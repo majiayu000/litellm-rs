@@ -3,196 +3,6 @@
 //! This module uses Rust's type system to enforce provider capabilities
 //! at compile time, preventing runtime errors from calling unsupported methods.
 
-use std::marker::PhantomData;
-
-use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::context::RequestContext;
-use crate::core::types::responses::{ChatResponse, EmbeddingResponse, ImageGenerationResponse};
-use crate::core::types::{chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest};
-
-// ============================================================================
-// Capability States (Phantom Types)
-// ============================================================================
-
-/// Provider has chat capability
-pub struct WithChat;
-
-/// Provider has no chat capability
-pub struct NoChat;
-
-/// Provider has embedding capability
-pub struct WithEmbedding;
-
-/// Provider has no embedding capability
-pub struct NoEmbedding;
-
-/// Provider has image capability
-pub struct WithImage;
-
-/// Provider has no image capability
-pub struct NoImage;
-
-/// Provider has streaming capability
-pub struct WithStream;
-
-/// Provider has no streaming capability
-pub struct NoStream;
-
-// ============================================================================
-// Type-Safe Provider Wrapper
-// ============================================================================
-
-/// Type-safe provider wrapper that enforces capabilities at compile time
-pub struct TypedProvider<P, Chat, Embed, Image, Stream> {
-    inner: P,
-    _chat: PhantomData<Chat>,
-    _embed: PhantomData<Embed>,
-    _image: PhantomData<Image>,
-    _stream: PhantomData<Stream>,
-}
-
-impl<P, C, E, I, S> TypedProvider<P, C, E, I, S> {
-    /// Get reference to inner provider
-    pub fn inner(&self) -> &P {
-        &self.inner
-    }
-
-    /// Get mutable reference to inner provider
-    pub fn inner_mut(&mut self) -> &mut P {
-        &mut self.inner
-    }
-}
-
-// ============================================================================
-// Capability-Specific Implementations
-// ============================================================================
-
-/// Chat completion methods - only available when Chat = WithChat
-impl<P, E, I, S> TypedProvider<P, WithChat, E, I, S>
-where
-    P: ChatProvider,
-{
-    pub async fn chat_completion(
-        &self,
-        request: ChatRequest,
-        context: RequestContext,
-    ) -> Result<ChatResponse, ProviderError> {
-        self.inner.chat_completion(request, context).await
-    }
-}
-
-/// Embedding methods - only available when Embed = WithEmbedding
-impl<P, C, I, S> TypedProvider<P, C, WithEmbedding, I, S>
-where
-    P: EmbeddingProvider,
-{
-    pub async fn create_embeddings(
-        &self,
-        request: EmbeddingRequest,
-        context: RequestContext,
-    ) -> Result<EmbeddingResponse, ProviderError> {
-        self.inner.create_embeddings(request, context).await
-    }
-}
-
-/// Image generation methods - only available when Image = WithImage
-impl<P, C, E, S> TypedProvider<P, C, E, WithImage, S>
-where
-    P: ImageProvider,
-{
-    pub async fn create_images(
-        &self,
-        request: ImageGenerationRequest,
-        context: RequestContext,
-    ) -> Result<ImageGenerationResponse, ProviderError> {
-        self.inner.create_images(request, context).await
-    }
-}
-
-// ============================================================================
-// Provider Traits
-// ============================================================================
-
-/// Trait for providers that support chat completion
-#[async_trait::async_trait]
-pub trait ChatProvider {
-    async fn chat_completion(
-        &self,
-        request: ChatRequest,
-        context: RequestContext,
-    ) -> Result<ChatResponse, ProviderError>;
-}
-
-/// Trait for providers that support embeddings
-#[async_trait::async_trait]
-pub trait EmbeddingProvider {
-    async fn create_embeddings(
-        &self,
-        request: EmbeddingRequest,
-        context: RequestContext,
-    ) -> Result<EmbeddingResponse, ProviderError>;
-}
-
-/// Trait for providers that support image generation
-#[async_trait::async_trait]
-pub trait ImageProvider {
-    async fn create_images(
-        &self,
-        request: ImageGenerationRequest,
-        context: RequestContext,
-    ) -> Result<ImageGenerationResponse, ProviderError>;
-}
-
-// ============================================================================
-// Capability Verification Macros
-// ============================================================================
-
-/// Macro to verify provider capabilities at compile time
-#[macro_export]
-macro_rules! verify_capability {
-    ($provider:expr, chat) => {
-        compile_time_assert!($provider: ChatCapable);
-    };
-    ($provider:expr, embedding) => {
-        compile_time_assert!($provider: EmbeddingCapable);
-    };
-    ($provider:expr, image) => {
-        compile_time_assert!($provider: ImageCapable);
-    };
-}
-
-/// Macro to create a typed provider with specific capabilities
-#[macro_export]
-macro_rules! typed_provider {
-    ($provider:expr, capabilities: [chat]) => {
-        TypedProvider::<_, WithChat, NoEmbedding, NoImage, NoStream> {
-            inner: $provider,
-            _chat: PhantomData,
-            _embed: PhantomData,
-            _image: PhantomData,
-            _stream: PhantomData,
-        }
-    };
-    ($provider:expr, capabilities: [chat, embedding]) => {
-        TypedProvider::<_, WithChat, WithEmbedding, NoImage, NoStream> {
-            inner: $provider,
-            _chat: PhantomData,
-            _embed: PhantomData,
-            _image: PhantomData,
-            _stream: PhantomData,
-        }
-    };
-    ($provider:expr, capabilities: [chat, embedding, image]) => {
-        TypedProvider::<_, WithChat, WithEmbedding, WithImage, NoStream> {
-            inner: $provider,
-            _chat: PhantomData,
-            _embed: PhantomData,
-            _image: PhantomData,
-            _stream: PhantomData,
-        }
-    };
-}
-
 // ============================================================================
 // Capability Sets (Const Generics Alternative)
 // ============================================================================
@@ -238,6 +48,7 @@ impl Capabilities {
 }
 
 /// Provider with const-generic capabilities
+#[allow(dead_code)]
 pub struct ConstProvider<P, const CAPS: u8> {
     inner: P,
 }
@@ -263,20 +74,6 @@ impl<P, const CAPS: u8> ConstProvider<P, CAPS> {
     }
 }
 
-// Only compile chat methods if CAP_CHAT is set
-impl<P> ConstProvider<P, { CAP_CHAT }>
-where
-    P: ChatProvider,
-{
-    pub async fn chat(
-        &self,
-        request: ChatRequest,
-        context: RequestContext,
-    ) -> Result<ChatResponse, ProviderError> {
-        self.inner.chat_completion(request, context).await
-    }
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -286,24 +83,6 @@ mod tests {
     use super::*;
 
     struct MockProvider;
-
-    #[async_trait::async_trait]
-    impl ChatProvider for MockProvider {
-        async fn chat_completion(
-            &self,
-            _request: ChatRequest,
-            _context: RequestContext,
-        ) -> Result<ChatResponse, ProviderError> {
-            unimplemented!()
-        }
-    }
-
-    #[test]
-    fn test_typed_provider_creation() {
-        let provider = MockProvider;
-        let _typed = typed_provider!(provider, capabilities: [chat]);
-        // This compiles, proving type safety
-    }
 
     #[test]
     fn test_capability_flags() {
