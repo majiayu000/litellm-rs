@@ -52,12 +52,7 @@ impl Default for BaseProviderConfig {
     }
 }
 
-impl BaseProviderConfig {
-    /// Merge with provider-specific configuration
-    pub fn merge_with<T: ProviderConfig>(self, specific: T) -> (Self, T) {
-        (self, specific)
-    }
-}
+impl BaseProviderConfig {}
 
 /// Trait for unified provider configuration
 pub trait UnifiedProviderConfig: ProviderConfig + Clone + Send + Sync {
@@ -74,16 +69,9 @@ pub trait UnifiedProviderConfig: ProviderConfig + Clone + Send + Sync {
         3
     }
 
-    /// Get effective API key (from config or environment)
+    /// Get effective API key (from config)
     fn get_effective_api_key(&self) -> Option<String> {
-        self.api_key()
-            .map(|s| s.to_string())
-            .or_else(|| self.get_api_key_from_env())
-    }
-
-    /// Get API key from environment variable
-    fn get_api_key_from_env(&self) -> Option<String> {
-        None // Override in specific implementations
+        self.api_key().map(|s| s.to_string())
     }
 
     /// Get effective API base URL
