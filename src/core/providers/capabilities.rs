@@ -7,7 +7,6 @@ use std::marker::PhantomData;
 
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::context::RequestContext;
-use crate::core::types::model::ProviderCapability;
 use crate::core::types::responses::{ChatResponse, EmbeddingResponse, ImageGenerationResponse};
 use crate::core::types::{chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest};
 
@@ -142,56 +141,6 @@ pub trait ImageProvider {
         request: ImageGenerationRequest,
         context: RequestContext,
     ) -> Result<ImageGenerationResponse, ProviderError>;
-}
-
-// ============================================================================
-// Builder Pattern for TypedProvider
-// ============================================================================
-
-pub struct TypedProviderBuilder<P> {
-    provider: P,
-    capabilities: Vec<ProviderCapability>,
-}
-
-impl<P> TypedProviderBuilder<P> {
-    pub fn new(provider: P) -> Self {
-        Self {
-            provider,
-            capabilities: Vec::new(),
-        }
-    }
-
-    pub fn with_capability(mut self, capability: ProviderCapability) -> Self {
-        self.capabilities.push(capability);
-        self
-    }
-
-    /// Build a typed provider based on declared capabilities
-    pub fn build(self) -> impl BuildResult<P> {
-        // This would use const generics or macros to generate the right type
-        // based on self.capabilities
-        let _ = self.capabilities;
-        TypedProviderBuilderResult {
-            provider: self.provider,
-        }
-    }
-}
-
-pub trait BuildResult<P> {
-    type Output;
-    fn into_typed(self) -> Self::Output;
-}
-
-struct TypedProviderBuilderResult<P> {
-    provider: P,
-}
-
-impl<P> BuildResult<P> for TypedProviderBuilderResult<P> {
-    type Output = P; // Simplified - in production, would return appropriate TypedProvider variant
-
-    fn into_typed(self) -> Self::Output {
-        self.provider
-    }
 }
 
 // ============================================================================
