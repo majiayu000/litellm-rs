@@ -12,25 +12,6 @@ use crate::core::types::responses::{ChatResponse, EmbeddingResponse, ImageGenera
 use crate::core::types::{chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest};
 
 // ============================================================================
-// Capability Marker Traits
-// ============================================================================
-
-/// Marker trait for chat completion capability
-pub trait ChatCapable {}
-
-/// Marker trait for embedding capability
-pub trait EmbeddingCapable {}
-
-/// Marker trait for image generation capability
-pub trait ImageCapable {}
-
-/// Marker trait for function calling capability
-pub trait FunctionCapable {}
-
-/// Marker trait for streaming capability
-pub trait StreamCapable {}
-
-// ============================================================================
 // Capability States (Phantom Types)
 // ============================================================================
 
