@@ -142,7 +142,9 @@ pub use crate::core::traits::provider::llm_provider::trait_definition::LLMProvid
 use crate::core::types::responses::{
     ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse,
 };
-use crate::core::types::{chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest};
+use crate::core::types::{
+    chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest,
+};
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
 use chrono::{DateTime, Utc};
 pub use contextual_error::ContextualError;

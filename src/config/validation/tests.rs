@@ -9,9 +9,9 @@ use crate::config::models::auth::AuthConfig;
 use crate::config::models::cache::CacheConfig;
 use crate::config::models::enterprise::{EnterpriseConfig, SsoConfig};
 use crate::config::models::provider::ProviderConfig;
-use crate::core::types::config::rate_limit::RateLimitConfig;
 use crate::config::models::server::ServerConfig;
 use crate::config::models::storage::{DatabaseConfig, RedisConfig};
+use crate::core::types::config::rate_limit::RateLimitConfig;
 
 // ==================== Server Config Validation ====================
 
@@ -353,22 +353,18 @@ fn test_ssrf_validation_private_ip_192_range() {
 #[test]
 fn test_ssrf_validation_metadata_endpoints() {
     // Cloud metadata endpoints should be blocked
+    assert!(validate_url_against_ssrf("http://169.254.169.254/latest/meta-data", "test").is_err());
     assert!(
-        validate_url_against_ssrf("http://169.254.169.254/latest/meta-data", "test").is_err()
+        validate_url_against_ssrf("http://metadata.google.internal/computeMetadata", "test")
+            .is_err()
     );
-    assert!(validate_url_against_ssrf(
-        "http://metadata.google.internal/computeMetadata",
-        "test"
-    )
-    .is_err());
 }
 
 #[test]
 fn test_ssrf_validation_aws_metadata() {
     assert!(validate_url_against_ssrf("http://169.254.169.254/latest", "test").is_err());
     assert!(
-        validate_url_against_ssrf("http://169.254.169.254/latest/meta-data/iam", "test")
-            .is_err()
+        validate_url_against_ssrf("http://169.254.169.254/latest/meta-data/iam", "test").is_err()
     );
 }
 

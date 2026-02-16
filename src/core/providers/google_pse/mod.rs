@@ -16,11 +16,12 @@ use crate::core::providers::base_provider::{
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
-    provider::ProviderConfig, error_mapper::trait_def::ErrorMapper,
+    error_mapper::trait_def::ErrorMapper, provider::ProviderConfig,
     provider::llm_provider::trait_definition::LLMProvider,
 };
 use crate::core::types::{
-    chat::ChatMessage, chat::ChatRequest,
+    chat::ChatMessage,
+    chat::ChatRequest,
     context::RequestContext,
     embedding::EmbeddingRequest,
     health::HealthStatus,

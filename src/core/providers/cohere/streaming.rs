@@ -39,7 +39,10 @@ mod tests {
         let data = b"data: {\"type\": \"text-generation\", \"text\": \"Hello, \"}\n\n";
         let result = parser.process_bytes(data).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].choices[0].delta.content, Some("Hello, ".to_string()));
+        assert_eq!(
+            result[0].choices[0].delta.content,
+            Some("Hello, ".to_string())
+        );
     }
 
     #[test]
@@ -50,7 +53,10 @@ mod tests {
         let data = b"data: {\"type\": \"content-delta\", \"delta\": {\"message\": {\"content\": {\"text\": \"World!\"}}}}\n\n";
         let result = parser.process_bytes(data).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].choices[0].delta.content, Some("World!".to_string()));
+        assert_eq!(
+            result[0].choices[0].delta.content,
+            Some("World!".to_string())
+        );
     }
 
     #[test]

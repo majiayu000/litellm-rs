@@ -65,8 +65,7 @@ fn test_model_info() {
         assert!(!models.is_empty());
 
         // Check if IBM Granite models are present
-        let granite_models: Vec<_> =
-            models.iter().filter(|m| m.id.contains("granite")).collect();
+        let granite_models: Vec<_> = models.iter().filter(|m| m.id.contains("granite")).collect();
         assert!(!granite_models.is_empty());
 
         // Check if Llama models are present
@@ -105,8 +104,7 @@ fn test_supported_openai_params() {
         assert!(params.contains(&"response_format"));
 
         // Test model without tools
-        let params_no_tools =
-            provider.get_supported_openai_params("ibm/granite-3b-code-instruct");
+        let params_no_tools = provider.get_supported_openai_params("ibm/granite-3b-code-instruct");
         assert!(params_no_tools.contains(&"temperature"));
         assert!(params_no_tools.contains(&"max_tokens"));
         assert!(!params_no_tools.contains(&"tools"));

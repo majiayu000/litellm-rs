@@ -159,8 +159,7 @@ impl DefaultRouter {
         if let Ok(api_key) = std::env::var("GROQ_API_KEY") {
             use crate::core::providers::groq::{GroqConfig, GroqProvider};
 
-            let config = GroqConfig::from_env()
-                .with_api_key(api_key);
+            let config = GroqConfig::from_env().with_api_key(api_key);
 
             if let Ok(groq_provider) = GroqProvider::new(config).await {
                 provider_registry.register(Provider::Groq(groq_provider));

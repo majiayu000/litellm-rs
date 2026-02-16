@@ -25,7 +25,10 @@ fn test_config_custom_values() {
         .with_timeout(120);
 
     assert_eq!(config.base.api_key.as_deref(), Some("test-key"));
-    assert_eq!(config.base.api_base.as_deref(), Some("https://custom.api.com"));
+    assert_eq!(
+        config.base.api_base.as_deref(),
+        Some("https://custom.api.com")
+    );
     assert_eq!(config.base.timeout, 120);
 }
 
@@ -37,8 +40,7 @@ fn test_config_get_api_base_default() {
 
 #[test]
 fn test_config_get_api_key() {
-    let config = ElevenLabsConfig::from_env()
-        .with_api_key("my-api-key");
+    let config = ElevenLabsConfig::from_env().with_api_key("my-api-key");
     assert_eq!(config.get_api_key(), Some("my-api-key".to_string()));
 }
 
@@ -271,8 +273,7 @@ fn test_stt_max_file_size() {
 
 #[tokio::test]
 async fn test_provider_capabilities() {
-    let config = ElevenLabsConfig::from_env()
-        .with_api_key("test-key");
+    let config = ElevenLabsConfig::from_env().with_api_key("test-key");
     let provider = ElevenLabsProvider::new(config).await.unwrap();
     let capabilities = provider.capabilities();
 
@@ -390,8 +391,7 @@ async fn test_provider_creation_without_key() {
 
 #[tokio::test]
 async fn test_provider_creation_with_key() {
-    let config = ElevenLabsConfig::from_env()
-        .with_api_key("test-api-key");
+    let config = ElevenLabsConfig::from_env().with_api_key("test-api-key");
 
     let result = ElevenLabsProvider::new(config).await;
     assert!(result.is_ok());

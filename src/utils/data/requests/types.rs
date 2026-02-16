@@ -237,5 +237,4 @@ mod tests {
         assert_eq!(args["location"], "San Francisco, CA");
         assert_eq!(args["unit"], "celsius");
     }
-
 }

@@ -15,7 +15,8 @@ use tracing::{debug, warn};
 // New type system imports - base_llm removed
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::{
-    chat::ChatMessage, chat::ChatRequest,
+    chat::ChatMessage,
+    chat::ChatRequest,
     message::MessageContent,
     message::MessageRole,
     responses::{ChatChoice, ChatResponse, FinishReason, Usage},

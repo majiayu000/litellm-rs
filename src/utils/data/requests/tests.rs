@@ -53,12 +53,9 @@ fn test_tool_choice_validation() {
 
     assert!(RequestUtils::validate_tool_choice(&Some("auto".to_string()), &tools).is_ok());
     assert!(RequestUtils::validate_tool_choice(&Some("none".to_string()), &tools).is_ok());
+    assert!(RequestUtils::validate_tool_choice(&Some("test_function".to_string()), &tools).is_ok());
     assert!(
-        RequestUtils::validate_tool_choice(&Some("test_function".to_string()), &tools).is_ok()
-    );
-    assert!(
-        RequestUtils::validate_tool_choice(&Some("invalid_function".to_string()), &tools)
-            .is_err()
+        RequestUtils::validate_tool_choice(&Some("invalid_function".to_string()), &tools).is_err()
     );
     assert!(RequestUtils::validate_tool_choice(&Some("auto".to_string()), &None).is_err());
 }

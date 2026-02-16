@@ -442,10 +442,7 @@ impl SSETransformer for AnthropicTransformer {
             )
         })?;
 
-        let event_type = json
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let event_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
         let created = chrono::Utc::now().timestamp();
 
@@ -516,7 +513,8 @@ impl SSETransformer for AnthropicTransformer {
 
                 let usage = json.get("usage").map(|u| {
                     let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let output = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    let output =
+                        u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     crate::core::types::responses::Usage {
                         prompt_tokens: input,
                         completion_tokens: output,
@@ -548,17 +546,15 @@ impl SSETransformer for AnthropicTransformer {
                     system_fingerprint: None,
                 }))
             }
-            "message_stop" => {
-                Ok(Some(ChatChunk {
-                    id: String::new(),
-                    object: "chat.completion.chunk".to_string(),
-                    created,
-                    model: self.model.clone(),
-                    choices: vec![],
-                    usage: None,
-                    system_fingerprint: None,
-                }))
-            }
+            "message_stop" => Ok(Some(ChatChunk {
+                id: String::new(),
+                object: "chat.completion.chunk".to_string(),
+                created,
+                model: self.model.clone(),
+                choices: vec![],
+                usage: None,
+                system_fingerprint: None,
+            })),
             "error" => {
                 let msg = json
                     .get("error")
@@ -566,7 +562,11 @@ impl SSETransformer for AnthropicTransformer {
                     .and_then(|m| m.as_str())
                     .unwrap_or("Unknown streaming error");
                 Err(ProviderError::streaming_error(
-                    "anthropic", "chat", None, None, msg.to_string(),
+                    "anthropic",
+                    "chat",
+                    None,
+                    None,
+                    msg.to_string(),
                 ))
             }
             // content_block_start, content_block_stop, ping — skip
@@ -604,10 +604,7 @@ impl SSETransformer for GeminiTransformer {
 
     fn transform_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
         let json: Value = serde_json::from_str(data).map_err(|e| {
-            ProviderError::response_parsing(
-                "gemini",
-                format!("Failed to parse Gemini SSE: {}", e),
-            )
+            ProviderError::response_parsing("gemini", format!("Failed to parse Gemini SSE: {}", e))
         })?;
 
         // Error response
@@ -632,9 +629,18 @@ impl SSETransformer for GeminiTransformer {
         if candidates.is_empty() {
             // Usage-only chunk
             let usage = json.get("usageMetadata").map(|u| {
-                let prompt = u.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let completion = u.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let total = u.get("totalTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let prompt = u
+                    .get("promptTokenCount")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                let completion = u
+                    .get("candidatesTokenCount")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                let total = u
+                    .get("totalTokenCount")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
                 crate::core::types::responses::Usage {
                     prompt_tokens: prompt,
                     completion_tokens: completion,
@@ -693,7 +699,11 @@ impl SSETransformer for GeminiTransformer {
                     } else {
                         None
                     },
-                    content: if delta_content.is_empty() { None } else { Some(delta_content) },
+                    content: if delta_content.is_empty() {
+                        None
+                    } else {
+                        Some(delta_content)
+                    },
                     thinking: None,
                     function_call: None,
                     tool_calls: None,
@@ -704,9 +714,18 @@ impl SSETransformer for GeminiTransformer {
         }
 
         let usage = json.get("usageMetadata").map(|u| {
-            let prompt = u.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let completion = u.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let total = u.get("totalTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let prompt = u
+                .get("promptTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let completion = u
+                .get("candidatesTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let total = u
+                .get("totalTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
             crate::core::types::responses::Usage {
                 prompt_tokens: prompt,
                 completion_tokens: completion,
@@ -771,10 +790,7 @@ impl SSETransformer for CohereTransformer {
 
     fn transform_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
         let json: Value = serde_json::from_str(data).map_err(|e| {
-            ProviderError::response_parsing(
-                "cohere",
-                format!("Failed to parse Cohere SSE: {}", e),
-            )
+            ProviderError::response_parsing("cohere", format!("Failed to parse Cohere SSE: {}", e))
         })?;
 
         let event_type = json
@@ -793,7 +809,8 @@ impl SSETransformer for CohereTransformer {
                         .and_then(|d| d.get("message"))
                         .and_then(|m| m.get("content"))
                         .and_then(|c| {
-                            c.get("text").and_then(|t| t.as_str())
+                            c.get("text")
+                                .and_then(|t| t.as_str())
                                 .or_else(|| c.as_str())
                         })
                         .unwrap_or("");
@@ -836,8 +853,14 @@ impl SSETransformer for CohereTransformer {
                         .and_then(|d| d.get("usage"))
                         .and_then(|u| u.get("tokens"))
                         .map(|tokens| {
-                            let prompt = tokens.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let completion = tokens.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let prompt = tokens
+                                .get("input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u32;
+                            let completion = tokens
+                                .get("output_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u32;
                             crate::core::types::responses::Usage {
                                 prompt_tokens: prompt,
                                 completion_tokens: completion,
@@ -950,10 +973,20 @@ impl SSETransformer for DatabricksTransformer {
             )
         })?;
 
-        let id = json.get("id").and_then(|v| v.as_str()).unwrap_or("chunk").to_string();
-        let created = json.get("created").and_then(|v| v.as_i64())
+        let id = json
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("chunk")
+            .to_string();
+        let created = json
+            .get("created")
+            .and_then(|v| v.as_i64())
             .unwrap_or_else(|| chrono::Utc::now().timestamp());
-        let model = json.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let model = json
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let mut choices = Vec::new();
         if let Some(choices_arr) = json.get("choices").and_then(|v| v.as_array()) {
@@ -961,16 +994,19 @@ impl SSETransformer for DatabricksTransformer {
                 let index = choice.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
                 let delta = if let Some(delta_obj) = choice.get("delta") {
-                    let role = delta_obj
-                        .get("role")
-                        .and_then(|v| v.as_str())
-                        .and_then(|r| match r {
-                            "assistant" => Some(crate::core::types::message::MessageRole::Assistant),
-                            "user" => Some(crate::core::types::message::MessageRole::User),
-                            "system" => Some(crate::core::types::message::MessageRole::System),
-                            "tool" => Some(crate::core::types::message::MessageRole::Tool),
-                            _ => None,
-                        });
+                    let role =
+                        delta_obj
+                            .get("role")
+                            .and_then(|v| v.as_str())
+                            .and_then(|r| match r {
+                                "assistant" => {
+                                    Some(crate::core::types::message::MessageRole::Assistant)
+                                }
+                                "user" => Some(crate::core::types::message::MessageRole::User),
+                                "system" => Some(crate::core::types::message::MessageRole::System),
+                                "tool" => Some(crate::core::types::message::MessageRole::Tool),
+                                _ => None,
+                            });
 
                     // Handle content — could be string or array (Claude reasoning)
                     let content = match delta_obj.get("content") {
@@ -996,8 +1032,11 @@ impl SSETransformer for DatabricksTransformer {
                     }
                 } else {
                     ChatDelta {
-                        role: None, content: None, thinking: None,
-                        tool_calls: None, function_call: None,
+                        role: None,
+                        content: None,
+                        thinking: None,
+                        tool_calls: None,
+                        function_call: None,
                     }
                 };
 

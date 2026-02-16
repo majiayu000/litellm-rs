@@ -145,7 +145,10 @@ pub async fn aembedding(
 /// # Ok(())
 /// # }
 /// ```
-pub async fn embed_text(model: &str, text: &str) -> crate::utils::error::gateway_error::Result<Vec<f32>> {
+pub async fn embed_text(
+    model: &str,
+    text: &str,
+) -> crate::utils::error::gateway_error::Result<Vec<f32>> {
     let response = embedding(model, text, None).await?;
 
     response
@@ -153,7 +156,11 @@ pub async fn embed_text(model: &str, text: &str) -> crate::utils::error::gateway
         .into_iter()
         .next()
         .map(|d| d.embedding)
-        .ok_or_else(|| crate::utils::error::gateway_error::GatewayError::internal("No embedding data in response"))
+        .ok_or_else(|| {
+            crate::utils::error::gateway_error::GatewayError::internal(
+                "No embedding data in response",
+            )
+        })
 }
 
 /// Embed multiple texts and return their embedding vectors

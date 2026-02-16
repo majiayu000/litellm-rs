@@ -7,8 +7,7 @@ use crate::core::types::model::ProviderCapability;
 
 #[tokio::test]
 async fn test_provider_creation() {
-    let config = HyperbolicConfig::from_env()
-        .with_api_key("test-key");
+    let config = HyperbolicConfig::from_env().with_api_key("test-key");
 
     let provider = HyperbolicProvider::new(config).await;
     assert!(provider.is_ok());
@@ -84,8 +83,7 @@ fn test_supported_openai_params() {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let provider = HyperbolicProvider::with_api_key("test-key").await.unwrap();
 
-        let params =
-            provider.get_supported_openai_params("meta-llama/Meta-Llama-3.1-70B-Instruct");
+        let params = provider.get_supported_openai_params("meta-llama/Meta-Llama-3.1-70B-Instruct");
         assert!(params.contains(&"temperature"));
         assert!(params.contains(&"max_tokens"));
         assert!(params.contains(&"tools"));
@@ -138,8 +136,7 @@ fn test_config_api_base() {
     let config = HyperbolicConfig::default();
     assert_eq!(config.get_api_base(), "https://api.hyperbolic.xyz/v1");
 
-    let custom_config = HyperbolicConfig::from_env()
-        .with_base_url("https://custom.hyperbolic.xyz");
+    let custom_config = HyperbolicConfig::from_env().with_base_url("https://custom.hyperbolic.xyz");
     assert_eq!(
         custom_config.get_api_base(),
         "https://custom.hyperbolic.xyz"

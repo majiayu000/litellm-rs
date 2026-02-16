@@ -95,18 +95,16 @@ async fn test_provider_with_api_base() {
 
 #[tokio::test]
 async fn test_provider_with_credentials() {
-    let provider = VLLMProvider::with_credentials(
-        "http://localhost:8000/v1",
-        Some("test-key".to_string()),
-    )
-    .await;
+    let provider =
+        VLLMProvider::with_credentials("http://localhost:8000/v1", Some("test-key".to_string()))
+            .await;
     assert!(provider.is_ok());
 }
 
 #[tokio::test]
 async fn test_provider_with_model() {
-    let config = VLLMConfig::new("http://localhost:8000/v1")
-        .with_model("meta-llama/Llama-3.1-8B-Instruct");
+    let config =
+        VLLMConfig::new("http://localhost:8000/v1").with_model("meta-llama/Llama-3.1-8B-Instruct");
     let provider = VLLMProvider::new(config).await.unwrap();
 
     // Should have one model in the list

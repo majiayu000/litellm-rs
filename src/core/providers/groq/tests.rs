@@ -7,8 +7,7 @@ use crate::core::types::model::ProviderCapability;
 
 #[tokio::test]
 async fn test_provider_creation() {
-    let config = GroqConfig::from_env()
-        .with_api_key("test-key");
+    let config = GroqConfig::from_env().with_api_key("test-key");
 
     let provider = GroqProvider::new(config).await;
     assert!(provider.is_ok());
@@ -53,8 +52,7 @@ fn test_model_info() {
         assert!(!llama_models.is_empty());
 
         // Check if Mixtral models are present
-        let mixtral_models: Vec<_> =
-            models.iter().filter(|m| m.id.contains("mixtral")).collect();
+        let mixtral_models: Vec<_> = models.iter().filter(|m| m.id.contains("mixtral")).collect();
         assert!(!mixtral_models.is_empty());
     });
 }

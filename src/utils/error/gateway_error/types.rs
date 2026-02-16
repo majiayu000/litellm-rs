@@ -168,7 +168,6 @@ pub enum GatewayError {
     #[cfg(feature = "websockets")]
     #[error("WebSocket error: {0}")]
     WebSocket(String),
-
 }
 
 #[cfg(test)]

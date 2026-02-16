@@ -2,10 +2,10 @@
 
 use super::types::{Choice, CompletionOptions, CompletionResponse};
 use crate::core::types::responses::ChatResponse;
-use crate::core::types::{chat::ChatMessage, chat::ChatRequest};
-use crate::utils::error::gateway_error::Result;
 #[cfg(test)]
 use crate::core::types::responses::Usage;
+use crate::core::types::{chat::ChatMessage, chat::ChatRequest};
+use crate::utils::error::gateway_error::Result;
 
 /// Convert to chat completion request
 pub fn convert_to_chat_completion_request(

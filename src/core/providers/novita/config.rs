@@ -28,15 +28,13 @@ mod tests {
 
     #[test]
     fn test_novita_config_get_api_base_custom() {
-        let config = NovitaConfig::from_env()
-            .with_base_url("https://custom.novita.ai");
+        let config = NovitaConfig::from_env().with_base_url("https://custom.novita.ai");
         assert_eq!(config.get_api_base(), "https://custom.novita.ai");
     }
 
     #[test]
     fn test_novita_config_get_api_key() {
-        let config = NovitaConfig::from_env()
-            .with_api_key("test-key");
+        let config = NovitaConfig::from_env().with_api_key("test-key");
         assert_eq!(config.get_api_key(), Some("test-key".to_string()));
     }
 

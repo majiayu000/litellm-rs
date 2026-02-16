@@ -6,7 +6,9 @@
 mod tests {
     use litellm_rs::core::providers::Provider;
     use litellm_rs::core::providers::openai::OpenAIProvider;
-    use litellm_rs::core::router::deployment::{Deployment, DeploymentConfig, DeploymentState, HealthStatus};
+    use litellm_rs::core::router::deployment::{
+        Deployment, DeploymentConfig, DeploymentState, HealthStatus,
+    };
     use litellm_rs::core::router::{RouterConfig, UnifiedRouter, UnifiedRoutingStrategy};
     use std::sync::atomic::Ordering;
 

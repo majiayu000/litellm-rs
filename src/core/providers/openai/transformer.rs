@@ -239,12 +239,13 @@ impl OpenAIResponseTransformer {
                 text: text.clone(),
                 signature: None,
             });
-        let compatible_message = message
-            .into_compatible_message()
-            .map_err(|message| OpenAIError::ResponseParsing {
-                provider: "openai",
-                message,
-            })?;
+        let compatible_message =
+            message
+                .into_compatible_message()
+                .map_err(|message| OpenAIError::ResponseParsing {
+                    provider: "openai",
+                    message,
+                })?;
         let mut core_message: ChatMessage = compatible_message.into();
         core_message.thinking = thinking;
         Ok(core_message)
@@ -571,7 +572,13 @@ mod tests {
         };
 
         let result = OpenAIRequestTransformer::transform(request).unwrap();
-        let tool_calls = result.messages.first().unwrap().tool_calls.as_ref().unwrap();
+        let tool_calls = result
+            .messages
+            .first()
+            .unwrap()
+            .tool_calls
+            .as_ref()
+            .unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls.first().unwrap().id, "call_123");
         assert_eq!(tool_calls.first().unwrap().function.name, "get_weather");
@@ -601,7 +608,10 @@ mod tests {
         let result = OpenAIRequestTransformer::transform(request).unwrap();
         let tools = result.tools.unwrap();
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools.first().unwrap().function.as_ref().unwrap().name, "get_weather");
+        assert_eq!(
+            tools.first().unwrap().function.as_ref().unwrap().name,
+            "get_weather"
+        );
     }
 
     #[test]
@@ -863,7 +873,10 @@ mod tests {
             };
 
             let result = OpenAIResponseTransformer::transform(response).unwrap();
-            assert_eq!(result.choices.first().unwrap().finish_reason, Some(expected));
+            assert_eq!(
+                result.choices.first().unwrap().finish_reason,
+                Some(expected)
+            );
         }
     }
 
@@ -902,7 +915,14 @@ mod tests {
         };
 
         let result = OpenAIResponseTransformer::transform(response).unwrap();
-        let tool_calls = result.choices.first().unwrap().message.tool_calls.as_ref().unwrap();
+        let tool_calls = result
+            .choices
+            .first()
+            .unwrap()
+            .message
+            .tool_calls
+            .as_ref()
+            .unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls.first().unwrap().id, "call_abc");
         assert_eq!(tool_calls.first().unwrap().function.name, "get_weather");
@@ -1059,7 +1079,10 @@ mod tests {
         let result = OpenAIResponseTransformer::transform_stream_chunk(chunk).unwrap();
         assert_eq!(result.id, "chatcmpl-123");
         assert_eq!(result.choices.len(), 1);
-        assert_eq!(result.choices.first().unwrap().delta.content, Some("Hello".to_string()));
+        assert_eq!(
+            result.choices.first().unwrap().delta.content,
+            Some("Hello".to_string())
+        );
     }
 
     #[test]
@@ -1307,7 +1330,14 @@ mod tests {
         };
 
         let result = OpenAIResponseTransformer::transform(response).unwrap();
-        let func_call = result.choices.first().unwrap().message.function_call.as_ref().unwrap();
+        let func_call = result
+            .choices
+            .first()
+            .unwrap()
+            .message
+            .function_call
+            .as_ref()
+            .unwrap();
         assert_eq!(func_call.name, "get_weather");
     }
 }

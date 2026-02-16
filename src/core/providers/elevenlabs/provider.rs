@@ -51,16 +51,12 @@ impl ElevenLabsProvider {
         // Build model list
         let models = Self::build_model_list();
 
-        Ok(Self {
-            config,
-            models,
-        })
+        Ok(Self { config, models })
     }
 
     /// Create provider with API key only
     pub async fn with_api_key(api_key: impl Into<String>) -> Result<Self, ProviderError> {
-        let config = ElevenLabsConfig::from_env()
-            .with_api_key(api_key);
+        let config = ElevenLabsConfig::from_env().with_api_key(api_key);
         Self::new(config).await
     }
 

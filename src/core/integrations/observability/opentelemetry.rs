@@ -595,9 +595,7 @@ impl Integration for OpenTelemetryIntegration {
         }
 
         // Store active span
-        let active = ActiveSpan {
-            span,
-        };
+        let active = ActiveSpan { span };
 
         self.active_spans
             .write()
@@ -692,9 +690,7 @@ impl Integration for OpenTelemetryIntegration {
             span = span.attribute("llm.provider", provider.clone());
         }
 
-        let active = ActiveSpan {
-            span,
-        };
+        let active = ActiveSpan { span };
 
         self.active_spans
             .write()

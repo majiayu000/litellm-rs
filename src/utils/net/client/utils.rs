@@ -13,8 +13,8 @@ pub struct ClientUtils;
 impl ClientUtils {
     /// Creates an HTTP client with the specified configuration
     pub fn create_http_client(config: &HttpClientConfig) -> Result<Client, ProviderError> {
-        let mut client_builder = create_client_builder(config.timeout)
-            .user_agent(&config.user_agent);
+        let mut client_builder =
+            create_client_builder(config.timeout).user_agent(&config.user_agent);
 
         if let Some(proxy_url) = &config.proxy {
             let proxy = Proxy::all(proxy_url).map_err(|e| ProviderError::InvalidRequest {

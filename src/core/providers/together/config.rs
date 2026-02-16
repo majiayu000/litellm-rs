@@ -30,15 +30,13 @@ mod tests {
 
     #[test]
     fn test_together_config_get_api_base_custom() {
-        let config = TogetherConfig::from_env()
-            .with_base_url("https://custom.together.xyz");
+        let config = TogetherConfig::from_env().with_base_url("https://custom.together.xyz");
         assert_eq!(config.get_api_base(), "https://custom.together.xyz");
     }
 
     #[test]
     fn test_together_config_get_api_key() {
-        let config = TogetherConfig::from_env()
-            .with_api_key("test-key");
+        let config = TogetherConfig::from_env().with_api_key("test-key");
         assert_eq!(config.get_api_key(), Some("test-key".to_string()));
     }
 

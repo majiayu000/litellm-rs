@@ -650,9 +650,7 @@ fn test_json_schema_validation_all_types() {
     assert!(DataUtils::validate_json_schema(&json!(null), &json!({"type": "null"})).is_ok());
     assert!(DataUtils::validate_json_schema(&json!(true), &json!({"type": "boolean"})).is_ok());
     assert!(DataUtils::validate_json_schema(&json!(123), &json!({"type": "number"})).is_ok());
-    assert!(
-        DataUtils::validate_json_schema(&json!("test"), &json!({"type": "string"})).is_ok()
-    );
+    assert!(DataUtils::validate_json_schema(&json!("test"), &json!({"type": "string"})).is_ok());
     assert!(DataUtils::validate_json_schema(&json!([]), &json!({"type": "array"})).is_ok());
     assert!(DataUtils::validate_json_schema(&json!({}), &json!({"type": "object"})).is_ok());
 }

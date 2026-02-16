@@ -1,6 +1,6 @@
 //! Async logger implementation for high-performance logging
 
-use crate::utils::logging::enhanced::types::{AsyncLoggerConfig, AsyncLogRecord};
+use crate::utils::logging::enhanced::types::{AsyncLogRecord, AsyncLoggerConfig};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};

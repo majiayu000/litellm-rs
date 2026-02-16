@@ -109,7 +109,6 @@ impl AnthropicProvider {
 
         Ok(())
     }
-
 }
 
 #[async_trait]
@@ -241,10 +240,7 @@ impl LLMProvider for AnthropicProvider {
 
         let registry = get_anthropic_registry();
         let model_spec = registry.get_model_spec(&request.model).ok_or_else(|| {
-            ProviderError::not_supported(
-                "anthropic",
-                format!("Unknown model: {}", request.model),
-            )
+            ProviderError::not_supported("anthropic", format!("Unknown model: {}", request.model))
         })?;
 
         if !model_spec

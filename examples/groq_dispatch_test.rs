@@ -9,8 +9,7 @@ use litellm_rs::core::types::health::HealthStatus;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create Groq provider through the Provider enum
-    let config = GroqConfig::from_env()
-        .with_api_key("test-key");
+    let config = GroqConfig::from_env().with_api_key("test-key");
 
     let groq_provider = GroqProvider::new(config).await?;
     let provider = Provider::Groq(groq_provider);

@@ -14,8 +14,8 @@ use crate::core::providers::base::{
     streaming_client,
 };
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::traits::provider::ProviderConfig;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
+use crate::core::traits::provider::ProviderConfig;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::{
     chat::{ChatMessage, ChatRequest},

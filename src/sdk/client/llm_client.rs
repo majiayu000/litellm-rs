@@ -100,7 +100,7 @@ impl LLMClient {
 
     /// Check individual provider health
     pub(crate) async fn check_provider_health(&self, provider_id: &str) -> Result<()> {
-        use crate::sdk::types::{ChatOptions, SdkChatRequest, Content, Message, Role};
+        use crate::sdk::types::{ChatOptions, Content, Message, Role, SdkChatRequest};
 
         let simple_request = SdkChatRequest {
             model: String::new(),

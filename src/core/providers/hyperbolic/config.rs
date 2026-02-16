@@ -30,15 +30,13 @@ mod tests {
 
     #[test]
     fn test_hyperbolic_config_get_api_base_custom() {
-        let config = HyperbolicConfig::from_env()
-            .with_base_url("https://custom.hyperbolic.xyz");
+        let config = HyperbolicConfig::from_env().with_base_url("https://custom.hyperbolic.xyz");
         assert_eq!(config.get_api_base(), "https://custom.hyperbolic.xyz");
     }
 
     #[test]
     fn test_hyperbolic_config_get_api_key() {
-        let config = HyperbolicConfig::from_env()
-            .with_api_key("test-key");
+        let config = HyperbolicConfig::from_env().with_api_key("test-key");
         assert_eq!(config.get_api_key(), Some("test-key".to_string()));
     }
 
@@ -56,8 +54,7 @@ mod tests {
 
     #[test]
     fn test_hyperbolic_config_validation_with_key() {
-        let config = HyperbolicConfig::from_env()
-            .with_api_key("test-key");
+        let config = HyperbolicConfig::from_env().with_api_key("test-key");
         assert!(config.validate().is_ok());
     }
 }

@@ -42,17 +42,6 @@ where
         }
     }
 
-    /// Create a successful response with metadata
-    #[allow(dead_code)]
-    pub fn success_with_meta(data: T, meta: serde_json::Value) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-            meta: Some(meta),
-        }
-    }
-
     /// Create an error response
     pub fn error(message: String) -> ApiResponse<()> {
         ApiResponse {
@@ -73,16 +62,6 @@ impl<T> ApiResponse<T> {
             data: None,
             error: Some(message),
             meta: None,
-        }
-    }
-
-    /// Create an error response with metadata
-    pub fn error_with_meta(message: String, meta: serde_json::Value) -> ApiResponse<()> {
-        ApiResponse {
-            success: false,
-            data: None,
-            error: Some(message),
-            meta: Some(meta),
         }
     }
 }

@@ -1,8 +1,8 @@
 //! Authentication middleware
 
 use crate::auth::AuthMethod;
-use crate::core::types::context::RequestContext;
 use crate::core::models::{ApiKey, user::types::User};
+use crate::core::types::context::RequestContext;
 use crate::server::middleware::auth_rate_limiter::get_auth_rate_limiter;
 use crate::server::middleware::helpers::{extract_auth_method, is_public_route};
 use crate::server::state::AppState;

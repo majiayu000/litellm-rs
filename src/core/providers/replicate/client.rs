@@ -9,7 +9,8 @@ use super::models::{ReplicateModelType, get_replicate_registry};
 use super::prediction::{CreatePredictionRequest, PredictionResponse, PredictionStatus};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::{
-    chat::ChatMessage, chat::ChatRequest,
+    chat::ChatMessage,
+    chat::ChatRequest,
     image::ImageGenerationRequest,
     message::MessageContent,
     message::MessageRole,

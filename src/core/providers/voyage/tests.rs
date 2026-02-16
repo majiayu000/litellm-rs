@@ -7,21 +7,19 @@ mod provider_tests {
     use super::*;
     use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
     use crate::core::types::{
-        chat::ChatMessage, chat::ChatRequest, embedding::EmbeddingInput, embedding::EmbeddingRequest,
-        message::MessageContent, message::MessageRole,
+        chat::ChatMessage, chat::ChatRequest, embedding::EmbeddingInput,
+        embedding::EmbeddingRequest, message::MessageContent, message::MessageRole,
     };
     use crate::core::types::{context::RequestContext, model::ProviderCapability};
 
     async fn create_test_provider() -> VoyageProvider {
-        let config = VoyageConfig::from_env()
-            .with_api_key("test-key");
+        let config = VoyageConfig::from_env().with_api_key("test-key");
         VoyageProvider::new(config).await.unwrap()
     }
 
     #[tokio::test]
     async fn test_provider_creation() {
-        let config = VoyageConfig::from_env()
-            .with_api_key("test-key");
+        let config = VoyageConfig::from_env().with_api_key("test-key");
         let provider = VoyageProvider::new(config).await;
         assert!(provider.is_ok());
     }
@@ -331,8 +329,7 @@ mod config_tests {
 
     #[test]
     fn test_config_validation_with_key() {
-        let config = VoyageConfig::from_env()
-            .with_api_key("test-key");
+        let config = VoyageConfig::from_env().with_api_key("test-key");
         assert!(config.validate().is_ok());
     }
 

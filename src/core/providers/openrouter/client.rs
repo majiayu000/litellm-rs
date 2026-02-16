@@ -9,7 +9,7 @@ use tracing::{debug, error, warn};
 
 use crate::ProviderError;
 use crate::core::traits::{
-    provider::ProviderConfig, error_mapper::types::GenericErrorMapper,
+    error_mapper::types::GenericErrorMapper, provider::ProviderConfig,
     provider::llm_provider::trait_definition::LLMProvider,
 };
 use crate::core::types::{

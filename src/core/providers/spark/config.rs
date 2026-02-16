@@ -195,7 +195,10 @@ impl ProviderConfig for SparkConfig {
             return Err("Spark API key cannot be empty".to_string());
         }
 
-        let api_secret = self.api_secret.as_ref().ok_or("Spark API secret is required")?;
+        let api_secret = self
+            .api_secret
+            .as_ref()
+            .ok_or("Spark API secret is required")?;
         if api_secret.is_empty() {
             return Err("Spark API secret cannot be empty".to_string());
         }

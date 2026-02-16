@@ -11,7 +11,7 @@ use super::model_info::get_models;
 use crate::core::providers::base::{GlobalPoolManager, HttpMethod, header};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
-    provider::ProviderConfig as _, error_mapper::trait_def::ErrorMapper,
+    error_mapper::trait_def::ErrorMapper, provider::ProviderConfig as _,
     provider::llm_provider::trait_definition::LLMProvider,
 };
 use crate::core::types::{

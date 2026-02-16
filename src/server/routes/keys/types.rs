@@ -284,7 +284,6 @@ impl KeyErrorResponse {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(message, "INTERNAL_ERROR")
     }
-
 }
 
 #[cfg(test)]

@@ -9,10 +9,7 @@ use crate::core::streaming::types::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta, Event,
 };
 use crate::core::types::{
-    self,
-    chat::ChatRequest as CoreChatRequest,
-    context::RequestContext,
-    model::ProviderCapability,
+    self, chat::ChatRequest as CoreChatRequest, context::RequestContext, model::ProviderCapability,
 };
 use crate::server::routes::errors;
 use crate::server::state::AppState;
@@ -214,11 +211,7 @@ fn build_core_chat_request(
 
     Ok(CoreChatRequest {
         model,
-        messages: request
-            .messages
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        messages: request.messages.into_iter().map(Into::into).collect(),
         temperature: request.temperature,
         max_tokens: request.max_tokens,
         max_completion_tokens: request.max_completion_tokens,

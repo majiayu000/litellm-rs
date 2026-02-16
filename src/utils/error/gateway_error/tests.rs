@@ -125,9 +125,7 @@ fn test_alert_helper() {
 #[test]
 fn test_not_implemented_helper() {
     let error = GatewayError::not_implemented("Feature not available");
-    assert!(
-        matches!(error, GatewayError::NotImplemented(msg) if msg == "Feature not available")
-    );
+    assert!(matches!(error, GatewayError::NotImplemented(msg) if msg == "Feature not available"));
 }
 
 #[test]
@@ -175,9 +173,7 @@ fn test_no_providers_for_model_helper() {
 #[test]
 fn test_no_healthy_providers_helper() {
     let error = GatewayError::no_healthy_providers("All providers down");
-    assert!(
-        matches!(error, GatewayError::NoHealthyProviders(msg) if msg == "All providers down")
-    );
+    assert!(matches!(error, GatewayError::NoHealthyProviders(msg) if msg == "All providers down"));
 }
 
 #[test]

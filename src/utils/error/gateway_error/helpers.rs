@@ -139,9 +139,7 @@ mod tests {
     #[test]
     fn test_authorization_error() {
         let error = GatewayError::authorization("Insufficient permissions");
-        assert!(
-            matches!(error, GatewayError::Forbidden(msg) if msg == "Insufficient permissions")
-        );
+        assert!(matches!(error, GatewayError::Forbidden(msg) if msg == "Insufficient permissions"));
     }
 
     // ==================== Request Error Tests ====================

@@ -8,8 +8,7 @@ use crate::core::types::model::ProviderCapability;
 
 #[tokio::test]
 async fn test_provider_creation() {
-    let config = TogetherConfig::from_env()
-        .with_api_key("test-key");
+    let config = TogetherConfig::from_env().with_api_key("test-key");
 
     let provider = TogetherProvider::new(config).await;
     assert!(provider.is_ok());
@@ -95,8 +94,8 @@ fn test_supported_openai_params() {
         assert!(params.contains(&"response_format"));
 
         // Test vision model (no function calling)
-        let vision_params = provider
-            .get_supported_openai_params("meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo");
+        let vision_params =
+            provider.get_supported_openai_params("meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo");
         assert!(vision_params.contains(&"temperature"));
         assert!(!vision_params.contains(&"tools"));
         assert!(!vision_params.contains(&"response_format"));
@@ -293,19 +292,16 @@ fn test_config_get_api_base() {
     let config = TogetherConfig::from_env();
     assert_eq!(config.get_api_base(), "https://api.together.xyz/v1");
 
-    let custom_config = TogetherConfig::from_env()
-        .with_base_url("https://custom.together.xyz");
+    let custom_config = TogetherConfig::from_env().with_base_url("https://custom.together.xyz");
     assert_eq!(custom_config.get_api_base(), "https://custom.together.xyz");
 }
 
 #[test]
 fn test_config_validation() {
-    let valid_config = TogetherConfig::from_env()
-        .with_api_key("test-key");
+    let valid_config = TogetherConfig::from_env().with_api_key("test-key");
     assert!(valid_config.validate().is_ok());
 
-    let mut invalid_timeout_config = TogetherConfig::from_env()
-        .with_api_key("test-key");
+    let mut invalid_timeout_config = TogetherConfig::from_env().with_api_key("test-key");
     invalid_timeout_config.base.timeout = 0;
     assert!(invalid_timeout_config.validate().is_err());
 }

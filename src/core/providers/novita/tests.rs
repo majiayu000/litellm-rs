@@ -8,8 +8,7 @@ use crate::core::types::model::ProviderCapability;
 
 #[tokio::test]
 async fn test_provider_creation() {
-    let config = NovitaConfig::from_env()
-        .with_api_key("test-key");
+    let config = NovitaConfig::from_env().with_api_key("test-key");
 
     let provider = NovitaProvider::new(config).await;
     assert!(provider.is_ok());
@@ -54,8 +53,7 @@ fn test_model_info() {
         assert!(!llama_models.is_empty());
 
         // Check if Mistral models are present
-        let mistral_models: Vec<_> =
-            models.iter().filter(|m| m.id.contains("mistral")).collect();
+        let mistral_models: Vec<_> = models.iter().filter(|m| m.id.contains("mistral")).collect();
         assert!(!mistral_models.is_empty());
     });
 }
@@ -162,8 +160,7 @@ fn test_config_api_base() {
     let config = NovitaConfig::from_env();
     assert_eq!(config.get_api_base(), "https://api.novita.ai/v3/openai");
 
-    let custom_config = NovitaConfig::from_env()
-        .with_base_url("https://custom.novita.ai");
+    let custom_config = NovitaConfig::from_env().with_base_url("https://custom.novita.ai");
     assert_eq!(custom_config.get_api_base(), "https://custom.novita.ai");
 }
 

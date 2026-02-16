@@ -15,7 +15,7 @@ use crate::core::providers::base::{
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
-    provider::ProviderConfig, error_mapper::trait_def::ErrorMapper,
+    error_mapper::trait_def::ErrorMapper, provider::ProviderConfig,
     provider::llm_provider::trait_definition::LLMProvider,
 };
 use crate::core::types::{

@@ -112,8 +112,8 @@ fn test_log_entry_multiple_metadata() {
 
 #[test]
 fn test_log_entry_serialization() {
-    let entry = LogEntry::new(LogLevel::Error, "Error occurred".to_string())
-        .with_module("api".to_string());
+    let entry =
+        LogEntry::new(LogLevel::Error, "Error occurred".to_string()).with_module("api".to_string());
 
     let json = serde_json::to_string(&entry).unwrap();
     assert!(json.contains("ERROR"));

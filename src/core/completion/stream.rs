@@ -1,9 +1,9 @@
 //! Completion streaming types
 
-use crate::core::types::responses::FinishReason;
-use futures::stream::BoxStream;
 #[cfg(test)]
 use crate::core::streaming::types::ChatCompletionChunk;
+use crate::core::types::responses::FinishReason;
+use futures::stream::BoxStream;
 
 /// Streaming completion response
 pub type CompletionStream =

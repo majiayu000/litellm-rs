@@ -271,7 +271,8 @@ mod tests {
 
     #[test]
     fn test_request_metrics_finish() {
-        let mut metrics = ProviderRequestMetrics::new("anthropic".to_string(), "claude-3".to_string());
+        let mut metrics =
+            ProviderRequestMetrics::new("anthropic".to_string(), "claude-3".to_string());
 
         // Small delay to ensure measurable duration
         thread::sleep(Duration::from_millis(10));
@@ -295,7 +296,8 @@ mod tests {
 
     #[test]
     fn test_request_metrics_increment_retry() {
-        let mut metrics = ProviderRequestMetrics::new("openai".to_string(), "gpt-3.5-turbo".to_string());
+        let mut metrics =
+            ProviderRequestMetrics::new("openai".to_string(), "gpt-3.5-turbo".to_string());
 
         assert_eq!(metrics.retry_count, 0);
 
@@ -440,7 +442,8 @@ mod tests {
         let status_codes = vec![200, 201, 400, 401, 403, 404, 429, 500, 502, 503];
 
         for code in status_codes {
-            let mut metrics = ProviderRequestMetrics::new("provider".to_string(), "model".to_string());
+            let mut metrics =
+                ProviderRequestMetrics::new("provider".to_string(), "model".to_string());
             metrics.finish(Some(code));
             assert_eq!(metrics.status_code, Some(code));
         }

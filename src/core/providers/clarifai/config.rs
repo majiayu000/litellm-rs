@@ -57,7 +57,10 @@ mod tests {
     #[test]
     fn test_clarifai_config_get_api_base_default() {
         let config = ClarifaiConfig::default();
-        assert_eq!(config.get_api_base(), "https://api.clarifai.com/v2/ext/openai/v1");
+        assert_eq!(
+            config.get_api_base(),
+            "https://api.clarifai.com/v2/ext/openai/v1"
+        );
     }
 
     #[test]

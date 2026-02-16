@@ -42,15 +42,13 @@ mod tests {
 
     #[test]
     fn test_voyage_config_get_api_base_custom() {
-        let config = VoyageConfig::from_env()
-            .with_base_url("https://custom.voyageai.com");
+        let config = VoyageConfig::from_env().with_base_url("https://custom.voyageai.com");
         assert_eq!(config.get_api_base(), "https://custom.voyageai.com");
     }
 
     #[test]
     fn test_voyage_config_get_api_key() {
-        let config = VoyageConfig::from_env()
-            .with_api_key("test-key");
+        let config = VoyageConfig::from_env().with_api_key("test-key");
         assert_eq!(config.get_api_key(), Some("test-key".to_string()));
     }
 
@@ -62,8 +60,7 @@ mod tests {
             "https://api.voyageai.com/v1/embeddings"
         );
 
-        let config2 = VoyageConfig::from_env()
-            .with_base_url("https://custom.api.com/embeddings");
+        let config2 = VoyageConfig::from_env().with_base_url("https://custom.api.com/embeddings");
         assert_eq!(
             config2.get_embeddings_url(),
             "https://custom.api.com/embeddings"

@@ -895,8 +895,8 @@ pub fn default_http_error_mapper(
 ) -> ProviderError {
     match status_code {
         400 => {
-            let message =
-                parse_error_message_from_body(response_body).unwrap_or_else(|| response_body.to_string());
+            let message = parse_error_message_from_body(response_body)
+                .unwrap_or_else(|| response_body.to_string());
             ProviderError::invalid_request(provider, message)
         }
         401 => ProviderError::authentication(provider, "Invalid API key"),

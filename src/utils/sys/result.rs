@@ -124,10 +124,9 @@ macro_rules! safe_unwrap {
             Ok(val) => val,
             Err(e) => {
                 error!("Error in {}: {}", $context, e);
-                return Err($crate::utils::error::gateway_error::GatewayError::Internal(format!(
-                    "Failed in {}: {}",
-                    $context, e
-                )));
+                return Err($crate::utils::error::gateway_error::GatewayError::Internal(
+                    format!("Failed in {}: {}", $context, e),
+                ));
             }
         }
     };
@@ -141,10 +140,9 @@ macro_rules! safe_unwrap_option {
             Some(val) => val,
             None => {
                 error!("Missing required value in {}", $context);
-                return Err($crate::utils::error::gateway_error::GatewayError::Internal(format!(
-                    "Missing required value in {}",
-                    $context
-                )));
+                return Err($crate::utils::error::gateway_error::GatewayError::Internal(
+                    format!("Missing required value in {}", $context),
+                ));
             }
         }
     };

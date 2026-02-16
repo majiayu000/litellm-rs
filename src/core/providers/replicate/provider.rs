@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use crate::core::providers::base::{GlobalPoolManager, HeaderPair, HttpMethod, header};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::traits::{provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider};
+use crate::core::traits::{
+    provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider,
+};
 use crate::core::types::{
     chat::ChatRequest,
     context::RequestContext,
@@ -557,7 +559,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_transform_request() {
-        use crate::core::types::{chat::ChatMessage, message::MessageContent, message::MessageRole};
+        use crate::core::types::{
+            chat::ChatMessage, message::MessageContent, message::MessageRole,
+        };
 
         let config = ReplicateConfig::new("test-token");
         let provider = ReplicateProvider::new(config).unwrap();

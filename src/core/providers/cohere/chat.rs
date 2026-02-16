@@ -3,7 +3,7 @@
 //! Handles chat completion requests for Cohere Command models.
 //! Supports both v1 (legacy) and v2 (OpenAI-compatible) APIs.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use super::config::{CohereApiVersion, CohereConfig};

@@ -25,7 +25,10 @@ fn test_config_custom_values() {
         .with_timeout(180);
 
     assert_eq!(config.base.api_key.as_deref(), Some("test-key"));
-    assert_eq!(config.base.api_base.as_deref(), Some("https://custom.api.com"));
+    assert_eq!(
+        config.base.api_base.as_deref(),
+        Some("https://custom.api.com")
+    );
     assert_eq!(config.base.timeout, 180);
     assert!(!config.debug);
 }
@@ -38,8 +41,7 @@ fn test_config_get_api_base_default() {
 
 #[test]
 fn test_config_get_api_key() {
-    let config = DeepgramConfig::from_env()
-        .with_api_key("my-api-key");
+    let config = DeepgramConfig::from_env().with_api_key("my-api-key");
     assert_eq!(config.get_api_key(), Some("my-api-key".to_string()));
 }
 
@@ -207,8 +209,7 @@ fn test_openai_transcription_response_serialization() {
 
 #[tokio::test]
 async fn test_provider_capabilities() {
-    let config = DeepgramConfig::from_env()
-        .with_api_key("test-key");
+    let config = DeepgramConfig::from_env().with_api_key("test-key");
     let provider = DeepgramProvider::new(config).await.unwrap();
     let capabilities = provider.capabilities();
 
@@ -330,8 +331,7 @@ async fn test_provider_creation_without_key() {
 
 #[tokio::test]
 async fn test_provider_creation_with_key() {
-    let config = DeepgramConfig::from_env()
-        .with_api_key("test-api-key");
+    let config = DeepgramConfig::from_env().with_api_key("test-api-key");
 
     let result = DeepgramProvider::new(config).await;
     assert!(result.is_ok());

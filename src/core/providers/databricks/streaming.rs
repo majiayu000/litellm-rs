@@ -48,7 +48,10 @@ mod tests {
         let result = parser.process_bytes(data).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].id, "chatcmpl-123");
-        assert_eq!(result[0].choices[0].delta.content, Some("Hello".to_string()));
+        assert_eq!(
+            result[0].choices[0].delta.content,
+            Some("Hello".to_string())
+        );
     }
 
     #[test]
@@ -58,7 +61,10 @@ mod tests {
 
         let data = b"data: {\"id\":\"test\",\"created\":0,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n";
         let result = parser.process_bytes(data).unwrap();
-        assert_eq!(result[0].choices[0].delta.role, Some(MessageRole::Assistant));
+        assert_eq!(
+            result[0].choices[0].delta.role,
+            Some(MessageRole::Assistant)
+        );
         assert_eq!(result[0].choices[0].delta.content, Some("Hi".to_string()));
     }
 

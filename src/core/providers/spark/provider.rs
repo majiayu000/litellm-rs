@@ -11,7 +11,7 @@ use std::pin::Pin;
 use crate::core::providers::base_provider::{BaseHttpClient, BaseProviderConfig};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
-    provider::ProviderConfig, error_mapper::trait_def::ErrorMapper,
+    error_mapper::trait_def::ErrorMapper, provider::ProviderConfig,
     provider::llm_provider::trait_definition::LLMProvider,
 };
 use crate::core::types::{
@@ -96,7 +96,6 @@ impl SparkProvider {
 
         Ok(())
     }
-
 }
 
 /// Spark error mapper
@@ -271,10 +270,7 @@ impl LLMProvider for SparkProvider {
 
         let registry = get_spark_registry();
         let model_spec = registry.get_model_spec(&request.model).ok_or_else(|| {
-            ProviderError::not_supported(
-                "spark",
-                format!("Unknown model: {}", request.model),
-            )
+            ProviderError::not_supported("spark", format!("Unknown model: {}", request.model))
         })?;
 
         if !model_spec

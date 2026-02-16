@@ -3,7 +3,9 @@
 #[cfg(test)]
 use crate::utils::logging::enhanced::async_logger::AsyncLogger;
 use crate::utils::logging::enhanced::sampler::LogSampler;
-use crate::utils::logging::enhanced::types::{AsyncLoggerConfig, AsyncLogRecord, HttpRequestMetrics};
+use crate::utils::logging::enhanced::types::{
+    AsyncLogRecord, AsyncLoggerConfig, HttpRequestMetrics,
+};
 use std::collections::HashMap;
 use tracing::Level;
 use uuid::Uuid;

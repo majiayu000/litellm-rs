@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-use crate::core::types::{chat::ChatMessage, chat::ChatRequest, message::MessageContent, message::MessageRole};
+use crate::core::types::{
+    chat::ChatMessage, chat::ChatRequest, message::MessageContent, message::MessageRole,
+};
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
 
 fn create_test_config() -> HuggingFaceConfig {

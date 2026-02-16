@@ -28,15 +28,13 @@ mod tests {
 
     #[test]
     fn test_nvidia_nim_config_get_api_base_custom() {
-        let config = NvidiaNimConfig::from_env()
-            .with_base_url("https://custom.nvidia.com");
+        let config = NvidiaNimConfig::from_env().with_base_url("https://custom.nvidia.com");
         assert_eq!(config.get_api_base(), "https://custom.nvidia.com");
     }
 
     #[test]
     fn test_nvidia_nim_config_get_api_key() {
-        let config = NvidiaNimConfig::from_env()
-            .with_api_key("nvapi-test-key");
+        let config = NvidiaNimConfig::from_env().with_api_key("nvapi-test-key");
         assert_eq!(config.get_api_key(), Some("nvapi-test-key".to_string()));
     }
 

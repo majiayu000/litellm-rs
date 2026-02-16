@@ -141,7 +141,10 @@ pub fn generate_embedding_key_with_user(
 /// Generate a cache key from arbitrary serializable request
 pub fn generate_key_from_json<T: Serialize>(prefix: &str, request: &T) -> CacheKey {
     let json = serde_json::to_string(request).unwrap_or_else(|e| {
-        warn!("Failed to serialize request for cache key generation: {}", e);
+        warn!(
+            "Failed to serialize request for cache key generation: {}",
+            e
+        );
         String::new()
     });
     let normalized = normalize_json_string(&json);

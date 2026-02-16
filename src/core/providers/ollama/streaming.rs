@@ -5,9 +5,9 @@
 
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
-use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, Usage};
 #[cfg(test)]
 use crate::core::types::responses::ChatResponse;
+use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, Usage};
 use bytes::Bytes;
 use futures::Stream;
 use std::pin::Pin;
@@ -38,7 +38,6 @@ pub struct OllamaStreamChunk {
     /// Evaluation count (only present when done=true)
     #[serde(default)]
     pub eval_count: Option<u32>,
-
 
     /// Error message (if any)
     #[serde(default)]

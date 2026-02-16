@@ -30,15 +30,13 @@ mod tests {
 
     #[test]
     fn test_groq_config_get_api_base_custom() {
-        let config = GroqConfig::from_env()
-            .with_base_url("https://custom.groq.com");
+        let config = GroqConfig::from_env().with_base_url("https://custom.groq.com");
         assert_eq!(config.get_api_base(), "https://custom.groq.com");
     }
 
     #[test]
     fn test_groq_config_get_api_key() {
-        let config = GroqConfig::from_env()
-            .with_api_key("test-key");
+        let config = GroqConfig::from_env().with_api_key("test-key");
         assert_eq!(config.get_api_key(), Some("test-key".to_string()));
     }
 

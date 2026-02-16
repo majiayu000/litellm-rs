@@ -152,8 +152,7 @@ fn test_model_name_special_chars() {
 fn test_empty_messages() {
     let messages: Vec<ChatMessage> = vec![];
     assert!(
-        RequestValidator::validate_chat_completion_request("gpt-4", &messages, None, None)
-            .is_err()
+        RequestValidator::validate_chat_completion_request("gpt-4", &messages, None, None).is_err()
     );
 }
 
@@ -266,8 +265,7 @@ fn test_multiple_messages() {
     ];
 
     assert!(
-        RequestValidator::validate_chat_completion_request("gpt-4", &messages, None, None)
-            .is_ok()
+        RequestValidator::validate_chat_completion_request("gpt-4", &messages, None, None).is_ok()
     );
 }
 

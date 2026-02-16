@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::config::CohereConfig;
 use super::error::CohereError;
@@ -256,7 +256,6 @@ impl CohereEmbeddingHandler {
             _ => None,
         }
     }
-
 }
 
 #[cfg(test)]

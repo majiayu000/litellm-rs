@@ -238,7 +238,10 @@ mod tests {
             core_msg.role,
             crate::core::types::message::MessageRole::Assistant
         );
-        assert_eq!(core_msg.tool_calls.as_ref().map(|calls| calls.len()), Some(1));
+        assert_eq!(
+            core_msg.tool_calls.as_ref().map(|calls| calls.len()),
+            Some(1)
+        );
     }
 
     #[test]

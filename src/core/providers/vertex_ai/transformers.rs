@@ -3,7 +3,8 @@
 use crate::ProviderError;
 use crate::core::types::responses::FinishReason;
 use crate::core::types::{
-    chat::ChatMessage, chat::ChatRequest,
+    chat::ChatMessage,
+    chat::ChatRequest,
     message::MessageContent,
     message::MessageRole,
     responses::{ChatChoice, ChatResponse, Usage},

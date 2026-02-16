@@ -5,7 +5,9 @@
 //! TracingConfig, and HealthConfig.
 
 use super::trait_def::Validate;
-use crate::config::models::monitoring::{HealthConfig, MetricsConfig, MonitoringConfig, TracingConfig};
+use crate::config::models::monitoring::{
+    HealthConfig, MetricsConfig, MonitoringConfig, TracingConfig,
+};
 use tracing::debug;
 
 impl Validate for MonitoringConfig {

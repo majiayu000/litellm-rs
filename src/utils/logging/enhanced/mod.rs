@@ -17,4 +17,4 @@ pub use async_logger::{AsyncLogger, async_logger, init_async_logger};
 pub use performance_logger::PerformanceLogger;
 pub use sampler::LogSampler;
 pub use security_logger::SecurityLogger;
-pub use types::{AsyncLoggerConfig, AsyncLogRecord, HttpRequestMetrics};
+pub use types::{AsyncLogRecord, AsyncLoggerConfig, HttpRequestMetrics};

@@ -3,9 +3,8 @@
 use crate::core::models::openai::{EmbeddingRequest, EmbeddingResponse};
 use crate::core::providers::ProviderRegistry;
 use crate::core::types::{
-    context::RequestContext,
-    embedding::EmbeddingInput, embedding::EmbeddingRequest as CoreEmbeddingRequest,
-    model::ProviderCapability,
+    context::RequestContext, embedding::EmbeddingInput,
+    embedding::EmbeddingRequest as CoreEmbeddingRequest, model::ProviderCapability,
 };
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
@@ -25,9 +24,12 @@ pub async fn embeddings(
 ) -> ActixResult<HttpResponse> {
     info!("Embedding request for model: {}", request.model);
 
-    handle_ai_request(&req, request.into_inner(), "Embedding", |request, context| {
-        handle_embedding_via_pool(&state.router, request, context)
-    })
+    handle_ai_request(
+        &req,
+        request.into_inner(),
+        "Embedding",
+        |request, context| handle_embedding_via_pool(&state.router, request, context),
+    )
     .await
 }
 

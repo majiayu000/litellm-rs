@@ -129,7 +129,9 @@ impl From<LogEntry> for ObservabilityLogRecord {
         let model = fields
             .remove("model")
             .and_then(|value| value.as_str().map(ToString::to_string));
-        let duration_ms = fields.remove("duration_ms").and_then(|value| value.as_u64());
+        let duration_ms = fields
+            .remove("duration_ms")
+            .and_then(|value| value.as_u64());
         let cost = fields.remove("cost").and_then(|value| value.as_f64());
         let tokens = fields
             .remove("tokens")

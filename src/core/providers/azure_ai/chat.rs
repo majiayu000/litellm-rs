@@ -9,7 +9,8 @@ use std::pin::Pin;
 
 // Type system imports
 use crate::core::types::{
-    chat::ChatMessage, chat::ChatRequest,
+    chat::ChatMessage,
+    chat::ChatRequest,
     context::RequestContext,
     message::MessageContent,
     message::MessageRole,

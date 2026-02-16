@@ -8,7 +8,8 @@ use crate::core::providers::unified_provider::ProviderError;
 /// Provider name constant for error messages
 const PROVIDER_NAME: &str = "v0";
 use crate::core::types::{
-    chat::ChatMessage, chat::ChatRequest,
+    chat::ChatMessage,
+    chat::ChatRequest,
     message::MessageRole,
     responses::{ChatChoice, ChatResponse, FinishReason, Usage},
 };

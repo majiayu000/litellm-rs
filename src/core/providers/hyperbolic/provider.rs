@@ -99,8 +99,7 @@ impl HyperbolicProvider {
 
     /// Create provider with API key only
     pub async fn with_api_key(api_key: impl Into<String>) -> Result<Self, HyperbolicError> {
-        let config = HyperbolicConfig::from_env()
-            .with_api_key(api_key);
+        let config = HyperbolicConfig::from_env().with_api_key(api_key);
         Self::new(config).await
     }
 

@@ -28,9 +28,12 @@ pub async fn completions(
 ) -> ActixResult<HttpResponse> {
     info!("Text completion request for model: {}", request.model);
 
-    handle_ai_request(&req, request.into_inner(), "Text completion", |request, context| {
-        handle_completion_via_pool(&state.router, request, context)
-    })
+    handle_ai_request(
+        &req,
+        request.into_inner(),
+        "Text completion",
+        |request, context| handle_completion_via_pool(&state.router, request, context),
+    )
     .await
 }
 

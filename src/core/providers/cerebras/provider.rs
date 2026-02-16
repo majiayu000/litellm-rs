@@ -14,7 +14,9 @@ use crate::core::providers::base::{
     GlobalPoolManager, HeaderPair, HttpMethod, get_pricing_db, header, header_owned,
 };
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::traits::{provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider};
+use crate::core::traits::{
+    provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider,
+};
 use crate::core::types::{
     chat::ChatRequest,
     context::RequestContext,

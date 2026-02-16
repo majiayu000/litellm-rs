@@ -7,7 +7,9 @@
 #[cfg(test)]
 mod tests {
     use litellm_rs::config::models::gateway::GatewayConfig;
-    use litellm_rs::config::models::provider::{ProviderConfig, ProviderHealthCheckConfig, RetryConfig};
+    use litellm_rs::config::models::provider::{
+        ProviderConfig, ProviderHealthCheckConfig, RetryConfig,
+    };
     use litellm_rs::config::models::server::{CorsConfig, ServerConfig, TlsConfig};
 
     // ==================== GatewayConfig Validation ====================

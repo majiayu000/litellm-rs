@@ -23,9 +23,12 @@ pub async fn image_generations(
 ) -> ActixResult<HttpResponse> {
     info!("Image generation request for model: {:?}", request.model);
 
-    handle_ai_request(&req, request.into_inner(), "Image generation", |request, context| {
-        handle_image_generation_via_pool(&state.router, request, context)
-    })
+    handle_ai_request(
+        &req,
+        request.into_inner(),
+        "Image generation",
+        |request, context| handle_image_generation_via_pool(&state.router, request, context),
+    )
     .await
 }
 

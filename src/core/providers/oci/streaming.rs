@@ -37,7 +37,10 @@ mod tests {
         let test_data = b"data: {\"id\":\"test-1\",\"model\":\"cohere.command-r-plus\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\n";
         let result = parser.process_bytes(test_data).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].choices[0].delta.content, Some("Hello".to_string()));
+        assert_eq!(
+            result[0].choices[0].delta.content,
+            Some("Hello".to_string())
+        );
     }
 
     #[test]

@@ -30,15 +30,13 @@ mod tests {
 
     #[test]
     fn test_deepgram_config_get_api_base_custom() {
-        let config = DeepgramConfig::from_env()
-            .with_base_url("https://custom.deepgram.com");
+        let config = DeepgramConfig::from_env().with_base_url("https://custom.deepgram.com");
         assert_eq!(config.get_api_base(), "https://custom.deepgram.com");
     }
 
     #[test]
     fn test_deepgram_config_get_api_key() {
-        let config = DeepgramConfig::from_env()
-            .with_api_key("test-key");
+        let config = DeepgramConfig::from_env().with_api_key("test-key");
         assert_eq!(config.get_api_key(), Some("test-key".to_string()));
     }
 
@@ -56,8 +54,7 @@ mod tests {
 
     #[test]
     fn test_deepgram_config_validation_with_key() {
-        let config = DeepgramConfig::from_env()
-            .with_api_key("test-key");
+        let config = DeepgramConfig::from_env().with_api_key("test-key");
         assert!(config.validate().is_ok());
     }
 }

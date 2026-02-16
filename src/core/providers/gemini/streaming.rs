@@ -51,8 +51,8 @@ impl Stream for GeminiStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::providers::base::sse::UnifiedSSEParser;
     use crate::core::providers::base::sse::GeminiTransformer;
+    use crate::core::providers::base::sse::UnifiedSSEParser;
 
     #[test]
     fn test_sse_parsing() {
