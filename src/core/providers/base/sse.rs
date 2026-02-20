@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::core::providers::unified_provider::ProviderError;
+use crate::core::{providers::unified_provider::ProviderError, types::thinking::ThinkingDelta};
 use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason};
 
 /// SSE Event Types
@@ -359,12 +359,18 @@ impl SSETransformer for OpenAICompatibleTransformer {
                 ProviderError::response_parsing(self.provider, "No delta in choice".to_string())
             })?;
 
-            let delta_obj: ChatDelta = serde_json::from_value(delta.clone()).map_err(|e| {
+            let mut delta_obj: ChatDelta = serde_json::from_value(delta.clone()).map_err(|e| {
                 ProviderError::response_parsing(
                     self.provider,
                     format!("Failed to parse delta: {}", e),
                 )
             })?;
+            if let Some(Value::String(reasoning_content)) = delta.get("reasoning_content") {
+                delta_obj.thinking = Some(ThinkingDelta {
+                    content: Some(reasoning_content.clone()),
+                    ..Default::default()
+                });
+            }
 
             let finish_reason = choice
                 .get("finish_reason")
