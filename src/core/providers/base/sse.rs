@@ -10,8 +10,8 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::core::{providers::unified_provider::ProviderError, types::thinking::ThinkingDelta};
 use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason};
+use crate::core::{providers::unified_provider::ProviderError, types::thinking::ThinkingDelta};
 
 /// SSE Event Types
 #[derive(Debug, Clone, PartialEq)]
