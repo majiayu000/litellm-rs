@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::core::providers::unified_provider::ProviderError;
+use crate::core::{providers::unified_provider::ProviderError, types::thinking::ThinkingDelta};
 use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason};
 
 /// SSE Event Types
@@ -359,12 +359,18 @@ impl SSETransformer for OpenAICompatibleTransformer {
                 ProviderError::response_parsing(self.provider, "No delta in choice".to_string())
             })?;
 
-            let delta_obj: ChatDelta = serde_json::from_value(delta.clone()).map_err(|e| {
+            let mut delta_obj: ChatDelta = serde_json::from_value(delta.clone()).map_err(|e| {
                 ProviderError::response_parsing(
                     self.provider,
                     format!("Failed to parse delta: {}", e),
                 )
             })?;
+            if let Some(Value::String(reasoning_content)) = delta.get("reasoning_content") {
+                delta_obj.thinking = Some(ThinkingDelta {
+                    content: Some(reasoning_content.clone()),
+                    ..Default::default()
+                });
+            }
 
             let finish_reason = choice
                 .get("finish_reason")
@@ -1113,6 +1119,37 @@ mod tests {
         assert_eq!(result.id, "test-id");
         assert_eq!(result.model, "gpt-4");
         assert_eq!(result.choices[0].delta.content, Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn test_openai_transformer_reasoning_content_to_thinking() {
+        let transformer = OpenAICompatibleTransformer::new("test");
+
+        let json_data = r#"{
+            "id": "test-id-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "deepseek-r1",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "Answer",
+                    "reasoning_content": "chain-of-thought"
+                },
+                "finish_reason": null
+            }]
+        }"#;
+
+        let result = transformer.transform_chunk(json_data).unwrap().unwrap();
+        assert_eq!(
+            result.choices[0]
+                .delta
+                .thinking
+                .as_ref()
+                .and_then(|t| t.content.as_ref())
+                .map(String::as_str),
+            Some("chain-of-thought")
+        );
     }
 
     #[test]
