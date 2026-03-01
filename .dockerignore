@@ -1,0 +1,23 @@
+.git
+.github
+.vscode
+.idea
+.DS_Store
+
+# Rust build artifacts
+/target
+**/target
+
+# CI/test artifacts
+coverage/
+lcov.info
+*.log
+
+# Docs and misc
+/docs
+*.md
+
+# Local env and temp
+.env
+.env.*
+/tmp

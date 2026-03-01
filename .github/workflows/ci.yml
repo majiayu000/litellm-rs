@@ -1,57 +1,59 @@
-name: CI
+name: CI Fast
 
 on:
-  push:
-    branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+concurrency:
+  group: ci-fast-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # 共享的 features 配置
   FEATURES: "postgres sqlite redis s3 metrics tracing websockets analytics"
 
 jobs:
-  # 代码质量检查 (快速，无需服务)
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: rustfmt, clippy
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-    - name: Cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-lint-fast-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Check formatting
-      run: cargo fmt --all -- --check
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
-    - name: Run clippy
-      run: cargo clippy --all-targets --features "$FEATURES" -- -D warnings
+      - name: Run clippy
+        run: cargo clippy --all-targets --features "$FEATURES" -- -D warnings
 
-    - name: Provider consistency guards
-      run: |
-        cargo test test_catalog_entries_are_supported_selectors --lib
-        cargo test test_catalog_entries_are_creatable_via_factory --lib
-        cargo test core::router::gateway_config::tests:: --lib
+      - name: Provider consistency guards
+        run: |
+          cargo test test_catalog_entries_are_supported_selectors --lib
+          cargo test test_catalog_entries_are_creatable_via_factory --lib
+          cargo test core::router::gateway_config::tests:: --lib
 
-    - name: Schema duplication guards
-      run: bash scripts/guards/check_schema_duplicates.sh
+      - name: Schema duplication guards
+        run: bash scripts/guards/check_schema_duplicates.sh
 
-  # 测试 + 覆盖率 (合并，避免重复编译)
   test:
-    name: Test & Coverage
+    name: Test
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -78,166 +80,29 @@ jobs:
           - 6379:6379
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: llvm-tools-preview
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-    - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-test-fast-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libpq-dev
-
-    - name: Run tests with coverage
-      run: cargo llvm-cov --features "$FEATURES" --workspace --lcov --output-path lcov.info
-      env:
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gateway_test
-        REDIS_URL: redis://localhost:6379
-        JWT_SECRET: test-secret-key-for-ci
-        RUST_LOG: debug
-
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        files: lcov.info
-        fail_ci_if_error: false
-        token: ${{ secrets.CODECOV_TOKEN }}
-
-  # 安全审计
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-    - name: Install cargo-audit
-      run: cargo install cargo-audit --locked
-    - name: Run audit
-      run: cargo audit
-
-  # Linux 构建 (每次都运行)
-  build-linux:
-    name: Build Linux
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libpq-dev pkg-config libssl-dev
-
-    - name: Build
-      run: cargo build --release --features "$FEATURES"
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: litellm-gateway-linux
-        path: |
-          target/release/gateway
-          target/release/google-gateway
-
-  # 跨平台构建 (只在 main 分支)
-  build-cross-platform:
-    name: Build (${{ matrix.os }})
-    if: github.ref == 'refs/heads/main'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Install system dependencies (macOS)
-      if: matrix.os == 'macos-latest'
-      run: brew install postgresql openssl pkg-config
-
-    - name: Build
-      run: cargo build --release --features "${{ env.FEATURES }}"
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: litellm-gateway-${{ matrix.target }}
-        path: |
-          target/release/gateway*
-          target/release/google-gateway*
-
-  # 基准测试 (只在 main 分支 push)
-  benchmark:
-    name: Benchmark
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libpq-dev
-
-    - name: Run benchmarks
-      run: cargo bench --features "$FEATURES"
-
-    - name: Upload benchmark results
-      uses: actions/upload-artifact@v4
-      with:
-        name: benchmark-results
-        path: target/criterion/
+      - name: Run tests
+        run: cargo test --workspace --features "$FEATURES" --verbose
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gateway_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret-key-for-ci
+          RUST_LOG: debug

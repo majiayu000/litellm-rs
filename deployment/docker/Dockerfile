@@ -1,7 +1,7 @@
 # Multi-stage build for LiteLLM-RS
 FROM rust:1.92-slim AS builder
 
-# Install system dependencies including cross-compilation tools
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
@@ -10,21 +10,9 @@ RUN apt-get update && apt-get install -y \
     git \
     cmake \
     build-essential \
-    clang \
-    llvm \
-    musl-tools \
-    gcc-arm-linux-gnueabihf \
-    libc6-dev-armhf-cross \
     && rm -rf /var/lib/apt/lists/*
 
-# Set environment variables for cross-compilation and AWS LC
 ENV CMAKE=cmake
-ENV CC=clang
-ENV CXX=clang++
-ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
-
-# Add Rust targets for cross-compilation
-RUN rustup target add armv7-unknown-linux-gnueabihf
 
 # Create app user
 RUN useradd -m -u 1001 appuser
@@ -46,16 +34,15 @@ RUN mkdir -p src/bin && \
     echo "fn main() {}" > benches/e2e_benchmarks.rs
 
 # Build dependencies (this layer will be cached)
-RUN cargo build --release --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUN cargo build --release --locked --features "postgres sqlite redis s3 metrics tracing websockets analytics"
 RUN rm -rf src/*
 
 # Copy source code and necessary files
 COPY src ./src
 COPY config ./config
-COPY .git ./.git
 
 # Build the application
-RUN cargo build --release --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUN cargo build --release --locked --features "postgres sqlite redis s3 metrics tracing websockets analytics"
 
 # Runtime stage
 FROM debian:bookworm-slim

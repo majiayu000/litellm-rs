@@ -1,0 +1,62 @@
+name: CI Cross Platform
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FEATURES: "postgres sqlite redis s3 metrics tracing websockets analytics"
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cross-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install system dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install postgresql openssl pkg-config
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --locked --features "$FEATURES"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: litellm-gateway-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/gateway*
+            target/${{ matrix.target }}/release/google-gateway*
