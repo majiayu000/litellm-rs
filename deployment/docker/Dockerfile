@@ -1,5 +1,5 @@
 # Multi-stage build for LiteLLM-RS
-FROM rust:1.92-slim AS builder
+FROM rust:1.92-bookworm AS builder
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
