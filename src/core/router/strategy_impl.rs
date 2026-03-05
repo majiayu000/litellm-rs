@@ -335,6 +335,34 @@ pub fn rate_limit_aware<'a>(
     rate_limit_aware_from_context(&contexts)
 }
 
+/// Round-robin selection (RoundRobin) using snapshot contexts.
+///
+/// Cycles through deployment IDs in context order, using a per-model counter.
+/// Returns None if contexts is empty.
+pub fn round_robin_from_context<'ctx, 'id>(
+    model_name: &str,
+    contexts: &'ctx [RoutingContext<'id>],
+    round_robin_counters: &DashMap<String, AtomicUsize>,
+) -> Option<&'id DeploymentId> {
+    if contexts.is_empty() {
+        return None;
+    }
+
+    if contexts.len() == 1 {
+        return Some(contexts[0].deployment_id);
+    }
+
+    // Get or create counter for this model
+    let counter = round_robin_counters
+        .entry(model_name.to_string())
+        .or_insert_with(|| AtomicUsize::new(0));
+
+    // Fetch and increment counter
+    let index = counter.fetch_add(1, Relaxed) % contexts.len();
+
+    Some(contexts[index].deployment_id)
+}
+
 /// Round-robin selection (RoundRobin)
 ///
 /// Cycles through deployments in order, using a per-model counter.
@@ -1069,6 +1097,39 @@ mod tests {
         let counters: DashMap<String, AtomicUsize> = DashMap::new();
         let candidates: Vec<String> = vec![];
         assert!(round_robin("gpt-4", &candidates, &counters).is_none());
+    }
+
+    #[test]
+    fn test_round_robin_from_context_cycles_through_candidates() {
+        let counters: DashMap<String, AtomicUsize> = DashMap::new();
+        let candidate_ids = vec!["d1".to_string(), "d2".to_string(), "d3".to_string()];
+        let contexts: Vec<RoutingContext<'_>> = candidate_ids
+            .iter()
+            .map(|id| RoutingContext {
+                deployment_id: id,
+                weight: 1,
+                priority: 1,
+                active_requests: 0,
+                tpm_current: 0,
+                tpm_limit: None,
+                rpm_current: 0,
+                rpm_limit: None,
+                avg_latency_us: 0,
+            })
+            .collect();
+
+        assert_eq!(
+            round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+            "d1"
+        );
+        assert_eq!(
+            round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+            "d2"
+        );
+        assert_eq!(
+            round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+            "d3"
+        );
     }
 
     // ====================================================================================

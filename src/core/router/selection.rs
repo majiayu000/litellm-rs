@@ -112,9 +112,9 @@ impl Router {
             RoutingStrategy::RateLimitAware => {
                 strategy_impl::rate_limit_aware_from_context(&routing_contexts)
             }
-            RoutingStrategy::RoundRobin => strategy_impl::round_robin(
+            RoutingStrategy::RoundRobin => strategy_impl::round_robin_from_context(
                 &resolved_name,
-                &candidate_ids,
+                &routing_contexts,
                 &self.round_robin_counters,
             ),
         }
