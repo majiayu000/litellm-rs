@@ -52,8 +52,8 @@ pub fn build_routing_contexts<'id>(
 }
 
 /// Weighted random selection (SimpleShuffle) using snapshot contexts.
-pub fn weighted_random_from_context<'ctx, 'id>(
-    contexts: &'ctx [RoutingContext<'id>],
+pub fn weighted_random_from_context<'id>(
+    contexts: &[RoutingContext<'id>],
 ) -> Option<&'id DeploymentId> {
     if contexts.is_empty() {
         return None;
@@ -84,8 +84,8 @@ pub fn weighted_random_from_context<'ctx, 'id>(
 }
 
 /// Select deployment with fewest active requests (LeastBusy) using snapshot contexts.
-pub fn least_busy_from_context<'ctx, 'id>(
-    contexts: &'ctx [RoutingContext<'id>],
+pub fn least_busy_from_context<'id>(
+    contexts: &[RoutingContext<'id>],
 ) -> Option<&'id DeploymentId> {
     if contexts.is_empty() {
         return None;
@@ -117,8 +117,8 @@ pub fn least_busy_from_context<'ctx, 'id>(
 }
 
 /// Select deployment with lowest TPM usage rate (UsageBased) using snapshot contexts.
-pub fn lowest_usage_from_context<'ctx, 'id>(
-    contexts: &'ctx [RoutingContext<'id>],
+pub fn lowest_usage_from_context<'id>(
+    contexts: &[RoutingContext<'id>],
 ) -> Option<&'id DeploymentId> {
     if contexts.is_empty() {
         return None;
@@ -143,8 +143,8 @@ pub fn lowest_usage_from_context<'ctx, 'id>(
 }
 
 /// Select deployment with lowest average latency (LatencyBased) using snapshot contexts.
-pub fn lowest_latency_from_context<'ctx, 'id>(
-    contexts: &'ctx [RoutingContext<'id>],
+pub fn lowest_latency_from_context<'id>(
+    contexts: &[RoutingContext<'id>],
 ) -> Option<&'id DeploymentId> {
     if contexts.is_empty() {
         return None;
@@ -181,8 +181,8 @@ pub fn lowest_latency_from_context<'ctx, 'id>(
 }
 
 /// Select deployment with lowest cost (CostBased) using snapshot contexts.
-pub fn lowest_cost_from_context<'ctx, 'id>(
-    contexts: &'ctx [RoutingContext<'id>],
+pub fn lowest_cost_from_context<'id>(
+    contexts: &[RoutingContext<'id>],
 ) -> Option<&'id DeploymentId> {
     if contexts.is_empty() {
         return None;
@@ -202,8 +202,8 @@ pub fn lowest_cost_from_context<'ctx, 'id>(
 }
 
 /// Select deployment furthest from rate limits (RateLimitAware) using snapshot contexts.
-pub fn rate_limit_aware_from_context<'ctx, 'id>(
-    contexts: &'ctx [RoutingContext<'id>],
+pub fn rate_limit_aware_from_context<'id>(
+    contexts: &[RoutingContext<'id>],
 ) -> Option<&'id DeploymentId> {
     if contexts.is_empty() {
         return None;
@@ -339,9 +339,9 @@ pub fn rate_limit_aware<'a>(
 ///
 /// Cycles through deployment IDs in context order, using a per-model counter.
 /// Returns None if contexts is empty.
-pub fn round_robin_from_context<'ctx, 'id>(
+pub fn round_robin_from_context<'id>(
     model_name: &str,
-    contexts: &'ctx [RoutingContext<'id>],
+    contexts: &[RoutingContext<'id>],
     round_robin_counters: &DashMap<String, AtomicUsize>,
 ) -> Option<&'id DeploymentId> {
     if contexts.is_empty() {
@@ -1102,7 +1102,7 @@ mod tests {
     #[test]
     fn test_round_robin_from_context_cycles_through_candidates() {
         let counters: DashMap<String, AtomicUsize> = DashMap::new();
-        let candidate_ids = vec!["d1".to_string(), "d2".to_string(), "d3".to_string()];
+        let candidate_ids = ["d1".to_string(), "d2".to_string(), "d3".to_string()];
         let contexts: Vec<RoutingContext<'_>> = candidate_ids
             .iter()
             .map(|id| RoutingContext {

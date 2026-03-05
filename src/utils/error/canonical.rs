@@ -147,6 +147,12 @@ impl CanonicalError for GatewayError {
             | GatewayError::VectorDb(_)
             | GatewayError::Alert(_)
             | GatewayError::Cache(_) => ErrorCode::Internal,
+            #[cfg(feature = "s3")]
+            GatewayError::S3(_) => ErrorCode::Internal,
+            #[cfg(feature = "vector-db")]
+            GatewayError::Qdrant(_) => ErrorCode::Internal,
+            #[cfg(feature = "websockets")]
+            GatewayError::WebSocket(_) => ErrorCode::Network,
         }
     }
 
@@ -251,6 +257,30 @@ mod tests {
         let err = GatewayError::NotFound("missing".to_string());
         assert_eq!(err.canonical_code(), ErrorCode::NotFound);
         assert!(!err.canonical_retryable());
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_gateway_s3_mapping() {
+        let err = GatewayError::S3("bucket error".to_string());
+        assert_eq!(err.canonical_code(), ErrorCode::Internal);
+        assert!(!err.canonical_retryable());
+    }
+
+    #[cfg(feature = "vector-db")]
+    #[test]
+    fn test_gateway_qdrant_mapping() {
+        let err = GatewayError::Qdrant("connection failed".to_string());
+        assert_eq!(err.canonical_code(), ErrorCode::Internal);
+        assert!(!err.canonical_retryable());
+    }
+
+    #[cfg(feature = "websockets")]
+    #[test]
+    fn test_gateway_websocket_mapping() {
+        let err = GatewayError::WebSocket("connection closed".to_string());
+        assert_eq!(err.canonical_code(), ErrorCode::Network);
+        assert!(err.canonical_retryable());
     }
 
     #[test]
