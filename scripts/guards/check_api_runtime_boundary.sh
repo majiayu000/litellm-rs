@@ -45,14 +45,14 @@ assert_no_match \
 
 assert_no_match \
   "config/sdk must not depend on server/storage modules" \
-  '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]+crate::(server|storage)\b'
+  '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]+crate[[:space:]]*::[[:space:]]*(server|storage)\b'
 
 assert_no_match \
   "config/sdk must not reference runtime crates via fully-qualified paths" \
-  '^[[:space:]]*[^/"#*].*\b(actix_web|sea_orm|redis)::'
+  '^[[:space:]]*[^/"#*].*\b(actix_web|sea_orm|redis)[[:space:]]*::'
 
 assert_no_match \
   "config/sdk must not reference server/storage modules via fully-qualified paths" \
-  '^[[:space:]]*[^/"#*].*\bcrate::(server|storage)::'
+  '^[[:space:]]*[^/"#*].*\bcrate[[:space:]]*::[[:space:]]*(server|storage)[[:space:]]*::'
 
 echo "API/runtime boundary guard passed."
