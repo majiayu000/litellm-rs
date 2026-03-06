@@ -115,38 +115,43 @@ impl MetricsCollector {
         cost: Option<f64>,
         success: bool,
     ) {
-        let mut metrics = self.prometheus_metrics.write().await;
-
-        // Request counter
         let key = format!("{}:{}", provider, model);
-        *metrics.request_total.entry(key.clone()).or_insert(0) += 1;
+        let duration_secs = duration.as_secs_f64();
 
-        // Duration histogram (bounded to prevent memory leaks)
-        metrics
-            .request_duration
-            .entry(key.clone())
-            .or_insert_with(BoundedHistogram::default)
-            .record(duration.as_secs_f64());
+        {
+            let mut metrics = self.prometheus_metrics.write().await;
 
-        // Error counter
-        if !success {
-            *metrics.error_total.entry(key.clone()).or_insert(0) += 1;
+            // Request counter
+            *metrics.request_total.entry(key.clone()).or_insert(0) += 1;
+
+            // Duration histogram (bounded to prevent memory leaks)
+            metrics
+                .request_duration
+                .entry(key.clone())
+                .or_insert_with(BoundedHistogram::default)
+                .record(duration_secs);
+
+            // Error counter
+            if !success {
+                *metrics.error_total.entry(key.clone()).or_insert(0) += 1;
+            }
         }
 
         // Token usage
         if let Some(token_usage) = tokens {
-            *metrics
-                .token_usage
-                .entry(format!("{}:prompt", key))
-                .or_insert(0) += token_usage.prompt_tokens as u64;
-            *metrics
-                .token_usage
-                .entry(format!("{}:completion", key))
-                .or_insert(0) += token_usage.completion_tokens as u64;
+            let prompt_key = format!("{}:prompt", key);
+            let completion_key = format!("{}:completion", key);
+            let prompt_tokens = token_usage.prompt_tokens as u64;
+            let completion_tokens = token_usage.completion_tokens as u64;
+
+            let mut metrics = self.prometheus_metrics.write().await;
+            *metrics.token_usage.entry(prompt_key).or_insert(0) += prompt_tokens;
+            *metrics.token_usage.entry(completion_key).or_insert(0) += completion_tokens;
         }
 
         // Cost tracking
         if let Some(request_cost) = cost {
+            let mut metrics = self.prometheus_metrics.write().await;
             *metrics.cost_total.entry(key).or_insert(0.0) += request_cost;
         }
     }
@@ -372,6 +377,37 @@ mod tests {
         let metrics = collector.prometheus_metrics.read().await;
         assert_eq!(*metrics.request_total.get("openai:gpt-4").unwrap(), 1);
         assert_eq!(*metrics.error_total.get("openai:gpt-4").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_record_request_updates_all_primary_metrics() {
+        let collector = MetricsCollector::new();
+        let tokens = TokenUsage {
+            prompt_tokens: 42,
+            completion_tokens: 24,
+            total_tokens: 66,
+        };
+
+        collector
+            .record_request(
+                "openai",
+                "gpt-4",
+                Duration::from_millis(100),
+                Some(tokens),
+                Some(0.12),
+                false,
+            )
+            .await;
+
+        let metrics = collector.prometheus_metrics.read().await;
+        assert_eq!(*metrics.request_total.get("openai:gpt-4").unwrap(), 1);
+        assert_eq!(*metrics.error_total.get("openai:gpt-4").unwrap(), 1);
+        assert_eq!(*metrics.token_usage.get("openai:gpt-4:prompt").unwrap(), 42);
+        assert_eq!(
+            *metrics.token_usage.get("openai:gpt-4:completion").unwrap(),
+            24
+        );
+        assert_eq!(*metrics.cost_total.get("openai:gpt-4").unwrap(), 0.12);
     }
 
     #[tokio::test]
