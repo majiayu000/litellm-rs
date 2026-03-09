@@ -64,7 +64,12 @@ fn test_extract_auth_method_none() {
 fn test_is_public_route() {
     assert!(is_public_route("/health"));
     assert!(is_public_route("/auth/login"));
-    assert!(is_public_route("/metrics"));
+    assert!(is_public_route("/auth/login/callback"));
+    // /metrics requires authentication (not in PUBLIC_ROUTES)
+    assert!(!is_public_route("/metrics"));
+    // Prefix bypass must be prevented
+    assert!(!is_public_route("/auth/login_evil"));
+    assert!(!is_public_route("/healthz"));
     assert!(!is_public_route("/api/users"));
     assert!(!is_public_route("/v1/chat/completions"));
 }

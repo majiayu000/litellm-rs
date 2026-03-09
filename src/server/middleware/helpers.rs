@@ -47,7 +47,6 @@ pub fn extract_auth_method(headers: &HeaderMap) -> AuthMethod {
 pub fn is_public_route(path: &str) -> bool {
     const PUBLIC_ROUTES: &[&str] = &[
         "/health",
-        "/metrics",
         "/auth/login",
         "/auth/register",
         "/auth/forgot-password",
@@ -57,7 +56,9 @@ pub fn is_public_route(path: &str) -> bool {
         "/openapi.json",
     ];
 
-    PUBLIC_ROUTES.iter().any(|&route| path.starts_with(route))
+    PUBLIC_ROUTES
+        .iter()
+        .any(|&route| path == route || path.starts_with(&format!("{route}/")))
 }
 
 /// Check if a route requires admin privileges
