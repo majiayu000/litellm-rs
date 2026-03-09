@@ -8,6 +8,7 @@ use actix_web::web;
 use actix_web::{HttpResponse, ResponseError};
 use dashmap::DashMap;
 use futures::future::{Ready, ready};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -57,6 +58,7 @@ impl KeyTracker {
 #[derive(Debug)]
 struct RateLimitError {
     retry_after: u64,
+    limit: u32,
 }
 
 impl fmt::Display for RateLimitError {
@@ -73,7 +75,7 @@ impl ResponseError for RateLimitError {
     fn error_response(&self) -> HttpResponse {
         HttpResponse::TooManyRequests()
             .insert_header(("Retry-After", self.retry_after.to_string()))
-            .insert_header(("X-RateLimit-Limit", "rate_limited"))
+            .insert_header(("X-RateLimit-Limit", self.limit.to_string()))
             .json(serde_json::json!({
                 "error": {
                     "message": "Rate limit exceeded. Please retry after the indicated seconds.",
@@ -141,8 +143,9 @@ pub struct RateLimitMiddlewareService<S> {
 fn extract_client_key(req: &ServiceRequest) -> String {
     if let Some(auth) = req.headers().get("Authorization") {
         if let Ok(val) = auth.to_str() {
-            // Use the raw header value so different keys map to different buckets.
-            return val.to_string();
+            // Hash the token so raw secrets never reside in memory as map keys
+            let hash = Sha256::digest(val.as_bytes());
+            return format!("auth:{:x}", hash);
         }
     }
 
@@ -182,8 +185,10 @@ where
 
         // --- Try global rate limiter first ---
         if let Some(global_limiter) = get_global_rate_limiter() {
-            // The global limiter uses its own configured default_rpm.
-            // We hand off to it and treat its result as authoritative.
+            let limit = global_limiter.limit();
+            // service.call() returns a lazy future; it only executes on .await.
+            // We must call it here because it consumes `req`, but we will NOT
+            // await it if the rate check fails — so no downstream work is wasted.
             let fut = self.service.call(req);
             let key = client_key.clone();
 
@@ -198,7 +203,7 @@ where
                         "Rate limit exceeded (global limiter): retry after {}s",
                         retry_after
                     );
-                    let err = RateLimitError { retry_after };
+                    let err = RateLimitError { retry_after, limit };
                     return Err(actix_web::Error::from(err));
                 }
 
@@ -242,7 +247,10 @@ where
                     "Rate limit exceeded (fallback limiter): retry after {}s",
                     retry_after
                 );
-                let err = RateLimitError { retry_after };
+                let err = RateLimitError {
+                    retry_after,
+                    limit: requests_per_minute,
+                };
                 return Err(actix_web::Error::from(err));
             }
 
