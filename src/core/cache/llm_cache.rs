@@ -13,7 +13,7 @@ use crate::core::models::openai::{
 };
 use crate::storage::redis::RedisPool;
 use crate::utils::error::gateway_error::Result;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, trace};
@@ -89,11 +89,53 @@ impl LLMCacheConfig {
     }
 }
 
+fn serialize_chat_response_arc<S>(
+    response: &Arc<ChatCompletionResponse>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    response.as_ref().serialize(serializer)
+}
+
+fn deserialize_chat_response_arc<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Arc<ChatCompletionResponse>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    ChatCompletionResponse::deserialize(deserializer).map(Arc::new)
+}
+
+fn serialize_embedding_response_arc<S>(
+    response: &Arc<EmbeddingResponse>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    response.as_ref().serialize(serializer)
+}
+
+fn deserialize_embedding_response_arc<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Arc<EmbeddingResponse>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    EmbeddingResponse::deserialize(deserializer).map(Arc::new)
+}
+
 /// Cached chat response wrapper
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedChatResponse {
     /// The original response
-    pub response: ChatCompletionResponse,
+    #[serde(
+        serialize_with = "serialize_chat_response_arc",
+        deserialize_with = "deserialize_chat_response_arc"
+    )]
+    pub response: Arc<ChatCompletionResponse>,
     /// Model used for the request
     pub model: String,
     /// Whether this was a cached response
@@ -105,6 +147,11 @@ pub struct CachedChatResponse {
 impl CachedChatResponse {
     /// Create a new cached response
     pub fn new(response: ChatCompletionResponse, model: String) -> Self {
+        Self::from_arc_response(Arc::new(response), model)
+    }
+
+    /// Create a new cached response from a shared payload
+    pub fn from_arc_response(response: Arc<ChatCompletionResponse>, model: String) -> Self {
         Self {
             response,
             model,
@@ -116,9 +163,19 @@ impl CachedChatResponse {
         }
     }
 
+    /// Clone the shared response payload
+    pub fn response_arc(&self) -> Arc<ChatCompletionResponse> {
+        Arc::clone(&self.response)
+    }
+
+    /// Get the shared response payload
+    pub fn into_response_arc(self) -> Arc<ChatCompletionResponse> {
+        self.response
+    }
+
     /// Get the underlying response
     pub fn into_response(self) -> ChatCompletionResponse {
-        self.response
+        Arc::try_unwrap(self.response).unwrap_or_else(|response| (*response).clone())
     }
 }
 
@@ -126,7 +183,11 @@ impl CachedChatResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedEmbeddingResponse {
     /// The original response
-    pub response: EmbeddingResponse,
+    #[serde(
+        serialize_with = "serialize_embedding_response_arc",
+        deserialize_with = "deserialize_embedding_response_arc"
+    )]
+    pub response: Arc<EmbeddingResponse>,
     /// Model used for the request
     pub model: String,
     /// Whether this was a cached response
@@ -138,6 +199,11 @@ pub struct CachedEmbeddingResponse {
 impl CachedEmbeddingResponse {
     /// Create a new cached response
     pub fn new(response: EmbeddingResponse, model: String) -> Self {
+        Self::from_arc_response(Arc::new(response), model)
+    }
+
+    /// Create a new cached response from a shared payload
+    pub fn from_arc_response(response: Arc<EmbeddingResponse>, model: String) -> Self {
         Self {
             response,
             model,
@@ -149,9 +215,19 @@ impl CachedEmbeddingResponse {
         }
     }
 
+    /// Clone the shared response payload
+    pub fn response_arc(&self) -> Arc<EmbeddingResponse> {
+        Arc::clone(&self.response)
+    }
+
+    /// Get the shared response payload
+    pub fn into_response_arc(self) -> Arc<EmbeddingResponse> {
+        self.response
+    }
+
     /// Get the underlying response
     pub fn into_response(self) -> EmbeddingResponse {
-        self.response
+        Arc::try_unwrap(self.response).unwrap_or_else(|response| (*response).clone())
     }
 }
 
@@ -190,7 +266,7 @@ impl LLMCache {
     pub async fn get_chat_response(
         &self,
         request: &ChatCompletionRequest,
-    ) -> Result<Option<ChatCompletionResponse>> {
+    ) -> Result<Option<Arc<ChatCompletionResponse>>> {
         self.get_chat_response_with_user(request, None).await
     }
 
@@ -199,7 +275,7 @@ impl LLMCache {
         &self,
         request: &ChatCompletionRequest,
         user_id: Option<&str>,
-    ) -> Result<Option<ChatCompletionResponse>> {
+    ) -> Result<Option<Arc<ChatCompletionResponse>>> {
         // Don't cache streaming requests
         if request.stream.unwrap_or(false) {
             return Ok(None);
@@ -217,7 +293,7 @@ impl LLMCache {
                 key = %key,
                 "Chat cache hit"
             );
-            return Ok(Some(cached.into_response()));
+            return Ok(Some(cached.response_arc()));
         }
 
         // TODO: Implement semantic cache lookup
@@ -285,7 +361,7 @@ impl LLMCache {
     pub async fn get_embedding_response(
         &self,
         request: &EmbeddingRequest,
-    ) -> Result<Option<EmbeddingResponse>> {
+    ) -> Result<Option<Arc<EmbeddingResponse>>> {
         let key = generate_embedding_key(request);
 
         if let Some(cached) = self.embedding_cache.get(&key).await? {
@@ -294,7 +370,7 @@ impl LLMCache {
                 key = %key,
                 "Embedding cache hit"
             );
-            return Ok(Some(cached.into_response()));
+            return Ok(Some(cached.response_arc()));
         }
 
         Ok(None)
@@ -441,6 +517,7 @@ mod tests {
     use super::*;
     use crate::core::models::openai::messages::{ChatMessage, MessageContent, MessageRole};
     use crate::core::models::openai::{ChatChoice, Usage};
+    use std::sync::Arc;
 
     fn create_user_message(content: &str) -> ChatMessage {
         ChatMessage {
@@ -527,7 +604,29 @@ mod tests {
 
         let result = cache.get_chat_response(&request).await.unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().id, response.id);
+        assert_eq!(result.as_ref().unwrap().id.as_str(), response.id.as_str());
+    }
+
+    #[tokio::test]
+    async fn test_llm_cache_chat_hit_reuses_shared_payload() {
+        let cache = LLMCache::memory_only();
+        let request = create_test_request();
+        let response = create_test_response();
+
+        cache.cache_chat_response(&request, response).await.unwrap();
+
+        let first = cache
+            .get_chat_response(&request)
+            .await
+            .unwrap()
+            .expect("first cache hit");
+        let second = cache
+            .get_chat_response(&request)
+            .await
+            .unwrap()
+            .expect("second cache hit");
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[tokio::test]
@@ -616,7 +715,49 @@ mod tests {
 
         let result = cache.get_embedding_response(&request).await.unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().model, response.model);
+        assert_eq!(
+            result.as_ref().unwrap().model.as_str(),
+            response.model.as_str()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_cache_embedding_hit_reuses_shared_payload() {
+        let cache = LLMCache::memory_only();
+
+        let request = EmbeddingRequest {
+            model: "text-embedding-ada-002".to_string(),
+            input: serde_json::json!("Test input"),
+            user: None,
+        };
+
+        let response = EmbeddingResponse {
+            object: "list".to_string(),
+            data: vec![],
+            model: "text-embedding-ada-002".to_string(),
+            usage: crate::core::models::openai::EmbeddingUsage {
+                prompt_tokens: 3,
+                total_tokens: 3,
+            },
+        };
+
+        cache
+            .cache_embedding_response(&request, response)
+            .await
+            .unwrap();
+
+        let first = cache
+            .get_embedding_response(&request)
+            .await
+            .unwrap()
+            .expect("first cache hit");
+        let second = cache
+            .get_embedding_response(&request)
+            .await
+            .unwrap()
+            .expect("second cache hit");
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     // ==================== Statistics Tests ====================
@@ -673,8 +814,9 @@ mod tests {
         assert_eq!(cached.model, "gpt-4");
         assert!(cached.cached_at > 0);
 
-        let restored = cached.into_response();
-        assert_eq!(restored.id, response.id);
+        let shared = cached.response_arc();
+        assert!(Arc::ptr_eq(&shared, &cached.response));
+        assert_eq!(shared.id.as_str(), response.id.as_str());
     }
 
     // ==================== LLMCacheConfig Tests ====================
