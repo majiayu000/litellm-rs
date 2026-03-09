@@ -103,12 +103,29 @@ impl Router {
     }
 
     /// Set the complete list of deployments (batch operation)
+    ///
+    /// Builds the new maps locally first, then swaps entry-by-entry so
+    /// concurrent readers never observe an empty deployment window.
     pub fn set_model_list(&self, deployments: Vec<Deployment>) {
-        self.deployments.clear();
-        self.model_index.clear();
+        let new_deployments: DashMap<DeploymentId, Deployment> = DashMap::new();
+        let new_index: DashMap<String, Vec<DeploymentId>> = DashMap::new();
 
         for deployment in deployments {
-            self.add_deployment(deployment);
+            let model_name = deployment.model_name.clone();
+            let id = deployment.id.clone();
+            new_deployments.insert(id.clone(), deployment);
+            new_index.entry(model_name).or_default().push(id);
+        }
+
+        self.deployments
+            .retain(|k, _| new_deployments.contains_key(k));
+        for (k, v) in new_deployments {
+            self.deployments.insert(k, v);
+        }
+
+        self.model_index.retain(|k, _| new_index.contains_key(k));
+        for (k, v) in new_index {
+            self.model_index.insert(k, v);
         }
     }
 

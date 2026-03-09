@@ -134,7 +134,10 @@ impl Router {
     /// Decrements the active_requests counter for the deployment.
     pub fn release_deployment(&self, deployment_id: &str) {
         if let Some(deployment) = self.deployments.get(deployment_id) {
-            deployment.state.active_requests.fetch_sub(1, Relaxed);
+            let _ = deployment
+                .state
+                .active_requests
+                .fetch_update(Relaxed, Relaxed, |v| Some(v.saturating_sub(1)));
         }
     }
 }
