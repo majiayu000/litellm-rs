@@ -113,9 +113,9 @@ mod tests {
         let usage = UsageTokens::new(1000, 500);
         let result = cost_per_token("claude-3-opus-20240229", &usage);
 
-        // Should return Ok for known Anthropic model
-        assert!(result.is_ok() || result.is_err());
-        // We don't test exact values as they may change
+        let (input_cost, output_cost) = result.expect("known Anthropic model should be priced");
+        assert!(input_cost > 0.0);
+        assert!(output_cost > 0.0);
     }
 
     #[test]
@@ -123,7 +123,9 @@ mod tests {
         let usage = UsageTokens::new(1000, 500);
         let result = cost_per_token("claude-3-sonnet-20240229", &usage);
 
-        assert!(result.is_ok() || result.is_err());
+        let (input_cost, output_cost) = result.expect("known Anthropic model should be priced");
+        assert!(input_cost > 0.0);
+        assert!(output_cost > 0.0);
     }
 
     #[test]
@@ -131,7 +133,9 @@ mod tests {
         let usage = UsageTokens::new(1000, 500);
         let result = cost_per_token("claude-3-haiku-20240307", &usage);
 
-        assert!(result.is_ok() || result.is_err());
+        let (input_cost, output_cost) = result.expect("known Anthropic model should be priced");
+        assert!(input_cost > 0.0);
+        assert!(output_cost > 0.0);
     }
 
     #[test]
@@ -318,22 +322,24 @@ mod tests {
     #[test]
     fn test_anthropic_cost_with_prefix() {
         // Test model with anthropic/ prefix
-        let result = calculate_anthropic_cost("anthropic/claude-3-opus-20240229", 1000, 500);
-        // May or may not work depending on implementation
-        assert!(result.is_some() || result.is_none());
+        let prefixed = calculate_anthropic_cost("anthropic/claude-3-opus-20240229", 1000, 500);
+        let canonical = calculate_anthropic_cost("claude-3-opus-20240229", 1000, 500);
+
+        assert_eq!(prefixed, canonical);
+        assert!(prefixed.is_some());
     }
 
     #[test]
     fn test_anthropic_cost_claude_2() {
         let result = calculate_anthropic_cost("claude-2.1", 1000, 500);
-        // Should work if model is in pricing database
-        assert!(result.is_some() || result.is_none());
+        let cost = result.expect("claude-2.1 should have anthropic pricing");
+        assert!(cost > 0.0);
     }
 
     #[test]
     fn test_anthropic_cost_claude_instant() {
         let result = calculate_anthropic_cost("claude-instant-1.2", 1000, 500);
-        // Should work if model is in pricing database
-        assert!(result.is_some() || result.is_none());
+        let cost = result.expect("claude-instant-1.2 should have anthropic pricing");
+        assert!(cost > 0.0);
     }
 }

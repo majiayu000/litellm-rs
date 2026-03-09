@@ -3,24 +3,22 @@
 //! This module contains all tests for the server components.
 
 #[cfg(test)]
-use crate::server::HttpServer;
 use crate::server::builder::ServerBuilder;
 use crate::server::types::ServerRequestMetrics;
+use crate::utils::error::gateway_error::GatewayError;
 
-#[test]
-fn test_server_builder() {
-    let _builder = ServerBuilder::new();
-    // ServerBuilder exists and can be instantiated
-}
+#[tokio::test]
+async fn test_server_builder_requires_config() {
+    let result = ServerBuilder::new().build().await;
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("builder without configuration should fail"),
+    };
 
-#[test]
-fn test_app_state_creation() {
-    // Basic test to ensure module compiles
-    // HttpServer requires config, so we just test that the type exists
-    assert_eq!(
-        std::mem::size_of::<HttpServer>(),
-        std::mem::size_of::<HttpServer>()
-    );
+    match error {
+        GatewayError::Config(message) => assert_eq!(message, "Configuration is required"),
+        other => panic!("expected config error, got: {other:?}"),
+    }
 }
 
 #[test]
