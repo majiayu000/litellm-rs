@@ -19,6 +19,7 @@ use super::model_info::{
 };
 use crate::ProviderError;
 use crate::core::providers::base::HttpErrorMapper;
+use crate::core::streaming::utils::is_done_marker;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::{
     chat::ChatMessage,
@@ -600,7 +601,7 @@ impl GitHubCopilotStream {
         if let Some(data) = line.strip_prefix("data: ") {
             let data = data.trim();
 
-            if data == "[DONE]" {
+            if is_done_marker(data) {
                 return None;
             }
 
@@ -723,6 +724,27 @@ mod tests {
         let params = provider.get_supported_openai_params("claude-3-7-sonnet");
         assert!(params.contains(&"thinking"));
         assert!(params.contains(&"reasoning_effort"));
+    }
+
+    #[test]
+    fn test_github_copilot_stream_parse_done_marker() {
+        let stream = futures::stream::empty::<Result<Bytes, reqwest::Error>>();
+        let parser = GitHubCopilotStream::new(stream);
+        assert!(parser.parse_sse_line("data: [DONE]").is_none());
+    }
+
+    #[test]
+    fn test_github_copilot_stream_parse_valid_chunk() {
+        let stream = futures::stream::empty::<Result<Bytes, reqwest::Error>>();
+        let parser = GitHubCopilotStream::new(stream);
+        let line = r#"data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}"#;
+
+        let parsed = parser
+            .parse_sse_line(line)
+            .expect("expected parser to return a chunk result");
+        let chunk = parsed.expect("expected valid chat chunk");
+        assert_eq!(chunk.id, "chatcmpl-123");
+        assert_eq!(chunk.choices.len(), 1);
     }
 
     #[test]
