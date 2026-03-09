@@ -84,9 +84,7 @@ pub fn weighted_random_from_context<'id>(
 }
 
 /// Select deployment with fewest active requests (LeastBusy) using snapshot contexts.
-pub fn least_busy_from_context<'id>(
-    contexts: &[RoutingContext<'id>],
-) -> Option<&'id DeploymentId> {
+pub fn least_busy_from_context<'id>(contexts: &[RoutingContext<'id>]) -> Option<&'id DeploymentId> {
     if contexts.is_empty() {
         return None;
     }
