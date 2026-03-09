@@ -70,7 +70,7 @@ async fn test_health_monitor_registration() {
 
     monitor.register_provider("test-provider".to_string()).await;
 
-    let health = monitor.get_provider_health("test-provider");
+    let health = monitor.get_provider_health("test-provider").await;
     assert!(health.is_some());
     assert_eq!(health.unwrap().provider_id, "test-provider");
 }
