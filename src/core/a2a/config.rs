@@ -255,7 +255,7 @@ fn extract_url_host(url: &str) -> Option<String> {
 
     // Take everything up to the first '/', '?', or '#' to isolate host[:port]
     let authority = after_scheme
-        .split(|c| c == '/' || c == '?' || c == '#')
+        .split(['/', '?', '#'])
         .next()?;
 
     if authority.is_empty() {
