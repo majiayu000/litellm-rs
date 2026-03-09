@@ -10,8 +10,14 @@ pub fn parse_sse_line(line: &str) -> Option<String> {
 }
 
 /// Check if SSE line indicates end of stream
+pub fn is_done_marker(data: &str) -> bool {
+    data == "[DONE]"
+}
+
+/// Check if SSE line indicates end of stream
 pub fn is_done_line(line: &str) -> bool {
-    line.trim() == "data: [DONE]" || line.trim() == "[DONE]"
+    let trimmed = line.trim();
+    trimmed == "data: [DONE]" || is_done_marker(trimmed)
 }
 
 /// Create an error event for SSE
@@ -98,6 +104,17 @@ mod tests {
     }
 
     // ==================== is_done_line Tests ====================
+
+    #[test]
+    fn test_is_done_marker_exact_match() {
+        assert!(is_done_marker("[DONE]"));
+    }
+
+    #[test]
+    fn test_is_done_marker_non_match() {
+        assert!(!is_done_marker(" [DONE] "));
+        assert!(!is_done_marker("done"));
+    }
 
     #[test]
     fn test_is_done_line_with_data_prefix() {

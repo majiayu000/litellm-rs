@@ -16,6 +16,7 @@ use super::model_info::{
 };
 use crate::core::providers::base::{GlobalPoolManager, HttpErrorMapper, HttpMethod, header};
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::streaming::utils::is_done_marker;
 use crate::core::traits::{
     provider::ProviderConfig as _, provider::llm_provider::trait_definition::LLMProvider,
 };
@@ -35,6 +36,17 @@ const FIREWORKS_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletionStream,
     ProviderCapability::ToolCalling,
 ];
+
+fn parse_fireworks_sse_line(line: &str) -> Option<Result<ChatChunk, ProviderError>> {
+    let data = line.strip_prefix("data: ")?;
+    if is_done_marker(data) {
+        return None;
+    }
+
+    Some(serde_json::from_str::<ChatChunk>(data).map_err(|e| {
+        ProviderError::api_error("fireworks", 500, format!("Failed to parse chunk: {}", e))
+    }))
+}
 
 /// Fireworks AI provider implementation
 #[derive(Debug, Clone)]
@@ -485,20 +497,8 @@ impl LLMProvider for FireworksProvider {
                     let text = String::from_utf8_lossy(&bytes);
                     // Parse SSE data
                     for line in text.lines() {
-                        if let Some(data) = line.strip_prefix("data: ") {
-                            if data == "[DONE]" {
-                                return None;
-                            }
-                            match serde_json::from_str::<ChatChunk>(data) {
-                                Ok(chunk) => return Some(Ok(chunk)),
-                                Err(e) => {
-                                    return Some(Err(ProviderError::api_error(
-                                        "fireworks",
-                                        500,
-                                        format!("Failed to parse chunk: {}", e),
-                                    )));
-                                }
-                            }
+                        if let Some(parsed) = parse_fireworks_sse_line(line) {
+                            return Some(parsed);
                         }
                     }
                     None
@@ -554,5 +554,31 @@ impl LLMProvider for FireworksProvider {
         let output_cost =
             (output_tokens as f64) * (model_info.output_cost_per_million / 1_000_000.0);
         Ok(input_cost + output_cost)
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::parse_fireworks_sse_line;
+
+    #[test]
+    fn test_parse_fireworks_sse_line_done_marker() {
+        assert!(parse_fireworks_sse_line("data: [DONE]").is_none());
+    }
+
+    #[test]
+    fn test_parse_fireworks_sse_line_valid_chunk() {
+        let line = r#"data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"llama-v3p1-70b-instruct","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}"#;
+        let parsed = parse_fireworks_sse_line(line).expect("expected a parsed chunk result");
+        let chunk = parsed.expect("expected valid chat chunk");
+        assert_eq!(chunk.id, "chatcmpl-123");
+        assert_eq!(chunk.choices.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_fireworks_sse_line_invalid_chunk() {
+        let parsed = parse_fireworks_sse_line("data: {invalid json")
+            .expect("expected parse attempt for malformed chunk");
+        assert!(parsed.is_err());
     }
 }
