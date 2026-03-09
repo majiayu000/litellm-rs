@@ -197,19 +197,41 @@ impl PgVectorConfig {
         }
 
         if let Ok(dimension) = env::var("PG_VECTOR_DIMENSION") {
-            config.dimension = dimension.parse().unwrap_or(1536);
+            config.dimension = dimension.parse().map_err(|_| {
+                ProviderError::configuration(
+                    PROVIDER_NAME,
+                    format!("Invalid PG_VECTOR_DIMENSION value: '{dimension}' (expected integer)"),
+                )
+            })?;
         }
 
         if let Ok(index_type) = env::var("PG_VECTOR_INDEX_TYPE") {
-            config.index_type = index_type.parse().unwrap_or_default();
+            config.index_type = index_type.parse().map_err(|e| {
+                ProviderError::configuration(
+                    PROVIDER_NAME,
+                    format!("Invalid PG_VECTOR_INDEX_TYPE: {e}"),
+                )
+            })?;
         }
 
         if let Ok(metric) = env::var("PG_VECTOR_DISTANCE_METRIC") {
-            config.distance_metric = metric.parse().unwrap_or_default();
+            config.distance_metric = metric.parse().map_err(|e| {
+                ProviderError::configuration(
+                    PROVIDER_NAME,
+                    format!("Invalid PG_VECTOR_DISTANCE_METRIC: {e}"),
+                )
+            })?;
         }
 
         if let Ok(max_conn) = env::var("PG_VECTOR_MAX_CONNECTIONS") {
-            config.max_connections = max_conn.parse().unwrap_or(10);
+            config.max_connections = max_conn.parse().map_err(|_| {
+                ProviderError::configuration(
+                    PROVIDER_NAME,
+                    format!(
+                        "Invalid PG_VECTOR_MAX_CONNECTIONS value: '{max_conn}' (expected integer)"
+                    ),
+                )
+            })?;
         }
 
         if let Ok(schema) = env::var("PG_VECTOR_SCHEMA") {
