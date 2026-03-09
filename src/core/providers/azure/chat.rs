@@ -25,6 +25,7 @@ use crate::core::providers::base::{
     HeaderPair, apply_headers, header, header_owned, header_static,
 };
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::streaming::utils::is_done_marker;
 use crate::core::traits::provider::ProviderConfig;
 use crate::utils::net::http::create_custom_client;
 
@@ -185,7 +186,7 @@ impl AzureChatHandler {
                             let line = line.trim();
 
                             if let Some(data) = line.strip_prefix("data: ") {
-                                if data == "[DONE]" {
+                                if is_done_marker(data) {
                                     // End of stream
                                     break;
                                 }
