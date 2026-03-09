@@ -67,25 +67,16 @@ impl SecretManager for EnvSecretManager {
         }
     }
 
-    async fn write_secret(&self, name: &str, value: &str) -> SecretResult<()> {
-        let env_name = self.get_env_name(name);
-        // Note: This only sets the variable for the current process
-        // SAFETY: We're setting an environment variable which is safe in single-threaded
-        // contexts or when properly synchronized. This is primarily for testing/development.
-        unsafe {
-            env::set_var(&env_name, value);
-        }
-        Ok(())
+    async fn write_secret(&self, _name: &str, _value: &str) -> SecretResult<()> {
+        Err(SecretError::other(
+            "EnvSecretManager does not support write at runtime; use a persistent secret backend",
+        ))
     }
 
-    async fn delete_secret(&self, name: &str) -> SecretResult<()> {
-        let env_name = self.get_env_name(name);
-        // SAFETY: We're removing an environment variable which is safe in single-threaded
-        // contexts or when properly synchronized. This is primarily for testing/development.
-        unsafe {
-            env::remove_var(&env_name);
-        }
-        Ok(())
+    async fn delete_secret(&self, _name: &str) -> SecretResult<()> {
+        Err(SecretError::other(
+            "EnvSecretManager does not support delete at runtime; use a persistent secret backend",
+        ))
     }
 
     async fn list_secrets(&self, options: &ListSecretsOptions) -> SecretResult<ListSecretsResult> {
@@ -179,27 +170,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_write_secret() {
+    async fn test_write_secret_returns_error() {
         let manager = EnvSecretManager::new();
-
-        manager
+        let result = manager
             .write_secret("TEST_SECRET_WRITE", "written_value")
-            .await
-            .unwrap();
-
-        assert_eq!(env::var("TEST_SECRET_WRITE").unwrap(), "written_value");
-
-        unsafe { remove_test_env("TEST_SECRET_WRITE") };
+            .await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("does not support write"));
     }
 
     #[tokio::test]
-    async fn test_delete_secret() {
+    async fn test_delete_secret_returns_error() {
         let manager = EnvSecretManager::new();
-        unsafe { set_test_env("TEST_SECRET_DELETE", "to_delete") };
-
-        manager.delete_secret("TEST_SECRET_DELETE").await.unwrap();
-
-        assert!(env::var("TEST_SECRET_DELETE").is_err());
+        let result = manager.delete_secret("TEST_SECRET_DELETE").await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("does not support delete"));
     }
 
     #[tokio::test]
