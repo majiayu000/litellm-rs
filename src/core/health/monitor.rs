@@ -7,9 +7,10 @@ use super::provider::ProviderHealth;
 use crate::utils::error::recovery::circuit_breaker::CircuitBreaker;
 use crate::utils::error::recovery::types::CircuitBreakerConfig;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tokio::sync::RwLock;
+use tracing::info;
 
 /// Health monitor configuration
 #[derive(Debug, Clone)]
@@ -69,26 +70,22 @@ impl HealthMonitor {
         );
 
         // Initialize provider health
-        if let Ok(mut health) = self.provider_health.write() {
+        {
+            let mut health = self.provider_health.write().await;
             health.insert(
                 provider_id.clone(),
                 ProviderHealth::new(provider_id.clone()),
             );
-        } else {
-            error!("Failed to acquire write lock for provider health");
-            return;
         }
 
         // Initialize circuit breaker (wrapped in Arc for shared access)
-        if let Ok(mut breakers) = self.circuit_breakers.write() {
+        {
+            let mut breakers = self.circuit_breakers.write().await;
             let breaker_config = CircuitBreakerConfig::default();
             breakers.insert(
                 provider_id.clone(),
                 Arc::new(CircuitBreaker::new(breaker_config)),
             );
-        } else {
-            error!("Failed to acquire write lock for circuit breakers");
-            return;
         }
 
         // Start health check task if auto-check is enabled
@@ -98,11 +95,9 @@ impl HealthMonitor {
     }
 
     /// Get circuit breaker for a provider
-    pub fn get_circuit_breaker(&self, provider_id: &str) -> Option<Arc<CircuitBreaker>> {
-        self.circuit_breakers
-            .read()
-            .ok()
-            .and_then(|breakers| breakers.get(provider_id).cloned())
+    pub async fn get_circuit_breaker(&self, provider_id: &str) -> Option<Arc<CircuitBreaker>> {
+        let breakers = self.circuit_breakers.read().await;
+        breakers.get(provider_id).cloned()
     }
 
     /// Shutdown health monitoring for all providers
@@ -110,12 +105,9 @@ impl HealthMonitor {
         info!("Shutting down health monitoring");
 
         // Cancel all health check tasks
-        let tasks = match self.check_tasks.write() {
-            Ok(mut task_map) => task_map.drain().map(|(_, task)| task).collect::<Vec<_>>(),
-            Err(_) => {
-                error!("Failed to acquire write lock for check tasks during shutdown");
-                return;
-            }
+        let tasks = {
+            let mut task_map = self.check_tasks.write().await;
+            task_map.drain().map(|(_, task)| task).collect::<Vec<_>>()
         };
 
         for task in tasks {
@@ -178,23 +170,19 @@ impl HealthMonitor {
                     };
 
                 // Update provider health
-                if let Ok(mut health_map) = provider_health.write() {
-                    if let Some(provider_health) = health_map.get_mut(&provider_id) {
-                        provider_health.update(result);
-                        debug!(
-                            "Updated health for {}: {:?}",
-                            provider_id, provider_health.status
-                        );
-                    }
+                let mut health_map = provider_health.write().await;
+                if let Some(provider_health) = health_map.get_mut(&provider_id) {
+                    provider_health.update(result);
+                    debug!(
+                        "Updated health for {}: {:?}",
+                        provider_id, provider_health.status
+                    );
                 }
             }
         });
 
         // Store task handle
-        if let Ok(mut tasks) = self.check_tasks.write() {
-            tasks.insert(provider_id, task);
-        } else {
-            error!("Failed to acquire write lock for check tasks");
-        }
+        let mut tasks = self.check_tasks.write().await;
+        tasks.insert(provider_id, task);
     }
 }

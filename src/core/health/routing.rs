@@ -7,11 +7,8 @@ use super::monitor::HealthMonitor;
 
 impl HealthMonitor {
     /// Get healthy providers sorted by routing weight
-    pub fn get_healthy_providers(&self) -> Vec<(String, f64)> {
-        let health_map = match self.provider_health.read() {
-            Ok(map) => map,
-            Err(_) => return Vec::new(),
-        };
+    pub async fn get_healthy_providers(&self) -> Vec<(String, f64)> {
+        let health_map = self.provider_health.read().await;
         let mut providers: Vec<_> = health_map
             .iter()
             .filter(|(_, health)| health.is_available())
