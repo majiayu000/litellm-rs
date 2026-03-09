@@ -13,31 +13,26 @@ use tracing::info;
 
 impl HealthMonitor {
     /// Get health status for a provider
-    pub fn get_provider_health(&self, provider_id: &str) -> Option<ProviderHealth> {
-        self.provider_health
-            .read()
-            .ok()
-            .and_then(|health| health.get(provider_id).cloned())
+    pub async fn get_provider_health(&self, provider_id: &str) -> Option<ProviderHealth> {
+        let health = self.provider_health.read().await;
+        health.get(provider_id).cloned()
     }
 
     /// Get health status for all providers
-    pub fn get_all_provider_health(&self) -> HashMap<String, ProviderHealth> {
-        self.provider_health
-            .read()
-            .map(|health| health.clone())
-            .unwrap_or_default()
+    pub async fn get_all_provider_health(&self) -> HashMap<String, ProviderHealth> {
+        let health = self.provider_health.read().await;
+        health.clone()
     }
 
     /// Manually update provider health
-    pub fn update_provider_health(&self, provider_id: &str, result: HealthCheckResult) {
-        if let Ok(mut health_map) = self.provider_health.write() {
-            if let Some(provider_health) = health_map.get_mut(provider_id) {
-                provider_health.update(result);
-                info!(
-                    "Manually updated health for {}: {:?}",
-                    provider_id, provider_health.status
-                );
-            }
+    pub async fn update_provider_health(&self, provider_id: &str, result: HealthCheckResult) {
+        let mut health_map = self.provider_health.write().await;
+        if let Some(provider_health) = health_map.get_mut(provider_id) {
+            provider_health.update(result);
+            info!(
+                "Manually updated health for {}: {:?}",
+                provider_id, provider_health.status
+            );
         }
     }
 }
