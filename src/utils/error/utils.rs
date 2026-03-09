@@ -24,37 +24,41 @@ pub enum ErrorCategory {
 pub struct ErrorUtils;
 
 impl ErrorUtils {
-    pub fn map_http_status_to_error(status_code: u16, message: Option<String>) -> ProviderError {
+    pub fn map_http_status_to_error(
+        provider: &'static str,
+        status_code: u16,
+        message: Option<String>,
+    ) -> ProviderError {
         let msg = message.unwrap_or_else(|| format!("HTTP error {}", status_code));
 
         match status_code {
             400 => ProviderError::InvalidRequest {
-                provider: "unknown",
+                provider,
                 message: msg,
             },
             401 => ProviderError::Authentication {
-                provider: "unknown",
+                provider,
                 message: msg,
             },
             403 => ProviderError::Authentication {
-                provider: "unknown",
+                provider,
                 message: format!("Permission denied: {}", msg),
             },
             404 => ProviderError::ModelNotFound {
-                provider: "unknown",
+                provider,
                 model: msg,
             },
-            429 => ProviderError::rate_limit_with_retry("unknown", msg, Some(60)),
+            429 => ProviderError::rate_limit_with_retry(provider, msg, Some(60)),
             408 | 504 => ProviderError::Timeout {
-                provider: "unknown",
+                provider,
                 message: msg,
             },
             500 | 502 | 503 => ProviderError::ProviderUnavailable {
-                provider: "unknown",
+                provider,
                 message: msg,
             },
             _ => ProviderError::Other {
-                provider: "unknown",
+                provider,
                 message: msg,
             },
         }
@@ -240,7 +244,7 @@ impl ErrorUtils {
     }
 
     pub fn parse_provider_error(
-        provider: &str,
+        provider: &'static str,
         status_code: u16,
         response_body: &str,
     ) -> ProviderError {
@@ -248,7 +252,11 @@ impl ErrorUtils {
             "openai" => Self::parse_openai_error(response_body),
             "anthropic" => Self::parse_anthropic_error(response_body),
             "google" => Self::parse_google_error(response_body),
-            _ => Self::map_http_status_to_error(status_code, Some(response_body.to_string())),
+            _ => Self::map_http_status_to_error(
+                provider,
+                status_code,
+                Some(response_body.to_string()),
+            ),
         }
     }
 
@@ -336,10 +344,14 @@ mod tests {
 
     #[test]
     fn test_map_http_status_400_bad_request() {
-        let error = ErrorUtils::map_http_status_to_error(400, Some("Bad request".to_string()));
+        let error = ErrorUtils::map_http_status_to_error(
+            "custom-provider",
+            400,
+            Some("Bad request".to_string()),
+        );
         match error {
             ProviderError::InvalidRequest { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "custom-provider");
                 assert_eq!(message, "Bad request");
             }
             _ => panic!("Expected InvalidRequest error"),
@@ -348,9 +360,10 @@ mod tests {
 
     #[test]
     fn test_map_http_status_400_no_message() {
-        let error = ErrorUtils::map_http_status_to_error(400, None);
+        let error = ErrorUtils::map_http_status_to_error("openai", 400, None);
         match error {
-            ProviderError::InvalidRequest { message, .. } => {
+            ProviderError::InvalidRequest { provider, message } => {
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "HTTP error 400");
             }
             _ => panic!("Expected InvalidRequest error"),
@@ -359,10 +372,11 @@ mod tests {
 
     #[test]
     fn test_map_http_status_401_unauthorized() {
-        let error = ErrorUtils::map_http_status_to_error(401, Some("Unauthorized".to_string()));
+        let error =
+            ErrorUtils::map_http_status_to_error("openai", 401, Some("Unauthorized".to_string()));
         match error {
             ProviderError::Authentication { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "Unauthorized");
             }
             _ => panic!("Expected Authentication error"),
@@ -371,10 +385,11 @@ mod tests {
 
     #[test]
     fn test_map_http_status_403_forbidden() {
-        let error = ErrorUtils::map_http_status_to_error(403, Some("Access denied".to_string()));
+        let error =
+            ErrorUtils::map_http_status_to_error("openai", 403, Some("Access denied".to_string()));
         match error {
             ProviderError::Authentication { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "Permission denied: Access denied");
             }
             _ => panic!("Expected Authentication error"),
@@ -383,10 +398,14 @@ mod tests {
 
     #[test]
     fn test_map_http_status_404_not_found() {
-        let error = ErrorUtils::map_http_status_to_error(404, Some("Model not found".to_string()));
+        let error = ErrorUtils::map_http_status_to_error(
+            "openai",
+            404,
+            Some("Model not found".to_string()),
+        );
         match error {
             ProviderError::ModelNotFound { provider, model } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(model, "Model not found");
             }
             _ => panic!("Expected ModelNotFound error"),
@@ -395,8 +414,11 @@ mod tests {
 
     #[test]
     fn test_map_http_status_429_rate_limit() {
-        let error =
-            ErrorUtils::map_http_status_to_error(429, Some("Too many requests".to_string()));
+        let error = ErrorUtils::map_http_status_to_error(
+            "openai",
+            429,
+            Some("Too many requests".to_string()),
+        );
         match error {
             ProviderError::RateLimit {
                 provider,
@@ -404,7 +426,7 @@ mod tests {
                 retry_after,
                 ..
             } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "Too many requests");
                 assert_eq!(retry_after, Some(60));
             }
@@ -414,10 +436,14 @@ mod tests {
 
     #[test]
     fn test_map_http_status_408_timeout() {
-        let error = ErrorUtils::map_http_status_to_error(408, Some("Request timeout".to_string()));
+        let error = ErrorUtils::map_http_status_to_error(
+            "openai",
+            408,
+            Some("Request timeout".to_string()),
+        );
         match error {
             ProviderError::Timeout { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "Request timeout");
             }
             _ => panic!("Expected Timeout error"),
@@ -426,10 +452,14 @@ mod tests {
 
     #[test]
     fn test_map_http_status_504_gateway_timeout() {
-        let error = ErrorUtils::map_http_status_to_error(504, Some("Gateway timeout".to_string()));
+        let error = ErrorUtils::map_http_status_to_error(
+            "openai",
+            504,
+            Some("Gateway timeout".to_string()),
+        );
         match error {
             ProviderError::Timeout { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "Gateway timeout");
             }
             _ => panic!("Expected Timeout error"),
@@ -438,11 +468,14 @@ mod tests {
 
     #[test]
     fn test_map_http_status_500_internal_server_error() {
-        let error =
-            ErrorUtils::map_http_status_to_error(500, Some("Internal server error".to_string()));
+        let error = ErrorUtils::map_http_status_to_error(
+            "openai",
+            500,
+            Some("Internal server error".to_string()),
+        );
         match error {
             ProviderError::ProviderUnavailable { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "Internal server error");
             }
             _ => panic!("Expected ProviderUnavailable error"),
@@ -451,10 +484,11 @@ mod tests {
 
     #[test]
     fn test_map_http_status_502_bad_gateway() {
-        let error = ErrorUtils::map_http_status_to_error(502, Some("Bad gateway".to_string()));
+        let error =
+            ErrorUtils::map_http_status_to_error("openai", 502, Some("Bad gateway".to_string()));
         match error {
             ProviderError::ProviderUnavailable { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "Bad gateway");
             }
             _ => panic!("Expected ProviderUnavailable error"),
@@ -463,11 +497,14 @@ mod tests {
 
     #[test]
     fn test_map_http_status_503_service_unavailable() {
-        let error =
-            ErrorUtils::map_http_status_to_error(503, Some("Service unavailable".to_string()));
+        let error = ErrorUtils::map_http_status_to_error(
+            "openai",
+            503,
+            Some("Service unavailable".to_string()),
+        );
         match error {
             ProviderError::ProviderUnavailable { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "Service unavailable");
             }
             _ => panic!("Expected ProviderUnavailable error"),
@@ -476,10 +513,11 @@ mod tests {
 
     #[test]
     fn test_map_http_status_unknown() {
-        let error = ErrorUtils::map_http_status_to_error(418, Some("I'm a teapot".to_string()));
+        let error =
+            ErrorUtils::map_http_status_to_error("openai", 418, Some("I'm a teapot".to_string()));
         match error {
             ProviderError::Other { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "openai");
                 assert_eq!(message, "I'm a teapot");
             }
             _ => panic!("Expected Other error"),
@@ -1010,7 +1048,7 @@ mod tests {
         let error = ErrorUtils::parse_provider_error("unknown-provider", 500, response);
         match error {
             ProviderError::ProviderUnavailable { provider, message } => {
-                assert_eq!(provider, "unknown");
+                assert_eq!(provider, "unknown-provider");
                 assert_eq!(message, "Error message");
             }
             _ => panic!("Expected ProviderUnavailable error"),
