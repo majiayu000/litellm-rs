@@ -128,6 +128,30 @@ pub struct LoginQuery {
     pub prompt: Option<String>,
 }
 
+/// Returns `true` when `redirect_uri` is safe to follow.
+///
+/// If `allowed_origins` is empty the whitelist is disabled (permissive).
+/// Otherwise the URI's origin (scheme + host + optional port) must exactly
+/// match one of the entries in `allowed_origins`.
+fn is_redirect_origin_allowed(redirect_uri: &str, allowed_origins: &[String]) -> bool {
+    if allowed_origins.is_empty() {
+        return true;
+    }
+    let Ok(parsed) = url::Url::parse(redirect_uri) else {
+        return false;
+    };
+    let origin = match parsed.port() {
+        Some(port) => format!(
+            "{}://{}:{}",
+            parsed.scheme(),
+            parsed.host_str().unwrap_or(""),
+            port
+        ),
+        None => format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or("")),
+    };
+    allowed_origins.iter().any(|allowed| allowed == &origin)
+}
+
 /// Configure OAuth routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -386,14 +410,25 @@ pub async fn oauth_callback(
 
     // Check if we need to redirect to a client URL
     if let Some(redirect) = stored_state.extra_data.get("client_redirect") {
-        let redirect_url = if redirect.contains('?') {
-            format!("{}&session_id={}", redirect, session_id)
+        let allowed = &oauth.config.allowed_redirect_origins;
+        if is_redirect_origin_allowed(redirect, allowed) {
+            let redirect_url = if redirect.contains('?') {
+                format!("{}&session_id={}", redirect, session_id)
+            } else {
+                format!("{}?session_id={}", redirect, session_id)
+            };
+            return Ok(HttpResponse::Found()
+                .insert_header(("Location", redirect_url))
+                .finish());
         } else {
-            format!("{}?session_id={}", redirect, session_id)
-        };
-        return Ok(HttpResponse::Found()
-            .insert_header(("Location", redirect_url))
-            .finish());
+            warn!(
+                "OAuth callback: client_redirect '{}' not in allowed_redirect_origins; falling back to /",
+                redirect
+            );
+            return Ok(HttpResponse::Found()
+                .insert_header(("Location", "/"))
+                .finish());
+        }
     }
 
     // Return auth response

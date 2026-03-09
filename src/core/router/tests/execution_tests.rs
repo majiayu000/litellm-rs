@@ -119,6 +119,7 @@ async fn test_execute_with_retry_success_second_attempt() {
     let config = RouterConfig {
         num_retries: 3,
         retry_after_secs: 0,
+        cooldown_time_secs: 0,
         ..Default::default()
     };
     let router = Router::new(config);
@@ -152,6 +153,7 @@ async fn test_execute_with_retry_exhausted() {
     let config = RouterConfig {
         num_retries: 2,
         retry_after_secs: 0,
+        cooldown_time_secs: 0,
         ..Default::default()
     };
     let router = Router::new(config);
@@ -345,6 +347,7 @@ async fn test_execute_with_rate_limit_error() {
     let config = RouterConfig {
         num_retries: 2,
         retry_after_secs: 0,
+        cooldown_time_secs: 0,
         ..Default::default()
     };
     let router = Router::new(config);
@@ -394,6 +397,7 @@ async fn test_execute_max_retries_exceeded() {
     let config = RouterConfig {
         num_retries: 3,
         retry_after_secs: 0,
+        cooldown_time_secs: 0,
         ..Default::default()
     };
     let router = Router::new(config);

@@ -62,7 +62,9 @@ impl Router {
             .iter()
             .filter(|id| {
                 if let Some(deployment) = self.deployments.get(id.as_str()) {
-                    if !deployment.is_healthy() || deployment.is_in_cooldown() {
+                    // Check cooldown first: is_in_cooldown() resets health
+                    // from Cooldown to Degraded when the cooldown period expires.
+                    if deployment.is_in_cooldown() || !deployment.is_healthy() {
                         return false;
                     }
 

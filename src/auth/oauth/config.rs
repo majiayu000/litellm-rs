@@ -410,6 +410,12 @@ pub struct OAuthGatewayConfig {
     /// Whether to auto-create users on first login
     #[serde(default = "default_true")]
     pub auto_create_users: bool,
+
+    /// Allowed origins for post-login client redirects (scheme + host, e.g. "https://app.example.com").
+    /// If non-empty, `client_redirect` URIs must match one of these origins; otherwise the redirect
+    /// is silently replaced with `/`. An empty list disables the whitelist check (permissive).
+    #[serde(default)]
+    pub allowed_redirect_origins: Vec<String>,
 }
 
 fn default_session_ttl() -> u64 {
@@ -429,6 +435,7 @@ impl Default for OAuthGatewayConfig {
             allow_multiple_providers: false,
             default_role: default_role(),
             auto_create_users: true,
+            allowed_redirect_origins: Vec::new(),
         }
     }
 }

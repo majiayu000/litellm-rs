@@ -306,10 +306,30 @@ impl Deployment {
     /// Check if deployment is in cooldown
     ///
     /// Returns true if current time is before cooldown_until timestamp.
+    /// When cooldown expires, automatically resets health to Degraded so the
+    /// deployment becomes eligible for selection again.
     pub fn is_in_cooldown(&self) -> bool {
-        let now = current_timestamp();
         let cooldown_until = self.state.cooldown_until.load(Ordering::Relaxed);
-        cooldown_until > now
+        if cooldown_until == 0 {
+            return false;
+        }
+        let now = current_timestamp();
+        if cooldown_until > now {
+            return true;
+        }
+        // Cooldown expired: reset health from Cooldown to Degraded so
+        // `is_healthy()` returns true and the deployment is selectable.
+        // CAS failure means another thread already transitioned the state -- safe to ignore.
+        self.state
+            .health
+            .compare_exchange(
+                HealthStatus::Cooldown as u8,
+                HealthStatus::Degraded as u8,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .ok();
+        false
     }
 
     /// Record a successful request
