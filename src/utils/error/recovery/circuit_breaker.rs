@@ -2,21 +2,39 @@
 
 use super::types::{CircuitBreakerConfig, CircuitBreakerMetrics, CircuitState};
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 #[allow(unused_imports)]
 use tracing::{debug, warn};
+
+const STATE_CLOSED: u8 = 0;
+const STATE_OPEN: u8 = 1;
+const STATE_HALF_OPEN: u8 = 2;
+const NO_TIMESTAMP: u64 = u64::MAX;
+
+fn decode_state(state: u8) -> CircuitState {
+    match state {
+        STATE_CLOSED => CircuitState::Closed,
+        STATE_OPEN => CircuitState::Open,
+        STATE_HALF_OPEN => CircuitState::HalfOpen,
+        _ => CircuitState::Closed,
+    }
+}
+
+fn duration_to_nanos(duration: Duration) -> u64 {
+    duration.as_nanos().min(u128::from(u64::MAX)) as u64
+}
 
 /// Circuit breaker implementation
 pub struct CircuitBreaker {
     config: CircuitBreakerConfig,
-    state: Arc<Mutex<CircuitState>>,
+    state: AtomicU8,
     failure_count: AtomicU32,
     success_count: AtomicU32,
-    last_failure_time: Arc<Mutex<Option<Instant>>>,
+    last_failure_time: AtomicU64,
     request_count: AtomicU32,
-    window_start: Arc<Mutex<Instant>>,
+    window_start: AtomicU64,
+    time_origin: Instant,
 }
 
 impl CircuitBreaker {
@@ -24,13 +42,21 @@ impl CircuitBreaker {
     pub fn new(config: CircuitBreakerConfig) -> Self {
         Self {
             config,
-            state: Arc::new(Mutex::new(CircuitState::Closed)),
+            state: AtomicU8::new(STATE_CLOSED),
             failure_count: AtomicU32::new(0),
             success_count: AtomicU32::new(0),
-            last_failure_time: Arc::new(Mutex::new(None)),
+            last_failure_time: AtomicU64::new(NO_TIMESTAMP),
             request_count: AtomicU32::new(0),
-            window_start: Arc::new(Mutex::new(Instant::now())),
+            window_start: AtomicU64::new(0),
+            time_origin: Instant::now(),
         }
+    }
+
+    fn now_nanos(&self) -> u64 {
+        self.time_origin
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64
     }
 
     /// Execute a function with circuit breaker protection
@@ -65,34 +91,35 @@ impl CircuitBreaker {
 
     /// Check if the circuit breaker allows execution
     async fn can_execute(&self) -> bool {
-        // Use unwrap_or_else to handle poisoned mutex gracefully
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match self.state.load(Ordering::Acquire) {
+            STATE_CLOSED => true,
+            STATE_OPEN => {
+                let last_failure_time = self.last_failure_time.load(Ordering::Acquire);
+                if last_failure_time == NO_TIMESTAMP {
+                    return false;
+                }
 
-        match *state {
-            CircuitState::Closed => true,
-            CircuitState::Open => {
-                // Check if timeout has passed
-                if let Some(last_failure) = *self
-                    .last_failure_time
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                {
-                    if last_failure.elapsed() >= self.config.timeout {
+                let elapsed = self.now_nanos().saturating_sub(last_failure_time);
+                if elapsed < duration_to_nanos(self.config.timeout) {
+                    return false;
+                }
+
+                match self.state.compare_exchange(
+                    STATE_OPEN,
+                    STATE_HALF_OPEN,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
                         debug!("Circuit breaker transitioning from Open to HalfOpen");
-                        *state = CircuitState::HalfOpen;
                         self.success_count.store(0, Ordering::Relaxed);
                         true
-                    } else {
-                        false
                     }
-                } else {
-                    false
+                    Err(current_state) => current_state != STATE_OPEN,
                 }
             }
-            CircuitState::HalfOpen => true,
+            STATE_HALF_OPEN => true,
+            _ => false,
         }
     }
 
@@ -100,13 +127,18 @@ impl CircuitBreaker {
     async fn on_success(&self) {
         let success_count = self.success_count.fetch_add(1, Ordering::Relaxed) + 1;
 
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if *state == CircuitState::HalfOpen && success_count >= self.config.success_threshold {
+        if success_count >= self.config.success_threshold
+            && self
+                .state
+                .compare_exchange(
+                    STATE_HALF_OPEN,
+                    STATE_CLOSED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+        {
             debug!("Circuit breaker transitioning from HalfOpen to Closed");
-            *state = CircuitState::Closed;
             self.failure_count.store(0, Ordering::Relaxed);
             self.success_count.store(0, Ordering::Relaxed);
         }
@@ -116,53 +148,44 @@ impl CircuitBreaker {
     async fn on_failure(&self) {
         let failure_count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
         let request_count = self.request_count.load(Ordering::Relaxed);
+        let now = self.now_nanos();
 
-        *self
-            .last_failure_time
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+        self.last_failure_time.store(now, Ordering::Release);
 
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        // Update window if needed
+        let window_start = self.window_start.load(Ordering::Acquire);
+        if now.saturating_sub(window_start) >= duration_to_nanos(self.config.window_size)
+            && self
+                .window_start
+                .compare_exchange(window_start, now, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
         {
-            let mut window_start = self.window_start.lock().unwrap_or_else(|p| p.into_inner());
-            if window_start.elapsed() >= self.config.window_size {
-                *window_start = Instant::now();
-                self.failure_count.store(1, Ordering::Relaxed);
-                self.request_count.store(1, Ordering::Relaxed);
-                return;
-            }
+            self.failure_count.store(1, Ordering::Relaxed);
+            self.request_count.store(1, Ordering::Relaxed);
+            return;
         }
 
         // Check if we should open the circuit
         if request_count >= self.config.min_requests
             && failure_count >= self.config.failure_threshold
-            && *state != CircuitState::Open
+            && self.state.load(Ordering::Acquire) != STATE_OPEN
         {
             warn!(
                 "Circuit breaker opening due to {} failures out of {} requests",
                 failure_count, request_count
             );
-            *state = CircuitState::Open;
+            self.state.store(STATE_OPEN, Ordering::Release);
         }
 
         // Always open from half-open on failure
-        if *state == CircuitState::HalfOpen {
+        if self.state.load(Ordering::Acquire) == STATE_HALF_OPEN {
             debug!("Circuit breaker transitioning from HalfOpen to Open due to failure");
-            *state = CircuitState::Open;
+            self.state.store(STATE_OPEN, Ordering::Release);
         }
     }
 
     /// Get current circuit breaker state
     pub fn state(&self) -> CircuitState {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        decode_state(self.state.load(Ordering::Acquire))
     }
 
     /// Get current metrics
@@ -177,19 +200,13 @@ impl CircuitBreaker {
 
     /// Reset the circuit breaker
     pub fn reset(&self) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *state = CircuitState::Closed;
+        self.state.store(STATE_CLOSED, Ordering::Release);
         self.failure_count.store(0, Ordering::Relaxed);
         self.success_count.store(0, Ordering::Relaxed);
         self.request_count.store(0, Ordering::Relaxed);
-        *self
-            .last_failure_time
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = None;
-        *self.window_start.lock().unwrap_or_else(|p| p.into_inner()) = Instant::now();
+        self.last_failure_time
+            .store(NO_TIMESTAMP, Ordering::Release);
+        self.window_start.store(self.now_nanos(), Ordering::Release);
         debug!("Circuit breaker reset");
     }
 }
@@ -197,6 +214,7 @@ impl CircuitBreaker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn default_config() -> CircuitBreakerConfig {
@@ -285,24 +303,25 @@ mod tests {
         let cb = CircuitBreaker::new(default_config());
 
         // Set last failure time
-        *cb.last_failure_time.lock().unwrap() = Some(Instant::now());
+        cb.last_failure_time
+            .store(cb.now_nanos(), Ordering::Relaxed);
 
         // Reset
         cb.reset();
 
-        assert!(cb.last_failure_time.lock().unwrap().is_none());
+        assert_eq!(cb.last_failure_time.load(Ordering::Relaxed), NO_TIMESTAMP);
     }
 
     #[test]
     fn test_circuit_breaker_reset_resets_window_start() {
         let cb = CircuitBreaker::new(default_config());
 
-        let before = *cb.window_start.lock().unwrap();
+        let before = cb.window_start.load(Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(10));
 
         cb.reset();
 
-        let after = *cb.window_start.lock().unwrap();
+        let after = cb.window_start.load(Ordering::Relaxed);
         assert!(after > before);
     }
 
