@@ -324,6 +324,6 @@ mod tests {
         // Cache hit
         let result = cache.get_chat_response(&request).await.unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().id, "chatcmpl-123");
+        assert_eq!(result.as_ref().unwrap().id.as_str(), "chatcmpl-123");
     }
 }
