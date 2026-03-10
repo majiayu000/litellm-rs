@@ -2,7 +2,7 @@
 name = "litellm-rs"
 version = "0.4.3"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.88"
 authors = ["lifcc"]
 description = "A high-performance AI Gateway written in Rust, providing OpenAI-compatible APIs with intelligent routing, load balancing, and enterprise features"
 documentation = "https://docs.rs/litellm-rs"

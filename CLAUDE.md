@@ -222,6 +222,34 @@ This Rust implementation maintains API compatibility with the original Python Li
 - Helper functions: `completion()`, `user_message()`, `system_message()`, `assistant_message()`
 - Unified interface for 100+ providers with automatic routing
 
+## Agent / Multi-PR Rules
+
+When using AI agents (Claude, Codex, Copilot) to create PRs:
+
+### Branch Rules
+- **One issue → one branch → one PR**. Never bundle unrelated fixes.
+- **Always branch from latest `main`**. Never fork from another feature branch.
+- **Max 10 files / 500 lines per PR** (excluding Cargo.lock, docs). Use `scripts/guards/check_pr_scope.sh` to verify.
+- **Run overlap check before pushing**: `scripts/guards/check_pr_overlap.sh` detects file conflicts with open PRs.
+
+### Agent Isolation
+- Parallel agents **must** use `git worktree` for isolation:
+  ```bash
+  git worktree add /tmp/agent-task-{id} -b fix/issue-{id} main
+  ```
+- Two agents must **never** modify the same file concurrently.
+
+### Before Creating PR
+1. `cargo fmt --all -- --check`
+2. `cargo clippy --all-targets --all-features -- -D warnings`
+3. `cargo test --all-features`
+4. `bash scripts/guards/check_pr_scope.sh`
+5. `bash scripts/guards/check_pr_overlap.sh`
+
+### Toolchain
+- Rust version is pinned in `rust-toolchain.toml`. CI uses the same version.
+- Never use `@stable` in CI — always reference the pinned version.
+
 ## Known Issues & Solutions
 
 ### docs.rs Build Issue
