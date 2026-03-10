@@ -1,6 +1,3 @@
-// TODO: fix collapsible_if instances introduced by clippy 1.94.0 let-chain support
-#![allow(clippy::collapsible_if)]
-
 //! # LiteLLM-RS
 //!
 //! A Rust implementation of Python LiteLLM - call 100+ LLM APIs using OpenAI format.
