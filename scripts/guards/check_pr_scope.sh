@@ -83,7 +83,7 @@ for file in $(git diff --name-only "$BASE"...HEAD -- ':!Cargo.lock' ':!*.md' ':!
     esac
 done
 
-UNIQUE_DOMAINS=$(echo "$DOMAINS" | tr ' ' '\n' | sort -u | grep -v '^$' | wc -l | tr -d ' ')
+UNIQUE_DOMAINS=$(echo "$DOMAINS" | tr ' ' '\n' | sort -u | grep -v '^$' | wc -l | tr -d ' ' || echo "0")
 if [ "$UNIQUE_DOMAINS" -gt 3 ]; then
     echo -e "${YELLOW}WARN: PR touches $UNIQUE_DOMAINS ownership domains${NC}"
     echo "  Domains: $(echo "$DOMAINS" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ', ')"
