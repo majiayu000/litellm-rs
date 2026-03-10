@@ -42,7 +42,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --features "$FEATURES" -- -D warnings -A clippy::collapsible_if
+        run: cargo clippy --all-targets --features "$FEATURES" -- -D warnings -A collapsible_if -A clippy::collapsible_if
 
       - name: Provider consistency guards
         run: |
