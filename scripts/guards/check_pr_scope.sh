@@ -21,6 +21,16 @@ NC='\033[0m'
 
 echo "=== PR Scope Guard ==="
 
+# Deepen fetch if merge base not found (shallow clone)
+if ! git merge-base "$BASE" HEAD >/dev/null 2>&1; then
+    echo "Shallow clone detected, fetching full history..."
+    git fetch origin main --unshallow 2>/dev/null || git fetch origin main --deepen=100 2>/dev/null || true
+    if ! git merge-base "$BASE" HEAD >/dev/null 2>&1; then
+        echo "WARN: Cannot determine merge base — skipping scope check."
+        exit 0
+    fi
+fi
+
 # Count changed files (excluding auto-generated)
 CHANGED_FILES=$(git diff --name-only "$BASE"...HEAD -- \
     ':!Cargo.lock' \
