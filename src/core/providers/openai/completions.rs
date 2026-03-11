@@ -264,29 +264,32 @@ pub fn validate_completion_request(request: &OpenAICompletionRequest) -> Result<
 
     // Check prompt
     if let Some(prompt) = &request.prompt
-        && prompt.is_empty() {
-            return Err(ProviderError::InvalidRequest {
-                provider: "openai",
-                message: "Prompt cannot be empty".to_string(),
-            });
-        }
+        && prompt.is_empty()
+    {
+        return Err(ProviderError::InvalidRequest {
+            provider: "openai",
+            message: "Prompt cannot be empty".to_string(),
+        });
+    }
 
     // Check parameters
     if let Some(n) = request.n
-        && (n == 0 || n > 128) {
-            return Err(ProviderError::InvalidRequest {
-                provider: "openai",
-                message: "n must be between 1 and 128".to_string(),
-            });
-        }
+        && (n == 0 || n > 128)
+    {
+        return Err(ProviderError::InvalidRequest {
+            provider: "openai",
+            message: "n must be between 1 and 128".to_string(),
+        });
+    }
 
     if let Some(temp) = request.temperature
-        && !(0.0..=2.0).contains(&temp) {
-            return Err(ProviderError::InvalidRequest {
-                provider: "openai",
-                message: "temperature must be between 0.0 and 2.0".to_string(),
-            });
-        }
+        && !(0.0..=2.0).contains(&temp)
+    {
+        return Err(ProviderError::InvalidRequest {
+            provider: "openai",
+            message: "temperature must be between 0.0 and 2.0".to_string(),
+        });
+    }
 
     if let Some(max_tokens) = request.max_tokens {
         let model_info = get_completion_models()
@@ -294,12 +297,13 @@ pub fn validate_completion_request(request: &OpenAICompletionRequest) -> Result<
             .find(|m| m.id == request.model);
 
         if let Some(info) = model_info
-            && max_tokens > info.max_tokens {
-                return Err(ProviderError::InvalidRequest {
-                    provider: "openai",
-                    message: format!("max_tokens exceeds model limit of {}", info.max_tokens),
-                });
-            }
+            && max_tokens > info.max_tokens
+        {
+            return Err(ProviderError::InvalidRequest {
+                provider: "openai",
+                message: format!("max_tokens exceeds model limit of {}", info.max_tokens),
+            });
+        }
     }
 
     Ok(())

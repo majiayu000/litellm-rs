@@ -67,28 +67,29 @@ impl BedrockProvider {
 
         for model_id in available_models {
             if let Some(pricing) = CostCalculator::get_model_pricing(model_id)
-                && let Ok(model_config) = get_model_config(model_id) {
-                    models.push(ModelInfo {
-                        id: model_id.to_string(),
-                        name: format!(
-                            "{} (Bedrock)",
-                            model_id.split('.').next_back().unwrap_or(model_id)
-                        ),
-                        provider: "bedrock".to_string(),
-                        max_context_length: model_config.max_context_length,
-                        max_output_length: model_config.max_output_length,
-                        supports_streaming: model_config.supports_streaming,
-                        supports_tools: model_config.supports_function_calling,
-                        supports_multimodal: model_config.supports_multimodal,
-                        input_cost_per_1k_tokens: Some(pricing.input_cost_per_1k),
-                        output_cost_per_1k_tokens: Some(pricing.output_cost_per_1k),
-                        currency: pricing.currency.to_string(),
-                        capabilities: vec![],
-                        created_at: None,
-                        updated_at: None,
-                        metadata: HashMap::new(),
-                    });
-                }
+                && let Ok(model_config) = get_model_config(model_id)
+            {
+                models.push(ModelInfo {
+                    id: model_id.to_string(),
+                    name: format!(
+                        "{} (Bedrock)",
+                        model_id.split('.').next_back().unwrap_or(model_id)
+                    ),
+                    provider: "bedrock".to_string(),
+                    max_context_length: model_config.max_context_length,
+                    max_output_length: model_config.max_output_length,
+                    supports_streaming: model_config.supports_streaming,
+                    supports_tools: model_config.supports_function_calling,
+                    supports_multimodal: model_config.supports_multimodal,
+                    input_cost_per_1k_tokens: Some(pricing.input_cost_per_1k),
+                    output_cost_per_1k_tokens: Some(pricing.output_cost_per_1k),
+                    currency: pricing.currency.to_string(),
+                    capabilities: vec![],
+                    created_at: None,
+                    updated_at: None,
+                    metadata: HashMap::new(),
+                });
+            }
         }
 
         Ok(Self { client, models })

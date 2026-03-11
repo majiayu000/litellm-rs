@@ -119,9 +119,10 @@ impl SecretManager for EnvSecretManager {
 
             // Check max results
             if let Some(max) = options.max_results
-                && secrets.len() >= max {
-                    break;
-                }
+                && secrets.len() >= max
+            {
+                break;
+            }
         }
 
         Ok(ListSecretsResult {

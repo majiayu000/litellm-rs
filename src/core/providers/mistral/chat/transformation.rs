@@ -90,9 +90,10 @@ impl MistralChatTransformation {
 
         // Handle response format
         if let Some(format) = request.response_format
-            && let Ok(format_val) = serde_json::to_value(format) {
-                transformed["response_format"] = format_val;
-            }
+            && let Ok(format_val) = serde_json::to_value(format)
+        {
+            transformed["response_format"] = format_val;
+        }
 
         // Handle tools and function calling
         if let Some(tools) = request.tools {

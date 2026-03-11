@@ -142,20 +142,22 @@ pub struct RateLimitMiddlewareService<S> {
 /// 3. Direct peer IP from connection info
 fn extract_client_key(req: &ServiceRequest) -> String {
     if let Some(auth) = req.headers().get("Authorization")
-        && let Ok(val) = auth.to_str() {
-            // Hash the token so raw secrets never reside in memory as map keys
-            let hash = Sha256::digest(val.as_bytes());
-            return format!("auth:{:x}", hash);
-        }
+        && let Ok(val) = auth.to_str()
+    {
+        // Hash the token so raw secrets never reside in memory as map keys
+        let hash = Sha256::digest(val.as_bytes());
+        return format!("auth:{:x}", hash);
+    }
 
     let conn = req.connection_info();
     if let Some(forwarded) = req.headers().get("X-Forwarded-For")
-        && let Ok(val) = forwarded.to_str() {
-            let first = val.split(',').next().unwrap_or(val).trim();
-            if !first.is_empty() {
-                return first.to_string();
-            }
+        && let Ok(val) = forwarded.to_str()
+    {
+        let first = val.split(',').next().unwrap_or(val).trim();
+        if !first.is_empty() {
+            return first.to_string();
         }
+    }
 
     conn.peer_addr().unwrap_or("unknown").to_string()
 }

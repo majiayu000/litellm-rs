@@ -51,9 +51,10 @@ impl RerankCache {
         let entries = self.entries.read().await;
 
         if let Some(entry) = entries.get(&key)
-            && entry.created_at.elapsed() < entry.ttl {
-                return Some(entry.response.clone());
-            }
+            && entry.created_at.elapsed() < entry.ttl
+        {
+            return Some(entry.response.clone());
+        }
         None
     }
 
@@ -69,9 +70,10 @@ impl RerankCache {
 
             // If still at capacity, remove random entry
             if entries.len() >= self.max_size
-                && let Some(key_to_remove) = entries.keys().next().cloned() {
-                    entries.remove(&key_to_remove);
-                }
+                && let Some(key_to_remove) = entries.keys().next().cloned()
+            {
+                entries.remove(&key_to_remove);
+            }
         }
 
         entries.insert(

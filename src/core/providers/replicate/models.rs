@@ -238,10 +238,11 @@ impl ReplicateModelRegistry {
             let mut default_params = HashMap::new();
             // Parse default size into width and height
             if let Some((w, h)) = default_size.split_once('x')
-                && let (Ok(width), Ok(height)) = (w.parse::<i64>(), h.parse::<i64>()) {
-                    default_params.insert("width".to_string(), serde_json::json!(width));
-                    default_params.insert("height".to_string(), serde_json::json!(height));
-                }
+                && let (Ok(width), Ok(height)) = (w.parse::<i64>(), h.parse::<i64>())
+            {
+                default_params.insert("width".to_string(), serde_json::json!(width));
+                default_params.insert("height".to_string(), serde_json::json!(height));
+            }
 
             self.models.insert(
                 id.to_string(),

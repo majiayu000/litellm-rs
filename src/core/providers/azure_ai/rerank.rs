@@ -190,12 +190,13 @@ impl AzureAIRerankUtils {
 
         // Validate top_n
         if let Some(top_n) = request.top_n
-            && (top_n == 0 || top_n > 1000) {
-                return Err(ProviderError::invalid_request(
-                    "azure_ai",
-                    "top_n must be between 1 and 1000",
-                ));
-            }
+            && (top_n == 0 || top_n > 1000)
+        {
+            return Err(ProviderError::invalid_request(
+                "azure_ai",
+                "top_n must be between 1 and 1000",
+            ));
+        }
 
         // Validate document lengths
         for (i, doc) in request.documents.iter().enumerate() {

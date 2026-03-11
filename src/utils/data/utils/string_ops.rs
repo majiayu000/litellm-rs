@@ -16,16 +16,18 @@ impl StringOps {
         let trimmed = input.trim();
 
         if let Some(start) = trimmed.find('{')
-            && let Some(end) = trimmed.rfind('}') {
-                let json_str = &trimmed[start..=end];
-                return serde_json::from_str(json_str).ok();
-            }
+            && let Some(end) = trimmed.rfind('}')
+        {
+            let json_str = &trimmed[start..=end];
+            return serde_json::from_str(json_str).ok();
+        }
 
         if let Some(start) = trimmed.find('[')
-            && let Some(end) = trimmed.rfind(']') {
-                let json_str = &trimmed[start..=end];
-                return serde_json::from_str(json_str).ok();
-            }
+            && let Some(end) = trimmed.rfind(']')
+        {
+            let json_str = &trimmed[start..=end];
+            return serde_json::from_str(json_str).ok();
+        }
 
         serde_json::from_str(trimmed).ok()
     }

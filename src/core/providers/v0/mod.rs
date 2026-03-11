@@ -306,9 +306,10 @@ impl LLMProvider for V0Provider {
 
         // Ensure stream parameter is boolean value, not Option<bool>
         if let Some(stream_val) = params.get("stream")
-            && let Some(stream_bool) = stream_val.as_bool() {
-                params.insert("stream".to_string(), Value::Bool(stream_bool));
-            }
+            && let Some(stream_bool) = stream_val.as_bool()
+        {
+            params.insert("stream".to_string(), Value::Bool(stream_bool));
+        }
 
         Ok(params)
     }

@@ -172,11 +172,12 @@ impl CohereRerankHandler {
         }
 
         if let Some(top_n) = request.top_n
-            && (top_n == 0 || top_n > 1000) {
-                return Err(super::error::cohere_invalid_request(
-                    "top_n must be between 1 and 1000",
-                ));
-            }
+            && (top_n == 0 || top_n > 1000)
+        {
+            return Err(super::error::cohere_invalid_request(
+                "top_n must be between 1 and 1000",
+            ));
+        }
 
         // Validate query length
         if request.query.len() > 2048 {

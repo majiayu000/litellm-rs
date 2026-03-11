@@ -232,9 +232,10 @@ impl OpenAIProvider {
             && let (Some(input_cost), Some(output_cost)) = (
                 model_info.input_cost_per_1k_tokens,
                 model_info.output_cost_per_1k_tokens,
-            ) {
-                return Some((input_cost, output_cost));
-            }
+            )
+        {
+            return Some((input_cost, output_cost));
+        }
         None
     }
 

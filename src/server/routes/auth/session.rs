@@ -12,9 +12,10 @@ pub async fn logout(state: web::Data<AppState>, req: HttpRequest) -> ActixResult
 
     // Extract session token from headers or cookies
     if let Some(session_token) = extract_session_token(req.headers())
-        && let Err(e) = state.auth.logout(&session_token).await {
-            warn!("Failed to logout user: {}", e);
-        }
+        && let Err(e) = state.auth.logout(&session_token).await
+    {
+        warn!("Failed to logout user: {}", e);
+    }
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(())))
 }
@@ -24,20 +25,22 @@ pub fn extract_session_token(headers: &HeaderMap) -> Option<String> {
     // Check Authorization header
     if let Some(auth_header) = headers.get("authorization")
         && let Ok(auth_str) = auth_header.to_str()
-            && let Some(stripped) = auth_str.strip_prefix("Session ") {
-                return Some(stripped.to_string());
-            }
+        && let Some(stripped) = auth_str.strip_prefix("Session ")
+    {
+        return Some(stripped.to_string());
+    }
 
     // Check session cookie
     if let Some(cookie_header) = headers.get("cookie")
-        && let Ok(cookie_str) = cookie_header.to_str() {
-            for cookie in cookie_str.split(';') {
-                let cookie = cookie.trim();
-                if let Some(stripped) = cookie.strip_prefix("session=") {
-                    return Some(stripped.to_string());
-                }
+        && let Ok(cookie_str) = cookie_header.to_str()
+    {
+        for cookie in cookie_str.split(';') {
+            let cookie = cookie.trim();
+            if let Some(stripped) = cookie.strip_prefix("session=") {
+                return Some(stripped.to_string());
             }
         }
+    }
 
     None
 }

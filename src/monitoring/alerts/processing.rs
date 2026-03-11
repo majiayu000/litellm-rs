@@ -78,9 +78,10 @@ impl AlertManager {
 
         for rule in rules.values() {
             if rule.enabled
-                && let Err(e) = self.evaluate_rule(rule).await {
-                    warn!("Failed to evaluate rule {}: {}", rule.name, e);
-                }
+                && let Err(e) = self.evaluate_rule(rule).await
+            {
+                warn!("Failed to evaluate rule {}: {}", rule.name, e);
+            }
         }
 
         Ok(())

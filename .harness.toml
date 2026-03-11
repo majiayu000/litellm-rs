@@ -1,0 +1,65 @@
+[server]
+transport = "stdio"
+http_addr = "127.0.0.1:9800"
+data_dir = "~/.local/share/harness"
+project_root = "/Users/apple/Desktop/code/AI/gateway/litellm-rs"
+notification_broadcast_capacity = 256
+notification_lag_log_every = 1
+
+[agents]
+default_agent = "claude"
+sandbox_mode = "danger-full-access"
+
+[agents.claude]
+cli_path = "/opt/homebrew/bin/claude"
+default_model = "sonnet"
+
+[agents.codex]
+cli_path = "/opt/homebrew/bin/codex"
+
+[agents.codex.cloud]
+enabled = false
+cache_ttl_hours = 12
+setup_commands = []
+setup_secret_env = []
+
+[agents.anthropic_api]
+base_url = "https://api.anthropic.com"
+default_model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+
+[agents.review]
+enabled = true
+reviewer_agent = "codex"
+max_rounds = 3
+
+[gc]
+max_drafts_per_run = 5
+budget_per_signal_usd = 0.50
+total_budget_usd = 5.0
+adopt_wait_secs = 120
+adopt_max_rounds = 3
+adopt_turn_timeout_secs = 600
+
+[gc.signal_thresholds]
+repeated_warn_min = 10
+chronic_block_min = 5
+hot_file_edits_min = 20
+slow_op_threshold_ms = 5000
+slow_op_count_min = 10
+escalation_ratio = 1.5
+violation_min = 5
+
+[rules]
+discovery_paths = []
+exec_policy_paths = []
+
+[observe]
+db_path = "~/.local/share/harness/harness.db"
+session_renewal_secs = 1800
+log_retention_days = 90
+
+[otel]
+environment = "development"
+exporter = "disabled"
+log_user_prompt = false

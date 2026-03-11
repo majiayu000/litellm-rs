@@ -253,34 +253,35 @@ impl OpenAILikeProvider {
     fn map_error_response(&self, status: u16, body: &str) -> OpenAILikeError {
         // Try to parse error JSON
         if let Ok(error_json) = serde_json::from_str::<Value>(body)
-            && let Some(error) = error_json.get("error") {
-                let error_type = error.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                let error_code = error.get("code").and_then(|c| c.as_str()).unwrap_or("");
-                let message = error
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown error");
+            && let Some(error) = error_json.get("error")
+        {
+            let error_type = error.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let error_code = error.get("code").and_then(|c| c.as_str()).unwrap_or("");
+            let message = error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error");
 
-                return match (status, error_type, error_code) {
-                    (401, _, _) | (_, "authentication_error", _) => {
-                        OpenAILikeError::openai_like_authentication(message)
-                    }
-                    (429, _, _) | (_, "rate_limit_error", _) => {
-                        let retry_after = error.get("retry_after").and_then(|r| r.as_u64());
-                        OpenAILikeError::openai_like_rate_limit(retry_after)
-                    }
-                    (404, _, "model_not_found") => {
-                        OpenAILikeError::openai_like_model_not_found(message)
-                    }
-                    (400, "invalid_request_error", _) => {
-                        OpenAILikeError::openai_like_invalid_request(message)
-                    }
-                    (503, _, _) | (_, "overloaded_error", _) => {
-                        OpenAILikeError::openai_like_unavailable(message)
-                    }
-                    _ => OpenAILikeError::openai_like_api_error(status, message),
-                };
-            }
+            return match (status, error_type, error_code) {
+                (401, _, _) | (_, "authentication_error", _) => {
+                    OpenAILikeError::openai_like_authentication(message)
+                }
+                (429, _, _) | (_, "rate_limit_error", _) => {
+                    let retry_after = error.get("retry_after").and_then(|r| r.as_u64());
+                    OpenAILikeError::openai_like_rate_limit(retry_after)
+                }
+                (404, _, "model_not_found") => {
+                    OpenAILikeError::openai_like_model_not_found(message)
+                }
+                (400, "invalid_request_error", _) => {
+                    OpenAILikeError::openai_like_invalid_request(message)
+                }
+                (503, _, _) | (_, "overloaded_error", _) => {
+                    OpenAILikeError::openai_like_unavailable(message)
+                }
+                _ => OpenAILikeError::openai_like_api_error(status, message),
+            };
+        }
 
         // Fallback to status-based error
         match status {

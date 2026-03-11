@@ -221,22 +221,24 @@ impl ClientUtils {
     ) -> Option<Duration> {
         if let Some(retry_after) = headers.get("retry-after")
             && let Ok(retry_str) = retry_after.to_str()
-                && let Ok(seconds) = retry_str.parse::<u64>() {
-                    return Some(Duration::from_secs(seconds));
-                }
+            && let Ok(seconds) = retry_str.parse::<u64>()
+        {
+            return Some(Duration::from_secs(seconds));
+        }
 
         if let Some(rate_limit_reset) = headers.get("x-ratelimit-reset")
             && let Ok(reset_str) = rate_limit_reset.to_str()
-                && let Ok(reset_time) = reset_str.parse::<u64>() {
-                    let current_time = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
+            && let Ok(reset_time) = reset_str.parse::<u64>()
+        {
+            let current_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
 
-                    if reset_time > current_time {
-                        return Some(Duration::from_secs(reset_time - current_time));
-                    }
-                }
+            if reset_time > current_time {
+                return Some(Duration::from_secs(reset_time - current_time));
+            }
+        }
 
         None
     }

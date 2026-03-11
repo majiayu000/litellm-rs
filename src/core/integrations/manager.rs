@@ -180,14 +180,15 @@ impl IntegrationManager {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
             if integration.is_enabled()
-                && let Err(e) = integration.on_llm_stream(event).await {
-                    if self.config.log_errors {
-                        warn!("Integration {} stream error: {}", integration.name(), e);
-                    }
-                    if self.config.fail_fast {
-                        return Err(e);
-                    }
+                && let Err(e) = integration.on_llm_stream(event).await
+            {
+                if self.config.log_errors {
+                    warn!("Integration {} stream error: {}", integration.name(), e);
                 }
+                if self.config.fail_fast {
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
@@ -197,18 +198,19 @@ impl IntegrationManager {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
             if integration.is_enabled()
-                && let Err(e) = integration.on_embedding_start(event).await {
-                    if self.config.log_errors {
-                        warn!(
-                            "Integration {} embedding start error: {}",
-                            integration.name(),
-                            e
-                        );
-                    }
-                    if self.config.fail_fast {
-                        return Err(e);
-                    }
+                && let Err(e) = integration.on_embedding_start(event).await
+            {
+                if self.config.log_errors {
+                    warn!(
+                        "Integration {} embedding start error: {}",
+                        integration.name(),
+                        e
+                    );
                 }
+                if self.config.fail_fast {
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
@@ -218,18 +220,19 @@ impl IntegrationManager {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
             if integration.is_enabled()
-                && let Err(e) = integration.on_embedding_end(event).await {
-                    if self.config.log_errors {
-                        warn!(
-                            "Integration {} embedding end error: {}",
-                            integration.name(),
-                            e
-                        );
-                    }
-                    if self.config.fail_fast {
-                        return Err(e);
-                    }
+                && let Err(e) = integration.on_embedding_end(event).await
+            {
+                if self.config.log_errors {
+                    warn!(
+                        "Integration {} embedding end error: {}",
+                        integration.name(),
+                        e
+                    );
                 }
+                if self.config.fail_fast {
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
@@ -239,14 +242,15 @@ impl IntegrationManager {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
             if integration.is_enabled()
-                && let Err(e) = integration.on_cache_hit(event).await {
-                    if self.config.log_errors {
-                        warn!("Integration {} cache hit error: {}", integration.name(), e);
-                    }
-                    if self.config.fail_fast {
-                        return Err(e);
-                    }
+                && let Err(e) = integration.on_cache_hit(event).await
+            {
+                if self.config.log_errors {
+                    warn!("Integration {} cache hit error: {}", integration.name(), e);
                 }
+                if self.config.fail_fast {
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
@@ -256,14 +260,15 @@ impl IntegrationManager {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
             if integration.is_enabled()
-                && let Err(e) = integration.flush().await {
-                    if self.config.log_errors {
-                        warn!("Integration {} flush error: {}", integration.name(), e);
-                    }
-                    if self.config.fail_fast {
-                        return Err(e);
-                    }
+                && let Err(e) = integration.flush().await
+            {
+                if self.config.log_errors {
+                    warn!("Integration {} flush error: {}", integration.name(), e);
                 }
+                if self.config.fail_fast {
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }

@@ -67,12 +67,12 @@ impl FunctionCallingHandler {
                 // OpenAI format
                 if let Some(choices) = response.get("choices").and_then(|c| c.as_array())
                     && let Some(choice) = choices.first()
-                        && let Some(message) = choice.get("message")
-                            && let Some(tool_calls) = message.get("tool_calls") {
-                                let tool_calls: Vec<ToolCall> =
-                                    serde_json::from_value(tool_calls.clone())?;
-                                return Ok(tool_calls);
-                            }
+                    && let Some(message) = choice.get("message")
+                    && let Some(tool_calls) = message.get("tool_calls")
+                {
+                    let tool_calls: Vec<ToolCall> = serde_json::from_value(tool_calls.clone())?;
+                    return Ok(tool_calls);
+                }
                 Ok(vec![])
             }
             crate::core::providers::ProviderType::Anthropic => {
@@ -82,20 +82,21 @@ impl FunctionCallingHandler {
                     for item in content {
                         if let Some(tool_type) = item.get("type").and_then(|t| t.as_str())
                             && tool_type == "tool_use"
-                                && let (Some(id), Some(name), Some(input)) = (
-                                    item.get("id").and_then(|i| i.as_str()),
-                                    item.get("name").and_then(|n| n.as_str()),
-                                    item.get("input"),
-                                ) {
-                                    tool_calls.push(ToolCall {
-                                        id: id.to_string(),
-                                        tool_type: "function".to_string(),
-                                        function: FunctionCall {
-                                            name: name.to_string(),
-                                            arguments: input.to_string(),
-                                        },
-                                    });
-                                }
+                            && let (Some(id), Some(name), Some(input)) = (
+                                item.get("id").and_then(|i| i.as_str()),
+                                item.get("name").and_then(|n| n.as_str()),
+                                item.get("input"),
+                            )
+                        {
+                            tool_calls.push(ToolCall {
+                                id: id.to_string(),
+                                tool_type: "function".to_string(),
+                                function: FunctionCall {
+                                    name: name.to_string(),
+                                    arguments: input.to_string(),
+                                },
+                            });
+                        }
                     }
                     return Ok(tool_calls);
                 }

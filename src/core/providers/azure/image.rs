@@ -235,29 +235,32 @@ impl AzureImageUtils {
 
         // Validate quality
         if let Some(quality) = &request.quality
-            && !["standard", "hd"].contains(&quality.as_str()) {
-                return Err(azure_config_error(format!(
-                    "Invalid quality '{}'. Must be 'standard' or 'hd'",
-                    quality
-                )));
-            }
+            && !["standard", "hd"].contains(&quality.as_str())
+        {
+            return Err(azure_config_error(format!(
+                "Invalid quality '{}'. Must be 'standard' or 'hd'",
+                quality
+            )));
+        }
 
         // Validate style
         if let Some(style) = &request.style
-            && !["vivid", "natural"].contains(&style.as_str()) {
-                return Err(azure_config_error(format!(
-                    "Invalid style '{}'. Must be 'vivid' or 'natural'",
-                    style
-                )));
-            }
+            && !["vivid", "natural"].contains(&style.as_str())
+        {
+            return Err(azure_config_error(format!(
+                "Invalid style '{}'. Must be 'vivid' or 'natural'",
+                style
+            )));
+        }
 
         // Validate n (number of images)
         if let Some(n) = request.n
-            && (n == 0 || n > 10) {
-                return Err(azure_config_error(
-                    "Number of images must be between 1 and 10",
-                ));
-            }
+            && (n == 0 || n > 10)
+        {
+            return Err(azure_config_error(
+                "Number of images must be between 1 and 10",
+            ));
+        }
 
         Ok(())
     }

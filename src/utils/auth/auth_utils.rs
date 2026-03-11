@@ -98,9 +98,10 @@ impl AuthUtils {
 
         for env_var in env_vars {
             if let Ok(key) = env::var(env_var)
-                && !key.is_empty() {
-                    return Some(key);
-                }
+                && !key.is_empty()
+            {
+                return Some(key);
+            }
         }
 
         None

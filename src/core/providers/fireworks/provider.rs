@@ -133,9 +133,10 @@ impl FireworksProvider {
             for tool in tools.iter_mut() {
                 // Remove 'strict' field from function parameters if present
                 if let Some(ref mut params) = tool.function.parameters
-                    && let Some(obj) = params.as_object_mut() {
-                        obj.remove("strict");
-                    }
+                    && let Some(obj) = params.as_object_mut()
+                {
+                    obj.remove("strict");
+                }
             }
         }
     }
@@ -152,11 +153,13 @@ impl FireworksProvider {
 
         // Transform json_schema format to json_object
         if let Some(ref mut format) = request.response_format
-            && format.format_type == "json_schema" && format.json_schema.is_some() {
-                // Fireworks uses json_object with a schema field
-                format.format_type = "json_object".to_string();
-                // Keep the schema in json_schema field
-            }
+            && format.format_type == "json_schema"
+            && format.json_schema.is_some()
+        {
+            // Fireworks uses json_object with a schema field
+            format.format_type = "json_object".to_string();
+            // Keep the schema in json_schema field
+        }
     }
 
     /// Handle tool_choice mapping
@@ -342,9 +345,10 @@ impl LLMProvider for FireworksProvider {
 
         // Map tool_choice "required" to "any"
         if let Some(tool_choice) = params.get_mut("tool_choice")
-            && tool_choice.as_str() == Some("required") {
-                *tool_choice = serde_json::json!("any");
-            }
+            && tool_choice.as_str() == Some("required")
+        {
+            *tool_choice = serde_json::json!("any");
+        }
 
         Ok(params)
     }
