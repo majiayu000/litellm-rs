@@ -56,7 +56,7 @@ pin-project-lite = "0.2"
 paste = "1"
 
 # HTTP client
-reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls", "multipart"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart"], default-features = false }
 
 # Serialization and deserialization
 serde = { version = "1.0", features = ["derive"] }
@@ -80,8 +80,8 @@ aws-sdk-secretsmanager = { version = "1.70", optional = true }
 aws-config = { version = "1.5", optional = true }
 
 # Cloud secret managers
-google-cloud-secretmanager-v1 = { version = "1.4", optional = true }
-google-cloud-auth = { version = "1.5", optional = true }
+google-cloud-secretmanager-v1 = { version = "~1.3", optional = true }
+google-cloud-auth = { version = "~1.4", optional = true }
 azure_security_keyvault_secrets = { version = "0.10", optional = true }
 azure_identity = { version = "0.31", optional = true }
 azure_core = { version = "0.31", optional = true }
