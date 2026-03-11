@@ -105,11 +105,10 @@ impl OptimizedConfigManager {
         // Check cache first
         {
             let cache = self.cache.read();
-            if let Some(cached) = cache.get(file_path) {
-                if let Ok(config) = self.try_downcast_config::<T>(cached.clone()) {
+            if let Some(cached) = cache.get(file_path)
+                && let Ok(config) = self.try_downcast_config::<T>(cached.clone()) {
                     return Ok(config);
                 }
-            }
         }
 
         // Load from file
@@ -175,9 +174,9 @@ impl OptimizedConfigManager {
             loop {
                 interval.tick().await;
 
-                if let Ok(metadata) = tokio::fs::metadata(&file_path_for_spawn).await {
-                    if let Ok(modified) = metadata.modified() {
-                        if modified > last_modified {
+                if let Ok(metadata) = tokio::fs::metadata(&file_path_for_spawn).await
+                    && let Ok(modified) = metadata.modified()
+                        && modified > last_modified {
                             last_modified = modified;
 
                             // Reload configuration
@@ -209,8 +208,6 @@ impl OptimizedConfigManager {
                                 }
                             }
                         }
-                    }
-                }
             }
         });
 

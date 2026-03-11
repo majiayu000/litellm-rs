@@ -241,14 +241,13 @@ impl GeminiEmbeddingHandler {
         }
 
         // Check output dimensionality
-        if let Some(dims) = request.output_dimensionality {
-            if dims <= 0 || dims > self.model.dimensions() as i32 {
+        if let Some(dims) = request.output_dimensionality
+            && (dims <= 0 || dims > self.model.dimensions() as i32) {
                 return Err(ProviderError::invalid_request(
                     "vertex_ai",
                     format!("Invalid output dimensionality: {}", dims),
                 ));
             }
-        }
 
         Ok(())
     }

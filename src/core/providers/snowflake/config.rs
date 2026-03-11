@@ -116,11 +116,10 @@ impl SnowflakeConfig {
 
     /// Get the authentication type based on the API key format
     pub fn get_auth_type(&self) -> AuthType {
-        if let Some(ref key) = self.get_api_key() {
-            if key.starts_with("pat/") {
+        if let Some(ref key) = self.get_api_key()
+            && key.starts_with("pat/") {
                 return AuthType::ProgrammaticAccessToken;
             }
-        }
         AuthType::KeypairJwt
     }
 

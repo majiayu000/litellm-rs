@@ -10,11 +10,10 @@ impl RequestUtils {
     ) -> Result<String, ProviderError> {
         let mut processed = system_message.to_string();
 
-        if let Some(max_tokens) = max_tokens {
-            if processed.len() > (max_tokens as usize * 4) {
+        if let Some(max_tokens) = max_tokens
+            && processed.len() > (max_tokens as usize * 4) {
                 processed = Self::truncate_message(&processed, max_tokens as usize * 4)?;
             }
-        }
 
         if Self::needs_model_specific_processing(model) {
             processed = Self::apply_model_specific_processing(&processed, model)?;
@@ -58,13 +57,12 @@ impl RequestUtils {
             messages.remove(0);
         }
 
-        if Self::estimate_total_tokens(messages, model) > max_tokens as usize {
-            if let Some(last_message) = messages.last_mut() {
+        if Self::estimate_total_tokens(messages, model) > max_tokens as usize
+            && let Some(last_message) = messages.last_mut() {
                 let target_length = (max_tokens as usize * 3).saturating_sub(100);
                 last_message.content =
                     Self::truncate_message(&last_message.content, target_length)?;
             }
-        }
 
         Ok(())
     }

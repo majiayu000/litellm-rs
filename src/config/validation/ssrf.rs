@@ -64,26 +64,24 @@ pub fn validate_url_against_ssrf(url_str: &str, context: &str) -> Result<(), Str
     }
 
     // Try to parse as IP address and check for private/internal ranges
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_or_internal_ip(&ip) {
+    if let Ok(ip) = host.parse::<IpAddr>()
+        && is_private_or_internal_ip(&ip) {
             return Err(format!(
                 "{} URL host '{}' is a private/internal IP address (SSRF protection)",
                 context, host
             ));
         }
-    }
 
     // Check for IP addresses in brackets (IPv6)
     if host.starts_with('[') && host.ends_with(']') {
         let ip_str = &host[1..host.len() - 1];
-        if let Ok(ip) = ip_str.parse::<IpAddr>() {
-            if is_private_or_internal_ip(&ip) {
+        if let Ok(ip) = ip_str.parse::<IpAddr>()
+            && is_private_or_internal_ip(&ip) {
                 return Err(format!(
                     "{} URL host '{}' is a private/internal IP address (SSRF protection)",
                     context, host
                 ));
             }
-        }
     }
 
     // Check for decimal/octal/hex encoded IP addresses that bypass filters
@@ -102,8 +100,8 @@ pub fn validate_url_against_ssrf(url_str: &str, context: &str) -> Result<(), Str
     }
 
     // Check for hex-encoded IP (0x prefix)
-    if host.starts_with("0x") || host.starts_with("0X") {
-        if let Ok(num) = u32::from_str_radix(&host[2..], 16) {
+    if (host.starts_with("0x") || host.starts_with("0X"))
+        && let Ok(num) = u32::from_str_radix(&host[2..], 16) {
             let ip = Ipv4Addr::from(num);
             if is_private_or_internal_ip(&IpAddr::V4(ip)) {
                 return Err(format!(
@@ -112,7 +110,6 @@ pub fn validate_url_against_ssrf(url_str: &str, context: &str) -> Result<(), Str
                 ));
             }
         }
-    }
 
     // Resolve DNS to ensure host does not map to private/internal IPs
     let host_is_literal = host.parse::<IpAddr>().is_ok()

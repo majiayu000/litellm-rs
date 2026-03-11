@@ -231,11 +231,10 @@ impl SecretManager for FileSecretManager {
             };
 
             // Filter by prefix
-            if let Some(prefix) = &options.prefix {
-                if !secret_name.starts_with(prefix) {
+            if let Some(prefix) = &options.prefix
+                && !secret_name.starts_with(prefix) {
                     continue;
                 }
-            }
 
             // Get file metadata for timestamps
             let metadata = entry.metadata().await.ok();
@@ -263,11 +262,10 @@ impl SecretManager for FileSecretManager {
             secrets.push(secret_meta);
 
             // Check max results
-            if let Some(max) = options.max_results {
-                if secrets.len() >= max {
+            if let Some(max) = options.max_results
+                && secrets.len() >= max {
                     break;
                 }
-            }
         }
 
         Ok(ListSecretsResult {

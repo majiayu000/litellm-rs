@@ -74,24 +74,22 @@ impl OpenAIImageVariationsUtils {
     /// Validate image variations request
     pub fn validate_request(request: &OpenAIImageVariationsRequest) -> Result<(), ProviderError> {
         // Check model
-        if let Some(model) = &request.model {
-            if !Self::supports_image_variations(model) {
+        if let Some(model) = &request.model
+            && !Self::supports_image_variations(model) {
                 return Err(ProviderError::ModelNotFound {
                     provider: "openai",
                     model: model.clone(),
                 });
             }
-        }
 
         // Check n parameter
-        if let Some(n) = request.n {
-            if n == 0 || n > 10 {
+        if let Some(n) = request.n
+            && (n == 0 || n > 10) {
                 return Err(ProviderError::InvalidRequest {
                     provider: "openai",
                     message: "n must be between 1 and 10".to_string(),
                 });
             }
-        }
 
         // Check image format (basic validation)
         if !request.image.starts_with("data:image/png;base64,")
@@ -104,15 +102,14 @@ impl OpenAIImageVariationsUtils {
         }
 
         // Check size if provided
-        if let Some(size) = &request.size {
-            if !Self::is_supported_size(size) {
+        if let Some(size) = &request.size
+            && !Self::is_supported_size(size) {
                 return Err(ProviderError::InvalidRequest {
                     provider: "openai",
                     message: "Unsupported image size. Supported sizes: 256x256, 512x512, 1024x1024"
                         .to_string(),
                 });
             }
-        }
 
         Ok(())
     }

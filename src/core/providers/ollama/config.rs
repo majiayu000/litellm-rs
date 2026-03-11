@@ -103,11 +103,10 @@ impl ProviderConfig for OllamaConfig {
         }
 
         // Validate mirostat value if set
-        if let Some(mirostat) = self.mirostat {
-            if !(0..=2).contains(&mirostat) {
+        if let Some(mirostat) = self.mirostat
+            && !(0..=2).contains(&mirostat) {
                 return Err("Mirostat must be 0, 1, or 2".to_string());
             }
-        }
 
         Ok(())
     }

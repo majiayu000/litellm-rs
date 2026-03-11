@@ -664,11 +664,10 @@ impl Integration for OpenTelemetryIntegration {
     async fn on_llm_stream(&self, event: &LlmStreamEvent) -> IntegrationResult<()> {
         // Add stream events to the active span
         let mut active_spans = self.active_spans.write();
-        if let Some(active) = active_spans.get_mut(&event.request_id) {
-            if event.is_final {
+        if let Some(active) = active_spans.get_mut(&event.request_id)
+            && event.is_final {
                 active.span = active.span.clone().event("stream.complete");
             }
-        }
         Ok(())
     }
 

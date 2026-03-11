@@ -92,8 +92,8 @@ impl CohereChatHandler {
 
                 let mut parameter_definitions = HashMap::new();
 
-                if let Some(params) = function.get("parameters") {
-                    if let Some(properties) = params.get("properties").and_then(|p| p.as_object()) {
+                if let Some(params) = function.get("parameters")
+                    && let Some(properties) = params.get("properties").and_then(|p| p.as_object()) {
                         let required = params
                             .get("required")
                             .and_then(|r| r.as_array())
@@ -120,7 +120,6 @@ impl CohereChatHandler {
                             );
                         }
                     }
-                }
 
                 cohere_tools.push(json!({
                     "name": name,
@@ -195,9 +194,9 @@ impl CohereChatHandler {
     /// Extract content from Cohere response
     fn extract_content(response_json: &Value) -> Result<String, CohereError> {
         // v2 format: message.content is an array of content blocks
-        if let Some(message) = response_json.get("message") {
-            if let Some(content) = message.get("content") {
-                if let Some(content_array) = content.as_array() {
+        if let Some(message) = response_json.get("message")
+            && let Some(content) = message.get("content")
+                && let Some(content_array) = content.as_array() {
                     let text: String = content_array
                         .iter()
                         .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
@@ -205,8 +204,6 @@ impl CohereChatHandler {
                         .join("");
                     return Ok(text);
                 }
-            }
-        }
 
         // v1 format: text is at top level
         if let Some(text) = response_json.get("text").and_then(|t| t.as_str()) {
@@ -219,8 +216,8 @@ impl CohereChatHandler {
     /// Extract usage from Cohere response
     fn extract_usage(response_json: &Value) -> Result<Usage, CohereError> {
         // v2 format: usage.tokens
-        if let Some(usage) = response_json.get("usage") {
-            if let Some(tokens) = usage.get("tokens") {
+        if let Some(usage) = response_json.get("usage")
+            && let Some(tokens) = usage.get("tokens") {
                 let prompt_tokens = tokens
                     .get("input_tokens")
                     .and_then(|v| v.as_u64())
@@ -239,11 +236,10 @@ impl CohereChatHandler {
                     thinking_usage: None,
                 });
             }
-        }
 
         // v1 format: meta.billed_units
-        if let Some(meta) = response_json.get("meta") {
-            if let Some(billed_units) = meta.get("billed_units") {
+        if let Some(meta) = response_json.get("meta")
+            && let Some(billed_units) = meta.get("billed_units") {
                 let prompt_tokens = billed_units
                     .get("input_tokens")
                     .and_then(|v| v.as_u64())
@@ -262,7 +258,6 @@ impl CohereChatHandler {
                     thinking_usage: None,
                 });
             }
-        }
 
         Ok(Usage {
             prompt_tokens: 0,

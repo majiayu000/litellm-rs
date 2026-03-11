@@ -125,8 +125,8 @@ impl ImageGenerationHandler {
         }
 
         // Validate aspect ratio
-        if let Some(aspect_ratio) = &request.aspect_ratio {
-            if model.supports_aspect_ratio() {
+        if let Some(aspect_ratio) = &request.aspect_ratio
+            && model.supports_aspect_ratio() {
                 let supported = model.supported_aspect_ratios();
                 if !supported.contains(&aspect_ratio.as_str()) {
                     return Err(ProviderError::invalid_request(
@@ -135,17 +135,15 @@ impl ImageGenerationHandler {
                     ));
                 }
             }
-        }
 
         // Validate number of images
-        if let Some(count) = request.number_of_images {
-            if !(1..=4).contains(&count) {
+        if let Some(count) = request.number_of_images
+            && !(1..=4).contains(&count) {
                 return Err(ProviderError::invalid_request(
                     "vertex_ai",
                     "Number of images must be between 1 and 4",
                 ));
             }
-        }
 
         Ok(())
     }

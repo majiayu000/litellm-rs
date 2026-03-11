@@ -229,22 +229,18 @@ impl AzureResponseProcessor {
         response: &serde_json::Value,
     ) -> Option<super::ContentFilterResults> {
         // Look in choices first
-        if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
-            if let Some(first_choice) = choices.first() {
-                if let Some(filters) = first_choice.get("content_filter_results") {
-                    if let Ok(filter_results) = serde_json::from_value(filters.clone()) {
+        if let Some(choices) = response.get("choices").and_then(|c| c.as_array())
+            && let Some(first_choice) = choices.first()
+                && let Some(filters) = first_choice.get("content_filter_results")
+                    && let Ok(filter_results) = serde_json::from_value(filters.clone()) {
                         return Some(filter_results);
                     }
-                }
-            }
-        }
 
         // Check root level
-        if let Some(filters) = response.get("content_filter_results") {
-            if let Ok(filter_results) = serde_json::from_value(filters.clone()) {
+        if let Some(filters) = response.get("content_filter_results")
+            && let Ok(filter_results) = serde_json::from_value(filters.clone()) {
                 return Some(filter_results);
             }
-        }
 
         None
     }
@@ -253,11 +249,10 @@ impl AzureResponseProcessor {
         &self,
         response: &serde_json::Value,
     ) -> Option<Vec<super::PromptFilterResult>> {
-        if let Some(filters) = response.get("prompt_filter_results") {
-            if let Ok(filter_results) = serde_json::from_value(filters.clone()) {
+        if let Some(filters) = response.get("prompt_filter_results")
+            && let Ok(filter_results) = serde_json::from_value(filters.clone()) {
                 return Some(filter_results);
             }
-        }
         None
     }
 
@@ -266,11 +261,10 @@ impl AzureResponseProcessor {
         // Check finish_reason for content_filter
         if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
             for choice in choices {
-                if let Some(finish_reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
-                    if finish_reason == "content_filter" {
+                if let Some(finish_reason) = choice.get("finish_reason").and_then(|r| r.as_str())
+                    && finish_reason == "content_filter" {
                         return true;
                     }
-                }
             }
         }
 

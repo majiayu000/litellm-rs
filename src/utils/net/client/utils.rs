@@ -219,17 +219,15 @@ impl ClientUtils {
     pub fn extract_retry_after_from_headers(
         headers: &reqwest::header::HeaderMap,
     ) -> Option<Duration> {
-        if let Some(retry_after) = headers.get("retry-after") {
-            if let Ok(retry_str) = retry_after.to_str() {
-                if let Ok(seconds) = retry_str.parse::<u64>() {
+        if let Some(retry_after) = headers.get("retry-after")
+            && let Ok(retry_str) = retry_after.to_str()
+                && let Ok(seconds) = retry_str.parse::<u64>() {
                     return Some(Duration::from_secs(seconds));
                 }
-            }
-        }
 
-        if let Some(rate_limit_reset) = headers.get("x-ratelimit-reset") {
-            if let Ok(reset_str) = rate_limit_reset.to_str() {
-                if let Ok(reset_time) = reset_str.parse::<u64>() {
+        if let Some(rate_limit_reset) = headers.get("x-ratelimit-reset")
+            && let Ok(reset_str) = rate_limit_reset.to_str()
+                && let Ok(reset_time) = reset_str.parse::<u64>() {
                     let current_time = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
@@ -239,8 +237,6 @@ impl ClientUtils {
                         return Some(Duration::from_secs(reset_time - current_time));
                     }
                 }
-            }
-        }
 
         None
     }

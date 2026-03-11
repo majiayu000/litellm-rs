@@ -192,11 +192,10 @@ impl AzureChatHandler {
                                 }
 
                                 // Parse chunk
-                                if let Ok(chunk_json) = serde_json::from_str::<Value>(data) {
-                                    if let Ok(chunk) = Self::transform_streaming_chunk(chunk_json, &deployment_clone) {
+                                if let Ok(chunk_json) = serde_json::from_str::<Value>(data)
+                                    && let Ok(chunk) = Self::transform_streaming_chunk(chunk_json, &deployment_clone) {
                                         yield Ok(chunk);
                                     }
-                                }
                             }
                         }
                     }

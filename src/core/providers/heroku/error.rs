@@ -52,15 +52,14 @@ impl ErrorMapper<ProviderError> for HerokuErrorMapper {
 /// Extract model name from error response body
 fn extract_model_from_body(response_body: &str) -> String {
     // Try to parse as JSON and extract model info
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(response_body) {
-        if let Some(model) = json
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(response_body)
+        && let Some(model) = json
             .get("error")
             .and_then(|e| e.get("param"))
             .and_then(|p| p.as_str())
         {
             return model.to_string();
         }
-    }
     "unknown".to_string()
 }
 

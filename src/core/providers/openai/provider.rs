@@ -228,14 +228,13 @@ impl OpenAIProvider {
 
     /// Get model pricing information
     pub fn get_model_pricing(&self, model_id: &str) -> Option<(f64, f64)> {
-        if let Ok(model_info) = self.get_model_info(model_id) {
-            if let (Some(input_cost), Some(output_cost)) = (
+        if let Ok(model_info) = self.get_model_info(model_id)
+            && let (Some(input_cost), Some(output_cost)) = (
                 model_info.input_cost_per_1k_tokens,
                 model_info.output_cost_per_1k_tokens,
             ) {
                 return Some((input_cost, output_cost));
             }
-        }
         None
     }
 

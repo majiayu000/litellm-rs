@@ -65,11 +65,10 @@ impl crate::core::traits::provider::ProviderConfig for OpenAIProviderConfig {
             return Err("API key is required".to_string());
         }
 
-        if let Some(base_url) = &self.api_base {
-            if Url::parse(base_url).is_err() {
+        if let Some(base_url) = &self.api_base
+            && Url::parse(base_url).is_err() {
                 return Err("Invalid API base URL".to_string());
             }
-        }
 
         if self.timeout_seconds == 0 {
             return Err("Timeout must be greater than 0".to_string());

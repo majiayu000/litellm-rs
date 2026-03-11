@@ -74,16 +74,15 @@ impl Clone for BudgetMiddleware {
 /// Default scope extractor - extracts user ID from request headers or extensions
 fn default_scope_extractor(req: &ServiceRequest) -> Option<BudgetScope> {
     // Try to get user ID from X-User-ID header
-    if let Some(user_id) = req.headers().get("X-User-ID") {
-        if let Ok(user_id_str) = user_id.to_str() {
+    if let Some(user_id) = req.headers().get("X-User-ID")
+        && let Ok(user_id_str) = user_id.to_str() {
             return Some(BudgetScope::User(user_id_str.to_string()));
         }
-    }
 
     // Try to get API key from Authorization header
-    if let Some(auth_header) = req.headers().get("Authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if let Some(api_key) = auth_str.strip_prefix("Bearer ") {
+    if let Some(auth_header) = req.headers().get("Authorization")
+        && let Ok(auth_str) = auth_header.to_str()
+            && let Some(api_key) = auth_str.strip_prefix("Bearer ") {
                 // Use first 16 chars as identifier for privacy
                 let key_id = if api_key.len() > 16 {
                     &api_key[..16]
@@ -92,15 +91,12 @@ fn default_scope_extractor(req: &ServiceRequest) -> Option<BudgetScope> {
                 };
                 return Some(BudgetScope::ApiKey(key_id.to_string()));
             }
-        }
-    }
 
     // Try to get team ID from X-Team-ID header
-    if let Some(team_id) = req.headers().get("X-Team-ID") {
-        if let Ok(team_id_str) = team_id.to_str() {
+    if let Some(team_id) = req.headers().get("X-Team-ID")
+        && let Ok(team_id_str) = team_id.to_str() {
             return Some(BudgetScope::Team(team_id_str.to_string()));
         }
-    }
 
     // Fall back to global scope
     Some(BudgetScope::Global)
@@ -305,37 +301,31 @@ fn extract_scope_from_request(req: &ServiceRequest) -> Option<BudgetScope> {
     // 5. Global scope
 
     // Check for explicit budget scope header
-    if let Some(scope_header) = req.headers().get("X-Budget-Scope") {
-        if let Ok(scope_str) = scope_header.to_str() {
-            if let Some(scope) = BudgetScope::from_key(scope_str) {
+    if let Some(scope_header) = req.headers().get("X-Budget-Scope")
+        && let Ok(scope_str) = scope_header.to_str()
+            && let Some(scope) = BudgetScope::from_key(scope_str) {
                 return Some(scope);
             }
-        }
-    }
 
     // Try user ID
-    if let Some(user_id) = req.headers().get("X-User-ID") {
-        if let Ok(user_id_str) = user_id.to_str() {
-            if !user_id_str.is_empty() {
+    if let Some(user_id) = req.headers().get("X-User-ID")
+        && let Ok(user_id_str) = user_id.to_str()
+            && !user_id_str.is_empty() {
                 return Some(BudgetScope::User(user_id_str.to_string()));
             }
-        }
-    }
 
     // Try team ID
-    if let Some(team_id) = req.headers().get("X-Team-ID") {
-        if let Ok(team_id_str) = team_id.to_str() {
-            if !team_id_str.is_empty() {
+    if let Some(team_id) = req.headers().get("X-Team-ID")
+        && let Ok(team_id_str) = team_id.to_str()
+            && !team_id_str.is_empty() {
                 return Some(BudgetScope::Team(team_id_str.to_string()));
             }
-        }
-    }
 
     // Try API key
-    if let Some(auth_header) = req.headers().get("Authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if let Some(api_key) = auth_str.strip_prefix("Bearer ") {
-                if !api_key.is_empty() {
+    if let Some(auth_header) = req.headers().get("Authorization")
+        && let Ok(auth_str) = auth_header.to_str()
+            && let Some(api_key) = auth_str.strip_prefix("Bearer ")
+                && !api_key.is_empty() {
                     // Hash or truncate API key for privacy
                     let key_id = if api_key.len() > 16 {
                         format!("{}...", &api_key[..16])
@@ -344,9 +334,6 @@ fn extract_scope_from_request(req: &ServiceRequest) -> Option<BudgetScope> {
                     };
                     return Some(BudgetScope::ApiKey(key_id));
                 }
-            }
-        }
-    }
 
     // Default to global scope
     Some(BudgetScope::Global)

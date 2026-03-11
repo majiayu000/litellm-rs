@@ -245,14 +245,13 @@ impl VectorStoreHandler {
             ));
         }
 
-        if let Some(k) = request.k {
-            if k == 0 || k > 1000 {
+        if let Some(k) = request.k
+            && (k == 0 || k > 1000) {
                 return Err(ProviderError::invalid_request(
                     "vertex_ai",
                     "k must be between 1 and 1000",
                 ));
             }
-        }
 
         Ok(())
     }
