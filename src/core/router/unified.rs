@@ -88,11 +88,10 @@ impl Router {
     pub fn remove_deployment(&self, id: &str) -> Option<Deployment> {
         let removed = self.deployments.remove(id).map(|(_, v)| v);
 
-        if let Some(ref deployment) = removed {
-            if let Some(mut entry) = self.model_index.get_mut(&deployment.model_name) {
+        if let Some(ref deployment) = removed
+            && let Some(mut entry) = self.model_index.get_mut(&deployment.model_name) {
                 entry.retain(|did| did != id);
             }
-        }
 
         removed
     }

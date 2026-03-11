@@ -61,14 +61,13 @@ impl BudgetAwareRouter {
 
                 if !is_available {
                     debug!("Provider '{}' filtered out: budget exceeded", provider);
-                } else if self.log_warnings && status == BudgetStatus::Warning {
-                    if let Some(usage) = self.budget_limits.providers.get_provider_usage(provider) {
+                } else if self.log_warnings && status == BudgetStatus::Warning
+                    && let Some(usage) = self.budget_limits.providers.get_provider_usage(provider) {
                         warn!(
                             "Provider '{}' approaching budget limit: ${:.2} / ${:.2} ({:.1}%)",
                             provider, usage.current_spend, usage.max_budget, usage.usage_percentage
                         );
                     }
-                }
 
                 is_available
             })

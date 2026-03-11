@@ -162,20 +162,18 @@ impl LocalStorage {
             }
 
             // Apply prefix filter
-            if let Some(prefix) = prefix {
-                if !file_name.starts_with(prefix) {
+            if let Some(prefix) = prefix
+                && !file_name.starts_with(prefix) {
                     continue;
                 }
-            }
 
             files.push(file_name);
 
             // Apply limit
-            if let Some(limit) = limit {
-                if files.len() >= limit {
+            if let Some(limit) = limit
+                && files.len() >= limit {
                     break;
                 }
-            }
         }
 
         Ok(files)

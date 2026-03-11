@@ -77,11 +77,10 @@ impl AlertManager {
         let rules = self.storage.read().rules.clone();
 
         for rule in rules.values() {
-            if rule.enabled {
-                if let Err(e) = self.evaluate_rule(rule).await {
+            if rule.enabled
+                && let Err(e) = self.evaluate_rule(rule).await {
                     warn!("Failed to evaluate rule {}: {}", rule.name, e);
                 }
-            }
         }
 
         Ok(())

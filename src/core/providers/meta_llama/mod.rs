@@ -501,11 +501,10 @@ impl ProviderConfig for LlamaProviderConfig {
             return Err("API key is required for Llama provider".to_string());
         }
 
-        if let Some(timeout) = self.timeout {
-            if timeout == 0 {
+        if let Some(timeout) = self.timeout
+            && timeout == 0 {
                 return Err("Timeout must be greater than 0".to_string());
             }
-        }
 
         Ok(())
     }

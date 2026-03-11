@@ -330,34 +330,31 @@ impl LlamaUtils {
     /// Validate request parameters
     pub fn validate_params(params: &Value) -> Result<(), ProviderError> {
         // Check temperature range
-        if let Some(temp) = params.get("temperature").and_then(|t| t.as_f64()) {
-            if !(0.0..=2.0).contains(&temp) {
+        if let Some(temp) = params.get("temperature").and_then(|t| t.as_f64())
+            && !(0.0..=2.0).contains(&temp) {
                 return Err(ProviderError::invalid_request(
                     PROVIDER_NAME,
                     format!("Temperature must be between 0 and 2, got {}", temp),
                 ));
             }
-        }
 
         // Check top_p range
-        if let Some(top_p) = params.get("top_p").and_then(|t| t.as_f64()) {
-            if !(0.0..=1.0).contains(&top_p) {
+        if let Some(top_p) = params.get("top_p").and_then(|t| t.as_f64())
+            && !(0.0..=1.0).contains(&top_p) {
                 return Err(ProviderError::invalid_request(
                     PROVIDER_NAME,
                     format!("top_p must be between 0 and 1, got {}", top_p),
                 ));
             }
-        }
 
         // Check max_tokens
-        if let Some(max_tokens) = params.get("max_tokens").and_then(|t| t.as_i64()) {
-            if max_tokens < 1 {
+        if let Some(max_tokens) = params.get("max_tokens").and_then(|t| t.as_i64())
+            && max_tokens < 1 {
                 return Err(ProviderError::invalid_request(
                     PROVIDER_NAME,
                     format!("max_tokens must be positive, got {}", max_tokens),
                 ));
             }
-        }
 
         Ok(())
     }

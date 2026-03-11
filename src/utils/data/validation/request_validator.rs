@@ -44,13 +44,12 @@ impl RequestValidator {
         }
 
         // Validate temperature
-        if let Some(temperature) = temperature {
-            if !(0.0..=2.0).contains(&temperature) {
+        if let Some(temperature) = temperature
+            && !(0.0..=2.0).contains(&temperature) {
                 return Err(GatewayError::Validation(
                     "temperature must be between 0.0 and 2.0".to_string(),
                 ));
             }
-        }
 
         Ok(())
     }
@@ -173,13 +172,12 @@ impl RequestValidator {
             }
             ContentPart::ImageUrl { image_url } => {
                 Self::validate_image_url(&image_url.url)?;
-                if let Some(detail) = &image_url.detail {
-                    if !["low", "high", "auto"].contains(&detail.as_str()) {
+                if let Some(detail) = &image_url.detail
+                    && !["low", "high", "auto"].contains(&detail.as_str()) {
                         return Err(GatewayError::Validation(
                             "Image detail must be 'low', 'high', or 'auto'".to_string(),
                         ));
                     }
-                }
             }
             ContentPart::Audio { audio } => {
                 Self::validate_audio_data(&audio.data)?;
@@ -199,13 +197,12 @@ impl RequestValidator {
                     )));
                 }
                 Self::validate_base64_payload(&source.data, "image")?;
-                if let Some(detail) = detail {
-                    if !["low", "high", "auto"].contains(&detail.as_str()) {
+                if let Some(detail) = detail
+                    && !["low", "high", "auto"].contains(&detail.as_str()) {
                         return Err(GatewayError::Validation(
                             "Image detail must be 'low', 'high', or 'auto'".to_string(),
                         ));
                     }
-                }
                 if let Some(url) = image_url {
                     Self::validate_image_url(&url.url)?;
                 }

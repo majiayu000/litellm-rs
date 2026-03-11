@@ -146,8 +146,8 @@ impl CopilotAuthenticator {
     /// Get the API key, refreshing if needed
     pub async fn get_api_key(&self) -> Result<String, GitHubCopilotError> {
         // Try to read from cache first
-        if let Ok(content) = fs::read_to_string(&self.api_key_path) {
-            if let Ok(api_key_info) = serde_json::from_str::<ApiKeyInfo>(&content) {
+        if let Ok(content) = fs::read_to_string(&self.api_key_path)
+            && let Ok(api_key_info) = serde_json::from_str::<ApiKeyInfo>(&content) {
                 // Check if not expired
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -159,7 +159,6 @@ impl CopilotAuthenticator {
                 }
                 debug!("API key expired, refreshing...");
             }
-        }
 
         // Need to refresh
         self.refresh_api_key().await
@@ -167,11 +166,10 @@ impl CopilotAuthenticator {
 
     /// Get the API base URL from cached API key info
     pub fn get_api_base(&self) -> Option<String> {
-        if let Ok(content) = fs::read_to_string(&self.api_key_path) {
-            if let Ok(api_key_info) = serde_json::from_str::<ApiKeyInfo>(&content) {
+        if let Ok(content) = fs::read_to_string(&self.api_key_path)
+            && let Ok(api_key_info) = serde_json::from_str::<ApiKeyInfo>(&content) {
                 return api_key_info.endpoints.api;
             }
-        }
         None
     }
 
@@ -219,11 +217,10 @@ impl CopilotAuthenticator {
 
             // Save to cache
             self.ensure_token_dir()?;
-            if let Ok(json) = serde_json::to_string(&api_key_info) {
-                if let Err(e) = fs::write(&self.api_key_path, json) {
+            if let Ok(json) = serde_json::to_string(&api_key_info)
+                && let Err(e) = fs::write(&self.api_key_path, json) {
                     warn!("Failed to cache API key: {}", e);
                 }
-            }
 
             return Ok(api_key_info.token);
         }
@@ -320,14 +317,13 @@ impl CopilotAuthenticator {
                 return Ok(access_token);
             }
 
-            if let Some(error) = &token_response.error {
-                if error != "authorization_pending" {
+            if let Some(error) = &token_response.error
+                && error != "authorization_pending" {
                     return Err(ProviderError::authentication(
                         "github_copilot",
                         format!("Access token error: OAuth error: {}", error),
                     ));
                 }
-            }
         }
 
         Err(ProviderError::authentication(

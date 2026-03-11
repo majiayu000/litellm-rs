@@ -372,11 +372,10 @@ fn reconstruct_diarized_transcript(words: &[WordInfo]) -> String {
 
         if speaker != current_speaker {
             // New speaker: save previous segment and start new one
-            if !current_words.is_empty() {
-                if let Some(sp) = current_speaker {
+            if !current_words.is_empty()
+                && let Some(sp) = current_speaker {
                     segments.push(format!("Speaker {}: {}", sp, current_words.join(" ")));
                 }
-            }
             current_speaker = speaker;
             current_words = vec![word_text];
         } else {
@@ -385,11 +384,10 @@ fn reconstruct_diarized_transcript(words: &[WordInfo]) -> String {
     }
 
     // Add the last segment
-    if !current_words.is_empty() {
-        if let Some(sp) = current_speaker {
+    if !current_words.is_empty()
+        && let Some(sp) = current_speaker {
             segments.push(format!("\nSpeaker {}: {}\n", sp, current_words.join(" ")));
         }
-    }
 
     segments.join("\n")
 }

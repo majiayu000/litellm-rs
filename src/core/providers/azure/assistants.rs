@@ -610,14 +610,13 @@ impl AzureAssistantUtils {
             ));
         }
 
-        if let Some(instructions) = &request.instructions {
-            if instructions.len() > 32768 {
+        if let Some(instructions) = &request.instructions
+            && instructions.len() > 32768 {
                 return Err(ProviderError::invalid_request(
                     "azure",
                     "Instructions exceed maximum length of 32768 characters".to_string(),
                 ));
             }
-        }
 
         Ok(())
     }

@@ -119,11 +119,10 @@ impl OpenAIConfig {
         }
 
         // Timeout
-        if let Ok(timeout_str) = std::env::var("OPENAI_TIMEOUT") {
-            if let Ok(timeout) = timeout_str.parse::<u64>() {
+        if let Ok(timeout_str) = std::env::var("OPENAI_TIMEOUT")
+            && let Ok(timeout) = timeout_str.parse::<u64>() {
                 config.base.timeout = timeout;
             }
-        }
 
         config
     }
@@ -134,23 +133,20 @@ impl OpenAIConfig {
         self.base.validate("openai")?;
 
         // OpenAI specific validations
-        if let Some(ref api_key) = self.base.api_key {
-            if !api_key.starts_with("sk-") && !api_key.starts_with("sk-proj-") {
+        if let Some(ref api_key) = self.base.api_key
+            && !api_key.starts_with("sk-") && !api_key.starts_with("sk-proj-") {
                 return Err("OpenAI API key must start with 'sk-' or 'sk-proj-'".to_string());
             }
-        }
 
-        if let Some(ref org) = self.organization {
-            if org.is_empty() {
+        if let Some(ref org) = self.organization
+            && org.is_empty() {
                 return Err("Organization ID cannot be empty".to_string());
             }
-        }
 
-        if let Some(ref project) = self.project {
-            if project.is_empty() {
+        if let Some(ref project) = self.project
+            && project.is_empty() {
                 return Err("Project ID cannot be empty".to_string());
             }
-        }
 
         Ok(())
     }

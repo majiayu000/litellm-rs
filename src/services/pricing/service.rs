@@ -66,11 +66,10 @@ impl PricingService {
         total_time_seconds: Option<f64>,
     ) -> Result<CostResult> {
         // Auto-refresh if needed
-        if self.needs_refresh() {
-            if let Err(e) = self.refresh_pricing_data().await {
+        if self.needs_refresh()
+            && let Err(e) = self.refresh_pricing_data().await {
                 warn!("Failed to refresh pricing data: {}", e);
             }
-        }
 
         let model_info = self
             .get_model_info(model)

@@ -18,18 +18,16 @@ pub fn get_request_context(req: &HttpRequest) -> ActixResult<RequestContext> {
     let mut context = RequestContext::new();
 
     // Extract request ID
-    if let Some(request_id) = req.headers().get("x-request-id") {
-        if let Ok(id) = request_id.to_str() {
+    if let Some(request_id) = req.headers().get("x-request-id")
+        && let Ok(id) = request_id.to_str() {
             context.request_id = id.to_string();
         }
-    }
 
     // Extract user agent
-    if let Some(user_agent) = req.headers().get("user-agent") {
-        if let Ok(agent) = user_agent.to_str() {
+    if let Some(user_agent) = req.headers().get("user-agent")
+        && let Ok(agent) = user_agent.to_str() {
             context.user_agent = Some(agent.to_string());
         }
-    }
 
     context.client_ip = req.connection_info().peer_addr().map(|ip| ip.to_string());
 

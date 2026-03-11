@@ -82,8 +82,8 @@ impl SemanticCache {
 
         // Find the best match
         for result in search_results {
-            if result.score >= self.config.similarity_threshold as f32 {
-                if let Some(entry) = self.get_cache_entry(&result.id).await? {
+            if result.score >= self.config.similarity_threshold as f32
+                && let Some(entry) = self.get_cache_entry(&result.id).await? {
                     // Check if entry is still valid
                     if is_entry_valid(&entry) {
                         // Update access and hit statistics with single lock
@@ -110,7 +110,6 @@ impl SemanticCache {
                         self.remove_cache_entry(&result.id).await?;
                     }
                 }
-            }
         }
 
         // No cache hit

@@ -138,14 +138,13 @@ impl AzureAIEmbeddingUtils {
         }
 
         // Validate dimensions if specified
-        if let Some(dimensions) = request.dimensions {
-            if dimensions == 0 || dimensions > 3072 {
+        if let Some(dimensions) = request.dimensions
+            && (dimensions == 0 || dimensions > 3072) {
                 return Err(ProviderError::invalid_request(
                     "azure_ai",
                     "Dimensions must be between 1 and 3072",
                 ));
             }
-        }
 
         Ok(())
     }

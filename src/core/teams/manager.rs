@@ -152,14 +152,13 @@ impl TeamManager {
             self.validate_team_name(&name)?;
 
             // Check if new name conflicts with another team
-            if let Some(existing) = self.repository.get_by_name(&name).await? {
-                if existing.id() != id {
+            if let Some(existing) = self.repository.get_by_name(&name).await?
+                && existing.id() != id {
                     return Err(GatewayError::Conflict(format!(
                         "Team with name '{}' already exists",
                         name
                     )));
                 }
-            }
             team.name = name;
         }
 

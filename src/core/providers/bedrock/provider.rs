@@ -66,8 +66,8 @@ impl BedrockProvider {
         let available_models = CostCalculator::get_all_models();
 
         for model_id in available_models {
-            if let Some(pricing) = CostCalculator::get_model_pricing(model_id) {
-                if let Ok(model_config) = get_model_config(model_id) {
+            if let Some(pricing) = CostCalculator::get_model_pricing(model_id)
+                && let Ok(model_config) = get_model_config(model_id) {
                     models.push(ModelInfo {
                         id: model_id.to_string(),
                         name: format!(
@@ -89,7 +89,6 @@ impl BedrockProvider {
                         metadata: HashMap::new(),
                     });
                 }
-            }
         }
 
         Ok(Self { client, models })

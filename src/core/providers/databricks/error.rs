@@ -55,11 +55,10 @@ impl ErrorMapper<ProviderError> for DatabricksErrorMapper {
 fn extract_model_name(response_body: &str) -> String {
     // Try to extract model name from error message
     // Common patterns: "model 'xxx' not found", "Model xxx does not exist"
-    if let Some(start) = response_body.find("model '") {
-        if let Some(end) = response_body[start + 7..].find('\'') {
+    if let Some(start) = response_body.find("model '")
+        && let Some(end) = response_body[start + 7..].find('\'') {
             return response_body[start + 7..start + 7 + end].to_string();
         }
-    }
     if let Some(start) = response_body.find("Model ") {
         let rest = &response_body[start + 6..];
         if let Some(end) = rest.find(|c: char| c.is_whitespace()) {

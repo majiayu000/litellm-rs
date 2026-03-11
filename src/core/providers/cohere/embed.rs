@@ -160,8 +160,8 @@ impl CohereEmbeddingHandler {
     /// Extract embeddings from the response
     fn extract_embeddings(embeddings: &Value) -> Result<Vec<Vec<f32>>, CohereError> {
         // Try float first (most common)
-        if let Some(float_embeddings) = embeddings.get("float") {
-            if let Some(arr) = float_embeddings.as_array() {
+        if let Some(float_embeddings) = embeddings.get("float")
+            && let Some(arr) = float_embeddings.as_array() {
                 return arr
                     .iter()
                     .map(|emb| {
@@ -177,12 +177,11 @@ impl CohereEmbeddingHandler {
                     })
                     .collect();
             }
-        }
 
         // Fallback: try to parse embeddings directly as a nested array
-        if let Some(arr) = embeddings.as_array() {
-            if let Some(first) = arr.first() {
-                if first.is_array() {
+        if let Some(arr) = embeddings.as_array()
+            && let Some(first) = arr.first()
+                && first.is_array() {
                     return arr
                         .iter()
                         .map(|emb| {
@@ -200,8 +199,6 @@ impl CohereEmbeddingHandler {
                         })
                         .collect();
                 }
-            }
-        }
 
         Err(super::error::cohere_response_parsing(
             "No valid embeddings found in response",
@@ -212,8 +209,8 @@ impl CohereEmbeddingHandler {
     fn extract_usage(response_json: &Value, input_count: usize) -> Usage {
         let mut prompt_tokens = 0u32;
 
-        if let Some(meta) = response_json.get("meta") {
-            if let Some(billed_units) = meta.get("billed_units") {
+        if let Some(meta) = response_json.get("meta")
+            && let Some(billed_units) = meta.get("billed_units") {
                 if let Some(input_tokens) =
                     billed_units.get("input_tokens").and_then(|v| v.as_u64())
                 {
@@ -223,7 +220,6 @@ impl CohereEmbeddingHandler {
                     prompt_tokens += images as u32;
                 }
             }
-        }
 
         // If no usage info, estimate based on input count
         if prompt_tokens == 0 {

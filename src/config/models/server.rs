@@ -166,11 +166,10 @@ impl TlsConfig {
             return Err(format!("TLS private key file not found: {}", self.key_file));
         }
 
-        if let Some(ca_file) = &self.ca_file {
-            if !std::path::Path::new(ca_file).exists() {
+        if let Some(ca_file) = &self.ca_file
+            && !std::path::Path::new(ca_file).exists() {
                 return Err(format!("TLS CA file not found: {}", ca_file));
             }
-        }
 
         Ok(())
     }

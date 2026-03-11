@@ -234,8 +234,8 @@ impl JsonOps {
     pub fn validate_json_schema(data: &Value, schema: &Value) -> Result<(), ProviderError> {
         match (data, schema) {
             (_, Value::Object(schema_map)) => {
-                if let Some(type_value) = schema_map.get("type") {
-                    if let Some(expected_type) = type_value.as_str() {
+                if let Some(type_value) = schema_map.get("type")
+                    && let Some(expected_type) = type_value.as_str() {
                         let data_type = match data {
                             Value::Null => "null",
                             Value::Bool(_) => "boolean",
@@ -255,7 +255,6 @@ impl JsonOps {
                             });
                         }
                     }
-                }
 
                 if let (Value::Object(data_map), Some(Value::Object(properties))) =
                     (data, schema_map.get("properties"))
@@ -268,8 +267,8 @@ impl JsonOps {
 
                     if let Some(Value::Array(required)) = schema_map.get("required") {
                         for required_prop in required {
-                            if let Some(prop_name) = required_prop.as_str() {
-                                if !data_map.contains_key(prop_name) {
+                            if let Some(prop_name) = required_prop.as_str()
+                                && !data_map.contains_key(prop_name) {
                                     return Err(ProviderError::InvalidRequest {
                                         provider: "unknown",
                                         message: format!(
@@ -278,7 +277,6 @@ impl JsonOps {
                                         ),
                                     });
                                 }
-                            }
                         }
                     }
                 }

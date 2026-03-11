@@ -247,11 +247,10 @@ impl LangfuseLogger {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        if sender_clone.pending_count() > 0 {
-                            if let Err(e) = sender_clone.flush().await {
+                        if sender_clone.pending_count() > 0
+                            && let Err(e) = sender_clone.flush().await {
                                 warn!("Langfuse flush error: {}", e);
                             }
-                        }
                     }
                     _ = shutdown_rx.recv() => {
                         debug!("Langfuse logger shutting down");

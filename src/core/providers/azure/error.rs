@@ -70,21 +70,19 @@ pub fn azure_header_error(msg: impl Into<String>) -> ProviderError {
 /// Extract error message from Azure response
 pub fn extract_azure_error_message(response: &serde_json::Value) -> String {
     if let Some(error) = response.get("error") {
-        if let Some(message) = error.get("message") {
-            if let Some(msg_str) = message.as_str() {
+        if let Some(message) = error.get("message")
+            && let Some(msg_str) = message.as_str() {
                 return msg_str.to_string();
             }
-        }
         // Try Azure-specific error format
-        if let Some(code) = error.get("code") {
-            if let Some(code_str) = code.as_str() {
+        if let Some(code) = error.get("code")
+            && let Some(code_str) = code.as_str() {
                 let message = error
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("Unknown error");
                 return format!("{}: {}", code_str, message);
             }
-        }
     }
 
     // Fallback to generic message

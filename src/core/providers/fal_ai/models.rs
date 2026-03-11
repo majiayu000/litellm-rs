@@ -28,11 +28,10 @@ impl ImageSize {
             "768x1024" => ImageSize::Preset("portrait_4_3".to_string()),
             _ => {
                 // Try to parse custom dimensions
-                if let Some((w, h)) = size.split_once('x') {
-                    if let (Ok(width), Ok(height)) = (w.parse(), h.parse()) {
+                if let Some((w, h)) = size.split_once('x')
+                    && let (Ok(width), Ok(height)) = (w.parse(), h.parse()) {
                         return ImageSize::Custom { width, height };
                     }
-                }
                 // Default fallback
                 ImageSize::Preset("landscape_4_3".to_string())
             }

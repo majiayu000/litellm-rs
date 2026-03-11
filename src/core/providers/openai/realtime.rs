@@ -455,36 +455,32 @@ impl OpenAIRealtimeUtils {
         }
 
         // Check temperature range
-        if let Some(temperature) = config.temperature {
-            if !(0.0..=2.0).contains(&temperature) {
+        if let Some(temperature) = config.temperature
+            && !(0.0..=2.0).contains(&temperature) {
                 return Err(ProviderError::InvalidRequest {
                     provider: "openai",
                     message: "temperature must be between 0.0 and 2.0".to_string(),
                 });
             }
-        }
 
         // Check max tokens
-        if let Some(max_tokens) = config.max_response_output_tokens {
-            if max_tokens == 0 || max_tokens > 4096 {
+        if let Some(max_tokens) = config.max_response_output_tokens
+            && (max_tokens == 0 || max_tokens > 4096) {
                 return Err(ProviderError::InvalidRequest {
                     provider: "openai",
                     message: "max_response_output_tokens must be between 1 and 4096".to_string(),
                 });
             }
-        }
 
         // Validate turn detection config
-        if let Some(turn_detection) = &config.turn_detection {
-            if let Some(threshold) = turn_detection.threshold {
-                if !(0.0..=1.0).contains(&threshold) {
+        if let Some(turn_detection) = &config.turn_detection
+            && let Some(threshold) = turn_detection.threshold
+                && !(0.0..=1.0).contains(&threshold) {
                     return Err(ProviderError::InvalidRequest {
                         provider: "openai",
                         message: "turn detection threshold must be between 0.0 and 1.0".to_string(),
                     });
                 }
-            }
-        }
 
         Ok(())
     }
