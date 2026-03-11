@@ -65,13 +65,13 @@ pub fn weighted_random_from_context<'id>(
 
     let total_weight: u32 = contexts.iter().map(|ctx| ctx.weight).sum();
     if total_weight == 0 {
-        let mut rng = rand::thread_rng();
-        let index = rng.gen_range(0..contexts.len());
+        let mut rng = rand::rng();
+        let index = rng.random_range(0..contexts.len());
         return Some(contexts[index].deployment_id);
     }
 
-    let mut rng = rand::thread_rng();
-    let mut point = rng.gen_range(0..total_weight);
+    let mut rng = rand::rng();
+    let mut point = rng.random_range(0..total_weight);
 
     for ctx in contexts {
         if point < ctx.weight {
@@ -108,8 +108,8 @@ pub fn least_busy_from_context<'id>(contexts: &[RoutingContext<'id>]) -> Option<
     if tied.len() == 1 {
         Some(tied[0])
     } else {
-        let mut rng = rand::thread_rng();
-        let index = rng.gen_range(0..tied.len());
+        let mut rng = rand::rng();
+        let index = rng.random_range(0..tied.len());
         Some(tied[index])
     }
 }
