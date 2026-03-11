@@ -292,20 +292,22 @@ impl FineTuningHandler {
 
         // Validate hyperparameters
         if let Some(epochs) = request.epoch_count
-            && !(1..=100).contains(&epochs) {
-                return Err(ProviderError::invalid_request(
-                    "vertex_ai",
-                    "Epoch count must be between 1 and 100",
-                ));
-            }
+            && !(1..=100).contains(&epochs)
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "Epoch count must be between 1 and 100",
+            ));
+        }
 
         if let Some(lr_mult) = request.learning_rate_multiplier
-            && (lr_mult <= 0.0 || lr_mult > 10.0) {
-                return Err(ProviderError::invalid_request(
-                    "vertex_ai",
-                    "Learning rate multiplier must be between 0 and 10",
-                ));
-            }
+            && (lr_mult <= 0.0 || lr_mult > 10.0)
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "Learning rate multiplier must be between 0 and 10",
+            ));
+        }
 
         Ok(())
     }

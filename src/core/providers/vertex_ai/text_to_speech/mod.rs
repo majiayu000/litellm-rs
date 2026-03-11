@@ -132,48 +132,53 @@ impl TextToSpeechHandler {
 
         // Validate text length
         if let Some(text) = &request.input.text
-            && text.len() > 5000 {
-                return Err(ProviderError::invalid_request(
-                    "vertex_ai",
-                    "Text input too long (max 5000 characters)",
-                ));
-            }
+            && text.len() > 5000
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "Text input too long (max 5000 characters)",
+            ));
+        }
 
         // Validate SSML length
         if let Some(ssml) = &request.input.ssml
-            && ssml.len() > 5000 {
-                return Err(ProviderError::invalid_request(
-                    "vertex_ai",
-                    "SSML input too long (max 5000 characters)",
-                ));
-            }
+            && ssml.len() > 5000
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "SSML input too long (max 5000 characters)",
+            ));
+        }
 
         // Validate speaking rate
         if let Some(rate) = request.audio_config.speaking_rate
-            && !(0.25..=4.0).contains(&rate) {
-                return Err(ProviderError::invalid_request(
-                    "vertex_ai",
-                    "Speaking rate must be between 0.25 and 4.0",
-                ));
-            }
+            && !(0.25..=4.0).contains(&rate)
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "Speaking rate must be between 0.25 and 4.0",
+            ));
+        }
 
         // Validate pitch
         if let Some(pitch) = request.audio_config.pitch
-            && !(-20.0..=20.0).contains(&pitch) {
-                return Err(ProviderError::invalid_request(
-                    "vertex_ai",
-                    "Pitch must be between -20.0 and 20.0",
-                ));
-            }
+            && !(-20.0..=20.0).contains(&pitch)
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "Pitch must be between -20.0 and 20.0",
+            ));
+        }
 
         // Validate volume gain
         if let Some(volume) = request.audio_config.volume_gain_db
-            && !(-96.0..=16.0).contains(&volume) {
-                return Err(ProviderError::invalid_request(
-                    "vertex_ai",
-                    "Volume gain must be between -96.0 and 16.0 dB",
-                ));
-            }
+            && !(-96.0..=16.0).contains(&volume)
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "Volume gain must be between -96.0 and 16.0 dB",
+            ));
+        }
 
         Ok(())
     }

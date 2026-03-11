@@ -96,13 +96,15 @@ impl From<ObservabilityLogRecord> for LogEntry {
             metadata.insert("cost".to_string(), serde_json::json!(cost));
         }
         if let Some(tokens) = record.tokens
-            && let Ok(value) = serde_json::to_value(tokens) {
-                metadata.insert("tokens".to_string(), value);
-            }
+            && let Ok(value) = serde_json::to_value(tokens)
+        {
+            metadata.insert("tokens".to_string(), value);
+        }
         if let Some(error) = record.error
-            && let Ok(value) = serde_json::to_value(error) {
-                metadata.insert("error".to_string(), value);
-            }
+            && let Ok(value) = serde_json::to_value(error)
+        {
+            metadata.insert("error".to_string(), value);
+        }
 
         LogEntry {
             timestamp: record.timestamp,

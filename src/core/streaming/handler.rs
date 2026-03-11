@@ -145,16 +145,18 @@ impl StreamingHandler {
                 // OpenAI format
                 if let Some(choices) = json_chunk.get("choices").and_then(|c| c.as_array())
                     && let Some(choice) = choices.first()
-                        && let Some(delta) = choice.get("delta")
-                            && let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-                                return Ok(content.to_string());
-                            }
+                    && let Some(delta) = choice.get("delta")
+                    && let Some(content) = delta.get("content").and_then(|c| c.as_str())
+                {
+                    return Ok(content.to_string());
+                }
 
                 // Anthropic format
                 if let Some(delta) = json_chunk.get("delta")
-                    && let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                        return Ok(text.to_string());
-                    }
+                    && let Some(text) = delta.get("text").and_then(|t| t.as_str())
+                {
+                    return Ok(text.to_string());
+                }
 
                 // Generic text field
                 if let Some(text) = json_chunk.get("text").and_then(|t| t.as_str()) {

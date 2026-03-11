@@ -258,18 +258,19 @@ impl QdrantStore {
             .map_err(|e| GatewayError::VectorDb(format!("Failed to parse get response: {}", e)))?;
 
         if let Some(point) = result["result"].as_object()
-            && let (Some(id), Some(vector)) = (point["id"].as_str(), point["vector"].as_array()) {
-                let vector_data: Vec<f32> = vector
-                    .iter()
-                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                    .collect();
+            && let (Some(id), Some(vector)) = (point["id"].as_str(), point["vector"].as_array())
+        {
+            let vector_data: Vec<f32> = vector
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
 
-                return Ok(Some(VectorPoint {
-                    id: id.to_string(),
-                    vector: vector_data,
-                    metadata: point["payload"].clone().into(),
-                }));
-            }
+            return Ok(Some(VectorPoint {
+                id: id.to_string(),
+                vector: vector_data,
+                metadata: point["payload"].clone().into(),
+            }));
+        }
 
         Ok(None)
     }

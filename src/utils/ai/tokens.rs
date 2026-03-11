@@ -324,15 +324,16 @@ impl TokenUtils {
 
     pub fn validate_token_limit(model: &str, token_count: usize) -> Result<(), ProviderError> {
         if let Some(max_tokens) = Self::get_max_tokens_for_model(model)
-            && token_count > max_tokens {
-                return Err(ProviderError::InvalidRequest {
-                    provider: "unknown",
-                    message: format!(
-                        "Token count {} exceeds model limit of {}",
-                        token_count, max_tokens
-                    ),
-                });
-            }
+            && token_count > max_tokens
+        {
+            return Err(ProviderError::InvalidRequest {
+                provider: "unknown",
+                message: format!(
+                    "Token count {} exceeds model limit of {}",
+                    token_count, max_tokens
+                ),
+            });
+        }
         Ok(())
     }
 }

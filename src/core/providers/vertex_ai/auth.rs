@@ -199,9 +199,10 @@ impl VertexAuth {
         {
             let cache = self.token_cache.read().await;
             if let Some(ref token) = *cache
-                && !token.is_expired() {
-                    return Ok(token.token.clone());
-                }
+                && !token.is_expired()
+            {
+                return Ok(token.token.clone());
+            }
         }
 
         // Fetch new token based on credential type

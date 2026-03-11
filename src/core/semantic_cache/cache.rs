@@ -83,33 +83,34 @@ impl SemanticCache {
         // Find the best match
         for result in search_results {
             if result.score >= self.config.similarity_threshold as f32
-                && let Some(entry) = self.get_cache_entry(&result.id).await? {
-                    // Check if entry is still valid
-                    if is_entry_valid(&entry) {
-                        // Update access and hit statistics with single lock
-                        {
-                            let mut data = self.cache_data.write().await;
-                            if let Some(cache_entry) = data.entries.get_mut(&result.id) {
-                                cache_entry.last_accessed = chrono::Utc::now();
-                                cache_entry.access_count += 1;
-                            }
-                            data.stats.hits += 1;
-                            data.stats.avg_hit_similarity = (data.stats.avg_hit_similarity
-                                * (data.stats.hits - 1) as f64
-                                + result.score as f64)
-                                / data.stats.hits as f64;
+                && let Some(entry) = self.get_cache_entry(&result.id).await?
+            {
+                // Check if entry is still valid
+                if is_entry_valid(&entry) {
+                    // Update access and hit statistics with single lock
+                    {
+                        let mut data = self.cache_data.write().await;
+                        if let Some(cache_entry) = data.entries.get_mut(&result.id) {
+                            cache_entry.last_accessed = chrono::Utc::now();
+                            cache_entry.access_count += 1;
                         }
-
-                        info!(
-                            "Cache hit! Similarity: {:.3}, Entry: {}",
-                            result.score, result.id
-                        );
-                        return Ok(Some(entry.response));
-                    } else {
-                        // Remove expired entry
-                        self.remove_cache_entry(&result.id).await?;
+                        data.stats.hits += 1;
+                        data.stats.avg_hit_similarity = (data.stats.avg_hit_similarity
+                            * (data.stats.hits - 1) as f64
+                            + result.score as f64)
+                            / data.stats.hits as f64;
                     }
+
+                    info!(
+                        "Cache hit! Similarity: {:.3}, Entry: {}",
+                        result.score, result.id
+                    );
+                    return Ok(Some(entry.response));
+                } else {
+                    // Remove expired entry
+                    self.remove_cache_entry(&result.id).await?;
                 }
+            }
         }
 
         // No cache hit

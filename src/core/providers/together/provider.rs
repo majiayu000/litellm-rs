@@ -113,9 +113,10 @@ impl TogetherProvider {
     pub(crate) fn should_handle_response_format(&self, request: &ChatRequest) -> bool {
         // Together AI supports response_format only for certain models with function calling
         if let Some(ref format) = request.response_format
-            && format.format_type == "json_object" {
-                return !is_function_calling_model(&request.model);
-            }
+            && format.format_type == "json_object"
+        {
+            return !is_function_calling_model(&request.model);
+        }
         false
     }
 
@@ -133,10 +134,11 @@ impl TogetherProvider {
     fn handle_response_format(&self, request: &mut ChatRequest) {
         // Check if model supports function calling / response_format
         if let Some(ref format) = request.response_format
-            && format.format_type == "text" {
-                // Remove text format as it's the default
-                request.response_format = None;
-            }
+            && format.format_type == "text"
+        {
+            // Remove text format as it's the default
+            request.response_format = None;
+        }
     }
 
     /// Execute an HTTP request

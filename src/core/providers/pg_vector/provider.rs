@@ -61,11 +61,12 @@ impl PgVectorProvider {
     fn make_safe_url(url: &str) -> String {
         // Simple password masking
         if let Some(at_pos) = url.find('@')
-            && let Some(colon_pos) = url[..at_pos].rfind(':') {
-                let prefix = &url[..colon_pos + 1];
-                let suffix = &url[at_pos..];
-                return format!("{}****{}", prefix, suffix);
-            }
+            && let Some(colon_pos) = url[..at_pos].rfind(':')
+        {
+            let prefix = &url[..colon_pos + 1];
+            let suffix = &url[at_pos..];
+            return format!("{}****{}", prefix, suffix);
+        }
         url.to_string()
     }
 
@@ -231,14 +232,15 @@ ON CONFLICT (id) DO UPDATE SET
 
         // Use safe parameterized filters instead of raw SQL string
         if let Some(ref filters) = options.metadata_filters
-            && !filters.is_empty() {
-                let (filter_sql, params) = filters.to_sql_with_params(_param_index);
-                if !filter_sql.is_empty() {
-                    conditions.push(filter_sql);
-                    _filter_params = params;
-                    _param_index += _filter_params.len();
-                }
+            && !filters.is_empty()
+        {
+            let (filter_sql, params) = filters.to_sql_with_params(_param_index);
+            if !filter_sql.is_empty() {
+                conditions.push(filter_sql);
+                _filter_params = params;
+                _param_index += _filter_params.len();
             }
+        }
 
         if !conditions.is_empty() {
             sql.push_str(" WHERE ");

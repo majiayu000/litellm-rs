@@ -171,13 +171,14 @@ impl McpGateway {
                     let mut func = tool.to_openai_function();
                     // Prefix tool name with server name for disambiguation
                     if let Some(name) = func.get_mut("function")
-                        && let Some(name_field) = name.get_mut("name") {
-                            *name_field = serde_json::Value::String(format!(
-                                "mcp_{}__{}",
-                                server_name,
-                                name_field.as_str().unwrap_or("")
-                            ));
-                        }
+                        && let Some(name_field) = name.get_mut("name")
+                    {
+                        *name_field = serde_json::Value::String(format!(
+                            "mcp_{}__{}",
+                            server_name,
+                            name_field.as_str().unwrap_or("")
+                        ));
+                    }
                     functions.push(func);
                 }
             }
@@ -246,12 +247,13 @@ impl McpGateway {
 
         for name in &server_names {
             if let Ok(server) = self.get_server(name).await
-                && server.is_connected().await {
-                    connected += 1;
-                    if let Ok(tools) = server.list_tools().await {
-                        total_tools += tools.tools.len();
-                    }
+                && server.is_connected().await
+            {
+                connected += 1;
+                if let Ok(tools) = server.list_tools().await {
+                    total_tools += tools.tools.len();
                 }
+            }
         }
 
         GatewayStats {

@@ -229,15 +229,16 @@ impl AnthropicClient {
 
         // Add tool support
         if let Some(tools) = &request.tools
-            && model_spec.features.contains(&ModelFeature::ToolCalling) {
-                let anthropic_tools = self.transform_tools(tools)?;
-                anthropic_request["tools"] = json!(anthropic_tools);
+            && model_spec.features.contains(&ModelFeature::ToolCalling)
+        {
+            let anthropic_tools = self.transform_tools(tools)?;
+            anthropic_request["tools"] = json!(anthropic_tools);
 
-                // Add tool_choice
-                if let Some(tool_choice) = &request.tool_choice {
-                    anthropic_request["tool_choice"] = self.transform_tool_choice(tool_choice)?;
-                }
+            // Add tool_choice
+            if let Some(tool_choice) = &request.tool_choice {
+                anthropic_request["tool_choice"] = self.transform_tool_choice(tool_choice)?;
             }
+        }
 
         Ok(anthropic_request)
     }

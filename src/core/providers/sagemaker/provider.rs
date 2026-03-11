@@ -140,9 +140,10 @@ impl LLMProvider for SagemakerProvider {
         // HuggingFace TGI requires temperature > 0
         if !self.config.allow_zero_temp
             && let Some(temp) = params.get("temperature")
-                && temp.as_f64() == Some(0.0) {
-                    params.insert("temperature".to_string(), serde_json::json!(0.01));
-                }
+            && temp.as_f64() == Some(0.0)
+        {
+            params.insert("temperature".to_string(), serde_json::json!(0.01));
+        }
 
         Ok(params)
     }

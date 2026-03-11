@@ -57,9 +57,9 @@ fn extract_model_from_body(response_body: &str) -> String {
             .get("error")
             .and_then(|e| e.get("param"))
             .and_then(|p| p.as_str())
-        {
-            return model.to_string();
-        }
+    {
+        return model.to_string();
+    }
     "unknown".to_string()
 }
 

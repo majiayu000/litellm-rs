@@ -43,20 +43,18 @@ pub fn parse_hf_error_response(status: u16, body: &str) -> HuggingFaceError {
             .get("error")
             .and_then(|e| e.as_str())
             .or_else(|| json.get("message").and_then(|m| m.as_str()))
-        {
-            return match status {
-                401 => ProviderError::huggingface_authentication(error_msg),
-                403 => {
-                    ProviderError::huggingface_authentication(format!("Forbidden: {}", error_msg))
-                }
-                404 => ProviderError::huggingface_model_not_found(error_msg),
-                429 => {
-                    let retry_after = json.get("retry_after").and_then(|r| r.as_u64());
-                    ProviderError::huggingface_rate_limit(retry_after)
-                }
-                _ => ProviderError::huggingface_api_error(status, error_msg),
-            };
-        }
+    {
+        return match status {
+            401 => ProviderError::huggingface_authentication(error_msg),
+            403 => ProviderError::huggingface_authentication(format!("Forbidden: {}", error_msg)),
+            404 => ProviderError::huggingface_model_not_found(error_msg),
+            429 => {
+                let retry_after = json.get("retry_after").and_then(|r| r.as_u64());
+                ProviderError::huggingface_rate_limit(retry_after)
+            }
+            _ => ProviderError::huggingface_api_error(status, error_msg),
+        };
+    }
 
     // Fallback to raw body
     match status {

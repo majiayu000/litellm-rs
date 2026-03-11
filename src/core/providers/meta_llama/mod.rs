@@ -502,9 +502,10 @@ impl ProviderConfig for LlamaProviderConfig {
         }
 
         if let Some(timeout) = self.timeout
-            && timeout == 0 {
-                return Err("Timeout must be greater than 0".to_string());
-            }
+            && timeout == 0
+        {
+            return Err("Timeout must be greater than 0".to_string());
+        }
 
         Ok(())
     }

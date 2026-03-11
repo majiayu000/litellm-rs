@@ -173,10 +173,11 @@ impl ReplicateClient {
         // Parse size if provided
         if let Some(size) = &request.size {
             if let Some((w, h)) = size.split_once('x')
-                && let (Ok(width), Ok(height)) = (w.parse::<i64>(), h.parse::<i64>()) {
-                    input["width"] = json!(width);
-                    input["height"] = json!(height);
-                }
+                && let (Ok(width), Ok(height)) = (w.parse::<i64>(), h.parse::<i64>())
+            {
+                input["width"] = json!(width);
+                input["height"] = json!(height);
+            }
         } else if let Some(params) = default_params {
             // Use default size from model registry
             if let Some(width) = params.get("width") {

@@ -76,9 +76,10 @@ impl AnthropicErrorMapper {
 
         // Try top-level message
         if let Some(message) = response.get("message")
-            && let Some(msg_str) = message.as_str() {
-                return ProviderError::api_error("anthropic", 500, msg_str);
-            }
+            && let Some(msg_str) = message.as_str()
+        {
+            return ProviderError::api_error("anthropic", 500, msg_str);
+        }
 
         // Default error
         ProviderError::api_error("anthropic", 500, "Unknown API error")

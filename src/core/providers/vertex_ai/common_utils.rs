@@ -207,9 +207,10 @@ pub struct SafetyRating {
 /// Extract error message from Vertex AI error response
 pub fn extract_error_message(response: &Value) -> String {
     if let Some(error) = response.get("error")
-        && let Some(message) = error["message"].as_str() {
-            return message.to_string();
-        }
+        && let Some(message) = error["message"].as_str()
+    {
+        return message.to_string();
+    }
 
     response.to_string()
 }
@@ -217,9 +218,10 @@ pub fn extract_error_message(response: &Value) -> String {
 /// Check if response indicates quota exceeded
 pub fn is_quota_exceeded(response: &Value) -> bool {
     if let Some(error) = response.get("error")
-        && let Some(message) = error["message"].as_str() {
-            return message.contains("quota") || message.contains("Quota");
-        }
+        && let Some(message) = error["message"].as_str()
+    {
+        return message.contains("quota") || message.contains("Quota");
+    }
     false
 }
 
@@ -245,21 +247,23 @@ pub fn validate_parameters(
 ) -> Result<(), ProviderError> {
     // Validate temperature
     if let Some(temp) = temperature
-        && !(0.0..=2.0).contains(&temp) {
-            return Err(ProviderError::invalid_request(
-                "vertex_ai",
-                format!("Temperature must be between 0.0 and 2.0, got {}", temp),
-            ));
-        }
+        && !(0.0..=2.0).contains(&temp)
+    {
+        return Err(ProviderError::invalid_request(
+            "vertex_ai",
+            format!("Temperature must be between 0.0 and 2.0, got {}", temp),
+        ));
+    }
 
     // Validate top_p
     if let Some(p) = top_p
-        && !(0.0..=1.0).contains(&p) {
-            return Err(ProviderError::invalid_request(
-                "vertex_ai",
-                format!("Top-p must be between 0.0 and 1.0, got {}", p),
-            ));
-        }
+        && !(0.0..=1.0).contains(&p)
+    {
+        return Err(ProviderError::invalid_request(
+            "vertex_ai",
+            format!("Top-p must be between 0.0 and 1.0, got {}", p),
+        ));
+    }
 
     // Validate max_tokens against model limits
     if let Some(max) = max_tokens {

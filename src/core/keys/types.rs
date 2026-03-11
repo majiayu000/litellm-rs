@@ -299,9 +299,10 @@ impl ManagedApiKey {
         }
 
         if let Some(expires_at) = self.expires_at
-            && Utc::now() > expires_at {
-                return false;
-            }
+            && Utc::now() > expires_at
+        {
+            return false;
+        }
 
         true
     }
@@ -313,9 +314,10 @@ impl ManagedApiKey {
         }
 
         if let Some(expires_at) = self.expires_at
-            && Utc::now() > expires_at {
-                return KeyStatus::Expired;
-            }
+            && Utc::now() > expires_at
+        {
+            return KeyStatus::Expired;
+        }
 
         self.status
     }
