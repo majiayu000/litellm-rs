@@ -24,31 +24,28 @@ impl GuardrailEngine {
         let mut guardrails: Vec<BoxedGuardrail> = Vec::new();
 
         // Add OpenAI moderation if configured
-        if let Some(ref moderation_config) = config.openai_moderation {
-            if moderation_config.enabled {
+        if let Some(ref moderation_config) = config.openai_moderation
+            && moderation_config.enabled {
                 info!("Initializing OpenAI moderation guardrail");
                 let guardrail = OpenAIModerationGuardrail::new(moderation_config.clone())?;
                 guardrails.push(Box::new(guardrail));
             }
-        }
 
         // Add PII detection if configured
-        if let Some(ref pii_config) = config.pii {
-            if pii_config.enabled {
+        if let Some(ref pii_config) = config.pii
+            && pii_config.enabled {
                 info!("Initializing PII detection guardrail");
                 let guardrail = PIIGuardrail::new(pii_config.clone())?;
                 guardrails.push(Box::new(guardrail));
             }
-        }
 
         // Add prompt injection detection if configured
-        if let Some(ref injection_config) = config.prompt_injection {
-            if injection_config.enabled {
+        if let Some(ref injection_config) = config.prompt_injection
+            && injection_config.enabled {
                 info!("Initializing prompt injection guardrail");
                 let guardrail = PromptInjectionGuardrail::new(injection_config.clone())?;
                 guardrails.push(Box::new(guardrail));
             }
-        }
 
         // Sort by priority
         guardrails.sort_by_priority();

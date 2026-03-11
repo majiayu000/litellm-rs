@@ -68,14 +68,13 @@ impl GeminiTransformer {
         };
 
         // Handle JSON mode / response format
-        if let Some(ref format) = request.response_format {
-            if format.response_type == Some("json_object".to_string()) {
+        if let Some(ref format) = request.response_format
+            && format.response_type == Some("json_object".to_string()) {
                 generation_config.response_mime_type = Some("application/json".to_string());
                 if let Some(ref schema) = format.json_schema {
                     generation_config.response_schema = Some(serde_json::to_value(schema)?);
                 }
             }
-        }
 
         // Handle tools/functions
         let tools = if let Some(ref tools) = request.tools {

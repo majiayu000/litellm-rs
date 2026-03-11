@@ -219,8 +219,8 @@ pub fn validate_chat_request_common(
         ));
     }
 
-    if let Some(max_tokens) = request.max_tokens {
-        if max_tokens > max_output_tokens {
+    if let Some(max_tokens) = request.max_tokens
+        && max_tokens > max_output_tokens {
             return Err(ProviderError::invalid_request(
                 provider,
                 format!(
@@ -229,7 +229,6 @@ pub fn validate_chat_request_common(
                 ),
             ));
         }
-    }
 
     Ok(())
 }

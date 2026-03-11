@@ -53,26 +53,23 @@ impl AzureResponseUtils {
         // Check choices for content filter results
         if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
             for choice in choices {
-                if let Some(finish_reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
-                    if finish_reason == "content_filter" {
+                if let Some(finish_reason) = choice.get("finish_reason").and_then(|r| r.as_str())
+                    && finish_reason == "content_filter" {
                         return true;
                     }
-                }
 
-                if let Some(content_filter) = choice.get("content_filter_results") {
-                    if Self::check_content_filter_object(content_filter) {
+                if let Some(content_filter) = choice.get("content_filter_results")
+                    && Self::check_content_filter_object(content_filter) {
                         return true;
                     }
-                }
             }
         }
 
         // Check root level content filter results
-        if let Some(content_filter) = response.get("content_filter_results") {
-            if Self::check_content_filter_object(content_filter) {
+        if let Some(content_filter) = response.get("content_filter_results")
+            && Self::check_content_filter_object(content_filter) {
                 return true;
             }
-        }
 
         false
     }
@@ -80,21 +77,19 @@ impl AzureResponseUtils {
     /// Extract response content from various response types
     pub fn extract_content(response: &serde_json::Value) -> Option<String> {
         // Try chat completion format first
-        if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
-            if let Some(first_choice) = choices.first() {
+        if let Some(choices) = response.get("choices").and_then(|c| c.as_array())
+            && let Some(first_choice) = choices.first() {
                 // Chat format
-                if let Some(message) = first_choice.get("message") {
-                    if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
+                if let Some(message) = first_choice.get("message")
+                    && let Some(content) = message.get("content").and_then(|c| c.as_str()) {
                         return Some(content.to_string());
                     }
-                }
 
                 // Completion format
                 if let Some(text) = first_choice.get("text").and_then(|t| t.as_str()) {
                     return Some(text.to_string());
                 }
             }
-        }
 
         // Try embedding format
         if let Some(data) = response.get("data").and_then(|d| d.as_array()) {
@@ -153,11 +148,10 @@ impl AzureResponseUtils {
     pub fn has_function_calls(response: &serde_json::Value) -> bool {
         if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
             for choice in choices {
-                if let Some(message) = choice.get("message") {
-                    if message.get("function_call").is_some() {
+                if let Some(message) = choice.get("message")
+                    && message.get("function_call").is_some() {
                         return true;
                     }
-                }
             }
         }
         false
@@ -167,11 +161,10 @@ impl AzureResponseUtils {
     pub fn has_tool_calls(response: &serde_json::Value) -> bool {
         if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
             for choice in choices {
-                if let Some(message) = choice.get("message") {
-                    if message.get("tool_calls").is_some() {
+                if let Some(message) = choice.get("message")
+                    && message.get("tool_calls").is_some() {
                         return true;
                     }
-                }
             }
         }
         false
@@ -193,11 +186,10 @@ impl AzureResponseUtils {
     fn check_content_filter_object(content_filter: &serde_json::Value) -> bool {
         if let Some(obj) = content_filter.as_object() {
             for (_, filter_result) in obj {
-                if let Some(filtered) = filter_result.get("filtered").and_then(|f| f.as_bool()) {
-                    if filtered {
+                if let Some(filtered) = filter_result.get("filtered").and_then(|f| f.as_bool())
+                    && filtered {
                         return true;
                     }
-                }
             }
         }
         false
@@ -205,11 +197,10 @@ impl AzureResponseUtils {
 
     fn extract_choice_content(choice: &serde_json::Value) -> Option<String> {
         // Try message content first (chat format)
-        if let Some(message) = choice.get("message") {
-            if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
+        if let Some(message) = choice.get("message")
+            && let Some(content) = message.get("content").and_then(|c| c.as_str()) {
                 return Some(content.to_string());
             }
-        }
 
         // Try text content (completion format)
         if let Some(text) = choice.get("text").and_then(|t| t.as_str()) {
@@ -220,11 +211,10 @@ impl AzureResponseUtils {
     }
 
     fn is_choice_filtered(choice: &serde_json::Value) -> bool {
-        if let Some(finish_reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
-            if finish_reason == "content_filter" {
+        if let Some(finish_reason) = choice.get("finish_reason").and_then(|r| r.as_str())
+            && finish_reason == "content_filter" {
                 return true;
             }
-        }
 
         if let Some(content_filter) = choice.get("content_filter_results") {
             return Self::check_content_filter_object(content_filter);

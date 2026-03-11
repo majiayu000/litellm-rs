@@ -121,14 +121,13 @@ where
         }
 
         // L2: Check Redis cache
-        if let Some(ref redis) = self.redis {
-            if let Some(value) = redis.get(key).await? {
+        if let Some(ref redis) = self.redis
+            && let Some(value) = redis.get(key).await? {
                 // Populate memory cache with the value from Redis
                 self.memory.set(key.clone(), value.clone());
                 trace!(key = %key, "Dual cache L2 hit, populated L1");
                 return Ok(Some(value));
             }
-        }
 
         trace!(key = %key, "Dual cache miss");
         Ok(None)
@@ -152,8 +151,8 @@ where
                 }
 
                 // Check Redis
-                if let Some(ref redis) = self.redis {
-                    if let Some(entry) = redis.get_entry(key).await? {
+                if let Some(ref redis) = self.redis
+                    && let Some(entry) = redis.get_entry(key).await? {
                         // Populate memory cache
                         self.memory.set_with_size(
                             key.clone(),
@@ -163,7 +162,6 @@ where
                         );
                         return Ok(Some(entry));
                     }
-                }
 
                 Ok(None)
             }
@@ -199,12 +197,11 @@ where
         self.memory.set_with_ttl(key.clone(), value.clone(), ttl);
 
         // Write to Redis cache (asynchronous)
-        if let Some(ref redis) = self.redis {
-            if let Err(e) = redis.set_with_ttl(key.clone(), value, ttl).await {
+        if let Some(ref redis) = self.redis
+            && let Err(e) = redis.set_with_ttl(key.clone(), value, ttl).await {
                 warn!(key = %key, error = %e, "Failed to write to Redis cache");
                 // Don't fail the operation if Redis write fails
             }
-        }
 
         trace!(key = %key, ttl_secs = ttl.as_secs(), "Dual cache set");
         Ok(())
@@ -261,11 +258,10 @@ where
                 }
 
                 // Delete from Redis
-                if let Some(ref redis) = self.redis {
-                    if redis.delete(key).await.unwrap_or(false) {
+                if let Some(ref redis) = self.redis
+                    && redis.delete(key).await.unwrap_or(false) {
                         deleted = true;
                     }
-                }
             }
         }
 

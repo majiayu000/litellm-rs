@@ -28,11 +28,10 @@ pub fn calculate_cost_component(
 ) -> f64 {
     let cost_per_unit = get_cost_per_unit(pricing, cost_key);
 
-    if let Some(value) = usage_value {
-        if cost_per_unit > 0.0 && value > 0.0 {
+    if let Some(value) = usage_value
+        && cost_per_unit > 0.0 && value > 0.0 {
             return value * cost_per_unit;
         }
-    }
 
     0.0
 }
@@ -58,8 +57,8 @@ pub fn select_tiered_pricing(pricing: &ModelPricing, usage: &UsageTokens) -> (f6
         });
 
         for (key, &cost) in thresholds {
-            if let Some(threshold) = extract_threshold(key) {
-                if usage.prompt_tokens as f64 > threshold {
+            if let Some(threshold) = extract_threshold(key)
+                && usage.prompt_tokens as f64 > threshold {
                     if key.starts_with("input_cost_per_token_above_") {
                         input_cost = cost;
                     } else if key.starts_with("output_cost_per_token_above_") {
@@ -71,7 +70,6 @@ pub fn select_tiered_pricing(pricing: &ModelPricing, usage: &UsageTokens) -> (f6
                     }
                     break; // Apply only the first (highest) applicable tier
                 }
-            }
         }
     }
 
@@ -87,8 +85,8 @@ pub fn select_tiered_pricing(pricing: &ModelPricing, usage: &UsageTokens) -> (f6
 /// e.g., "input_cost_per_token_above_128k_tokens" -> Some(128000.0)
 ///       "input_cost_per_token_above_100_tokens" -> Some(100.0)
 fn extract_threshold(key: &str) -> Option<f64> {
-    if let Some(above_part) = key.split("_above_").nth(1) {
-        if let Some(threshold_str) = above_part.split("_tokens").next() {
+    if let Some(above_part) = key.split("_above_").nth(1)
+        && let Some(threshold_str) = above_part.split("_tokens").next() {
             if let Some(number_str) = threshold_str.strip_suffix('k') {
                 if let Ok(number) = number_str.parse::<f64>() {
                     return Some(number * 1000.0);
@@ -97,7 +95,6 @@ fn extract_threshold(key: &str) -> Option<f64> {
                 return Some(number);
             }
         }
-    }
     None
 }
 
@@ -176,13 +173,12 @@ pub fn validate_usage(usage: &UsageTokens) -> Result<(), CostError> {
         });
     }
 
-    if let Some(cached) = usage.cached_tokens {
-        if cached > usage.prompt_tokens {
+    if let Some(cached) = usage.cached_tokens
+        && cached > usage.prompt_tokens {
             return Err(CostError::InvalidUsage {
                 message: "Cached tokens cannot exceed prompt tokens".to_string(),
             });
         }
-    }
 
     Ok(())
 }

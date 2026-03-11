@@ -393,12 +393,11 @@ impl BudgetAlertManager {
 
         if let Some(alert_ids) = storage.alerts_by_budget.get(budget_id).cloned() {
             for alert_id in alert_ids {
-                if let Some(alert) = storage.alerts.get_mut(&alert_id) {
-                    if !alert.acknowledged {
+                if let Some(alert) = storage.alerts.get_mut(&alert_id)
+                    && !alert.acknowledged {
                         alert.acknowledge();
                         count += 1;
                     }
-                }
             }
         }
 

@@ -169,11 +169,10 @@ impl NvidiaNimProvider {
             }
 
             // Map max_completion_tokens to max_tokens if present
-            if let Some(max_completion) = obj.remove("max_completion_tokens") {
-                if !obj.contains_key("max_tokens") {
+            if let Some(max_completion) = obj.remove("max_completion_tokens")
+                && !obj.contains_key("max_tokens") {
                     obj.insert("max_tokens".to_string(), max_completion);
                 }
-            }
         }
     }
 }
@@ -232,13 +231,12 @@ impl LLMProvider for NvidiaNimProvider {
         self.map_params(&mut request_json, &request.model);
 
         // Remove tools if model doesn't support them
-        if !supports_tools(&request.model) {
-            if let Some(obj) = request_json.as_object_mut() {
+        if !supports_tools(&request.model)
+            && let Some(obj) = request_json.as_object_mut() {
                 obj.remove("tools");
                 obj.remove("tool_choice");
                 obj.remove("parallel_tool_calls");
             }
-        }
 
         Ok(request_json)
     }
@@ -309,12 +307,11 @@ impl LLMProvider for NvidiaNimProvider {
         self.map_params(&mut request_json, &request.model);
 
         // Remove tools if not supported
-        if !supports_tools(&request.model) {
-            if let Some(obj) = request_json.as_object_mut() {
+        if !supports_tools(&request.model)
+            && let Some(obj) = request_json.as_object_mut() {
                 obj.remove("tools");
                 obj.remove("tool_choice");
             }
-        }
 
         // Execute streaming request using reqwest directly for SSE
         let url = format!("{}/chat/completions", self.config.get_api_base());

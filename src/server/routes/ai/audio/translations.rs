@@ -62,11 +62,10 @@ pub async fn audio_translations(
 
         match field_name.as_str() {
             "file" => {
-                if let Some(cd) = field.content_disposition() {
-                    if let Some(fname) = cd.get_filename() {
+                if let Some(cd) = field.content_disposition()
+                    && let Some(fname) = cd.get_filename() {
                         filename = fname.to_string();
                     }
-                }
                 let mut data = Vec::new();
                 while let Some(chunk) = field.next().await {
                     if let Ok(bytes) = chunk {
@@ -91,11 +90,10 @@ pub async fn audio_translations(
                 }
             }
             "temperature" => {
-                if let Some(Ok(bytes)) = field.next().await {
-                    if let Ok(temp) = String::from_utf8_lossy(&bytes).parse::<f32>() {
+                if let Some(Ok(bytes)) = field.next().await
+                    && let Ok(temp) = String::from_utf8_lossy(&bytes).parse::<f32>() {
                         temperature = Some(temp);
                     }
-                }
             }
             _ => while field.next().await.is_some() {},
         }

@@ -96,8 +96,8 @@ impl HuggingFaceEmbeddingHandler {
         }
 
         // Handle OpenAI-compatible format
-        if let Some(data) = response.get("data") {
-            if let Some(arr) = data.as_array() {
+        if let Some(data) = response.get("data")
+            && let Some(arr) = data.as_array() {
                 return arr
                     .iter()
                     .enumerate()
@@ -120,11 +120,10 @@ impl HuggingFaceEmbeddingHandler {
                     })
                     .collect();
             }
-        }
 
         // Single embedding response
-        if let Some(arr) = response.as_array() {
-            if !arr.is_empty() && arr[0].is_number() {
+        if let Some(arr) = response.as_array()
+            && !arr.is_empty() && arr[0].is_number() {
                 // Direct embedding vector
                 let embedding: Vec<f32> = arr
                     .iter()
@@ -136,7 +135,6 @@ impl HuggingFaceEmbeddingHandler {
                     embedding,
                 }]);
             }
-        }
 
         Err(HuggingFaceError::huggingface_response_parsing(
             "Unable to parse embedding response format",

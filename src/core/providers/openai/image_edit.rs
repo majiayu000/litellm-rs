@@ -115,14 +115,13 @@ impl OpenAIImageEditUtils {
     /// Validate image edit request
     pub fn validate_request(request: &OpenAIImageEditRequest) -> Result<(), ProviderError> {
         // Check model
-        if let Some(model) = &request.model {
-            if !Self::supports_image_editing(model) {
+        if let Some(model) = &request.model
+            && !Self::supports_image_editing(model) {
                 return Err(ProviderError::ModelNotFound {
                     provider: "openai",
                     model: model.clone(),
                 });
             }
-        }
 
         // Check prompt
         if request.prompt.is_empty() {
@@ -140,14 +139,13 @@ impl OpenAIImageEditUtils {
         }
 
         // Check n parameter
-        if let Some(n) = request.n {
-            if n == 0 || n > 10 {
+        if let Some(n) = request.n
+            && (n == 0 || n > 10) {
                 return Err(ProviderError::InvalidRequest {
                     provider: "openai",
                     message: "n must be between 1 and 10".to_string(),
                 });
             }
-        }
 
         // Check image format (basic validation - in real implementation would check file headers)
         if !request.image.starts_with("data:image/png;base64,")

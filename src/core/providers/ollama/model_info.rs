@@ -242,21 +242,18 @@ impl OllamaShowResponse {
                 "max_position_embeddings",
                 "n_ctx",
             ] {
-                if let Some(val) = model_info.get(key) {
-                    if let Some(num) = val.as_u64() {
+                if let Some(val) = model_info.get(key)
+                    && let Some(num) = val.as_u64() {
                         return Some(num as u32);
                     }
-                }
             }
 
             // Try nested structure
-            if let Some(general) = model_info.get("general") {
-                if let Some(ctx) = general.get("context_length") {
-                    if let Some(num) = ctx.as_u64() {
+            if let Some(general) = model_info.get("general")
+                && let Some(ctx) = general.get("context_length")
+                    && let Some(num) = ctx.as_u64() {
                         return Some(num as u32);
                     }
-                }
-            }
         }
         None
     }

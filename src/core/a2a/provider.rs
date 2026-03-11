@@ -192,15 +192,14 @@ impl A2AProviderAdapter for GenericA2AProvider {
         let message = A2AMessage::cancel_task(task_id);
         let response = self.send_message(config, message).await?;
 
-        if response.is_error() {
-            if let Some(error) = response.error {
+        if response.is_error()
+            && let Some(error) = response.error {
                 return Err(A2AError::TaskFailed {
                     agent_name: config.name.clone(),
                     task_id: task_id.to_string(),
                     message: error.message,
                 });
             }
-        }
 
         Ok(())
     }

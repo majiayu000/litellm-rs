@@ -64,11 +64,10 @@ pub async fn audio_transcriptions(
         match field_name.as_str() {
             "file" => {
                 // Get filename from content disposition
-                if let Some(cd) = field.content_disposition() {
-                    if let Some(fname) = cd.get_filename() {
+                if let Some(cd) = field.content_disposition()
+                    && let Some(fname) = cd.get_filename() {
                         filename = fname.to_string();
                     }
-                }
 
                 // Read file data
                 let mut data = Vec::new();
@@ -105,11 +104,10 @@ pub async fn audio_transcriptions(
                 }
             }
             "temperature" => {
-                if let Some(Ok(bytes)) = field.next().await {
-                    if let Ok(temp) = String::from_utf8_lossy(&bytes).parse::<f32>() {
+                if let Some(Ok(bytes)) = field.next().await
+                    && let Ok(temp) = String::from_utf8_lossy(&bytes).parse::<f32>() {
                         temperature = Some(temp);
                     }
-                }
             }
             _ => {
                 // Skip unknown fields

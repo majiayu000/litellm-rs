@@ -77,23 +77,20 @@ impl RequestUtils {
     ) -> HashMap<String, Value> {
         let mut non_default = HashMap::new();
 
-        if let Some(temp) = params.get("temperature") {
-            if temp.as_f64() != Some(1.0) {
+        if let Some(temp) = params.get("temperature")
+            && temp.as_f64() != Some(1.0) {
                 non_default.insert("temperature".to_string(), temp.clone());
             }
-        }
 
-        if let Some(max_tokens) = params.get("max_tokens") {
-            if max_tokens.as_u64().is_some() {
+        if let Some(max_tokens) = params.get("max_tokens")
+            && max_tokens.as_u64().is_some() {
                 non_default.insert("max_tokens".to_string(), max_tokens.clone());
             }
-        }
 
-        if let Some(top_p) = params.get("top_p") {
-            if top_p.as_f64() != Some(1.0) {
+        if let Some(top_p) = params.get("top_p")
+            && top_p.as_f64() != Some(1.0) {
                 non_default.insert("top_p".to_string(), top_p.clone());
             }
-        }
 
         non_default
     }

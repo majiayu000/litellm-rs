@@ -16,11 +16,10 @@ pub fn should_cache_request(config: &SemanticCacheConfig, request: &ChatCompleti
     }
 
     // Don't cache requests with high randomness
-    if let Some(temperature) = request.temperature {
-        if temperature > 0.7 {
+    if let Some(temperature) = request.temperature
+        && temperature > 0.7 {
             return false;
         }
-    }
 
     true
 }

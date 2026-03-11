@@ -88,8 +88,8 @@ crate::define_pooled_http_provider_with_hooks!(
                 error_text: String,
                 _request: &ChatRequest|
      -> ProviderError {
-        if let Ok(value) = serde_json::from_str::<Value>(&error_text) {
-            if let Some(error) = value.get("error") {
+        if let Ok(value) = serde_json::from_str::<Value>(&error_text)
+            && let Some(error) = value.get("error") {
                 let message = error
                     .get("message")
                     .and_then(|m| m.as_str())
@@ -108,7 +108,6 @@ crate::define_pooled_http_provider_with_hooks!(
                     _ => HttpErrorMapper::map_status_code(PROVIDER_NAME, status, message),
                 };
             }
-        }
 
         HttpErrorMapper::map_status_code(PROVIDER_NAME, status, &error_text)
     },

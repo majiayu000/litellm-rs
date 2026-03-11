@@ -66,15 +66,14 @@ impl ErrorUtils {
 
     pub fn extract_retry_after(headers: &HashMap<String, String>) -> Option<Duration> {
         // Check for Retry-After header
-        if let Some(retry_after) = headers.get("retry-after") {
-            if let Ok(seconds) = retry_after.parse::<u64>() {
+        if let Some(retry_after) = headers.get("retry-after")
+            && let Ok(seconds) = retry_after.parse::<u64>() {
                 return Some(Duration::from_secs(seconds));
             }
-        }
 
         // Check for X-RateLimit-Reset header
-        if let Some(reset) = headers.get("x-ratelimit-reset") {
-            if let Ok(timestamp) = reset.parse::<i64>() {
+        if let Some(reset) = headers.get("x-ratelimit-reset")
+            && let Ok(timestamp) = reset.parse::<i64>() {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
@@ -84,14 +83,13 @@ impl ErrorUtils {
                     return Some(Duration::from_secs((timestamp - now) as u64));
                 }
             }
-        }
 
         None
     }
 
     pub fn parse_openai_error(response_body: &str) -> ProviderError {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(response_body) {
-            if let Some(error) = json.get("error") {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(response_body)
+            && let Some(error) = json.get("error") {
                 let error_type = error.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 let message = error
                     .get("message")
@@ -137,7 +135,6 @@ impl ErrorUtils {
                     },
                 };
             }
-        }
 
         ProviderError::Other {
             provider: "openai",
@@ -146,8 +143,8 @@ impl ErrorUtils {
     }
 
     pub fn parse_anthropic_error(response_body: &str) -> ProviderError {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(response_body) {
-            if let Some(error) = json.get("error") {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(response_body)
+            && let Some(error) = json.get("error") {
                 let error_type = error.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 let message = error
                     .get("message")
@@ -185,7 +182,6 @@ impl ErrorUtils {
                     },
                 };
             }
-        }
 
         ProviderError::Other {
             provider: "anthropic",
@@ -194,8 +190,8 @@ impl ErrorUtils {
     }
 
     pub fn parse_google_error(response_body: &str) -> ProviderError {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(response_body) {
-            if let Some(error) = json.get("error") {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(response_body)
+            && let Some(error) = json.get("error") {
                 let status = error.get("status").and_then(|v| v.as_str()).unwrap_or("");
                 let message = error
                     .get("message")
@@ -235,7 +231,6 @@ impl ErrorUtils {
                     },
                 };
             }
-        }
 
         ProviderError::Other {
             provider: "unknown",

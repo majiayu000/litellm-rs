@@ -252,8 +252,8 @@ impl OpenAILikeProvider {
     /// Map HTTP error response to OpenAILikeError
     fn map_error_response(&self, status: u16, body: &str) -> OpenAILikeError {
         // Try to parse error JSON
-        if let Ok(error_json) = serde_json::from_str::<Value>(body) {
-            if let Some(error) = error_json.get("error") {
+        if let Ok(error_json) = serde_json::from_str::<Value>(body)
+            && let Some(error) = error_json.get("error") {
                 let error_type = error.get("type").and_then(|t| t.as_str()).unwrap_or("");
                 let error_code = error.get("code").and_then(|c| c.as_str()).unwrap_or("");
                 let message = error
@@ -281,7 +281,6 @@ impl OpenAILikeProvider {
                     _ => OpenAILikeError::openai_like_api_error(status, message),
                 };
             }
-        }
 
         // Fallback to status-based error
         match status {

@@ -113,11 +113,10 @@ impl OpenAILikeConfig {
         }
 
         // Timeout
-        if let Ok(timeout_str) = std::env::var("OPENAI_LIKE_TIMEOUT") {
-            if let Ok(timeout) = timeout_str.parse::<u64>() {
+        if let Ok(timeout_str) = std::env::var("OPENAI_LIKE_TIMEOUT")
+            && let Ok(timeout) = timeout_str.parse::<u64>() {
                 config.base.timeout = timeout;
             }
-        }
 
         // Skip API key check
         if let Ok(skip) = std::env::var("OPENAI_LIKE_SKIP_API_KEY") {
@@ -212,11 +211,10 @@ impl OpenAILikeConfig {
 
     /// Get the effective model name (strip prefix if configured)
     pub fn get_effective_model(&self, model: &str) -> String {
-        if let Some(prefix) = &self.model_prefix {
-            if model.starts_with(prefix) {
+        if let Some(prefix) = &self.model_prefix
+            && model.starts_with(prefix) {
                 return model[prefix.len()..].to_string();
             }
-        }
         model.to_string()
     }
 }

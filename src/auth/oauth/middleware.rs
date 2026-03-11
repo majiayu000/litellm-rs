@@ -255,11 +255,9 @@ fn extract_session_id(req: &ServiceRequest) -> Option<String> {
         .headers()
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
-    {
-        if let Some(token) = auth.strip_prefix("Bearer ") {
+        && let Some(token) = auth.strip_prefix("Bearer ") {
             return Some(token.to_string());
         }
-    }
 
     // Try cookie
     if let Some(cookie) = req.cookie("session_id") {

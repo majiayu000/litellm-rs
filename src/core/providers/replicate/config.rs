@@ -88,17 +88,15 @@ impl ReplicateConfig {
             config.base.api_base = Some(api_base);
         }
 
-        if let Ok(polling_delay) = std::env::var("REPLICATE_POLLING_DELAY") {
-            if let Ok(delay) = polling_delay.parse() {
+        if let Ok(polling_delay) = std::env::var("REPLICATE_POLLING_DELAY")
+            && let Ok(delay) = polling_delay.parse() {
                 config.polling_delay_seconds = delay;
             }
-        }
 
-        if let Ok(polling_retries) = std::env::var("REPLICATE_POLLING_RETRIES") {
-            if let Ok(retries) = polling_retries.parse() {
+        if let Ok(polling_retries) = std::env::var("REPLICATE_POLLING_RETRIES")
+            && let Ok(retries) = polling_retries.parse() {
                 config.polling_retries = retries;
             }
-        }
 
         config
     }

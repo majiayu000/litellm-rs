@@ -175,18 +175,16 @@ impl AuditLogger {
         event.message = self.redact_string(&event.message);
 
         // Redact request body
-        if let Some(ref mut request) = event.request {
-            if let Some(ref mut body) = request.body {
+        if let Some(ref mut request) = event.request
+            && let Some(ref mut body) = request.body {
                 *body = self.redact_string(body);
             }
-        }
 
         // Redact response body
-        if let Some(ref mut response) = event.response {
-            if let Some(ref mut body) = response.body {
+        if let Some(ref mut response) = event.response
+            && let Some(ref mut body) = response.body {
                 *body = self.redact_string(body);
             }
-        }
 
         event
     }

@@ -179,8 +179,8 @@ impl IntegrationManager {
     pub async fn on_llm_stream(&self, event: &LlmStreamEvent) -> IntegrationResult<()> {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
-            if integration.is_enabled() {
-                if let Err(e) = integration.on_llm_stream(event).await {
+            if integration.is_enabled()
+                && let Err(e) = integration.on_llm_stream(event).await {
                     if self.config.log_errors {
                         warn!("Integration {} stream error: {}", integration.name(), e);
                     }
@@ -188,7 +188,6 @@ impl IntegrationManager {
                         return Err(e);
                     }
                 }
-            }
         }
         Ok(())
     }
@@ -197,8 +196,8 @@ impl IntegrationManager {
     pub async fn on_embedding_start(&self, event: &EmbeddingStartEvent) -> IntegrationResult<()> {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
-            if integration.is_enabled() {
-                if let Err(e) = integration.on_embedding_start(event).await {
+            if integration.is_enabled()
+                && let Err(e) = integration.on_embedding_start(event).await {
                     if self.config.log_errors {
                         warn!(
                             "Integration {} embedding start error: {}",
@@ -210,7 +209,6 @@ impl IntegrationManager {
                         return Err(e);
                     }
                 }
-            }
         }
         Ok(())
     }
@@ -219,8 +217,8 @@ impl IntegrationManager {
     pub async fn on_embedding_end(&self, event: &EmbeddingEndEvent) -> IntegrationResult<()> {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
-            if integration.is_enabled() {
-                if let Err(e) = integration.on_embedding_end(event).await {
+            if integration.is_enabled()
+                && let Err(e) = integration.on_embedding_end(event).await {
                     if self.config.log_errors {
                         warn!(
                             "Integration {} embedding end error: {}",
@@ -232,7 +230,6 @@ impl IntegrationManager {
                         return Err(e);
                     }
                 }
-            }
         }
         Ok(())
     }
@@ -241,8 +238,8 @@ impl IntegrationManager {
     pub async fn on_cache_hit(&self, event: &CacheHitEvent) -> IntegrationResult<()> {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
-            if integration.is_enabled() {
-                if let Err(e) = integration.on_cache_hit(event).await {
+            if integration.is_enabled()
+                && let Err(e) = integration.on_cache_hit(event).await {
                     if self.config.log_errors {
                         warn!("Integration {} cache hit error: {}", integration.name(), e);
                     }
@@ -250,7 +247,6 @@ impl IntegrationManager {
                         return Err(e);
                     }
                 }
-            }
         }
         Ok(())
     }
@@ -259,8 +255,8 @@ impl IntegrationManager {
     pub async fn flush(&self) -> IntegrationResult<()> {
         let integrations = self.integrations.read().await;
         for integration in integrations.iter() {
-            if integration.is_enabled() {
-                if let Err(e) = integration.flush().await {
+            if integration.is_enabled()
+                && let Err(e) = integration.flush().await {
                     if self.config.log_errors {
                         warn!("Integration {} flush error: {}", integration.name(), e);
                     }
@@ -268,7 +264,6 @@ impl IntegrationManager {
                         return Err(e);
                     }
                 }
-            }
         }
         Ok(())
     }

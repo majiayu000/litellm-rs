@@ -106,23 +106,20 @@ impl RunwayMLConfig {
             config.base.api_base = Some(api_base);
         }
 
-        if let Ok(polling_delay) = std::env::var("RUNWAYML_POLLING_DELAY") {
-            if let Ok(delay) = polling_delay.parse() {
+        if let Ok(polling_delay) = std::env::var("RUNWAYML_POLLING_DELAY")
+            && let Ok(delay) = polling_delay.parse() {
                 config.polling_delay_seconds = delay;
             }
-        }
 
-        if let Ok(polling_retries) = std::env::var("RUNWAYML_POLLING_RETRIES") {
-            if let Ok(retries) = polling_retries.parse() {
+        if let Ok(polling_retries) = std::env::var("RUNWAYML_POLLING_RETRIES")
+            && let Ok(retries) = polling_retries.parse() {
                 config.polling_retries = retries;
             }
-        }
 
-        if let Ok(duration) = std::env::var("RUNWAYML_VIDEO_DURATION") {
-            if let Ok(dur) = duration.parse() {
+        if let Ok(duration) = std::env::var("RUNWAYML_VIDEO_DURATION")
+            && let Ok(dur) = duration.parse() {
                 config.default_video_duration = dur;
             }
-        }
 
         if let Ok(resolution) = std::env::var("RUNWAYML_VIDEO_RESOLUTION") {
             config.default_video_resolution = resolution;

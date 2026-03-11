@@ -38,8 +38,8 @@ impl ProviderError {
 /// Parse HuggingFace API error response
 pub fn parse_hf_error_response(status: u16, body: &str) -> HuggingFaceError {
     // Try to parse as JSON error response
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(error_msg) = json
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body)
+        && let Some(error_msg) = json
             .get("error")
             .and_then(|e| e.as_str())
             .or_else(|| json.get("message").and_then(|m| m.as_str()))
@@ -57,7 +57,6 @@ pub fn parse_hf_error_response(status: u16, body: &str) -> HuggingFaceError {
                 _ => ProviderError::huggingface_api_error(status, error_msg),
             };
         }
-    }
 
     // Fallback to raw body
     match status {

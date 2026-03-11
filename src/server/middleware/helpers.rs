@@ -6,8 +6,8 @@ use actix_web::http::header::HeaderMap;
 /// Extract authentication method from headers
 pub fn extract_auth_method(headers: &HeaderMap) -> AuthMethod {
     // Check Authorization header
-    if let Some(auth_header) = headers.get("authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
+    if let Some(auth_header) = headers.get("authorization")
+        && let Ok(auth_str) = auth_header.to_str() {
             if let Some(stripped) = auth_str.strip_prefix("Bearer ") {
                 let token = stripped.to_string();
                 return AuthMethod::Jwt(token);
@@ -18,18 +18,16 @@ pub fn extract_auth_method(headers: &HeaderMap) -> AuthMethod {
                 return AuthMethod::ApiKey(auth_str.to_string());
             }
         }
-    }
 
     // Check X-API-Key header
-    if let Some(api_key_header) = headers.get("x-api-key") {
-        if let Ok(key) = api_key_header.to_str() {
+    if let Some(api_key_header) = headers.get("x-api-key")
+        && let Ok(key) = api_key_header.to_str() {
             return AuthMethod::ApiKey(key.to_string());
         }
-    }
 
     // Check session cookie
-    if let Some(cookie_header) = headers.get("cookie") {
-        if let Ok(cookie_str) = cookie_header.to_str() {
+    if let Some(cookie_header) = headers.get("cookie")
+        && let Ok(cookie_str) = cookie_header.to_str() {
             for cookie in cookie_str.split(';') {
                 let cookie = cookie.trim();
                 if let Some(stripped) = cookie.strip_prefix("session=") {
@@ -38,7 +36,6 @@ pub fn extract_auth_method(headers: &HeaderMap) -> AuthMethod {
                 }
             }
         }
-    }
 
     AuthMethod::None
 }
