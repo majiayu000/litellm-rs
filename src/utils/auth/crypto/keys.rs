@@ -1,14 +1,14 @@
 //! Key and token generation utilities
 
 use base64::{Engine as _, engine::general_purpose};
-use rand::{Rng, distributions::Alphanumeric};
+use rand::{Rng, distr::Alphanumeric};
 use sha2::{Digest, Sha256};
 
 /// Generate a secure API key
 pub fn generate_api_key() -> String {
     let prefix = "gw";
-    let random_part: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
+    let random_part: String = rand::rng()
+        .sample_iter(Alphanumeric)
         .take(32)
         .map(char::from)
         .collect();
@@ -18,8 +18,8 @@ pub fn generate_api_key() -> String {
 
 /// Generate a JWT secret
 pub fn generate_jwt_secret() -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
+    rand::rng()
+        .sample_iter(Alphanumeric)
         .take(64)
         .map(char::from)
         .collect()
@@ -27,8 +27,8 @@ pub fn generate_jwt_secret() -> String {
 
 /// Generate a secure random token
 pub fn generate_token(length: usize) -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
+    rand::rng()
+        .sample_iter(Alphanumeric)
         .take(length)
         .map(char::from)
         .collect()
@@ -36,8 +36,8 @@ pub fn generate_token(length: usize) -> String {
 
 /// Generate a secure session token
 pub fn generate_session_token() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
     general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
 }
 

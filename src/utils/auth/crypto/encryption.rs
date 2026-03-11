@@ -38,7 +38,7 @@ pub fn encrypt_data(key: &[u8], data: &str) -> Result<String> {
 
     // Generate random 96-bit nonce (12 bytes)
     let mut nonce_bytes = [0u8; AES_GCM_NONCE_SIZE];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Encrypt the data
@@ -98,8 +98,8 @@ pub fn decrypt_data(key: &[u8], encrypted_data: &str) -> Result<String> {
 
 /// Generate a secure random salt
 pub fn generate_salt() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..16).map(|_| rng.r#gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..16).map(|_| rng.random()).collect();
     general_purpose::STANDARD.encode(&bytes)
 }
 
@@ -113,8 +113,8 @@ pub fn hash_with_salt(data: &str, salt: &str) -> String {
 
 /// Generate a time-based one-time password (TOTP) secret
 pub fn generate_totp_secret() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..20).map(|_| rng.r#gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..20).map(|_| rng.random()).collect();
     general_purpose::STANDARD.encode(&bytes)
 }
 
