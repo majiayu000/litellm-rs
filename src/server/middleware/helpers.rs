@@ -7,35 +7,38 @@ use actix_web::http::header::HeaderMap;
 pub fn extract_auth_method(headers: &HeaderMap) -> AuthMethod {
     // Check Authorization header
     if let Some(auth_header) = headers.get("authorization")
-        && let Ok(auth_str) = auth_header.to_str() {
-            if let Some(stripped) = auth_str.strip_prefix("Bearer ") {
-                let token = stripped.to_string();
-                return AuthMethod::Jwt(token);
-            } else if let Some(stripped) = auth_str.strip_prefix("ApiKey ") {
-                let key = stripped.to_string();
-                return AuthMethod::ApiKey(key);
-            } else if auth_str.starts_with("gw-") {
-                return AuthMethod::ApiKey(auth_str.to_string());
-            }
+        && let Ok(auth_str) = auth_header.to_str()
+    {
+        if let Some(stripped) = auth_str.strip_prefix("Bearer ") {
+            let token = stripped.to_string();
+            return AuthMethod::Jwt(token);
+        } else if let Some(stripped) = auth_str.strip_prefix("ApiKey ") {
+            let key = stripped.to_string();
+            return AuthMethod::ApiKey(key);
+        } else if auth_str.starts_with("gw-") {
+            return AuthMethod::ApiKey(auth_str.to_string());
         }
+    }
 
     // Check X-API-Key header
     if let Some(api_key_header) = headers.get("x-api-key")
-        && let Ok(key) = api_key_header.to_str() {
-            return AuthMethod::ApiKey(key.to_string());
-        }
+        && let Ok(key) = api_key_header.to_str()
+    {
+        return AuthMethod::ApiKey(key.to_string());
+    }
 
     // Check session cookie
     if let Some(cookie_header) = headers.get("cookie")
-        && let Ok(cookie_str) = cookie_header.to_str() {
-            for cookie in cookie_str.split(';') {
-                let cookie = cookie.trim();
-                if let Some(stripped) = cookie.strip_prefix("session=") {
-                    let session_id = stripped.to_string();
-                    return AuthMethod::Session(session_id);
-                }
+        && let Ok(cookie_str) = cookie_header.to_str()
+    {
+        for cookie in cookie_str.split(';') {
+            let cookie = cookie.trim();
+            if let Some(stripped) = cookie.strip_prefix("session=") {
+                let session_id = stripped.to_string();
+                return AuthMethod::Session(session_id);
             }
         }
+    }
 
     AuthMethod::None
 }

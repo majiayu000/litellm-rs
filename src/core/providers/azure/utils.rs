@@ -65,47 +65,54 @@ impl AzureUtils {
 
         // Rate limit headers
         if let Some(limit) = headers.get("x-ratelimit-limit-requests")
-            && let Ok(value) = limit.to_str() {
-                openai_headers.insert("x-ratelimit-limit-requests".to_string(), value.to_string());
-            }
+            && let Ok(value) = limit.to_str()
+        {
+            openai_headers.insert("x-ratelimit-limit-requests".to_string(), value.to_string());
+        }
 
         if let Some(remaining) = headers.get("x-ratelimit-remaining-requests")
-            && let Ok(value) = remaining.to_str() {
-                openai_headers.insert(
-                    "x-ratelimit-remaining-requests".to_string(),
-                    value.to_string(),
-                );
-            }
+            && let Ok(value) = remaining.to_str()
+        {
+            openai_headers.insert(
+                "x-ratelimit-remaining-requests".to_string(),
+                value.to_string(),
+            );
+        }
 
         if let Some(reset) = headers.get("x-ratelimit-reset-requests")
-            && let Ok(value) = reset.to_str() {
-                openai_headers.insert("x-ratelimit-reset-requests".to_string(), value.to_string());
-            }
+            && let Ok(value) = reset.to_str()
+        {
+            openai_headers.insert("x-ratelimit-reset-requests".to_string(), value.to_string());
+        }
 
         // Token rate limit headers
         if let Some(limit) = headers.get("x-ratelimit-limit-tokens")
-            && let Ok(value) = limit.to_str() {
-                openai_headers.insert("x-ratelimit-limit-tokens".to_string(), value.to_string());
-            }
+            && let Ok(value) = limit.to_str()
+        {
+            openai_headers.insert("x-ratelimit-limit-tokens".to_string(), value.to_string());
+        }
 
         if let Some(remaining) = headers.get("x-ratelimit-remaining-tokens")
-            && let Ok(value) = remaining.to_str() {
-                openai_headers.insert(
-                    "x-ratelimit-remaining-tokens".to_string(),
-                    value.to_string(),
-                );
-            }
+            && let Ok(value) = remaining.to_str()
+        {
+            openai_headers.insert(
+                "x-ratelimit-remaining-tokens".to_string(),
+                value.to_string(),
+            );
+        }
 
         if let Some(reset) = headers.get("x-ratelimit-reset-tokens")
-            && let Ok(value) = reset.to_str() {
-                openai_headers.insert("x-ratelimit-reset-tokens".to_string(), value.to_string());
-            }
+            && let Ok(value) = reset.to_str()
+        {
+            openai_headers.insert("x-ratelimit-reset-tokens".to_string(), value.to_string());
+        }
 
         // Azure specific headers
         if let Some(request_id) = headers.get("x-request-id")
-            && let Ok(value) = request_id.to_str() {
-                openai_headers.insert("x-request-id".to_string(), value.to_string());
-            }
+            && let Ok(value) = request_id.to_str()
+        {
+            openai_headers.insert("x-request-id".to_string(), value.to_string());
+        }
 
         openai_headers
     }

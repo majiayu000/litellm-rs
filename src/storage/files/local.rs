@@ -163,17 +163,19 @@ impl LocalStorage {
 
             // Apply prefix filter
             if let Some(prefix) = prefix
-                && !file_name.starts_with(prefix) {
-                    continue;
-                }
+                && !file_name.starts_with(prefix)
+            {
+                continue;
+            }
 
             files.push(file_name);
 
             // Apply limit
             if let Some(limit) = limit
-                && files.len() >= limit {
-                    break;
-                }
+                && files.len() >= limit
+            {
+                break;
+            }
         }
 
         Ok(files)

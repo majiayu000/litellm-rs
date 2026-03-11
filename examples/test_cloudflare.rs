@@ -74,9 +74,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(response) => {
             println!("\nResponse:");
             if let Some(choice) = response.choices.first()
-                && let Some(ref content) = choice.message.content {
-                    println!("{}", content);
-                }
+                && let Some(ref content) = choice.message.content
+            {
+                println!("{}", content);
+            }
         }
         Err(e) => {
             println!("Chat completion failed: {}", e);
@@ -108,9 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(response) => {
             println!("\nMistral Response:");
             if let Some(choice) = response.choices.first()
-                && let Some(ref content) = choice.message.content {
-                    println!("{}", content);
-                }
+                && let Some(ref content) = choice.message.content
+            {
+                println!("{}", content);
+            }
         }
         Err(e) => {
             println!("Mistral request failed: {}", e);
@@ -142,9 +144,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(response) => {
             println!("\nCode Llama Response:");
             if let Some(choice) = response.choices.first()
-                && let Some(ref content) = choice.message.content {
-                    println!("{}", content);
-                }
+                && let Some(ref content) = choice.message.content
+            {
+                println!("{}", content);
+            }
         }
         Err(e) => {
             println!("Code generation failed: {}", e);

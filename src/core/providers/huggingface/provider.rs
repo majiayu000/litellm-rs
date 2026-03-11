@@ -212,9 +212,10 @@ impl HuggingFaceProvider {
             .map_err(|e| HuggingFaceError::huggingface_response_parsing(e.to_string()))?;
 
         if let Some(mapping) = data.get("inferenceProviderMapping")
-            && let Some(obj) = mapping.as_object() {
-                return Ok(obj.clone().into_iter().collect());
-            }
+            && let Some(obj) = mapping.as_object()
+        {
+            return Ok(obj.clone().into_iter().collect());
+        }
 
         Ok(HashMap::new())
     }
@@ -229,12 +230,13 @@ impl HuggingFaceProvider {
 
         if let Some(provider_info) = mapping.get(provider) {
             if let Some(status) = provider_info.get("status").and_then(|s| s.as_str())
-                && status == "staging" {
-                    warn!(
-                        "Model {} is in staging mode for provider {}. Meant for test purposes only.",
-                        model, provider
-                    );
-                }
+                && status == "staging"
+            {
+                warn!(
+                    "Model {} is in staging mode for provider {}. Meant for test purposes only.",
+                    model, provider
+                );
+            }
 
             if let Some(provider_id) = provider_info.get("providerId").and_then(|p| p.as_str()) {
                 return Ok(provider_id.to_string());

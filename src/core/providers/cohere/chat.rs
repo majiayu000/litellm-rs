@@ -93,33 +93,34 @@ impl CohereChatHandler {
                 let mut parameter_definitions = HashMap::new();
 
                 if let Some(params) = function.get("parameters")
-                    && let Some(properties) = params.get("properties").and_then(|p| p.as_object()) {
-                        let required = params
-                            .get("required")
-                            .and_then(|r| r.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-                            .unwrap_or_default();
+                    && let Some(properties) = params.get("properties").and_then(|p| p.as_object())
+                {
+                    let required = params
+                        .get("required")
+                        .and_then(|r| r.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                        .unwrap_or_default();
 
-                        for (param_name, param_def) in properties {
-                            let param_type = param_def
-                                .get("type")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("string");
-                            let param_desc = param_def
-                                .get("description")
-                                .and_then(|d| d.as_str())
-                                .unwrap_or("");
+                    for (param_name, param_def) in properties {
+                        let param_type = param_def
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("string");
+                        let param_desc = param_def
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("");
 
-                            parameter_definitions.insert(
-                                param_name.clone(),
-                                json!({
-                                    "type": param_type,
-                                    "description": param_desc,
-                                    "required": required.contains(&param_name.as_str())
-                                }),
-                            );
-                        }
+                        parameter_definitions.insert(
+                            param_name.clone(),
+                            json!({
+                                "type": param_type,
+                                "description": param_desc,
+                                "required": required.contains(&param_name.as_str())
+                            }),
+                        );
                     }
+                }
 
                 cohere_tools.push(json!({
                     "name": name,
@@ -196,14 +197,15 @@ impl CohereChatHandler {
         // v2 format: message.content is an array of content blocks
         if let Some(message) = response_json.get("message")
             && let Some(content) = message.get("content")
-                && let Some(content_array) = content.as_array() {
-                    let text: String = content_array
-                        .iter()
-                        .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
-                        .collect::<Vec<_>>()
-                        .join("");
-                    return Ok(text);
-                }
+            && let Some(content_array) = content.as_array()
+        {
+            let text: String = content_array
+                .iter()
+                .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("");
+            return Ok(text);
+        }
 
         // v1 format: text is at top level
         if let Some(text) = response_json.get("text").and_then(|t| t.as_str()) {
@@ -217,47 +219,49 @@ impl CohereChatHandler {
     fn extract_usage(response_json: &Value) -> Result<Usage, CohereError> {
         // v2 format: usage.tokens
         if let Some(usage) = response_json.get("usage")
-            && let Some(tokens) = usage.get("tokens") {
-                let prompt_tokens = tokens
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let completion_tokens = tokens
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
+            && let Some(tokens) = usage.get("tokens")
+        {
+            let prompt_tokens = tokens
+                .get("input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let completion_tokens = tokens
+                .get("output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
 
-                return Ok(Usage {
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens: prompt_tokens + completion_tokens,
-                    prompt_tokens_details: None,
-                    completion_tokens_details: None,
-                    thinking_usage: None,
-                });
-            }
+            return Ok(Usage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens: prompt_tokens + completion_tokens,
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
+                thinking_usage: None,
+            });
+        }
 
         // v1 format: meta.billed_units
         if let Some(meta) = response_json.get("meta")
-            && let Some(billed_units) = meta.get("billed_units") {
-                let prompt_tokens = billed_units
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let completion_tokens = billed_units
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
+            && let Some(billed_units) = meta.get("billed_units")
+        {
+            let prompt_tokens = billed_units
+                .get("input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let completion_tokens = billed_units
+                .get("output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
 
-                return Ok(Usage {
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens: prompt_tokens + completion_tokens,
-                    prompt_tokens_details: None,
-                    completion_tokens_details: None,
-                    thinking_usage: None,
-                });
-            }
+            return Ok(Usage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens: prompt_tokens + completion_tokens,
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
+                thinking_usage: None,
+            });
+        }
 
         Ok(Usage {
             prompt_tokens: 0,

@@ -198,9 +198,10 @@ impl RequestUtils {
     fn is_valid_tool_name(tool_name: &str, tools: &[Value]) -> bool {
         tools.iter().any(|tool| {
             if let Some(function) = tool.get("function")
-                && let Some(name) = function.get("name") {
-                    return name.as_str() == Some(tool_name);
-                }
+                && let Some(name) = function.get("name")
+            {
+                return name.as_str() == Some(tool_name);
+            }
             false
         })
     }

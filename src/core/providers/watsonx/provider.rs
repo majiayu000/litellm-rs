@@ -160,9 +160,10 @@ impl WatsonxProvider {
         {
             let cache = self.token_cache.read().await;
             if let Some(cached) = cache.as_ref()
-                && cached.expires_at > std::time::Instant::now() {
-                    return Ok(cached.token.clone());
-                }
+                && cached.expires_at > std::time::Instant::now()
+            {
+                return Ok(cached.token.clone());
+            }
         }
 
         // Generate new IAM token

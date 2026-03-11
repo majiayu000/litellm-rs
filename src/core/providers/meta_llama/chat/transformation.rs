@@ -116,16 +116,17 @@ impl LlamaChatTransformation {
         // Handle response format - only json_schema is supported
         if let Some(format) = request.response_format
             && let Ok(format_val) = serde_json::to_value(format)
-                && let Some(format_type) = format_val.get("type").and_then(|t| t.as_str()) {
-                    if format_type == "json_schema" {
-                        transformed["response_format"] = format_val;
-                    } else {
-                        warn!(
-                            "Llama API only supports json_schema for response_format, ignoring: {}",
-                            format_type
-                        );
-                    }
-                }
+            && let Some(format_type) = format_val.get("type").and_then(|t| t.as_str())
+        {
+            if format_type == "json_schema" {
+                transformed["response_format"] = format_val;
+            } else {
+                warn!(
+                    "Llama API only supports json_schema for response_format, ignoring: {}",
+                    format_type
+                );
+            }
+        }
 
         // Handle tools and function calling
         if let Some(tools) = request.tools {

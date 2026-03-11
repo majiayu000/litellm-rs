@@ -97,44 +97,47 @@ impl HuggingFaceEmbeddingHandler {
 
         // Handle OpenAI-compatible format
         if let Some(data) = response.get("data")
-            && let Some(arr) = data.as_array() {
-                return arr
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, item)| {
-                        let embedding = item
-                            .get("embedding")
-                            .and_then(|e| e.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-
-                        Ok(EmbeddingData {
-                            object: "embedding".to_string(),
-                            index: idx as u32,
-                            embedding,
+            && let Some(arr) = data.as_array()
+        {
+            return arr
+                .iter()
+                .enumerate()
+                .map(|(idx, item)| {
+                    let embedding = item
+                        .get("embedding")
+                        .and_then(|e| e.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                                .collect()
                         })
+                        .unwrap_or_default();
+
+                    Ok(EmbeddingData {
+                        object: "embedding".to_string(),
+                        index: idx as u32,
+                        embedding,
                     })
-                    .collect();
-            }
+                })
+                .collect();
+        }
 
         // Single embedding response
         if let Some(arr) = response.as_array()
-            && !arr.is_empty() && arr[0].is_number() {
-                // Direct embedding vector
-                let embedding: Vec<f32> = arr
-                    .iter()
-                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                    .collect();
-                return Ok(vec![EmbeddingData {
-                    object: "embedding".to_string(),
-                    index: 0,
-                    embedding,
-                }]);
-            }
+            && !arr.is_empty()
+            && arr[0].is_number()
+        {
+            // Direct embedding vector
+            let embedding: Vec<f32> = arr
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
+            return Ok(vec![EmbeddingData {
+                object: "embedding".to_string(),
+                index: 0,
+                embedding,
+            }]);
+        }
 
         Err(HuggingFaceError::huggingface_response_parsing(
             "Unable to parse embedding response format",

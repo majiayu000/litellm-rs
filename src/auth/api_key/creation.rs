@@ -123,10 +123,11 @@ impl ApiKeyHandler {
 
         // Check if key is expired
         if let Some(expires_at) = api_key.expires_at
-            && Utc::now() > expires_at {
-                debug!("API key is expired");
-                return Ok(None);
-            }
+            && Utc::now() > expires_at
+        {
+            debug!("API key is expired");
+            return Ok(None);
+        }
 
         // Get associated user if any
         let user = if let Some(user_id) = api_key.user_id {
@@ -183,14 +184,15 @@ impl ApiKeyHandler {
 
         // Check if key is expired
         if let Some(expires_at) = api_key.expires_at
-            && Utc::now() > expires_at {
-                return Ok(ApiKeyVerification {
-                    api_key,
-                    user: None,
-                    is_valid: false,
-                    invalid_reason: Some("API key is expired".to_string()),
-                });
-            }
+            && Utc::now() > expires_at
+        {
+            return Ok(ApiKeyVerification {
+                api_key,
+                user: None,
+                is_valid: false,
+                invalid_reason: Some("API key is expired".to_string()),
+            });
+        }
 
         // Get associated user if any
         let user = if let Some(user_id) = api_key.user_id {
@@ -201,14 +203,15 @@ impl ApiKeyHandler {
 
         // Check if user is active (if associated)
         if let Some(ref user) = user
-            && !user.is_active() {
-                return Ok(ApiKeyVerification {
-                    api_key,
-                    user: Some(user.clone()),
-                    is_valid: false,
-                    invalid_reason: Some("Associated user is inactive".to_string()),
-                });
-            }
+            && !user.is_active()
+        {
+            return Ok(ApiKeyVerification {
+                api_key,
+                user: Some(user.clone()),
+                is_valid: false,
+                invalid_reason: Some("Associated user is inactive".to_string()),
+            });
+        }
 
         // Update last used timestamp
         self.update_last_used(api_key.metadata.id).await?;

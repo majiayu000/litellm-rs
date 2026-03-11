@@ -80,15 +80,16 @@ impl McpServer {
 
         // Add auth header if configured
         if let Some(auth) = &config.auth
-            && let Some(header_value) = auth.get_header_value() {
-                let header_name = auth.get_header_name();
-                if let (Ok(name), Ok(val)) = (
-                    reqwest::header::HeaderName::from_bytes(header_name.as_bytes()),
-                    reqwest::header::HeaderValue::from_str(&header_value),
-                ) {
-                    headers.insert(name, val);
-                }
+            && let Some(header_value) = auth.get_header_value()
+        {
+            let header_name = auth.get_header_name();
+            if let (Ok(name), Ok(val)) = (
+                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()),
+                reqwest::header::HeaderValue::from_str(&header_value),
+            ) {
+                headers.insert(name, val);
             }
+        }
 
         Ok(Self {
             config,

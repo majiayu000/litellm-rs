@@ -62,21 +62,23 @@ impl LlamaChatHandler {
 
         // Validate temperature
         if let Some(temp) = request.temperature
-            && !(0.0..=2.0).contains(&temp) {
-                return Err(ProviderError::invalid_request(
-                    "meta",
-                    format!("Temperature must be between 0 and 2, got {}", temp),
-                ));
-            }
+            && !(0.0..=2.0).contains(&temp)
+        {
+            return Err(ProviderError::invalid_request(
+                "meta",
+                format!("Temperature must be between 0 and 2, got {}", temp),
+            ));
+        }
 
         // Validate top_p
         if let Some(top_p) = request.top_p
-            && !(0.0..=1.0).contains(&top_p) {
-                return Err(ProviderError::invalid_request(
-                    "meta",
-                    format!("top_p must be between 0 and 1, got {}", top_p),
-                ));
-            }
+            && !(0.0..=1.0).contains(&top_p)
+        {
+            return Err(ProviderError::invalid_request(
+                "meta",
+                format!("top_p must be between 0 and 1, got {}", top_p),
+            ));
+        }
 
         Ok(())
     }

@@ -167,9 +167,10 @@ impl TlsConfig {
         }
 
         if let Some(ca_file) = &self.ca_file
-            && !std::path::Path::new(ca_file).exists() {
-                return Err(format!("TLS CA file not found: {}", ca_file));
-            }
+            && !std::path::Path::new(ca_file).exists()
+        {
+            return Err(format!("TLS CA file not found: {}", ca_file));
+        }
 
         Ok(())
     }

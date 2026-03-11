@@ -75,28 +75,31 @@ impl Clone for BudgetMiddleware {
 fn default_scope_extractor(req: &ServiceRequest) -> Option<BudgetScope> {
     // Try to get user ID from X-User-ID header
     if let Some(user_id) = req.headers().get("X-User-ID")
-        && let Ok(user_id_str) = user_id.to_str() {
-            return Some(BudgetScope::User(user_id_str.to_string()));
-        }
+        && let Ok(user_id_str) = user_id.to_str()
+    {
+        return Some(BudgetScope::User(user_id_str.to_string()));
+    }
 
     // Try to get API key from Authorization header
     if let Some(auth_header) = req.headers().get("Authorization")
         && let Ok(auth_str) = auth_header.to_str()
-            && let Some(api_key) = auth_str.strip_prefix("Bearer ") {
-                // Use first 16 chars as identifier for privacy
-                let key_id = if api_key.len() > 16 {
-                    &api_key[..16]
-                } else {
-                    api_key
-                };
-                return Some(BudgetScope::ApiKey(key_id.to_string()));
-            }
+        && let Some(api_key) = auth_str.strip_prefix("Bearer ")
+    {
+        // Use first 16 chars as identifier for privacy
+        let key_id = if api_key.len() > 16 {
+            &api_key[..16]
+        } else {
+            api_key
+        };
+        return Some(BudgetScope::ApiKey(key_id.to_string()));
+    }
 
     // Try to get team ID from X-Team-ID header
     if let Some(team_id) = req.headers().get("X-Team-ID")
-        && let Ok(team_id_str) = team_id.to_str() {
-            return Some(BudgetScope::Team(team_id_str.to_string()));
-        }
+        && let Ok(team_id_str) = team_id.to_str()
+    {
+        return Some(BudgetScope::Team(team_id_str.to_string()));
+    }
 
     // Fall back to global scope
     Some(BudgetScope::Global)
@@ -303,37 +306,41 @@ fn extract_scope_from_request(req: &ServiceRequest) -> Option<BudgetScope> {
     // Check for explicit budget scope header
     if let Some(scope_header) = req.headers().get("X-Budget-Scope")
         && let Ok(scope_str) = scope_header.to_str()
-            && let Some(scope) = BudgetScope::from_key(scope_str) {
-                return Some(scope);
-            }
+        && let Some(scope) = BudgetScope::from_key(scope_str)
+    {
+        return Some(scope);
+    }
 
     // Try user ID
     if let Some(user_id) = req.headers().get("X-User-ID")
         && let Ok(user_id_str) = user_id.to_str()
-            && !user_id_str.is_empty() {
-                return Some(BudgetScope::User(user_id_str.to_string()));
-            }
+        && !user_id_str.is_empty()
+    {
+        return Some(BudgetScope::User(user_id_str.to_string()));
+    }
 
     // Try team ID
     if let Some(team_id) = req.headers().get("X-Team-ID")
         && let Ok(team_id_str) = team_id.to_str()
-            && !team_id_str.is_empty() {
-                return Some(BudgetScope::Team(team_id_str.to_string()));
-            }
+        && !team_id_str.is_empty()
+    {
+        return Some(BudgetScope::Team(team_id_str.to_string()));
+    }
 
     // Try API key
     if let Some(auth_header) = req.headers().get("Authorization")
         && let Ok(auth_str) = auth_header.to_str()
-            && let Some(api_key) = auth_str.strip_prefix("Bearer ")
-                && !api_key.is_empty() {
-                    // Hash or truncate API key for privacy
-                    let key_id = if api_key.len() > 16 {
-                        format!("{}...", &api_key[..16])
-                    } else {
-                        api_key.to_string()
-                    };
-                    return Some(BudgetScope::ApiKey(key_id));
-                }
+        && let Some(api_key) = auth_str.strip_prefix("Bearer ")
+        && !api_key.is_empty()
+    {
+        // Hash or truncate API key for privacy
+        let key_id = if api_key.len() > 16 {
+            format!("{}...", &api_key[..16])
+        } else {
+            api_key.to_string()
+        };
+        return Some(BudgetScope::ApiKey(key_id));
+    }
 
     // Default to global scope
     Some(BudgetScope::Global)

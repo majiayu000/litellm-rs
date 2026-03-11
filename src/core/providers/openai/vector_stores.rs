@@ -299,21 +299,23 @@ impl OpenAIVectorStoreUtils {
 
         // Check name length
         if let Some(name) = &request.name
-            && name.len() > 256 {
-                return Err(ProviderError::InvalidRequest {
-                    provider: "openai",
-                    message: "Vector store name must be 256 characters or less".to_string(),
-                });
-            }
+            && name.len() > 256
+        {
+            return Err(ProviderError::InvalidRequest {
+                provider: "openai",
+                message: "Vector store name must be 256 characters or less".to_string(),
+            });
+        }
 
         // Check expiration policy
         if let Some(expires_after) = &request.expires_after
-            && (expires_after.days == 0 || expires_after.days > 365) {
-                return Err(ProviderError::InvalidRequest {
-                    provider: "openai",
-                    message: "Expiration days must be between 1 and 365".to_string(),
-                });
-            }
+            && (expires_after.days == 0 || expires_after.days > 365)
+        {
+            return Err(ProviderError::InvalidRequest {
+                provider: "openai",
+                message: "Expiration days must be between 1 and 365".to_string(),
+            });
+        }
 
         // Validate chunking strategy
         if let Some(ChunkingStrategy::Static {

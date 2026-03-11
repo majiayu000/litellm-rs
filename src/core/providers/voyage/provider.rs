@@ -111,9 +111,10 @@ impl VoyageProvider {
 
         // Map OpenAI 'dimensions' to Voyage 'output_dimension'
         if let Some(dimensions) = request.dimensions
-            && supports_custom_dimensions(&request.model) {
-                payload["output_dimension"] = serde_json::json!(dimensions);
-            }
+            && supports_custom_dimensions(&request.model)
+        {
+            payload["output_dimension"] = serde_json::json!(dimensions);
+        }
 
         // Add task_type if specified (Voyage-specific parameter)
         if let Some(ref task_type) = request.task_type {
@@ -271,9 +272,10 @@ impl LLMProvider for VoyageProvider {
     ) -> Result<HashMap<String, serde_json::Value>, Self::Error> {
         // Map 'dimensions' to 'output_dimension' for Voyage 3 models
         if let Some(dimensions) = params.remove("dimensions")
-            && supports_custom_dimensions(model) {
-                params.insert("output_dimension".to_string(), dimensions);
-            }
+            && supports_custom_dimensions(model)
+        {
+            params.insert("output_dimension".to_string(), dimensions);
+        }
 
         Ok(params)
     }

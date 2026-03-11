@@ -49,9 +49,10 @@ impl Validate for GatewayConfig {
 impl Validate for GatewayPricingConfig {
     fn validate(&self) -> Result<(), String> {
         if let Some(source) = &self.source
-            && source.trim().is_empty() {
-                return Err("Pricing source cannot be empty when provided".to_string());
-            }
+            && source.trim().is_empty()
+        {
+            return Err("Pricing source cannot be empty when provided".to_string());
+        }
 
         Ok(())
     }

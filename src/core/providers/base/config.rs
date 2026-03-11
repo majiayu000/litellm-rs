@@ -149,9 +149,10 @@ impl BaseConfig {
 
         // Default API version for specific providers
         if config.api_version.is_none()
-            && let Some(default_version) = Self::default_api_version(&normalized_provider) {
-                config.api_version = Some(default_version.to_string());
-            }
+            && let Some(default_version) = Self::default_api_version(&normalized_provider)
+        {
+            config.api_version = Some(default_version.to_string());
+        }
 
         config
     }

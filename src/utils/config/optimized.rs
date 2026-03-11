@@ -106,9 +106,10 @@ impl OptimizedConfigManager {
         {
             let cache = self.cache.read();
             if let Some(cached) = cache.get(file_path)
-                && let Ok(config) = self.try_downcast_config::<T>(cached.clone()) {
-                    return Ok(config);
-                }
+                && let Ok(config) = self.try_downcast_config::<T>(cached.clone())
+            {
+                return Ok(config);
+            }
         }
 
         // Load from file
@@ -176,38 +177,36 @@ impl OptimizedConfigManager {
 
                 if let Ok(metadata) = tokio::fs::metadata(&file_path_for_spawn).await
                     && let Ok(modified) = metadata.modified()
-                        && modified > last_modified {
-                            last_modified = modified;
+                    && modified > last_modified
+                {
+                    last_modified = modified;
 
-                            // Reload configuration
-                            match Self::load_from_file_static::<T>(&file_path_for_spawn).await {
-                                Ok(new_config) => {
-                                    let config_arc = Arc::new(new_config);
+                    // Reload configuration
+                    match Self::load_from_file_static::<T>(&file_path_for_spawn).await {
+                        Ok(new_config) => {
+                            let config_arc = Arc::new(new_config);
 
-                                    // Update cache
-                                    {
-                                        let mut cache_guard = cache.write();
-                                        if let Ok(config_value) =
-                                            Self::serialize_to_config_value_static(&*config_arc)
-                                        {
-                                            cache_guard.insert(
-                                                file_path_for_spawn.clone(),
-                                                Arc::new(config_value),
-                                            );
-                                        }
-                                    }
-
-                                    // Call callback
-                                    callback(config_arc);
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to reload config {}: {}",
-                                        file_path_for_spawn, e
+                            // Update cache
+                            {
+                                let mut cache_guard = cache.write();
+                                if let Ok(config_value) =
+                                    Self::serialize_to_config_value_static(&*config_arc)
+                                {
+                                    cache_guard.insert(
+                                        file_path_for_spawn.clone(),
+                                        Arc::new(config_value),
                                     );
                                 }
                             }
+
+                            // Call callback
+                            callback(config_arc);
                         }
+                        Err(e) => {
+                            error!("Failed to reload config {}: {}", file_path_for_spawn, e);
+                        }
+                    }
+                }
             }
         });
 

@@ -359,28 +359,31 @@ impl OpenAIFineTuningUtils {
         // Validate hyperparameters
         if let Some(hyperparams) = &request.hyperparameters {
             if let Some(n_epochs) = hyperparams.n_epochs
-                && (n_epochs == 0 || n_epochs > 50) {
-                    return Err(ProviderError::InvalidRequest {
-                        provider: "openai",
-                        message: "n_epochs must be between 1 and 50".to_string(),
-                    });
-                }
+                && (n_epochs == 0 || n_epochs > 50)
+            {
+                return Err(ProviderError::InvalidRequest {
+                    provider: "openai",
+                    message: "n_epochs must be between 1 and 50".to_string(),
+                });
+            }
 
             if let Some(batch_size) = hyperparams.batch_size
-                && ![1, 2, 4, 8, 16, 32].contains(&batch_size) {
-                    return Err(ProviderError::InvalidRequest {
-                        provider: "openai",
-                        message: "batch_size must be one of: 1, 2, 4, 8, 16, 32".to_string(),
-                    });
-                }
+                && ![1, 2, 4, 8, 16, 32].contains(&batch_size)
+            {
+                return Err(ProviderError::InvalidRequest {
+                    provider: "openai",
+                    message: "batch_size must be one of: 1, 2, 4, 8, 16, 32".to_string(),
+                });
+            }
 
             if let Some(lr_multiplier) = hyperparams.learning_rate_multiplier
-                && (lr_multiplier <= 0.0 || lr_multiplier > 10.0) {
-                    return Err(ProviderError::InvalidRequest {
-                        provider: "openai",
-                        message: "learning_rate_multiplier must be between 0 and 10".to_string(),
-                    });
-                }
+                && (lr_multiplier <= 0.0 || lr_multiplier > 10.0)
+            {
+                return Err(ProviderError::InvalidRequest {
+                    provider: "openai",
+                    message: "learning_rate_multiplier must be between 0 and 10".to_string(),
+                });
+            }
         }
 
         Ok(())

@@ -83,17 +83,19 @@ impl GeminiProvider {
 
         // Check temperature range
         if let Some(temperature) = request.temperature
-            && !(0.0..=2.0).contains(&temperature) {
-                return Err(gemini_validation_error(
-                    "temperature must be between 0.0 and 2.0",
-                ));
-            }
+            && !(0.0..=2.0).contains(&temperature)
+        {
+            return Err(gemini_validation_error(
+                "temperature must be between 0.0 and 2.0",
+            ));
+        }
 
         // Check top_p range
         if let Some(top_p) = request.top_p
-            && !(0.0..=1.0).contains(&top_p) {
-                return Err(gemini_validation_error("top_p must be between 0.0 and 1.0"));
-            }
+            && !(0.0..=1.0).contains(&top_p)
+        {
+            return Err(gemini_validation_error("top_p must be between 0.0 and 1.0"));
+        }
 
         // Check tool calling support
         if request.tools.is_some() && !model_spec.features.contains(&ModelFeature::ToolCalling) {

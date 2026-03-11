@@ -235,26 +235,27 @@ impl JsonOps {
         match (data, schema) {
             (_, Value::Object(schema_map)) => {
                 if let Some(type_value) = schema_map.get("type")
-                    && let Some(expected_type) = type_value.as_str() {
-                        let data_type = match data {
-                            Value::Null => "null",
-                            Value::Bool(_) => "boolean",
-                            Value::Number(_) => "number",
-                            Value::String(_) => "string",
-                            Value::Array(_) => "array",
-                            Value::Object(_) => "object",
-                        };
+                    && let Some(expected_type) = type_value.as_str()
+                {
+                    let data_type = match data {
+                        Value::Null => "null",
+                        Value::Bool(_) => "boolean",
+                        Value::Number(_) => "number",
+                        Value::String(_) => "string",
+                        Value::Array(_) => "array",
+                        Value::Object(_) => "object",
+                    };
 
-                        if data_type != expected_type {
-                            return Err(ProviderError::InvalidRequest {
-                                provider: "unknown",
-                                message: format!(
-                                    "Expected type '{}', got '{}'",
-                                    expected_type, data_type
-                                ),
-                            });
-                        }
+                    if data_type != expected_type {
+                        return Err(ProviderError::InvalidRequest {
+                            provider: "unknown",
+                            message: format!(
+                                "Expected type '{}', got '{}'",
+                                expected_type, data_type
+                            ),
+                        });
                     }
+                }
 
                 if let (Value::Object(data_map), Some(Value::Object(properties))) =
                     (data, schema_map.get("properties"))
@@ -268,15 +269,16 @@ impl JsonOps {
                     if let Some(Value::Array(required)) = schema_map.get("required") {
                         for required_prop in required {
                             if let Some(prop_name) = required_prop.as_str()
-                                && !data_map.contains_key(prop_name) {
-                                    return Err(ProviderError::InvalidRequest {
-                                        provider: "unknown",
-                                        message: format!(
-                                            "Required property '{}' is missing",
-                                            prop_name
-                                        ),
-                                    });
-                                }
+                                && !data_map.contains_key(prop_name)
+                            {
+                                return Err(ProviderError::InvalidRequest {
+                                    provider: "unknown",
+                                    message: format!(
+                                        "Required property '{}' is missing",
+                                        prop_name
+                                    ),
+                                });
+                            }
                         }
                     }
                 }

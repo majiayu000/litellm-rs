@@ -36,9 +36,10 @@ impl BoundedHistogram {
 
         // If at capacity, remove oldest sample from sum
         if self.samples.len() >= self.max_samples
-            && let Some(oldest) = self.samples.pop_front() {
-                self.sum -= oldest;
-            }
+            && let Some(oldest) = self.samples.pop_front()
+        {
+            self.sum -= oldest;
+        }
 
         self.samples.push_back(value);
     }

@@ -154,9 +154,10 @@ impl AzureEmbeddingUtils {
 
         // Validate dimensions if specified (only for certain models)
         if let Some(dimensions) = request.dimensions
-            && (dimensions == 0 || dimensions > 3072) {
-                return Err(azure_config_error("Dimensions must be between 1 and 3072"));
-            }
+            && (dimensions == 0 || dimensions > 3072)
+        {
+            return Err(azure_config_error("Dimensions must be between 1 and 3072"));
+        }
 
         Ok(())
     }
