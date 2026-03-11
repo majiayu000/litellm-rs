@@ -3045,7 +3045,7 @@ checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
 
 [[package]]
 name = "litellm-rs"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "actix-cors",
  "actix-multipart",
@@ -3080,7 +3080,7 @@ dependencies = [
  "parking_lot",
  "paste",
  "pin-project-lite",
- "rand 0.8.5",
+ "rand 0.9.2",
  "redis",
  "regex",
  "reqwest",
@@ -3773,9 +3773,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.13"
+version = "0.11.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
+checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",

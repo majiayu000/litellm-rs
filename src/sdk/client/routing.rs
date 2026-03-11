@@ -74,8 +74,8 @@ impl LoadBalancer {
                 // Weighted random selection
                 use rand::Rng;
                 let total_weight: f32 = enabled_providers.iter().map(|p| p.weight).sum();
-                let mut rng = rand::thread_rng();
-                let mut random_weight = rng.r#gen::<f32>() * total_weight;
+                let mut rng = rand::rng();
+                let mut random_weight = rng.random::<f32>() * total_weight;
 
                 for provider in &enabled_providers {
                     random_weight -= provider.weight;
