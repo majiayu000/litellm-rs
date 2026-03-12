@@ -4,12 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "simple_openai"
-path = "simple_openai.rs"
-
-[[bin]]
-name = "openai_example"
-path = "openai_example.rs"
+name = "hello"
+path = "hello.rs"
 
 [dependencies]
 litellm-rs = { path = ".." }
