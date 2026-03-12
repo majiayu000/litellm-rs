@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Test PR to verify CI/CD workflow
+
 ## [0.4.2] - 2026-02-28
 
 ### Fixed
