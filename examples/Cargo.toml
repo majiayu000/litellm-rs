@@ -8,7 +8,3 @@ name = "hello"
 path = "hello.rs"
 
 [dependencies]
-litellm-rs = { path = ".." }
-tokio = { version = "1", features = ["full"] }
-tracing-subscriber = "0.3"
-serde_json = "1.0"
