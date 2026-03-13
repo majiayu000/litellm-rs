@@ -40,6 +40,29 @@ impl UsageTokens {
     }
 }
 
+impl From<crate::core::types::responses::Usage> for UsageTokens {
+    fn from(usage: crate::core::types::responses::Usage) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+            cached_tokens: usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            audio_tokens: usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.audio_tokens),
+            image_tokens: None,
+            reasoning_tokens: usage
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens),
+        }
+    }
+}
+
 /// Model pricing information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelPricing {
@@ -386,6 +409,46 @@ pub enum CostError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==================== Usage → UsageTokens Conversion Tests ====================
+
+    #[test]
+    fn test_usage_to_usage_tokens_basic() {
+        use crate::core::types::responses::Usage;
+        let usage = Usage::new(100, 50);
+        let tokens: UsageTokens = usage.into();
+        assert_eq!(tokens.prompt_tokens, 100);
+        assert_eq!(tokens.completion_tokens, 50);
+        assert_eq!(tokens.total_tokens, 150);
+        assert!(tokens.cached_tokens.is_none());
+        assert!(tokens.reasoning_tokens.is_none());
+    }
+
+    #[test]
+    fn test_usage_to_usage_tokens_with_details() {
+        use crate::core::types::responses::{
+            CompletionTokensDetails, PromptTokensDetails, Usage,
+        };
+        let usage = Usage {
+            prompt_tokens: 200,
+            completion_tokens: 100,
+            total_tokens: 300,
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: Some(50),
+                audio_tokens: Some(10),
+            }),
+            completion_tokens_details: Some(CompletionTokensDetails {
+                reasoning_tokens: Some(30),
+                audio_tokens: None,
+            }),
+            thinking_usage: None,
+        };
+        let tokens: UsageTokens = usage.into();
+        assert_eq!(tokens.cached_tokens, Some(50));
+        assert_eq!(tokens.audio_tokens, Some(10));
+        assert_eq!(tokens.reasoning_tokens, Some(30));
+        assert!(tokens.image_tokens.is_none());
+    }
 
     // ==================== UsageTokens Tests ====================
 
