@@ -146,7 +146,7 @@ jobs:
           sudo apt-get install -y libpq-dev
 
       - name: Run tests
-        run: cargo test --workspace --features "$FEATURES" --verbose
+        run: cargo test --lib --tests --bins --features "$FEATURES" --verbose
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gateway_test
           REDIS_URL: redis://localhost:6379
