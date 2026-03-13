@@ -85,7 +85,7 @@ assert_single_definition "RouterConfig" "pub[[:space:]]+struct[[:space:]]+Router
 assert_allowed_definition_set \
   "ProviderType" \
   "pub[[:space:]]+enum[[:space:]]+ProviderType\\b" \
-  "src/core/providers/mod.rs" \
+  "src/core/providers/provider_type.rs" \
   "src/sdk/config.rs"
 
 echo "Schema duplication guard passed."
