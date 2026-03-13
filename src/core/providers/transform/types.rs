@@ -1,7 +1,12 @@
 //! Request/Response Transformation Engine - Format normalization across providers
 //!
-//! This module implements sophisticated transformation pipelines that convert
-//! between OpenAI-compatible format and provider-specific formats.
+//! This module implements transformation pipelines that convert between
+//! OpenAI-compatible format and provider-specific formats.
+//!
+//! **Internal pipeline DTOs** — Types here are serde adaptation layers for
+//! provider-specific JSON schemas. They are intentionally separate from
+//! `core::types` (the canonical API types) to isolate provider format changes
+//! from the public API surface. Do not use outside the `transform` module.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
