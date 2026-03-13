@@ -115,7 +115,7 @@ pub trait ProviderConfig: Send + Sync + Clone + Debug + 'static {
     /// Providers with optional API keys or custom fields should implement
     /// `validate()` directly instead.
     fn validate_standard(&self, provider_name: &str) -> Result<(), String> {
-        if self.api_key().map_or(true, |k| k.is_empty()) {
+        if self.api_key().is_none_or(|k| k.is_empty()) {
             return Err(format!("{} API key is required", provider_name));
         }
         if self.timeout().as_secs() == 0 {
