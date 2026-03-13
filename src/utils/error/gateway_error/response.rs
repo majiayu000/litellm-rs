@@ -129,7 +129,7 @@ impl ResponseError for GatewayError {
                     provider_error.to_string(),
                 ),
             },
-            GatewayError::RateLimit(_) => (
+            GatewayError::RateLimit { .. } => (
                 actix_web::http::StatusCode::TOO_MANY_REQUESTS,
                 "RATE_LIMIT_EXCEEDED",
                 self.to_string(),
@@ -235,7 +235,28 @@ impl ResponseError for GatewayError {
             },
         };
 
-        HttpResponse::build(status_code).json(error_response)
+        let mut builder = HttpResponse::build(status_code);
+
+        // Add rate limit headers for 429 responses
+        if let GatewayError::RateLimit {
+            retry_after,
+            rpm_limit,
+            tpm_limit,
+            ..
+        } = self
+        {
+            if let Some(secs) = retry_after {
+                builder.insert_header(("Retry-After", secs.to_string()));
+            }
+            if let Some(rpm) = rpm_limit {
+                builder.insert_header(("X-RateLimit-Limit-Requests", rpm.to_string()));
+            }
+            if let Some(tpm) = tpm_limit {
+                builder.insert_header(("X-RateLimit-Limit-Tokens", tpm.to_string()));
+            }
+        }
+
+        builder.json(error_response)
     }
 }
 
@@ -421,9 +442,26 @@ mod tests {
 
     #[test]
     fn test_gateway_error_rate_limit_response() {
-        let error = GatewayError::RateLimit("Rate limit exceeded".to_string());
+        let error = GatewayError::RateLimit {
+            message: "Rate limit exceeded".to_string(),
+            retry_after: Some(60),
+            rpm_limit: Some(100),
+            tpm_limit: Some(50000),
+        };
         let response = error.error_response();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get("Retry-After").unwrap().to_str().unwrap(),
+            "60"
+        );
+        assert_eq!(
+            response.headers().get("X-RateLimit-Limit-Requests").unwrap().to_str().unwrap(),
+            "100"
+        );
+        assert_eq!(
+            response.headers().get("X-RateLimit-Limit-Tokens").unwrap().to_str().unwrap(),
+            "50000"
+        );
     }
 
     #[test]
@@ -754,7 +792,7 @@ mod tests {
             ("NOT_FOUND", GatewayError::NotFound("test".to_string())),
             (
                 "RATE_LIMIT_EXCEEDED",
-                GatewayError::RateLimit("test".to_string()),
+                GatewayError::rate_limit("test"),
             ),
         ];
 

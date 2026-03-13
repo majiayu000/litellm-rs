@@ -81,8 +81,8 @@ impl From<crate::utils::error::gateway_error::GatewayError> for SDKError {
             crate::utils::error::gateway_error::GatewayError::BadRequest(msg) => {
                 SDKError::InvalidRequest(msg)
             }
-            crate::utils::error::gateway_error::GatewayError::RateLimit(msg) => {
-                SDKError::RateLimitError(msg)
+            crate::utils::error::gateway_error::GatewayError::RateLimit { message, .. } => {
+                SDKError::RateLimitError(message)
             }
             crate::utils::error::gateway_error::GatewayError::ProviderUnavailable(msg) => {
                 SDKError::ProviderError(msg)
@@ -374,7 +374,12 @@ mod tests {
 
     #[test]
     fn test_from_gateway_error_rate_limit() {
-        let gateway_error = GatewayError::RateLimit("Too many requests".to_string());
+        let gateway_error = GatewayError::RateLimit {
+            message: "Too many requests".to_string(),
+            retry_after: None,
+            rpm_limit: None,
+            tpm_limit: None,
+        };
         let sdk_error: SDKError = gateway_error.into();
         assert!(matches!(sdk_error, SDKError::RateLimitError(_)));
         assert!(sdk_error.is_retryable());

@@ -58,9 +58,14 @@ pub enum GatewayError {
     #[error("Provider error: {0}")]
     Provider(ProviderError),
 
-    /// Rate limiting errors
-    #[error("Rate limit exceeded: {0}")]
-    RateLimit(String),
+    /// Rate limiting errors with structured metadata
+    #[error("Rate limit exceeded: {message}")]
+    RateLimit {
+        message: String,
+        retry_after: Option<u64>,
+        rpm_limit: Option<u32>,
+        tpm_limit: Option<u32>,
+    },
 
     /// Validation errors
     #[error("Validation error: {0}")]
@@ -211,7 +216,12 @@ mod tests {
 
     #[test]
     fn test_rate_limit_error_display() {
-        let error = GatewayError::RateLimit("100 requests per minute exceeded".to_string());
+        let error = GatewayError::RateLimit {
+            message: "100 requests per minute exceeded".to_string(),
+            retry_after: None,
+            rpm_limit: None,
+            tpm_limit: None,
+        };
         assert_eq!(
             error.to_string(),
             "Rate limit exceeded: 100 requests per minute exceeded"

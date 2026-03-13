@@ -457,7 +457,12 @@ mod tests {
 
     #[test]
     fn test_async_batch_error_from_gateway_error_rate_limit() {
-        let gateway_error = GatewayError::RateLimit("Rate limit exceeded".to_string());
+        let gateway_error = GatewayError::RateLimit {
+            message: "Rate limit exceeded".to_string(),
+            retry_after: None,
+            rpm_limit: None,
+            tpm_limit: None,
+        };
         let batch_error: AsyncBatchError = gateway_error.into();
 
         assert!(batch_error.retryable);

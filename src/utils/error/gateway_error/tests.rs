@@ -71,7 +71,7 @@ fn test_validation_helper() {
 #[test]
 fn test_rate_limit_helper() {
     let error = GatewayError::rate_limit("Too many requests");
-    assert!(matches!(error, GatewayError::RateLimit(msg) if msg == "Too many requests"));
+    assert!(matches!(error, GatewayError::RateLimit { ref message, .. } if message == "Too many requests"));
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn test_all_error_variants_display() {
     let errors = vec![
         GatewayError::Config("config error".to_string()),
         GatewayError::Auth("auth error".to_string()),
-        GatewayError::RateLimit("rate limit".to_string()),
+        GatewayError::rate_limit("rate limit"),
         GatewayError::Validation("validation".to_string()),
         GatewayError::Cache("cache".to_string()),
         GatewayError::CircuitBreaker("circuit breaker".to_string()),

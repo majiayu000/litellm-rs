@@ -29,7 +29,7 @@ mod tests {
         let provider_err = ProviderError::rate_limit("anthropic", Some(60));
         let gateway_err: GatewayError = provider_err.into();
 
-        assert!(matches!(gateway_err, GatewayError::RateLimit(_)));
+        assert!(matches!(gateway_err, GatewayError::RateLimit { .. }));
         let response = gateway_err.error_response();
         assert_eq!(response.status().as_u16(), 429);
     }
@@ -154,7 +154,7 @@ mod tests {
             404
         );
         assert_eq!(
-            GatewayError::RateLimit("test".to_string())
+            GatewayError::rate_limit("test")
                 .error_response()
                 .status()
                 .as_u16(),
@@ -233,7 +233,7 @@ mod tests {
             message: "Too many requests".to_string(),
         };
         let gateway: GatewayError = err.into();
-        assert!(matches!(gateway, GatewayError::RateLimit(_)));
+        assert!(matches!(gateway, GatewayError::RateLimit { .. }));
 
         // 400 -> BadRequest
         let err = ProviderError::ApiError {

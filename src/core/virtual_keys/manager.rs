@@ -171,30 +171,45 @@ impl VirtualKeyManager {
             // Check RPM
             if let Some(rpm) = rate_limits.rpm {
                 if state.request_count >= rpm {
-                    return Err(GatewayError::RateLimit(format!(
-                        "Rate limit exceeded: {} requests per minute",
-                        rpm
-                    )));
+                    return Err(GatewayError::RateLimit {
+                        message: format!(
+                            "Rate limit exceeded: {} requests per minute",
+                            rpm
+                        ),
+                        retry_after: Some(60),
+                        rpm_limit: Some(rpm),
+                        tpm_limit: rate_limits.tpm,
+                    });
                 }
             }
 
             // Check TPM
             if let Some(tpm) = rate_limits.tpm {
                 if state.token_count + tokens_requested > tpm {
-                    return Err(GatewayError::RateLimit(format!(
-                        "Token rate limit exceeded: {} tokens per minute",
-                        tpm
-                    )));
+                    return Err(GatewayError::RateLimit {
+                        message: format!(
+                            "Token rate limit exceeded: {} tokens per minute",
+                            tpm
+                        ),
+                        retry_after: Some(60),
+                        rpm_limit: rate_limits.rpm,
+                        tpm_limit: Some(tpm),
+                    });
                 }
             }
 
             // Check parallel requests
             if let Some(max_parallel) = rate_limits.max_parallel_requests {
                 if state.parallel_requests >= max_parallel {
-                    return Err(GatewayError::RateLimit(format!(
-                        "Too many parallel requests: max {}",
-                        max_parallel
-                    )));
+                    return Err(GatewayError::RateLimit {
+                        message: format!(
+                            "Too many parallel requests: max {}",
+                            max_parallel
+                        ),
+                        retry_after: Some(1),
+                        rpm_limit: rate_limits.rpm,
+                        tpm_limit: rate_limits.tpm,
+                    });
                 }
             }
 

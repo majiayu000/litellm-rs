@@ -34,7 +34,12 @@ impl GatewayError {
     }
 
     pub fn rate_limit<S: Into<String>>(message: S) -> Self {
-        Self::RateLimit(message.into())
+        Self::RateLimit {
+            message: message.into(),
+            retry_after: None,
+            rpm_limit: None,
+            tpm_limit: None,
+        }
     }
 
     pub fn timeout<S: Into<String>>(message: S) -> Self {
@@ -211,7 +216,7 @@ mod tests {
     #[test]
     fn test_rate_limit_error() {
         let error = GatewayError::rate_limit("Rate limit exceeded");
-        assert!(matches!(error, GatewayError::RateLimit(msg) if msg == "Rate limit exceeded"));
+        assert!(matches!(error, GatewayError::RateLimit { ref message, .. } if message == "Rate limit exceeded"));
     }
 
     #[test]

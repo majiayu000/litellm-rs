@@ -120,7 +120,7 @@ impl CanonicalError for GatewayError {
             GatewayError::Auth(_) => ErrorCode::Authentication,
             GatewayError::Forbidden(_) => ErrorCode::Authorization,
             GatewayError::Provider(provider_error) => provider_error.canonical_code(),
-            GatewayError::RateLimit(_) => ErrorCode::RateLimited,
+            GatewayError::RateLimit { .. } => ErrorCode::RateLimited,
             GatewayError::Validation(_)
             | GatewayError::BadRequest(_)
             | GatewayError::NoProvidersForModel(_) => ErrorCode::InvalidRequest,
