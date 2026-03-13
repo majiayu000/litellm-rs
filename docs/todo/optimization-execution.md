@@ -1,7 +1,8 @@
 # 优化执行计划
 
 > 创建时间: 2026-03-13
-> 基线: cargo check 47.93s | 1097 .rs files | 328k LOC | v0.4.5
+> 基线: cargo check (cached) 47.93s | (clean) 1m57s | 1097 .rs files | 328k LOC | v0.4.5
+> 当前: cargo check (clean) 57.42s | --all-features (clean) 2m11s
 
 ## 总览
 
@@ -127,10 +128,20 @@ impl Stream for XxxStream {
 > 需要先完成 Step 1-3，评估效果后再决定是否推进。
 > 主要风险：循环依赖、inter-crate 耦合、CI 配置变更。
 
-### 待评估项
-- [ ] 分析之前 workspace 失败的具体原因
-- [ ] 评估 Step 1-3 完成后 cargo check 时间
-- [ ] 决定是否值得推进 P2/P3
+### 评估结果 (Step 1-3 完成后)
+
+**编译时间对比:**
+| 场景 | 优化前 | 优化后 | 变化 |
+|------|--------|--------|------|
+| `cargo check` (clean, default) | 1m 57s | 57.42s | -51% |
+| `cargo check --all-features` (clean) | ~2m 11s | 2m 11s | 无变化 (仍编译全量) |
+| `cargo check` (incremental) | 47.93s | 26.69s | -44% |
+
+**结论:**
+- P1 (default features 瘦身) 带来了显著的日常开发加速 (-51% clean, -44% incremental)
+- P2/P3 (workspace 拆分) 主要优化 --all-features 场景和增量编译隔离
+- 之前 workspace 拆分尝试已回滚，说明存在技术风险 (循环依赖、耦合)
+- **建议: P2/P3 暂缓**，当前编译速度已满足日常开发需求。如需进一步优化可在独立分支推进
 
 ---
 
@@ -141,3 +152,4 @@ impl Stream for XxxStream {
 | 2026-03-13 11:45 | 1 | 删除 6 个 .bak 文件 + _bak/ 目录 | ✅ 未跟踪文件，无需 commit |
 | 2026-03-13 12:00 | 2 | default features 去掉 providers-extra/extended | ✅ 26.69s (44%↓), 10413 tests pass |
 | 2026-03-13 12:20 | 3 | SSE 流式代码去重 (7 provider) | ✅ -167 行, 10413 tests pass |
+| 2026-03-13 12:30 | 评估 | Clean build: 1m57s → 57.42s (-51%) | P2/P3 暂缓 |
