@@ -227,8 +227,11 @@ fn default_pricing_source() -> Option<String> {
 }
 
 /// Main gateway configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
+    /// Configuration schema version
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
     /// Server configuration
     pub server: ServerConfig,
     /// Provider configurations
@@ -253,6 +256,28 @@ pub struct GatewayConfig {
     /// Pricing configuration
     #[serde(default)]
     pub pricing: GatewayPricingConfig,
+}
+
+fn default_schema_version() -> String {
+    "1.0".to_string()
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: default_schema_version(),
+            server: ServerConfig::default(),
+            providers: Vec::new(),
+            router: GatewayRouterConfig::default(),
+            storage: StorageConfig::default(),
+            auth: AuthConfig::default(),
+            monitoring: MonitoringConfig::default(),
+            cache: CacheConfig::default(),
+            rate_limit: RateLimitConfig::default(),
+            enterprise: EnterpriseConfig::default(),
+            pricing: GatewayPricingConfig::default(),
+        }
+    }
 }
 
 impl GatewayConfig {
@@ -626,7 +651,35 @@ mod tests {
     #[test]
     fn test_gateway_config_validate_success() {
         let config = create_valid_config();
-        assert!(config.validate().is_ok());
+        let result = config.validate();
+        if let Err(e) = &result {
+            eprintln!("Validation error: {}", e);
+        }
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_gateway_config_validate_empty_schema_version() {
+        let mut config = create_valid_config();
+        config.schema_version = "".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Schema version"));
+    }
+
+    #[test]
+    fn test_gateway_config_validate_unsupported_schema_version() {
+        let mut config = create_valid_config();
+        config.schema_version = "2.0".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unsupported schema version"));
+    }
+
+    #[test]
+    fn test_gateway_config_default_schema_version() {
+        let config = GatewayConfig::default();
+        assert_eq!(config.schema_version, "1.0");
     }
 
     #[test]
