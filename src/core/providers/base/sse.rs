@@ -1072,6 +1072,20 @@ impl SSETransformer for DatabricksTransformer {
     }
 }
 
+/// Create an OpenAI-compatible SSE stream from an HTTP response.
+///
+/// Replaces the manual `.scan()` + `.flat_map()` pattern that was duplicated
+/// across many providers. Uses `UnifiedSSEStream` which handles buffering,
+/// parsing, and error mapping internally.
+pub fn create_provider_sse_stream(
+    response: reqwest::Response,
+    provider_name: &'static str,
+) -> Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>> {
+    let transformer = OpenAICompatibleTransformer::new(provider_name);
+    let stream = UnifiedSSEStream::new(Box::pin(response.bytes_stream()), transformer);
+    Box::pin(stream)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

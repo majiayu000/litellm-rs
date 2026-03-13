@@ -295,42 +295,9 @@ impl LLMProvider for CodestralProvider {
             ));
         }
 
-        // Parse SSE stream using shared infrastructure
-        use crate::core::providers::base::sse::{OpenAICompatibleTransformer, UnifiedSSEParser};
-        use futures::StreamExt;
-
-        let transformer = OpenAICompatibleTransformer::new("codestral");
-        let parser = UnifiedSSEParser::new(transformer);
-
-        // Convert response bytes to stream of ChatChunks
-        let byte_stream = response.bytes_stream();
-        let stream = byte_stream
-            .scan((parser, Vec::new()), |(parser, buffer), bytes_result| {
-                futures::future::ready(match bytes_result {
-                    Ok(bytes) => match parser.process_bytes(&bytes) {
-                        Ok(chunks) => {
-                            *buffer = chunks;
-                            Some(Ok(buffer.clone()))
-                        }
-                        Err(e) => Some(Err(HttpErrorMapper::map_status_code(
-                            "codestral",
-                            500,
-                            &e.to_string(),
-                        ))),
-                    },
-                    Err(e) => Some(Err(ProviderError::network("codestral", e.to_string()))),
-                })
-            })
-            .map(|result: Result<Vec<_>, CodestralError>| match result {
-                Ok(chunks) => chunks
-                    .into_iter()
-                    .map(Ok)
-                    .collect::<Vec<Result<_, CodestralError>>>(),
-                Err(e) => vec![Err(e)],
-            })
-            .flat_map(futures::stream::iter);
-
-        Ok(Box::pin(stream))
+        Ok(crate::core::providers::base::create_provider_sse_stream(
+            response, "codestral",
+        ))
     }
 
     async fn embeddings(

@@ -21,5 +21,5 @@ pub use pricing::{PricingDatabase, get_pricing_db};
 pub use sse::{
     AnthropicTransformer, CohereTransformer, DatabricksTransformer, GeminiTransformer,
     OpenAICompatibleTransformer, SSEEvent, SSEEventType, SSETransformer, UnifiedSSEParser,
-    UnifiedSSEStream,
+    UnifiedSSEStream, create_provider_sse_stream,
 };

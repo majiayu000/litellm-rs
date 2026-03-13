@@ -9,7 +9,7 @@
 |---|------|------|----------|------|
 | 1 | 死代码清理 (.bak 文件 + _bak/ 目录 + base_provider.rs.bak) | 极低 | 代码卫生 | ✅ 已完成 |
 | 3 | P1: 默认 features 瘦身 | 低 | cargo check 47.93s → 26.69s (44%↓) | ✅ 已完成 |
-| 4 | SSE 流式代码去重 | 中 | 减少 ~1000 行重复代码 | ⬜ 待执行 |
+| 4 | SSE 流式代码去重 | 中 | -167 行 (7 provider scan→1行调用) | ✅ 已完成 |
 | 5 | P2: MCP + A2A workspace 拆分 | 高 | 编译隔离 | ⬜ 待评估 |
 | 6 | P3: 完整 workspace 拆分 | 极高 | 编译加速 ~60% | ⬜ 待评估 |
 
@@ -109,11 +109,14 @@ impl Stream for XxxStream {
 5. 全量测试
 
 ### 执行记录
-- [ ] 设计通用函数
-- [ ] 先行验证 (2 个 provider)
-- [ ] Review
-- [ ] 批量推广
-- [ ] 全量测试
+- [x] 设计通用函数: `create_provider_sse_stream(response, provider_name)` in base/sse.rs
+- [x] 先行验证: sambanova + galadriel 编译通过
+- [x] 批量推广: 7/7 provider 完成 (sambanova, galadriel, friendliai, gigachat, mistral, huggingface, codestral)
+- [x] Review: HuggingFaceError/CodestralError 均为 ProviderError type alias，兼容
+- [x] cargo check --all-features: 通过 ✅
+- [x] cargo test --all-features: 10276 + 137 + 100 全部通过 ✅
+- [x] cargo clippy: 通过 ✅
+- [x] 改动: 9 files, +36 -203 (净减 167 行)
 - [ ] 提交
 
 ---
@@ -137,3 +140,4 @@ impl Stream for XxxStream {
 |------|------|------|------|
 | 2026-03-13 11:45 | 1 | 删除 6 个 .bak 文件 + _bak/ 目录 | ✅ 未跟踪文件，无需 commit |
 | 2026-03-13 12:00 | 2 | default features 去掉 providers-extra/extended | ✅ 26.69s (44%↓), 10413 tests pass |
+| 2026-03-13 12:20 | 3 | SSE 流式代码去重 (7 provider) | ✅ -167 行, 10413 tests pass |

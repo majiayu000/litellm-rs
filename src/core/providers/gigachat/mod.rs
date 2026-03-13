@@ -343,33 +343,9 @@ impl LLMProvider for GigaChatProvider {
             return Err(HttpErrorMapper::map_status_code("gigachat", status, &body));
         }
 
-        use crate::core::providers::base::sse::{OpenAICompatibleTransformer, UnifiedSSEParser};
-        use futures::StreamExt;
-
-        let transformer = OpenAICompatibleTransformer::new("gigachat");
-        let parser = UnifiedSSEParser::new(transformer);
-
-        let byte_stream = response.bytes_stream();
-        let stream = byte_stream
-            .scan((parser, Vec::new()), |(parser, buffer), bytes_result| {
-                futures::future::ready(match bytes_result {
-                    Ok(bytes) => match parser.process_bytes(&bytes) {
-                        Ok(chunks) => {
-                            *buffer = chunks;
-                            Some(Ok(buffer.clone()))
-                        }
-                        Err(e) => Some(Err(e)),
-                    },
-                    Err(e) => Some(Err(ProviderError::network("gigachat", e.to_string()))),
-                })
-            })
-            .map(|result| match result {
-                Ok(chunks) => chunks.into_iter().map(Ok).collect::<Vec<_>>(),
-                Err(e) => vec![Err(e)],
-            })
-            .flat_map(futures::stream::iter);
-
-        Ok(Box::pin(stream))
+        Ok(crate::core::providers::base::create_provider_sse_stream(
+            response, "gigachat",
+        ))
     }
 
     async fn embeddings(
