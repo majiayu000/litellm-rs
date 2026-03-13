@@ -7,14 +7,11 @@
 //! - `openai_compatible`: `define_openai_compatible_provider!` macro
 //! - `http_hooks`: `define_http_provider_with_hooks!` macro
 //! - `pooled_hooks`: `define_pooled_http_provider_with_hooks!` macro
-//! - `dispatch`: `dispatch_all_providers!` macro
-
 mod config_helpers;
 
 // All macro modules contain #[macro_export] macros, which are hoisted to crate root.
 // We still need to include the modules so the macros are compiled.
 mod basic_macros;
-mod dispatch;
 mod http_hooks;
 mod openai_compatible;
 mod pooled_hooks;
