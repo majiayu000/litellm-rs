@@ -1,7 +1,7 @@
 //! Tests for the pricing service
 
 #[cfg(test)]
-use crate::services::pricing::{ModelInfo, PricingService};
+use crate::services::pricing::{LiteLLMModelInfo, PricingService};
 use std::collections::HashMap;
 
 #[test]
@@ -15,7 +15,7 @@ fn test_model_info_deserialization() {
         "supports_function_calling": true
     }"#;
 
-    let model_info: ModelInfo = serde_json::from_str(json).unwrap();
+    let model_info: LiteLLMModelInfo = serde_json::from_str(json).unwrap();
     assert_eq!(model_info.max_tokens, Some(4096));
     assert_eq!(model_info.input_cost_per_token, Some(0.00001));
     assert_eq!(model_info.litellm_provider, "openai");
@@ -25,7 +25,7 @@ fn test_model_info_deserialization() {
 async fn test_token_based_cost_calculation() {
     let service = PricingService::new(None);
 
-    let model_info = ModelInfo {
+    let model_info = LiteLLMModelInfo {
         max_tokens: Some(4096),
         max_input_tokens: None,
         max_output_tokens: None,

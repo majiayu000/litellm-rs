@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 /// LiteLLM compatible model pricing data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
+pub struct LiteLLMModelInfo {
     /// Maximum total tokens
     pub max_tokens: Option<u32>,
     /// Maximum input tokens
@@ -45,8 +45,8 @@ pub struct ModelInfo {
 /// Consolidated pricing data - single lock for all pricing state
 #[derive(Debug)]
 pub(super) struct PricingData {
-    /// Model pricing data (model_name -> ModelInfo)
-    pub models: HashMap<String, ModelInfo>,
+    /// Model pricing data (model_name -> LiteLLMModelInfo)
+    pub models: HashMap<String, LiteLLMModelInfo>,
     /// Last update time
     pub last_updated: SystemTime,
 }
@@ -157,12 +157,12 @@ mod tests {
     use std::time::SystemTime;
 
     // ====================================================================================
-    // ModelInfo Tests
+    // LiteLLMModelInfo Tests
     // ====================================================================================
 
     #[test]
     fn test_model_info_minimal() {
-        let info = ModelInfo {
+        let info = LiteLLMModelInfo {
             max_tokens: None,
             max_input_tokens: None,
             max_output_tokens: None,
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_model_info_full() {
-        let info = ModelInfo {
+        let info = LiteLLMModelInfo {
             max_tokens: Some(128000),
             max_input_tokens: Some(100000),
             max_output_tokens: Some(8192),
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_model_info_character_based() {
-        let info = ModelInfo {
+        let info = LiteLLMModelInfo {
             max_tokens: None,
             max_input_tokens: None,
             max_output_tokens: None,
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_model_info_time_based() {
-        let info = ModelInfo {
+        let info = LiteLLMModelInfo {
             max_tokens: None,
             max_input_tokens: None,
             max_output_tokens: None,
@@ -265,7 +265,7 @@ mod tests {
         );
         extra.insert("custom_number".to_string(), serde_json::json!(42));
 
-        let info = ModelInfo {
+        let info = LiteLLMModelInfo {
             max_tokens: None,
             max_input_tokens: None,
             max_output_tokens: None,
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_model_info_clone() {
-        let info = ModelInfo {
+        let info = LiteLLMModelInfo {
             max_tokens: Some(4096),
             max_input_tokens: None,
             max_output_tokens: None,
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_model_info_serialization() {
-        let info = ModelInfo {
+        let info = LiteLLMModelInfo {
             max_tokens: Some(4096),
             max_input_tokens: None,
             max_output_tokens: None,
@@ -347,7 +347,7 @@ mod tests {
             "mode": "chat",
             "supports_function_calling": true
         }"#;
-        let info: ModelInfo = serde_json::from_str(json).unwrap();
+        let info: LiteLLMModelInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.max_tokens, Some(8192));
         assert_eq!(info.litellm_provider, "anthropic");
         assert!(info.supports_function_calling.unwrap());
@@ -369,7 +369,7 @@ mod tests {
         let mut models = HashMap::new();
         models.insert(
             "gpt-4".to_string(),
-            ModelInfo {
+            LiteLLMModelInfo {
                 max_tokens: Some(8192),
                 max_input_tokens: None,
                 max_output_tokens: None,

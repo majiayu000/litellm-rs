@@ -15,6 +15,6 @@ mod tests;
 // Re-export public types
 pub use service::PricingService;
 pub use types::{
-    CostRange, CostResult, CostType, ModelInfo, PricingEventType, PricingStatistics,
+    CostRange, CostResult, CostType, LiteLLMModelInfo, PricingEventType, PricingStatistics,
     PricingUpdateEvent,
 };

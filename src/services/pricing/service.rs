@@ -1,7 +1,7 @@
 //! Main pricing service implementation
 
 use super::types::{
-    CostRange, CostResult, CostType, ModelInfo, PricingData, PricingEventType, PricingStatistics,
+    CostRange, CostResult, CostType, LiteLLMModelInfo, PricingData, PricingEventType, PricingStatistics,
     PricingUpdateEvent,
 };
 use crate::utils::error::gateway_error::{GatewayError, Result};
@@ -50,7 +50,7 @@ impl PricingService {
     }
 
     /// Get model information
-    pub fn get_model_info(&self, model: &str) -> Option<ModelInfo> {
+    pub fn get_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
         let data = self.pricing_data.read();
         data.models.get(model).cloned()
     }
@@ -113,7 +113,7 @@ impl PricingService {
     pub(super) fn calculate_token_based_cost(
         &self,
         model: &str,
-        model_info: &ModelInfo,
+        model_info: &LiteLLMModelInfo,
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<CostResult> {
@@ -140,7 +140,7 @@ impl PricingService {
     fn calculate_google_cost(
         &self,
         model: &str,
-        model_info: &ModelInfo,
+        model_info: &LiteLLMModelInfo,
         input_tokens: u32,
         output_tokens: u32,
         prompt: Option<&str>,
@@ -179,7 +179,7 @@ impl PricingService {
     fn calculate_time_based_cost(
         &self,
         model: &str,
-        model_info: &ModelInfo,
+        model_info: &LiteLLMModelInfo,
         total_time_seconds: f64,
     ) -> Result<CostResult> {
         let cost_per_second = model_info.cost_per_second.unwrap_or(0.0);
@@ -250,7 +250,7 @@ impl PricingService {
     }
 
     /// Add custom model pricing
-    pub fn add_custom_model(&self, model: String, model_info: ModelInfo) {
+    pub fn add_custom_model(&self, model: String, model_info: LiteLLMModelInfo) {
         {
             let mut data = self.pricing_data.write();
             data.models.insert(model.clone(), model_info.clone());
@@ -311,8 +311,8 @@ mod tests {
 
     // ==================== Helper Functions ====================
 
-    fn create_test_model_info(provider: &str) -> ModelInfo {
-        ModelInfo {
+    fn create_test_model_info(provider: &str) -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
             max_tokens: Some(4096),
             max_input_tokens: Some(4096),
             max_output_tokens: Some(4096),
@@ -332,8 +332,8 @@ mod tests {
         }
     }
 
-    fn create_character_based_model_info() -> ModelInfo {
-        ModelInfo {
+    fn create_character_based_model_info() -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
             max_tokens: Some(8192),
             max_input_tokens: Some(8192),
             max_output_tokens: Some(8192),
@@ -353,8 +353,8 @@ mod tests {
         }
     }
 
-    fn create_time_based_model_info() -> ModelInfo {
-        ModelInfo {
+    fn create_time_based_model_info() -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
             max_tokens: Some(4096),
             max_input_tokens: Some(4096),
             max_output_tokens: Some(4096),
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn test_calculate_token_based_cost_no_pricing() {
         let service = PricingService::new(None);
-        let model_info = ModelInfo {
+        let model_info = LiteLLMModelInfo {
             max_tokens: Some(4096),
             max_input_tokens: None,
             max_output_tokens: None,
@@ -611,7 +611,7 @@ mod tests {
     #[test]
     fn test_supports_feature_streaming_default_true() {
         let service = PricingService::new(None);
-        let model_info = ModelInfo {
+        let model_info = LiteLLMModelInfo {
             max_tokens: Some(4096),
             max_input_tokens: None,
             max_output_tokens: None,
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn test_get_cost_per_token_no_pricing() {
         let service = PricingService::new(None);
-        let model_info = ModelInfo {
+        let model_info = LiteLLMModelInfo {
             max_tokens: Some(4096),
             max_input_tokens: None,
             max_output_tokens: None,

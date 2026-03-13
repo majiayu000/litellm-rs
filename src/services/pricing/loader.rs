@@ -1,7 +1,7 @@
 //! Data loading functionality for the pricing service
 
 use super::service::PricingService;
-use super::types::ModelInfo;
+use super::types::LiteLLMModelInfo;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -14,7 +14,7 @@ impl PricingService {
     }
 
     /// Load pricing data from URL
-    pub(super) async fn load_from_url(&self) -> Result<HashMap<String, ModelInfo>> {
+    pub(super) async fn load_from_url(&self) -> Result<HashMap<String, LiteLLMModelInfo>> {
         let response = self
             .http_client
             .get(&self.pricing_url)
@@ -35,7 +35,7 @@ impl PricingService {
             .await
             .map_err(|e| GatewayError::network(format!("Failed to read response: {}", e)))?;
 
-        let data: HashMap<String, ModelInfo> = serde_json::from_str(&text)
+        let data: HashMap<String, LiteLLMModelInfo> = serde_json::from_str(&text)
             .map_err(|e| GatewayError::parsing(format!("Failed to parse pricing JSON: {}", e)))?;
 
         debug!("Loaded {} models from URL", data.len());
@@ -43,12 +43,12 @@ impl PricingService {
     }
 
     /// Load pricing data from local file
-    pub(super) async fn load_from_file(&self) -> Result<HashMap<String, ModelInfo>> {
+    pub(super) async fn load_from_file(&self) -> Result<HashMap<String, LiteLLMModelInfo>> {
         let content = tokio::fs::read_to_string(&self.pricing_url)
             .await
             .map_err(GatewayError::Io)?;
 
-        let data: HashMap<String, ModelInfo> = serde_json::from_str(&content)
+        let data: HashMap<String, LiteLLMModelInfo> = serde_json::from_str(&content)
             .map_err(|e| GatewayError::parsing(format!("Failed to parse pricing JSON: {}", e)))?;
 
         debug!("Loaded {} models from file", data.len());
