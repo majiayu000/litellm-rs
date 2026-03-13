@@ -2,7 +2,7 @@
 
 use crate::core::providers::openai::OpenAIProvider;
 use crate::core::providers::Provider;
-use crate::core::router::deployment::{Deployment, DeploymentConfig, DeploymentId, DeploymentState};
+use crate::core::router::deployment::{Deployment, DeploymentConfig, DeploymentState};
 use crate::core::router::strategy_impl::*;
 use dashmap::DashMap;
 use std::sync::atomic::AtomicUsize;
@@ -71,7 +71,8 @@ async fn test_weighted_random_single_candidate() {
     deployments.insert("d1".to_string(), create_test_deployment("d1", config).await);
 
     let candidates = vec!["d1".to_string()];
-    let selected = weighted_random(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = weighted_random_from_context(&contexts).unwrap();
     assert_eq!(selected, "d1");
 }
 
@@ -90,10 +91,11 @@ async fn test_weighted_random_returns_valid_candidate() {
     }
 
     let candidates: Vec<String> = (1..=3).map(|i| format!("d{}", i)).collect();
+    let contexts = build_routing_contexts(&candidates, &deployments);
 
     // Run multiple times and verify result is always in candidates
     for _ in 0..100 {
-        let selected = weighted_random(&candidates, &deployments).unwrap();
+        let selected = weighted_random_from_context(&contexts).unwrap();
         assert!(candidates.contains(selected));
     }
 }
@@ -121,12 +123,13 @@ async fn test_weighted_random_respects_weights() {
     );
 
     let candidates = vec!["d1".to_string(), "d2".to_string()];
+    let contexts = build_routing_contexts(&candidates, &deployments);
 
     let mut d1_count = 0;
     let mut d2_count = 0;
 
     for _ in 0..1000 {
-        let selected = weighted_random(&candidates, &deployments).unwrap();
+        let selected = weighted_random_from_context(&contexts).unwrap();
         if selected == "d1" {
             d1_count += 1;
         } else {
@@ -156,19 +159,18 @@ async fn test_weighted_random_all_zero_weights() {
     }
 
     let candidates: Vec<String> = (1..=3).map(|i| format!("d{}", i)).collect();
+    let contexts = build_routing_contexts(&candidates, &deployments);
 
     // Should fall back to uniform random
     for _ in 0..10 {
-        let selected = weighted_random(&candidates, &deployments).unwrap();
+        let selected = weighted_random_from_context(&contexts).unwrap();
         assert!(candidates.contains(selected));
     }
 }
 
 #[test]
 fn test_weighted_random_empty_candidates() {
-    let deployments: DashMap<DeploymentId, Deployment> = DashMap::new();
-    let candidates: Vec<String> = vec![];
-    assert!(weighted_random(&candidates, &deployments).is_none());
+    assert!(weighted_random_from_context(&[]).is_none());
 }
 
 // ====================================================================================
@@ -182,7 +184,8 @@ async fn test_least_busy_single_candidate() {
     deployments.insert("d1".to_string(), create_test_deployment("d1", config).await);
 
     let candidates = vec!["d1".to_string()];
-    let selected = least_busy(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = least_busy_from_context(&contexts).unwrap();
     assert_eq!(selected, "d1");
 }
 
@@ -203,7 +206,8 @@ async fn test_least_busy_selects_lowest_active() {
     deployments.insert("d3".to_string(), d3);
 
     let candidates = vec!["d1".to_string(), "d2".to_string(), "d3".to_string()];
-    let selected = least_busy(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = least_busy_from_context(&contexts).unwrap();
 
     // d2 has the fewest active requests
     assert_eq!(selected, "d2");
@@ -222,10 +226,11 @@ async fn test_least_busy_with_ties() {
     deployments.insert("d2".to_string(), d2);
 
     let candidates = vec!["d1".to_string(), "d2".to_string()];
+    let contexts = build_routing_contexts(&candidates, &deployments);
 
     // Result should be one of the tied deployments
     for _ in 0..10 {
-        let selected = least_busy(&candidates, &deployments).unwrap();
+        let selected = least_busy_from_context(&contexts).unwrap();
         assert!(selected == "d1" || selected == "d2");
     }
 }
@@ -240,15 +245,14 @@ async fn test_least_busy_all_zero() {
     }
 
     let candidates: Vec<String> = (1..=3).map(|i| format!("d{}", i)).collect();
-    let selected = least_busy(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = least_busy_from_context(&contexts).unwrap();
     assert!(candidates.contains(selected));
 }
 
 #[test]
 fn test_least_busy_empty_candidates() {
-    let deployments: DashMap<DeploymentId, Deployment> = DashMap::new();
-    let candidates: Vec<String> = vec![];
-    assert!(least_busy(&candidates, &deployments).is_none());
+    assert!(least_busy_from_context(&[]).is_none());
 }
 
 // ====================================================================================
@@ -265,7 +269,8 @@ async fn test_lowest_usage_single_candidate() {
     deployments.insert("d1".to_string(), create_test_deployment("d1", config).await);
 
     let candidates = vec!["d1".to_string()];
-    let selected = lowest_usage(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_usage_from_context(&contexts).unwrap();
     assert_eq!(selected, "d1");
 }
 
@@ -301,7 +306,8 @@ async fn test_lowest_usage_selects_lowest_percentage() {
     deployments.insert("d3".to_string(), d3);
 
     let candidates = vec!["d1".to_string(), "d2".to_string(), "d3".to_string()];
-    let selected = lowest_usage(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_usage_from_context(&contexts).unwrap();
 
     // d2 has the lowest usage percentage
     assert_eq!(selected, "d2");
@@ -329,7 +335,8 @@ async fn test_lowest_usage_no_limit_treated_as_zero() {
     deployments.insert("d2".to_string(), d2);
 
     let candidates = vec!["d1".to_string(), "d2".to_string()];
-    let selected = lowest_usage(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_usage_from_context(&contexts).unwrap();
 
     // d1 has 0% usage (no limit)
     assert_eq!(selected, "d1");
@@ -337,9 +344,7 @@ async fn test_lowest_usage_no_limit_treated_as_zero() {
 
 #[test]
 fn test_lowest_usage_empty_candidates() {
-    let deployments: DashMap<DeploymentId, Deployment> = DashMap::new();
-    let candidates: Vec<String> = vec![];
-    assert!(lowest_usage(&candidates, &deployments).is_none());
+    assert!(lowest_usage_from_context(&[]).is_none());
 }
 
 // ====================================================================================
@@ -354,7 +359,8 @@ async fn test_lowest_latency_single_candidate() {
     deployments.insert("d1".to_string(), d1);
 
     let candidates = vec!["d1".to_string()];
-    let selected = lowest_latency(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_latency_from_context(&contexts).unwrap();
     assert_eq!(selected, "d1");
 }
 
@@ -375,7 +381,8 @@ async fn test_lowest_latency_selects_fastest() {
     deployments.insert("d3".to_string(), d3);
 
     let candidates = vec!["d1".to_string(), "d2".to_string(), "d3".to_string()];
-    let selected = lowest_latency(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_latency_from_context(&contexts).unwrap();
 
     // d2 has the lowest latency
     assert_eq!(selected, "d2");
@@ -401,7 +408,8 @@ async fn test_lowest_latency_new_deployment_uses_average() {
     deployments.insert("d3".to_string(), d3);
 
     let candidates = vec!["d1".to_string(), "d2".to_string(), "d3".to_string()];
-    let selected = lowest_latency(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_latency_from_context(&contexts).unwrap();
 
     // d1 has the lowest actual latency (1000)
     // d2 gets average = (1000 + 2000) / 2 = 1500
@@ -418,7 +426,8 @@ async fn test_lowest_latency_all_zero() {
     }
 
     let candidates: Vec<String> = (1..=3).map(|i| format!("d{}", i)).collect();
-    let selected = lowest_latency(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_latency_from_context(&contexts).unwrap();
 
     // Any candidate is valid when all have zero latency
     assert!(candidates.contains(selected));
@@ -426,9 +435,7 @@ async fn test_lowest_latency_all_zero() {
 
 #[test]
 fn test_lowest_latency_empty_candidates() {
-    let deployments: DashMap<DeploymentId, Deployment> = DashMap::new();
-    let candidates: Vec<String> = vec![];
-    assert!(lowest_latency(&candidates, &deployments).is_none());
+    assert!(lowest_latency_from_context(&[]).is_none());
 }
 
 // ====================================================================================
@@ -445,7 +452,8 @@ async fn test_lowest_cost_single_candidate() {
     deployments.insert("d1".to_string(), create_test_deployment("d1", config).await);
 
     let candidates = vec!["d1".to_string()];
-    let selected = lowest_cost(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_cost_from_context(&contexts).unwrap();
     assert_eq!(selected, "d1");
 }
 
@@ -481,7 +489,8 @@ async fn test_lowest_cost_selects_lowest_priority() {
     );
 
     let candidates = vec!["d1".to_string(), "d2".to_string(), "d3".to_string()];
-    let selected = lowest_cost(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_cost_from_context(&contexts).unwrap();
 
     // d2 has the lowest priority (cheapest)
     assert_eq!(selected, "d2");
@@ -502,7 +511,8 @@ async fn test_lowest_cost_all_same_priority() {
     }
 
     let candidates: Vec<String> = (1..=3).map(|i| format!("d{}", i)).collect();
-    let selected = lowest_cost(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = lowest_cost_from_context(&contexts).unwrap();
 
     // First one wins when all have same priority
     assert_eq!(selected, "d1");
@@ -510,9 +520,7 @@ async fn test_lowest_cost_all_same_priority() {
 
 #[test]
 fn test_lowest_cost_empty_candidates() {
-    let deployments: DashMap<DeploymentId, Deployment> = DashMap::new();
-    let candidates: Vec<String> = vec![];
-    assert!(lowest_cost(&candidates, &deployments).is_none());
+    assert!(lowest_cost_from_context(&[]).is_none());
 }
 
 // ====================================================================================
@@ -530,7 +538,8 @@ async fn test_rate_limit_aware_single_candidate() {
     deployments.insert("d1".to_string(), create_test_deployment("d1", config).await);
 
     let candidates = vec!["d1".to_string()];
-    let selected = rate_limit_aware(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = rate_limit_aware_from_context(&contexts).unwrap();
     assert_eq!(selected, "d1");
 }
 
@@ -561,7 +570,8 @@ async fn test_rate_limit_aware_selects_most_headroom() {
     deployments.insert("d2".to_string(), d2);
 
     let candidates = vec!["d1".to_string(), "d2".to_string()];
-    let selected = rate_limit_aware(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = rate_limit_aware_from_context(&contexts).unwrap();
 
     // d2 has more headroom
     assert_eq!(selected, "d2");
@@ -594,7 +604,8 @@ async fn test_rate_limit_aware_considers_rpm() {
     deployments.insert("d2".to_string(), d2);
 
     let candidates = vec!["d1".to_string(), "d2".to_string()];
-    let selected = rate_limit_aware(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = rate_limit_aware_from_context(&contexts).unwrap();
 
     // d2 should win because d1 is constrained by RPM (10% headroom vs 60%)
     assert_eq!(selected, "d2");
@@ -617,7 +628,8 @@ async fn test_rate_limit_aware_no_limits() {
     deployments.insert("d2".to_string(), create_test_deployment("d2", config).await);
 
     let candidates = vec!["d1".to_string(), "d2".to_string()];
-    let selected = rate_limit_aware(&candidates, &deployments).unwrap();
+    let contexts = build_routing_contexts(&candidates, &deployments);
+    let selected = rate_limit_aware_from_context(&contexts).unwrap();
 
     // Both have maximum distance, first one wins
     assert_eq!(selected, "d1");
@@ -625,9 +637,7 @@ async fn test_rate_limit_aware_no_limits() {
 
 #[test]
 fn test_rate_limit_aware_empty_candidates() {
-    let deployments: DashMap<DeploymentId, Deployment> = DashMap::new();
-    let candidates: Vec<String> = vec![];
-    assert!(rate_limit_aware(&candidates, &deployments).is_none());
+    assert!(rate_limit_aware_from_context(&[]).is_none());
 }
 
 // ====================================================================================
@@ -637,58 +647,138 @@ fn test_rate_limit_aware_empty_candidates() {
 #[test]
 fn test_round_robin_single_candidate() {
     let counters: DashMap<String, AtomicUsize> = DashMap::new();
-    let candidates = vec!["d1".to_string()];
+    let candidate_ids = ["d1".to_string()];
+    let contexts: Vec<RoutingContext<'_>> = candidate_ids
+        .iter()
+        .map(|id| RoutingContext {
+            deployment_id: id,
+            weight: 1,
+            priority: 1,
+            active_requests: 0,
+            tpm_current: 0,
+            tpm_limit: None,
+            rpm_current: 0,
+            rpm_limit: None,
+            avg_latency_us: 0,
+        })
+        .collect();
 
-    let selected = round_robin("gpt-4", &candidates, &counters).unwrap();
+    let selected = round_robin_from_context("gpt-4", &contexts, &counters).unwrap();
     assert_eq!(selected, "d1");
 }
 
 #[test]
 fn test_round_robin_cycles_through_candidates() {
     let counters: DashMap<String, AtomicUsize> = DashMap::new();
-    let candidates = vec!["d1".to_string(), "d2".to_string(), "d3".to_string()];
+    let candidate_ids = ["d1".to_string(), "d2".to_string(), "d3".to_string()];
+    let contexts: Vec<RoutingContext<'_>> = candidate_ids
+        .iter()
+        .map(|id| RoutingContext {
+            deployment_id: id,
+            weight: 1,
+            priority: 1,
+            active_requests: 0,
+            tpm_current: 0,
+            tpm_limit: None,
+            rpm_current: 0,
+            rpm_limit: None,
+            avg_latency_us: 0,
+        })
+        .collect();
 
     // First cycle
-    assert_eq!(round_robin("gpt-4", &candidates, &counters).unwrap(), "d1");
-    assert_eq!(round_robin("gpt-4", &candidates, &counters).unwrap(), "d2");
-    assert_eq!(round_robin("gpt-4", &candidates, &counters).unwrap(), "d3");
+    assert_eq!(
+        round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+        "d1"
+    );
+    assert_eq!(
+        round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+        "d2"
+    );
+    assert_eq!(
+        round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+        "d3"
+    );
 
     // Second cycle
-    assert_eq!(round_robin("gpt-4", &candidates, &counters).unwrap(), "d1");
-    assert_eq!(round_robin("gpt-4", &candidates, &counters).unwrap(), "d2");
+    assert_eq!(
+        round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+        "d1"
+    );
+    assert_eq!(
+        round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+        "d2"
+    );
 }
 
 #[test]
 fn test_round_robin_separate_counters_per_model() {
     let counters: DashMap<String, AtomicUsize> = DashMap::new();
-    let candidates = vec!["d1".to_string(), "d2".to_string()];
+    let candidate_ids = ["d1".to_string(), "d2".to_string()];
+    let contexts: Vec<RoutingContext<'_>> = candidate_ids
+        .iter()
+        .map(|id| RoutingContext {
+            deployment_id: id,
+            weight: 1,
+            priority: 1,
+            active_requests: 0,
+            tpm_current: 0,
+            tpm_limit: None,
+            rpm_current: 0,
+            rpm_limit: None,
+            avg_latency_us: 0,
+        })
+        .collect();
 
     // gpt-4 model
-    assert_eq!(round_robin("gpt-4", &candidates, &counters).unwrap(), "d1");
-    assert_eq!(round_robin("gpt-4", &candidates, &counters).unwrap(), "d2");
-
-    // claude model has its own counter
     assert_eq!(
-        round_robin("claude-3", &candidates, &counters).unwrap(),
+        round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
         "d1"
     );
     assert_eq!(
-        round_robin("claude-3", &candidates, &counters).unwrap(),
+        round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+        "d2"
+    );
+
+    // claude model has its own counter
+    assert_eq!(
+        round_robin_from_context("claude-3", &contexts, &counters).unwrap(),
+        "d1"
+    );
+    assert_eq!(
+        round_robin_from_context("claude-3", &contexts, &counters).unwrap(),
         "d2"
     );
 
     // gpt-4 continues from where it left off
-    assert_eq!(round_robin("gpt-4", &candidates, &counters).unwrap(), "d1");
+    assert_eq!(
+        round_robin_from_context("gpt-4", &contexts, &counters).unwrap(),
+        "d1"
+    );
 }
 
 #[test]
 fn test_round_robin_wraps_around() {
     let counters: DashMap<String, AtomicUsize> = DashMap::new();
-    let candidates = vec!["d1".to_string(), "d2".to_string()];
+    let candidate_ids = ["d1".to_string(), "d2".to_string()];
+    let contexts: Vec<RoutingContext<'_>> = candidate_ids
+        .iter()
+        .map(|id| RoutingContext {
+            deployment_id: id,
+            weight: 1,
+            priority: 1,
+            active_requests: 0,
+            tpm_current: 0,
+            tpm_limit: None,
+            rpm_current: 0,
+            rpm_limit: None,
+            avg_latency_us: 0,
+        })
+        .collect();
 
     // Run many times and verify it keeps cycling
     for i in 0..100 {
-        let selected = round_robin("gpt-4", &candidates, &counters).unwrap();
+        let selected = round_robin_from_context("gpt-4", &contexts, &counters).unwrap();
         if i % 2 == 0 {
             assert_eq!(selected, "d1");
         } else {
@@ -700,8 +790,8 @@ fn test_round_robin_wraps_around() {
 #[test]
 fn test_round_robin_empty_candidates() {
     let counters: DashMap<String, AtomicUsize> = DashMap::new();
-    let candidates: Vec<String> = vec![];
-    assert!(round_robin("gpt-4", &candidates, &counters).is_none());
+    let contexts: Vec<RoutingContext<'_>> = vec![];
+    assert!(round_robin_from_context("gpt-4", &contexts, &counters).is_none());
 }
 
 #[test]
@@ -771,19 +861,20 @@ async fn test_strategy_consistency() {
     deployments.insert("d2".to_string(), d2);
 
     let candidates = vec!["d1".to_string(), "d2".to_string()];
+    let contexts = build_routing_contexts(&candidates, &deployments);
 
     // Deterministic strategies should consistently return same result
     for _ in 0..10 {
         // least_busy always picks d2 (2 active vs 5)
-        assert_eq!(least_busy(&candidates, &deployments).unwrap(), "d2");
+        assert_eq!(least_busy_from_context(&contexts).unwrap(), "d2");
 
         // lowest_usage always picks d2 (10% vs 50%)
-        assert_eq!(lowest_usage(&candidates, &deployments).unwrap(), "d2");
+        assert_eq!(lowest_usage_from_context(&contexts).unwrap(), "d2");
 
         // lowest_latency always picks d1 (100us vs 200us)
-        assert_eq!(lowest_latency(&candidates, &deployments).unwrap(), "d1");
+        assert_eq!(lowest_latency_from_context(&contexts).unwrap(), "d1");
 
         // lowest_cost always picks d2 (priority 1 vs 10)
-        assert_eq!(lowest_cost(&candidates, &deployments).unwrap(), "d2");
+        assert_eq!(lowest_cost_from_context(&contexts).unwrap(), "d2");
     }
 }
