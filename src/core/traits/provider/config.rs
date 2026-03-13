@@ -108,4 +108,22 @@ pub trait ProviderConfig: Send + Sync + Clone + Debug + 'static {
     /// - Typical values: 2-5 retries
     /// - Consider rate limits when setting this value
     fn max_retries(&self) -> u32;
+
+    /// Standard validation: API key required, timeout > 0, max_retries <= 10.
+    ///
+    /// Call from `validate()` to avoid repeating common checks.
+    /// Providers with optional API keys or custom fields should implement
+    /// `validate()` directly instead.
+    fn validate_standard(&self, provider_name: &str) -> Result<(), String> {
+        if self.api_key().map_or(true, |k| k.is_empty()) {
+            return Err(format!("{} API key is required", provider_name));
+        }
+        if self.timeout().as_secs() == 0 {
+            return Err("Timeout must be greater than 0".to_string());
+        }
+        if self.max_retries() > 10 {
+            return Err("Max retries should not exceed 10".to_string());
+        }
+        Ok(())
+    }
 }

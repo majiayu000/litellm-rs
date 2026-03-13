@@ -153,3 +153,4 @@ impl Stream for XxxStream {
 | 2026-03-13 12:00 | 2 | default features 去掉 providers-extra/extended | ✅ 26.69s (44%↓), 10413 tests pass |
 | 2026-03-13 12:20 | 3 | SSE 流式代码去重 (7 provider) | ✅ -167 行, 10413 tests pass |
 | 2026-03-13 12:30 | 评估 | Clean build: 1m57s → 57.42s (-51%) | P2/P3 暂缓 |
+| 2026-03-13 12:50 | 4 | validate() 去重 (10 provider + trait default) | ✅ -80 行, 10413 tests pass |

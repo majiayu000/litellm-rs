@@ -66,16 +66,7 @@ impl Default for SambanovaConfig {
 
 impl ProviderConfig for SambanovaConfig {
     fn validate(&self) -> Result<(), String> {
-        if self.api_key.is_empty() {
-            return Err("Sambanova API key is required".to_string());
-        }
-        if self.timeout_seconds == 0 {
-            return Err("Timeout must be greater than 0".to_string());
-        }
-        if self.max_retries > 10 {
-            return Err("Max retries should not exceed 10".to_string());
-        }
-        Ok(())
+        self.validate_standard("Sambanova")
     }
 
     fn api_key(&self) -> Option<&str> {
