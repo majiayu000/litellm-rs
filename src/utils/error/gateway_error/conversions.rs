@@ -921,11 +921,11 @@ mod tests {
         let gateway_err: GatewayError = a2a_err.into();
         match gateway_err {
             GatewayError::RateLimit {
-                    message: msg,
-                    retry_after: None,
-                    rpm_limit: None,
-                    tpm_limit: None,
-                } => {
+                message: msg,
+                retry_after: None,
+                rpm_limit: None,
+                tpm_limit: None,
+            } => {
                 assert!(msg.contains("A2A"));
                 assert!(msg.contains("5000ms"));
             }
@@ -942,11 +942,11 @@ mod tests {
         let gateway_err: GatewayError = a2a_err.into();
         match gateway_err {
             GatewayError::RateLimit {
-                    message: msg,
-                    retry_after: None,
-                    rpm_limit: None,
-                    tpm_limit: None,
-                } => {
+                message: msg,
+                retry_after: None,
+                rpm_limit: None,
+                tpm_limit: None,
+            } => {
                 assert!(msg.contains("A2A rate limit exceeded"));
                 assert!(!msg.contains("protocol_code="));
                 assert!(!msg.contains("canonical_code="));
@@ -965,11 +965,11 @@ mod tests {
         let gateway_err: GatewayError = a2a_err.into();
         match gateway_err {
             GatewayError::RateLimit {
-                    message: msg,
-                    retry_after: None,
-                    rpm_limit: None,
-                    tpm_limit: None,
-                } => {
+                message: msg,
+                retry_after: None,
+                rpm_limit: None,
+                tpm_limit: None,
+            } => {
                 assert!(msg.contains("A2A"));
                 assert!(!msg.contains("retry after"));
             }
@@ -1237,11 +1237,11 @@ mod tests {
         let gateway_err: GatewayError = mcp_err.into();
         match gateway_err {
             GatewayError::RateLimit {
-                    message: msg,
-                    retry_after: None,
-                    rpm_limit: None,
-                    tpm_limit: None,
-                } => {
+                message: msg,
+                retry_after: None,
+                rpm_limit: None,
+                tpm_limit: None,
+            } => {
                 assert!(msg.contains("MCP"));
                 assert!(msg.contains("5000ms"));
             }
@@ -1258,11 +1258,11 @@ mod tests {
         let gateway_err: GatewayError = mcp_err.into();
         match gateway_err {
             GatewayError::RateLimit {
-                    message: msg,
-                    retry_after: None,
-                    rpm_limit: None,
-                    tpm_limit: None,
-                } => {
+                message: msg,
+                retry_after: None,
+                rpm_limit: None,
+                tpm_limit: None,
+            } => {
                 assert!(msg.contains("MCP rate limit exceeded"));
                 assert!(!msg.contains("protocol_code="));
                 assert!(!msg.contains("canonical_code="));
@@ -1281,11 +1281,11 @@ mod tests {
         let gateway_err: GatewayError = mcp_err.into();
         match gateway_err {
             GatewayError::RateLimit {
-                    message: msg,
-                    retry_after: None,
-                    rpm_limit: None,
-                    tpm_limit: None,
-                } => {
+                message: msg,
+                retry_after: None,
+                rpm_limit: None,
+                tpm_limit: None,
+            } => {
                 assert!(msg.contains("MCP"));
                 assert!(!msg.contains("retry after"));
             }

@@ -472,7 +472,8 @@ impl LLMProvider for HuggingFaceProvider {
         }
 
         Ok(crate::core::providers::base::create_provider_sse_stream(
-            response, "huggingface",
+            response,
+            "huggingface",
         ))
     }
 

@@ -332,7 +332,8 @@ impl LLMProvider for FriendliAIProvider {
         }
 
         Ok(crate::core::providers::base::create_provider_sse_stream(
-            response, "friendliai",
+            response,
+            "friendliai",
         ))
     }
 

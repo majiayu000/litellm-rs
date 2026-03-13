@@ -216,7 +216,9 @@ mod tests {
     #[test]
     fn test_rate_limit_error() {
         let error = GatewayError::rate_limit("Rate limit exceeded");
-        assert!(matches!(error, GatewayError::RateLimit { ref message, .. } if message == "Rate limit exceeded"));
+        assert!(
+            matches!(error, GatewayError::RateLimit { ref message, .. } if message == "Rate limit exceeded")
+        );
     }
 
     #[test]

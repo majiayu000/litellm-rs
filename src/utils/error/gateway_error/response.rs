@@ -100,8 +100,7 @@ impl ResponseError for GatewayError {
                     "DEPLOYMENT_NOT_FOUND",
                     provider_error.to_string(),
                 ),
-                ProviderError::ResponseParsing { .. }
-                | ProviderError::Streaming { .. } => (
+                ProviderError::ResponseParsing { .. } | ProviderError::Streaming { .. } => (
                     actix_web::http::StatusCode::BAD_GATEWAY,
                     "PROVIDER_RESPONSE_ERROR",
                     provider_error.to_string(),
@@ -451,15 +450,30 @@ mod tests {
         let response = error.error_response();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(
-            response.headers().get("Retry-After").unwrap().to_str().unwrap(),
+            response
+                .headers()
+                .get("Retry-After")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "60"
         );
         assert_eq!(
-            response.headers().get("X-RateLimit-Limit-Requests").unwrap().to_str().unwrap(),
+            response
+                .headers()
+                .get("X-RateLimit-Limit-Requests")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "100"
         );
         assert_eq!(
-            response.headers().get("X-RateLimit-Limit-Tokens").unwrap().to_str().unwrap(),
+            response
+                .headers()
+                .get("X-RateLimit-Limit-Tokens")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "50000"
         );
     }
@@ -790,10 +804,7 @@ mod tests {
                 GatewayError::Validation("test".to_string()),
             ),
             ("NOT_FOUND", GatewayError::NotFound("test".to_string())),
-            (
-                "RATE_LIMIT_EXCEEDED",
-                GatewayError::rate_limit("test"),
-            ),
+            ("RATE_LIMIT_EXCEEDED", GatewayError::rate_limit("test")),
         ];
 
         for (_expected_code, error) in error_codes {

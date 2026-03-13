@@ -1,7 +1,7 @@
 //! Tests for routing strategy implementations (extracted from strategy_impl.rs)
 
-use crate::core::providers::openai::OpenAIProvider;
 use crate::core::providers::Provider;
+use crate::core::providers::openai::OpenAIProvider;
 use crate::core::router::deployment::{Deployment, DeploymentConfig, DeploymentState};
 use crate::core::router::strategy_impl::*;
 use dashmap::DashMap;

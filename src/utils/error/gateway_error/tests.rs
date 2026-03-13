@@ -71,7 +71,9 @@ fn test_validation_helper() {
 #[test]
 fn test_rate_limit_helper() {
     let error = GatewayError::rate_limit("Too many requests");
-    assert!(matches!(error, GatewayError::RateLimit { ref message, .. } if message == "Too many requests"));
+    assert!(
+        matches!(error, GatewayError::RateLimit { ref message, .. } if message == "Too many requests")
+    );
 }
 
 #[test]

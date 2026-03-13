@@ -5,7 +5,7 @@
 
 use super::provider_type::ProviderType;
 use super::unified_provider::ProviderError;
-use super::{anthropic, cloudflare, macros, mistral, openai, openai_like, registry, Provider};
+use super::{Provider, anthropic, cloudflare, macros, mistral, openai, openai_like, registry};
 use tracing::warn;
 
 /// Returns true if a provider selector can be instantiated by the current runtime.

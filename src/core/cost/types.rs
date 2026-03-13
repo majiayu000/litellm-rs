@@ -426,9 +426,7 @@ mod tests {
 
     #[test]
     fn test_usage_to_usage_tokens_with_details() {
-        use crate::core::types::responses::{
-            CompletionTokensDetails, PromptTokensDetails, Usage,
-        };
+        use crate::core::types::responses::{CompletionTokensDetails, PromptTokensDetails, Usage};
         let usage = Usage {
             prompt_tokens: 200,
             completion_tokens: 100,

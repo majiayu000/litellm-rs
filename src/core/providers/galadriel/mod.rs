@@ -314,7 +314,8 @@ impl LLMProvider for GaladrielProvider {
         }
 
         Ok(crate::core::providers::base::create_provider_sse_stream(
-            response, "galadriel",
+            response,
+            "galadriel",
         ))
     }
 

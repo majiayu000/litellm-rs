@@ -264,4 +264,3 @@ pub fn round_robin_from_context<'id>(
 
     Some(contexts[index].deployment_id)
 }
-

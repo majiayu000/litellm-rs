@@ -237,7 +237,6 @@ pub struct ModelPricing {
     pub updated_at: DateTime<Utc>,
 }
 
-
 // ==================== Provider Dispatch Macros ====================
 // These macros eliminate repetitive match patterns across all provider methods
 
@@ -621,7 +620,6 @@ impl Provider {
         Ok(None)
     }
 }
-
 
 // ==================== Unit Tests ====================
 

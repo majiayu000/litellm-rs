@@ -296,7 +296,8 @@ impl LLMProvider for CodestralProvider {
         }
 
         Ok(crate::core::providers::base::create_provider_sse_stream(
-            response, "codestral",
+            response,
+            "codestral",
         ))
     }
 

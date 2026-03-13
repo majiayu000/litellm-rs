@@ -1,8 +1,8 @@
 //! Main pricing service implementation
 
 use super::types::{
-    CostRange, CostResult, CostType, LiteLLMModelInfo, PricingData, PricingEventType, PricingStatistics,
-    PricingUpdateEvent,
+    CostRange, CostResult, CostType, LiteLLMModelInfo, PricingData, PricingEventType,
+    PricingStatistics, PricingUpdateEvent,
 };
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use parking_lot::RwLock;
