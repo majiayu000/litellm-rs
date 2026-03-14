@@ -203,10 +203,11 @@ fn build_request_context(req: &mut ServiceRequest) -> RequestContext {
         id
     } else {
         let id = Uuid::new_v4().to_string();
-        req.headers_mut().insert(
-            HeaderName::from_static("x-request-id"),
-            HeaderValue::from_str(&id).unwrap_or_else(|_| HeaderValue::from_static("invalid")),
-        );
+        // UUID strings are always valid ASCII, but handle error gracefully
+        if let Ok(header_value) = HeaderValue::from_str(&id) {
+            req.headers_mut()
+                .insert(HeaderName::from_static("x-request-id"), header_value);
+        }
         id
     };
 

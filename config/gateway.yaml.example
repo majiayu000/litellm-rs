@@ -1,6 +1,9 @@
 # LiteLLM-RS Gateway Configuration Example
 # This example matches current `src/config/models/*` schema.
 
+# Configuration schema version
+schema_version: "1.0"
+
 server:
   host: "0.0.0.0"
   port: 8000
