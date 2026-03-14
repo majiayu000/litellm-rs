@@ -163,15 +163,13 @@ fn extract_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> Strin
     let peer = conn.peer_addr().unwrap_or("unknown");
     let peer_ip = parse_peer_ip(peer);
 
-    if trusted_proxies.iter().any(|p| p == &peer_ip) {
-        if let Some(forwarded) = req.headers().get("X-Forwarded-For")
-            && let Ok(val) = forwarded.to_str()
-        {
-            let first = val.split(',').next().unwrap_or(val).trim();
-            if !first.is_empty() {
-                return first.to_string();
-            }
-        }
+    if trusted_proxies.iter().any(|p| p == &peer_ip)
+        && let Some(forwarded) = req.headers().get("X-Forwarded-For")
+        && let Ok(val) = forwarded.to_str()
+        && let first = val.split(',').next().unwrap_or(val).trim()
+        && !first.is_empty()
+    {
+        return first.to_string();
     }
 
     peer.to_string()
