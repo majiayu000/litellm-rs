@@ -319,13 +319,13 @@ mod tests {
 
     #[test]
     fn test_trusted_proxy_match() {
-        let proxies = vec!["10.0.0.1".to_string()];
+        let proxies = ["10.0.0.1".to_string()];
         assert!(proxies.iter().any(|p| p == "10.0.0.1"));
     }
 
     #[test]
     fn test_trusted_proxy_no_match() {
-        let proxies = vec!["10.0.0.1".to_string()];
+        let proxies = ["10.0.0.1".to_string()];
         assert!(!proxies.iter().any(|p| p == "10.0.0.2"));
     }
 
