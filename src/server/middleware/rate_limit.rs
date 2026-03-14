@@ -172,7 +172,7 @@ fn extract_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> Strin
         return first.to_string();
     }
 
-    peer.to_string()
+    peer_ip
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimitMiddlewareService<S>
