@@ -22,16 +22,16 @@ impl EnterpriseConfig {
     /// Merge enterprise configurations
     pub fn merge(mut self, other: Self) -> Self {
         if other.enabled {
-            self.enabled = other.enabled;
+            self.enabled = true;
         }
         if other.sso.is_some() {
             self.sso = other.sso;
         }
         if other.audit_logging {
-            self.audit_logging = other.audit_logging;
+            self.audit_logging = true;
         }
         if other.advanced_analytics {
-            self.advanced_analytics = other.advanced_analytics;
+            self.advanced_analytics = true;
         }
         self
     }

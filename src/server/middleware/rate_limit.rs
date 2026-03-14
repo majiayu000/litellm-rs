@@ -11,6 +11,7 @@ use futures::future::{Ready, ready};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -134,13 +135,22 @@ pub struct RateLimitMiddlewareService<S> {
     fallback_store: Arc<DashMap<String, KeyTracker>>,
 }
 
+/// Extract the IP address (without port) from a peer address string.
+///
+/// Handles IPv4 (`1.2.3.4:5678` → `1.2.3.4`) and IPv6 (`[::1]:5678` → `::1`).
+fn parse_peer_ip(peer: &str) -> String {
+    peer.parse::<SocketAddr>()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|_| peer.to_string())
+}
+
 /// Extract a client identifier from the request.
 ///
 /// Priority:
 /// 1. `Authorization` header value (API key / Bearer token) — identifies the authenticated caller
-/// 2. `X-Forwarded-For` first address
-/// 3. Direct peer IP from connection info
-fn extract_client_key(req: &ServiceRequest) -> String {
+/// 2. `X-Forwarded-For` first address — only when peer IP is in `trusted_proxies`
+/// 3. Direct peer address from connection info
+fn extract_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
     if let Some(auth) = req.headers().get("Authorization")
         && let Ok(val) = auth.to_str()
     {
@@ -150,16 +160,21 @@ fn extract_client_key(req: &ServiceRequest) -> String {
     }
 
     let conn = req.connection_info();
-    if let Some(forwarded) = req.headers().get("X-Forwarded-For")
-        && let Ok(val) = forwarded.to_str()
-    {
-        let first = val.split(',').next().unwrap_or(val).trim();
-        if !first.is_empty() {
-            return first.to_string();
+    let peer = conn.peer_addr().unwrap_or("unknown");
+    let peer_ip = parse_peer_ip(peer);
+
+    if trusted_proxies.iter().any(|p| p == &peer_ip) {
+        if let Some(forwarded) = req.headers().get("X-Forwarded-For")
+            && let Ok(val) = forwarded.to_str()
+        {
+            let first = val.split(',').next().unwrap_or(val).trim();
+            if !first.is_empty() {
+                return first.to_string();
+            }
         }
     }
 
-    conn.peer_addr().unwrap_or("unknown").to_string()
+    peer.to_string()
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimitMiddlewareService<S>
@@ -175,13 +190,17 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        let _app_state = req.app_data::<web::Data<AppState>>().cloned();
+        let app_state = req.app_data::<web::Data<AppState>>().cloned();
+        let trusted_proxies: Vec<String> = app_state
+            .as_ref()
+            .map(|s| s.config.server().trusted_proxies.clone())
+            .unwrap_or_default();
         let requests_per_minute = self.requests_per_minute;
         let start_time = Instant::now();
         let path = req.path().to_string();
         let method = req.method().to_string();
 
-        let client_key = extract_client_key(&req);
+        let client_key = extract_client_key(&req, &trusted_proxies);
 
         // --- Try global rate limiter first ---
         if let Some(global_limiter) = get_global_rate_limiter() {
@@ -271,5 +290,48 @@ where
             );
             Ok(res)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_peer_ip_ipv4_with_port() {
+        assert_eq!(parse_peer_ip("127.0.0.1:1234"), "127.0.0.1");
+    }
+
+    #[test]
+    fn test_parse_peer_ip_ipv4_no_port() {
+        assert_eq!(parse_peer_ip("10.0.0.1"), "10.0.0.1");
+    }
+
+    #[test]
+    fn test_parse_peer_ip_ipv6_with_port() {
+        assert_eq!(parse_peer_ip("[::1]:8080"), "::1");
+    }
+
+    #[test]
+    fn test_parse_peer_ip_unknown_falls_back() {
+        assert_eq!(parse_peer_ip("unknown"), "unknown");
+    }
+
+    #[test]
+    fn test_trusted_proxy_match() {
+        let proxies = ["10.0.0.1".to_string()];
+        assert!(proxies.iter().any(|p| p == "10.0.0.1"));
+    }
+
+    #[test]
+    fn test_trusted_proxy_no_match() {
+        let proxies = ["10.0.0.1".to_string()];
+        assert!(!proxies.iter().any(|p| p == "10.0.0.2"));
+    }
+
+    #[test]
+    fn test_trusted_proxy_empty_list() {
+        let proxies: Vec<String> = vec![];
+        assert!(!proxies.iter().any(|p| p == "127.0.0.1"));
     }
 }

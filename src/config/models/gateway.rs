@@ -36,6 +36,9 @@ const ENV_JWT_EXPIRATION: &str = "LITELLM_JWT_EXPIRATION";
 const ENV_API_KEY_HEADER: &str = "LITELLM_API_KEY_HEADER";
 const ENV_PROVIDERS: &str = "LITELLM_PROVIDERS";
 const ENV_PRICING_SOURCE: &str = "LITELLM_PRICING_SOURCE";
+const ENV_CACHE_ENABLED: &str = "LITELLM_CACHE_ENABLED";
+const ENV_RATE_LIMIT_ENABLED: &str = "LITELLM_RATE_LIMIT_ENABLED";
+const ENV_ENTERPRISE_ENABLED: &str = "LITELLM_ENTERPRISE_ENABLED";
 const DEFAULT_PRICING_SOURCE: &str = "config/model_prices_extended.json";
 
 fn env_var(key: &str) -> Option<String> {
@@ -227,8 +230,11 @@ fn default_pricing_source() -> Option<String> {
 }
 
 /// Main gateway configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
+    /// Configuration schema version
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
     /// Server configuration
     pub server: ServerConfig,
     /// Provider configurations
@@ -253,6 +259,28 @@ pub struct GatewayConfig {
     /// Pricing configuration
     #[serde(default)]
     pub pricing: GatewayPricingConfig,
+}
+
+fn default_schema_version() -> String {
+    "1.0".to_string()
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: default_schema_version(),
+            server: ServerConfig::default(),
+            providers: Vec::new(),
+            router: GatewayRouterConfig::default(),
+            storage: StorageConfig::default(),
+            auth: AuthConfig::default(),
+            monitoring: MonitoringConfig::default(),
+            cache: CacheConfig::default(),
+            rate_limit: RateLimitConfig::default(),
+            enterprise: EnterpriseConfig::default(),
+            pricing: GatewayPricingConfig::default(),
+        }
+    }
 }
 
 impl GatewayConfig {
@@ -331,6 +359,16 @@ impl GatewayConfig {
 
         if let Some(pricing_source) = env_var(ENV_PRICING_SOURCE) {
             config.pricing.source = Some(pricing_source);
+        }
+
+        if let Some(enabled) = parse_env_bool(ENV_CACHE_ENABLED)? {
+            config.cache.enabled = enabled;
+        }
+        if let Some(enabled) = parse_env_bool(ENV_RATE_LIMIT_ENABLED)? {
+            config.rate_limit.enabled = enabled;
+        }
+        if let Some(enabled) = parse_env_bool(ENV_ENTERPRISE_ENABLED)? {
+            config.enterprise.enabled = enabled;
         }
 
         Ok(config)
@@ -446,7 +484,7 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    const TEST_ENV_KEYS: [&str; 18] = [
+    const TEST_ENV_KEYS: [&str; 21] = [
         ENV_HOST,
         ENV_PORT,
         ENV_WORKERS,
@@ -459,6 +497,9 @@ mod tests {
         ENV_API_KEY_HEADER,
         ENV_PROVIDERS,
         ENV_PRICING_SOURCE,
+        ENV_CACHE_ENABLED,
+        ENV_RATE_LIMIT_ENABLED,
+        ENV_ENTERPRISE_ENABLED,
         "LITELLM_PROVIDER_OPENAI_TYPE",
         "LITELLM_PROVIDER_OPENAI_API_KEY",
         "LITELLM_PROVIDER_OPENAI_BASE_URL",
@@ -626,7 +667,35 @@ mod tests {
     #[test]
     fn test_gateway_config_validate_success() {
         let config = create_valid_config();
-        assert!(config.validate().is_ok());
+        let result = config.validate();
+        if let Err(e) = &result {
+            eprintln!("Validation error: {}", e);
+        }
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_gateway_config_validate_empty_schema_version() {
+        let mut config = create_valid_config();
+        config.schema_version = "".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Schema version"));
+    }
+
+    #[test]
+    fn test_gateway_config_validate_unsupported_schema_version() {
+        let mut config = create_valid_config();
+        config.schema_version = "2.0".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unsupported schema version"));
+    }
+
+    #[test]
+    fn test_gateway_config_default_schema_version() {
+        let config = GatewayConfig::default();
+        assert_eq!(config.schema_version, "1.0");
     }
 
     #[test]
@@ -945,5 +1014,130 @@ mod tests {
         let config = create_valid_config();
         let cloned = config.clone();
         assert_eq!(config.providers.len(), cloned.providers.len());
+    }
+
+    // ==================== Environment Variable Feature Flag Tests ====================
+
+    #[test]
+    fn test_gateway_config_from_env_cache_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_test_env();
+        unsafe {
+            env::set_var(ENV_ENABLE_JWT, "true");
+            env::set_var(ENV_JWT_SECRET, "StrongJwtSecretWithMixedCaseAndNumbers1234");
+            env::set_var(ENV_PROVIDERS, "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_TYPE", "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_API_KEY", "sk-test-key");
+            env::set_var(ENV_CACHE_ENABLED, "true");
+        }
+
+        let config = GatewayConfig::from_env().unwrap();
+        assert!(config.cache.enabled);
+
+        clear_test_env();
+    }
+
+    #[test]
+    fn test_gateway_config_from_env_rate_limit_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_test_env();
+        unsafe {
+            env::set_var(ENV_ENABLE_JWT, "true");
+            env::set_var(ENV_JWT_SECRET, "StrongJwtSecretWithMixedCaseAndNumbers1234");
+            env::set_var(ENV_PROVIDERS, "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_TYPE", "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_API_KEY", "sk-test-key");
+            env::set_var(ENV_RATE_LIMIT_ENABLED, "1");
+        }
+
+        let config = GatewayConfig::from_env().unwrap();
+        assert!(config.rate_limit.enabled);
+
+        clear_test_env();
+    }
+
+    #[test]
+    fn test_gateway_config_from_env_enterprise_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_test_env();
+        unsafe {
+            env::set_var(ENV_ENABLE_JWT, "true");
+            env::set_var(ENV_JWT_SECRET, "StrongJwtSecretWithMixedCaseAndNumbers1234");
+            env::set_var(ENV_PROVIDERS, "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_TYPE", "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_API_KEY", "sk-test-key");
+            env::set_var(ENV_ENTERPRISE_ENABLED, "yes");
+        }
+
+        let config = GatewayConfig::from_env().unwrap();
+        assert!(config.enterprise.enabled);
+
+        clear_test_env();
+    }
+
+    #[test]
+    fn test_gateway_config_from_env_all_features_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_test_env();
+        unsafe {
+            env::set_var(ENV_ENABLE_JWT, "true");
+            env::set_var(ENV_JWT_SECRET, "StrongJwtSecretWithMixedCaseAndNumbers1234");
+            env::set_var(ENV_PROVIDERS, "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_TYPE", "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_API_KEY", "sk-test-key");
+            env::set_var(ENV_CACHE_ENABLED, "true");
+            env::set_var(ENV_RATE_LIMIT_ENABLED, "true");
+            env::set_var(ENV_ENTERPRISE_ENABLED, "true");
+        }
+
+        let config = GatewayConfig::from_env().unwrap();
+        assert!(config.cache.enabled);
+        assert!(config.rate_limit.enabled);
+        assert!(config.enterprise.enabled);
+
+        clear_test_env();
+    }
+
+    #[test]
+    fn test_gateway_config_from_env_features_disabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_test_env();
+        unsafe {
+            env::set_var(ENV_ENABLE_JWT, "true");
+            env::set_var(ENV_JWT_SECRET, "StrongJwtSecretWithMixedCaseAndNumbers1234");
+            env::set_var(ENV_PROVIDERS, "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_TYPE", "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_API_KEY", "sk-test-key");
+            env::set_var(ENV_CACHE_ENABLED, "false");
+            env::set_var(ENV_RATE_LIMIT_ENABLED, "0");
+            env::set_var(ENV_ENTERPRISE_ENABLED, "no");
+        }
+
+        let config = GatewayConfig::from_env().unwrap();
+        assert!(!config.cache.enabled);
+        assert!(!config.rate_limit.enabled);
+        assert!(!config.enterprise.enabled);
+
+        clear_test_env();
+    }
+
+    #[test]
+    fn test_gateway_config_from_env_invalid_cache_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_test_env();
+        unsafe {
+            env::set_var(ENV_ENABLE_JWT, "true");
+            env::set_var(ENV_JWT_SECRET, "StrongJwtSecretWithMixedCaseAndNumbers1234");
+            env::set_var(ENV_PROVIDERS, "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_TYPE", "openai");
+            env::set_var("LITELLM_PROVIDER_OPENAI_API_KEY", "sk-test-key");
+            env::set_var(ENV_CACHE_ENABLED, "invalid");
+        }
+
+        let result = GatewayConfig::from_env();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(ENV_CACHE_ENABLED));
+
+        clear_test_env();
     }
 }

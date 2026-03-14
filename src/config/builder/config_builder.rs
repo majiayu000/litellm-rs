@@ -65,6 +65,7 @@ impl GatewayConfigBuilder {
     /// Build the configuration with validation
     pub fn build(self) -> Result<Config> {
         let gateway = GatewayConfig {
+            schema_version: "1.0".to_string(),
             server: self.server.unwrap_or_default(),
             auth: self.auth.unwrap_or_default(),
             storage: self.storage.unwrap_or_default(),

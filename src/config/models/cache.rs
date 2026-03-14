@@ -39,7 +39,7 @@ impl CacheConfig {
     /// Merge cache configurations
     pub fn merge(mut self, other: Self) -> Self {
         if other.enabled {
-            self.enabled = other.enabled;
+            self.enabled = true;
         }
         if other.ttl != default_cache_ttl() {
             self.ttl = other.ttl;
@@ -48,7 +48,7 @@ impl CacheConfig {
             self.max_size = other.max_size;
         }
         if other.semantic_cache {
-            self.semantic_cache = other.semantic_cache;
+            self.semantic_cache = true;
         }
         if other.similarity_threshold != default_similarity_threshold() {
             self.similarity_threshold = other.similarity_threshold;

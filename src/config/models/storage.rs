@@ -73,7 +73,7 @@ impl DatabaseConfig {
             self.connection_timeout = other.connection_timeout;
         }
         if other.ssl {
-            self.ssl = other.ssl;
+            self.ssl = true;
         }
         if other.enabled {
             self.enabled = true;
@@ -126,10 +126,11 @@ impl RedisConfig {
             self.connection_timeout = other.connection_timeout;
         }
         if other.cluster {
-            self.cluster = other.cluster;
+            self.cluster = true;
         }
-        if !other.enabled {
-            self.enabled = false;
+        // Redis defaults to enabled=true, so we need to handle both enable and disable
+        if other.enabled != default_redis_enabled() {
+            self.enabled = other.enabled;
         }
         self
     }

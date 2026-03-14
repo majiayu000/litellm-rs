@@ -35,6 +35,10 @@ pub struct ServerConfig {
     /// Enabled features
     #[serde(default)]
     pub features: Vec<String>,
+    /// Trusted proxy IP addresses for X-Forwarded-For validation.
+    /// Only requests from these IPs will have their X-Forwarded-For header trusted.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -50,6 +54,7 @@ impl Default for ServerConfig {
             tls: None,
             cors: CorsConfig::default(),
             features: Vec::new(),
+            trusted_proxies: Vec::new(),
         }
     }
 }
@@ -84,6 +89,9 @@ impl ServerConfig {
         self.cors = self.cors.merge(other.cors);
         if !other.features.is_empty() {
             self.features = other.features;
+        }
+        if !other.trusted_proxies.is_empty() {
+            self.trusted_proxies = other.trusted_proxies;
         }
         self
     }
@@ -745,5 +753,51 @@ mod tests {
         let cloned = config.clone();
         assert_eq!(config.enabled, cloned.enabled);
         assert_eq!(config.max_age, cloned.max_age);
+    }
+
+    // ==================== trusted_proxies Tests ====================
+
+    #[test]
+    fn test_server_config_trusted_proxies_default_empty() {
+        let config = ServerConfig::default();
+        assert!(config.trusted_proxies.is_empty());
+    }
+
+    #[test]
+    fn test_server_config_trusted_proxies_deserialization() {
+        let json = r#"{
+            "trusted_proxies": ["127.0.0.1", "10.0.0.1"]
+        }"#;
+        let config: ServerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.trusted_proxies, vec!["127.0.0.1", "10.0.0.1"]);
+    }
+
+    #[test]
+    fn test_server_config_trusted_proxies_missing_key_defaults_empty() {
+        let json = r#"{"host": "0.0.0.0", "port": 8080, "timeout": 30, "max_body_size": 1048576}"#;
+        let config: ServerConfig = serde_json::from_str(json).unwrap();
+        assert!(config.trusted_proxies.is_empty());
+    }
+
+    #[test]
+    fn test_server_config_trusted_proxies_merge_non_empty() {
+        let base = ServerConfig::default();
+        let other = ServerConfig {
+            trusted_proxies: vec!["192.168.1.1".to_string()],
+            ..ServerConfig::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.trusted_proxies, vec!["192.168.1.1"]);
+    }
+
+    #[test]
+    fn test_server_config_trusted_proxies_merge_empty_keeps_base() {
+        let base = ServerConfig {
+            trusted_proxies: vec!["10.0.0.1".to_string()],
+            ..ServerConfig::default()
+        };
+        let other = ServerConfig::default(); // trusted_proxies is empty
+        let merged = base.merge(other);
+        assert_eq!(merged.trusted_proxies, vec!["10.0.0.1"]);
     }
 }

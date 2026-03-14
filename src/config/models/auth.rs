@@ -42,11 +42,11 @@ impl Default for AuthConfig {
 impl AuthConfig {
     /// Merge auth configurations
     pub fn merge(mut self, other: Self) -> Self {
-        if !other.enable_jwt {
-            self.enable_jwt = other.enable_jwt;
+        if other.enable_jwt {
+            self.enable_jwt = true;
         }
-        if !other.enable_api_key {
-            self.enable_api_key = other.enable_api_key;
+        if other.enable_api_key {
+            self.enable_api_key = true;
         }
         if !other.jwt_secret.is_empty() {
             self.jwt_secret = other.jwt_secret;

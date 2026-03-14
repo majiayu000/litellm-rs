@@ -85,6 +85,7 @@ impl ServerConfigBuilder {
                 allow_credentials: false,
             },
             features: Vec::new(),
+            trusted_proxies: Vec::new(),
         }
     }
 }

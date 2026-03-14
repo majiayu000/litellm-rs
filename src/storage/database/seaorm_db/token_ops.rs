@@ -2,7 +2,7 @@ use crate::utils::error::gateway_error::{GatewayError, Result};
 use sea_orm::*;
 use tracing::debug;
 
-use super::super::entities::{self, password_reset_token};
+use super::super::entities::{self, password_reset_token, user};
 use super::types::SeaOrmDatabase;
 
 impl SeaOrmDatabase {
@@ -103,5 +103,65 @@ impl SeaOrmDatabase {
             .map_err(GatewayError::Database)?;
 
         Ok(result.rows_affected)
+    }
+
+    /// Atomically validate, consume a password reset token and update the user's password
+    /// in a single database transaction to eliminate the TOCTOU race condition.
+    ///
+    /// Returns `true` if the token was valid and the password was updated,
+    /// or `false` if the token was not found, already used, or expired.
+    pub async fn reset_password_with_token(
+        &self,
+        token: &str,
+        password_hash: &str,
+    ) -> Result<bool> {
+        debug!("Atomically consuming password reset token and updating password");
+
+        let txn = self.db.begin().await.map_err(GatewayError::Database)?;
+
+        let token_model = entities::PasswordResetToken::find()
+            .filter(password_reset_token::Column::Token.eq(token))
+            .filter(password_reset_token::Column::UsedAt.is_null())
+            .filter(password_reset_token::Column::ExpiresAt.gt(chrono::Utc::now()))
+            .one(&txn)
+            .await
+            .map_err(GatewayError::Database)?;
+
+        let token_model = match token_model {
+            Some(m) => m,
+            None => {
+                txn.rollback().await.map_err(GatewayError::Database)?;
+                return Ok(false);
+            }
+        };
+
+        let user_id = token_model.user_id;
+
+        // Mark token as used inside the transaction
+        let mut token_active: password_reset_token::ActiveModel = token_model.into();
+        token_active.used_at = Set(Some(chrono::Utc::now().into()));
+        token_active
+            .update(&txn)
+            .await
+            .map_err(GatewayError::Database)?;
+
+        // Update the user's password inside the same transaction
+        let user_model = entities::User::find_by_id(user_id)
+            .one(&txn)
+            .await
+            .map_err(GatewayError::Database)?
+            .ok_or_else(|| GatewayError::NotFound("User not found".to_string()))?;
+
+        let mut user_active: user::ActiveModel = user_model.into();
+        user_active.password_hash = Set(password_hash.to_string());
+        user_active.updated_at = Set(chrono::Utc::now().into());
+        user_active
+            .update(&txn)
+            .await
+            .map_err(GatewayError::Database)?;
+
+        txn.commit().await.map_err(GatewayError::Database)?;
+
+        Ok(true)
     }
 }

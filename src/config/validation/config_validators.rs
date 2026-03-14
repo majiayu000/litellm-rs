@@ -15,6 +15,21 @@ impl Validate for GatewayConfig {
     fn validate(&self) -> Result<(), String> {
         debug!("Validating gateway configuration");
 
+        // Validate schema version
+        if self.schema_version.is_empty() {
+            return Err("Schema version cannot be empty".to_string());
+        }
+
+        // Check schema version compatibility
+        let supported_versions = ["1.0"];
+        if !supported_versions.contains(&self.schema_version.as_str()) {
+            return Err(format!(
+                "Unsupported schema version '{}'. Supported versions: {}",
+                self.schema_version,
+                supported_versions.join(", ")
+            ));
+        }
+
         Validate::validate(&self.server)?;
         self.server.cors.validate()?;
 
