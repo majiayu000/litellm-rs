@@ -42,14 +42,13 @@ impl reqwest::dns::Resolve for SsrfSafeDnsResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_owned();
         Box::pin(async move {
-            let addrs: std::io::Result<Vec<SocketAddr>> =
-                tokio::task::spawn_blocking(move || {
-                    (host.as_str(), 0u16)
-                        .to_socket_addrs()
-                        .map(|iter| iter.collect())
-                })
-                .await
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let addrs: std::io::Result<Vec<SocketAddr>> = tokio::task::spawn_blocking(move || {
+                (host.as_str(), 0u16)
+                    .to_socket_addrs()
+                    .map(|iter| iter.collect())
+            })
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
             let addrs = addrs?;
             let safe: Vec<SocketAddr> = addrs
