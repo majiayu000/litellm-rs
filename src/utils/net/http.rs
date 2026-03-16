@@ -48,7 +48,7 @@ impl reqwest::dns::Resolve for SsrfSafeDnsResolver {
                     .map(|iter| iter.collect())
             })
             .await
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(|e| std::io::Error::other(e))?;
 
             let addrs = addrs?;
             let safe: Vec<SocketAddr> = addrs
