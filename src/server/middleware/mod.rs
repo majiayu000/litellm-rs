@@ -6,7 +6,6 @@
 //! - Request ID tracking
 //! - Metrics collection
 //! - Security headers
-//! - CORS handling
 
 #![allow(dead_code)]
 
@@ -28,7 +27,4 @@ pub use helpers::{extract_auth_method, is_admin_route, is_api_route, is_public_r
 pub use metrics::{MetricsMiddleware, MetricsMiddlewareService, MiddlewareRequestMetrics};
 pub use rate_limit::{RateLimitMiddleware, RateLimitMiddlewareService};
 pub use request_id::{RequestIdMiddleware, RequestIdMiddlewareService};
-pub use security::{
-    CorsMiddleware, CorsMiddlewareService, SecurityHeadersMiddleware,
-    SecurityHeadersMiddlewareService,
-};
+pub use security::{SecurityHeadersMiddleware, SecurityHeadersMiddlewareService};
