@@ -24,9 +24,50 @@
 
 use dashmap::DashMap;
 use reqwest::{Client, ClientBuilder};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tracing::{debug, warn};
+
+use crate::config::validation::is_private_or_internal_ip;
+
+/// DNS resolver that rejects private/internal IP addresses at resolution time.
+///
+/// This mitigates DNS-rebinding attacks: even if a hostname resolves to a public IP
+/// at config-validation time, every actual request re-validates the resolved address,
+/// so a later rebind to an internal IP will be caught and rejected.
+struct SsrfSafeDnsResolver;
+
+impl reqwest::dns::Resolve for SsrfSafeDnsResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_owned();
+        Box::pin(async move {
+            let addrs: std::io::Result<Vec<SocketAddr>> = tokio::task::spawn_blocking(move || {
+                (host.as_str(), 0u16)
+                    .to_socket_addrs()
+                    .map(|iter| iter.collect())
+            })
+            .await
+            .map_err(std::io::Error::other)?;
+
+            let addrs = addrs?;
+            let safe: Vec<SocketAddr> = addrs
+                .into_iter()
+                .filter(|addr| !is_private_or_internal_ip(&addr.ip()))
+                .collect();
+
+            if safe.is_empty() {
+                return Err(
+                    "Host resolves to private/internal IP address (SSRF protection)"
+                        .to_string()
+                        .into(),
+                );
+            }
+
+            Ok(Box::new(safe.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
 
 /// Configuration for the HTTP client pool
 #[derive(Debug, Clone)]
@@ -158,6 +199,20 @@ pub fn create_custom_client_with_config(
 /// For reusable clients, prefer `get_client_with_timeout`.
 pub fn create_custom_client(timeout: Duration) -> Result<Client, reqwest::Error> {
     create_custom_client_with_config(timeout, &HttpClientPoolConfig::default())
+}
+
+/// Get or create an HTTP client with SSRF-safe DNS resolution for the given timeout.
+///
+/// Unlike `get_client_with_timeout_fallible`, this client installs `SsrfSafeDnsResolver`
+/// so every request re-validates the resolved IP against private/internal ranges.
+/// Use this for providers whose endpoint URL is user-controlled to prevent DNS-rebinding attacks.
+pub fn get_ssrf_safe_client_with_timeout_fallible(
+    timeout: Duration,
+) -> Result<Arc<Client>, reqwest::Error> {
+    create_client_builder_with_config(timeout, &HttpClientPoolConfig::default())
+        .dns_resolver(Arc::new(SsrfSafeDnsResolver))
+        .build()
+        .map(Arc::new)
 }
 
 /// Create a custom HTTP client with specific timeout and default headers

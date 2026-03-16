@@ -168,16 +168,16 @@ impl<T> AtomicValue<T> {
 }
 
 impl<T: Clone> AtomicValue<T> {
-    /// Updates the value using a closure.
+    /// Updates the value using a closure, with atomic compare-and-swap retry.
     ///
-    /// This operation loads the current value, applies the closure to get
-    /// a new value, and stores it. Note that this is not atomic with respect
-    /// to other updates - if concurrent updates are possible, consider using
-    /// `compare_and_swap` instead.
+    /// This operation uses `ArcSwap::rcu()` to perform a read-copy-update loop,
+    /// retrying until the compare-and-swap succeeds. The closure may be called
+    /// more than once if concurrent updates occur, so it must be side-effect-free
+    /// (i.e., `Fn` rather than `FnOnce`).
     ///
     /// # Arguments
     ///
-    /// * `f` - A closure that takes the current value and returns the new value
+    /// * `f` - A closure that takes a reference to the current value and returns the new value
     ///
     /// # Returns
     ///
@@ -194,12 +194,23 @@ impl<T: Clone> AtomicValue<T> {
     /// ```
     pub fn update<F>(&self, f: F) -> T
     where
-        F: FnOnce(T) -> T,
+        F: Fn(&T) -> T,
     {
-        let current = self.load();
-        let new_value = f((*current).clone());
-        self.store(new_value.clone());
-        new_value
+        use std::cell::Cell;
+        // `rcu` retries the closure until a compare-and-swap succeeds, so the
+        // closure may be called more than once.  The last invocation is always
+        // the one whose result was actually stored, so we capture that Arc and
+        // return a clone of it.
+        let last_new: Cell<Option<Arc<T>>> = Cell::new(None);
+        self.inner.rcu(|current| {
+            let new_arc = Arc::new(f(current.as_ref()));
+            last_new.set(Some(Arc::clone(&new_arc)));
+            new_arc
+        });
+        match last_new.into_inner() {
+            Some(arc) => (*arc).clone(),
+            None => unreachable!("rcu always invokes the closure at least once"),
+        }
     }
 
     /// Gets a clone of the current value.
@@ -445,9 +456,9 @@ mod tests {
             handle.join().unwrap();
         }
 
-        // Note: update is not atomic, so the final value may be less than 1000
-        // due to race conditions. This is expected behavior.
+        // update() uses rcu() for atomic compare-and-swap retry, so all 1000
+        // increments must be visible — no updates are lost under concurrency.
         let final_value = *value.load();
-        assert!(final_value > 0);
+        assert_eq!(final_value, 1000);
     }
 }
