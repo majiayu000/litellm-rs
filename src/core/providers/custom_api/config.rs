@@ -101,6 +101,10 @@ impl ProviderConfig for CustomHttpxConfig {
         validate_url_against_ssrf(&self.endpoint_url, "Endpoint URL")
     }
 
+    fn use_ssrf_safe_client(&self) -> bool {
+        true
+    }
+
     fn api_key(&self) -> Option<&str> {
         self.base.api_key.as_deref()
     }
@@ -125,7 +129,8 @@ mod tests {
 
     #[test]
     fn test_valid_public_url() {
-        let cfg = CustomHttpxConfig::new("https://api.example.com/v1/chat");
+        // Use a literal public IP — fictional subdomains may not resolve in all test environments
+        let cfg = CustomHttpxConfig::new("https://8.8.8.8/v1/chat");
         assert!(cfg.validate().is_ok());
     }
 
