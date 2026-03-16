@@ -213,16 +213,17 @@ pub async fn list_keys(
             let allowed = match &auth.user {
                 Some(user) => {
                     user.has_role(&UserRole::Admin)
-                        || (user.has_role(&UserRole::Manager)
-                            && user.team_ids.contains(&team_id))
+                        || (user.has_role(&UserRole::Manager) && user.team_ids.contains(&team_id))
                 }
                 None => auth.context.team_id() == Some(team_id),
             };
             if !allowed {
-                warn!("Caller attempted to list keys for team {} without permission", team_id);
-                let error_response = KeyErrorResponse::forbidden(
-                    "Not authorized to list keys for this team",
+                warn!(
+                    "Caller attempted to list keys for team {} without permission",
+                    team_id
                 );
+                let error_response =
+                    KeyErrorResponse::forbidden("Not authorized to list keys for this team");
                 return Ok(
                     HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
                 );
@@ -236,9 +237,8 @@ pub async fn list_keys(
                 .unwrap_or(false);
             if !is_admin {
                 warn!("Non-admin caller attempted to list all keys");
-                let error_response = KeyErrorResponse::forbidden(
-                    "Admin privileges required to list all keys",
-                );
+                let error_response =
+                    KeyErrorResponse::forbidden("Admin privileges required to list all keys");
                 return Ok(
                     HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
                 );
