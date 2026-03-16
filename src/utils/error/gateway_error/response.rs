@@ -213,10 +213,73 @@ impl ResponseError for GatewayError {
                 "NO_HEALTHY_PROVIDERS",
                 self.to_string(),
             ),
-            _ => (
+            GatewayError::Internal(_) => (
                 actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",
-                "An internal error occurred".to_string(),
+                self.to_string(),
+            ),
+            GatewayError::Jwt(_) => (
+                actix_web::http::StatusCode::UNAUTHORIZED,
+                "JWT_ERROR",
+                self.to_string(),
+            ),
+            GatewayError::Serialization(_) => (
+                actix_web::http::StatusCode::BAD_REQUEST,
+                "SERIALIZATION_ERROR",
+                self.to_string(),
+            ),
+            GatewayError::Cache(_) => (
+                actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
+                "CACHE_ERROR",
+                self.to_string(),
+            ),
+            GatewayError::Crypto(_) => (
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "CRYPTO_ERROR",
+                self.to_string(),
+            ),
+            GatewayError::FileStorage(_) => (
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "FILE_STORAGE_ERROR",
+                self.to_string(),
+            ),
+            GatewayError::HttpClient(_) => (
+                actix_web::http::StatusCode::BAD_GATEWAY,
+                "HTTP_CLIENT_ERROR",
+                self.to_string(),
+            ),
+            GatewayError::Io(_) => (
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "IO_ERROR",
+                self.to_string(),
+            ),
+            GatewayError::VectorDb(_) => (
+                actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
+                "VECTOR_DB_ERROR",
+                self.to_string(),
+            ),
+            GatewayError::Yaml(_) => (
+                actix_web::http::StatusCode::BAD_REQUEST,
+                "YAML_ERROR",
+                self.to_string(),
+            ),
+            #[cfg(feature = "s3")]
+            GatewayError::S3(_) => (
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "S3_ERROR",
+                self.to_string(),
+            ),
+            #[cfg(feature = "vector-db")]
+            GatewayError::Qdrant(_) => (
+                actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
+                "QDRANT_ERROR",
+                self.to_string(),
+            ),
+            #[cfg(feature = "websockets")]
+            GatewayError::WebSocket(_) => (
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "WEBSOCKET_ERROR",
+                self.to_string(),
             ),
         };
 
@@ -764,6 +827,106 @@ mod tests {
         let error = GatewayError::Provider(provider_error);
         let response = error.error_response();
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    // ==================== Previously-wildcard Variant Tests ====================
+
+    #[test]
+    fn test_gateway_error_jwt_response() {
+        use jsonwebtoken::{errors::Error as JwtError, errors::ErrorKind};
+        let jwt_error = JwtError::from(ErrorKind::InvalidToken);
+        let error = GatewayError::Jwt(jwt_error);
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_gateway_error_serialization_response() {
+        let json_err: serde_json::Error =
+            serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
+        let error = GatewayError::Serialization(json_err);
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_gateway_error_cache_response() {
+        let error = GatewayError::Cache("Cache unavailable".to_string());
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_gateway_error_crypto_response() {
+        let error = GatewayError::Crypto("Encryption failed".to_string());
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_gateway_error_file_storage_response() {
+        let error = GatewayError::FileStorage("Write failed".to_string());
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_gateway_error_http_client_response() {
+        let req_err = reqwest::Client::new()
+            .get("not-a-valid-url")
+            .build()
+            .unwrap_err();
+        let error = GatewayError::HttpClient(req_err);
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn test_gateway_error_io_response() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied");
+        let error = GatewayError::Io(io_err);
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_gateway_error_vector_db_response() {
+        let error = GatewayError::VectorDb("Vector search failed".to_string());
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_gateway_error_yaml_response() {
+        let yaml_err: serde_yaml::Error =
+            serde_yaml::from_str::<serde_yaml::Value>("key: [unclosed").unwrap_err();
+        let error = GatewayError::Yaml(yaml_err);
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(feature = "vector-db")]
+    #[test]
+    fn test_gateway_error_qdrant_response() {
+        let error = GatewayError::Qdrant("Qdrant unavailable".to_string());
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[cfg(feature = "websockets")]
+    #[test]
+    fn test_gateway_error_websocket_response() {
+        let error = GatewayError::WebSocket("WS connection failed".to_string());
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_gateway_error_s3_response() {
+        let error = GatewayError::S3("Bucket not found".to_string());
+        let response = error.error_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     // ==================== Integration Tests ====================

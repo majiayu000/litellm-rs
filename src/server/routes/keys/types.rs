@@ -284,6 +284,16 @@ impl KeyErrorResponse {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(message, "INTERNAL_ERROR")
     }
+
+    /// Create a forbidden error
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(message, "FORBIDDEN")
+    }
+
+    /// Create an unauthorized error
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self::new(message, "UNAUTHORIZED")
+    }
 }
 
 #[cfg(test)]
