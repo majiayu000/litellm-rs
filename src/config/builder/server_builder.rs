@@ -74,11 +74,7 @@ impl ServerConfigBuilder {
             tls: None,
             cors: crate::config::models::server::CorsConfig {
                 enabled: self.enable_cors,
-                allowed_origins: if self.cors_origins.is_empty() {
-                    vec!["*".to_string()]
-                } else {
-                    self.cors_origins
-                },
+                allowed_origins: self.cors_origins,
                 allowed_methods: vec!["GET".to_string(), "POST".to_string(), "OPTIONS".to_string()],
                 allowed_headers: vec!["Content-Type".to_string(), "Authorization".to_string()],
                 max_age: 3600,
@@ -268,7 +264,7 @@ mod tests {
         let config = ServerConfigBuilder::new().enable_cors().build();
 
         assert!(config.cors.enabled);
-        assert_eq!(config.cors.allowed_origins, vec!["*"]);
+        assert!(config.cors.allowed_origins.is_empty());
     }
 
     #[test]
