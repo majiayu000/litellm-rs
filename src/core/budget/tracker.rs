@@ -60,6 +60,24 @@ impl BudgetTracker {
         self.alert_states.insert(key, AlertState::default());
     }
 
+    /// Atomically register a budget only if no budget exists for the scope.
+    ///
+    /// Uses the DashMap Entry API to eliminate the TOCTOU race between
+    /// `has_budget()` and `register_budget()`. Returns `true` if the budget
+    /// was inserted, or `false` if a budget already existed for the scope.
+    pub fn try_register_budget(&self, budget: Budget) -> bool {
+        let key = budget.scope.to_key();
+        match self.budgets.entry(key.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(_) => false,
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                debug!("Registering budget: {} ({})", budget.name, key);
+                e.insert(budget);
+                self.alert_states.insert(key, AlertState::default());
+                true
+            }
+        }
+    }
+
     /// Unregister a budget
     pub fn unregister_budget(&self, scope: &BudgetScope) {
         let key = scope.to_key();
