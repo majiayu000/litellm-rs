@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::config::validation::validate_url_against_ssrf;
 use crate::core::providers::base::BaseConfig;
 use crate::core::traits::provider::ProviderConfig;
 
@@ -97,11 +98,11 @@ impl ProviderConfig for CustomHttpxConfig {
             return Err("Endpoint URL is required".to_string());
         }
 
-        if !self.endpoint_url.starts_with("http://") && !self.endpoint_url.starts_with("https://") {
-            return Err("Endpoint URL must start with http:// or https://".to_string());
-        }
+        validate_url_against_ssrf(&self.endpoint_url, "Endpoint URL")
+    }
 
-        Ok(())
+    fn use_ssrf_safe_client(&self) -> bool {
+        true
     }
 
     fn api_key(&self) -> Option<&str> {
@@ -118,5 +119,79 @@ impl ProviderConfig for CustomHttpxConfig {
 
     fn max_retries(&self) -> u32 {
         self.base.max_retries
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::traits::provider::ProviderConfig;
+
+    #[test]
+    fn test_valid_public_url() {
+        // Use a literal public IP — fictional subdomains may not resolve in all test environments
+        let cfg = CustomHttpxConfig::new("https://8.8.8.8/v1/chat");
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_reject_localhost() {
+        let cfg = CustomHttpxConfig::new("http://localhost:8080/endpoint");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_loopback_ip() {
+        let cfg = CustomHttpxConfig::new("http://127.0.0.1:8080/endpoint");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_loopback_ip_range() {
+        let cfg = CustomHttpxConfig::new("http://127.100.200.1/endpoint");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_private_10_block() {
+        let cfg = CustomHttpxConfig::new("http://10.0.0.1/internal");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_private_172_block() {
+        let cfg = CustomHttpxConfig::new("http://172.16.0.1/internal");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_private_192_168_block() {
+        let cfg = CustomHttpxConfig::new("http://192.168.1.1/internal");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_link_local_metadata() {
+        // AWS/GCP cloud metadata endpoint
+        let cfg = CustomHttpxConfig::new("http://169.254.169.254/latest/meta-data/");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_ipv6_loopback() {
+        let cfg = CustomHttpxConfig::new("http://[::1]/endpoint");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_empty_url() {
+        let cfg = CustomHttpxConfig::new("");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_non_http_scheme() {
+        let cfg = CustomHttpxConfig::new("ftp://example.com/endpoint");
+        assert!(cfg.validate().is_err());
     }
 }
