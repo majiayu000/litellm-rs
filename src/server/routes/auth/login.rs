@@ -20,18 +20,48 @@ fn get_login_rate_limiter() -> Arc<AuthRateLimiter> {
         .clone()
 }
 
-/// Extract client IP from the request for rate limiting.
-/// Uses only the TCP peer address to prevent X-Forwarded-For spoofing.
-/// Strips the port number so the limit applies per-IP, not per-connection.
-fn extract_client_ip(req: &HttpRequest) -> String {
+/// Parse the leftmost valid IP from an X-Forwarded-For header value.
+fn client_ip_from_xff(xff: &str) -> Option<String> {
+    xff.split(',')
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+        .map(|ip| ip.to_string())
+}
+
+/// Extract the rate-limiting key (client IP) from the request.
+///
+/// * When the immediate peer is a **trusted proxy** (configured in `server.trusted_proxies`),
+///   the leftmost valid IP from `X-Forwarded-For` is used as the real client address.
+/// * Otherwise the raw TCP peer address is used so that `X-Forwarded-For` cannot be
+///   spoofed by untrusted callers.
+///
+/// Port numbers are always stripped so the limit applies per-IP, not per-connection.
+fn extract_client_ip(req: &HttpRequest, trusted_proxies: &[String]) -> String {
     let peer = req
         .connection_info()
         .peer_addr()
         .unwrap_or("unknown")
         .to_string();
-    peer.parse::<std::net::SocketAddr>()
+
+    let peer_ip = peer
+        .parse::<std::net::SocketAddr>()
         .map(|addr| addr.ip().to_string())
-        .unwrap_or(peer)
+        .unwrap_or(peer);
+
+    // Only consult X-Forwarded-For when the request arrives from a trusted proxy
+    if !trusted_proxies.is_empty() && trusted_proxies.contains(&peer_ip) {
+        if let Some(xff) = req.headers().get("x-forwarded-for") {
+            if let Ok(xff_str) = xff.to_str() {
+                if let Some(client_ip) = client_ip_from_xff(xff_str) {
+                    return client_ip;
+                }
+            }
+        }
+    }
+
+    peer_ip
 }
 
 /// Counter for probabilistic cleanup of rate limiter entries
@@ -43,7 +73,7 @@ pub async fn login(
     state: web::Data<AppState>,
     request: web::Json<LoginRequest>,
 ) -> ActixResult<HttpResponse> {
-    let client_ip = extract_client_ip(&req);
+    let client_ip = extract_client_ip(&req, &state.config.gateway.server.trusted_proxies);
 
     // Rate limit: max 5 login attempts per IP per minute
     let limiter = get_login_rate_limiter();
@@ -156,9 +186,6 @@ pub async fn login(
             );
         }
     };
-
-    // Successful authentication: reset failure counter for this IP
-    limiter.record_success(&client_ip);
 
     info!("User logged in successfully: {}", user.username);
 
@@ -295,24 +322,61 @@ mod tests {
     }
 
     #[test]
-    fn test_success_resets_rate_limit_counter() {
+    fn test_success_does_not_reset_rate_limit_counter() {
+        // Successful login must NOT reset the counter: an attacker with one valid
+        // account must not be able to interleave their own successful logins to
+        // bypass the per-IP brute-force limit against a victim account.
         let limiter = AuthRateLimiter::new(5, 60, 60);
         let ip = "192.0.2.1";
 
-        // Accumulate 4 failures
+        // Accumulate 4 failures (one short of lockout)
         for _ in 0..4 {
             assert!(limiter.check_allowed(ip).is_ok());
             limiter.record_failure(ip);
         }
 
-        // A successful login resets the counter
-        limiter.record_success(ip);
+        // The login handler no longer calls record_success(); simulate by doing nothing.
 
-        // After reset, 5 more failures should be allowed before blocking
-        for _ in 0..5 {
-            assert!(limiter.check_allowed(ip).is_ok());
-            limiter.record_failure(ip);
-        }
+        // The 5th failure still hits the limit and triggers lockout
+        assert!(limiter.check_allowed(ip).is_ok());
+        limiter.record_failure(ip);
         assert!(limiter.check_allowed(ip).is_err());
+    }
+
+    // ---- trusted-proxy XFF helpers ----
+
+    #[test]
+    fn test_client_ip_from_xff_single() {
+        assert_eq!(
+            client_ip_from_xff("203.0.113.5"),
+            Some("203.0.113.5".to_string())
+        );
+    }
+
+    #[test]
+    fn test_client_ip_from_xff_chain() {
+        // Leftmost address is the original client
+        assert_eq!(
+            client_ip_from_xff("203.0.113.5, 10.0.0.1, 10.0.0.2"),
+            Some("203.0.113.5".to_string())
+        );
+    }
+
+    #[test]
+    fn test_client_ip_from_xff_invalid_returns_none() {
+        assert_eq!(client_ip_from_xff("not-an-ip, 10.0.0.1"), None);
+    }
+
+    #[test]
+    fn test_client_ip_from_xff_empty_returns_none() {
+        assert_eq!(client_ip_from_xff(""), None);
+    }
+
+    #[test]
+    fn test_client_ip_from_xff_ipv6() {
+        assert_eq!(
+            client_ip_from_xff("2001:db8::1, 10.0.0.1"),
+            Some("2001:db8::1".to_string())
+        );
     }
 }
