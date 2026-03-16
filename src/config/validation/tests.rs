@@ -260,26 +260,28 @@ fn test_ssrf_validation_valid_urls() {
 
 #[test]
 fn test_ssrf_validation_https_urls() {
-    assert!(validate_url_against_ssrf("https://secure.example.com", "test").is_ok());
+    // Use literal public IPs — fictional subdomains may not resolve in all test environments
+    assert!(validate_url_against_ssrf("https://8.8.8.8", "test").is_ok());
     assert!(validate_url_against_ssrf("https://api.github.com", "test").is_ok());
     assert!(validate_url_against_ssrf("https://google.com", "test").is_ok());
 }
 
 #[test]
 fn test_ssrf_validation_http_urls() {
-    assert!(validate_url_against_ssrf("http://public.example.com", "test").is_ok());
+    // Use literal public IPs — fictional subdomains may not resolve in all test environments
+    assert!(validate_url_against_ssrf("http://8.8.8.8", "test").is_ok());
     assert!(validate_url_against_ssrf("http://example.com:9000", "test").is_ok());
 }
 
 #[test]
 fn test_ssrf_validation_url_with_path() {
-    assert!(validate_url_against_ssrf("https://api.example.com/v1/chat", "test").is_ok());
+    assert!(validate_url_against_ssrf("https://8.8.8.8/v1/chat", "test").is_ok());
     assert!(validate_url_against_ssrf("https://example.com/api/v2/messages", "test").is_ok());
 }
 
 #[test]
 fn test_ssrf_validation_url_with_query() {
-    assert!(validate_url_against_ssrf("https://api.example.com/v1?key=value", "test").is_ok());
+    assert!(validate_url_against_ssrf("https://8.8.8.8/v1?key=value", "test").is_ok());
 }
 
 // ==================== SSRF Validation - Localhost ====================

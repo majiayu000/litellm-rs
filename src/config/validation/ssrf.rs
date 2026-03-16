@@ -123,14 +123,22 @@ pub fn validate_url_against_ssrf(url_str: &str, context: &str) -> Result<(), Str
 
     if !host_is_literal {
         let port = url.port_or_known_default().unwrap_or(80);
-        if let Ok(addrs) = (host, port).to_socket_addrs() {
-            for addr in addrs {
-                if is_private_or_internal_ip(&addr.ip()) {
-                    return Err(format!(
-                        "{} URL host '{}' resolves to a private/internal IP address (SSRF protection)",
-                        context, host
-                    ));
+        match (host, port).to_socket_addrs() {
+            Ok(addrs) => {
+                for addr in addrs {
+                    if is_private_or_internal_ip(&addr.ip()) {
+                        return Err(format!(
+                            "{} URL host '{}' resolves to a private/internal IP address (SSRF protection)",
+                            context, host
+                        ));
+                    }
                 }
+            }
+            Err(_) => {
+                return Err(format!(
+                    "{} URL host '{}' could not be resolved — unresolvable hosts are rejected (SSRF protection)",
+                    context, host
+                ));
             }
         }
     }
@@ -139,7 +147,7 @@ pub fn validate_url_against_ssrf(url_str: &str, context: &str) -> Result<(), Str
 }
 
 /// Check if an IP address is private, internal, or reserved
-fn is_private_or_internal_ip(ip: &IpAddr) -> bool {
+pub(crate) fn is_private_or_internal_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ipv4) => {
             // Loopback (127.0.0.0/8)
@@ -196,7 +204,8 @@ mod tests {
 
     #[test]
     fn test_valid_url_with_port() {
-        let result = validate_url_against_ssrf("https://api.example.com:8443/v1", "API endpoint");
+        // Use a literal public IP to avoid DNS dependency in tests
+        let result = validate_url_against_ssrf("https://8.8.8.8:8443/v1", "API endpoint");
         assert!(result.is_ok());
     }
 
@@ -218,7 +227,8 @@ mod tests {
 
     #[test]
     fn test_valid_subdomain() {
-        let result = validate_url_against_ssrf("https://api.sub.example.com", "Subdomain API");
+        // Use a literal public IP — subdomain DNS is not reliably available in all test envs
+        let result = validate_url_against_ssrf("https://1.1.1.1", "Subdomain API");
         assert!(result.is_ok());
     }
 
