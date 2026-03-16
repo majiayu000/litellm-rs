@@ -100,7 +100,7 @@ aes-gcm = { version = "0.10", optional = true }
 regex = "1.10"
 hex = "0.4"
 url = "2.5"
-base64 = "0.21"
+base64 = "0.22"
 
 # Monitoring and tracing
 tracing = "0.1"
