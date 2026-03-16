@@ -1,18 +1,69 @@
 //! User login endpoint
 
+use crate::server::middleware::AuthRateLimiter;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use crate::utils::auth::crypto::password::verify_password;
-use actix_web::{HttpResponse, Result as ActixResult, web};
+use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info, warn};
 
 use super::models::{LoginRequest, LoginResponse, UserInfo};
 
+/// Global login rate limiter: 5 attempts per IP per minute
+static LOGIN_RATE_LIMITER: std::sync::OnceLock<Arc<AuthRateLimiter>> = std::sync::OnceLock::new();
+
+fn get_login_rate_limiter() -> Arc<AuthRateLimiter> {
+    LOGIN_RATE_LIMITER
+        .get_or_init(|| Arc::new(AuthRateLimiter::new(5, 60, 60)))
+        .clone()
+}
+
+/// Extract client IP from the request for rate limiting.
+/// Uses only the TCP peer address to prevent X-Forwarded-For spoofing.
+fn extract_client_ip(req: &HttpRequest) -> String {
+    req.connection_info()
+        .peer_addr()
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// Counter for probabilistic cleanup of rate limiter entries
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 /// User login endpoint
 pub async fn login(
+    req: HttpRequest,
     state: web::Data<AppState>,
     request: web::Json<LoginRequest>,
 ) -> ActixResult<HttpResponse> {
+    let client_ip = extract_client_ip(&req);
+
+    // Rate limit: max 5 login attempts per IP per minute
+    let limiter = get_login_rate_limiter();
+
+    // Probabilistic cleanup: every 100th request, purge stale entries
+    let count = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    if count.is_multiple_of(100) {
+        limiter.cleanup_old_entries();
+    }
+
+    if let Err(retry_after) = limiter.check_allowed(&client_ip) {
+        warn!(
+            "Login rate limit exceeded for IP {}: retry after {}s",
+            client_ip, retry_after
+        );
+        return Ok(HttpResponse::TooManyRequests()
+            .insert_header(("Retry-After", retry_after.to_string()))
+            .json(ApiResponse::<()>::error(
+                "Too many login attempts. Please try again later.".to_string(),
+            )));
+    }
+
+    // Count this attempt toward the rate limit
+    limiter.record_failure(&client_ip);
+
     info!("User login attempt: {}", request.username);
 
     // Find user by username
@@ -184,5 +235,37 @@ mod tests {
         assert_eq!(user_info.role, "Admin");
         assert!(user_info.email_verified);
         assert!(user_info.full_name.is_some());
+    }
+
+    #[test]
+    fn test_login_rate_limiter_blocks_after_limit() {
+        let limiter = AuthRateLimiter::new(5, 60, 60);
+        let ip = "192.0.2.1";
+
+        // First 5 attempts should be allowed
+        for _ in 0..5 {
+            assert!(limiter.check_allowed(ip).is_ok());
+            limiter.record_failure(ip);
+        }
+
+        // 6th attempt should be blocked
+        assert!(limiter.check_allowed(ip).is_err());
+    }
+
+    #[test]
+    fn test_login_rate_limiter_different_ips_independent() {
+        let limiter = AuthRateLimiter::new(5, 60, 60);
+        let ip1 = "192.0.2.1";
+        let ip2 = "192.0.2.2";
+
+        // Exhaust limit for ip1
+        for _ in 0..5 {
+            assert!(limiter.check_allowed(ip1).is_ok());
+            limiter.record_failure(ip1);
+        }
+        assert!(limiter.check_allowed(ip1).is_err());
+
+        // ip2 should still be allowed
+        assert!(limiter.check_allowed(ip2).is_ok());
     }
 }
