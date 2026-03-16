@@ -22,11 +22,16 @@ fn get_login_rate_limiter() -> Arc<AuthRateLimiter> {
 
 /// Extract client IP from the request for rate limiting.
 /// Uses only the TCP peer address to prevent X-Forwarded-For spoofing.
+/// Strips the port number so the limit applies per-IP, not per-connection.
 fn extract_client_ip(req: &HttpRequest) -> String {
-    req.connection_info()
+    let peer = req
+        .connection_info()
         .peer_addr()
         .unwrap_or("unknown")
-        .to_string()
+        .to_string();
+    peer.parse::<std::net::SocketAddr>()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or(peer)
 }
 
 /// Counter for probabilistic cleanup of rate limiter entries
@@ -61,9 +66,6 @@ pub async fn login(
             )));
     }
 
-    // Count this attempt toward the rate limit
-    limiter.record_failure(&client_ip);
-
     info!("User login attempt: {}", request.username);
 
     // Find user by username
@@ -76,6 +78,7 @@ pub async fn login(
         Ok(Some(user)) => user,
         Ok(None) => {
             warn!("Login attempt with invalid username: {}", request.username);
+            limiter.record_failure(&client_ip);
             return Ok(HttpResponse::Unauthorized()
                 .json(ApiResponse::<()>::error("Invalid credentials".to_string())));
         }
@@ -89,6 +92,7 @@ pub async fn login(
     // Check if user is active
     if !user.is_active() {
         warn!("Login attempt for inactive user: {}", request.username);
+        limiter.record_failure(&client_ip);
         return Ok(HttpResponse::Forbidden()
             .json(ApiResponse::<()>::error("Account is disabled".to_string())));
     }
@@ -108,6 +112,7 @@ pub async fn login(
             "Login attempt with invalid password for user: {}",
             request.username
         );
+        limiter.record_failure(&client_ip);
         return Ok(HttpResponse::Unauthorized()
             .json(ApiResponse::<()>::error("Invalid credentials".to_string())));
     }
@@ -151,6 +156,9 @@ pub async fn login(
             );
         }
     };
+
+    // Successful authentication: reset failure counter for this IP
+    limiter.record_success(&client_ip);
 
     info!("User logged in successfully: {}", user.username);
 
@@ -267,5 +275,44 @@ mod tests {
 
         // ip2 should still be allowed
         assert!(limiter.check_allowed(ip2).is_ok());
+    }
+
+    #[test]
+    fn test_extract_client_ip_strips_port() {
+        // IPv4 with port: only the IP portion should be used as the rate-limit key
+        let ipv4_with_port = "192.0.2.1:54321"
+            .parse::<std::net::SocketAddr>()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_else(|_| "192.0.2.1:54321".to_string());
+        assert_eq!(ipv4_with_port, "192.0.2.1");
+
+        // IPv6 with port
+        let ipv6_with_port = "[::1]:54321"
+            .parse::<std::net::SocketAddr>()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_else(|_| "[::1]:54321".to_string());
+        assert_eq!(ipv6_with_port, "::1");
+    }
+
+    #[test]
+    fn test_success_resets_rate_limit_counter() {
+        let limiter = AuthRateLimiter::new(5, 60, 60);
+        let ip = "192.0.2.1";
+
+        // Accumulate 4 failures
+        for _ in 0..4 {
+            assert!(limiter.check_allowed(ip).is_ok());
+            limiter.record_failure(ip);
+        }
+
+        // A successful login resets the counter
+        limiter.record_success(ip);
+
+        // After reset, 5 more failures should be allowed before blocking
+        for _ in 0..5 {
+            assert!(limiter.check_allowed(ip).is_ok());
+            limiter.record_failure(ip);
+        }
+        assert!(limiter.check_allowed(ip).is_err());
     }
 }
