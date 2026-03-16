@@ -44,7 +44,7 @@ pub struct PricingStatsResponse {
 }
 
 /// Refresh pricing data endpoint
-/// POST /api/v1/pricing/refresh
+/// POST /v1/pricing/refresh
 pub async fn refresh_pricing(
     data: web::Data<AppState>,
     payload: web::Json<RefreshRequest>,
@@ -96,7 +96,7 @@ pub async fn refresh_pricing(
 }
 
 /// Get pricing statistics endpoint
-/// GET /api/v1/pricing/stats
+/// GET /v1/pricing/stats
 pub async fn get_pricing_stats(data: web::Data<AppState>) -> Result<HttpResponse> {
     let pricing_service = &data.pricing;
     let stats = pricing_service.get_statistics();
@@ -119,7 +119,7 @@ pub async fn get_pricing_stats(data: web::Data<AppState>) -> Result<HttpResponse
 }
 
 /// Get pricing for a specific model
-/// GET /api/v1/pricing/model/{model_name}
+/// GET /v1/pricing/model/{model_name}
 pub async fn get_model_pricing(
     data: web::Data<AppState>,
     path: web::Path<String>,
@@ -137,7 +137,7 @@ pub async fn get_model_pricing(
 }
 
 /// Calculate cost for a completion
-/// POST /api/v1/pricing/calculate
+/// POST /v1/pricing/calculate
 #[derive(Debug, Deserialize)]
 pub struct CostCalculationRequest {
     /// Model name to calculate cost for
@@ -183,7 +183,7 @@ pub async fn calculate_cost(
 /// Configure pricing endpoints
 pub fn configure_pricing_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/api/v1/pricing")
+        web::scope("/v1/pricing")
             .route("/refresh", web::post().to(refresh_pricing))
             .route("/stats", web::get().to(get_pricing_stats))
             .route("/model/{model_name}", web::get().to(get_model_pricing))
