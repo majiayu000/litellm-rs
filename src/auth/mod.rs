@@ -25,6 +25,6 @@ pub use crate::core::models::ApiKey;
 
 // Re-export types from submodules
 pub use system::AuthSystem;
-pub use types::AuthMethod;
+pub use types::{AuthMethod, AuthResult};
 
 // Re-export OAuth types for convenience

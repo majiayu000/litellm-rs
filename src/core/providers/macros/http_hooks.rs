@@ -143,9 +143,15 @@ macro_rules! define_http_provider_with_hooks {
                 <$config_type as $crate::core::traits::provider::ProviderConfig>::validate(&config)
                     .map_err(|e| $crate::core::providers::unified_provider::ProviderError::configuration($provider_name, e))?;
 
-                let http_client = $crate::utils::net::http::get_client_with_timeout_fallible(
-                    <$config_type as $crate::core::traits::provider::ProviderConfig>::timeout(&config),
-                )
+                let http_client = if <$config_type as $crate::core::traits::provider::ProviderConfig>::use_ssrf_safe_client(&config) {
+                    $crate::utils::net::http::get_ssrf_safe_client_with_timeout_fallible(
+                        <$config_type as $crate::core::traits::provider::ProviderConfig>::timeout(&config),
+                    )
+                } else {
+                    $crate::utils::net::http::get_client_with_timeout_fallible(
+                        <$config_type as $crate::core::traits::provider::ProviderConfig>::timeout(&config),
+                    )
+                }
                 .map_err(|e| {
                     $crate::core::providers::unified_provider::ProviderError::initialization(
                         $provider_name,
