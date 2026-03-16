@@ -1,60 +1,10 @@
-//! Security headers and CORS middleware
+//! Security headers middleware
 
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::http::header::HeaderValue;
 use futures::future::{Ready, ready};
 use std::future::Future;
 use std::pin::Pin;
-
-// ============================================================================
-// CORS Middleware
-// ============================================================================
-
-/// CORS middleware for Actix-web
-pub struct CorsMiddleware;
-
-impl<S, B> Transform<S, ServiceRequest> for CorsMiddleware
-where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
-    S::Future: 'static,
-    B: 'static,
-{
-    type Response = ServiceResponse<B>;
-    type Error = actix_web::Error;
-    type InitError = ();
-    type Transform = CorsMiddlewareService<S>;
-    type Future = Ready<Result<Self::Transform, Self::InitError>>;
-
-    fn new_transform(&self, service: S) -> Self::Future {
-        ready(Ok(CorsMiddlewareService { service }))
-    }
-}
-
-/// Service implementation for CORS middleware
-pub struct CorsMiddlewareService<S> {
-    service: S,
-}
-
-impl<S, B> Service<ServiceRequest> for CorsMiddlewareService<S>
-where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
-    S::Future: 'static,
-    B: 'static,
-{
-    type Response = ServiceResponse<B>;
-    type Error = actix_web::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
-
-    forward_ready!(service);
-
-    fn call(&self, req: ServiceRequest) -> Self::Future {
-        let fut = self.service.call(req);
-        Box::pin(async move {
-            let res = fut.await?;
-            Ok(res)
-        })
-    }
-}
 
 // ============================================================================
 // Security Headers Middleware

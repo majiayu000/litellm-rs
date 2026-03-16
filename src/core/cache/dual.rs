@@ -233,8 +233,12 @@ where
             CacheMode::Dual => {
                 self.memory
                     .set_with_size(key.clone(), value.clone(), ttl, size_bytes);
-                if let Some(ref redis) = self.redis {
-                    let _ = redis.set_with_size(key, value, ttl, size_bytes).await;
+                if let Some(ref redis) = self.redis
+                    && let Err(e) = redis
+                        .set_with_size(key.clone(), value, ttl, size_bytes)
+                        .await
+                {
+                    warn!(key = %key, error = %e, "Redis write failed in dual cache mode");
                 }
                 Ok(())
             }

@@ -100,7 +100,7 @@ aes-gcm = { version = "0.10", optional = true }
 regex = "1.10"
 hex = "0.4"
 url = "2.5"
-base64 = "0.21"
+base64 = "0.22"
 
 # Monitoring and tracing
 tracing = "0.1"
@@ -115,7 +115,7 @@ clap = { version = "4.4", features = ["derive", "env"], optional = true }
 dotenvy = "0.15"
 
 # Error handling
-thiserror = "1.0"
+thiserror = "2.0"
 
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }

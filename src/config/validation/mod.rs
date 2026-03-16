@@ -30,4 +30,5 @@ mod trait_def;
 pub use trait_def::Validate;
 
 // Re-export SSRF validation function if needed externally
+pub(crate) use ssrf::is_private_or_internal_ip;
 pub use ssrf::validate_url_against_ssrf;
