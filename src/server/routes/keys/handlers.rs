@@ -5,7 +5,7 @@ use super::types::{
     ListKeysQuery, ListKeysResponse, PaginationInfo, RevokeKeyResponse, RotateKeyResponse,
     UpdateKeyRequest, VerifyKeyRequest, VerifyKeyResponse,
 };
-use crate::auth::AuthMethod;
+use crate::auth::{AuthMethod, AuthResult};
 use crate::core::keys::KeyManager;
 use crate::core::keys::{CreateKeyConfig, KeyStatus, UpdateKeyConfig};
 use crate::core::models::user::types::{User, UserRole};
@@ -17,11 +17,49 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-/// Check whether `requesting_user` is allowed to access the key owned by `key_user_id`.
+/// Check whether `requesting_user` is allowed to access the key.
 ///
 /// Admins and super-admins bypass the ownership check.
-fn check_ownership(requesting_user: &User, key_user_id: Option<Uuid>) -> bool {
-    requesting_user.has_role(&UserRole::Admin) || key_user_id == Some(requesting_user.id())
+/// Managers can access team-scoped keys for teams they belong to.
+fn check_ownership(
+    requesting_user: &User,
+    key_user_id: Option<Uuid>,
+    key_team_id: Option<Uuid>,
+) -> bool {
+    // Admin (and SuperAdmin via has_role hierarchy) bypass all ownership checks.
+    if requesting_user.has_role(&UserRole::Admin) {
+        return true;
+    }
+    // User directly owns the key.
+    if key_user_id == Some(requesting_user.id()) {
+        return true;
+    }
+    // Managers can access team-scoped keys for teams they belong to.
+    // has_role(Manager) is true for Manager, Admin, and SuperAdmin.
+    if requesting_user.has_role(&UserRole::Manager) {
+        if let Some(team_id) = key_team_id {
+            return requesting_user.team_ids.contains(&team_id);
+        }
+    }
+    false
+}
+
+/// Check whether an authenticated caller is allowed to access a key.
+///
+/// Handles both user-based callers (JWT / user-linked API key) and team-only
+/// API keys (`user == None`, team context set on the request context).
+fn check_auth_result_ownership(
+    auth: &AuthResult,
+    key_user_id: Option<Uuid>,
+    key_team_id: Option<Uuid>,
+) -> bool {
+    if let Some(ref user) = auth.user {
+        check_ownership(user, key_user_id, key_team_id)
+    } else {
+        // Team-only API key: allow access only to keys owned by the same team.
+        let caller_team = auth.context.team_id();
+        caller_team.is_some() && caller_team == key_team_id
+    }
 }
 
 /// Returns `true` when at least one auth backend is enabled.
@@ -33,19 +71,20 @@ fn is_auth_enabled(state: &web::Data<AppState>) -> bool {
     state.config.auth().enable_jwt || state.config.auth().enable_api_key
 }
 
-/// Extract and authenticate the requesting user from the request headers.
+/// Extract and authenticate the requesting caller from the request headers.
 ///
 /// Supports the same credential schemes as the auth middleware:
 /// `Authorization: Bearer`, `Authorization: ApiKey`, `Authorization: gw-...`,
 /// and `X-API-Key`.
 ///
-/// Returns `Ok(Some(user))` when valid credentials are present and accepted,
+/// Returns `Ok(Some(result))` when valid credentials are present and accepted
+/// (the caller may be a user OR a team-only API key with `result.user == None`),
 /// `Ok(None)` when no credentials are present at all, and `Err(HttpResponse)`
 /// when credentials are present but invalid.
 async fn authenticate_request(
     req: &HttpRequest,
     state: &web::Data<AppState>,
-) -> Result<Option<User>, HttpResponse> {
+) -> Result<Option<AuthResult>, HttpResponse> {
     let auth_method = extract_auth_method(req.headers());
 
     if matches!(auth_method, AuthMethod::None) {
@@ -54,7 +93,7 @@ async fn authenticate_request(
 
     let context = RequestContext::new();
     match state.auth.authenticate(auth_method, context).await {
-        Ok(result) if result.success => Ok(result.user),
+        Ok(result) if result.success => Ok(Some(result)),
         Ok(result) => {
             let msg = result
                 .error
@@ -138,7 +177,7 @@ pub async fn list_keys(
 
     if is_auth_enabled(&state) {
         // All listing operations require authentication.
-        let requesting_user = match authenticate_request(&req, &state).await {
+        let auth = match authenticate_request(&req, &state).await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
                 let error_response =
@@ -146,15 +185,20 @@ pub async fn list_keys(
                 return Ok(HttpResponse::Unauthorized()
                     .json(ApiResponse::<()>::error(error_response.error)));
             }
-            Ok(Some(user)) => user,
+            Ok(Some(a)) => a,
         };
 
         if let Some(requested_user_id) = query.user_id {
             // Users can list their own keys; admins can list any user's keys.
-            if !check_ownership(&requesting_user, Some(requested_user_id)) {
+            // Team-only API keys (user == None) cannot list by user_id.
+            let allowed = auth
+                .user
+                .as_ref()
+                .map(|u| check_ownership(u, Some(requested_user_id), None))
+                .unwrap_or(false);
+            if !allowed {
                 warn!(
-                    "User {} attempted to list keys for user {}",
-                    requesting_user.id(),
+                    "Caller attempted to list keys for user {} without permission",
                     requested_user_id
                 );
                 let error_response =
@@ -163,16 +207,37 @@ pub async fn list_keys(
                     HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
                 );
             }
-        } else {
-            // Listing all keys or by team_id requires admin privileges.
-            // check_ownership(user, None) is true only for admins/super-admins.
-            if !check_ownership(&requesting_user, None) {
-                warn!(
-                    "Non-admin user {} attempted to list all keys or team keys",
-                    requesting_user.id()
-                );
+        } else if let Some(team_id) = query.team_id {
+            // Listing keys for a specific team.
+            // Managers belonging to that team and team-only API keys for that team are allowed.
+            let allowed = match &auth.user {
+                Some(user) => {
+                    user.has_role(&UserRole::Admin)
+                        || (user.has_role(&UserRole::Manager)
+                            && user.team_ids.contains(&team_id))
+                }
+                None => auth.context.team_id() == Some(team_id),
+            };
+            if !allowed {
+                warn!("Caller attempted to list keys for team {} without permission", team_id);
                 let error_response = KeyErrorResponse::forbidden(
-                    "Admin privileges required to list all keys or team keys",
+                    "Not authorized to list keys for this team",
+                );
+                return Ok(
+                    HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
+                );
+            }
+        } else {
+            // Listing all keys (no filter) requires admin privileges.
+            let is_admin = auth
+                .user
+                .as_ref()
+                .map(|u| u.has_role(&UserRole::Admin))
+                .unwrap_or(false);
+            if !is_admin {
+                warn!("Non-admin caller attempted to list all keys");
+                let error_response = KeyErrorResponse::forbidden(
+                    "Admin privileges required to list all keys",
                 );
                 return Ok(
                     HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
@@ -231,7 +296,7 @@ pub async fn get_key(
     // Authenticate before fetching the key to avoid leaking key existence to
     // unauthenticated callers (they should not be able to distinguish 404 from
     // 401 via this endpoint).
-    let requesting_user_opt = if is_auth_enabled(&state) {
+    let auth_opt = if is_auth_enabled(&state) {
         match authenticate_request(&req, &state).await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
@@ -240,7 +305,7 @@ pub async fn get_key(
                 return Ok(HttpResponse::Unauthorized()
                     .json(ApiResponse::<()>::error(error_response.error)));
             }
-            Ok(user) => user,
+            Ok(auth) => auth,
         }
     } else {
         None
@@ -249,13 +314,11 @@ pub async fn get_key(
     match key_manager.get_key(key_id).await {
         Ok(Some(key)) => {
             // Ownership check (skipped when auth is disabled).
-            if let Some(ref requesting_user) = requesting_user_opt {
-                if !check_ownership(requesting_user, key.user_id) {
+            if let Some(ref auth) = auth_opt {
+                if !check_auth_result_ownership(auth, key.user_id, key.team_id) {
                     warn!(
-                        "User {} attempted to access key {} owned by {:?}",
-                        requesting_user.id(),
-                        key_id,
-                        key.user_id
+                        "Caller attempted to access key {} owned by user={:?} team={:?}",
+                        key_id, key.user_id, key.team_id
                     );
                     let error_response =
                         KeyErrorResponse::forbidden("Not authorized to access this key");
@@ -294,7 +357,7 @@ pub async fn update_key(
 
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
-    let requesting_user_opt = if is_auth_enabled(&state) {
+    let auth_opt = if is_auth_enabled(&state) {
         match authenticate_request(&req, &state).await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
@@ -303,7 +366,7 @@ pub async fn update_key(
                 return Ok(HttpResponse::Unauthorized()
                     .json(ApiResponse::<()>::error(error_response.error)));
             }
-            Ok(user) => user,
+            Ok(auth) => auth,
         }
     } else {
         None
@@ -327,13 +390,11 @@ pub async fn update_key(
         }
     };
 
-    if let Some(ref requesting_user) = requesting_user_opt {
-        if !check_ownership(requesting_user, existing_key.user_id) {
+    if let Some(ref auth) = auth_opt {
+        if !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id) {
             warn!(
-                "User {} attempted to update key {} owned by {:?}",
-                requesting_user.id(),
-                key_id,
-                existing_key.user_id
+                "Caller attempted to update key {} owned by user={:?} team={:?}",
+                key_id, existing_key.user_id, existing_key.team_id
             );
             let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
             return Ok(
@@ -388,7 +449,7 @@ pub async fn revoke_key(
 
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
-    let requesting_user_opt = if is_auth_enabled(&state) {
+    let auth_opt = if is_auth_enabled(&state) {
         match authenticate_request(&req, &state).await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
@@ -397,7 +458,7 @@ pub async fn revoke_key(
                 return Ok(HttpResponse::Unauthorized()
                     .json(ApiResponse::<()>::error(error_response.error)));
             }
-            Ok(user) => user,
+            Ok(auth) => auth,
         }
     } else {
         None
@@ -421,13 +482,11 @@ pub async fn revoke_key(
         }
     };
 
-    if let Some(ref requesting_user) = requesting_user_opt {
-        if !check_ownership(requesting_user, existing_key.user_id) {
+    if let Some(ref auth) = auth_opt {
+        if !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id) {
             warn!(
-                "User {} attempted to revoke key {} owned by {:?}",
-                requesting_user.id(),
-                key_id,
-                existing_key.user_id
+                "Caller attempted to revoke key {} owned by user={:?} team={:?}",
+                key_id, existing_key.user_id, existing_key.team_id
             );
             let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
             return Ok(
@@ -477,7 +536,7 @@ pub async fn rotate_key(
 
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
-    let requesting_user_opt = if is_auth_enabled(&state) {
+    let auth_opt = if is_auth_enabled(&state) {
         match authenticate_request(&req, &state).await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
@@ -486,7 +545,7 @@ pub async fn rotate_key(
                 return Ok(HttpResponse::Unauthorized()
                     .json(ApiResponse::<()>::error(error_response.error)));
             }
-            Ok(user) => user,
+            Ok(auth) => auth,
         }
     } else {
         None
@@ -510,13 +569,11 @@ pub async fn rotate_key(
         }
     };
 
-    if let Some(ref requesting_user) = requesting_user_opt {
-        if !check_ownership(requesting_user, existing_key.user_id) {
+    if let Some(ref auth) = auth_opt {
+        if !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id) {
             warn!(
-                "User {} attempted to rotate key {} owned by {:?}",
-                requesting_user.id(),
-                key_id,
-                existing_key.user_id
+                "Caller attempted to rotate key {} owned by user={:?} team={:?}",
+                key_id, existing_key.user_id, existing_key.team_id
             );
             let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
             return Ok(
@@ -582,7 +639,7 @@ pub async fn get_key_usage(
 
     // Authenticate before fetching the key to avoid leaking key existence to
     // unauthenticated callers.
-    let requesting_user_opt = if is_auth_enabled(&state) {
+    let auth_opt = if is_auth_enabled(&state) {
         match authenticate_request(&req, &state).await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
@@ -591,7 +648,7 @@ pub async fn get_key_usage(
                 return Ok(HttpResponse::Unauthorized()
                     .json(ApiResponse::<()>::error(error_response.error)));
             }
-            Ok(user) => user,
+            Ok(auth) => auth,
         }
     } else {
         None
@@ -615,13 +672,11 @@ pub async fn get_key_usage(
         }
     };
 
-    if let Some(ref requesting_user) = requesting_user_opt {
-        if !check_ownership(requesting_user, key.user_id) {
+    if let Some(ref auth) = auth_opt {
+        if !check_auth_result_ownership(auth, key.user_id, key.team_id) {
             warn!(
-                "User {} attempted to access usage for key {} owned by {:?}",
-                requesting_user.id(),
-                key_id,
-                key.user_id
+                "Caller attempted to access usage for key {} owned by user={:?} team={:?}",
+                key_id, key.user_id, key.team_id
             );
             let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
             return Ok(
@@ -722,22 +777,20 @@ mod handler_tests {
         assert!(config.description.is_some());
     }
 
-    #[test]
-    fn test_check_ownership_admin_bypasses() {
+    fn make_user(role: UserRole, team_ids: Vec<Uuid>) -> User {
         use crate::core::models::Metadata;
         use crate::core::models::UsageStats;
         use crate::core::models::user::preferences::UserPreferences;
         use crate::core::models::user::types::{UserProfile, UserStatus};
-
-        let admin = User {
+        User {
             metadata: Metadata::new(),
-            username: "admin".to_string(),
-            email: "admin@example.com".to_string(),
+            username: "testuser".to_string(),
+            email: "test@example.com".to_string(),
             display_name: None,
             password_hash: "hash".to_string(),
-            role: UserRole::Admin,
+            role,
             status: UserStatus::Active,
-            team_ids: vec![],
+            team_ids,
             preferences: UserPreferences::default(),
             usage_stats: UsageStats::default(),
             rate_limits: None,
@@ -745,108 +798,62 @@ mod handler_tests {
             email_verified: true,
             two_factor_enabled: false,
             profile: UserProfile::default(),
-        };
-
-        let other_user_id = Uuid::new_v4();
-        // Admin should be allowed to access any key
-        assert!(check_ownership(&admin, Some(other_user_id)));
-        assert!(check_ownership(&admin, None));
+        }
     }
 
     #[test]
-    fn test_check_ownership_user_owns_key() {
-        use crate::core::models::Metadata;
-        use crate::core::models::UsageStats;
-        use crate::core::models::user::preferences::UserPreferences;
-        use crate::core::models::user::types::{UserProfile, UserStatus};
-
-        let metadata = Metadata::new();
-        let user_id = metadata.id;
-
-        let user = User {
-            metadata,
-            username: "user".to_string(),
-            email: "user@example.com".to_string(),
-            display_name: None,
-            password_hash: "hash".to_string(),
-            role: UserRole::User,
-            status: UserStatus::Active,
-            team_ids: vec![],
-            preferences: UserPreferences::default(),
-            usage_stats: UsageStats::default(),
-            rate_limits: None,
-            last_login_at: None,
-            email_verified: true,
-            two_factor_enabled: false,
-            profile: UserProfile::default(),
-        };
-
-        // User owns the key
-        assert!(check_ownership(&user, Some(user_id)));
-        // User does not own a different key
-        assert!(!check_ownership(&user, Some(Uuid::new_v4())));
-        // Key without owner — regular user cannot access
-        assert!(!check_ownership(&user, None));
+    fn test_check_ownership_admin_bypasses() {
+        let admin = make_user(UserRole::Admin, vec![]);
+        let other_user_id = Uuid::new_v4();
+        assert!(check_ownership(&admin, Some(other_user_id), None));
+        assert!(check_ownership(&admin, None, None));
+        assert!(check_ownership(&admin, None, Some(Uuid::new_v4())));
     }
 
     #[test]
     fn test_check_ownership_super_admin_bypasses() {
-        use crate::core::models::Metadata;
-        use crate::core::models::UsageStats;
-        use crate::core::models::user::preferences::UserPreferences;
-        use crate::core::models::user::types::{UserProfile, UserStatus};
-
-        let super_admin = User {
-            metadata: Metadata::new(),
-            username: "superadmin".to_string(),
-            email: "superadmin@example.com".to_string(),
-            display_name: None,
-            password_hash: "hash".to_string(),
-            role: UserRole::SuperAdmin,
-            status: UserStatus::Active,
-            team_ids: vec![],
-            preferences: UserPreferences::default(),
-            usage_stats: UsageStats::default(),
-            rate_limits: None,
-            last_login_at: None,
-            email_verified: true,
-            two_factor_enabled: false,
-            profile: UserProfile::default(),
-        };
-
+        let super_admin = make_user(UserRole::SuperAdmin, vec![]);
         let other_user_id = Uuid::new_v4();
-        assert!(check_ownership(&super_admin, Some(other_user_id)));
-        assert!(check_ownership(&super_admin, None));
+        assert!(check_ownership(&super_admin, Some(other_user_id), None));
+        assert!(check_ownership(&super_admin, None, None));
+    }
+
+    #[test]
+    fn test_check_ownership_user_owns_key() {
+        let user = make_user(UserRole::User, vec![]);
+        let user_id = user.id();
+        assert!(check_ownership(&user, Some(user_id), None));
+        assert!(!check_ownership(&user, Some(Uuid::new_v4()), None));
+        // Key without owner — regular user cannot access
+        assert!(!check_ownership(&user, None, None));
+    }
+
+    #[test]
+    fn test_check_ownership_manager_team_access() {
+        let team_id = Uuid::new_v4();
+        let other_team = Uuid::new_v4();
+        let manager = make_user(UserRole::Manager, vec![team_id]);
+
+        // Manager can access team-scoped keys for their own team
+        assert!(check_ownership(&manager, None, Some(team_id)));
+        // Manager cannot access keys for a team they don't belong to
+        assert!(!check_ownership(&manager, None, Some(other_team)));
+        // Manager cannot access user-owned keys for other users
+        assert!(!check_ownership(&manager, Some(Uuid::new_v4()), None));
+    }
+
+    #[test]
+    fn test_check_ownership_regular_user_cannot_access_team_key() {
+        let team_id = Uuid::new_v4();
+        let user = make_user(UserRole::User, vec![team_id]);
+        // Regular users do NOT get team-level management access even if team members
+        assert!(!check_ownership(&user, None, Some(team_id)));
     }
 
     #[test]
     fn test_is_auth_enabled_logic() {
-        // Verify that admin role cannot pass check_ownership with None key_user_id
-        // when non-admin is used (regression guard for the list-all-keys gate)
-        use crate::core::models::Metadata;
-        use crate::core::models::UsageStats;
-        use crate::core::models::user::preferences::UserPreferences;
-        use crate::core::models::user::types::{UserProfile, UserStatus};
-
-        let regular_user = User {
-            metadata: Metadata::new(),
-            username: "user".to_string(),
-            email: "user@example.com".to_string(),
-            display_name: None,
-            password_hash: "hash".to_string(),
-            role: UserRole::User,
-            status: UserStatus::Active,
-            team_ids: vec![],
-            preferences: UserPreferences::default(),
-            usage_stats: UsageStats::default(),
-            rate_limits: None,
-            last_login_at: None,
-            email_verified: true,
-            two_factor_enabled: false,
-            profile: UserProfile::default(),
-        };
-
+        let regular_user = make_user(UserRole::User, vec![]);
         // Regular users must NOT pass the list-all-keys gate
-        assert!(!check_ownership(&regular_user, None));
+        assert!(!check_ownership(&regular_user, None, None));
     }
 }
