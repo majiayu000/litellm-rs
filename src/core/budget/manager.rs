@@ -101,14 +101,6 @@ impl BudgetManager {
             ));
         }
 
-        // Check if budget already exists for this scope
-        if self.tracker.has_budget(&scope) {
-            return Err(GatewayError::Conflict(format!(
-                "Budget already exists for scope: {}",
-                scope
-            )));
-        }
-
         // Generate unique ID
         let id = uuid::Uuid::new_v4().to_string();
 
@@ -143,8 +135,13 @@ impl BudgetManager {
             budget.name, scope, budget.max_budget
         );
 
-        // Register with tracker
-        self.tracker.register_budget(budget.clone());
+        // Atomically check-and-insert to avoid TOCTOU race between has_budget() and register_budget()
+        if !self.tracker.try_register_budget(budget.clone()) {
+            return Err(GatewayError::Conflict(format!(
+                "Budget already exists for scope: {}",
+                scope
+            )));
+        }
 
         Ok(budget)
     }
@@ -833,5 +830,44 @@ mod tests {
             .unwrap();
 
         assert_eq!(budget.reset_period, ResetPeriod::Weekly);
+    }
+
+    #[tokio::test]
+    async fn test_create_budget_concurrent_no_toctou() {
+        use std::sync::Arc;
+
+        let manager = Arc::new(BudgetManager::new());
+        let concurrency = 20;
+
+        let handles: Vec<_> = (0..concurrency)
+            .map(|_| {
+                let m = Arc::clone(&manager);
+                tokio::spawn(async move {
+                    m.create_budget(BudgetScope::Global, BudgetConfig::new("Concurrent", 100.0))
+                        .await
+                })
+            })
+            .collect();
+
+        let mut ok_count = 0usize;
+        let mut conflict_count = 0usize;
+
+        for handle in handles {
+            match handle.await {
+                Ok(Ok(_)) => ok_count += 1,
+                Ok(Err(GatewayError::Conflict(_))) => conflict_count += 1,
+                Ok(Err(e)) => panic!("unexpected error: {:?}", e),
+                Err(e) => panic!("task panicked: {:?}", e),
+            }
+        }
+
+        // Exactly one insertion must succeed; the rest must return Conflict
+        assert_eq!(ok_count, 1, "exactly one create_budget should succeed");
+        assert_eq!(
+            conflict_count,
+            concurrency - 1,
+            "all other concurrent calls should return Conflict"
+        );
+        assert_eq!(manager.budget_count(), 1);
     }
 }
