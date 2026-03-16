@@ -18,30 +18,8 @@ impl_from_serde_error!(ProviderError, |e| Self::serialization(
     e.to_string()
 ));
 
-// Convert from provider-specific errors for unified handling
-impl From<crate::core::types::errors::OpenAIError> for ProviderError {
-    fn from(err: crate::core::types::errors::OpenAIError) -> Self {
-        use crate::core::types::errors::OpenAIError;
-        match err {
-            OpenAIError::Authentication(msg) => Self::authentication("openai", msg),
-            OpenAIError::RateLimit(_msg) => Self::rate_limit("openai", Some(60)),
-            OpenAIError::InvalidRequest(msg) => Self::invalid_request("openai", msg),
-            OpenAIError::Network(msg) => Self::network("openai", msg),
-            OpenAIError::Timeout(msg) => Self::timeout("openai", msg),
-            OpenAIError::Parsing(msg) => Self::serialization("openai", msg),
-            OpenAIError::Streaming(msg) => Self::network("openai", msg),
-            OpenAIError::UnsupportedFeature(feature) => Self::not_implemented("openai", feature),
-            OpenAIError::NotImplemented(feature) => Self::not_implemented("openai", feature),
-            OpenAIError::ModelNotFound { model } => Self::model_not_found("openai", model),
-            OpenAIError::ApiError {
-                message,
-                status_code,
-                ..
-            } => Self::api_error("openai", status_code.unwrap_or(500), message),
-            OpenAIError::Other(msg) => Self::api_error("openai", 500, msg),
-        }
-    }
-}
+// Note: OpenAIError is now a type alias for ProviderError (see src/core/types/errors/openai.rs),
+// so no From conversion is needed — they are the same type.
 
 // Azure provider uses ProviderError directly, no conversion needed
 
