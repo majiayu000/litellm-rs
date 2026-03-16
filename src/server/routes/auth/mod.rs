@@ -41,6 +41,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/reset-password", web::post().to(reset_password))
             .route("/verify-email", web::post().to(verify_email))
             .route("/change-password", web::post().to(change_password))
-            .route("/me", web::post().to(get_current_user)),
+            .route("/me", web::get().to(get_current_user)),
     );
 }
