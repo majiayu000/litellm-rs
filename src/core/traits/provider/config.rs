@@ -109,6 +109,15 @@ pub trait ProviderConfig: Send + Sync + Clone + Debug + 'static {
     /// - Consider rate limits when setting this value
     fn max_retries(&self) -> u32;
 
+    /// Whether this provider requires an SSRF-safe HTTP client.
+    ///
+    /// Return `true` for providers whose endpoint URL is user-controlled.
+    /// The SSRF-safe client re-validates the resolved IP on every request,
+    /// preventing DNS-rebinding attacks.
+    fn use_ssrf_safe_client(&self) -> bool {
+        false
+    }
+
     /// Standard validation: API key required, timeout > 0, max_retries <= 10.
     ///
     /// Call from `validate()` to avoid repeating common checks.
