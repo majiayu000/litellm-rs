@@ -5,13 +5,62 @@ use super::types::{
     ListKeysQuery, ListKeysResponse, PaginationInfo, RevokeKeyResponse, RotateKeyResponse,
     UpdateKeyRequest, VerifyKeyRequest, VerifyKeyResponse,
 };
+use crate::auth::AuthMethod;
 use crate::core::keys::KeyManager;
 use crate::core::keys::{CreateKeyConfig, KeyStatus, UpdateKeyConfig};
+use crate::core::models::user::types::{User, UserRole};
+use crate::core::types::context::RequestContext;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
-use actix_web::{HttpResponse, Result as ActixResult, web};
+use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use tracing::{error, info, warn};
 use uuid::Uuid;
+
+/// Extract and authenticate the requesting user from the Authorization header.
+///
+/// Returns `Ok(Some(user))` when the token is valid, `Ok(None)` when no
+/// Authorization header is present, and `Err(HttpResponse)` when the token
+/// is present but invalid.
+async fn authenticate_request(
+    req: &HttpRequest,
+    state: &web::Data<AppState>,
+) -> Result<Option<User>, HttpResponse> {
+    let auth_method = match req
+        .headers()
+        .get(actix_web::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(header) if header.starts_with("Bearer ") => AuthMethod::Jwt(header[7..].to_string()),
+        Some(header) if header.starts_with("ApiKey ") => {
+            AuthMethod::ApiKey(header[7..].to_string())
+        }
+        _ => return Ok(None),
+    };
+
+    let context = RequestContext::new();
+    match state.auth.authenticate(auth_method, context).await {
+        Ok(result) if result.success => Ok(result.user),
+        Ok(result) => {
+            let msg = result
+                .error
+                .unwrap_or_else(|| "Authentication failed".to_string());
+            let error_response = KeyErrorResponse::unauthorized(msg);
+            Err(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error)))
+        }
+        Err(e) => {
+            error!("Authentication error: {}", e);
+            let error_response = KeyErrorResponse::unauthorized("Authentication error");
+            Err(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error)))
+        }
+    }
+}
+
+/// Check whether `requesting_user` is allowed to access the key owned by `key_user_id`.
+///
+/// Admins and super-admins bypass the ownership check.
+fn check_ownership(requesting_user: &User, key_user_id: Option<Uuid>) -> bool {
+    requesting_user.has_role(&UserRole::Admin) || key_user_id == Some(requesting_user.id())
+}
 
 /// POST /v1/keys - Create a new API key
 pub async fn create_key(
@@ -71,12 +120,42 @@ pub async fn create_key(
 
 /// GET /v1/keys - List API keys
 pub async fn list_keys(
+    req: HttpRequest,
     state: web::Data<AppState>,
     query: web::Query<ListKeysQuery>,
 ) -> ActixResult<HttpResponse> {
     info!("Listing API keys");
 
     let key_manager = get_key_manager(&state)?;
+
+    // When filtering by user_id, verify the requesting user owns that user ID or is admin.
+    if let Some(requested_user_id) = query.user_id {
+        match authenticate_request(&req, &state).await {
+            Err(resp) => return Ok(resp),
+            Ok(None) => {
+                let error_response = KeyErrorResponse::unauthorized(
+                    "Authentication required to list keys by user ID",
+                );
+                return Ok(HttpResponse::Unauthorized()
+                    .json(ApiResponse::<()>::error(error_response.error)));
+            }
+            Ok(Some(ref requesting_user))
+                if !check_ownership(requesting_user, Some(requested_user_id)) =>
+            {
+                warn!(
+                    "User {} attempted to list keys for user {}",
+                    requesting_user.id(),
+                    requested_user_id
+                );
+                let error_response =
+                    KeyErrorResponse::forbidden("Not authorized to list keys for this user");
+                return Ok(
+                    HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
+                );
+            }
+            Ok(_) => {}
+        }
+    }
 
     // Calculate offset from page
     let offset = ((query.page.saturating_sub(1)) * query.limit) as usize;
@@ -145,6 +224,7 @@ pub async fn get_key(
 
 /// PUT /v1/keys/{id} - Update an API key
 pub async fn update_key(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
     request: web::Json<UpdateKeyRequest>,
@@ -153,6 +233,51 @@ pub async fn update_key(
     info!("Updating API key: {}", key_id);
 
     let key_manager = get_key_manager(&state)?;
+
+    // Retrieve key first to check ownership
+    let existing_key = match key_manager.get_key(key_id).await {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            warn!("API key not found: {}", key_id);
+            let error_response = KeyErrorResponse::not_found("API key");
+            return Ok(
+                HttpResponse::NotFound().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Err(e) => {
+            error!("Failed to get API key: {}", e);
+            let error_response = KeyErrorResponse::internal("Failed to get key");
+            return Ok(HttpResponse::InternalServerError()
+                .json(ApiResponse::<()>::error(error_response.error)));
+        }
+    };
+
+    // Verify ownership
+    match authenticate_request(&req, &state).await {
+        Err(resp) => return Ok(resp),
+        Ok(None) => {
+            let error_response =
+                KeyErrorResponse::unauthorized("Authentication required to update a key");
+            return Ok(
+                HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Ok(Some(ref requesting_user))
+            if !check_ownership(requesting_user, existing_key.user_id) =>
+        {
+            warn!(
+                "User {} attempted to update key {} owned by {:?}",
+                requesting_user.id(),
+                key_id,
+                existing_key.user_id
+            );
+            let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+            return Ok(
+                HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Ok(_) => {}
+    }
 
     let config = UpdateKeyConfig {
         name: request.name.clone(),
@@ -189,6 +314,7 @@ pub async fn update_key(
 
 /// DELETE /v1/keys/{id} - Revoke an API key
 pub async fn revoke_key(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
 ) -> ActixResult<HttpResponse> {
@@ -196,6 +322,51 @@ pub async fn revoke_key(
     info!("Revoking API key: {}", key_id);
 
     let key_manager = get_key_manager(&state)?;
+
+    // Retrieve key first to check ownership
+    let existing_key = match key_manager.get_key(key_id).await {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            warn!("API key not found: {}", key_id);
+            let error_response = KeyErrorResponse::not_found("API key");
+            return Ok(
+                HttpResponse::NotFound().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Err(e) => {
+            error!("Failed to get API key: {}", e);
+            let error_response = KeyErrorResponse::internal("Failed to get key");
+            return Ok(HttpResponse::InternalServerError()
+                .json(ApiResponse::<()>::error(error_response.error)));
+        }
+    };
+
+    // Verify ownership
+    match authenticate_request(&req, &state).await {
+        Err(resp) => return Ok(resp),
+        Ok(None) => {
+            let error_response =
+                KeyErrorResponse::unauthorized("Authentication required to revoke a key");
+            return Ok(
+                HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Ok(Some(ref requesting_user))
+            if !check_ownership(requesting_user, existing_key.user_id) =>
+        {
+            warn!(
+                "User {} attempted to revoke key {} owned by {:?}",
+                requesting_user.id(),
+                key_id,
+                existing_key.user_id
+            );
+            let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+            return Ok(
+                HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Ok(_) => {}
+    }
 
     match key_manager.revoke_key(key_id).await {
         Ok(()) => {
@@ -227,6 +398,7 @@ pub async fn revoke_key(
 
 /// POST /v1/keys/{id}/rotate - Rotate an API key
 pub async fn rotate_key(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
 ) -> ActixResult<HttpResponse> {
@@ -234,6 +406,51 @@ pub async fn rotate_key(
     info!("Rotating API key: {}", key_id);
 
     let key_manager = get_key_manager(&state)?;
+
+    // Retrieve key first to check ownership
+    let existing_key = match key_manager.get_key(key_id).await {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            warn!("API key not found: {}", key_id);
+            let error_response = KeyErrorResponse::not_found("API key");
+            return Ok(
+                HttpResponse::NotFound().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Err(e) => {
+            error!("Failed to get API key: {}", e);
+            let error_response = KeyErrorResponse::internal("Failed to get key");
+            return Ok(HttpResponse::InternalServerError()
+                .json(ApiResponse::<()>::error(error_response.error)));
+        }
+    };
+
+    // Verify ownership
+    match authenticate_request(&req, &state).await {
+        Err(resp) => return Ok(resp),
+        Ok(None) => {
+            let error_response =
+                KeyErrorResponse::unauthorized("Authentication required to rotate a key");
+            return Ok(
+                HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Ok(Some(ref requesting_user))
+            if !check_ownership(requesting_user, existing_key.user_id) =>
+        {
+            warn!(
+                "User {} attempted to rotate key {} owned by {:?}",
+                requesting_user.id(),
+                key_id,
+                existing_key.user_id
+            );
+            let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+            return Ok(
+                HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
+            );
+        }
+        Ok(_) => {}
+    }
 
     match key_manager.rotate_key(key_id).await {
         Ok((new_key_id, new_raw_key)) => {
@@ -379,5 +596,102 @@ mod handler_tests {
 
         assert_eq!(config.name, "Test Key");
         assert!(config.description.is_some());
+    }
+
+    #[test]
+    fn test_check_ownership_admin_bypasses() {
+        use crate::core::models::Metadata;
+        use crate::core::models::UsageStats;
+        use crate::core::models::user::preferences::UserPreferences;
+        use crate::core::models::user::types::{UserProfile, UserStatus};
+
+        let admin = User {
+            metadata: Metadata::new(),
+            username: "admin".to_string(),
+            email: "admin@example.com".to_string(),
+            display_name: None,
+            password_hash: "hash".to_string(),
+            role: UserRole::Admin,
+            status: UserStatus::Active,
+            team_ids: vec![],
+            preferences: UserPreferences::default(),
+            usage_stats: UsageStats::default(),
+            rate_limits: None,
+            last_login_at: None,
+            email_verified: true,
+            two_factor_enabled: false,
+            profile: UserProfile::default(),
+        };
+
+        let other_user_id = Uuid::new_v4();
+        // Admin should be allowed to access any key
+        assert!(check_ownership(&admin, Some(other_user_id)));
+        assert!(check_ownership(&admin, None));
+    }
+
+    #[test]
+    fn test_check_ownership_user_owns_key() {
+        use crate::core::models::Metadata;
+        use crate::core::models::UsageStats;
+        use crate::core::models::user::preferences::UserPreferences;
+        use crate::core::models::user::types::{UserProfile, UserStatus};
+
+        let metadata = Metadata::new();
+        let user_id = metadata.id;
+
+        let user = User {
+            metadata,
+            username: "user".to_string(),
+            email: "user@example.com".to_string(),
+            display_name: None,
+            password_hash: "hash".to_string(),
+            role: UserRole::User,
+            status: UserStatus::Active,
+            team_ids: vec![],
+            preferences: UserPreferences::default(),
+            usage_stats: UsageStats::default(),
+            rate_limits: None,
+            last_login_at: None,
+            email_verified: true,
+            two_factor_enabled: false,
+            profile: UserProfile::default(),
+        };
+
+        // User owns the key
+        assert!(check_ownership(&user, Some(user_id)));
+        // User does not own a different key
+        assert!(!check_ownership(&user, Some(Uuid::new_v4())));
+        // Key without owner — regular user cannot access
+        assert!(!check_ownership(&user, None));
+    }
+
+    #[test]
+    fn test_check_ownership_super_admin_bypasses() {
+        use crate::core::models::Metadata;
+        use crate::core::models::UsageStats;
+        use crate::core::models::user::preferences::UserPreferences;
+        use crate::core::models::user::types::{UserProfile, UserStatus};
+
+        let super_admin = User {
+            metadata: Metadata::new(),
+            username: "superadmin".to_string(),
+            email: "superadmin@example.com".to_string(),
+            display_name: None,
+            password_hash: "hash".to_string(),
+            role: UserRole::SuperAdmin,
+            status: UserStatus::Active,
+            team_ids: vec![],
+            preferences: UserPreferences::default(),
+            usage_stats: UsageStats::default(),
+            rate_limits: None,
+            last_login_at: None,
+            email_verified: true,
+            two_factor_enabled: false,
+            profile: UserProfile::default(),
+        };
+
+        let other_user_id = Uuid::new_v4();
+        assert!(check_ownership(&super_admin, Some(other_user_id)));
+        assert!(check_ownership(&super_admin, None));
     }
 }
