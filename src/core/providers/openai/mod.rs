@@ -11,7 +11,6 @@ pub mod config;
 pub mod error;
 pub mod error_mapper;
 pub mod models;
-pub mod provider;
 pub mod streaming;
 pub mod transformer;
 
