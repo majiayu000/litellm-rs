@@ -149,7 +149,7 @@ opt-level = 0
 
 # Feature flags
 [features]
-# Default: gateway with SQLite storage (use --all-features or --features providers-extra,providers-extended for full provider set)
+# Default: gateway with SQLite storage (use --all-features or --features providers-extra for full provider set)
 default = ["sqlite", "redis", "metrics", "tracing"]
 
 # Gateway mode: HTTP server with full middleware stack
@@ -164,9 +164,7 @@ lite = ["metrics", "tracing"]
 
 # Provider compilation tiers (for reducing build size when using --no-default-features)
 # - providers-extra: additional built-in provider implementations used by enum variants
-# - providers-extended: direct provider modules not wired into the unified enum/factory path
 providers-extra = []
-providers-extended = []
 
 # Storage backends (implies gateway since auth/server/monitoring require it)
 storage = ["dep:sea-orm", "dep:sea-orm-migration", "gateway"]
@@ -193,13 +191,13 @@ analytics = ["metrics"]
 enterprise = ["analytics", "vector-db"]
 
 # Full feature set
-full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "cloud-secrets", "providers-extra", "providers-extended"]
+full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "cloud-secrets", "providers-extra"]
 
 # Metadata
 [package.metadata.docs.rs]
 # Exclude vector-db feature because qdrant-client fails on docs.rs read-only filesystem
 all-features = false
-features = ["gateway", "postgres", "sqlite", "redis", "s3", "metrics", "tracing", "websockets", "analytics", "providers-extra", "providers-extended"]
+features = ["gateway", "postgres", "sqlite", "redis", "s3", "metrics", "tracing", "websockets", "analytics", "providers-extra"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.playground]

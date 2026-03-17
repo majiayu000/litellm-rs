@@ -5,188 +5,25 @@
 // Base infrastructure
 pub mod base;
 
-// Provider modules - alphabetically ordered
-// Tier 1 providers removed in favor of registry/catalog.rs are commented with their tier.
-#[cfg(feature = "providers-extended")]
-pub mod ai21;
-// aiml_api: Tier 1 → registry/catalog.rs
-// aleph_alpha: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod amazon_nova;
+// Provider modules — only those wired into the Provider enum or factory.
+// Tier 1 data-driven providers live in registry/catalog.rs (no module needed).
 pub mod anthropic;
-// anyscale: Tier 1 → registry/catalog.rs
 #[cfg(feature = "providers-extra")]
 pub mod azure;
 #[cfg(feature = "providers-extra")]
 pub mod azure_ai;
-// baichuan: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod baseten;
 #[cfg(feature = "providers-extra")]
 pub mod bedrock;
-// bytez: Tier 1 → registry/catalog.rs
-// cerebras: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod clarifai;
 pub mod cloudflare;
-#[cfg(feature = "providers-extended")]
-pub mod codestral;
-#[cfg(feature = "providers-extended")]
-pub mod cohere;
-// comet_api: Tier 1 → registry/catalog.rs
-// compactifai: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod custom_api;
-// dashscope: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod databricks;
-#[cfg(feature = "providers-extended")]
-pub mod datarobot;
-#[cfg(feature = "providers-extended")]
-pub mod deepgram;
-// deepinfra: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod deepl;
-// deepseek: Tier 1 → registry/catalog.rs
-// docker_model_runner: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod elevenlabs;
-#[cfg(feature = "providers-extended")]
-pub mod empower;
-#[cfg(feature = "providers-extended")]
-pub mod exa_ai;
-#[cfg(feature = "providers-extended")]
-pub mod fal_ai;
-// featherless: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod firecrawl;
-#[cfg(feature = "providers-extended")]
-pub mod fireworks;
-#[cfg(feature = "providers-extended")]
-pub mod friendliai;
-#[cfg(feature = "providers-extended")]
-pub mod galadriel;
-#[cfg(feature = "providers-extended")]
-pub mod gemini;
-#[cfg(feature = "providers-extended")]
-pub mod gigachat;
-#[cfg(feature = "providers-extended")]
-pub mod github;
-#[cfg(feature = "providers-extended")]
-pub mod github_copilot;
-#[cfg(feature = "providers-extended")]
-pub mod google_pse;
-#[cfg(feature = "providers-extended")]
-pub mod gradient_ai;
-// groq: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod heroku;
-// hosted_vllm: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod huggingface;
-// hyperbolic: Tier 1 → registry/catalog.rs
-// infinity: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod jina;
-// lambda_ai: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod langgraph;
-// lemonade: Tier 1 → registry/catalog.rs
-// linkup: Tier 1 → registry/catalog.rs
-// llamafile: Tier 1 → registry/catalog.rs
-// lm_studio: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod manus;
-// maritalk: Tier 1 → registry/catalog.rs
 #[cfg(feature = "providers-extra")]
 pub mod meta_llama;
-#[cfg(feature = "providers-extended")]
-pub mod milvus;
-// minimax: Tier 1 → registry/catalog.rs
 pub mod mistral;
-// moonshot: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod morph;
-// nanogpt: Tier 1 → registry/catalog.rs
-// nebius: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod nlp_cloud;
-// novita: Tier 1 → registry/catalog.rs
-// nscale: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod nvidia_nim;
-#[cfg(feature = "providers-extended")]
-pub mod oci;
-#[cfg(feature = "providers-extended")]
-pub mod ollama;
-// oobabooga: Tier 1 → registry/catalog.rs
 pub mod openai;
 pub mod openai_like;
-// openrouter: Tier 1 → registry/catalog.rs
-// ovhcloud: Tier 1 → registry/catalog.rs
-// perplexity: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod petals;
-#[cfg(feature = "providers-extended")]
-pub mod pg_vector;
-// poe: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod predibase;
-#[cfg(feature = "providers-extended")]
-pub mod qwen;
-#[cfg(feature = "providers-extended")]
-pub mod ragflow;
-#[cfg(feature = "providers-extended")]
-pub mod recraft;
-#[cfg(feature = "providers-extended")]
-pub mod replicate;
-#[cfg(feature = "providers-extended")]
-pub mod runwayml;
-#[cfg(feature = "providers-extended")]
-pub mod sagemaker;
-#[cfg(feature = "providers-extended")]
-pub mod sambanova;
-#[cfg(feature = "providers-extended")]
-pub mod sap_ai;
-#[cfg(feature = "providers-extended")]
-pub mod searxng;
-// siliconflow: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod snowflake;
-#[cfg(feature = "providers-extended")]
-pub mod spark;
-#[cfg(feature = "providers-extended")]
-pub mod stability;
-#[cfg(feature = "providers-extended")]
-pub mod tavily;
-#[cfg(feature = "providers-extended")]
-pub mod together;
-#[cfg(feature = "providers-extended")]
-pub mod topaz;
-#[cfg(feature = "providers-extended")]
-pub mod triton;
 #[cfg(feature = "providers-extra")]
 pub mod v0;
-#[cfg(feature = "providers-extended")]
-pub mod vercel_ai;
 #[cfg(feature = "providers-extra")]
 pub mod vertex_ai;
-// vllm: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod volcengine;
-#[cfg(feature = "providers-extended")]
-pub mod voyage;
-#[cfg(feature = "providers-extended")]
-pub mod wandb;
-#[cfg(feature = "providers-extended")]
-pub mod watsonx;
-// xai: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod xiaomi_mimo;
-// xinference: Tier 1 → registry/catalog.rs
-// yi: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod zhipu;
 
 // Shared utilities and architecture
 pub mod macros; // Macros for reducing boilerplate
