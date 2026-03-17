@@ -62,10 +62,8 @@ pub mod fal_ai;
 pub mod firecrawl;
 #[cfg(feature = "providers-extended")]
 pub mod fireworks;
-#[cfg(feature = "providers-extended")]
-pub mod friendliai;
-#[cfg(feature = "providers-extended")]
-pub mod galadriel;
+// friendliai: Tier 1 → registry/catalog.rs
+// galadriel: Tier 1 → registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod gemini;
 #[cfg(feature = "providers-extended")]
@@ -132,8 +130,7 @@ pub mod pg_vector;
 // poe: Tier 1 → registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod predibase;
-#[cfg(feature = "providers-extended")]
-pub mod qwen;
+// qwen: Tier 1 → registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod ragflow;
 #[cfg(feature = "providers-extended")]
@@ -144,8 +141,7 @@ pub mod replicate;
 pub mod runwayml;
 #[cfg(feature = "providers-extended")]
 pub mod sagemaker;
-#[cfg(feature = "providers-extended")]
-pub mod sambanova;
+// sambanova: Tier 1 → registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod sap_ai;
 #[cfg(feature = "providers-extended")]
@@ -181,12 +177,10 @@ pub mod wandb;
 #[cfg(feature = "providers-extended")]
 pub mod watsonx;
 // xai: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod xiaomi_mimo;
+// xiaomi_mimo: Tier 1 → registry/catalog.rs
 // xinference: Tier 1 → registry/catalog.rs
 // yi: Tier 1 → registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod zhipu;
+// zhipu: Tier 1 → registry/catalog.rs
 
 // Shared utilities and architecture
 pub mod macros; // Macros for reducing boilerplate
