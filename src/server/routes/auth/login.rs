@@ -51,14 +51,13 @@ fn extract_client_ip(req: &HttpRequest, trusted_proxies: &[String]) -> String {
         .unwrap_or(peer);
 
     // Only consult X-Forwarded-For when the request arrives from a trusted proxy
-    if !trusted_proxies.is_empty() && trusted_proxies.contains(&peer_ip) {
-        if let Some(xff) = req.headers().get("x-forwarded-for") {
-            if let Ok(xff_str) = xff.to_str() {
-                if let Some(client_ip) = client_ip_from_xff(xff_str) {
-                    return client_ip;
-                }
-            }
-        }
+    if !trusted_proxies.is_empty()
+        && trusted_proxies.contains(&peer_ip)
+        && let Some(xff) = req.headers().get("x-forwarded-for")
+        && let Ok(xff_str) = xff.to_str()
+        && let Some(client_ip) = client_ip_from_xff(xff_str)
+    {
+        return client_ip;
     }
 
     peer_ip
@@ -96,7 +95,7 @@ pub async fn login(
             )));
     }
 
-    info!("User login attempt: {}", request.username);
+    info!("User login attempt from IP {}", client_ip);
 
     // Find user by username
     let user = match state
@@ -107,7 +106,7 @@ pub async fn login(
     {
         Ok(Some(user)) => user,
         Ok(None) => {
-            warn!("Login attempt with invalid username: {}", request.username);
+            warn!("Login attempt with invalid username from IP {}", client_ip);
             limiter.record_failure(&client_ip);
             return Ok(HttpResponse::Unauthorized()
                 .json(ApiResponse::<()>::error("Invalid credentials".to_string())));
@@ -121,7 +120,7 @@ pub async fn login(
 
     // Check if user is active
     if !user.is_active() {
-        warn!("Login attempt for inactive user: {}", request.username);
+        warn!("Login attempt for inactive user from IP {}", client_ip);
         limiter.record_failure(&client_ip);
         return Ok(HttpResponse::Forbidden()
             .json(ApiResponse::<()>::error("Account is disabled".to_string())));
@@ -138,10 +137,7 @@ pub async fn login(
     };
 
     if !password_valid {
-        warn!(
-            "Login attempt with invalid password for user: {}",
-            request.username
-        );
+        warn!("Login attempt with invalid password from IP {}", client_ip);
         limiter.record_failure(&client_ip);
         return Ok(HttpResponse::Unauthorized()
             .json(ApiResponse::<()>::error("Invalid credentials".to_string())));
@@ -187,7 +183,7 @@ pub async fn login(
         }
     };
 
-    info!("User logged in successfully: {}", user.username);
+    info!("User logged in successfully from IP {}", client_ip);
 
     let response = LoginResponse {
         access_token,
