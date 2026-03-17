@@ -1,6 +1,6 @@
-//! Build script for Rust LiteLLM Gateway
+//! Build script for litellm-rs Gateway
 //!
-//! This script sets up build-time environment variables and metadata.
+//! Sets up build-time environment variables and metadata.
 
 use std::process::Command;
 
