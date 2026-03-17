@@ -4,7 +4,9 @@
 
 use crate::config::models::storage::RedisConfig;
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use redis::{Client, aio::MultiplexedConnection};
+use redis::{AsyncConnectionConfig, Client, aio::MultiplexedConnection};
+use std::sync::Arc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info};
 
 /// Redis connection pool (supports no-op mode when Redis is unavailable)
@@ -18,11 +20,15 @@ pub struct RedisPool {
     pub(crate) config: RedisConfig,
     /// Whether this is a no-op pool (Redis unavailable)
     pub(crate) noop_mode: bool,
+    /// Semaphore to enforce max_connections concurrency limit
+    pub(crate) semaphore: Arc<Semaphore>,
 }
 
 /// Redis connection wrapper
 pub struct RedisConnection {
     pub(crate) conn: Option<MultiplexedConnection>,
+    /// Held permit that is released when the connection is dropped
+    pub(crate) _permit: Option<OwnedSemaphorePermit>,
 }
 
 impl RedisPool {
@@ -35,25 +41,39 @@ impl RedisPool {
                 connection_manager: None,
                 config: config.clone(),
                 noop_mode: true,
+                semaphore: Arc::new(Semaphore::new(1)),
             });
         }
 
         info!("Creating Redis connection pool");
         debug!("Redis URL: {}", Self::sanitize_url(&config.url));
+        debug!(
+            "Redis max_connections: {}, connection_timeout: {}s",
+            config.max_connections, config.connection_timeout
+        );
 
         let client = Client::open(config.url.as_str()).map_err(GatewayError::Redis)?;
 
+        let async_config = AsyncConnectionConfig::new()
+            .set_connection_timeout(std::time::Duration::from_secs(config.connection_timeout));
+
         let connection_manager = client
-            .get_multiplexed_async_connection()
+            .get_multiplexed_async_connection_with_config(&async_config)
             .await
             .map_err(GatewayError::Redis)?;
 
-        info!("Redis connection pool created successfully");
+        let max_connections = config.max_connections.max(1) as usize;
+
+        info!(
+            "Redis connection pool created successfully (max_connections={})",
+            max_connections
+        );
         Ok(Self {
             client: Some(client),
             connection_manager: Some(connection_manager),
             config: config.clone(),
             noop_mode: false,
+            semaphore: Arc::new(Semaphore::new(max_connections)),
         })
     }
 
@@ -71,6 +91,7 @@ impl RedisPool {
                 cluster: false,
             },
             noop_mode: true,
+            semaphore: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -79,10 +100,29 @@ impl RedisPool {
         self.noop_mode
     }
 
-    /// Get a connection from the pool
+    /// Get a connection from the pool.
+    ///
+    /// The returned [`RedisConnection`] holds a semaphore permit that limits
+    /// the number of concurrent in-flight Redis operations to `max_connections`.
+    /// The permit is released automatically when the connection is dropped.
     pub async fn get_connection(&self) -> Result<RedisConnection> {
+        if self.noop_mode {
+            return Ok(RedisConnection {
+                conn: None,
+                _permit: None,
+            });
+        }
+
+        let permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
+
         Ok(RedisConnection {
             conn: self.connection_manager.clone(),
+            _permit: Some(permit),
         })
     }
 
