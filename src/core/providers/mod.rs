@@ -240,19 +240,7 @@ macro_rules! dispatch_provider {
         match $self {
             Provider::OpenAI(p) => p.$method(),
             Provider::Anthropic(p) => p.$method(),
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(p) => p.$method(),
-            #[cfg(feature = "providers-extra")]
-            Provider::Bedrock(p) => p.$method(),
             Provider::Mistral(p) => p.$method(),
-            #[cfg(feature = "providers-extra")]
-            Provider::MetaLlama(p) => p.$method(),
-            #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(p) => p.$method(),
-            #[cfg(feature = "providers-extra")]
-            Provider::V0(p) => p.$method(),
-            #[cfg(feature = "providers-extra")]
-            Provider::AzureAI(p) => p.$method(),
             Provider::Cloudflare(p) => p.$method(),
             Provider::OpenAILike(p) => p.$method(),
         }
@@ -262,19 +250,7 @@ macro_rules! dispatch_provider {
         match $self {
             Provider::OpenAI(p) => p.$method($($arg),+),
             Provider::Anthropic(p) => p.$method($($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(p) => p.$method($($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::Bedrock(p) => p.$method($($arg),+),
             Provider::Mistral(p) => p.$method($($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::MetaLlama(p) => p.$method($($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(p) => p.$method($($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::V0(p) => p.$method($($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::AzureAI(p) => p.$method($($arg),+),
             Provider::Cloudflare(p) => p.$method($($arg),+),
             Provider::OpenAILike(p) => p.$method($($arg),+),
         }
@@ -287,19 +263,7 @@ macro_rules! dispatch_provider_async {
         match $self {
             Provider::OpenAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Anthropic(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
-            #[cfg(feature = "providers-extra")]
-            Provider::Bedrock(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
-            #[cfg(feature = "providers-extra")]
-            Provider::MetaLlama(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
-            #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
-            #[cfg(feature = "providers-extra")]
-            Provider::V0(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
-            #[cfg(feature = "providers-extra")]
-            Provider::AzureAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
         }
@@ -312,19 +276,7 @@ macro_rules! dispatch_provider_value {
         match $self {
             Provider::OpenAI(p) => LLMProvider::$method(p),
             Provider::Anthropic(p) => LLMProvider::$method(p),
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(p) => LLMProvider::$method(p),
-            #[cfg(feature = "providers-extra")]
-            Provider::Bedrock(p) => LLMProvider::$method(p),
             Provider::Mistral(p) => LLMProvider::$method(p),
-            #[cfg(feature = "providers-extra")]
-            Provider::MetaLlama(p) => LLMProvider::$method(p),
-            #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(p) => LLMProvider::$method(p),
-            #[cfg(feature = "providers-extra")]
-            Provider::V0(p) => LLMProvider::$method(p),
-            #[cfg(feature = "providers-extra")]
-            Provider::AzureAI(p) => LLMProvider::$method(p),
             Provider::Cloudflare(p) => LLMProvider::$method(p),
             Provider::OpenAILike(p) => LLMProvider::$method(p),
         }
@@ -334,19 +286,7 @@ macro_rules! dispatch_provider_value {
         match $self {
             Provider::OpenAI(p) => LLMProvider::$method(p, $($arg),+),
             Provider::Anthropic(p) => LLMProvider::$method(p, $($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(p) => LLMProvider::$method(p, $($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::Bedrock(p) => LLMProvider::$method(p, $($arg),+),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::MetaLlama(p) => LLMProvider::$method(p, $($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(p) => LLMProvider::$method(p, $($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::V0(p) => LLMProvider::$method(p, $($arg),+),
-            #[cfg(feature = "providers-extra")]
-            Provider::AzureAI(p) => LLMProvider::$method(p, $($arg),+),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),+),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),+),
         }
@@ -379,19 +319,7 @@ macro_rules! dispatch_provider_async_direct {
         match $self {
             Provider::OpenAI(p) => LLMProvider::$method(p).await,
             Provider::Anthropic(p) => LLMProvider::$method(p).await,
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(p) => LLMProvider::$method(p).await,
-            #[cfg(feature = "providers-extra")]
-            Provider::Bedrock(p) => LLMProvider::$method(p).await,
             Provider::Mistral(p) => LLMProvider::$method(p).await,
-            #[cfg(feature = "providers-extra")]
-            Provider::MetaLlama(p) => LLMProvider::$method(p).await,
-            #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(p) => LLMProvider::$method(p).await,
-            #[cfg(feature = "providers-extra")]
-            Provider::V0(p) => LLMProvider::$method(p).await,
-            #[cfg(feature = "providers-extra")]
-            Provider::AzureAI(p) => LLMProvider::$method(p).await,
             Provider::Cloudflare(p) => LLMProvider::$method(p).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
         }
@@ -406,19 +334,7 @@ macro_rules! dispatch_provider_async_direct {
 pub enum Provider {
     OpenAI(openai::OpenAIProvider),
     Anthropic(anthropic::AnthropicProvider),
-    #[cfg(feature = "providers-extra")]
-    Azure(azure::AzureOpenAIProvider),
-    #[cfg(feature = "providers-extra")]
-    Bedrock(bedrock::BedrockProvider),
     Mistral(mistral::MistralProvider),
-    #[cfg(feature = "providers-extra")]
-    MetaLlama(meta_llama::LlamaProvider),
-    #[cfg(feature = "providers-extra")]
-    VertexAI(vertex_ai::VertexAIProvider),
-    #[cfg(feature = "providers-extra")]
-    V0(v0::V0Provider),
-    #[cfg(feature = "providers-extra")]
-    AzureAI(azure_ai::AzureAIProvider),
     Cloudflare(cloudflare::CloudflareProvider),
     /// Tier 1: data-driven OpenAI-compatible providers (groq, together, fireworks, etc.)
     OpenAILike(openai_like::OpenAILikeProvider),
@@ -430,19 +346,7 @@ impl Provider {
         match self {
             Provider::OpenAI(_) => "openai",
             Provider::Anthropic(_) => "anthropic",
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(_) => "azure",
-            #[cfg(feature = "providers-extra")]
-            Provider::Bedrock(_) => "bedrock",
             Provider::Mistral(_) => "mistral",
-            #[cfg(feature = "providers-extra")]
-            Provider::MetaLlama(_) => "meta_llama",
-            #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(_) => "vertex_ai",
-            #[cfg(feature = "providers-extra")]
-            Provider::V0(_) => "v0",
-            #[cfg(feature = "providers-extra")]
-            Provider::AzureAI(_) => "azure_ai",
             Provider::Cloudflare(_) => "cloudflare",
             Provider::OpenAILike(p) => {
                 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
@@ -456,19 +360,7 @@ impl Provider {
         match self {
             Provider::OpenAI(_) => ProviderType::OpenAI,
             Provider::Anthropic(_) => ProviderType::Anthropic,
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(_) => ProviderType::Azure,
-            #[cfg(feature = "providers-extra")]
-            Provider::Bedrock(_) => ProviderType::Bedrock,
             Provider::Mistral(_) => ProviderType::Mistral,
-            #[cfg(feature = "providers-extra")]
-            Provider::MetaLlama(_) => ProviderType::MetaLlama,
-            #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(_) => ProviderType::VertexAI,
-            #[cfg(feature = "providers-extra")]
-            Provider::V0(_) => ProviderType::V0,
-            #[cfg(feature = "providers-extra")]
-            Provider::AzureAI(_) => ProviderType::AzureAI,
             Provider::Cloudflare(_) => ProviderType::Cloudflare,
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,
         }
@@ -571,8 +463,6 @@ impl Provider {
 
         match self {
             Provider::OpenAI(p) => LLMProvider::embeddings(p, request, context).await,
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(p) => LLMProvider::embeddings(p, request, context).await,
             _ => Err(ProviderError::not_implemented(
                 "unknown",
                 format!("Embeddings not supported by {}", self.name()),
