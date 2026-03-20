@@ -34,6 +34,8 @@ pub struct ChatMessage {
 pub enum MessageRole {
     /// System message role
     System,
+    /// Developer message role (replaces System for OpenAI o-series models)
+    Developer,
     /// User message role
     User,
     /// Assistant message role
@@ -234,6 +236,7 @@ impl From<MessageRole> for crate::core::types::message::MessageRole {
     fn from(value: MessageRole) -> Self {
         match value {
             MessageRole::System => Self::System,
+            MessageRole::Developer => Self::Developer,
             MessageRole::User => Self::User,
             MessageRole::Assistant => Self::Assistant,
             MessageRole::Function => Self::Function,
@@ -246,6 +249,7 @@ impl From<crate::core::types::message::MessageRole> for MessageRole {
     fn from(value: crate::core::types::message::MessageRole) -> Self {
         match value {
             crate::core::types::message::MessageRole::System => Self::System,
+            crate::core::types::message::MessageRole::Developer => Self::Developer,
             crate::core::types::message::MessageRole::User => Self::User,
             crate::core::types::message::MessageRole::Assistant => Self::Assistant,
             crate::core::types::message::MessageRole::Function => Self::Function,

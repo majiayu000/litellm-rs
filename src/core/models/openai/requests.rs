@@ -61,6 +61,8 @@ pub struct ChatCompletionRequest {
     pub modalities: Option<Vec<String>>,
     /// Audio parameters
     pub audio: Option<AudioParams>,
+    /// Reasoning effort for o-series and GPT-5.x models ("low", "medium", "high")
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for ChatCompletionRequest {
@@ -90,6 +92,7 @@ impl Default for ChatCompletionRequest {
             top_logprobs: None,
             modalities: None,
             audio: None,
+            reasoning_effort: None,
         }
     }
 }

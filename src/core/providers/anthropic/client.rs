@@ -298,7 +298,7 @@ impl AnthropicClient {
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "user",     // Response
                 MessageRole::Function => "user", // Response
-                MessageRole::System => continue, // Already handled
+                MessageRole::System | MessageRole::Developer => continue, // Already handled
             };
 
             let content = if let Some(content) = message.content {

@@ -127,7 +127,7 @@ impl MistralChatTransformation {
             .iter()
             .map(|msg| {
                 let role = match msg.role {
-                    MessageRole::System => "system",
+                    MessageRole::System | MessageRole::Developer => "system",
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
                     MessageRole::Function => "tool", // Mistral uses "tool" for function messages
