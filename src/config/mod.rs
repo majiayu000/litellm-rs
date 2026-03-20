@@ -17,13 +17,44 @@ use crate::config::models::router::GatewayRouterConfig;
 use crate::config::models::server::ServerConfig;
 use crate::config::models::storage::StorageConfig;
 use crate::utils::error::gateway_error::{GatewayError, Result};
+use regex::Regex;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Canonical alias for gateway server runtime configuration.
 pub type GatewayServerConfig = crate::config::models::server::ServerConfig;
 /// Canonical alias for gateway provider runtime configuration.
 pub type GatewayProviderConfig = crate::config::models::provider::ProviderConfig;
+
+/// Substitutes `${VAR_NAME}` and `$VAR_NAME` patterns in a string with
+/// corresponding environment variable values. Unresolved variables are left as-is
+/// and a warning is emitted.
+fn substitute_env_vars(input: &str) -> String {
+    // Match ${VAR_NAME} first, then bare $VAR_NAME
+    let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+        .expect("static regex is valid");
+
+    re.replace_all(input, |caps: &regex::Captures<'_>| {
+        // Group 1: ${VAR_NAME}, group 2: $VAR_NAME
+        let var_name = caps
+            .get(1)
+            .or_else(|| caps.get(2))
+            .map(|m| m.as_str())
+            .unwrap_or("");
+
+        match std::env::var(var_name) {
+            Ok(val) => val,
+            Err(_) => {
+                warn!(
+                    "Config env var '{}' is not set; leaving placeholder as-is",
+                    var_name
+                );
+                caps[0].to_string()
+            }
+        }
+    })
+    .into_owned()
+}
 
 /// Main configuration struct for the Gateway
 #[derive(Debug, Clone, Default)]
@@ -41,6 +72,8 @@ impl Config {
         let content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| GatewayError::Config(format!("Failed to read config file: {}", e)))?;
+
+        let content = substitute_env_vars(&content);
 
         let gateway: GatewayConfig = serde_yml::from_str(&content)
             .map_err(|e| GatewayError::Config(format!("Failed to parse config: {}", e)))?;
@@ -134,6 +167,32 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_substitute_env_vars_braces() {
+        // SAFETY: test-only mutation of env, not run in parallel with other tests touching this var
+        unsafe { std::env::set_var("TEST_HOST", "example.com") };
+        let result = substitute_env_vars("host: ${TEST_HOST}");
+        assert_eq!(result, "host: example.com");
+        unsafe { std::env::remove_var("TEST_HOST") };
+    }
+
+    #[test]
+    fn test_substitute_env_vars_bare() {
+        // SAFETY: test-only mutation of env, not run in parallel with other tests touching this var
+        unsafe { std::env::set_var("TEST_PORT", "9000") };
+        let result = substitute_env_vars("port: $TEST_PORT");
+        assert_eq!(result, "port: 9000");
+        unsafe { std::env::remove_var("TEST_PORT") };
+    }
+
+    #[test]
+    fn test_substitute_env_vars_missing_leaves_placeholder() {
+        // SAFETY: test-only removal, unique var name avoids interference
+        unsafe { std::env::remove_var("DEFINITELY_NOT_SET_XYZ") };
+        let result = substitute_env_vars("key: ${DEFINITELY_NOT_SET_XYZ}");
+        assert_eq!(result, "key: ${DEFINITELY_NOT_SET_XYZ}");
+    }
 
     #[tokio::test]
     async fn test_config_from_file() {
