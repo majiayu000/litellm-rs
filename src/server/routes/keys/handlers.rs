@@ -36,10 +36,10 @@ fn check_ownership(
     }
     // Managers can access team-scoped keys for teams they belong to.
     // has_role(Manager) is true for Manager, Admin, and SuperAdmin.
-    if requesting_user.has_role(&UserRole::Manager) {
-        if let Some(team_id) = key_team_id {
-            return requesting_user.team_ids.contains(&team_id);
-        }
+    if requesting_user.has_role(&UserRole::Manager)
+        && let Some(team_id) = key_team_id
+    {
+        return requesting_user.team_ids.contains(&team_id);
     }
     false
 }
@@ -315,17 +315,18 @@ pub async fn get_key(
     match key_manager.get_key(key_id).await {
         Ok(Some(key)) => {
             // Ownership check (skipped when auth is disabled).
-            if let Some(ref auth) = auth_opt {
-                if !check_auth_result_ownership(auth, key.user_id, key.team_id) {
-                    warn!(
-                        "Caller attempted to access key {} owned by user={:?} team={:?}",
-                        key_id, key.user_id, key.team_id
-                    );
-                    let error_response =
-                        KeyErrorResponse::forbidden("Not authorized to access this key");
-                    return Ok(HttpResponse::Forbidden()
-                        .json(ApiResponse::<()>::error(error_response.error)));
-                }
+            if let Some(ref auth) = auth_opt
+                && !check_auth_result_ownership(auth, key.user_id, key.team_id)
+            {
+                warn!(
+                    "Caller attempted to access key {} owned by user={:?} team={:?}",
+                    key_id, key.user_id, key.team_id
+                );
+                let error_response =
+                    KeyErrorResponse::forbidden("Not authorized to access this key");
+                return Ok(
+                    HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
+                );
             }
             let response = KeyResponse { key };
             Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
@@ -391,17 +392,15 @@ pub async fn update_key(
         }
     };
 
-    if let Some(ref auth) = auth_opt {
-        if !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id) {
-            warn!(
-                "Caller attempted to update key {} owned by user={:?} team={:?}",
-                key_id, existing_key.user_id, existing_key.team_id
-            );
-            let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
-            return Ok(
-                HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
-            );
-        }
+    if let Some(ref auth) = auth_opt
+        && !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id)
+    {
+        warn!(
+            "Caller attempted to update key {} owned by user={:?} team={:?}",
+            key_id, existing_key.user_id, existing_key.team_id
+        );
+        let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+        return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
     }
 
     let config = UpdateKeyConfig {
@@ -483,17 +482,15 @@ pub async fn revoke_key(
         }
     };
 
-    if let Some(ref auth) = auth_opt {
-        if !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id) {
-            warn!(
-                "Caller attempted to revoke key {} owned by user={:?} team={:?}",
-                key_id, existing_key.user_id, existing_key.team_id
-            );
-            let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
-            return Ok(
-                HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
-            );
-        }
+    if let Some(ref auth) = auth_opt
+        && !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id)
+    {
+        warn!(
+            "Caller attempted to revoke key {} owned by user={:?} team={:?}",
+            key_id, existing_key.user_id, existing_key.team_id
+        );
+        let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+        return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
     }
 
     match key_manager.revoke_key(key_id).await {
@@ -570,17 +567,15 @@ pub async fn rotate_key(
         }
     };
 
-    if let Some(ref auth) = auth_opt {
-        if !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id) {
-            warn!(
-                "Caller attempted to rotate key {} owned by user={:?} team={:?}",
-                key_id, existing_key.user_id, existing_key.team_id
-            );
-            let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
-            return Ok(
-                HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
-            );
-        }
+    if let Some(ref auth) = auth_opt
+        && !check_auth_result_ownership(auth, existing_key.user_id, existing_key.team_id)
+    {
+        warn!(
+            "Caller attempted to rotate key {} owned by user={:?} team={:?}",
+            key_id, existing_key.user_id, existing_key.team_id
+        );
+        let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+        return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
     }
 
     match key_manager.rotate_key(key_id).await {
@@ -673,17 +668,15 @@ pub async fn get_key_usage(
         }
     };
 
-    if let Some(ref auth) = auth_opt {
-        if !check_auth_result_ownership(auth, key.user_id, key.team_id) {
-            warn!(
-                "Caller attempted to access usage for key {} owned by user={:?} team={:?}",
-                key_id, key.user_id, key.team_id
-            );
-            let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
-            return Ok(
-                HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
-            );
-        }
+    if let Some(ref auth) = auth_opt
+        && !check_auth_result_ownership(auth, key.user_id, key.team_id)
+    {
+        warn!(
+            "Caller attempted to access usage for key {} owned by user={:?} team={:?}",
+            key_id, key.user_id, key.team_id
+        );
+        let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+        return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
     }
 
     match key_manager.get_usage_stats(key_id).await {
