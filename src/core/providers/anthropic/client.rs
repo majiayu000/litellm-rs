@@ -240,6 +240,17 @@ impl AnthropicClient {
             }
         }
 
+        // Add thinking configuration
+        if let Some(thinking) = &request.thinking {
+            if thinking.enabled && model_spec.features.contains(&ModelFeature::ThinkingMode) {
+                let budget = thinking.budget_tokens.unwrap_or(10_000);
+                anthropic_request["thinking"] = json!({
+                    "type": "enabled",
+                    "budget_tokens": budget
+                });
+            }
+        }
+
         Ok(anthropic_request)
     }
 

@@ -47,7 +47,7 @@ pub const PROVIDER_NAME: &str = "anthropic";
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 pub const DEFAULT_API_VERSION: &str = "2023-06-01";
 pub const MAX_CONTEXT_LENGTH: u32 = 200_000;
-pub const MAX_OUTPUT_TOKENS: u32 = 8_192;
+pub const MAX_OUTPUT_TOKENS: u32 = 128_000;
 
 /// Create a new Anthropic provider
 pub fn new_provider(api_key: impl Into<String>) -> Result<AnthropicProvider, AnthropicError> {
