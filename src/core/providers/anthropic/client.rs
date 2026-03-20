@@ -253,7 +253,7 @@ impl AnthropicClient {
 
         for message in messages {
             match message.role {
-                MessageRole::System => {
+                MessageRole::System | MessageRole::Developer => {
                     if let Some(content) = &message.content {
                         match content {
                             crate::core::types::message::MessageContent::Text(text) => {
