@@ -20,6 +20,7 @@ use crate::core::types::{
     message::MessageContent,
     message::MessageRole,
     responses::{ChatChoice, ChatResponse, Usage},
+    tools::{FunctionCall, ToolCall},
 };
 
 use super::config::GeminiConfig;
@@ -214,7 +215,16 @@ impl GeminiClient {
     pub fn transform_chat_request(&self, request: &ChatRequest) -> Result<Value, ProviderError> {
         let mut contents = Vec::new();
 
+        // Collect system message parts for systemInstruction field
+        let mut system_parts: Vec<Value> = Vec::new();
         for message in &request.messages {
+            if message.role == MessageRole::System {
+                if let Some(text) = message.content.as_ref() {
+                    system_parts.push(json!({"text": text.to_string()}));
+                }
+                continue;
+            }
+
             let content = self.transform_message_content(message)?;
             let role = match message.role {
                 MessageRole::System | MessageRole::Developer => {
@@ -233,23 +243,14 @@ impl GeminiClient {
             }));
         }
 
-        // Handle
-        if let Some(system_msg) = request
-            .messages
-            .iter()
-            .find(|m| m.role == MessageRole::System)
-            && let Some(system_text) = system_msg.content.as_ref()
-            && let Some(first_content) = contents.first_mut()
-            && let Some(parts) = first_content
-                .get_mut("parts")
-                .and_then(|p| p.as_array_mut())
-        {
-            parts.insert(0, json!({"text": format!("System: {}", system_text)}));
-        }
-
         let mut gemini_request = json!({
             "contents": contents
         });
+
+        // Place system instructions in the dedicated systemInstruction field
+        if !system_parts.is_empty() {
+            gemini_request["systemInstruction"] = json!({"parts": system_parts});
+        }
 
         // Configuration
         let mut generation_config = json!({});
@@ -435,11 +436,32 @@ impl GeminiClient {
                 .and_then(|p| p.as_array())
                 .ok_or_else(|| gemini_parse_error("Invalid candidate content structure"))?;
 
-            // Extract text content
+            // Extract text content and function calls
             let mut text_parts = Vec::new();
-            for part in content {
+            let mut tool_calls: Vec<ToolCall> = Vec::new();
+            for (part_index, part) in content.iter().enumerate() {
                 if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                     text_parts.push(text);
+                }
+                // Map Gemini functionCall parts to unified ToolCall format
+                if let Some(fc) = part.get("functionCall") {
+                    let name = fc
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let args = fc
+                        .get("args")
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| "{}".to_string());
+                    tool_calls.push(ToolCall {
+                        id: format!("call_{}_{}", index, part_index),
+                        tool_type: "function".to_string(),
+                        function: FunctionCall {
+                            name,
+                            arguments: args,
+                        },
+                    });
                 }
             }
             let message_content = text_parts.join("");
@@ -457,14 +479,24 @@ impl GeminiClient {
                 })
                 .unwrap_or("stop");
 
+            let msg_content = if message_content.is_empty() && !tool_calls.is_empty() {
+                None
+            } else {
+                Some(MessageContent::Text(message_content))
+            };
+
             choices.push(ChatChoice {
                 index: index as u32,
                 message: crate::core::types::chat::ChatMessage {
                     role: MessageRole::Assistant,
-                    content: Some(MessageContent::Text(message_content)),
+                    content: msg_content,
                     thinking: None,
                     name: None,
-                    tool_calls: None,
+                    tool_calls: if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(tool_calls)
+                    },
                     tool_call_id: None,
                     function_call: None,
                 },
