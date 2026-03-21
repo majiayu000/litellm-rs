@@ -293,10 +293,27 @@ impl OpenAILikeProvider {
             for (key, value) in request.extra_params {
                 obj.insert(key, value);
             }
-            // Merge OpenRouter reasoning params (reasoning.effort etc.)
+            // Merge OpenRouter reasoning params without overwriting user-supplied nested keys.
+            // If both extra_params and the thinking transform produced a "reasoning" object,
+            // merge their inner keys so that user-provided flags (e.g. "exclude") are preserved.
             if let Some(Value::Object(params)) = openrouter_thinking_params {
                 for (key, value) in params {
-                    obj.insert(key, value);
+                    match obj.get_mut(&key) {
+                        Some(Value::Object(existing)) if value.is_object() => {
+                            // Deep merge: add thinking-param keys not already set by the user.
+                            if let Value::Object(incoming) = value {
+                                for (k, v) in incoming {
+                                    existing.entry(k).or_insert(v);
+                                }
+                            }
+                        }
+                        Some(_) => {
+                            // User already set this top-level key via extra_params; keep it.
+                        }
+                        None => {
+                            obj.insert(key, value);
+                        }
+                    }
                 }
             }
         }
