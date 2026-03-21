@@ -276,7 +276,10 @@ mod tests {
         };
 
         assert_eq!(key.metadata.len(), 2);
-        assert_eq!(key.metadata.get("environment"), Some(&"production".to_string()));
+        assert_eq!(
+            key.metadata.get("environment"),
+            Some(&"production".to_string())
+        );
     }
 
     #[test]
@@ -575,9 +578,21 @@ mod tests {
     fn test_key_generation_settings_default_permissions() {
         let settings = KeyGenerationSettings::default();
 
-        assert!(settings.default_permissions.contains(&Permission::ChatCompletion));
-        assert!(settings.default_permissions.contains(&Permission::TextCompletion));
-        assert!(settings.default_permissions.contains(&Permission::Embedding));
+        assert!(
+            settings
+                .default_permissions
+                .contains(&Permission::ChatCompletion)
+        );
+        assert!(
+            settings
+                .default_permissions
+                .contains(&Permission::TextCompletion)
+        );
+        assert!(
+            settings
+                .default_permissions
+                .contains(&Permission::Embedding)
+        );
     }
 
     #[test]
@@ -686,7 +701,10 @@ mod tests {
         // Check if under limits
         let under_rpm = limits.rpm.map(|l| state.request_count < l).unwrap_or(true);
         let under_tpm = limits.tpm.map(|l| state.token_count < l).unwrap_or(true);
-        let under_parallel = limits.max_parallel_requests.map(|l| state.parallel_requests < l).unwrap_or(true);
+        let under_parallel = limits
+            .max_parallel_requests
+            .map(|l| state.parallel_requests < l)
+            .unwrap_or(true);
 
         assert!(under_rpm);
         assert!(under_tpm);
@@ -713,9 +731,15 @@ mod tests {
         };
 
         // Check if over limits
-        let over_rpm = limits.rpm.map(|l| state.request_count >= l).unwrap_or(false);
+        let over_rpm = limits
+            .rpm
+            .map(|l| state.request_count >= l)
+            .unwrap_or(false);
         let over_tpm = limits.tpm.map(|l| state.token_count >= l).unwrap_or(false);
-        let over_parallel = limits.max_parallel_requests.map(|l| state.parallel_requests >= l).unwrap_or(false);
+        let over_parallel = limits
+            .max_parallel_requests
+            .map(|l| state.parallel_requests >= l)
+            .unwrap_or(false);
 
         assert!(over_rpm);
         assert!(over_tpm);
@@ -727,7 +751,10 @@ mod tests {
         let key = create_test_virtual_key();
 
         let cost = 10.0;
-        let would_exceed = key.max_budget.map(|b| key.spend + cost > b).unwrap_or(false);
+        let would_exceed = key
+            .max_budget
+            .map(|b| key.spend + cost > b)
+            .unwrap_or(false);
 
         assert!(!would_exceed); // 25 + 10 = 35 < 100
     }
@@ -738,7 +765,10 @@ mod tests {
         key.spend = 95.0;
 
         let cost = 10.0;
-        let would_exceed = key.max_budget.map(|b| key.spend + cost > b).unwrap_or(false);
+        let would_exceed = key
+            .max_budget
+            .map(|b| key.spend + cost > b)
+            .unwrap_or(false);
 
         assert!(would_exceed); // 95 + 10 = 105 > 100
     }
@@ -747,8 +777,7 @@ mod tests {
     fn test_key_validity_check() {
         let key = create_test_virtual_key();
 
-        let is_valid = key.is_active
-            && key.expires_at.map(|e| Utc::now() < e).unwrap_or(true);
+        let is_valid = key.is_active && key.expires_at.map(|e| Utc::now() < e).unwrap_or(true);
 
         assert!(is_valid);
     }
@@ -758,8 +787,7 @@ mod tests {
         let mut key = create_test_virtual_key();
         key.is_active = false;
 
-        let is_valid = key.is_active
-            && key.expires_at.map(|e| Utc::now() < e).unwrap_or(true);
+        let is_valid = key.is_active && key.expires_at.map(|e| Utc::now() < e).unwrap_or(true);
 
         assert!(!is_valid);
     }

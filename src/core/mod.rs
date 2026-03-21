@@ -42,9 +42,8 @@ pub mod traits;
 pub mod types;
 // User and team management - disabled until database methods are implemented
 // These modules require the following database methods to be implemented:
-// - virtual_keys: store_virtual_key, get_virtual_key, update_virtual_key, etc.
 // - user_management: get_user, create_user, get_team, create_team, etc.
-// NOTE: Requires database method implementations (virtual_keys, user_management).
+// NOTE: user_management requires database method implementations.
 // pub mod user_management;
-// pub mod virtual_keys;
+pub mod virtual_keys; // Database methods implemented as stubs in storage/database/seaorm_db/virtual_key_ops.rs
 pub mod webhooks;
