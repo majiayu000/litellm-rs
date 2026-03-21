@@ -642,10 +642,7 @@ mod tests {
             max_budget: Some(200.0),
             budget_duration: None,
             rate_limits: Some(create_test_rate_limits()),
-            permissions: Some(vec![
-                Permission::ChatCompletion,
-                Permission::Embedding,
-            ]),
+            permissions: Some(vec![Permission::ChatCompletion, Permission::Embedding]),
             metadata: None,
             expires_at: None,
             is_active: None,
@@ -681,13 +678,13 @@ mod tests {
 
     #[test]
     fn test_permission_combinations() {
-        let basic_perms = vec![Permission::ChatCompletion];
-        let standard_perms = vec![
+        let basic_perms = [Permission::ChatCompletion];
+        let standard_perms = [
             Permission::ChatCompletion,
             Permission::TextCompletion,
             Permission::Embedding,
         ];
-        let admin_perms = vec![
+        let admin_perms = [
             Permission::ChatCompletion,
             Permission::TextCompletion,
             Permission::Embedding,

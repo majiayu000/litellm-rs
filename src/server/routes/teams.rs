@@ -15,8 +15,8 @@
 //! - `GET    /v1/teams/{id}/usage`                - Get team usage statistics
 
 use crate::core::teams::{
-    AddMemberRequest, CreateTeamRequest, InMemoryTeamRepository, Team, TeamManager, TeamRole,
-    UpdateRoleRequest, UpdateTeamRequest,
+    AddMemberRequest, CreateTeamRequest, Team, TeamManager, TeamRole, UpdateRoleRequest,
+    UpdateTeamRequest,
 };
 use crate::server::routes::{ApiResponse, PaginatedResponse, PaginationQuery, errors};
 use crate::server::state::AppState;
@@ -90,13 +90,9 @@ pub struct MemberPath {
     pub user_id: Uuid,
 }
 
-/// Get or create the team manager from app state
-fn get_team_manager(_state: &web::Data<AppState>) -> TeamManager {
-    // For now, we use an in-memory repository
-    // In production, this would be backed by the database
-    // NOTE: Team manager should be stored in AppState for persistence.
-    let repo = Arc::new(InMemoryTeamRepository::new());
-    TeamManager::new(repo)
+/// Get the shared team manager from app state
+fn get_team_manager(state: &web::Data<AppState>) -> Arc<TeamManager> {
+    state.team_manager.clone()
 }
 
 /// Create a new team
@@ -281,7 +277,7 @@ pub async fn add_member(
         role: body.role.clone(),
     };
 
-    // NOTE: Should extract inviting user from auth context.
+    // Auth context not yet wired; invited_by is left unset.
     let invited_by = None;
 
     match manager.add_member(path.id, request, invited_by).await {

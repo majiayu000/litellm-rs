@@ -4,6 +4,7 @@
 
 use crate::config::Config;
 use crate::core::budget::UnifiedBudgetLimits;
+use crate::core::teams::{InMemoryTeamRepository, TeamManager};
 use crate::services::pricing::PricingService;
 use crate::utils::sync::AtomicValue;
 use std::sync::Arc;
@@ -31,6 +32,8 @@ pub struct AppState {
     pub pricing: Arc<PricingService>,
     /// Budget limits for provider and model cost tracking
     pub budget_limits: Arc<UnifiedBudgetLimits>,
+    /// Team manager for team lifecycle operations (shared, in-memory by default)
+    pub team_manager: Arc<TeamManager>,
 }
 
 impl AppState {
@@ -42,6 +45,7 @@ impl AppState {
         storage: crate::storage::StorageLayer,
         pricing: Arc<PricingService>,
     ) -> Self {
+        let team_manager = Arc::new(TeamManager::new(Arc::new(InMemoryTeamRepository::new())));
         Self {
             config: AtomicValue::new(config),
             auth: Arc::new(auth),
@@ -49,6 +53,7 @@ impl AppState {
             storage: Arc::new(storage),
             pricing,
             budget_limits: Arc::new(UnifiedBudgetLimits::new()),
+            team_manager,
         }
     }
 

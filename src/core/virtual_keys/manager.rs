@@ -98,10 +98,10 @@ impl VirtualKeyManager {
         // Check cache first
         {
             let data = self.key_data.read().await;
-            if let Some(key) = data.cache.get(&key_hash) {
-                if self.is_key_valid(key) {
-                    return Ok(key.clone());
-                }
+            if let Some(key) = data.cache.get(&key_hash)
+                && self.is_key_valid(key)
+            {
+                return Ok(key.clone());
             }
         }
 
@@ -142,11 +142,7 @@ impl VirtualKeyManager {
     }
 
     /// Check rate limits for a key
-    pub async fn check_rate_limits(
-        &self,
-        key: &VirtualKey,
-        tokens_requested: u32,
-    ) -> Result<()> {
+    pub async fn check_rate_limits(&self, key: &VirtualKey, tokens_requested: u32) -> Result<()> {
         if let Some(rate_limits) = &key.rate_limits {
             let mut data = self.key_data.write().await;
             let state = data
@@ -169,48 +165,39 @@ impl VirtualKeyManager {
             }
 
             // Check RPM
-            if let Some(rpm) = rate_limits.rpm {
-                if state.request_count >= rpm {
-                    return Err(GatewayError::RateLimit {
-                        message: format!(
-                            "Rate limit exceeded: {} requests per minute",
-                            rpm
-                        ),
-                        retry_after: Some(60),
-                        rpm_limit: Some(rpm),
-                        tpm_limit: rate_limits.tpm,
-                    });
-                }
+            if let Some(rpm) = rate_limits.rpm
+                && state.request_count >= rpm
+            {
+                return Err(GatewayError::RateLimit {
+                    message: format!("Rate limit exceeded: {} requests per minute", rpm),
+                    retry_after: Some(60),
+                    rpm_limit: Some(rpm),
+                    tpm_limit: rate_limits.tpm,
+                });
             }
 
             // Check TPM
-            if let Some(tpm) = rate_limits.tpm {
-                if state.token_count + tokens_requested > tpm {
-                    return Err(GatewayError::RateLimit {
-                        message: format!(
-                            "Token rate limit exceeded: {} tokens per minute",
-                            tpm
-                        ),
-                        retry_after: Some(60),
-                        rpm_limit: rate_limits.rpm,
-                        tpm_limit: Some(tpm),
-                    });
-                }
+            if let Some(tpm) = rate_limits.tpm
+                && state.token_count + tokens_requested > tpm
+            {
+                return Err(GatewayError::RateLimit {
+                    message: format!("Token rate limit exceeded: {} tokens per minute", tpm),
+                    retry_after: Some(60),
+                    rpm_limit: rate_limits.rpm,
+                    tpm_limit: Some(tpm),
+                });
             }
 
             // Check parallel requests
-            if let Some(max_parallel) = rate_limits.max_parallel_requests {
-                if state.parallel_requests >= max_parallel {
-                    return Err(GatewayError::RateLimit {
-                        message: format!(
-                            "Too many parallel requests: max {}",
-                            max_parallel
-                        ),
-                        retry_after: Some(1),
-                        rpm_limit: rate_limits.rpm,
-                        tpm_limit: rate_limits.tpm,
-                    });
-                }
+            if let Some(max_parallel) = rate_limits.max_parallel_requests
+                && state.parallel_requests >= max_parallel
+            {
+                return Err(GatewayError::RateLimit {
+                    message: format!("Too many parallel requests: max {}", max_parallel),
+                    retry_after: Some(1),
+                    rpm_limit: rate_limits.rpm,
+                    tpm_limit: rate_limits.tpm,
+                });
             }
 
             // Update counters
@@ -225,22 +212,22 @@ impl VirtualKeyManager {
     /// Record request completion (for parallel request tracking)
     pub async fn record_request_completion(&self, key_id: &str) {
         let mut data = self.key_data.write().await;
-        if let Some(state) = data.rate_limits.get_mut(key_id) {
-            if state.parallel_requests > 0 {
-                state.parallel_requests -= 1;
-            }
+        if let Some(state) = data.rate_limits.get_mut(key_id)
+            && state.parallel_requests > 0
+        {
+            state.parallel_requests -= 1;
         }
     }
 
     /// Check budget limits
     pub async fn check_budget(&self, key: &VirtualKey, cost: f64) -> Result<()> {
-        if let Some(max_budget) = key.max_budget {
-            if key.spend + cost > max_budget {
-                return Err(GatewayError::BudgetExceeded(format!(
-                    "Budget exceeded: ${:.2} + ${:.2} > ${:.2}",
-                    key.spend, cost, max_budget
-                )));
-            }
+        if let Some(max_budget) = key.max_budget
+            && key.spend + cost > max_budget
+        {
+            return Err(GatewayError::Forbidden(format!(
+                "Budget exceeded: ${:.2} + ${:.2} > ${:.2}",
+                key.spend, cost, max_budget
+            )));
         }
         Ok(())
     }
@@ -373,10 +360,10 @@ impl VirtualKeyManager {
             return false;
         }
 
-        if let Some(expires_at) = key.expires_at {
-            if Utc::now() > expires_at {
-                return false;
-            }
+        if let Some(expires_at) = key.expires_at
+            && Utc::now() > expires_at
+        {
+            return false;
         }
 
         true

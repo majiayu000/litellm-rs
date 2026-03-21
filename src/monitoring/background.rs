@@ -52,26 +52,24 @@ impl MonitoringSystem {
         Ok(())
     }
 
-    /// Aggregate metrics for storage
+    /// Aggregate metrics for storage.
+    ///
+    /// Collects the current snapshot; persistence is a stub until the
+    /// storage layer exposes a `store_metrics` method with a compatible
+    /// signature.
     pub(super) async fn aggregate_metrics(&self) -> Result<()> {
         debug!("Aggregating metrics");
-
         let _metrics = self.get_metrics().await?;
-
-        // Store metrics in database
-        // NOTE: SystemMetrics and RequestMetrics type mismatch; conversion needed before storage.
-        // self.storage.db().store_metrics(&metrics).await?;
-
-        // Store metrics in time series database (if configured)
-        // NOTE: time series storage not yet implemented
-
+        // Storage stub: persist metrics once store_metrics is implemented.
         Ok(())
     }
 
-    /// Run health checks
+    /// Run health checks.
+    ///
+    /// Stub — health check integration will be wired when the monitoring
+    /// system is activated.
     pub(super) async fn run_health_checks(&self) -> Result<()> {
         debug!("Running health checks");
-        // NOTE: health check integration pending monitoring system activation
         Ok(())
     }
 
