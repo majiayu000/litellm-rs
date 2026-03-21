@@ -28,7 +28,7 @@ impl MistralEmbeddingHandler {
         request: crate::core::types::embedding::EmbeddingRequest,
     ) -> Result<Value, MistralError> {
         let transformed = json!({
-            "model": "mistral-embed", // Always use mistral-embed for embeddings
+            "model": request.model,
             "input": request.input,
             "encoding_format": request.encoding_format.unwrap_or_else(|| "float".to_string()),
         });
@@ -146,6 +146,26 @@ mod tests {
         let value = result.unwrap();
         assert_eq!(value["model"], "mistral-embed");
         assert_eq!(value["encoding_format"], "float");
+    }
+
+    #[test]
+    fn test_transform_request_respects_user_model() {
+        let config = create_test_config();
+        let handler = MistralEmbeddingHandler::new(config).unwrap();
+
+        let request = EmbeddingRequest {
+            model: "mistral-embed-v2".to_string(),
+            input: EmbeddingInput::Text("Hello world".to_string()),
+            encoding_format: None,
+            dimensions: None,
+            user: None,
+            task_type: None,
+        };
+
+        let result = handler.transform_request(request);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(value["model"], "mistral-embed-v2");
     }
 
     #[test]

@@ -45,7 +45,12 @@ impl MistralChatTransformation {
                 "response_format".to_string(),
                 "tools".to_string(),
                 "tool_choice".to_string(),
-                "safe_prompt".to_string(), // Mistral-specific
+                "frequency_penalty".to_string(),
+                "presence_penalty".to_string(),
+                "n".to_string(),
+                "parallel_tool_calls".to_string(),
+                "guardrails".to_string(), // Mistral-specific (replaces safe_prompt)
+                "safe_prompt".to_string(), // Mistral-specific (legacy, prefer guardrails)
             ],
         }
     }
@@ -95,6 +100,18 @@ impl MistralChatTransformation {
             transformed["response_format"] = format_val;
         }
 
+        if let Some(freq) = request.frequency_penalty {
+            transformed["frequency_penalty"] = json!(freq);
+        }
+
+        if let Some(pres) = request.presence_penalty {
+            transformed["presence_penalty"] = json!(pres);
+        }
+
+        if let Some(n) = request.n {
+            transformed["n"] = json!(n);
+        }
+
         // Handle tools and function calling
         if let Some(tools) = request.tools {
             transformed["tools"] = json!(tools);
@@ -104,8 +121,17 @@ impl MistralChatTransformation {
             transformed["tool_choice"] = json!(tool_choice);
         }
 
-        // Add Mistral-specific safe_prompt parameter (default to false)
-        transformed["safe_prompt"] = json!(false);
+        if let Some(parallel) = request.parallel_tool_calls {
+            transformed["parallel_tool_calls"] = json!(parallel);
+        }
+
+        // Mistral-specific: guardrails (new name) supersedes safe_prompt (legacy).
+        // Only include if explicitly provided by the caller; never hardcode a default.
+        if let Some(guardrails) = request.extra_params.get("guardrails") {
+            transformed["guardrails"] = guardrails.clone();
+        } else if let Some(safe_prompt) = request.extra_params.get("safe_prompt") {
+            transformed["safe_prompt"] = safe_prompt.clone();
+        }
 
         debug!(
             "Transformed Mistral request: {}",
@@ -395,7 +421,9 @@ mod tests {
         let value = result.unwrap();
         assert_eq!(value["model"], "mistral-large");
         assert!(value["messages"].is_array());
-        assert_eq!(value["safe_prompt"], false);
+        // safe_prompt must NOT be injected when caller omits it
+        assert!(value.get("safe_prompt").is_none());
+        assert!(value.get("guardrails").is_none());
     }
 
     #[test]
@@ -622,6 +650,75 @@ mod tests {
         assert!(params.contains(&"response_format".to_string()));
         assert!(params.contains(&"tools".to_string()));
         assert!(params.contains(&"tool_choice".to_string()));
+        assert!(params.contains(&"frequency_penalty".to_string()));
+        assert!(params.contains(&"presence_penalty".to_string()));
+        assert!(params.contains(&"n".to_string()));
+        assert!(params.contains(&"parallel_tool_calls".to_string()));
+        assert!(params.contains(&"guardrails".to_string()));
         assert!(params.contains(&"safe_prompt".to_string()));
+    }
+
+    #[test]
+    fn test_transform_request_new_params() {
+        use std::collections::HashMap;
+        let transformation = MistralChatTransformation::new();
+        let mut extra_params = HashMap::new();
+        extra_params.insert("guardrails".to_string(), serde_json::json!(true));
+        let request = ChatRequest {
+            model: "mistral-large".to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("Hi".to_string())),
+                thinking: None,
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            frequency_penalty: Some(0.5),
+            presence_penalty: Some(0.5),
+            n: Some(2),
+            parallel_tool_calls: Some(true),
+            extra_params,
+            ..Default::default()
+        };
+
+        let Ok(value) = transformation.transform_request(request) else {
+            panic!("transform_request failed");
+        };
+        assert_eq!(value["frequency_penalty"], 0.5);
+        assert_eq!(value["presence_penalty"], 0.5);
+        assert_eq!(value["n"], 2);
+        assert_eq!(value["parallel_tool_calls"], true);
+        assert_eq!(value["guardrails"], true);
+        assert!(value.get("safe_prompt").is_none());
+    }
+
+    #[test]
+    fn test_safe_prompt_legacy_passthrough() {
+        use std::collections::HashMap;
+        let transformation = MistralChatTransformation::new();
+        let mut extra_params = HashMap::new();
+        extra_params.insert("safe_prompt".to_string(), serde_json::json!(true));
+        let request = ChatRequest {
+            model: "mistral-large".to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("Hi".to_string())),
+                thinking: None,
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            extra_params,
+            ..Default::default()
+        };
+
+        let Ok(value) = transformation.transform_request(request) else {
+            panic!("transform_request failed");
+        };
+        assert_eq!(value["safe_prompt"], true);
+        assert!(value.get("guardrails").is_none());
     }
 }
