@@ -142,6 +142,9 @@ pub struct ChatRequest {
     /// Number of top logprobs to return
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_logprobs: Option<u32>,
+    /// Reasoning effort for OpenAI o-series and GPT-5.x models ("low", "medium", "high")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     /// Thinking/reasoning configuration
     ///
     /// Enable and configure thinking mode for supported models:

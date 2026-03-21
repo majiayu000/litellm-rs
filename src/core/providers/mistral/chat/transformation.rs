@@ -104,8 +104,8 @@ impl MistralChatTransformation {
             transformed["tool_choice"] = json!(tool_choice);
         }
 
-        // Add Mistral-specific safe_prompt parameter (default to true)
-        transformed["safe_prompt"] = json!(true);
+        // Add Mistral-specific safe_prompt parameter (default to false)
+        transformed["safe_prompt"] = json!(false);
 
         debug!(
             "Transformed Mistral request: {}",
@@ -127,7 +127,7 @@ impl MistralChatTransformation {
             .iter()
             .map(|msg| {
                 let role = match msg.role {
-                    MessageRole::System => "system",
+                    MessageRole::System | MessageRole::Developer => "system",
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
                     MessageRole::Function => "tool", // Mistral uses "tool" for function messages
@@ -395,7 +395,7 @@ mod tests {
         let value = result.unwrap();
         assert_eq!(value["model"], "mistral-large");
         assert!(value["messages"].is_array());
-        assert_eq!(value["safe_prompt"], true);
+        assert_eq!(value["safe_prompt"], false);
     }
 
     #[test]

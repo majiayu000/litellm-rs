@@ -744,8 +744,8 @@ impl LLMProvider for VertexAIProvider {
         }
 
         let vertex_params = self.map_openai_params(params, &request.model).await?;
-        Ok(serde_json::to_value(vertex_params)
-            .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?)
+        serde_json::to_value(vertex_params)
+            .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))
     }
 
     /// Response

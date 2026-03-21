@@ -172,6 +172,12 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT4
         } else if model_id.starts_with("gpt-3.5") {
             OpenAIModelFamily::GPT35
+        } else if model_id.starts_with("gpt-5.4-mini") {
+            OpenAIModelFamily::GPT54Mini
+        } else if model_id.starts_with("gpt-5.4-turbo") {
+            OpenAIModelFamily::GPT54Turbo
+        } else if model_id.starts_with("gpt-5.4") {
+            OpenAIModelFamily::GPT54
         } else if model_id.starts_with("gpt-5.2-pro") {
             OpenAIModelFamily::GPT52Pro
         } else if model_id.starts_with("gpt-5.2-codex") || model_id.starts_with("gpt-5-codex") {
@@ -299,6 +305,9 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::O4Mini
                         | OpenAIModelFamily::GPT4OAudio
                         | OpenAIModelFamily::GPTAudio
+                        | OpenAIModelFamily::GPT54
+                        | OpenAIModelFamily::GPT54Mini
+                        | OpenAIModelFamily::GPT54Turbo
                 ),
                 supports_multimodal: matches!(
                     family,
@@ -318,6 +327,9 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::O3
                         | OpenAIModelFamily::O3Mini
                         | OpenAIModelFamily::O4Mini
+                        | OpenAIModelFamily::GPT54
+                        | OpenAIModelFamily::GPT54Mini
+                        | OpenAIModelFamily::GPT54Turbo
                 ) || id.contains("vision"),
                 input_cost_per_1k_tokens: Some(input_cost),
                 output_cost_per_1k_tokens: Some(output_cost),

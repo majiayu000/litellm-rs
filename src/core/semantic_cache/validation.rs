@@ -88,6 +88,7 @@ mod tests {
             stream_options: None,
             modalities: None,
             audio: None,
+            reasoning_effort: None,
         }
     }
 

@@ -68,7 +68,9 @@ pub fn messages_to_prompt(messages: &[crate::core::types::chat::ChatMessage]) ->
         };
 
         match message.role {
-            MessageRole::System => prompt.push_str(&format!("System: {}\n\n", content)),
+            MessageRole::System | MessageRole::Developer => {
+                prompt.push_str(&format!("System: {}\n\n", content))
+            }
             MessageRole::User => prompt.push_str(&format!("Human: {}\n\n", content)),
             MessageRole::Assistant => prompt.push_str(&format!("Assistant: {}\n\n", content)),
             MessageRole::Function | MessageRole::Tool => {

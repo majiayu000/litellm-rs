@@ -123,6 +123,9 @@ pub enum OpenAIModelFamily {
     GPTAudio,   // GPT Audio models (2025)
     GPTImage,   // GPT image generation models
     Realtime,   // Realtime API models
+    GPT54,      // GPT-5.4 models (2026)
+    GPT54Mini,  // GPT-5.4 Mini models (2026)
+    GPT54Turbo, // GPT-5.4 Turbo models (2026)
 }
 
 /// Model-specific configuration

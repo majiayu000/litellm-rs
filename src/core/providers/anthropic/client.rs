@@ -240,6 +240,23 @@ impl AnthropicClient {
             }
         }
 
+        // Add thinking configuration
+        if let Some(thinking) = &request.thinking {
+            if thinking.enabled && model_spec.features.contains(&ModelFeature::ThinkingMode) {
+                let budget = thinking.budget_tokens.unwrap_or(10_000);
+                // Anthropic requires max_tokens > budget_tokens. If the default (4096)
+                // is not greater than budget_tokens, raise max_tokens to budget + 1.
+                let current_max = request.max_tokens.unwrap_or(4096);
+                if current_max <= budget {
+                    anthropic_request["max_tokens"] = json!(budget + 1);
+                }
+                anthropic_request["thinking"] = json!({
+                    "type": "enabled",
+                    "budget_tokens": budget
+                });
+            }
+        }
+
         Ok(anthropic_request)
     }
 
@@ -253,7 +270,7 @@ impl AnthropicClient {
 
         for message in messages {
             match message.role {
-                MessageRole::System => {
+                MessageRole::System | MessageRole::Developer => {
                     if let Some(content) = &message.content {
                         match content {
                             crate::core::types::message::MessageContent::Text(text) => {
@@ -298,7 +315,7 @@ impl AnthropicClient {
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "user",     // Response
                 MessageRole::Function => "user", // Response
-                MessageRole::System => continue, // Already handled
+                MessageRole::System | MessageRole::Developer => continue, // Already handled
             };
 
             let content = if let Some(content) = message.content {
