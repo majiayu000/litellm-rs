@@ -80,7 +80,9 @@ impl UserManager {
         organization_id: Option<String>,
         creator_id: String,
     ) -> Result<Team> {
-        self.team_ops.create_team(team_name, description, organization_id, creator_id).await
+        self.team_ops
+            .create_team(team_name, description, organization_id, creator_id)
+            .await
     }
 
     /// Get team by ID
@@ -122,7 +124,9 @@ impl UserManager {
         description: Option<String>,
         creator_id: String,
     ) -> Result<Organization> {
-        self.team_ops.create_organization(organization_name, description, creator_id).await
+        self.team_ops
+            .create_organization(organization_name, description, creator_id)
+            .await
     }
 
     /// Get organization by ID

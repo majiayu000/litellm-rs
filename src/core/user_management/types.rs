@@ -285,10 +285,15 @@ mod tests {
     #[test]
     fn test_user_with_metadata() {
         let mut user = create_test_user();
-        user.metadata.insert("department".to_string(), "engineering".to_string());
-        user.metadata.insert("location".to_string(), "remote".to_string());
+        user.metadata
+            .insert("department".to_string(), "engineering".to_string());
+        user.metadata
+            .insert("location".to_string(), "remote".to_string());
 
-        assert_eq!(user.metadata.get("department"), Some(&"engineering".to_string()));
+        assert_eq!(
+            user.metadata.get("department"),
+            Some(&"engineering".to_string())
+        );
     }
 
     #[test]
@@ -540,10 +545,7 @@ mod tests {
     #[test]
     fn test_organization_with_multiple_admins() {
         let mut org = create_test_organization();
-        org.admins = vec![
-            "admin-1".to_string(),
-            "admin-2".to_string(),
-        ];
+        org.admins = vec!["admin-1".to_string(), "admin-2".to_string()];
 
         assert_eq!(org.admins.len(), 2);
     }
@@ -653,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_spend_aggregation_simulation() {
-        let users = vec![
+        let users = [
             User {
                 spend: 100.0,
                 ..create_test_user()

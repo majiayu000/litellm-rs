@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_user_role_all_variants_distinct() {
-        let roles = vec![
+        let roles = [
             UserRole::SuperAdmin,
             UserRole::OrgAdmin,
             UserRole::TeamAdmin,
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_team_role_all_variants_distinct() {
-        let roles = vec![
+        let roles = [
             TeamRole::Owner,
             TeamRole::Admin,
             TeamRole::Member,

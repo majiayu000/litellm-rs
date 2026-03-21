@@ -40,11 +40,7 @@ pub mod streaming;
 pub mod teams; // Team management module
 pub mod traits;
 pub mod types;
-// User and team management - disabled until database methods are implemented
-// These modules require the following database methods to be implemented:
-// - user_management: get_user, create_user, get_team, create_team, etc.
-// NOTE: user_management requires database method implementations.
-// pub mod user_management;
+pub mod user_management; // DB methods implemented as stubs in storage/database/seaorm_db/user_management_ops.rs
 #[cfg(feature = "gateway")]
 pub mod virtual_keys; // Database methods implemented as stubs in storage/database/seaorm_db/virtual_key_ops.rs
 pub mod webhooks;
