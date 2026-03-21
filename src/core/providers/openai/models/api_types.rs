@@ -47,6 +47,15 @@ pub struct OpenAIChatRequest {
     /// Reasoning effort for o-series and GPT-5.x models ("low", "medium", "high")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Whether to store the response for model improvement
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
+    /// Key-value metadata to attach to the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+    /// Service tier for the request ("default" or "flex")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
 }
 
 /// OpenAI Message

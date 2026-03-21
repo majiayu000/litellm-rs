@@ -233,7 +233,7 @@ impl OpenAIImageUtils {
 
     /// Get supported models for image generation
     pub fn get_generation_models() -> Vec<&'static str> {
-        vec!["dall-e-2", "dall-e-3"]
+        vec!["dall-e-2", "dall-e-3", "gpt-image-1", "gpt-image-1.5"]
     }
 
     /// Get supported models for image editing
