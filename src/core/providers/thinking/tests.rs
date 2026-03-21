@@ -844,13 +844,43 @@ fn test_openrouter_transform_config_unknown() {
         Some("high"),
         "reasoning.effort should be 'high' for High effort"
     );
+    // When effort is set, max_tokens must NOT be emitted; they are mutually exclusive on OpenRouter.
+    assert!(
+        result
+            .get("reasoning")
+            .and_then(|r| r.get("max_tokens"))
+            .is_none(),
+        "reasoning.max_tokens must not be set when effort is also set"
+    );
+}
+
+#[test]
+fn test_openrouter_transform_config_unknown_budget_only() {
+    let config = ThinkingConfig {
+        enabled: true,
+        budget_tokens: Some(8000),
+        effort: None,
+        include_thinking: true,
+        extra_params: Default::default(),
+    };
+
+    let Ok(result) = openrouter_thinking::transform_config(&config, "unknown-model") else {
+        panic!("transform_config must succeed for unknown-model");
+    };
     assert_eq!(
         result
             .get("reasoning")
             .and_then(|r| r.get("max_tokens"))
             .and_then(|v| v.as_u64()),
-        Some(10000),
-        "reasoning.max_tokens should equal budget_tokens"
+        Some(8000),
+        "reasoning.max_tokens should equal budget_tokens when effort is None"
+    );
+    assert!(
+        result
+            .get("reasoning")
+            .and_then(|r| r.get("effort"))
+            .is_none(),
+        "reasoning.effort must not be set when effort is None"
     );
 }
 
