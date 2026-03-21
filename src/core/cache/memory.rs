@@ -47,7 +47,7 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
         let cache = Arc::new(DashMap::with_capacity(config.max_size));
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_notify = Arc::new(Notify::new());
-        let lru_cap = NonZeroUsize::new(config.max_size).unwrap_or(NonZeroUsize::new(1).unwrap());
+        let lru_cap = NonZeroUsize::new(config.max_size).unwrap_or(NonZeroUsize::MIN);
 
         Self {
             cache,
