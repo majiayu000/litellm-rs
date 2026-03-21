@@ -291,9 +291,15 @@ impl AdvancedChatUtils {
     /// Uses prefix matching so dated snapshots (e.g. `gpt-4o-2024-08-06`) are
     /// covered automatically.  Legacy o1-preview and o1-mini are excluded
     /// because they were deprecated in April 2025 and never supported the
-    /// `json_schema` response format.
+    /// `json_schema` response format.  Audio-preview and realtime variants of
+    /// gpt-4o are also excluded — they share the `gpt-4o` prefix but do not
+    /// support structured outputs.
     pub fn supports_structured_outputs(model: &str) -> bool {
-        if model.starts_with("o1-preview") || model.starts_with("o1-mini") {
+        if model.starts_with("o1-preview")
+            || model.starts_with("o1-mini")
+            || model.starts_with("gpt-4o-audio")
+            || model.starts_with("gpt-4o-realtime")
+        {
             return false;
         }
         Self::get_structured_output_models()
@@ -604,6 +610,13 @@ mod tests {
             "o1-preview"
         ));
         assert!(!AdvancedChatUtils::supports_structured_outputs("o1-mini"));
+        // Audio-preview models share "gpt-4o" prefix but must NOT match
+        assert!(!AdvancedChatUtils::supports_structured_outputs(
+            "gpt-4o-audio-preview"
+        ));
+        assert!(!AdvancedChatUtils::supports_structured_outputs(
+            "gpt-4o-audio-preview-2024-10-01"
+        ));
         // Non-supporting models
         assert!(!AdvancedChatUtils::supports_structured_outputs(
             "gpt-3.5-turbo"
