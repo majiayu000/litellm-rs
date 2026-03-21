@@ -263,9 +263,9 @@ impl AdvancedChatUtils {
     pub fn get_structured_output_models() -> Vec<&'static str> {
         vec![
             // GPT-4o family
-            "gpt-4o", // GPT-4.1 family
+            "gpt-4o",  // GPT-4.1 family
             "gpt-4.1", // GPT-5.x family (2025–2026)
-            "gpt-5", // GPT-5.4 family (2026)
+            "gpt-5",   // GPT-5.4 family (2026)
             "gpt-5.4", // O-series reasoning models (GA, not legacy preview/mini)
             "o1", "o3", "o4-mini",
         ]
@@ -384,19 +384,26 @@ impl AdvancedChatUtils {
                 });
             }
 
-            // Reasoning models have specific constraints
-            if request.temperature.is_some() {
-                return Err(ProviderError::InvalidRequest {
-                    provider: "openai",
-                    message: "temperature parameter not supported for reasoning models".to_string(),
-                });
-            }
+            // Only legacy o1-preview/o1-mini reject temperature and top_p.
+            // GA o-series models (o1, o3, o4-mini) accept these parameters.
+            let is_legacy_o1 =
+                request.model.starts_with("o1-preview") || request.model.starts_with("o1-mini");
+            if is_legacy_o1 {
+                if request.temperature.is_some() {
+                    return Err(ProviderError::InvalidRequest {
+                        provider: "openai",
+                        message: "temperature parameter not supported for legacy reasoning models"
+                            .to_string(),
+                    });
+                }
 
-            if request.top_p.is_some() {
-                return Err(ProviderError::InvalidRequest {
-                    provider: "openai",
-                    message: "top_p parameter not supported for reasoning models".to_string(),
-                });
+                if request.top_p.is_some() {
+                    return Err(ProviderError::InvalidRequest {
+                        provider: "openai",
+                        message: "top_p parameter not supported for legacy reasoning models"
+                            .to_string(),
+                    });
+                }
             }
 
             if let Some(max_reasoning) = reasoning_config.max_reasoning_tokens
