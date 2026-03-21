@@ -1,0 +1,37 @@
+name: CI Disabled Modules
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-disabled-modules-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check-all-features:
+    name: Compile-check all features (including disabled modules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-all-features-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-all-features-
+
+      - name: cargo check --all-features
+        run: cargo check --all-features
