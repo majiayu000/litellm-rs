@@ -31,8 +31,7 @@ const SAGEMAKER_CAPABILITIES: &[ProviderCapability] = &[
 #[derive(Debug, Clone)]
 pub struct SagemakerProvider {
     config: SagemakerConfig,
-    #[allow(dead_code)]
-    pool_manager: Arc<GlobalPoolManager>,
+    _pool_manager: Arc<GlobalPoolManager>,
     signer: SagemakerSigV4Signer,
     models: Vec<ModelInfo>,
 }
@@ -82,7 +81,7 @@ impl SagemakerProvider {
 
         Ok(Self {
             config,
-            pool_manager,
+            _pool_manager: pool_manager,
             signer,
             models,
         })

@@ -327,14 +327,13 @@ pub mod postgres {
 
     /// PostgreSQL team repository
     pub struct PostgresTeamRepository {
-        #[allow(dead_code)]
-        db: Arc<Database>,
+        _db: Arc<Database>,
     }
 
     impl PostgresTeamRepository {
         /// Create a new PostgreSQL repository
         pub fn new(db: Arc<Database>) -> Self {
-            Self { db }
+            Self { _db: db }
         }
     }
 

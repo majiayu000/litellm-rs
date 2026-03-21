@@ -8,7 +8,6 @@ use super::local::LocalStorage;
 use super::s3::S3Storage;
 use super::types::{FileMetadata, FileStorage};
 
-#[allow(dead_code)]
 impl FileStorage {
     /// Create a new file storage instance
     pub async fn new(config: &FileStorageConfig) -> Result<Self> {

@@ -27,7 +27,6 @@ pub struct AlertManager {
     pub(super) active: AtomicBool,
 }
 
-#[allow(dead_code)]
 impl AlertManager {
     /// Create a new alert manager
     pub async fn new(config: &AlertingConfig) -> Result<Self> {

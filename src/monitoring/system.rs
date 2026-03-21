@@ -13,12 +13,11 @@ use super::{alerts, metrics};
 
 /// Main monitoring system
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct MonitoringSystem {
     /// Monitoring configuration
-    pub(super) config: Arc<MonitoringConfig>,
+    pub(super) _config: Arc<MonitoringConfig>,
     /// Storage layer for persistence
-    pub(super) storage: Arc<StorageLayer>,
+    pub(super) _storage: Arc<StorageLayer>,
     /// Metrics collector
     pub(super) metrics: Arc<metrics::MetricsCollector>,
     /// Alert manager
@@ -27,7 +26,6 @@ pub struct MonitoringSystem {
     pub(super) start_time: Instant,
 }
 
-#[allow(dead_code)]
 impl MonitoringSystem {
     /// Create a new monitoring system
     pub async fn new(config: &MonitoringConfig, storage: Arc<StorageLayer>) -> Result<Self> {
@@ -44,8 +42,8 @@ impl MonitoringSystem {
         info!("Monitoring system initialized successfully");
 
         Ok(Self {
-            config,
-            storage,
+            _config: config,
+            _storage: storage,
             metrics,
             alerts,
             start_time: Instant::now(),

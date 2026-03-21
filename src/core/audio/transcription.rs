@@ -36,7 +36,7 @@ impl TranscriptionService {
 
 /// Parse model string to extract provider and model name
 /// Format: "provider/model" or just "model"
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_model_string(model: &str) -> (&str, &str) {
     if let Some(idx) = model.find('/') {
         let provider = &model[..idx];

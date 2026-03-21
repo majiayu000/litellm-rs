@@ -17,7 +17,6 @@ impl SeaOrmDatabase {
     }
 
     /// Store request metrics
-    #[allow(dead_code)] // Reserved for future metrics storage functionality
     pub async fn store_metrics(
         &self,
         _metrics: &crate::core::models::metrics::request::RequestMetrics,

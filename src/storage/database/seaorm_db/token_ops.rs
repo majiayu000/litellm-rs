@@ -107,7 +107,6 @@ impl SeaOrmDatabase {
     }
 
     /// Clean up expired password reset tokens
-    #[allow(dead_code)] // Reserved for future token cleanup functionality
     pub async fn cleanup_expired_tokens(&self) -> Result<u64> {
         debug!("Cleaning up expired password reset tokens");
 

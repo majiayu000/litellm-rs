@@ -11,7 +11,6 @@ use super::weaviate::WeaviateStore;
 
 /// Vector store backend enum
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum VectorStoreBackend {
     /// Qdrant vector database
     Qdrant(QdrantStore),
@@ -21,7 +20,6 @@ pub enum VectorStoreBackend {
     Pinecone(PineconeStore),
 }
 
-#[allow(dead_code)]
 impl VectorStoreBackend {
     /// Create a new vector store instance
     pub async fn new(config: &VectorDbConfig) -> Result<Self> {

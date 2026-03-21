@@ -17,17 +17,16 @@ use super::types::FileMetadata;
 
 /// S3 file storage
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "s3"), allow(dead_code))]
 pub struct S3Storage {
     bucket: String,
-    region: String,
+    _region: String,
     #[cfg(feature = "s3")]
     client: Option<aws_s3::Client>,
     #[cfg(not(feature = "s3"))]
     client: Option<()>, // Placeholder when S3 feature is disabled
 }
 
-#[allow(dead_code)]
 impl S3Storage {
     /// Create a new S3 storage instance
     pub async fn new(config: &S3Config) -> Result<Self> {
@@ -50,7 +49,7 @@ impl S3Storage {
 
             Ok(Self {
                 bucket: config.bucket.clone(),
-                region: config.region.clone(),
+                _region: config.region.clone(),
                 client: Some(client),
             })
         }
@@ -59,7 +58,7 @@ impl S3Storage {
         {
             Ok(Self {
                 bucket: config.bucket.clone(),
-                region: config.region.clone(),
+                _region: config.region.clone(),
                 client: None,
             })
         }

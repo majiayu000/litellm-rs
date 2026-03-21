@@ -21,7 +21,6 @@ impl TokenCounter {
     }
 
     /// Count tokens in a chat completion request
-    #[allow(dead_code)]
     pub fn count_chat_tokens(
         &self,
         model: &str,
@@ -44,7 +43,6 @@ impl TokenCounter {
     }
 
     /// Count tokens in a single message
-    #[allow(dead_code)]
     fn count_message_tokens(
         &self,
         config: &ModelTokenConfig,
@@ -85,7 +83,6 @@ impl TokenCounter {
     }
 
     /// Count tokens in message content
-    #[allow(dead_code)]
     fn count_content_tokens(
         &self,
         config: &ModelTokenConfig,
@@ -104,7 +101,6 @@ impl TokenCounter {
     }
 
     /// Count tokens in a content part
-    #[allow(dead_code)]
     fn count_content_part_tokens(
         &self,
         config: &ModelTokenConfig,
@@ -158,7 +154,6 @@ impl TokenCounter {
     }
 
     /// Count tokens in embedding request
-    #[allow(dead_code)]
     pub fn count_embedding_tokens(&self, model: &str, input: &[String]) -> Result<TokenEstimate> {
         let config = self.get_model_config(model)?;
         let mut total_tokens = config.request_overhead;
@@ -177,7 +172,6 @@ impl TokenCounter {
     }
 
     /// Estimate output tokens based on max_tokens parameter
-    #[allow(dead_code)]
     pub fn estimate_output_tokens(
         &self,
         max_tokens: Option<u32>,
@@ -198,7 +192,6 @@ impl TokenCounter {
     }
 
     /// Check if request fits within context window
-    #[allow(dead_code)]
     pub fn check_context_window(
         &self,
         model: &str,
@@ -255,13 +248,11 @@ impl TokenCounter {
     }
 
     /// Add or update model configuration
-    #[allow(dead_code)]
     pub fn add_model_config(&mut self, config: ModelTokenConfig) {
         self.model_configs.insert(config.model.clone(), config);
     }
 
     /// Get supported models
-    #[allow(dead_code)]
     pub fn get_supported_models(&self) -> Vec<String> {
         self.model_configs.keys().cloned().collect()
     }

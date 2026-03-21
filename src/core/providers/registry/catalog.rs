@@ -328,23 +328,3 @@ fn def_local(
         model_prefix: None,
     }
 }
-
-/// Helper: provider with model prefix stripping
-#[allow(dead_code)]
-fn def_with_prefix(
-    name: &'static str,
-    display_name: &'static str,
-    base_url: &'static str,
-    auth_env_var: &'static str,
-    prefix: &'static str,
-) -> ProviderDefinition {
-    ProviderDefinition {
-        name,
-        display_name,
-        base_url,
-        auth_env_var,
-        auth_type: AuthType::Bearer,
-        skip_api_key: false,
-        model_prefix: Some(prefix),
-    }
-}

@@ -11,7 +11,6 @@ pub type Result<T> = std::result::Result<T, GatewayError>;
 /// Consolidated from ~36 variants to 15 semantic categories.
 /// Each variant maps to a distinct HTTP status code or error class.
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum GatewayError {
     /// Configuration errors
     #[error("Configuration error: {0}")]

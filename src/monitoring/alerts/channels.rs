@@ -6,7 +6,6 @@ use tracing::warn;
 
 /// Notification channel trait
 #[async_trait::async_trait]
-#[allow(dead_code)]
 pub trait NotificationChannel: Send + Sync + std::fmt::Debug {
     /// Send a notification
     async fn send(&self, alert: &Alert) -> Result<()>;
@@ -29,16 +28,14 @@ pub struct SlackChannel {
 
 /// Email notification channel
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct EmailChannel {
-    smtp_config: SmtpConfig,
-    recipients: Vec<String>,
+    _smtp_config: SmtpConfig,
+    _recipients: Vec<String>,
     min_severity: AlertSeverity,
 }
 
 /// SMTP configuration
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SmtpConfig {
     pub server: String,
     pub port: u16,
@@ -47,7 +44,6 @@ pub struct SmtpConfig {
     pub from_address: String,
 }
 
-#[allow(dead_code)]
 impl SlackChannel {
     /// Create a new Slack notification channel
     pub fn new(
@@ -133,7 +129,6 @@ impl NotificationChannel for SlackChannel {
     }
 }
 
-#[allow(dead_code)]
 impl EmailChannel {
     /// Create a new email notification channel
     pub fn new(
@@ -142,8 +137,8 @@ impl EmailChannel {
         min_severity: AlertSeverity,
     ) -> Self {
         Self {
-            smtp_config,
-            recipients,
+            _smtp_config: smtp_config,
+            _recipients: recipients,
             min_severity,
         }
     }
@@ -358,7 +353,7 @@ mod tests {
             AlertSeverity::Critical,
         );
 
-        assert_eq!(channel.recipients.len(), 2);
+        assert_eq!(channel._recipients.len(), 2);
     }
 
     #[test]
@@ -405,7 +400,7 @@ mod tests {
 
         let channel = EmailChannel::new(smtp_config, vec![], AlertSeverity::Info);
 
-        assert!(channel.recipients.is_empty());
+        assert!(channel._recipients.is_empty());
     }
 
     #[test]
@@ -421,7 +416,7 @@ mod tests {
         let recipients: Vec<String> = (0..10).map(|i| format!("user{}@test.com", i)).collect();
         let channel = EmailChannel::new(smtp_config, recipients, AlertSeverity::Info);
 
-        assert_eq!(channel.recipients.len(), 10);
+        assert_eq!(channel._recipients.len(), 10);
     }
 
     #[tokio::test]

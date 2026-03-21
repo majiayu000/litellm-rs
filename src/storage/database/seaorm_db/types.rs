@@ -19,7 +19,6 @@ pub enum DatabaseBackendType {
 #[derive(Debug, Clone)]
 pub struct DatabaseStats {
     /// Total number of users
-    #[allow(dead_code)] // Reserved for future database statistics
     pub total_users: u64,
     /// Database size
     pub size: u32,

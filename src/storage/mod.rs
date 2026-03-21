@@ -30,7 +30,6 @@ pub struct StorageLayer {
     pub vector: Option<Arc<vector::VectorStoreBackend>>,
 }
 
-#[allow(dead_code)]
 impl StorageLayer {
     /// Create a new storage layer
     pub async fn new(config: &StorageConfig) -> Result<Self> {

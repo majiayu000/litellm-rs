@@ -18,11 +18,9 @@ pub struct PgVectorProvider {
     config: PgVectorConfig,
     /// HTTP client for PostgreSQL REST API (when using PostgREST/Supabase)
     /// or internal connection state
-    #[allow(dead_code)]
-    client: Arc<reqwest::Client>,
+    _client: Arc<reqwest::Client>,
     /// Connection URL for display/logging (without password)
-    #[allow(dead_code)]
-    safe_url: String,
+    _safe_url: String,
 }
 
 impl PgVectorProvider {
@@ -39,8 +37,8 @@ impl PgVectorProvider {
 
         let provider = Self {
             config,
-            client,
-            safe_url,
+            _client: client,
+            _safe_url: safe_url,
         };
 
         info!(
@@ -435,10 +433,8 @@ pub enum StatementParam {
     /// JSON parameter (as string)
     Json(Option<String>),
     /// Integer parameter
-    #[allow(dead_code)]
     Int(i64),
     /// Float parameter
-    #[allow(dead_code)]
     Float(f64),
 }
 

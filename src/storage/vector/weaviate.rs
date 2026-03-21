@@ -7,16 +7,14 @@ use super::types::{SearchResult, VectorPoint};
 
 /// Weaviate vector store
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct WeaviateStore {
-    url: String,
-    api_key: Option<String>,
-    collection: String,
-    client: reqwest::Client,
+    _url: String,
+    _api_key: Option<String>,
+    _collection: String,
+    _client: reqwest::Client,
 }
 
 // Placeholder implementations for Weaviate
-#[allow(dead_code)]
 impl WeaviateStore {
     /// Create new Weaviate store (not implemented)
     pub async fn new(_config: &VectorDbConfig) -> Result<Self> {

@@ -3,7 +3,6 @@
 use super::types::GatewayError;
 
 /// Helper functions for creating specific errors
-#[allow(dead_code)]
 impl GatewayError {
     pub fn auth<S: Into<String>>(message: S) -> Self {
         Self::Auth(message.into())
@@ -111,7 +110,6 @@ impl GatewayError {
     }
 }
 
-#[allow(dead_code)]
 impl GatewayError {
     pub fn api_error<S: Into<String>>(_status_code: u16, message: S, _provider: S) -> Self {
         // ApiError doesn't exist in unified ProviderError, map to Internal in GatewayError

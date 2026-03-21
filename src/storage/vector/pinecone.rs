@@ -7,22 +7,19 @@ use super::types::{SearchResult, VectorPoint};
 
 /// Pinecone vector store
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PineconeStore {
-    url: String,
-    api_key: Option<String>,
-    collection: String,
-    client: reqwest::Client,
+    _url: String,
+    _api_key: Option<String>,
+    _collection: String,
+    _client: reqwest::Client,
 }
 
 /// Pinecone vector store implementation
-#[allow(dead_code)]
 pub struct PineconeVectorStore {
-    config: VectorDbConfig,
-    client: reqwest::Client,
+    _config: VectorDbConfig,
+    _client: reqwest::Client,
 }
 
-#[allow(dead_code)]
 impl PineconeStore {
     /// Create new Pinecone store (not implemented)
     pub async fn new(_config: &VectorDbConfig) -> Result<Self> {

@@ -17,7 +17,6 @@ pub(super) struct AlertStorage {
 
 /// Alert rule for automated alerting
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AlertRule {
     /// Rule ID
     pub id: String,
@@ -43,7 +42,6 @@ pub struct AlertRule {
 
 /// Comparison operators for alert rules
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ComparisonOperator {
     GreaterThan,
     LessThan,

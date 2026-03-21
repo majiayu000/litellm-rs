@@ -15,7 +15,6 @@ pub struct LocalStorage {
     base_path: PathBuf,
 }
 
-#[allow(dead_code)]
 impl LocalStorage {
     /// Create a new local storage instance
     pub async fn new(base_path: &str) -> Result<Self> {

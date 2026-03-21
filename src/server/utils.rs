@@ -10,7 +10,6 @@ impl HttpServer {
     /// Graceful shutdown signal handler
     ///
     /// Public API for external callers to use for graceful shutdown handling.
-    #[allow(dead_code)]
     pub async fn shutdown_signal() {
         let ctrl_c = async {
             match tokio::signal::ctrl_c().await {

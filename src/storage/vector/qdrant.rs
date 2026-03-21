@@ -8,7 +8,6 @@ use super::types::{SearchResult, VectorPoint};
 
 /// Qdrant vector store
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct QdrantStore {
     url: String,
     api_key: Option<String>,
@@ -16,7 +15,6 @@ pub struct QdrantStore {
     client: reqwest::Client,
 }
 
-#[allow(dead_code)]
 impl QdrantStore {
     /// Create a new Qdrant store
     pub async fn new(config: &VectorDbConfig) -> Result<Self> {

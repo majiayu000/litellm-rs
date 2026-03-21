@@ -129,13 +129,11 @@ impl SeaOrmDatabase {
     }
 
     /// Get the underlying database connection
-    #[allow(dead_code)] // Reserved for future direct database access
     pub fn connection(&self) -> &DatabaseConnection {
         &self.db
     }
 
     /// Close the database connection
-    #[allow(dead_code)] // Reserved for future connection cleanup
     pub async fn close(self) -> Result<()> {
         self.db.close().await.map_err(GatewayError::from)?;
         Ok(())

@@ -53,7 +53,6 @@ where
     }
 }
 
-#[allow(dead_code)]
 impl<T> ApiResponse<T> {
     /// Create an error response for any type
     pub fn error_for_type(message: String) -> ApiResponse<T> {
@@ -99,7 +98,6 @@ pub struct PaginationMeta {
     pub has_prev: bool,
 }
 
-#[allow(dead_code)]
 impl PaginationMeta {
     /// Create pagination metadata
     pub fn new(page: u32, limit: u32, total: u64) -> Self {
