@@ -80,6 +80,67 @@ impl From<&str> for ProviderType {
     }
 }
 
+/// Parse a provider type string with strict validation.
+///
+/// Unlike `From<&str>`, this returns an error for unrecognised strings instead of
+/// silently producing a `Custom` variant.  Use this for enum-variant providers
+/// (Tier 2/3 factory) **after** ruling out data-driven catalog selectors via
+/// `registry::get_definition`.  Catalog entries (e.g. `"aiml_api"`, `"aleph_alpha"`)
+/// are not listed here because they are handled in Tier 1 before this parser is called.
+///
+/// To intentionally use a custom provider, construct
+/// `ProviderType::Custom("name".to_string())` directly.
+impl std::str::FromStr for ProviderType {
+    type Err = crate::core::types::errors::ConfigError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "openai" => Ok(ProviderType::OpenAI),
+            "anthropic" => Ok(ProviderType::Anthropic),
+            "bedrock" | "aws-bedrock" => Ok(ProviderType::Bedrock),
+            "openrouter" => Ok(ProviderType::OpenRouter),
+            "vertex_ai" | "vertexai" | "vertex-ai" => Ok(ProviderType::VertexAI),
+            "azure" | "azure-openai" => Ok(ProviderType::Azure),
+            "azure_ai" | "azureai" | "azure-ai" => Ok(ProviderType::AzureAI),
+            "deepseek" | "deep-seek" => Ok(ProviderType::DeepSeek),
+            "deepinfra" | "deep-infra" => Ok(ProviderType::DeepInfra),
+            "v0" => Ok(ProviderType::V0),
+            "meta_llama" | "llama" | "meta-llama" => Ok(ProviderType::MetaLlama),
+            "mistral" | "mistralai" => Ok(ProviderType::Mistral),
+            "moonshot" | "moonshot-ai" => Ok(ProviderType::Moonshot),
+            "minimax" | "minimax-ai" => Ok(ProviderType::Minimax),
+            "dashscope" | "alibaba" | "qwen" | "tongyi" => Ok(ProviderType::Dashscope),
+            "groq" => Ok(ProviderType::Groq),
+            "xai" => Ok(ProviderType::XAI),
+            "cloudflare" | "cf" | "workers-ai" => Ok(ProviderType::Cloudflare),
+            "perplexity" | "perplexity-ai" | "pplx" => Ok(ProviderType::Perplexity),
+            "replicate" | "replicate-ai" => Ok(ProviderType::Replicate),
+            "fal_ai" | "fal-ai" | "fal" => Ok(ProviderType::FalAI),
+            "amazon_nova" | "amazon-nova" | "nova" => Ok(ProviderType::AmazonNova),
+            "github" | "github-models" => Ok(ProviderType::GitHub),
+            "github_copilot" | "github-copilot" | "copilot" => Ok(ProviderType::GitHubCopilot),
+            "hyperbolic" | "hyperbolic-ai" => Ok(ProviderType::Hyperbolic),
+            "infinity" | "infinity-embedding" => Ok(ProviderType::Infinity),
+            "novita" | "novita-ai" => Ok(ProviderType::Novita),
+            "volcengine" | "volc" | "doubao" | "bytedance" => Ok(ProviderType::Volcengine),
+            "nebius" | "nebius-ai" => Ok(ProviderType::Nebius),
+            "nscale" | "nscale-ai" => Ok(ProviderType::Nscale),
+            "pydantic_ai" | "pydantic-ai" | "pydantic" => Ok(ProviderType::PydanticAI),
+            "openai_compatible" | "openai-compatible" | "openai_like" | "openai-like" => {
+                Ok(ProviderType::OpenAICompatible)
+            }
+            _ => Err(crate::core::types::errors::ConfigError::InvalidValue {
+                field: "provider_type".to_string(),
+                value: format!(
+                    "unknown provider type '{}'; use a recognised provider name or construct \
+                     ProviderType::Custom explicitly",
+                    s
+                ),
+            }),
+        }
+    }
+}
+
 impl std::fmt::Display for ProviderType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -401,6 +462,126 @@ mod tests {
                 provider_type, provider,
                 "Expected '{}' to map to {:?}, but got {:?}",
                 provider_str, provider, provider_type
+            );
+        }
+    }
+
+    // ==================== FromStr (strict) Tests ====================
+
+    #[test]
+    fn test_from_str_known_providers_ok() {
+        use std::str::FromStr;
+        let cases: &[(&str, ProviderType)] = &[
+            ("openai", ProviderType::OpenAI),
+            ("anthropic", ProviderType::Anthropic),
+            ("bedrock", ProviderType::Bedrock),
+            ("groq", ProviderType::Groq),
+            ("mistral", ProviderType::Mistral),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                ProviderType::from_str(input).ok().as_ref(),
+                Some(expected),
+                "from_str({input:?}) should succeed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_str_case_insensitive() {
+        use std::str::FromStr;
+        let cases: &[(&str, ProviderType)] = &[
+            ("OpenAI", ProviderType::OpenAI),
+            ("ANTHROPIC", ProviderType::Anthropic),
+            ("GROQ", ProviderType::Groq),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                ProviderType::from_str(input).ok().as_ref(),
+                Some(expected),
+                "from_str({input:?}) case-insensitive should succeed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_str_aliases_ok() {
+        use std::str::FromStr;
+        let cases: &[(&str, ProviderType)] = &[
+            ("aws-bedrock", ProviderType::Bedrock),
+            ("vertex-ai", ProviderType::VertexAI),
+            ("openai-like", ProviderType::OpenAICompatible),
+            ("azure-openai", ProviderType::Azure),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                ProviderType::from_str(input).ok().as_ref(),
+                Some(expected),
+                "from_str({input:?}) alias should succeed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_str_rejects_unknown() {
+        use std::str::FromStr;
+        let result = ProviderType::from_str("gpt-4");
+        assert!(result.is_err(), "from_str('gpt-4') should return an error");
+        let msg = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            msg.contains("gpt-4"),
+            "error should mention the bad value: {msg}"
+        );
+        assert!(
+            msg.contains("unknown provider type"),
+            "error should explain the problem: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_from_str_rejects_typo() {
+        use std::str::FromStr;
+        let result = ProviderType::from_str("opanai");
+        assert!(result.is_err(), "typo 'opanai' should be rejected");
+        let msg = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            msg.contains("opanai"),
+            "error should mention the bad value: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_from_str_rejects_empty() {
+        use std::str::FromStr;
+        assert!(
+            ProviderType::from_str("").is_err(),
+            "empty string should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_from_str_does_not_produce_custom() {
+        use std::str::FromStr;
+        // Unknown strings should error, not silently become Custom
+        assert!(ProviderType::from_str("some-random-provider").is_err());
+        assert!(ProviderType::from_str("my-local-llm").is_err());
+    }
+
+    #[test]
+    fn test_from_str_all_known_variants() {
+        use std::str::FromStr;
+        for provider in all_non_custom_provider_types() {
+            let display = provider.to_string();
+            let result = ProviderType::from_str(&display);
+            assert!(
+                result.is_ok(),
+                "from_str failed for '{display}': {:?}",
+                result.err()
+            );
+            assert_eq!(
+                result.ok(),
+                Some(provider.clone()),
+                "from_str roundtrip failed for {display:?}"
             );
         }
     }
