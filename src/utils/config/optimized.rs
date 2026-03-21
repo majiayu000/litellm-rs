@@ -3,9 +3,9 @@
 //! This module provides optimized configuration loading and management
 //! with better performance and reduced memory usage.
 //!
-//! Hot reload is not supported. Configuration is loaded once at startup and
-//! cached for the lifetime of the process. Restart the server to pick up
-//! configuration changes.
+//! Hot reload is not supported. Due to a type-erasure limitation in the generic
+//! interface, `load_config` currently reloads from disk on every call rather than
+//! serving from cache. Restart the server to pick up configuration changes.
 
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use parking_lot::RwLock;
