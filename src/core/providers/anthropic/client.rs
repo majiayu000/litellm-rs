@@ -61,13 +61,12 @@ impl AnthropicClient {
 
     /// Request
     pub async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
-        // Request
         let anthropic_request = self.transform_chat_request(&request)?;
-
-        // Request
-        let response = self.send_request("/v1/messages", anthropic_request).await?;
-
-        // Response
+        let mut headers = self.get_request_headers();
+        headers.extend(self.compute_beta_headers(&request));
+        let response = self
+            .send_request("/v1/messages", anthropic_request, headers)
+            .await?;
         self.transform_chat_response(response)
     }
 
@@ -76,19 +75,22 @@ impl AnthropicClient {
         &self,
         request: ChatRequest,
     ) -> Result<reqwest::Response, ProviderError> {
-        // Request
         let mut anthropic_request = self.transform_chat_request(&request)?;
         anthropic_request["stream"] = json!(true);
-
-        // Request
-        self.send_stream_request("/v1/messages", anthropic_request)
+        let mut headers = self.get_request_headers();
+        headers.extend(self.compute_beta_headers(&request));
+        self.send_stream_request("/v1/messages", anthropic_request, headers)
             .await
     }
 
     /// Request
-    async fn send_request(&self, endpoint: &str, body: Value) -> Result<Value, ProviderError> {
+    async fn send_request(
+        &self,
+        endpoint: &str,
+        body: Value,
+        headers: Vec<HeaderPair>,
+    ) -> Result<Value, ProviderError> {
         let url = format!("{}{}", self.config.base_url.trim_end_matches('/'), endpoint);
-        let headers = self.get_request_headers();
 
         let response = timeout(
             Duration::from_secs(self.config.request_timeout),
@@ -106,9 +108,9 @@ impl AnthropicClient {
         &self,
         endpoint: &str,
         body: Value,
+        headers: Vec<HeaderPair>,
     ) -> Result<Response, ProviderError> {
         let url = format!("{}{}", self.config.base_url.trim_end_matches('/'), endpoint);
-        let headers = self.get_request_headers();
 
         let response = timeout(
             Duration::from_secs(self.config.request_timeout),
@@ -132,7 +134,7 @@ impl AnthropicClient {
     }
 
     /// Build request headers using the unified HeaderPair pattern.
-    fn get_request_headers(&self) -> Vec<HeaderPair> {
+    pub fn get_request_headers(&self) -> Vec<HeaderPair> {
         let mut headers = Vec::with_capacity(5);
 
         // Authentication header
@@ -153,6 +155,60 @@ impl AnthropicClient {
         }
 
         headers
+    }
+
+    /// Compute the `anthropic-beta` header values required for the given request.
+    ///
+    /// Returns an empty Vec when no beta features are needed.
+    fn compute_beta_headers(&self, request: &ChatRequest) -> Vec<HeaderPair> {
+        let mut features: Vec<String> = Vec::new();
+
+        // Extended / interleaved thinking requires the beta header.
+        if request.thinking.as_ref().is_some_and(|t| t.enabled) {
+            features.push("interleaved-thinking-2025-05-14".to_string());
+        }
+
+        // Computer-use built-in tool requires its own beta header.
+        if let Some(arr) = request
+            .extra_params
+            .get("anthropic_tools")
+            .and_then(|v| v.as_array())
+        {
+            for tool in arr {
+                if tool.get("type").and_then(|t| t.as_str()) == Some("computer_20241022") {
+                    features.push("computer-use-2024-10-22".to_string());
+                    break;
+                }
+            }
+        }
+
+        // Caller-supplied beta flags via extra_params["anthropic_beta"].
+        if let Some(beta_val) = request.extra_params.get("anthropic_beta") {
+            match beta_val {
+                Value::Array(arr) => {
+                    for item in arr {
+                        if let Some(s) = item.as_str() {
+                            let s = s.to_string();
+                            if !features.contains(&s) {
+                                features.push(s);
+                            }
+                        }
+                    }
+                }
+                Value::String(s) => {
+                    if !features.contains(s) {
+                        features.push(s.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if features.is_empty() {
+            return vec![];
+        }
+
+        vec![header("anthropic-beta", features.join(","))]
     }
 
     /// Handle
@@ -256,6 +312,34 @@ impl AnthropicClient {
                 "type": "enabled",
                 "budget_tokens": budget
             });
+        }
+
+        // Structured outputs: pass json_schema response_format to Anthropic.
+        if let Some(rf) = &request.response_format
+            && rf.format_type == "json_schema"
+            && let Some(schema) = &rf.json_schema
+        {
+            anthropic_request["response_format"] = json!({
+                "type": "json_schema",
+                "json_schema": schema
+            });
+        }
+
+        // Anthropic built-in (server-side) tools passed via extra_params.
+        // These are appended after any user-defined function tools.
+        if let Some(arr) = request
+            .extra_params
+            .get("anthropic_tools")
+            .and_then(|v| v.as_array())
+            .filter(|a| !a.is_empty())
+        {
+            let mut merged: Vec<Value> = anthropic_request
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            merged.extend(arr.iter().cloned());
+            anthropic_request["tools"] = json!(merged);
         }
 
         Ok(anthropic_request)
