@@ -37,8 +37,12 @@ pub enum AnthropicModelFamily {
     ClaudeOpus46,
     /// Claude Opus 4.5 models (latest flagship)
     ClaudeOpus45,
+    /// Claude Sonnet 4.6 models
+    ClaudeSonnet46,
     /// Claude Sonnet 4.5 models (latest balanced)
     ClaudeSonnet45,
+    /// Claude Haiku 4.5 models
+    ClaudeHaiku45,
     /// Claude Sonnet 4 models
     ClaudeSonnet4,
     /// Claude 3.5 Sonnet models
@@ -139,8 +143,8 @@ impl AnthropicModelRegistry {
                     id: "claude-opus-4-6".to_string(),
                     name: "Claude Opus 4.6".to_string(),
                     provider: "anthropic".to_string(),
-                    max_context_length: 200_000,
-                    max_output_length: Some(32_000),
+                    max_context_length: 1_000_000,
+                    max_output_length: Some(128_000),
                     supports_streaming: true,
                     supports_tools: true,
                     supports_multimodal: true,
@@ -176,8 +180,8 @@ impl AnthropicModelRegistry {
                     batch_discount: Some(0.5),
                 },
                 limits: ModelLimits {
-                    max_context_length: 200_000,
-                    max_output_tokens: 32_000,
+                    max_context_length: 1_000_000,
+                    max_output_tokens: 128_000,
                     max_images: Some(100),
                     max_document_size_mb: Some(100),
                 },
@@ -239,12 +243,12 @@ impl AnthropicModelRegistry {
             },
         );
 
-        // Claude Sonnet 4.5 (Latest balanced model - November 2025)
+        // Claude Sonnet 4.5 (Latest balanced model - September 2025)
         self.register_model(
-            "claude-sonnet-4-5-20251101",
+            "claude-sonnet-4-5-20250929",
             ModelSpec {
                 model_info: ModelInfo {
-                    id: "claude-sonnet-4-5-20251101".to_string(),
+                    id: "claude-sonnet-4-5-20250929".to_string(),
                     name: "Claude Sonnet 4.5".to_string(),
                     provider: "anthropic".to_string(),
                     max_context_length: 200_000,
@@ -281,6 +285,112 @@ impl AnthropicModelRegistry {
                     output_price: 15.0,
                     cache_write_price: Some(3.75),
                     cache_read_price: Some(0.30),
+                    batch_discount: Some(0.5),
+                },
+                limits: ModelLimits {
+                    max_context_length: 200_000,
+                    max_output_tokens: 16_000,
+                    max_images: Some(100),
+                    max_document_size_mb: Some(100),
+                },
+                config: ModelConfig::default(),
+            },
+        );
+
+        // Claude Sonnet 4.6 (October 2025)
+        self.register_model(
+            "claude-sonnet-4-6-20251001",
+            ModelSpec {
+                model_info: ModelInfo {
+                    id: "claude-sonnet-4-6-20251001".to_string(),
+                    name: "Claude Sonnet 4.6".to_string(),
+                    provider: "anthropic".to_string(),
+                    max_context_length: 200_000,
+                    max_output_length: Some(16_000),
+                    supports_streaming: true,
+                    supports_tools: true,
+                    supports_multimodal: true,
+                    input_cost_per_1k_tokens: Some(0.003),
+                    output_cost_per_1k_tokens: Some(0.015),
+                    currency: "USD".to_string(),
+                    capabilities: vec![
+                        crate::core::types::model::ProviderCapability::ChatCompletion,
+                        crate::core::types::model::ProviderCapability::ChatCompletionStream,
+                        crate::core::types::model::ProviderCapability::ToolCalling,
+                    ],
+                    created_at: None,
+                    updated_at: None,
+                    metadata: std::collections::HashMap::new(),
+                },
+                family: AnthropicModelFamily::ClaudeSonnet46,
+                features: vec![
+                    ModelFeature::MultimodalSupport,
+                    ModelFeature::ToolCalling,
+                    ModelFeature::FunctionCalling,
+                    ModelFeature::StreamingSupport,
+                    ModelFeature::CacheControl,
+                    ModelFeature::SystemMessages,
+                    ModelFeature::BatchProcessing,
+                    ModelFeature::ThinkingMode,
+                    ModelFeature::ComputerUse,
+                ],
+                pricing: ModelPricing {
+                    input_price: 3.0,
+                    output_price: 15.0,
+                    cache_write_price: Some(3.75),
+                    cache_read_price: Some(0.30),
+                    batch_discount: Some(0.5),
+                },
+                limits: ModelLimits {
+                    max_context_length: 200_000,
+                    max_output_tokens: 16_000,
+                    max_images: Some(100),
+                    max_document_size_mb: Some(100),
+                },
+                config: ModelConfig::default(),
+            },
+        );
+
+        // Claude Haiku 4.5 (October 2025)
+        self.register_model(
+            "claude-haiku-4-5-20251001",
+            ModelSpec {
+                model_info: ModelInfo {
+                    id: "claude-haiku-4-5-20251001".to_string(),
+                    name: "Claude Haiku 4.5".to_string(),
+                    provider: "anthropic".to_string(),
+                    max_context_length: 200_000,
+                    max_output_length: Some(16_000),
+                    supports_streaming: true,
+                    supports_tools: true,
+                    supports_multimodal: true,
+                    input_cost_per_1k_tokens: Some(0.0008),
+                    output_cost_per_1k_tokens: Some(0.004),
+                    currency: "USD".to_string(),
+                    capabilities: vec![
+                        crate::core::types::model::ProviderCapability::ChatCompletion,
+                        crate::core::types::model::ProviderCapability::ChatCompletionStream,
+                        crate::core::types::model::ProviderCapability::ToolCalling,
+                    ],
+                    created_at: None,
+                    updated_at: None,
+                    metadata: std::collections::HashMap::new(),
+                },
+                family: AnthropicModelFamily::ClaudeHaiku45,
+                features: vec![
+                    ModelFeature::MultimodalSupport,
+                    ModelFeature::ToolCalling,
+                    ModelFeature::FunctionCalling,
+                    ModelFeature::StreamingSupport,
+                    ModelFeature::CacheControl,
+                    ModelFeature::SystemMessages,
+                    ModelFeature::BatchProcessing,
+                ],
+                pricing: ModelPricing {
+                    input_price: 0.80,
+                    output_price: 4.0,
+                    cache_write_price: Some(1.00),
+                    cache_read_price: Some(0.08),
                     batch_discount: Some(0.5),
                 },
                 limits: ModelLimits {
@@ -699,8 +809,10 @@ impl AnthropicModelRegistry {
         self.register_alias("claude-opus-4-6-20260114", "claude-opus-4-6");
         self.register_alias("claude-opus-4-5", "claude-opus-4-5-20251101");
         self.register_alias("claude-opus-4-5-20251110", "claude-opus-4-5-20251101");
-        self.register_alias("claude-sonnet-4-5", "claude-sonnet-4-5-20251101");
-        self.register_alias("claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20251101");
+        self.register_alias("claude-sonnet-4-6", "claude-sonnet-4-6-20251001");
+        self.register_alias("claude-haiku-4-5", "claude-haiku-4-5-20251001");
+        self.register_alias("claude-sonnet-4-5", "claude-sonnet-4-5-20250929");
+        self.register_alias("claude-sonnet-4-5-20251101", "claude-sonnet-4-5-20250929");
         self.register_alias("claude-sonnet-4", "claude-sonnet-4-20251022");
         self.register_alias("claude-sonnet-4-20250514", "claude-sonnet-4-20251022");
         self.register_alias("claude-3-5-sonnet", "claude-3-5-sonnet-20241022");
@@ -767,12 +879,21 @@ impl AnthropicModelRegistry {
         } else if model_lower.contains("claude-opus-4-5") || model_lower.contains("claude-opus-4.5")
         {
             Some(AnthropicModelFamily::ClaudeOpus45)
+        } else if model_lower.contains("claude-sonnet-4-6")
+            || model_lower.contains("claude-sonnet-4.6")
+        {
+            Some(AnthropicModelFamily::ClaudeSonnet46)
+        } else if model_lower.contains("claude-haiku-4-5")
+            || model_lower.contains("claude-haiku-4.5")
+        {
+            Some(AnthropicModelFamily::ClaudeHaiku45)
         } else if model_lower.contains("claude-sonnet-4-5")
             || model_lower.contains("claude-sonnet-4.5")
         {
             Some(AnthropicModelFamily::ClaudeSonnet45)
         } else if model_lower.contains("claude-sonnet-4")
             && !model_lower.contains("claude-sonnet-4-5")
+            && !model_lower.contains("claude-sonnet-4-6")
         {
             Some(AnthropicModelFamily::ClaudeSonnet4)
         } else if model_lower.contains("claude-3-5-sonnet")
