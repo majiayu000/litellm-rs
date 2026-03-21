@@ -23,12 +23,11 @@ pub fn is_provider_selector_supported(selector: &str) -> bool {
         return true;
     }
 
-    let provider_type = ProviderType::from(normalized.as_str());
-    if matches!(provider_type, ProviderType::Custom(_)) {
-        return false;
+    // Catalog selectors are already handled above; use strict FromStr for enum variants.
+    match normalized.parse::<ProviderType>() {
+        Ok(t) => Provider::factory_supported_provider_types().contains(&t),
+        Err(_) => false,
     }
-
-    Provider::factory_supported_provider_types().contains(&provider_type)
 }
 
 /// Create a provider from configuration
@@ -58,8 +57,6 @@ pub async fn create_provider(
     } else {
         provider_type.as_str()
     };
-    let provider_type_enum = ProviderType::from(provider_selector);
-
     // --- Tier 1: check the data-driven catalog first ---
     let provider_name_lower = provider_selector.to_lowercase();
     if let Some(def) = registry::get_definition(&provider_name_lower) {
@@ -103,15 +100,12 @@ pub async fn create_provider(
     }
 
     // --- Tier 2/3: existing factory logic ---
-    if let ProviderType::Custom(custom_name) = &provider_type_enum {
-        return Err(ProviderError::not_implemented(
-            "unknown",
-            format!(
-                "Unknown provider type '{}' (name='{}'). Add a supported provider_type or implementation.",
-                custom_name, name
-            ),
-        ));
-    }
+    // Catalog selectors are already handled above; use strict FromStr so unknown strings
+    // produce a ConfigError::InvalidValue instead of silently becoming ProviderType::Custom.
+    let provider_type_enum = provider_selector
+        .parse::<ProviderType>()
+        .map_err(|e| ProviderError::invalid_request("provider_type", e.to_string()))?;
+
     if !Provider::factory_supported_provider_types().contains(&provider_type_enum) {
         return Err(ProviderError::not_implemented(
             "unknown",
@@ -1228,9 +1222,11 @@ mod tests {
         let err = create_provider(config)
             .await
             .expect_err("Expected unknown custom provider to fail");
+        // Unknown provider strings now produce InvalidRequest (via ConfigError::InvalidValue)
+        // instead of NotImplemented, so callers get a clear parse-time error.
         assert!(
-            matches!(err, ProviderError::NotImplemented { .. }),
-            "Expected NotImplemented error, got {}",
+            matches!(err, ProviderError::InvalidRequest { .. }),
+            "Expected InvalidRequest error, got {}",
             err
         );
         assert!(
