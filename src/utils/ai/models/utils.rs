@@ -60,7 +60,7 @@ impl ModelUtils {
                 supports_system_messages: true,
                 supports_web_search: false,
                 supports_url_context: true,
-                supports_vision: false,
+                supports_vision: true,
                 supports_streaming: true,
                 max_tokens: Some(100000),
                 context_window: Some(200000),
@@ -608,6 +608,14 @@ mod tests {
         assert!(ModelUtils::supports_vision("gpt-4-turbo"));
         assert!(ModelUtils::supports_vision("claude-3-opus"));
         assert!(!ModelUtils::supports_vision("gpt-3.5-turbo"));
+        // o3 and o4-mini support vision
+        assert!(ModelUtils::supports_vision("o3"));
+        assert!(ModelUtils::supports_vision("o3-mini"));
+        assert!(ModelUtils::supports_vision("o4-mini"));
+        // GPT-5.4 family supports vision (covered by gpt-5 prefix)
+        assert!(ModelUtils::supports_vision("gpt-5.4"));
+        assert!(ModelUtils::supports_vision("gpt-5.4-mini"));
+        assert!(ModelUtils::supports_vision("gpt-5.4-turbo"));
     }
 
     #[test]

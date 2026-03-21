@@ -256,23 +256,28 @@ pub struct AdvancedUsage {
 pub struct AdvancedChatUtils;
 
 impl AdvancedChatUtils {
-    /// Get models that support structured outputs
+    /// Get base model prefixes that support structured outputs.
+    ///
+    /// Note: o1-preview and o1-mini (deprecated April 2025) are intentionally
+    /// excluded — use `supports_structured_outputs()` for accurate detection.
     pub fn get_structured_output_models() -> Vec<&'static str> {
         vec![
-            "gpt-4o",
-            "gpt-4o-2024-08-06",
-            "gpt-4o-mini",
-            "gpt-4o-mini-2024-07-18",
+            // GPT-4o family
+            "gpt-4o",  // GPT-4.1 family
+            "gpt-4.1", // GPT-5.x family (2025–2026)
+            "gpt-5",   // GPT-5.4 family (2026)
+            "gpt-5.4", // O-series reasoning models (GA, not legacy preview/mini)
+            "o1", "o3", "o4-mini",
         ]
     }
 
-    /// Get reasoning models (o-series)
+    /// Get base model prefixes for o-series reasoning models.
     pub fn get_reasoning_models() -> Vec<&'static str> {
         vec![
-            "o1-preview",
-            "o1-preview-2024-09-12",
-            "o1-mini",
-            "o1-mini-2024-09-12",
+            // O1 family (GA and legacy)
+            "o1", // O3 family (2025)
+            "o3", // O4 family (2025–2026)
+            "o4",
         ]
     }
 
@@ -281,14 +286,34 @@ impl AdvancedChatUtils {
         vec!["gpt-4o-audio-preview", "gpt-4o-audio-preview-2024-10-01"]
     }
 
-    /// Check if model supports structured outputs
+    /// Check if model supports structured outputs.
+    ///
+    /// Uses prefix matching so dated snapshots (e.g. `gpt-4o-2024-08-06`) are
+    /// covered automatically.  Legacy o1-preview and o1-mini are excluded
+    /// because they were deprecated in April 2025 and never supported the
+    /// `json_schema` response format.  Audio-preview and realtime variants of
+    /// gpt-4o are also excluded — they share the `gpt-4o` prefix but do not
+    /// support structured outputs.
     pub fn supports_structured_outputs(model: &str) -> bool {
-        Self::get_structured_output_models().contains(&model)
+        if model.starts_with("o1-preview")
+            || model.starts_with("o1-mini")
+            || model.starts_with("gpt-4o-audio")
+            || model.starts_with("gpt-4o-realtime")
+        {
+            return false;
+        }
+        Self::get_structured_output_models()
+            .iter()
+            .any(|prefix| model.starts_with(prefix))
     }
 
-    /// Check if model is a reasoning model
+    /// Check if model is a reasoning model (o-series).
+    ///
+    /// Uses prefix matching so all o1/o3/o4 variants are detected.
     pub fn is_reasoning_model(model: &str) -> bool {
-        Self::get_reasoning_models().contains(&model)
+        Self::get_reasoning_models()
+            .iter()
+            .any(|prefix| model.starts_with(prefix))
     }
 
     /// Check if model supports audio responses
@@ -359,19 +384,26 @@ impl AdvancedChatUtils {
                 });
             }
 
-            // Reasoning models have specific constraints
-            if request.temperature.is_some() {
-                return Err(ProviderError::InvalidRequest {
-                    provider: "openai",
-                    message: "temperature parameter not supported for reasoning models".to_string(),
-                });
-            }
+            // Only legacy o1-preview/o1-mini reject temperature and top_p.
+            // GA o-series models (o1, o3, o4-mini) accept these parameters.
+            let is_legacy_o1 =
+                request.model.starts_with("o1-preview") || request.model.starts_with("o1-mini");
+            if is_legacy_o1 {
+                if request.temperature.is_some() {
+                    return Err(ProviderError::InvalidRequest {
+                        provider: "openai",
+                        message: "temperature parameter not supported for legacy reasoning models"
+                            .to_string(),
+                    });
+                }
 
-            if request.top_p.is_some() {
-                return Err(ProviderError::InvalidRequest {
-                    provider: "openai",
-                    message: "top_p parameter not supported for reasoning models".to_string(),
-                });
+                if request.top_p.is_some() {
+                    return Err(ProviderError::InvalidRequest {
+                        provider: "openai",
+                        message: "top_p parameter not supported for legacy reasoning models"
+                            .to_string(),
+                    });
+                }
             }
 
             if let Some(max_reasoning) = reasoning_config.max_reasoning_tokens
@@ -414,15 +446,22 @@ impl AdvancedChatUtils {
         Ok(())
     }
 
-    /// Get model capabilities
+    /// Get model capabilities.
+    ///
+    /// Legacy o1-preview and o1-mini (deprecated April 2025) lack tool calling
+    /// and streaming.  All GA o-series models (o1, o3, o4-mini) and GPT-5.4
+    /// support function calling and streaming.
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
+        let is_reasoning = Self::is_reasoning_model(model);
+        // Deprecated models that predate GA tool-calling and streaming support
+        let is_legacy_o1 = model.starts_with("o1-preview") || model.starts_with("o1-mini");
         ModelCapabilities {
             structured_outputs: Self::supports_structured_outputs(model),
-            reasoning: Self::is_reasoning_model(model),
+            reasoning: is_reasoning,
             audio_responses: Self::supports_audio_responses(model),
-            function_calling: !Self::is_reasoning_model(model), // o-series doesn't support function calling
-            streaming: !Self::is_reasoning_model(model), // o-series doesn't support streaming
-            temperature_control: !Self::is_reasoning_model(model),
+            function_calling: !is_legacy_o1,
+            streaming: !is_legacy_o1,
+            temperature_control: !is_legacy_o1,
         }
     }
 
@@ -545,10 +584,47 @@ mod tests {
 
     #[test]
     fn test_supports_structured_outputs() {
+        // Original GPT-4o family
         assert!(AdvancedChatUtils::supports_structured_outputs("gpt-4o"));
         assert!(AdvancedChatUtils::supports_structured_outputs(
             "gpt-4o-mini"
         ));
+        assert!(AdvancedChatUtils::supports_structured_outputs(
+            "gpt-4o-2024-08-06"
+        ));
+        // GPT-4.1 family
+        assert!(AdvancedChatUtils::supports_structured_outputs("gpt-4.1"));
+        assert!(AdvancedChatUtils::supports_structured_outputs(
+            "gpt-4.1-mini"
+        ));
+        // GPT-5.x family
+        assert!(AdvancedChatUtils::supports_structured_outputs("gpt-5"));
+        assert!(AdvancedChatUtils::supports_structured_outputs("gpt-5.2"));
+        // GPT-5.4 family
+        assert!(AdvancedChatUtils::supports_structured_outputs("gpt-5.4"));
+        assert!(AdvancedChatUtils::supports_structured_outputs(
+            "gpt-5.4-mini"
+        ));
+        assert!(AdvancedChatUtils::supports_structured_outputs(
+            "gpt-5.4-turbo"
+        ));
+        // GA o-series
+        assert!(AdvancedChatUtils::supports_structured_outputs("o3"));
+        assert!(AdvancedChatUtils::supports_structured_outputs("o3-mini"));
+        assert!(AdvancedChatUtils::supports_structured_outputs("o4-mini"));
+        // Legacy o1 models excluded
+        assert!(!AdvancedChatUtils::supports_structured_outputs(
+            "o1-preview"
+        ));
+        assert!(!AdvancedChatUtils::supports_structured_outputs("o1-mini"));
+        // Audio-preview models share "gpt-4o" prefix but must NOT match
+        assert!(!AdvancedChatUtils::supports_structured_outputs(
+            "gpt-4o-audio-preview"
+        ));
+        assert!(!AdvancedChatUtils::supports_structured_outputs(
+            "gpt-4o-audio-preview-2024-10-01"
+        ));
+        // Non-supporting models
         assert!(!AdvancedChatUtils::supports_structured_outputs(
             "gpt-3.5-turbo"
         ));
@@ -556,9 +632,18 @@ mod tests {
 
     #[test]
     fn test_is_reasoning_model() {
+        // Legacy o1 still recognized as reasoning models
         assert!(AdvancedChatUtils::is_reasoning_model("o1-preview"));
         assert!(AdvancedChatUtils::is_reasoning_model("o1-mini"));
+        // GA o-series
+        assert!(AdvancedChatUtils::is_reasoning_model("o1"));
+        assert!(AdvancedChatUtils::is_reasoning_model("o3"));
+        assert!(AdvancedChatUtils::is_reasoning_model("o3-mini"));
+        assert!(AdvancedChatUtils::is_reasoning_model("o3-pro"));
+        assert!(AdvancedChatUtils::is_reasoning_model("o4-mini"));
+        // Non-reasoning models
         assert!(!AdvancedChatUtils::is_reasoning_model("gpt-4o"));
+        assert!(!AdvancedChatUtils::is_reasoning_model("gpt-5.4"));
     }
 
     #[test]
@@ -667,11 +752,33 @@ mod tests {
         assert!(gpt4o_caps.function_calling);
         assert!(gpt4o_caps.streaming);
 
-        let o1_caps = AdvancedChatUtils::get_model_capabilities("o1-preview");
-        assert!(!o1_caps.structured_outputs);
-        assert!(o1_caps.reasoning);
-        assert!(!o1_caps.function_calling);
-        assert!(!o1_caps.streaming);
+        // Legacy o1-preview: no function calling or streaming
+        let o1_legacy = AdvancedChatUtils::get_model_capabilities("o1-preview");
+        assert!(!o1_legacy.structured_outputs);
+        assert!(o1_legacy.reasoning);
+        assert!(!o1_legacy.function_calling);
+        assert!(!o1_legacy.streaming);
+
+        // o3: reasoning + full tool calling + streaming + structured outputs
+        let o3_caps = AdvancedChatUtils::get_model_capabilities("o3");
+        assert!(o3_caps.structured_outputs);
+        assert!(o3_caps.reasoning);
+        assert!(o3_caps.function_calling);
+        assert!(o3_caps.streaming);
+
+        // o4-mini: same as o3
+        let o4_mini_caps = AdvancedChatUtils::get_model_capabilities("o4-mini");
+        assert!(o4_mini_caps.structured_outputs);
+        assert!(o4_mini_caps.reasoning);
+        assert!(o4_mini_caps.function_calling);
+        assert!(o4_mini_caps.streaming);
+
+        // GPT-5.4: full capabilities, not a reasoning model
+        let gpt54_caps = AdvancedChatUtils::get_model_capabilities("gpt-5.4");
+        assert!(gpt54_caps.structured_outputs);
+        assert!(!gpt54_caps.reasoning);
+        assert!(gpt54_caps.function_calling);
+        assert!(gpt54_caps.streaming);
     }
 
     #[test]
