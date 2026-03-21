@@ -40,6 +40,7 @@ pub mod streaming;
 pub mod teams; // Team management module
 pub mod traits;
 pub mod types;
+#[cfg(feature = "storage")]
 pub mod user_management; // DB methods implemented as stubs in storage/database/seaorm_db/user_management_ops.rs
 #[cfg(feature = "gateway")]
 pub mod virtual_keys; // Database methods implemented as stubs in storage/database/seaorm_db/virtual_key_ops.rs
