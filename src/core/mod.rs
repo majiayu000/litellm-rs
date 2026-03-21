@@ -45,5 +45,6 @@ pub mod types;
 // - user_management: get_user, create_user, get_team, create_team, etc.
 // NOTE: user_management requires database method implementations.
 // pub mod user_management;
+#[cfg(feature = "gateway")]
 pub mod virtual_keys; // Database methods implemented as stubs in storage/database/seaorm_db/virtual_key_ops.rs
 pub mod webhooks;
