@@ -621,3 +621,44 @@ fn test_mcp_rate_limit_without_retry_conversion() {
         _ => panic!("Expected RateLimit error"),
     }
 }
+
+#[test]
+fn test_mcp_validation_error_conversion() {
+    let mcp_err = McpError::ValidationError {
+        server_name: "github".to_string(),
+        tool_name: "create_pr".to_string(),
+        errors: vec!["title is required".to_string(), "body too long".to_string()],
+    };
+    let gateway_err: GatewayError = mcp_err.into();
+    match gateway_err {
+        GatewayError::Validation(msg) => {
+            assert!(msg.contains("create_pr"));
+            assert!(msg.contains("github"));
+            assert!(msg.contains("title is required"));
+            assert!(msg.contains("body too long"));
+        }
+        _ => panic!("Expected Validation error"),
+    }
+}
+
+#[test]
+fn test_mcp_validation_error_joins_errors_with_semicolons() {
+    let mcp_err = McpError::ValidationError {
+        server_name: "srv".to_string(),
+        tool_name: "tool".to_string(),
+        errors: vec!["err1".to_string(), "err2".to_string(), "err3".to_string()],
+    };
+    let gateway_err: GatewayError = mcp_err.into();
+    match gateway_err {
+        GatewayError::Validation(msg) => {
+            assert!(msg.contains("err1"));
+            assert!(msg.contains("err2"));
+            assert!(msg.contains("err3"));
+            assert!(
+                msg.contains("err1; err2; err3"),
+                "errors must be joined with semicolons, got: {msg}"
+            );
+        }
+        _ => panic!("Expected Validation error"),
+    }
+}

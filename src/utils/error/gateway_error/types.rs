@@ -278,4 +278,75 @@ mod tests {
         let error = GatewayError::Config("test".to_string());
         let _: &dyn std::error::Error = &error;
     }
+
+    #[test]
+    fn test_serde_yml_error_conversion() {
+        let yaml_result: std::result::Result<serde_yml::Value, _> =
+            serde_yml::from_str("key: [unclosed");
+        let yaml_error = yaml_result.unwrap_err();
+        let gateway_error: GatewayError = yaml_error.into();
+        assert!(
+            matches!(gateway_error, GatewayError::Serialization(_)),
+            "From<serde_yml::Error> must produce GatewayError::Serialization"
+        );
+        assert!(gateway_error.to_string().contains("Serialization error"));
+    }
+
+    #[test]
+    fn test_jwt_error_conversion() {
+        use jsonwebtoken::errors::{Error as JwtError, ErrorKind};
+        let jwt_error = JwtError::from(ErrorKind::InvalidToken);
+        let gateway_error: GatewayError = jwt_error.into();
+        assert!(
+            matches!(gateway_error, GatewayError::Auth(_)),
+            "From<jsonwebtoken::errors::Error> must produce GatewayError::Auth"
+        );
+        let msg = gateway_error.to_string();
+        assert!(
+            msg.contains("JWT error"),
+            "Auth message must include 'JWT error' prefix, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_jwt_error_conversion_preserves_error_kind() {
+        use jsonwebtoken::errors::{Error as JwtError, ErrorKind};
+        let jwt_error = JwtError::from(ErrorKind::ExpiredSignature);
+        let gateway_error: GatewayError = jwt_error.into();
+        let msg = gateway_error.to_string();
+        assert!(msg.starts_with("Authentication error: JWT error:"));
+        assert!(
+            msg.contains("ExpiredSignature"),
+            "Auth message must preserve the JWT error kind, got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "redis")]
+    #[test]
+    fn test_redis_error_conversion() {
+        let redis_err = redis::RedisError::from((
+            redis::ErrorKind::AuthenticationFailed,
+            "NOAUTH Authentication required",
+        ));
+        let gateway_err: GatewayError = redis_err.into();
+        assert!(
+            matches!(gateway_err, GatewayError::Storage(_)),
+            "From<redis::RedisError> must produce GatewayError::Storage"
+        );
+        let msg = gateway_err.to_string();
+        assert!(msg.contains("Redis error"));
+    }
+
+    #[cfg(feature = "storage")]
+    #[test]
+    fn test_sea_orm_db_err_conversion() {
+        let db_err = sea_orm::DbErr::Custom("connection refused".to_string());
+        let gateway_err: GatewayError = db_err.into();
+        assert!(
+            matches!(gateway_err, GatewayError::Storage(_)),
+            "From<sea_orm::DbErr> must produce GatewayError::Storage"
+        );
+        let msg = gateway_err.to_string();
+        assert!(msg.contains("Database error"));
+    }
 }

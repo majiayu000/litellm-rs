@@ -249,3 +249,7 @@ pub struct GatewayErrorDetail {
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "response_consolidation_tests.rs"]
+mod consolidation_tests;
