@@ -83,8 +83,10 @@ impl From<&str> for ProviderType {
 /// Parse a provider type string with strict validation.
 ///
 /// Unlike `From<&str>`, this returns an error for unrecognised strings instead of
-/// silently producing a `Custom` variant.  Use this at config-load time so
-/// typos and unsupported provider names are caught early.
+/// silently producing a `Custom` variant.  Use this for enum-variant providers
+/// (Tier 2/3 factory) **after** ruling out data-driven catalog selectors via
+/// `registry::get_definition`.  Catalog entries (e.g. `"aiml_api"`, `"aleph_alpha"`)
+/// are not listed here because they are handled in Tier 1 before this parser is called.
 ///
 /// To intentionally use a custom provider, construct
 /// `ProviderType::Custom("name".to_string())` directly.
