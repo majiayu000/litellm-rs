@@ -2,6 +2,10 @@
 //!
 //! This module provides optimized configuration loading and management
 //! with better performance and reduced memory usage.
+//!
+//! Hot reload is not supported. Due to a type-erasure limitation in the generic
+//! interface, `load_config` currently reloads from disk on every call rather than
+//! serving from cache. Restart the server to pick up configuration changes.
 
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use parking_lot::RwLock;
@@ -10,15 +14,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use tracing::error;
 
-/// Optimized configuration manager with caching and hot-reload support
+/// Optimized configuration manager with caching support
 #[derive(Debug)]
 pub struct OptimizedConfigManager {
     /// Cached configurations
     cache: Arc<RwLock<HashMap<String, Arc<ConfigValue>>>>,
-    /// Configuration file watchers
-    watchers: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
 }
 
 /// Generic configuration value wrapper
@@ -93,7 +94,6 @@ impl OptimizedConfigManager {
     pub fn new() -> Self {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
-            watchers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -157,68 +157,6 @@ impl OptimizedConfigManager {
         }
     }
 
-    /// Enable hot-reload for a configuration file
-    pub async fn enable_hot_reload<T, F>(&self, file_path: &str, callback: F) -> Result<()>
-    where
-        T: for<'de> Deserialize<'de> + Serialize + Send + Sync + 'static,
-        F: Fn(Arc<T>) + Send + Sync + 'static,
-    {
-        let file_path_owned = file_path.to_string();
-        let file_path_for_spawn = file_path_owned.clone();
-        let cache = self.cache.clone();
-        let callback = Arc::new(callback);
-
-        let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-            let mut last_modified = std::time::SystemTime::UNIX_EPOCH;
-
-            loop {
-                interval.tick().await;
-
-                if let Ok(metadata) = tokio::fs::metadata(&file_path_for_spawn).await
-                    && let Ok(modified) = metadata.modified()
-                    && modified > last_modified
-                {
-                    last_modified = modified;
-
-                    // Reload configuration
-                    match Self::load_from_file_static::<T>(&file_path_for_spawn).await {
-                        Ok(new_config) => {
-                            let config_arc = Arc::new(new_config);
-
-                            // Update cache
-                            {
-                                let mut cache_guard = cache.write();
-                                if let Ok(config_value) =
-                                    Self::serialize_to_config_value_static(&*config_arc)
-                                {
-                                    cache_guard.insert(
-                                        file_path_for_spawn.clone(),
-                                        Arc::new(config_value),
-                                    );
-                                }
-                            }
-
-                            // Call callback
-                            callback(config_arc);
-                        }
-                        Err(e) => {
-                            error!("Failed to reload config {}: {}", file_path_for_spawn, e);
-                        }
-                    }
-                }
-            }
-        });
-
-        // Store the handle
-        {
-            let mut watchers = self.watchers.write();
-            watchers.insert(file_path_owned, handle);
-        }
-
-        Ok(())
-    }
-
     /// Clear cache for a specific file
     pub fn clear_cache(&self, file_path: &str) {
         let mut cache = self.cache.write();
@@ -258,27 +196,6 @@ impl OptimizedConfigManager {
         // Simplified implementation
         Ok(ConfigValue::Object(HashMap::new()))
     }
-
-    // Static versions for use in async closures
-    async fn load_from_file_static<T>(file_path: &str) -> Result<T>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        let content = tokio::fs::read_to_string(file_path).await.map_err(|e| {
-            GatewayError::Config(format!("Failed to read config file {}: {}", file_path, e))
-        })?;
-
-        serde_yml::from_str(&content)
-            .map_err(|e| GatewayError::Config(format!("Failed to parse config: {}", e)))
-    }
-
-    fn serialize_to_config_value_static<T>(_config: &T) -> Result<ConfigValue>
-    where
-        T: Serialize,
-    {
-        // Simplified implementation
-        Ok(ConfigValue::Object(HashMap::new()))
-    }
 }
 
 impl Default for OptimizedConfigManager {
@@ -312,7 +229,6 @@ impl ConfigPresets {
         );
         config.insert("cache_size".to_string(), ConfigValue::Integer(1000));
         config.insert("enable_metrics".to_string(), ConfigValue::Boolean(true));
-        config.insert("hot_reload".to_string(), ConfigValue::Boolean(true));
         config
     }
 
@@ -325,7 +241,6 @@ impl ConfigPresets {
         );
         config.insert("cache_size".to_string(), ConfigValue::Integer(10000));
         config.insert("enable_metrics".to_string(), ConfigValue::Boolean(true));
-        config.insert("hot_reload".to_string(), ConfigValue::Boolean(false));
         config
     }
 
@@ -338,7 +253,6 @@ impl ConfigPresets {
         );
         config.insert("cache_size".to_string(), ConfigValue::Integer(100));
         config.insert("enable_metrics".to_string(), ConfigValue::Boolean(false));
-        config.insert("hot_reload".to_string(), ConfigValue::Boolean(false));
         config
     }
 }
