@@ -270,7 +270,7 @@ impl AnthropicClient {
 
         for message in messages {
             match message.role {
-                MessageRole::System => {
+                MessageRole::System | MessageRole::Developer => {
                     if let Some(content) = &message.content {
                         match content {
                             crate::core::types::message::MessageContent::Text(text) => {
@@ -315,7 +315,7 @@ impl AnthropicClient {
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "user",     // Response
                 MessageRole::Function => "user", // Response
-                MessageRole::System => continue, // Already handled
+                MessageRole::System | MessageRole::Developer => continue, // Already handled
             };
 
             let content = if let Some(content) = message.content {

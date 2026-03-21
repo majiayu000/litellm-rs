@@ -173,7 +173,7 @@ impl OllamaProvider {
 
         for msg in &request.messages {
             let role = match &msg.role {
-                MessageRole::System => "system",
+                MessageRole::System | MessageRole::Developer => "system",
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "tool",

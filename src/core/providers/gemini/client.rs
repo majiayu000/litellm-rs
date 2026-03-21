@@ -217,8 +217,8 @@ impl GeminiClient {
         for message in &request.messages {
             let content = self.transform_message_content(message)?;
             let role = match message.role {
-                MessageRole::System => {
-                    // Gemini doesn't directly support system role, need to convert to user message prefix
+                MessageRole::System | MessageRole::Developer => {
+                    // Gemini doesn't directly support system/developer role, need to convert to user message prefix
                     continue;
                 }
                 MessageRole::User => "user",

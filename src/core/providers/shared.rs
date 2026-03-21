@@ -20,6 +20,7 @@ impl MessageTransformer {
     pub fn role_to_string(role: &MessageRole) -> &'static str {
         match role {
             MessageRole::System => "system",
+            MessageRole::Developer => "developer",
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
             MessageRole::Tool => "tool",
