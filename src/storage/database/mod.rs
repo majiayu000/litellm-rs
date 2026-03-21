@@ -12,7 +12,7 @@ pub mod seaorm_db;
 
 // Re-export the main database interface
 pub use seaorm_db::SeaOrmDatabase as Database;
-pub use seaorm_db::{DatabaseBackendType, DatabaseStats};
+pub use seaorm_db::{DatabaseBackendType, DatabaseStats, SeaOrmTeamRepository};
 
 /// Returns the default absolute path for the SQLite fallback database.
 ///

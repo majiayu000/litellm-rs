@@ -4,8 +4,9 @@
 
 use crate::config::Config;
 use crate::core::budget::UnifiedBudgetLimits;
-use crate::core::teams::{InMemoryTeamRepository, TeamManager};
+use crate::core::teams::TeamManager;
 use crate::services::pricing::PricingService;
+use crate::storage::database::SeaOrmTeamRepository;
 use crate::utils::sync::AtomicValue;
 use std::sync::Arc;
 
@@ -45,7 +46,9 @@ impl AppState {
         storage: crate::storage::StorageLayer,
         pricing: Arc<PricingService>,
     ) -> Self {
-        let team_manager = Arc::new(TeamManager::new(Arc::new(InMemoryTeamRepository::new())));
+        let team_manager = Arc::new(TeamManager::new(Arc::new(SeaOrmTeamRepository::new(
+            storage.database.clone(),
+        ))));
         Self {
             config: AtomicValue::new(config),
             auth: Arc::new(auth),
