@@ -261,6 +261,13 @@ impl OpenAILikeProvider {
                 .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
         }
 
+        // Forward extra_params (e.g. OpenRouter-specific params, frequency_penalty, etc.)
+        if let Some(obj) = openai_request.as_object_mut() {
+            for (key, value) in request.extra_params {
+                obj.insert(key, value);
+            }
+        }
+
         Ok(openai_request)
     }
 
