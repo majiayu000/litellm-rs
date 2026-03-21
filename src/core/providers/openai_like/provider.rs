@@ -118,6 +118,16 @@ impl OpenAILikeProvider {
             headers.push(header_owned(key.clone(), value.clone()));
         }
 
+        // Add OpenRouter-specific headers when OR_SITE_URL / OR_APP_NAME are set
+        if self.config.provider_name == "openrouter" {
+            if let Ok(site_url) = std::env::var("OR_SITE_URL") {
+                headers.push(header_owned("HTTP-Referer".to_string(), site_url));
+            }
+            if let Ok(app_name) = std::env::var("OR_APP_NAME") {
+                headers.push(header_owned("X-Title".to_string(), app_name));
+            }
+        }
+
         headers
     }
 
@@ -261,10 +271,33 @@ impl OpenAILikeProvider {
                 .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
         }
 
+        // Wire OpenRouter reasoning parameter from ThinkingConfig before extra_params consumes request
+        let openrouter_thinking_params = if self.config.provider_name == "openrouter" {
+            if let Some(thinking_config) = &request.thinking {
+                let params =
+                    crate::core::providers::thinking::openrouter_thinking::transform_config(
+                        thinking_config,
+                        &model,
+                    )
+                    .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
+                Some(params)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Forward extra_params (e.g. OpenRouter-specific params, frequency_penalty, etc.)
         if let Some(obj) = openai_request.as_object_mut() {
             for (key, value) in request.extra_params {
                 obj.insert(key, value);
+            }
+            // Merge OpenRouter reasoning params (reasoning.effort etc.)
+            if let Some(Value::Object(params)) = openrouter_thinking_params {
+                for (key, value) in params {
+                    obj.insert(key, value);
+                }
             }
         }
 
@@ -650,5 +683,69 @@ mod tests {
     fn test_intern_provider_name_custom() {
         let name = intern_provider_name("xai");
         assert_eq!(name, "xai");
+    }
+
+    /// OR_SITE_URL → HTTP-Referer and OR_APP_NAME → X-Title are injected via
+    /// env vars at request time in get_request_headers(). Integration tests cover
+    /// the live path; here we verify the branch is only active for "openrouter".
+    #[tokio::test]
+    async fn test_non_openrouter_provider_no_or_headers() {
+        // When provider_name is NOT "openrouter", OR_* env vars must be ignored
+        // even if they happen to be set in the environment.
+        let config = OpenAILikeConfig::new("https://api.openai.com/v1")
+            .with_provider_name("openai")
+            .with_skip_api_key(true);
+        let Ok(provider) = OpenAILikeProvider::new(config).await else {
+            panic!("provider creation must succeed");
+        };
+        let headers = provider.get_request_headers();
+
+        let has_referer = headers.iter().any(|h| h.0 == "HTTP-Referer");
+        let has_title = headers.iter().any(|h| h.0 == "X-Title");
+
+        assert!(
+            !has_referer,
+            "HTTP-Referer must not be set for non-openrouter providers"
+        );
+        assert!(
+            !has_title,
+            "X-Title must not be set for non-openrouter providers"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_thinking_wired_in_transform() {
+        use crate::core::types::thinking::{ThinkingConfig, ThinkingEffort};
+
+        let config = OpenAILikeConfig::new("https://openrouter.ai/api/v1")
+            .with_provider_name("openrouter")
+            .with_skip_api_key(true);
+        let Ok(provider) = OpenAILikeProvider::new(config).await else {
+            panic!("provider creation must succeed");
+        };
+
+        let request = ChatRequest {
+            model: "unknown-model".to_string(),
+            messages: vec![],
+            thinking: Some(
+                ThinkingConfig::new()
+                    .enabled()
+                    .with_effort(ThinkingEffort::High)
+                    .with_budget(5000),
+            ),
+            ..Default::default()
+        };
+
+        let Ok(json) = provider.transform_chat_request(request) else {
+            panic!("transform_chat_request must succeed");
+        };
+
+        assert_eq!(
+            json.get("reasoning")
+                .and_then(|r| r.get("effort"))
+                .and_then(|v| v.as_str()),
+            Some("high"),
+            "reasoning.effort must be forwarded"
+        );
     }
 }
