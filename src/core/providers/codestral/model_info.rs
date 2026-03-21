@@ -22,11 +22,24 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
         ModelInfo {
             model_id: "codestral-latest",
             display_name: "Codestral Latest",
-            max_context_length: 32768,
-            max_output_length: 32768,
+            max_context_length: 256000,
+            max_output_length: 256000,
             supports_fim: true,
-            input_cost_per_million: 1.0,
-            output_cost_per_million: 3.0,
+            input_cost_per_million: 0.3,
+            output_cost_per_million: 0.9,
+        },
+    );
+
+    configs.insert(
+        "codestral-2508",
+        ModelInfo {
+            model_id: "codestral-2508",
+            display_name: "Codestral 2508",
+            max_context_length: 256000,
+            max_output_length: 256000,
+            supports_fim: true,
+            input_cost_per_million: 0.3,
+            output_cost_per_million: 0.9,
         },
     );
 
@@ -34,7 +47,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
         "codestral-2405",
         ModelInfo {
             model_id: "codestral-2405",
-            display_name: "Codestral 2405",
+            display_name: "Codestral 2405 (legacy)",
             max_context_length: 32768,
             max_output_length: 32768,
             supports_fim: true,

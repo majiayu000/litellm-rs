@@ -61,13 +61,13 @@ impl MistralChatHandler {
             ));
         }
 
-        // Validate temperature
+        // Validate temperature (Mistral supports [0.0, 1.5])
         if let Some(temp) = request.temperature
-            && !(0.0..=1.0).contains(&temp)
+            && !(0.0..=1.5).contains(&temp)
         {
             return Err(ProviderError::invalid_request(
                 "mistral",
-                format!("Temperature must be between 0 and 1, got {}", temp),
+                format!("Temperature must be between 0 and 1.5, got {}", temp),
             ));
         }
 
@@ -147,10 +147,15 @@ mod tests {
 
         assert!(handler.validate_request(&valid_request).is_ok());
 
-        // Test invalid temperature
+        // Test invalid temperature (above 1.5)
         let mut invalid_request = valid_request.clone();
         invalid_request.temperature = Some(2.0);
         assert!(handler.validate_request(&invalid_request).is_err());
+
+        // Test valid temperature at boundary (1.5 is allowed)
+        let mut boundary_request = valid_request.clone();
+        boundary_request.temperature = Some(1.5);
+        assert!(handler.validate_request(&boundary_request).is_ok());
 
         // Test invalid top_p
         let mut invalid_request = valid_request.clone();
