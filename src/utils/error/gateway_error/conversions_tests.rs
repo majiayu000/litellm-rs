@@ -654,6 +654,10 @@ fn test_mcp_validation_error_joins_errors_with_semicolons() {
             assert!(msg.contains("err1"));
             assert!(msg.contains("err2"));
             assert!(msg.contains("err3"));
+            assert!(
+                msg.contains("err1; err2; err3"),
+                "errors must be joined with semicolons, got: {msg}"
+            );
         }
         _ => panic!("Expected Validation error"),
     }

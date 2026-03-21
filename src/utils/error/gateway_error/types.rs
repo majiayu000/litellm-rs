@@ -315,6 +315,10 @@ mod tests {
         let gateway_error: GatewayError = jwt_error.into();
         let msg = gateway_error.to_string();
         assert!(msg.starts_with("Authentication error: JWT error:"));
+        assert!(
+            msg.contains("ExpiredSignature"),
+            "Auth message must preserve the JWT error kind, got: {msg}"
+        );
     }
 
     #[cfg(feature = "redis")]
