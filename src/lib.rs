@@ -114,7 +114,16 @@ pub use core::streaming::types::{
 pub use core::types::message::{MessageContent, MessageRole};
 
 // Export core functionality
-pub use core::models::{RequestContext, openai::*};
+pub use core::models::RequestContext;
+pub use core::models::openai::{
+    AudioContent, AudioDelta, AudioParams, CacheControl, ChatChoice, ChatChoiceDelta,
+    ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
+    ChatMessageDelta, CompletionChoice, CompletionRequest, CompletionTokensDetails, ContentLogprob,
+    DocumentSource, EmbeddingObject, EmbeddingRequest, EmbeddingUsage, Function, FunctionCallDelta,
+    ImageGenerationRequest, ImageGenerationResponse, ImageObject, ImageSource, ImageUrl, Logprobs,
+    Model, ModelListResponse, PromptTokensDetails, ResponseFormat, StreamOptions, Tool,
+    ToolCallDelta, ToolChoice, ToolChoiceFunction, ToolChoiceFunctionSpec, TopLogprob,
+};
 pub use core::providers::{Provider, ProviderError, ProviderRegistry, ProviderType};
 
 // Export unified router
