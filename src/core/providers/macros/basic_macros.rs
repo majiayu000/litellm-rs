@@ -131,14 +131,6 @@ macro_rules! provider_config {
             }
         }
 
-        $(
-            $(
-                #[allow(dead_code)]
-                fn $field() -> $field_type {
-                    provider_config!(@default $field_type $(, $default)?)
-                }
-            )?
-        )*
     };
 
     (@default $field_type:ty) => {
