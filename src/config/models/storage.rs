@@ -63,7 +63,8 @@ impl Default for DatabaseConfig {
 impl DatabaseConfig {
     /// Merge database configurations
     pub fn merge(mut self, other: Self) -> Self {
-        if !other.url.is_empty() && other.url != "postgresql://localhost/litellm" {
+        let default = Self::default();
+        if !other.url.is_empty() && other.url != default.url {
             self.url = other.url;
         }
         if other.max_connections != default_max_connections() {
@@ -116,7 +117,8 @@ impl Default for RedisConfig {
 impl RedisConfig {
     /// Merge Redis configurations
     pub fn merge(mut self, other: Self) -> Self {
-        if !other.url.is_empty() && other.url != "redis://localhost:6379" {
+        let default = Self::default();
+        if !other.url.is_empty() && other.url != default.url {
             self.url = other.url;
         }
         if other.max_connections != default_redis_max_connections() {
@@ -236,6 +238,46 @@ mod tests {
     }
 
     #[test]
+    fn test_database_config_merge_preserves_base_when_other_is_default_url() {
+        let base = DatabaseConfig {
+            url: "postgresql://custom-host/mydb".to_string(),
+            ..DatabaseConfig::default()
+        };
+        // other has the default URL — should not override base
+        let other = DatabaseConfig::default();
+        let merged = base.merge(other);
+        assert_eq!(merged.url, "postgresql://custom-host/mydb");
+    }
+
+    #[test]
+    fn test_database_config_merge_preserves_base_when_other_url_is_empty() {
+        let base = DatabaseConfig {
+            url: "postgresql://custom-host/mydb".to_string(),
+            ..DatabaseConfig::default()
+        };
+        let other = DatabaseConfig {
+            url: "".to_string(),
+            ..DatabaseConfig::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.url, "postgresql://custom-host/mydb");
+    }
+
+    #[test]
+    fn test_database_config_merge_both_custom_urls_takes_other() {
+        let base = DatabaseConfig {
+            url: "postgresql://base-host/basedb".to_string(),
+            ..DatabaseConfig::default()
+        };
+        let other = DatabaseConfig {
+            url: "postgresql://other-host/otherdb".to_string(),
+            ..DatabaseConfig::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.url, "postgresql://other-host/otherdb");
+    }
+
+    #[test]
     fn test_database_config_clone() {
         let config = DatabaseConfig::default();
         let cloned = config.clone();
@@ -330,6 +372,46 @@ mod tests {
         };
         let merged = base.merge(other);
         assert!(merged.enabled);
+    }
+
+    #[test]
+    fn test_redis_config_merge_preserves_base_when_other_is_default_url() {
+        let base = RedisConfig {
+            url: "redis://custom-host:6379".to_string(),
+            ..RedisConfig::default()
+        };
+        // other has the default URL — should not override base
+        let other = RedisConfig::default();
+        let merged = base.merge(other);
+        assert_eq!(merged.url, "redis://custom-host:6379");
+    }
+
+    #[test]
+    fn test_redis_config_merge_preserves_base_when_other_url_is_empty() {
+        let base = RedisConfig {
+            url: "redis://custom-host:6379".to_string(),
+            ..RedisConfig::default()
+        };
+        let other = RedisConfig {
+            url: "".to_string(),
+            ..RedisConfig::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.url, "redis://custom-host:6379");
+    }
+
+    #[test]
+    fn test_redis_config_merge_both_custom_urls_takes_other() {
+        let base = RedisConfig {
+            url: "redis://base-host:6379".to_string(),
+            ..RedisConfig::default()
+        };
+        let other = RedisConfig {
+            url: "redis://other-host:6380".to_string(),
+            ..RedisConfig::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.url, "redis://other-host:6380");
     }
 
     #[test]
