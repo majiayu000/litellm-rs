@@ -51,7 +51,7 @@ impl UserOperations {
             preferences: UserPreferences::default(),
         };
 
-        self.database.create_user(&user).await?;
+        self.database.um_create_user(&user).await?;
         info!("User created successfully: {}", user.user_id);
         Ok(user)
     }
@@ -79,7 +79,10 @@ impl UserOperations {
 
     /// Check if user has permission
     pub async fn check_permission(&self, user_id: &str, permission: &str) -> Result<bool> {
-        let user = self.database.get_user(user_id).await?
+        let user = self
+            .database
+            .get_user(user_id)
+            .await?
             .ok_or_else(|| GatewayError::NotFound("User not found".to_string()))?;
 
         // Super admin has all permissions
@@ -94,10 +97,10 @@ impl UserOperations {
 
         // Check team permissions
         for team_id in &user.teams {
-            if let Some(team) = self.database.get_team(team_id).await? {
-                if team.permissions.contains(&permission.to_string()) {
-                    return Ok(true);
-                }
+            if let Some(team) = self.database.get_team(team_id).await?
+                && team.permissions.contains(&permission.to_string())
+            {
+                return Ok(true);
             }
         }
 
@@ -116,7 +119,10 @@ impl UserOperations {
 
     /// Get user teams
     pub async fn get_user_teams(&self, user_id: &str) -> Result<Vec<Team>> {
-        let user = self.database.get_user(user_id).await?
+        let user = self
+            .database
+            .get_user(user_id)
+            .await?
             .ok_or_else(|| GatewayError::NotFound("User not found".to_string()))?;
 
         let mut teams = Vec::new();

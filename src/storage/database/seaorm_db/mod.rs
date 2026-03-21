@@ -5,6 +5,7 @@ mod batch_ops;
 mod connection;
 mod token_ops;
 mod types;
+mod user_management_ops;
 mod user_ops;
 mod virtual_key_ops;
 

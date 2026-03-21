@@ -72,14 +72,22 @@ impl TeamOperations {
         user_id: &str,
         role: TeamRole,
     ) -> Result<()> {
-        info!("Adding user {} to team {} with role {:?}", user_id, team_id, role);
+        info!(
+            "Adding user {} to team {} with role {:?}",
+            user_id, team_id, role
+        );
 
-        let mut team = self.database.get_team(team_id).await?
+        let mut team = self
+            .database
+            .get_team(team_id)
+            .await?
             .ok_or_else(|| GatewayError::NotFound("Team not found".to_string()))?;
 
         // Check if user is already a member
         if team.members.iter().any(|m| m.user_id == user_id) {
-            return Err(GatewayError::Conflict("User is already a team member".to_string()));
+            return Err(GatewayError::Conflict(
+                "User is already a team member".to_string(),
+            ));
         }
 
         // Add member
@@ -105,7 +113,10 @@ impl TeamOperations {
     pub async fn remove_user_from_team(&self, team_id: &str, user_id: &str) -> Result<()> {
         info!("Removing user {} from team {}", user_id, team_id);
 
-        let mut team = self.database.get_team(team_id).await?
+        let mut team = self
+            .database
+            .get_team(team_id)
+            .await?
             .ok_or_else(|| GatewayError::NotFound("Team not found".to_string()))?;
 
         // Remove member
@@ -158,7 +169,10 @@ impl TeamOperations {
         };
 
         self.database.create_organization(&organization).await?;
-        info!("Organization created successfully: {}", organization.organization_id);
+        info!(
+            "Organization created successfully: {}",
+            organization.organization_id
+        );
         Ok(organization)
     }
 
