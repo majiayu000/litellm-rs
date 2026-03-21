@@ -59,6 +59,9 @@ impl OpenAIRequestTransformer {
             response_format,
             seed: request.seed,
             reasoning_effort: request.reasoning_effort,
+            store: request.store,
+            metadata: request.metadata,
+            service_tier: request.service_tier,
         })
     }
 

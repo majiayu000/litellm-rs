@@ -387,6 +387,9 @@ fn build_core_chat_request(
         top_logprobs: request.top_logprobs,
         thinking: None,
         reasoning_effort: request.reasoning_effort,
+        store: None,
+        metadata: None,
+        service_tier: None,
         extra_params,
     })
 }
