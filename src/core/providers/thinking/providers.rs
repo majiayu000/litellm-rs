@@ -452,13 +452,35 @@ pub mod openrouter_thinking {
     }
 
     /// Transform thinking config for OpenRouter
+    ///
+    /// For models with a recognized provider prefix (openai/, anthropic/, etc.) the
+    /// provider-specific format is used so OpenRouter can forward it correctly.
+    /// For all other models the OpenRouter-native `reasoning.effort` object is emitted,
+    /// which OpenRouter accepts universally across its model catalog.
     pub fn transform_config(config: &ThinkingConfig, model: &str) -> Result<Value, ProviderError> {
         match detect_provider(model) {
             "openai" => openai_thinking::transform_config(config, model),
             "anthropic" => anthropic_thinking::transform_config(config, model),
             "deepseek" => deepseek_thinking::transform_config(config, model),
             "gemini" => gemini_thinking::transform_config(config, model),
-            _ => Ok(Value::Object(serde_json::Map::new())),
+            _ => {
+                // Use OpenRouter's native reasoning object for generic/unknown models
+                let mut params = serde_json::Map::new();
+                if let Some(effort) = &config.effort {
+                    let effort_str = match effort {
+                        ThinkingEffort::Low => "low",
+                        ThinkingEffort::Medium => "medium",
+                        ThinkingEffort::High => "high",
+                    };
+                    let mut reasoning = serde_json::Map::new();
+                    reasoning.insert("effort".into(), effort_str.into());
+                    if let Some(budget) = config.budget_tokens {
+                        reasoning.insert("max_tokens".into(), budget.into());
+                    }
+                    params.insert("reasoning".into(), Value::Object(reasoning));
+                }
+                Ok(Value::Object(params))
+            }
         }
     }
 

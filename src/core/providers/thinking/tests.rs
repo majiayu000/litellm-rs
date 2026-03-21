@@ -832,8 +832,46 @@ fn test_openrouter_transform_config_unknown() {
         extra_params: Default::default(),
     };
 
-    let result = openrouter_thinking::transform_config(&config, "unknown-model").unwrap();
-    assert!(result.as_object().unwrap().is_empty());
+    // Unknown models use the OpenRouter-native reasoning.effort format
+    let Ok(result) = openrouter_thinking::transform_config(&config, "unknown-model") else {
+        panic!("transform_config must succeed for unknown-model");
+    };
+    assert_eq!(
+        result
+            .get("reasoning")
+            .and_then(|r| r.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("high"),
+        "reasoning.effort should be 'high' for High effort"
+    );
+    assert_eq!(
+        result
+            .get("reasoning")
+            .and_then(|r| r.get("max_tokens"))
+            .and_then(|v| v.as_u64()),
+        Some(10000),
+        "reasoning.max_tokens should equal budget_tokens"
+    );
+}
+
+#[test]
+fn test_openrouter_transform_config_unknown_no_effort() {
+    let config = ThinkingConfig {
+        enabled: true,
+        budget_tokens: None,
+        effort: None,
+        include_thinking: true,
+        extra_params: Default::default(),
+    };
+
+    // No effort specified: no reasoning object emitted
+    let Ok(result) = openrouter_thinking::transform_config(&config, "unknown-model") else {
+        panic!("transform_config must succeed for unknown-model");
+    };
+    assert!(
+        result.as_object().is_some_and(|m| m.is_empty()),
+        "no reasoning key when effort is None"
+    );
 }
 
 #[test]
