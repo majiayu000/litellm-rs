@@ -44,6 +44,9 @@ pub struct OpenAIChatRequest {
     pub logprobs: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_logprobs: Option<u32>,
+    /// Reasoning effort for o-series and GPT-5.x models ("low", "medium", "high")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// OpenAI Message
@@ -76,6 +79,7 @@ impl OpenAIMessage {
     ) -> Result<Self, String> {
         let role = match message.role {
             crate::core::models::openai::MessageRole::System => "system",
+            crate::core::models::openai::MessageRole::Developer => "developer",
             crate::core::models::openai::MessageRole::User => "user",
             crate::core::models::openai::MessageRole::Assistant => "assistant",
             crate::core::models::openai::MessageRole::Tool => "tool",

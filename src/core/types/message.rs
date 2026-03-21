@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub enum MessageRole {
     /// System message
     System,
+    /// Developer message (replaces System for OpenAI o-series models)
+    Developer,
     /// User message
     User,
     /// Assistant message
@@ -29,6 +31,7 @@ impl std::fmt::Display for MessageRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MessageRole::System => write!(f, "system"),
+            MessageRole::Developer => write!(f, "developer"),
             MessageRole::User => write!(f, "user"),
             MessageRole::Assistant => write!(f, "assistant"),
             MessageRole::Tool => write!(f, "tool"),

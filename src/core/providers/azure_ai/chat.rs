@@ -348,6 +348,7 @@ impl AzureAIChatUtils {
     fn transform_role(role: &MessageRole) -> &'static str {
         match role {
             MessageRole::System => "system",
+            MessageRole::Developer => "developer",
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
             MessageRole::Function => "function",

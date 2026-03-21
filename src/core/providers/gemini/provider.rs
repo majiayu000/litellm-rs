@@ -262,6 +262,7 @@ impl LLMProvider for GeminiProvider {
             functions: None,
             function_call: None,
             thinking: None,
+            reasoning_effort: None,
             extra_params: std::collections::HashMap::new(),
         };
 
@@ -358,6 +359,7 @@ impl LLMProvider for GeminiProvider {
             functions: None,
             function_call: None,
             thinking: None,
+            reasoning_effort: None,
             extra_params: std::collections::HashMap::new(),
         };
 

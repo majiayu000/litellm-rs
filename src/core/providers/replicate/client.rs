@@ -79,7 +79,7 @@ impl ReplicateClient {
 
         for msg in messages {
             let role_prefix = match msg.role {
-                MessageRole::System => "[INST] <<SYS>>\n",
+                MessageRole::System | MessageRole::Developer => "[INST] <<SYS>>\n",
                 MessageRole::User => "[INST] ",
                 MessageRole::Assistant => "",
                 MessageRole::Tool => "[TOOL] ",
@@ -87,7 +87,7 @@ impl ReplicateClient {
             };
 
             let role_suffix = match msg.role {
-                MessageRole::System => "\n<</SYS>>\n\n",
+                MessageRole::System | MessageRole::Developer => "\n<</SYS>>\n\n",
                 MessageRole::User => " [/INST] ",
                 MessageRole::Assistant => " </s><s>",
                 MessageRole::Tool => " ",

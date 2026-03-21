@@ -267,6 +267,7 @@ impl AzureChatHandler {
         let mut msg = json!({
             "role": match message.role {
                 MessageRole::System => "system",
+                MessageRole::Developer => "developer",
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::Function => "function",

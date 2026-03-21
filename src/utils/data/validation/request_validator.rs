@@ -64,7 +64,10 @@ impl RequestValidator {
 
         // Validate role
         match message.role {
-            MessageRole::System | MessageRole::User | MessageRole::Assistant => {
+            MessageRole::System
+            | MessageRole::Developer
+            | MessageRole::User
+            | MessageRole::Assistant => {
                 // These roles should have content
                 if message.content.is_none() {
                     return Err(GatewayError::Validation(format!(
