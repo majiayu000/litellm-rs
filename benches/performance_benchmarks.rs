@@ -335,6 +335,9 @@ fn bench_serialization(c: &mut Criterion) {
         modalities: None,
         audio: None,
         reasoning_effort: None,
+        store: None,
+        metadata: None,
+        service_tier: None,
     };
 
     group.bench_function("serialize_request", |b| {

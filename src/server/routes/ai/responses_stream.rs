@@ -5,14 +5,16 @@
 
 use crate::core::models::openai::requests::ChatCompletionRequest;
 use crate::core::models::openai::responses_api::{
-    ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage, ResponseStreamEvent,
-    ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
+    ResponseFunctionCall, ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage,
+    ResponseStreamEvent, ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::core::providers::ProviderError;
 use crate::core::streaming::types::Event;
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
 use crate::server::routes::ai::chat::build_core_chat_request;
-use crate::server::routes::ai::responses::{current_unix_ts, uuid_v4_hex};
+use crate::server::routes::ai::responses::{
+    current_unix_ts, finish_reason_enum_to_status, uuid_v4_hex,
+};
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::http::header::{CACHE_CONTROL, CONTENT_TYPE};
@@ -20,9 +22,19 @@ use actix_web::{HttpResponse, ResponseError, Result as ActixResult};
 use bytes::Bytes;
 use futures::StreamExt;
 use serde_json::json;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+
+/// Accumulated state for one in-progress tool call during streaming.
+struct ToolCallAccum {
+    item_id: String,
+    call_id: String,
+    name: String,
+    arguments: String,
+    output_index: u32,
+}
 
 /// Streaming path for POST /v1/responses.
 pub(crate) async fn handle_streaming_response(
@@ -103,52 +115,21 @@ pub(crate) async fn handle_streaming_response(
                     return;
                 }
 
-                // ── response.output_item.added ────────────────────────────────
-                let item_id = format!("msg_{}", uuid_v4_hex());
-                let placeholder = ResponseOutputItem::Message(ResponseOutputMessage {
-                    id: item_id.clone(),
-                    role: "assistant".to_string(),
-                    status: "in_progress".to_string(),
-                    content: vec![],
-                });
-                if emit(
-                    &tx,
-                    &ResponseStreamEvent::ResponseOutputItemAdded {
-                        output_index: 0,
-                        item: placeholder,
-                    },
-                )
-                .await
-                .is_err()
-                {
-                    return;
-                }
-
-                // ── response.content_part.added ───────────────────────────────
-                let empty_part = ResponseOutputContent::OutputText {
-                    text: String::new(),
-                    annotations: None,
-                    logprobs: None,
-                };
-                if emit(
-                    &tx,
-                    &ResponseStreamEvent::ResponseContentPartAdded {
-                        output_index: 0,
-                        content_index: 0,
-                        part: empty_part,
-                    },
-                )
-                .await
-                .is_err()
-                {
-                    return;
-                }
-
-                // ── text deltas ───────────────────────────────────────────────
+                // ── streaming state ───────────────────────────────────────────
                 let mut full_text = String::new();
+                let mut text_started = false;
+                let mut text_item_id = String::new();
+                let mut text_output_index: u32 = 0;
                 let mut in_tokens: u32 = 0;
                 let mut out_tokens: u32 = 0;
+                let mut next_output_index: u32 = 0;
+                let mut final_status: &'static str = "completed";
+                // Tool calls keyed by streaming index
+                let mut tool_states: HashMap<u32, ToolCallAccum> = HashMap::new();
+                // Preserves insertion order for final iteration
+                let mut tool_order: Vec<u32> = Vec::new();
 
+                // ── text and tool-call deltas ─────────────────────────────────
                 loop {
                     let next = if idle_timeout == 0 {
                         stream.next().await
@@ -180,23 +161,162 @@ pub(crate) async fn handle_streaming_response(
                                 out_tokens = u.completion_tokens;
                             }
                             for choice in &chunk.choices {
-                                let text = choice.delta.content.as_deref().unwrap_or("");
-                                if text.is_empty() {
-                                    continue;
+                                if let Some(r) = &choice.finish_reason {
+                                    final_status = finish_reason_enum_to_status(Some(r));
                                 }
-                                full_text.push_str(text);
-                                if emit(
-                                    &tx,
-                                    &ResponseStreamEvent::ResponseOutputTextDelta {
-                                        output_index: 0,
-                                        content_index: 0,
-                                        delta: text.to_string(),
-                                    },
-                                )
-                                .await
-                                .is_err()
-                                {
-                                    return;
+
+                                // ── text content ──────────────────────────────
+                                let text = choice.delta.content.as_deref().unwrap_or("");
+                                if !text.is_empty() {
+                                    if !text_started {
+                                        text_started = true;
+                                        text_output_index = next_output_index;
+                                        next_output_index += 1;
+                                        text_item_id = format!("msg_{}", uuid_v4_hex());
+
+                                        let placeholder =
+                                            ResponseOutputItem::Message(ResponseOutputMessage {
+                                                id: text_item_id.clone(),
+                                                role: "assistant".to_string(),
+                                                status: "in_progress".to_string(),
+                                                content: vec![],
+                                            });
+                                        if emit(
+                                            &tx,
+                                            &ResponseStreamEvent::ResponseOutputItemAdded {
+                                                output_index: text_output_index,
+                                                item: placeholder,
+                                            },
+                                        )
+                                        .await
+                                        .is_err()
+                                        {
+                                            return;
+                                        }
+
+                                        if emit(
+                                            &tx,
+                                            &ResponseStreamEvent::ResponseContentPartAdded {
+                                                output_index: text_output_index,
+                                                content_index: 0,
+                                                part: ResponseOutputContent::OutputText {
+                                                    text: String::new(),
+                                                    annotations: None,
+                                                    logprobs: None,
+                                                },
+                                            },
+                                        )
+                                        .await
+                                        .is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+
+                                    full_text.push_str(text);
+                                    if emit(
+                                        &tx,
+                                        &ResponseStreamEvent::ResponseOutputTextDelta {
+                                            output_index: text_output_index,
+                                            content_index: 0,
+                                            delta: text.to_string(),
+                                        },
+                                    )
+                                    .await
+                                    .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+
+                                // ── tool-call deltas ──────────────────────────
+                                if let Some(tc_deltas) = &choice.delta.tool_calls {
+                                    for tc in tc_deltas {
+                                        let idx = tc.index;
+
+                                        // First chunk for this call (has an id): emit placeholder
+                                        if let Some(call_id) = &tc.id {
+                                            if !tool_states.contains_key(&idx) {
+                                                let item_id = format!("fc_{}", uuid_v4_hex());
+                                                let out_idx = next_output_index;
+                                                next_output_index += 1;
+                                                let name = tc
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.name.as_deref())
+                                                    .unwrap_or("")
+                                                    .to_string();
+
+                                                let fc_item = ResponseOutputItem::FunctionCall(
+                                                    ResponseFunctionCall {
+                                                        id: item_id.clone(),
+                                                        name: name.clone(),
+                                                        arguments: String::new(),
+                                                        status: "in_progress".to_string(),
+                                                        call_id: Some(call_id.clone()),
+                                                    },
+                                                );
+                                                if emit(
+                                                    &tx,
+                                                    &ResponseStreamEvent::ResponseOutputItemAdded {
+                                                        output_index: out_idx,
+                                                        item: fc_item,
+                                                    },
+                                                )
+                                                .await
+                                                .is_err()
+                                                {
+                                                    return;
+                                                }
+
+                                                tool_states.insert(
+                                                    idx,
+                                                    ToolCallAccum {
+                                                        item_id,
+                                                        call_id: call_id.clone(),
+                                                        name,
+                                                        arguments: String::new(),
+                                                        output_index: out_idx,
+                                                    },
+                                                );
+                                                tool_order.push(idx);
+                                            }
+                                        }
+
+                                        if let Some(fn_delta) = &tc.function {
+                                            if let Some(state) = tool_states.get_mut(&idx) {
+                                                // Late-arriving name (rare)
+                                                if let Some(n) = &fn_delta.name {
+                                                    if state.name.is_empty() {
+                                                        state.name.clone_from(n);
+                                                    }
+                                                }
+                                                // Emit argument deltas
+                                                if let Some(args) = &fn_delta.arguments {
+                                                    if !args.is_empty() {
+                                                        state.arguments.push_str(args);
+                                                        let (cid, oi) = (
+                                                            state.call_id.clone(),
+                                                            state.output_index,
+                                                        );
+                                                        if emit(
+                                                            &tx,
+                                                            &ResponseStreamEvent::ResponseFunctionCallArgumentsDelta {
+                                                                output_index: oi,
+                                                                call_id: cid,
+                                                                delta: args.clone(),
+                                                            },
+                                                        )
+                                                        .await
+                                                        .is_err()
+                                                        {
+                                                            return;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -209,63 +329,112 @@ pub(crate) async fn handle_streaming_response(
                     }
                 }
 
-                // ── response.output_text.done ─────────────────────────────────
-                if emit(
-                    &tx,
-                    &ResponseStreamEvent::ResponseOutputTextDone {
-                        output_index: 0,
-                        content_index: 0,
-                        text: full_text.clone(),
-                    },
-                )
-                .await
-                .is_err()
-                {
-                    return;
-                }
+                let item_status = final_status;
+                let mut all_output: Vec<(u32, ResponseOutputItem)> = Vec::new();
 
-                // ── response.content_part.done ────────────────────────────────
-                if emit(
-                    &tx,
-                    &ResponseStreamEvent::ResponseContentPartDone {
-                        output_index: 0,
-                        content_index: 0,
-                        part: ResponseOutputContent::OutputText {
+                // ── text done events ──────────────────────────────────────────
+                if text_started {
+                    if emit(
+                        &tx,
+                        &ResponseStreamEvent::ResponseOutputTextDone {
+                            output_index: text_output_index,
+                            content_index: 0,
+                            text: full_text.clone(),
+                        },
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+
+                    if emit(
+                        &tx,
+                        &ResponseStreamEvent::ResponseContentPartDone {
+                            output_index: text_output_index,
+                            content_index: 0,
+                            part: ResponseOutputContent::OutputText {
+                                text: full_text.clone(),
+                                annotations: None,
+                                logprobs: None,
+                            },
+                        },
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+
+                    let text_done = ResponseOutputItem::Message(ResponseOutputMessage {
+                        id: text_item_id,
+                        role: "assistant".to_string(),
+                        status: item_status.to_string(),
+                        content: vec![ResponseOutputContent::OutputText {
                             text: full_text.clone(),
                             annotations: None,
                             logprobs: None,
+                        }],
+                    });
+                    if emit(
+                        &tx,
+                        &ResponseStreamEvent::ResponseOutputItemDone {
+                            output_index: text_output_index,
+                            item: text_done.clone(),
                         },
-                    },
-                )
-                .await
-                .is_err()
-                {
-                    return;
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    all_output.push((text_output_index, text_done));
                 }
 
-                // ── response.output_item.done ─────────────────────────────────
-                let done_item = ResponseOutputItem::Message(ResponseOutputMessage {
-                    id: item_id,
-                    role: "assistant".to_string(),
-                    status: "completed".to_string(),
-                    content: vec![ResponseOutputContent::OutputText {
-                        text: full_text.clone(),
-                        annotations: None,
-                        logprobs: None,
-                    }],
-                });
-                if emit(
-                    &tx,
-                    &ResponseStreamEvent::ResponseOutputItemDone {
-                        output_index: 0,
-                        item: done_item.clone(),
-                    },
-                )
-                .await
-                .is_err()
-                {
-                    return;
+                // ── tool-call done events ─────────────────────────────────────
+                for idx in &tool_order {
+                    if let Some(state) = tool_states.get(idx) {
+                        if emit(
+                            &tx,
+                            &ResponseStreamEvent::ResponseFunctionCallArgumentsDone {
+                                output_index: state.output_index,
+                                call_id: state.call_id.clone(),
+                                arguments: state.arguments.clone(),
+                            },
+                        )
+                        .await
+                        .is_err()
+                        {
+                            return;
+                        }
+
+                        let fc_done = ResponseOutputItem::FunctionCall(ResponseFunctionCall {
+                            id: state.item_id.clone(),
+                            name: state.name.clone(),
+                            arguments: state.arguments.clone(),
+                            status: "completed".to_string(),
+                            call_id: Some(state.call_id.clone()),
+                        });
+                        if emit(
+                            &tx,
+                            &ResponseStreamEvent::ResponseOutputItemDone {
+                                output_index: state.output_index,
+                                item: fc_done.clone(),
+                            },
+                        )
+                        .await
+                        .is_err()
+                        {
+                            return;
+                        }
+                        all_output.push((state.output_index, fc_done));
+                    }
                 }
+
+                // Sort by output_index to preserve stream order
+                all_output.sort_by_key(|(i, _)| *i);
+                let output_items: Vec<ResponseOutputItem> =
+                    all_output.into_iter().map(|(_, item)| item).collect();
 
                 // ── response.completed ────────────────────────────────────────
                 let total = in_tokens + out_tokens;
@@ -280,9 +449,9 @@ pub(crate) async fn handle_streaming_response(
                     id: resp_id,
                     object: "response".to_string(),
                     created_at,
-                    status: "completed".to_string(),
+                    status: item_status.to_string(),
                     model: model_name,
-                    output: vec![done_item],
+                    output: output_items,
                     usage,
                     error: None,
                     previous_response_id: original.previous_response_id,

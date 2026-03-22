@@ -12,6 +12,7 @@ use crate::core::models::openai::responses_api::{
     ResponseInputItem, ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage,
     ResponseTool, ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
 };
+use crate::core::types::responses::FinishReason;
 use crate::server::routes::ai::chat::handle_chat_completion_with_state;
 use crate::server::routes::errors;
 use crate::server::state::AppState;
@@ -218,11 +219,19 @@ pub(crate) fn convert_to_responses_api(
 ) -> ResponsesApiResponse {
     let resp_id = format!("resp_{}", &chat.id);
 
+    // Determine overall status from the first choice's finish_reason.
+    let overall_status = chat
+        .choices
+        .first()
+        .and_then(|c| c.finish_reason.as_deref())
+        .map(|r| finish_reason_to_status(Some(r)))
+        .unwrap_or("completed");
+
     let output: Vec<ResponseOutputItem> = chat
         .choices
         .into_iter()
         .flat_map(|choice| {
-            let finish_status = "completed";
+            let finish_status = finish_reason_to_status(choice.finish_reason.as_deref());
             let mut items: Vec<ResponseOutputItem> = Vec::new();
 
             // Text content → message output item
@@ -292,13 +301,36 @@ pub(crate) fn convert_to_responses_api(
         id: resp_id,
         object: "response".to_string(),
         created_at: chat.created as i64,
-        status: "completed".to_string(),
+        status: overall_status.to_string(),
         model: chat.model,
         output,
         usage,
         error: None,
         previous_response_id: original.previous_response_id.clone(),
         metadata: original.metadata.clone(),
+    }
+}
+
+/// Map a chat-completion `finish_reason` to a Responses API item/response status.
+///
+/// - `"stop"` / `"tool_calls"` / `None` → `"completed"` (normal completion)
+/// - `"length"` → `"incomplete"` (truncated by token limit)
+/// - `"content_filter"` → `"failed"` (safety filter triggered)
+pub(crate) fn finish_reason_to_status(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("length") => "incomplete",
+        Some("content_filter") => "failed",
+        _ => "completed",
+    }
+}
+
+/// Same mapping as [`finish_reason_to_status`] but for the typed `FinishReason` enum
+/// used by the internal streaming types.
+pub(crate) fn finish_reason_enum_to_status(reason: Option<&FinishReason>) -> &'static str {
+    match reason {
+        Some(FinishReason::Length) => "incomplete",
+        Some(FinishReason::ContentFilter) => "failed",
+        _ => "completed",
     }
 }
 
