@@ -626,9 +626,12 @@ mod tests {
         let msg3 = A2AMessage::get_task("task-1");
         let msg4 = A2AMessage::cancel_task("task-2");
 
-        // Each message must receive a distinct ID.
+        // Each message must receive a distinct ID (all pairs, not just adjacent).
         assert_ne!(msg1.id, msg2.id);
+        assert_ne!(msg1.id, msg3.id);
+        assert_ne!(msg1.id, msg4.id);
         assert_ne!(msg2.id, msg3.id);
+        assert_ne!(msg2.id, msg4.id);
         assert_ne!(msg3.id, msg4.id);
     }
 
