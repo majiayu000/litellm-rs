@@ -75,6 +75,9 @@ async fn test_should_cache_request() {
         modalities: None,
         audio: None,
         reasoning_effort: None,
+        store: None,
+        metadata: None,
+        service_tier: None,
     };
 
     // Should cache low temperature request

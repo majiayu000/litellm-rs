@@ -340,6 +340,21 @@ impl OpenAIModelRegistry {
                 metadata: HashMap::new(),
             };
 
+            // Mark known deprecated/removed models
+            if matches!(
+                id,
+                "gpt-3.5-turbo"
+                    | "gpt-3.5-turbo-0125"
+                    | "o1-preview"
+                    | "o1-mini"
+                    | "o1-mini-2024-09-12"
+                    | "codex-mini-latest"
+            ) {
+                model_info
+                    .metadata
+                    .insert("deprecated".to_string(), serde_json::json!(true));
+            }
+
             let features = self.detect_features(&model_info);
             model_info.capabilities = features
                 .iter()

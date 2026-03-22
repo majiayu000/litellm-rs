@@ -86,6 +86,41 @@ pub struct AnthropicChatRequest {
     pub anthropic_params: AnthropicRequestParams,
 }
 
+/// Anthropic server-side (built-in) tool types.
+///
+/// These are tools that Anthropic hosts and runs server-side, as opposed to
+/// user-defined function tools.  Pass a list of these via the `"anthropic_tools"`
+/// key in `ChatRequest::extra_params`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AnthropicBuiltinToolType {
+    /// Web search tool — searches the web for real-time information.
+    #[serde(rename = "web_search_20250305")]
+    WebSearch,
+    /// Computer use tool — controls a virtual desktop environment.
+    #[serde(rename = "computer_20241022")]
+    ComputerUse,
+}
+
+/// An Anthropic server-side built-in tool definition.
+///
+/// Populate `display_width_px` / `display_height_px` when using
+/// `AnthropicBuiltinToolType::ComputerUse`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicBuiltinTool {
+    /// The built-in tool type.
+    #[serde(rename = "type")]
+    pub tool_type: AnthropicBuiltinToolType,
+    /// Display width in pixels (required for `computer_20241022`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_width_px: Option<u32>,
+    /// Display height in pixels (required for `computer_20241022`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_height_px: Option<u32>,
+    /// X display number (optional, for `computer_20241022`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_number: Option<u32>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +418,57 @@ mod tests {
         };
         let cloned = params.clone();
         assert_eq!(params.system, cloned.system);
+    }
+
+    // ==================== AnthropicBuiltinTool Tests ====================
+
+    #[test]
+    fn test_builtin_tool_type_web_search_serialization() {
+        let t = AnthropicBuiltinToolType::WebSearch;
+        let json = serde_json::to_value(&t).unwrap();
+        assert_eq!(json, "web_search_20250305");
+    }
+
+    #[test]
+    fn test_builtin_tool_type_computer_use_serialization() {
+        let t = AnthropicBuiltinToolType::ComputerUse;
+        let json = serde_json::to_value(&t).unwrap();
+        assert_eq!(json, "computer_20241022");
+    }
+
+    #[test]
+    fn test_builtin_tool_web_search_round_trip() {
+        let tool = AnthropicBuiltinTool {
+            tool_type: AnthropicBuiltinToolType::WebSearch,
+            display_width_px: None,
+            display_height_px: None,
+            display_number: None,
+        };
+        let json = serde_json::to_value(&tool).unwrap();
+        assert_eq!(json["type"], "web_search_20250305");
+        assert!(!json.as_object().unwrap().contains_key("display_width_px"));
+    }
+
+    #[test]
+    fn test_builtin_tool_computer_use_round_trip() {
+        let tool = AnthropicBuiltinTool {
+            tool_type: AnthropicBuiltinToolType::ComputerUse,
+            display_width_px: Some(1920),
+            display_height_px: Some(1080),
+            display_number: Some(1),
+        };
+        let json = serde_json::to_value(&tool).unwrap();
+        assert_eq!(json["type"], "computer_20241022");
+        assert_eq!(json["display_width_px"], 1920);
+        assert_eq!(json["display_height_px"], 1080);
+        assert_eq!(json["display_number"], 1);
+    }
+
+    #[test]
+    fn test_builtin_tool_deserialization() {
+        let json = r#"{"type":"web_search_20250305"}"#;
+        let tool: AnthropicBuiltinTool = serde_json::from_str(json).unwrap();
+        assert_eq!(tool.tool_type, AnthropicBuiltinToolType::WebSearch);
+        assert!(tool.display_width_px.is_none());
     }
 }

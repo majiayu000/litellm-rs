@@ -170,6 +170,14 @@ pub struct AdvancedChatRequest {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+
+    /// Whether to store the response for model improvement
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
+
+    /// Service tier for the request ("default" or "flex")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
 }
 
 /// Advanced chat response with reasoning and structured output
@@ -712,6 +720,8 @@ mod tests {
             top_logprobs: None,
             user: None,
             metadata: None,
+            store: None,
+            service_tier: None,
         };
 
         assert!(AdvancedChatUtils::validate_request(&request).is_ok());

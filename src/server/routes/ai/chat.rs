@@ -387,6 +387,9 @@ pub(crate) fn build_core_chat_request(
         top_logprobs: request.top_logprobs,
         thinking: None,
         reasoning_effort: request.reasoning_effort,
+        store: request.store,
+        metadata: request.metadata,
+        service_tier: request.service_tier,
         extra_params,
     })
 }

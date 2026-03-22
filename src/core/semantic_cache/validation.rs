@@ -89,6 +89,9 @@ mod tests {
             modalities: None,
             audio: None,
             reasoning_effort: None,
+            store: None,
+            metadata: None,
+            service_tier: None,
         }
     }
 

@@ -63,6 +63,15 @@ pub struct ChatCompletionRequest {
     pub audio: Option<AudioParams>,
     /// Reasoning effort for o-series and GPT-5.x models ("low", "medium", "high")
     pub reasoning_effort: Option<String>,
+    /// Whether to store the response for model improvement (OpenAI)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
+    /// Key-value metadata to attach to the request (OpenAI)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, String>>,
+    /// Service tier for the request (OpenAI, e.g. "auto", "default", "flex")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
 }
 
 impl Default for ChatCompletionRequest {
@@ -93,6 +102,9 @@ impl Default for ChatCompletionRequest {
             modalities: None,
             audio: None,
             reasoning_effort: None,
+            store: None,
+            metadata: None,
+            service_tier: None,
         }
     }
 }

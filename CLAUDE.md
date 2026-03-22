@@ -171,15 +171,70 @@ The codebase uses Cargo features extensively:
 - Postman collections for API testing (`tests/*.postman_collection.json`)
 - Mock implementations for external services
 
+## Provider Tiers
+
+Providers are split into two tiers based on whether they need custom Rust code.
+
+### Tier 1 — Catalog-only (zero code)
+
+A provider belongs in Tier 1 when **all** of the following are true:
+
+- The remote API is OpenAI-compatible (`/v1/chat/completions`, standard request/response shape)
+- No custom request transformation is needed (no special headers, param filtering, or model-name mangling)
+- No custom streaming logic is needed (standard SSE with `data: [DONE]`)
+- No provider-specific model metadata is required at runtime
+
+**How to add a Tier 1 provider**: add a single `def()` entry in
+`src/core/providers/registry/catalog.rs` and a commented annotation in
+`src/core/providers/mod.rs`:
+
+```rust
+// in catalog.rs
+def("myprovider", "My Provider", "https://api.myprovider.com/v1", "MYPROVIDER_API_KEY"),
+
+// in mod.rs
+// myprovider: Tier 1 -> registry/catalog.rs
+```
+
+No other files need to change. The factory in `src/core/providers/factory/mod.rs`
+automatically routes Tier 1 names through `OpenAILikeProvider`.
+
+### Tier 2 — Code-based (custom implementation)
+
+A provider requires Tier 2 treatment when **any** of the following apply:
+
+- Non-OpenAI request/response format (e.g., Anthropic, Gemini, Cohere, Bedrock)
+- Custom HTTP client with auth signing (e.g., AWS SigV4 for Bedrock, SageMaker)
+- Unique streaming protocol (e.g., non-SSE, multipart, proprietary framing)
+- Provider-specific model info or capability metadata
+- Special parameter handling (e.g., tool-call transformation, response_format mapping)
+- Rerank, embed, image-generation, or audio endpoints with diverging schemas
+
+**How to add a Tier 2 provider**: create a directory under `src/core/providers/<name>/`
+containing at minimum `mod.rs`, then add a variant to `ProviderType` and implement
+the relevant trait methods. Also add the `pub mod <name>;` declaration in
+`src/core/providers/mod.rs` (guarded by the appropriate feature flag).
+
+### Resolving half-migrated providers
+
+If `git status` shows `DU` (deleted-by-us, unresolved) files under `src/core/providers/`:
+
+1. Decide the tier using the criteria above.
+2. **Tier 1**: delete the directory and add a catalog entry + `mod.rs` comment.
+3. **Tier 2**: restore the directory (`git checkout HEAD -- <path>`) and complete
+   the implementation, or add stub methods that return `ProviderError::not_implemented`.
+4. Verify with `cargo check --all-features` — zero DU files means no unresolved paths.
+
 ## Common Development Patterns
 
-1. **Adding new providers**: Implement the `Provider` trait in `src/core/providers/`
-2. **New API endpoints**: Add routes in `src/server/routes/`
-3. **Authentication**: Extend auth modules in `src/auth/`
-4. **Configuration**: Update models in `src/config/models/`
-5. **Monitoring**: Add metrics in respective modules
-6. **MCP servers**: Add server configs in `src/core/mcp/config.rs`
-7. **A2A agents**: Add agent configs in `src/core/a2a/config.rs`
+1. **Adding a Tier 1 provider**: add a `def()` entry in `src/core/providers/registry/catalog.rs`
+2. **Adding a Tier 2 provider**: create a provider directory in `src/core/providers/<name>/`
+3. **New API endpoints**: add routes in `src/server/routes/`
+4. **Authentication**: extend auth modules in `src/auth/`
+5. **Configuration**: update models in `src/config/models/`
+6. **Monitoring**: add metrics in respective modules
+7. **MCP servers**: add server configs in `src/core/mcp/config.rs`
+8. **A2A agents**: add agent configs in `src/core/a2a/config.rs`
 
 ## Protocol Gateways
 
