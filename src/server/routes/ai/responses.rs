@@ -3,12 +3,14 @@
 //! Accepts Responses API requests, converts to internal chat-completion format,
 //! forwards to the selected provider, and converts results back.
 
-use crate::core::models::openai::messages::{ChatMessage, MessageContent, MessageRole};
+use crate::core::models::openai::messages::{
+    ChatMessage, ContentPart, ImageUrl, MessageContent, MessageRole,
+};
 use crate::core::models::openai::requests::ChatCompletionRequest;
 use crate::core::models::openai::responses_api::{
-    ResponseInput, ResponseInputContent, ResponseInputContentPart, ResponseInputItem,
-    ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage, ResponseTool, ResponseUsage,
-    ResponsesApiRequest, ResponsesApiResponse,
+    ResponseFunctionCall, ResponseInput, ResponseInputContent, ResponseInputContentPart,
+    ResponseInputItem, ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage,
+    ResponseTool, ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::server::routes::ai::chat::handle_chat_completion_with_state;
 use crate::server::routes::errors;
@@ -118,18 +120,32 @@ pub(crate) fn build_chat_request(
                 let content = match &msg.content {
                     ResponseInputContent::Text(t) => MessageContent::Text(t.clone()),
                     ResponseInputContent::Parts(parts) => {
-                        let text: String = parts
+                        let content_parts: Vec<ContentPart> = parts
                             .iter()
                             .filter_map(|p| match p {
-                                ResponseInputContentPart::InputText { text } => Some(text.as_str()),
-                                ResponseInputContentPart::OutputText { text } => {
-                                    Some(text.as_str())
+                                ResponseInputContentPart::InputText { text }
+                                | ResponseInputContentPart::OutputText { text } => {
+                                    Some(ContentPart::Text { text: text.clone() })
                                 }
-                                _ => None,
+                                ResponseInputContentPart::InputImage { image_url, detail } => {
+                                    image_url.as_ref().map(|url| ContentPart::ImageUrl {
+                                        image_url: ImageUrl {
+                                            url: url.clone(),
+                                            detail: detail.clone(),
+                                        },
+                                    })
+                                }
                             })
-                            .collect::<Vec<_>>()
-                            .join("");
-                        MessageContent::Text(text)
+                            .collect();
+                        if content_parts.len() == 1 {
+                            if let ContentPart::Text { text } = &content_parts[0] {
+                                MessageContent::Text(text.clone())
+                            } else {
+                                MessageContent::Parts(content_parts)
+                            }
+                        } else {
+                            MessageContent::Parts(content_parts)
+                        }
                     }
                 };
                 messages.push(ChatMessage {
@@ -152,18 +168,30 @@ pub(crate) fn build_chat_request(
     let mut tools: Vec<crate::core::models::openai::tools::Tool> = Vec::new();
     if let Some(req_tools) = &req.tools {
         for t in req_tools {
-            if let ResponseTool::Function(f) = t {
-                tools.push(crate::core::models::openai::tools::Tool {
-                    tool_type: "function".to_string(),
-                    function: crate::core::models::openai::tools::Function {
-                        name: f.function.name.clone(),
-                        description: f.function.description.clone(),
-                        parameters: f.function.parameters.clone(),
-                    },
-                });
+            match t {
+                ResponseTool::Function(f) => {
+                    tools.push(crate::core::models::openai::tools::Tool {
+                        tool_type: "function".to_string(),
+                        function: crate::core::models::openai::tools::Function {
+                            name: f.function.name.clone(),
+                            description: f.function.description.clone(),
+                            parameters: f.function.parameters.clone(),
+                        },
+                    });
+                }
+                ResponseTool::WebSearch(_)
+                | ResponseTool::WebSearchPreview(_)
+                | ResponseTool::FileSearch(_)
+                | ResponseTool::CodeInterpreter(_)
+                | ResponseTool::ComputerUsePreview(_)
+                | ResponseTool::Mcp(_) => {
+                    return Err(
+                        "built-in tools (web_search, file_search, code_interpreter, mcp, \
+                         computer_use) are not supported via the chat-completions proxy path"
+                            .to_string(),
+                    );
+                }
             }
-            // Built-in tools (web_search, file_search, etc.) are forwarded
-            // through the CoreChatRequest's extra_params by the provider layer.
         }
     }
 
@@ -171,28 +199,13 @@ pub(crate) fn build_chat_request(
         model: req.model.clone(),
         messages,
         temperature: req.temperature,
-        max_tokens: None,
         max_completion_tokens: req.max_output_tokens,
         top_p: req.top_p,
-        n: None,
         stream: req.stream,
-        stream_options: None,
-        stop: None,
-        presence_penalty: None,
-        frequency_penalty: None,
-        logit_bias: None,
         user: req.user.clone(),
-        functions: None,
-        function_call: None,
         tools: if tools.is_empty() { None } else { Some(tools) },
-        tool_choice: None,
-        response_format: None,
-        seed: None,
-        logprobs: None,
-        top_logprobs: None,
-        modalities: None,
-        audio: None,
         reasoning_effort: req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+        ..Default::default()
     })
 }
 
@@ -208,14 +221,13 @@ pub(crate) fn convert_to_responses_api(
     let output: Vec<ResponseOutputItem> = chat
         .choices
         .into_iter()
-        .map(|choice| {
-            let finish_status = match choice.finish_reason.as_deref() {
-                Some("stop") | Some("tool_calls") | Some("function_call") => "completed",
-                _ => "completed",
-            };
+        .flat_map(|choice| {
+            let finish_status = "completed";
+            let mut items: Vec<ResponseOutputItem> = Vec::new();
 
-            let content = match choice.message.content {
-                Some(MessageContent::Text(ref t)) if !t.is_empty() => {
+            // Text content → message output item
+            let text_content: Vec<ResponseOutputContent> = match &choice.message.content {
+                Some(MessageContent::Text(t)) if !t.is_empty() => {
                     vec![ResponseOutputContent::OutputText {
                         text: t.clone(),
                         annotations: None,
@@ -224,13 +236,39 @@ pub(crate) fn convert_to_responses_api(
                 }
                 _ => vec![],
             };
+            if !text_content.is_empty() {
+                items.push(ResponseOutputItem::Message(ResponseOutputMessage {
+                    id: format!("msg_{}", uuid_v4_hex()),
+                    role: "assistant".to_string(),
+                    status: finish_status.to_string(),
+                    content: text_content,
+                }));
+            }
 
-            ResponseOutputItem::Message(ResponseOutputMessage {
-                id: format!("msg_{}", uuid_v4_hex()),
-                role: "assistant".to_string(),
-                status: finish_status.to_string(),
-                content,
-            })
+            // Tool calls → function call output items
+            if let Some(tool_calls) = choice.message.tool_calls {
+                for tc in tool_calls {
+                    items.push(ResponseOutputItem::FunctionCall(ResponseFunctionCall {
+                        id: format!("fc_{}", uuid_v4_hex()),
+                        name: tc.function.name.clone(),
+                        arguments: tc.function.arguments.clone(),
+                        status: finish_status.to_string(),
+                        call_id: Some(tc.id.clone()),
+                    }));
+                }
+            }
+
+            // Ensure at least one output item per choice
+            if items.is_empty() {
+                items.push(ResponseOutputItem::Message(ResponseOutputMessage {
+                    id: format!("msg_{}", uuid_v4_hex()),
+                    role: "assistant".to_string(),
+                    status: finish_status.to_string(),
+                    content: vec![],
+                }));
+            }
+
+            items
         })
         .collect();
 
@@ -273,14 +311,20 @@ pub(crate) fn parse_role(role: &str) -> Result<MessageRole, String> {
     }
 }
 
-/// Generate a short hex identifier for response/message IDs.
+/// Generate a collision-resistant hex identifier for response/message IDs.
+///
+/// Combines full nanoseconds since epoch with a process-global atomic counter
+/// so IDs remain unique across concurrent calls within the same second.
 pub(crate) fn uuid_v4_hex() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .subsec_nanos();
-    format!("{nanos:016x}")
+        .as_nanos() as u64;
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos:016x}{seq:08x}")
 }
 
 /// Current Unix timestamp in seconds.
