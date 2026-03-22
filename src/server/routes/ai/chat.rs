@@ -301,7 +301,7 @@ async fn handle_chat_completion_internal(
     Ok(convert_core_chat_response(execution.0))
 }
 
-fn build_core_chat_request(
+pub(crate) fn build_core_chat_request(
     request: ChatCompletionRequest,
     model: String,
     stream: bool,

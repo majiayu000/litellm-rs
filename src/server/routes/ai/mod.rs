@@ -10,6 +10,8 @@ mod embeddings;
 mod images;
 mod models;
 mod provider_selection;
+mod responses;
+mod responses_stream;
 
 // Public re-exports for backward compatibility
 pub use audio::{audio_speech, audio_transcriptions, audio_translations};
@@ -21,6 +23,7 @@ pub use context::{
 pub use embeddings::embeddings;
 pub use images::image_generations;
 pub use models::{get_model, list_models};
+pub use responses::create_response;
 
 use actix_web::web;
 
@@ -30,6 +33,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         web::scope("/v1")
             // Chat completions
             .route("/chat/completions", web::post().to(chat_completions))
+            // Responses API
+            .route("/responses", web::post().to(create_response))
             // Embeddings
             .route("/embeddings", web::post().to(embeddings))
             // Image generation

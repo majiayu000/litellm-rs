@@ -15,6 +15,7 @@ pub mod helpers;
 pub mod messages;
 pub mod requests;
 pub mod responses;
+pub mod responses_api;
 pub mod tools;
 
 // Re-export all public types for backward compatibility
