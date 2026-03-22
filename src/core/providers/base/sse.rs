@@ -1200,4 +1200,51 @@ mod tests {
         assert_eq!(results3.len(), 1); // Now we have a complete event
         assert_eq!(results3[0].choices[0].delta.content, Some("Hi".to_string()));
     }
+
+    /// Verify the buffer size limit constant matches the documented value.
+    #[test]
+    fn test_max_chunk_buffer_size_constant() {
+        assert_eq!(MAX_CHUNK_BUFFER_SIZE, 10_000);
+    }
+
+    /// Verify that delivering more than MAX_CHUNK_BUFFER_SIZE events in a single
+    /// network read triggers the OOM guard and returns an error instead of
+    /// growing the buffer without bound.
+    #[tokio::test]
+    async fn test_buffer_overflow_returns_error() {
+        use futures::StreamExt;
+
+        // Build one SSE payload that contains MAX_CHUNK_BUFFER_SIZE + 1 complete events.
+        // Each line is: data: <valid JSON>\n\n
+        let event_json = r#"{"id":"x","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}"#;
+        let single_line = format!("data: {event_json}\n\n");
+        let big_payload = single_line.repeat(MAX_CHUNK_BUFFER_SIZE + 1);
+
+        // Wrap in a stream that yields one large Ok(Bytes) item.
+        let mock_stream = futures::stream::iter(vec![Ok::<bytes::Bytes, reqwest::Error>(
+            bytes::Bytes::from(big_payload),
+        )]);
+
+        let transformer = OpenAICompatibleTransformer::new("test");
+        let mut sse_stream = UnifiedSSEStream::new(mock_stream, transformer);
+
+        // Consume the stream until we hit the expected error.
+        let mut got_overflow_error = false;
+        while let Some(result) = sse_stream.next().await {
+            if let Err(err) = result {
+                let msg = format!("{err:?}");
+                assert!(
+                    msg.contains(&MAX_CHUNK_BUFFER_SIZE.to_string()),
+                    "Expected buffer-limit message, got: {msg}"
+                );
+                got_overflow_error = true;
+                break;
+            }
+        }
+
+        assert!(
+            got_overflow_error,
+            "Stream should have returned a buffer-overflow error"
+        );
+    }
 }
