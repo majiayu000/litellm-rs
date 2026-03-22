@@ -303,6 +303,127 @@ pub(super) fn build_cloudflare_config_from_factory(
     Ok(cf_config)
 }
 
+pub(super) fn build_meta_llama_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
+    let api_key = macros::require_config_str(config, "api_key", "meta_llama")?;
+    let api_base = config_str(config, "base_url")
+        .or_else(|| config_str(config, "api_base"))
+        .unwrap_or("https://api.llama.com/compat/v1");
+
+    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
+    oai_config.provider_name = "meta_llama".to_string();
+
+    if let Some(timeout) = config_u64(config, "timeout") {
+        oai_config.base.timeout = timeout;
+    }
+    if let Some(max_retries) = config_u32(config, "max_retries") {
+        oai_config.base.max_retries = max_retries;
+    }
+    merge_string_headers(&mut oai_config.base.headers, config, "headers");
+    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
+
+    Ok(oai_config)
+}
+
+pub(super) fn build_v0_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
+    let api_key = macros::require_config_str(config, "api_key", "v0")?;
+    let api_base = config_str(config, "base_url")
+        .or_else(|| config_str(config, "api_base"))
+        .unwrap_or("https://api.v0.dev/v1");
+
+    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
+    oai_config.provider_name = "v0".to_string();
+
+    if let Some(timeout) = config_u64(config, "timeout") {
+        oai_config.base.timeout = timeout;
+    }
+    if let Some(max_retries) = config_u32(config, "max_retries") {
+        oai_config.base.max_retries = max_retries;
+    }
+    merge_string_headers(&mut oai_config.base.headers, config, "headers");
+    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
+
+    Ok(oai_config)
+}
+
+pub(super) fn build_azure_ai_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
+    let api_key = macros::require_config_str(config, "api_key", "azure_ai")?;
+    let api_base = config_str(config, "base_url")
+        .or_else(|| config_str(config, "api_base"))
+        .or_else(|| config_str(config, "endpoint"))
+        .ok_or_else(|| {
+            ProviderError::configuration("azure_ai", "base_url (or endpoint) is required")
+        })?;
+
+    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
+    oai_config.provider_name = "azure_ai".to_string();
+
+    if let Some(api_version) = config_str(config, "api_version") {
+        oai_config.base.api_version = Some(api_version.to_string());
+    }
+    if let Some(timeout) = config_u64(config, "timeout") {
+        oai_config.base.timeout = timeout;
+    }
+    if let Some(max_retries) = config_u32(config, "max_retries") {
+        oai_config.base.max_retries = max_retries;
+    }
+    merge_string_headers(&mut oai_config.base.headers, config, "headers");
+    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
+
+    Ok(oai_config)
+}
+
+pub(super) fn build_amazon_nova_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
+    let api_key = macros::require_config_str(config, "api_key", "amazon_nova")?;
+    let api_base = config_str(config, "base_url")
+        .or_else(|| config_str(config, "api_base"))
+        .unwrap_or("https://api.nova.amazon.com/v1");
+
+    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
+    oai_config.provider_name = "amazon_nova".to_string();
+
+    if let Some(timeout) = config_u64(config, "timeout") {
+        oai_config.base.timeout = timeout;
+    }
+    if let Some(max_retries) = config_u32(config, "max_retries") {
+        oai_config.base.max_retries = max_retries;
+    }
+    merge_string_headers(&mut oai_config.base.headers, config, "headers");
+    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
+
+    Ok(oai_config)
+}
+
+pub(super) fn build_fal_ai_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
+    let api_key = macros::require_config_str(config, "api_key", "fal_ai")?;
+    let api_base = config_str(config, "base_url")
+        .or_else(|| config_str(config, "api_base"))
+        .unwrap_or("https://fal.run");
+
+    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
+    oai_config.provider_name = "fal_ai".to_string();
+
+    if let Some(timeout) = config_u64(config, "timeout") {
+        oai_config.base.timeout = timeout;
+    }
+    if let Some(max_retries) = config_u32(config, "max_retries") {
+        oai_config.base.max_retries = max_retries;
+    }
+    merge_string_headers(&mut oai_config.base.headers, config, "headers");
+    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
+
+    Ok(oai_config)
+}
+
 pub(super) fn build_openai_like_config_from_factory(
     config: &serde_json::Value,
 ) -> Result<openai_like::OpenAILikeConfig, ProviderError> {

@@ -9,9 +9,12 @@ use crate::core::providers::unified_provider::ProviderError;
 use crate::core::providers::{Provider, anthropic, cloudflare, mistral, openai, openai_like};
 
 use super::builder::{
-    build_anthropic_config_from_factory, build_cloudflare_config_from_factory,
+    build_amazon_nova_config_from_factory, build_anthropic_config_from_factory,
+    build_azure_ai_config_from_factory, build_cloudflare_config_from_factory,
+    build_fal_ai_config_from_factory, build_meta_llama_config_from_factory,
     build_mistral_config_from_factory, build_openai_config_from_factory,
-    build_openai_like_config_from_factory, config_str, config_u32, config_u64,
+    build_openai_like_config_from_factory, build_v0_config_from_factory, config_str, config_u32,
+    config_u64,
 };
 
 impl Provider {
@@ -88,6 +91,41 @@ impl Provider {
                 let provider = openai_like::OpenAILikeProvider::new(oai_config)
                     .await
                     .map_err(|e| ProviderError::initialization(def.name, e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::MetaLlama => {
+                let oai_config = build_meta_llama_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("meta_llama", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::V0 => {
+                let oai_config = build_v0_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("v0", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::AzureAI => {
+                let oai_config = build_azure_ai_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("azure_ai", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::AmazonNova => {
+                let oai_config = build_amazon_nova_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("amazon_nova", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::FalAI => {
+                let oai_config = build_fal_ai_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("fal_ai", e.to_string()))?;
                 Ok(Provider::OpenAILike(provider))
             }
             _ => Err(ProviderError::not_implemented(

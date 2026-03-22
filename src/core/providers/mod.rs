@@ -380,6 +380,12 @@ impl Provider {
             ProviderType::Mistral,
             ProviderType::Cloudflare,
             ProviderType::OpenAICompatible,
+            // Tier 2: providers with explicit OpenAI-compatible factory branches
+            ProviderType::MetaLlama,
+            ProviderType::V0,
+            ProviderType::AzureAI,
+            ProviderType::AmazonNova,
+            ProviderType::FalAI,
             // Catalog-covered provider types (Tier 1)
             ProviderType::Groq,
             ProviderType::OpenRouter,
