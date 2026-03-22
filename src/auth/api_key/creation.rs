@@ -396,3 +396,99 @@ impl ApiKeyHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== validate_create_key_input ====================
+
+    #[test]
+    fn test_valid_name_and_permissions() {
+        let result = validate_create_key_input("My API Key", &["api.chat".to_string()]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_empty_name_is_rejected() {
+        let result = validate_create_key_input("", &[]);
+        assert!(matches!(result, Err(GatewayError::Validation(_))));
+        if let Err(GatewayError::Validation(msg)) = result {
+            assert!(msg.contains("empty"), "unexpected message: {msg}");
+        }
+    }
+
+    #[test]
+    fn test_name_at_max_length_is_accepted() {
+        let name = "a".repeat(255);
+        let result = validate_create_key_input(&name, &[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_name_exceeding_max_length_is_rejected() {
+        let name = "a".repeat(256);
+        let result = validate_create_key_input(&name, &[]);
+        assert!(matches!(result, Err(GatewayError::Validation(_))));
+        if let Err(GatewayError::Validation(msg)) = result {
+            assert!(msg.contains("255"), "expected '255' in message: {msg}");
+        }
+    }
+
+    #[test]
+    fn test_name_with_control_character_is_rejected() {
+        let name = "bad\x00name";
+        let result = validate_create_key_input(name, &[]);
+        assert!(matches!(result, Err(GatewayError::Validation(_))));
+        if let Err(GatewayError::Validation(msg)) = result {
+            assert!(
+                msg.contains("control"),
+                "expected 'control' in message: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_name_with_newline_is_rejected() {
+        let result = validate_create_key_input("bad\nname", &[]);
+        assert!(matches!(result, Err(GatewayError::Validation(_))));
+    }
+
+    #[test]
+    fn test_empty_permissions_are_accepted() {
+        let result = validate_create_key_input("My Key", &[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_wildcard_permission_is_accepted() {
+        let result = validate_create_key_input("My Key", &["*".to_string()]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_all_known_permissions_are_accepted() {
+        let perms: Vec<String> = VALID_PERMISSIONS.iter().map(|p| p.to_string()).collect();
+        let result = validate_create_key_input("My Key", &perms);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unknown_permission_is_rejected() {
+        let result = validate_create_key_input("My Key", &["invalid.perm".to_string()]);
+        assert!(matches!(result, Err(GatewayError::Validation(_))));
+        if let Err(GatewayError::Validation(msg)) = result {
+            assert!(
+                msg.contains("invalid.perm"),
+                "expected permission name in message: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixed_valid_and_invalid_permissions_are_rejected() {
+        let perms = vec!["api.chat".to_string(), "not.a.perm".to_string()];
+        let result = validate_create_key_input("My Key", &perms);
+        assert!(matches!(result, Err(GatewayError::Validation(_))));
+    }
+}
