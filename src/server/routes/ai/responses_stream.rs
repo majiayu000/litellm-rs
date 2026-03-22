@@ -235,84 +235,81 @@ pub(crate) async fn handle_streaming_response(
                                         let idx = tc.index;
 
                                         // First chunk for this call (has an id): emit placeholder
-                                        if let Some(call_id) = &tc.id {
-                                            if !tool_states.contains_key(&idx) {
-                                                let item_id = format!("fc_{}", uuid_v4_hex());
-                                                let out_idx = next_output_index;
-                                                next_output_index += 1;
-                                                let name = tc
-                                                    .function
-                                                    .as_ref()
-                                                    .and_then(|f| f.name.as_deref())
-                                                    .unwrap_or("")
-                                                    .to_string();
+                                        if let (
+                                            Some(call_id),
+                                            std::collections::hash_map::Entry::Vacant(entry),
+                                        ) = (&tc.id, tool_states.entry(idx))
+                                        {
+                                            let item_id = format!("fc_{}", uuid_v4_hex());
+                                            let out_idx = next_output_index;
+                                            next_output_index += 1;
+                                            let name = tc
+                                                .function
+                                                .as_ref()
+                                                .and_then(|f| f.name.as_deref())
+                                                .unwrap_or("")
+                                                .to_string();
 
-                                                let fc_item = ResponseOutputItem::FunctionCall(
-                                                    ResponseFunctionCall {
-                                                        id: item_id.clone(),
-                                                        name: name.clone(),
-                                                        arguments: String::new(),
-                                                        status: "in_progress".to_string(),
-                                                        call_id: Some(call_id.clone()),
-                                                    },
-                                                );
+                                            let fc_item = ResponseOutputItem::FunctionCall(
+                                                ResponseFunctionCall {
+                                                    id: item_id.clone(),
+                                                    name: name.clone(),
+                                                    arguments: String::new(),
+                                                    status: "in_progress".to_string(),
+                                                    call_id: Some(call_id.clone()),
+                                                },
+                                            );
+                                            if emit(
+                                                &tx,
+                                                &ResponseStreamEvent::ResponseOutputItemAdded {
+                                                    output_index: out_idx,
+                                                    item: fc_item,
+                                                },
+                                            )
+                                            .await
+                                            .is_err()
+                                            {
+                                                return;
+                                            }
+
+                                            entry.insert(ToolCallAccum {
+                                                item_id,
+                                                call_id: call_id.clone(),
+                                                name,
+                                                arguments: String::new(),
+                                                output_index: out_idx,
+                                            });
+                                            tool_order.push(idx);
+                                        }
+
+                                        if let Some(fn_delta) = &tc.function
+                                            && let Some(state) = tool_states.get_mut(&idx)
+                                        {
+                                            // Late-arriving name (rare)
+                                            if let Some(n) = &fn_delta.name
+                                                && state.name.is_empty()
+                                            {
+                                                state.name.clone_from(n);
+                                            }
+                                            // Emit argument deltas
+                                            if let Some(args) = &fn_delta.arguments
+                                                && !args.is_empty()
+                                            {
+                                                state.arguments.push_str(args);
+                                                let (cid, oi) =
+                                                    (state.call_id.clone(), state.output_index);
                                                 if emit(
                                                     &tx,
-                                                    &ResponseStreamEvent::ResponseOutputItemAdded {
-                                                        output_index: out_idx,
-                                                        item: fc_item,
+                                                    &ResponseStreamEvent::ResponseFunctionCallArgumentsDelta {
+                                                        output_index: oi,
+                                                        call_id: cid,
+                                                        delta: args.clone(),
                                                     },
                                                 )
                                                 .await
                                                 .is_err()
                                                 {
                                                     return;
-                                                }
-
-                                                tool_states.insert(
-                                                    idx,
-                                                    ToolCallAccum {
-                                                        item_id,
-                                                        call_id: call_id.clone(),
-                                                        name,
-                                                        arguments: String::new(),
-                                                        output_index: out_idx,
-                                                    },
-                                                );
-                                                tool_order.push(idx);
-                                            }
-                                        }
-
-                                        if let Some(fn_delta) = &tc.function {
-                                            if let Some(state) = tool_states.get_mut(&idx) {
-                                                // Late-arriving name (rare)
-                                                if let Some(n) = &fn_delta.name {
-                                                    if state.name.is_empty() {
-                                                        state.name.clone_from(n);
-                                                    }
-                                                }
-                                                // Emit argument deltas
-                                                if let Some(args) = &fn_delta.arguments {
-                                                    if !args.is_empty() {
-                                                        state.arguments.push_str(args);
-                                                        let (cid, oi) = (
-                                                            state.call_id.clone(),
-                                                            state.output_index,
-                                                        );
-                                                        if emit(
-                                                            &tx,
-                                                            &ResponseStreamEvent::ResponseFunctionCallArgumentsDelta {
-                                                                output_index: oi,
-                                                                call_id: cid,
-                                                                delta: args.clone(),
-                                                            },
-                                                        )
-                                                        .await
-                                                        .is_err()
-                                                        {
-                                                            return;
-                                                        }
-                                                    }
                                                 }
                                             }
                                         }

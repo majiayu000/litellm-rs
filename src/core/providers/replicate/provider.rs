@@ -593,6 +593,10 @@ mod tests {
             function_call: None,
             logprobs: None,
             top_logprobs: None,
+            reasoning_effort: None,
+            store: None,
+            metadata: None,
+            service_tier: None,
             thinking: None,
             extra_params: HashMap::new(),
         };
