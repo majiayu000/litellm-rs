@@ -44,6 +44,19 @@ pub async fn create_response(
         _ => {}
     }
 
+    if request.background.unwrap_or(false) {
+        return Ok(errors::validation_error(
+            "background (async) execution is not supported; omit background or set it to false",
+        ));
+    }
+
+    if request.previous_response_id.is_some() {
+        return Ok(errors::validation_error(
+            "previous_response_id (stateful chaining) is not supported; \
+             omit previous_response_id to make a fresh request",
+        ));
+    }
+
     let chat_request = match build_chat_request(&request) {
         Ok(r) => r,
         Err(e) => return Ok(errors::validation_error(&e)),
@@ -121,23 +134,32 @@ pub(crate) fn build_chat_request(
                 let content = match &msg.content {
                     ResponseInputContent::Text(t) => MessageContent::Text(t.clone()),
                     ResponseInputContent::Parts(parts) => {
-                        let content_parts: Vec<ContentPart> = parts
-                            .iter()
-                            .filter_map(|p| match p {
+                        let mut content_parts: Vec<ContentPart> = Vec::new();
+                        for p in parts {
+                            match p {
                                 ResponseInputContentPart::InputText { text }
                                 | ResponseInputContentPart::OutputText { text } => {
-                                    Some(ContentPart::Text { text: text.clone() })
+                                    content_parts.push(ContentPart::Text { text: text.clone() });
                                 }
                                 ResponseInputContentPart::InputImage { image_url, detail } => {
-                                    image_url.as_ref().map(|url| ContentPart::ImageUrl {
-                                        image_url: ImageUrl {
-                                            url: url.clone(),
-                                            detail: detail.clone(),
-                                        },
-                                    })
+                                    match image_url {
+                                        Some(url) => {
+                                            content_parts.push(ContentPart::ImageUrl {
+                                                image_url: ImageUrl {
+                                                    url: url.clone(),
+                                                    detail: detail.clone(),
+                                                },
+                                            });
+                                        }
+                                        None => {
+                                            return Err(
+                                                "input_image part is missing image_url".to_string()
+                                            );
+                                        }
+                                    }
                                 }
-                            })
-                            .collect();
+                            }
+                        }
                         if content_parts.len() == 1 {
                             if let ContentPart::Text { text } = &content_parts[0] {
                                 MessageContent::Text(text.clone())
@@ -206,6 +228,8 @@ pub(crate) fn build_chat_request(
         user: req.user.clone(),
         tools: if tools.is_empty() { None } else { Some(tools) },
         reasoning_effort: req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+        store: req.store,
+        metadata: req.metadata.clone(),
         ..Default::default()
     })
 }
@@ -243,6 +267,21 @@ pub(crate) fn convert_to_responses_api(
                         logprobs: None,
                     }]
                 }
+                Some(MessageContent::Parts(parts)) => parts
+                    .iter()
+                    .filter_map(|part| {
+                        if let ContentPart::Text { text } = part {
+                            if !text.is_empty() {
+                                return Some(ResponseOutputContent::OutputText {
+                                    text: text.clone(),
+                                    annotations: None,
+                                    logprobs: None,
+                                });
+                            }
+                        }
+                        None
+                    })
+                    .collect(),
                 _ => vec![],
             };
             if !text_content.is_empty() {
@@ -339,6 +378,7 @@ pub(crate) fn parse_role(role: &str) -> Result<MessageRole, String> {
         "user" => Ok(MessageRole::User),
         "assistant" => Ok(MessageRole::Assistant),
         "system" => Ok(MessageRole::System),
+        "developer" => Ok(MessageRole::Developer),
         other => Err(format!("unknown message role: {other}")),
     }
 }
