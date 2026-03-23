@@ -6,6 +6,7 @@
 //! - `registry`: `Provider::from_config_async` dispatch table
 
 mod builder;
+mod builder_delegates;
 mod registry;
 mod resolver;
 
