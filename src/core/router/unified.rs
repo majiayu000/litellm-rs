@@ -12,8 +12,19 @@ use crate::core::providers::unified_provider::ProviderError;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::time::Duration;
+
+/// Snapshot of routing metrics counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoutingMetrics {
+    /// Total number of deployments selected via `select_deployment`.
+    pub provider_selected: u64,
+    /// Total number of strategy evaluations (one per `select_deployment` call).
+    pub strategy_used: u64,
+    /// Total number of fallback model attempts in `execute`.
+    pub fallback_triggered: u64,
+}
 
 /// Unified Router
 ///
@@ -38,6 +49,15 @@ pub struct Router {
 
     /// Round-robin counters (per model, for RoundRobin strategy)
     pub(crate) round_robin_counters: DashMap<String, AtomicUsize>,
+
+    /// Atomic counter: number of times a provider was selected.
+    pub(crate) provider_selected_count: AtomicU64,
+
+    /// Atomic counter: number of times a routing strategy was evaluated.
+    pub(crate) strategy_used_count: AtomicU64,
+
+    /// Atomic counter: number of fallback model attempts.
+    pub(crate) fallback_triggered_count: AtomicU64,
 }
 
 impl Router {
@@ -50,6 +70,9 @@ impl Router {
             config,
             fallback_config: FallbackConfig::default(),
             round_robin_counters: DashMap::new(),
+            provider_selected_count: AtomicU64::new(0),
+            strategy_used_count: AtomicU64::new(0),
+            fallback_triggered_count: AtomicU64::new(0),
         }
     }
 
@@ -67,6 +90,15 @@ impl Router {
     /// Get the router configuration
     pub fn config(&self) -> &RouterConfig {
         &self.config
+    }
+
+    /// Return a snapshot of the routing metrics counters.
+    pub fn routing_metrics(&self) -> RoutingMetrics {
+        RoutingMetrics {
+            provider_selected: self.provider_selected_count.load(Relaxed),
+            strategy_used: self.strategy_used_count.load(Relaxed),
+            fallback_triggered: self.fallback_triggered_count.load(Relaxed),
+        }
     }
 
     // ========== Deployment Management ==========

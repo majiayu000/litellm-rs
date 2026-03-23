@@ -42,4 +42,4 @@ pub use budget_routing::{BudgetAwareRouter, BudgetAwareRouting, RequestBudgetChe
 pub use config::{RouterConfig, RoutingStrategy as UnifiedRoutingStrategy};
 pub use error::{CooldownReason, RouterError};
 pub use fallback::{ExecutionResult, FallbackConfig, FallbackType};
-pub use unified::Router as UnifiedRouter;
+pub use unified::{Router as UnifiedRouter, RoutingMetrics};

@@ -126,6 +126,8 @@ impl Router {
             let is_fallback = model_idx > 0;
 
             if is_fallback {
+                self.fallback_triggered_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tracing::info!(
                     original_model = %model_name,
                     fallback_model = %model,

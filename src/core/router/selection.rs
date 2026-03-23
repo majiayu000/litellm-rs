@@ -157,10 +157,12 @@ impl Router {
         .cloned()
         .ok_or_else(|| RouterError::NoAvailableDeployment(model_name.to_string()))?;
 
-        // 6. Increment active_requests counter
+        // 6. Increment active_requests counter and routing metrics
         if let Some(deployment) = self.deployments.get(&selected_id) {
             deployment.state.active_requests.fetch_add(1, Relaxed);
         }
+        self.provider_selected_count.fetch_add(1, Relaxed);
+        self.strategy_used_count.fetch_add(1, Relaxed);
 
         tracing::debug!(
             model = %model_name,
