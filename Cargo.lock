@@ -3135,6 +3135,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-test",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "url",

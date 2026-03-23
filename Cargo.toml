@@ -49,6 +49,7 @@ actix-cors = { version = "0.7", optional = true }
 actix-multipart = { version = "0.7", optional = true }
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "signal"] }
 tokio-stream = "0.1"
+tokio-util = "0.7"
 futures = "0.3"
 async-trait = "0.1"
 async-stream = "0.3"
