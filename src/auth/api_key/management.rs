@@ -121,6 +121,9 @@ impl ApiKeyHandler {
             .update_api_key_usage(key_id, requests, tokens, cost)
             .await?;
 
+        // Invalidate cached API key so subsequent reads see updated usage stats
+        self.invalidate_cache_for_key_id(key_id).await;
+
         Ok(())
     }
 
