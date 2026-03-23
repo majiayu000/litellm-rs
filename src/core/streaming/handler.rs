@@ -9,7 +9,8 @@ use futures::stream::{Stream, StreamExt};
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::error;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 use uuid::Uuid;
 
 /// Streaming response handler
@@ -35,8 +36,16 @@ impl StreamingHandler {
         }
     }
 
-    /// Create a streaming response from a provider stream for Actix-web
-    pub fn create_sse_stream<S>(mut self, provider_stream: S) -> impl Stream<Item = Result<Bytes>>
+    /// Create a streaming response from a provider stream for Actix-web.
+    ///
+    /// The optional `cancel` token allows the caller to abort the provider
+    /// stream when the HTTP client disconnects, preventing wasted upstream
+    /// work and network I/O.
+    pub fn create_sse_stream<S>(
+        mut self,
+        provider_stream: S,
+        cancel: Option<CancellationToken>,
+    ) -> impl Stream<Item = Result<Bytes>>
     where
         S: Stream<Item = Result<String>> + Send + 'static,
     {
@@ -45,7 +54,24 @@ impl StreamingHandler {
         tokio::spawn(async move {
             tokio::pin!(provider_stream);
 
-            while let Some(chunk_result) = provider_stream.next().await {
+            loop {
+                let next_chunk = if let Some(ref token) = cancel {
+                    tokio::select! {
+                        biased;
+                        _ = token.cancelled() => {
+                            info!("streaming cancelled by client disconnect");
+                            break;
+                        }
+                        chunk = provider_stream.next() => chunk,
+                    }
+                } else {
+                    provider_stream.next().await
+                };
+
+                let Some(chunk_result) = next_chunk else {
+                    break;
+                };
+
                 match chunk_result {
                     Ok(chunk_data) => {
                         match self.process_chunk(&chunk_data).await {
