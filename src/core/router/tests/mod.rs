@@ -15,3 +15,6 @@ mod concurrency_edge_case_tests;
 // Legacy module tests (moved from embedded tests)
 mod deployment_tests;
 mod strategy_impl_tests;
+
+// Selection logic edge case tests (issue #343)
+mod selection_tests;
