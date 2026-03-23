@@ -116,6 +116,9 @@ bytes = "1.5"
 clap = { version = "4.4", features = ["derive", "env"], optional = true }
 dotenvy = "0.15"
 
+# JSON Schema validation
+jsonschema = { version = "0.28", optional = true }
+
 # Error handling
 thiserror = "2.0"
 
@@ -188,6 +191,9 @@ cloud-secrets = ["aws-secrets", "gcp-secrets", "azure-secrets", "vault-secrets"]
 metrics = ["dep:sysinfo"]
 tracing = ["dep:tracing-subscriber"]
 
+# JSON Schema validation for MCP tool parameters
+mcp-validation = ["dep:jsonschema"]
+
 # Advanced features
 vector-db = []
 websockets = []
@@ -195,7 +201,7 @@ analytics = ["metrics"]
 enterprise = ["analytics", "vector-db"]
 
 # Full feature set
-full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "cloud-secrets", "providers-extra", "providers-extended"]
+full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "cloud-secrets", "providers-extra", "providers-extended", "mcp-validation"]
 
 # Metadata
 [package.metadata.docs.rs]
