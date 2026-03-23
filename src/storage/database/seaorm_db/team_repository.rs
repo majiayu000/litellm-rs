@@ -9,7 +9,7 @@ use crate::core::models::team::{Team, TeamMember, TeamRole, TeamStatus};
 use crate::core::teams::repository::TeamRepository;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use async_trait::async_trait;
-use sea_orm::{ConnectionTrait, DbBackend, Statement, Value};
+use sea_orm::{ConnectionTrait, DbBackend, Statement, TransactionTrait, Value};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -145,6 +145,8 @@ impl TeamRepository for SeaOrmTeamRepository {
 
     async fn delete(&self, id: Uuid) -> Result<()> {
         let id_str = id.to_string();
+        let txn = self.db.db.begin().await.map_err(GatewayError::from)?;
+
         // Remove members before the team row (no DB-level FK constraint).
         let sql = format!("DELETE FROM team_members WHERE team_id = {}", self.ph(1));
         let stmt = Statement::from_sql_and_values(
@@ -152,7 +154,7 @@ impl TeamRepository for SeaOrmTeamRepository {
             &sql,
             [Value::String(Some(Box::new(id_str.clone())))],
         );
-        self.db.db.execute(stmt).await.map_err(GatewayError::from)?;
+        txn.execute(stmt).await.map_err(GatewayError::from)?;
 
         let sql = format!("DELETE FROM teams WHERE id = {}", self.ph(1));
         let stmt = Statement::from_sql_and_values(
@@ -160,7 +162,9 @@ impl TeamRepository for SeaOrmTeamRepository {
             &sql,
             [Value::String(Some(Box::new(id_str)))],
         );
-        self.db.db.execute(stmt).await.map_err(GatewayError::from)?;
+        txn.execute(stmt).await.map_err(GatewayError::from)?;
+
+        txn.commit().await.map_err(GatewayError::from)?;
         Ok(())
     }
 
@@ -282,9 +286,32 @@ impl TeamRepository for SeaOrmTeamRepository {
         user_id: Uuid,
         role: TeamRole,
     ) -> Result<TeamMember> {
-        let mut member = self.get_member(team_id, user_id).await?.ok_or_else(|| {
-            GatewayError::NotFound(format!("Member {} not found in team {}", user_id, team_id))
-        })?;
+        let txn = self.db.db.begin().await.map_err(GatewayError::from)?;
+
+        // Read the member inside the transaction to prevent TOCTOU
+        let read_sql = format!(
+            "SELECT data FROM team_members WHERE team_id = {} AND user_id = {}",
+            self.ph(1),
+            self.ph(2)
+        );
+        let read_stmt = Statement::from_sql_and_values(
+            self.backend(),
+            &read_sql,
+            [
+                Value::String(Some(Box::new(team_id.to_string()))),
+                Value::String(Some(Box::new(user_id.to_string()))),
+            ],
+        );
+        let row = txn
+            .query_one(read_stmt)
+            .await
+            .map_err(GatewayError::from)?
+            .ok_or_else(|| {
+                GatewayError::NotFound(format!("Member {} not found in team {}", user_id, team_id))
+            })?;
+        let raw_data: String = row.try_get("", "data").map_err(GatewayError::from)?;
+        let mut member: TeamMember = Self::from_json(&raw_data)?;
+
         member.role = role;
         member.metadata.touch();
         let data = Self::to_json(&member)?;
@@ -303,7 +330,9 @@ impl TeamRepository for SeaOrmTeamRepository {
                 Value::String(Some(Box::new(user_id.to_string()))),
             ],
         );
-        self.db.db.execute(stmt).await.map_err(GatewayError::from)?;
+        txn.execute(stmt).await.map_err(GatewayError::from)?;
+
+        txn.commit().await.map_err(GatewayError::from)?;
         Ok(member)
     }
 
