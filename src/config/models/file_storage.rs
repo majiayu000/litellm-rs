@@ -24,7 +24,7 @@ impl Default for FileStorageConfig {
 }
 
 /// S3 configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct S3Config {
     /// S3 bucket name
     pub bucket: String,
@@ -38,8 +38,20 @@ pub struct S3Config {
     pub endpoint: Option<String>,
 }
 
+impl std::fmt::Debug for S3Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Config")
+            .field("bucket", &self.bucket)
+            .field("region", &self.region)
+            .field("access_key_id", &"***REDACTED***")
+            .field("secret_access_key", &"***REDACTED***")
+            .field("endpoint", &self.endpoint)
+            .finish()
+    }
+}
+
 /// Vector database configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct VectorDbConfig {
     /// Vector DB type (pinecone, weaviate, etc.)
     pub db_type: String,
@@ -49,6 +61,17 @@ pub struct VectorDbConfig {
     pub api_key: String,
     /// Index name
     pub index_name: String,
+}
+
+impl std::fmt::Debug for VectorDbConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VectorDbConfig")
+            .field("db_type", &self.db_type)
+            .field("url", &self.url)
+            .field("api_key", &"***REDACTED***")
+            .field("index_name", &self.index_name)
+            .finish()
+    }
 }
 
 impl Default for VectorDbConfig {
@@ -63,7 +86,7 @@ impl Default for VectorDbConfig {
 }
 
 /// Alerting configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct AlertingConfig {
     /// Enable alerting
     #[serde(default)]
@@ -74,8 +97,21 @@ pub struct AlertingConfig {
     pub email: Option<EmailConfig>,
 }
 
+impl std::fmt::Debug for AlertingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertingConfig")
+            .field("enabled", &self.enabled)
+            .field(
+                "slack_webhook",
+                &self.slack_webhook.as_ref().map(|_| "***REDACTED***"),
+            )
+            .field("email", &self.email)
+            .finish()
+    }
+}
+
 /// Email configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
     /// SMTP server
     pub smtp_server: String,
@@ -89,6 +125,19 @@ pub struct EmailConfig {
     pub from_address: String,
     /// To addresses
     pub to_addresses: Vec<String>,
+}
+
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailConfig")
+            .field("smtp_server", &self.smtp_server)
+            .field("smtp_port", &self.smtp_port)
+            .field("username", &self.username)
+            .field("password", &"***REDACTED***")
+            .field("from_address", &self.from_address)
+            .field("to_addresses", &self.to_addresses)
+            .finish()
+    }
 }
 
 #[cfg(test)]

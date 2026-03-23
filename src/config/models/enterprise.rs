@@ -38,7 +38,7 @@ impl EnterpriseConfig {
 }
 
 /// SSO configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SsoConfig {
     /// SSO provider
     pub provider: String,
@@ -51,6 +51,18 @@ pub struct SsoConfig {
     /// Additional settings
     #[serde(default)]
     pub settings: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl std::fmt::Debug for SsoConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SsoConfig")
+            .field("provider", &self.provider)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"***REDACTED***")
+            .field("redirect_url", &self.redirect_url)
+            .field("settings", &self.settings)
+            .finish()
+    }
 }
 
 #[cfg(test)]
