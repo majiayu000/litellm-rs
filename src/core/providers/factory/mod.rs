@@ -6,6 +6,8 @@
 //! - `registry`: `Provider::from_config_async` dispatch table
 
 mod builder;
+#[cfg(test)]
+mod builder_tests;
 mod registry;
 mod resolver;
 

@@ -386,6 +386,12 @@ impl Provider {
             ProviderType::AzureAI,
             ProviderType::AmazonNova,
             ProviderType::FalAI,
+            ProviderType::Azure,
+            ProviderType::Bedrock,
+            ProviderType::VertexAI,
+            ProviderType::Replicate,
+            ProviderType::GitHub,
+            ProviderType::GitHubCopilot,
             // Catalog-covered provider types (Tier 1)
             ProviderType::Groq,
             ProviderType::OpenRouter,
