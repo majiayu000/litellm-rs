@@ -352,3 +352,44 @@ async fn test_select_deployment_with_alias() {
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "test-1");
 }
+
+#[tokio::test]
+async fn test_routing_metrics_provider_selected_and_strategy_used() {
+    let config = RouterConfig {
+        routing_strategy: RoutingStrategy::RoundRobin,
+        ..Default::default()
+    };
+    let router = Router::new(config);
+
+    let d1 = create_test_deployment("test-1", "gpt-4").await;
+    let d2 = create_test_deployment("test-2", "gpt-4").await;
+
+    d1.state
+        .health
+        .store(HealthStatus::Healthy as u8, Ordering::Relaxed);
+    d2.state
+        .health
+        .store(HealthStatus::Healthy as u8, Ordering::Relaxed);
+
+    router.add_deployment(d1);
+    router.add_deployment(d2);
+
+    // Make 10 selections
+    for _ in 0..10 {
+        let id = router.select_deployment("gpt-4").unwrap();
+        router.release_deployment(&id);
+    }
+
+    let metrics = router.routing_metrics();
+
+    // Both deployments should have been selected
+    let total_selected: u64 = metrics.provider_selected.values().sum();
+    assert_eq!(total_selected, 10, "Expected 10 total selections");
+
+    // Strategy should be recorded as RoundRobin
+    let rr_count = metrics.strategy_used.get("RoundRobin").copied().unwrap_or(0);
+    assert_eq!(rr_count, 10, "Expected 10 RoundRobin strategy uses");
+
+    // No fallbacks triggered in simple selection
+    assert_eq!(metrics.fallback_triggered, 0);
+}

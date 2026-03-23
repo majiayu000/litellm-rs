@@ -162,6 +162,10 @@ impl Router {
             deployment.state.active_requests.fetch_add(1, Relaxed);
         }
 
+        // 7. Record routing metrics
+        self.record_provider_selected(&selected_id);
+        self.record_strategy_used(&format!("{:?}", self.config.routing_strategy));
+
         tracing::debug!(
             model = %model_name,
             strategy = ?self.config.routing_strategy,

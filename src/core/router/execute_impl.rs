@@ -126,6 +126,7 @@ impl Router {
             let is_fallback = model_idx > 0;
 
             if is_fallback {
+                self.record_fallback_triggered();
                 tracing::info!(
                     original_model = %model_name,
                     fallback_model = %model,

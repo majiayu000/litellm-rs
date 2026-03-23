@@ -12,7 +12,7 @@ use crate::core::providers::unified_provider::ProviderError;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::time::Duration;
 
 /// Unified Router
@@ -38,6 +38,15 @@ pub struct Router {
 
     /// Round-robin counters (per model, for RoundRobin strategy)
     pub(crate) round_robin_counters: DashMap<String, AtomicUsize>,
+
+    /// Routing metrics: total provider selections
+    pub(crate) metrics_provider_selected: DashMap<String, AtomicU64>,
+
+    /// Routing metrics: total strategy invocations by strategy name
+    pub(crate) metrics_strategy_used: DashMap<String, AtomicU64>,
+
+    /// Routing metrics: total fallback triggers
+    pub(crate) metrics_fallback_triggered: AtomicU64,
 }
 
 impl Router {
@@ -50,6 +59,9 @@ impl Router {
             config,
             fallback_config: FallbackConfig::default(),
             round_robin_counters: DashMap::new(),
+            metrics_provider_selected: DashMap::new(),
+            metrics_strategy_used: DashMap::new(),
+            metrics_fallback_triggered: AtomicU64::new(0),
         }
     }
 
@@ -375,6 +387,61 @@ impl Router {
             }
         })
     }
+
+    // ========== Routing Metrics ==========
+
+    /// Record that a provider/deployment was selected for routing
+    pub(crate) fn record_provider_selected(&self, deployment_id: &str) {
+        self.metrics_provider_selected
+            .entry(deployment_id.to_string())
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Relaxed);
+    }
+
+    /// Record the routing strategy used for a selection
+    pub(crate) fn record_strategy_used(&self, strategy: &str) {
+        self.metrics_strategy_used
+            .entry(strategy.to_string())
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Relaxed);
+    }
+
+    /// Record that a fallback was triggered
+    pub(crate) fn record_fallback_triggered(&self) {
+        self.metrics_fallback_triggered.fetch_add(1, Relaxed);
+    }
+
+    /// Get a snapshot of routing metrics
+    pub fn routing_metrics(&self) -> RoutingMetrics {
+        let provider_selected: std::collections::HashMap<String, u64> = self
+            .metrics_provider_selected
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().load(Relaxed)))
+            .collect();
+
+        let strategy_used: std::collections::HashMap<String, u64> = self
+            .metrics_strategy_used
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().load(Relaxed)))
+            .collect();
+
+        RoutingMetrics {
+            provider_selected,
+            strategy_used,
+            fallback_triggered: self.metrics_fallback_triggered.load(Relaxed),
+        }
+    }
+}
+
+/// Snapshot of routing decision metrics
+#[derive(Debug, Clone, Default)]
+pub struct RoutingMetrics {
+    /// Number of times each deployment was selected
+    pub provider_selected: std::collections::HashMap<String, u64>,
+    /// Number of times each strategy was used
+    pub strategy_used: std::collections::HashMap<String, u64>,
+    /// Total number of fallback triggers
+    pub fallback_triggered: u64,
 }
 
 impl Default for Router {
