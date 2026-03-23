@@ -122,6 +122,26 @@ impl AgentRegistry {
         self.agents.read().await.get(name).cloned()
     }
 
+    /// Get an agent for routing, auto-triggering a health check if state is Unknown.
+    ///
+    /// When an agent has never been health-checked (state == Unknown), this
+    /// method probes its URL before returning. This ensures the router never
+    /// receives an agent whose availability is undetermined.
+    pub async fn get_for_routing(&self, name: &str) -> Option<AgentEntry> {
+        let needs_check = {
+            let agents = self.agents.read().await;
+            agents
+                .get(name)
+                .is_some_and(|e| e.state == AgentState::Unknown && e.config.enabled)
+        };
+
+        if needs_check {
+            self.check_agent_health(name).await;
+        }
+
+        self.agents.read().await.get(name).cloned()
+    }
+
     /// Get agent configuration
     pub async fn get_config(&self, name: &str) -> Option<AgentConfig> {
         self.agents.read().await.get(name).map(|e| e.config.clone())
@@ -454,6 +474,39 @@ mod tests {
         registry.update_state("agent1", AgentState::Healthy).await;
         let available = registry.list_available().await;
         assert_eq!(available.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_for_routing_triggers_health_check() {
+        let registry = AgentRegistry::new();
+
+        // Use an unreachable URL so the health check marks it Unhealthy
+        let config = AgentConfig::new("probe-agent", "https://192.0.2.1/health");
+        registry.register(config).await.unwrap();
+
+        // Starts as Unknown
+        let entry = registry.get("probe-agent").await.unwrap();
+        assert_eq!(entry.state, AgentState::Unknown);
+
+        // get_for_routing should trigger a health check
+        let entry = registry.get_for_routing("probe-agent").await.unwrap();
+        assert_ne!(entry.state, AgentState::Unknown);
+        assert!(entry.last_health_check.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_for_routing_skips_known_state() {
+        let registry = AgentRegistry::new();
+
+        let config = AgentConfig::new("known-agent", "https://192.0.2.1/health");
+        registry.register(config).await.unwrap();
+        registry
+            .update_state("known-agent", AgentState::Healthy)
+            .await;
+
+        // Already Healthy, should not re-probe (returns immediately)
+        let entry = registry.get_for_routing("known-agent").await.unwrap();
+        assert_eq!(entry.state, AgentState::Healthy);
     }
 
     #[tokio::test]
