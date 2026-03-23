@@ -33,12 +33,11 @@ pub trait Middleware<Req, Resp>: Send + Sync {
 #[async_trait]
 pub trait MiddlewareNext<Req, Resp>: Send + Sync {
     /// Call the next handler in the chain
-    async fn call(&self, request: Req) -> Result<Resp, Box<dyn std::error::Error + Send + Sync>>;
+    async fn call(&self, request: Req) -> Result<Resp, MiddlewareError>;
 }
 
 // Type aliases for cleaner types
-type BoxedError = Box<dyn std::error::Error + Send + Sync>;
-type BoxedMiddleware<Req, Resp> = Box<dyn Middleware<Req, Resp, Error = BoxedError>>;
+type BoxedMiddleware<Req, Resp> = Box<dyn Middleware<Req, Resp, Error = MiddlewareError>>;
 type BoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Middleware chain/stack
@@ -72,13 +71,10 @@ where
         &self,
         request: Req,
         final_handler: F,
-    ) -> Result<Resp, Box<dyn std::error::Error + Send + Sync>>
+    ) -> Result<Resp, MiddlewareError>
     where
         F: FnOnce(Req) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Resp, Box<dyn std::error::Error + Send + Sync>>>
-            + Send
-            + Sync
-            + 'static,
+        Fut: Future<Output = Result<Resp, MiddlewareError>> + Send + Sync + 'static,
     {
         let handler = Box::new(FinalHandler::new(final_handler));
         self.execute_chain(request, 0, handler).await
@@ -90,7 +86,7 @@ where
         request: Req,
         index: usize,
         final_handler: Box<dyn MiddlewareNext<Req, Resp>>,
-    ) -> BoxedFuture<'_, Result<Resp, BoxedError>> {
+    ) -> BoxedFuture<'_, Result<Resp, MiddlewareError>> {
         Box::pin(async move {
             if index >= self.middlewares.len() {
                 // Execute final handler
@@ -106,10 +102,9 @@ where
 
                 // NOTE: Middleware execution disabled; type constraints not yet resolved.
                 // self.middlewares[index].process(request, next).await
-                Err(Box::new(std::io::Error::other(
-                    "Middleware system temporarily disabled",
+                Err(MiddlewareError::ExecutionFailed(
+                    "Middleware system temporarily disabled".to_string(),
                 ))
-                    as Box<dyn std::error::Error + Send + Sync>)
             }
         })
     }
@@ -144,14 +139,16 @@ impl<F, Fut, Req, Resp> FinalHandler<F, Fut, Req, Resp> {
 impl<F, Fut, Req, Resp> MiddlewareNext<Req, Resp> for FinalHandler<F, Fut, Req, Resp>
 where
     F: FnOnce(Req) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<Resp, Box<dyn std::error::Error + Send + Sync>>> + Send + Sync,
+    Fut: Future<Output = Result<Resp, MiddlewareError>> + Send + Sync,
     Req: Send + Sync,
     Resp: Send + Sync,
 {
-    async fn call(&self, _request: Req) -> Result<Resp, Box<dyn std::error::Error + Send + Sync>> {
+    async fn call(&self, _request: Req) -> Result<Resp, MiddlewareError> {
         // FnOnce can only be called once, but trait methods may be called multiple times
         // This requires a more complex design with interior mutability
-        Err("FinalHandler: FnOnce handling not yet implemented".into())
+        Err(MiddlewareError::ExecutionFailed(
+            "FinalHandler: FnOnce handling not yet implemented".to_string(),
+        ))
     }
 }
 
@@ -169,9 +166,11 @@ where
     Req: Clone + Send + Sync + 'static,
     Resp: Send + Sync + 'static,
 {
-    async fn call(&self, _request: Req) -> Result<Resp, Box<dyn std::error::Error + Send + Sync>> {
+    async fn call(&self, _request: Req) -> Result<Resp, MiddlewareError> {
         // This requires redesign due to lifetime issues with recursive middleware chains
-        Err("NextHandler: next handler not yet implemented".into())
+        Err(MiddlewareError::ExecutionFailed(
+            "NextHandler: next handler not yet implemented".to_string(),
+        ))
     }
 }
 

@@ -4,6 +4,7 @@
 
 use crate::core::types::health::HealthStatus;
 use crate::core::types::{chat::ChatRequest, context::RequestContext, responses::ChatResponse};
+use crate::utils::error::gateway_error::GatewayError;
 
 use super::llm_provider::trait_definition::LLMProvider;
 
@@ -109,13 +110,12 @@ impl ProviderHandle {
         &self,
         _request: ChatRequest,
         _context: RequestContext,
-    ) -> Result<ChatResponse, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<ChatResponse, GatewayError> {
         // This is a simplified implementation - in a real system,
         // you'd need to properly downcast and handle the provider
-        Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Provider chat_completion not implemented",
-        )))
+        Err(GatewayError::Internal(
+            "Provider chat_completion not implemented".to_string(),
+        ))
     }
 
     /// Check if model is supported
@@ -174,7 +174,7 @@ impl ProviderHandle {
         _model: &str,
         _input: u32,
         _output: u32,
-    ) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<f64, GatewayError> {
         // Simplified implementation
         Ok(0.0)
     }
@@ -186,9 +186,7 @@ impl ProviderHandle {
     ///
     /// # Note
     /// Simplified implementation - returns 100ms
-    pub async fn get_average_latency(
-        &self,
-    ) -> Result<std::time::Duration, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_average_latency(&self) -> Result<std::time::Duration, GatewayError> {
         // Simplified implementation
         Ok(std::time::Duration::from_millis(100))
     }
@@ -200,7 +198,7 @@ impl ProviderHandle {
     ///
     /// # Note
     /// Simplified implementation - returns 1.0 (100%)
-    pub async fn get_success_rate(&self) -> Result<f32, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_success_rate(&self) -> Result<f32, GatewayError> {
         // Simplified implementation
         Ok(1.0)
     }
