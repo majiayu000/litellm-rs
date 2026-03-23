@@ -12,6 +12,9 @@ mod strategy_tests;
 // Concurrency and edge case tests (issue #216)
 mod concurrency_edge_case_tests;
 
+// Selection logic tests (check_parallel_limit, check_rate_limit, mixed states)
+mod selection_tests;
+
 // Legacy module tests (moved from embedded tests)
 mod deployment_tests;
 mod strategy_impl_tests;
