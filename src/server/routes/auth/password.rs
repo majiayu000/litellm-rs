@@ -12,13 +12,13 @@ use tracing::{info, warn};
 use super::models::{ChangePasswordRequest, ForgotPasswordRequest, ResetPasswordRequest};
 use super::user::get_authenticated_user;
 
-/// Global password reset rate limiter: 5 attempts per IP per minute
+/// Global password reset rate limiter: 5 attempts per IP per 15 minutes
 static PASSWORD_RESET_RATE_LIMITER: std::sync::OnceLock<Arc<AuthRateLimiter>> =
     std::sync::OnceLock::new();
 
 fn get_password_reset_rate_limiter() -> Arc<AuthRateLimiter> {
     PASSWORD_RESET_RATE_LIMITER
-        .get_or_init(|| Arc::new(AuthRateLimiter::new(5, 60, 60)))
+        .get_or_init(|| Arc::new(AuthRateLimiter::new(5, 900, 900)))
         .clone()
 }
 
@@ -69,7 +69,7 @@ pub async fn forgot_password(
     let cfg = state.config.load();
     let client_ip = extract_client_ip(&req, &cfg.gateway.server.trusted_proxies);
 
-    // Rate limit: max 5 password reset requests per IP per minute
+    // Rate limit: max 5 password reset requests per IP per 15 minutes
     let limiter = get_password_reset_rate_limiter();
 
     // Probabilistic cleanup: every 100th request, purge stale entries
@@ -120,7 +120,7 @@ pub async fn reset_password(
     let cfg = state.config.load();
     let client_ip = extract_client_ip(&req, &cfg.gateway.server.trusted_proxies);
 
-    // Rate limit: max 5 reset attempts per IP per minute
+    // Rate limit: max 5 reset attempts per IP per 15 minutes
     let limiter = get_password_reset_rate_limiter();
 
     // Probabilistic cleanup: every 100th request, purge stale entries
