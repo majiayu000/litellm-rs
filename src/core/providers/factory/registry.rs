@@ -10,10 +10,13 @@ use crate::core::providers::{Provider, anthropic, cloudflare, mistral, openai, o
 
 use super::builder::{
     build_amazon_nova_config_from_factory, build_anthropic_config_from_factory,
-    build_azure_ai_config_from_factory, build_cloudflare_config_from_factory,
-    build_fal_ai_config_from_factory, build_meta_llama_config_from_factory,
+    build_azure_ai_config_from_factory, build_azure_config_from_factory,
+    build_bedrock_config_from_factory, build_cloudflare_config_from_factory,
+    build_fal_ai_config_from_factory, build_github_config_from_factory,
+    build_github_copilot_config_from_factory, build_meta_llama_config_from_factory,
     build_mistral_config_from_factory, build_openai_config_from_factory,
-    build_openai_like_config_from_factory, build_v0_config_from_factory, config_str, config_u32,
+    build_openai_like_config_from_factory, build_replicate_config_from_factory,
+    build_v0_config_from_factory, build_vertex_ai_config_from_factory, config_str, config_u32,
     config_u64,
 };
 
@@ -126,6 +129,48 @@ impl Provider {
                 let provider = openai_like::OpenAILikeProvider::new(oai_config)
                     .await
                     .map_err(|e| ProviderError::initialization("fal_ai", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::Azure => {
+                let oai_config = build_azure_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("azure", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::Bedrock => {
+                let oai_config = build_bedrock_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("bedrock", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::VertexAI => {
+                let oai_config = build_vertex_ai_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("vertex_ai", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::Replicate => {
+                let oai_config = build_replicate_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("replicate", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::GitHub => {
+                let oai_config = build_github_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("github", e.to_string()))?;
+                Ok(Provider::OpenAILike(provider))
+            }
+            ProviderType::GitHubCopilot => {
+                let oai_config = build_github_copilot_config_from_factory(&config)?;
+                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                    .await
+                    .map_err(|e| ProviderError::initialization("github_copilot", e.to_string()))?;
                 Ok(Provider::OpenAILike(provider))
             }
             _ => Err(ProviderError::not_implemented(
