@@ -2,9 +2,24 @@
 
 use crate::auth::AuthMethod;
 use actix_web::http::header::HeaderMap;
+use actix_web::http::header::HeaderName;
 
 /// Extract authentication method from headers
 pub fn extract_auth_method(headers: &HeaderMap) -> AuthMethod {
+    extract_auth_method_with_api_key_header(headers, "x-api-key")
+}
+
+/// Extract authentication method from headers using a configured API key header.
+///
+/// Priority:
+/// 1. `Authorization` header (`Bearer <jwt>`, `ApiKey <key>`, or raw `gw-...`)
+/// 2. Configured API key header
+/// 3. `X-API-Key` (backward-compatible fallback)
+/// 4. `session=` cookie
+pub fn extract_auth_method_with_api_key_header(
+    headers: &HeaderMap,
+    api_key_header: &str,
+) -> AuthMethod {
     // Check Authorization header
     if let Some(auth_header) = headers.get("authorization")
         && let Ok(auth_str) = auth_header.to_str()
@@ -20,11 +35,16 @@ pub fn extract_auth_method(headers: &HeaderMap) -> AuthMethod {
         }
     }
 
-    // Check X-API-Key header
-    if let Some(api_key_header) = headers.get("x-api-key")
-        && let Ok(key) = api_key_header.to_str()
+    // Check configured API key header (unless it overlaps with Authorization/Cookie).
+    if let Some(key) = get_header_value(headers, api_key_header) {
+        return AuthMethod::ApiKey(key);
+    }
+
+    // Backward-compatible fallback.
+    if !api_key_header.eq_ignore_ascii_case("x-api-key")
+        && let Some(key) = get_header_value(headers, "x-api-key")
     {
-        return AuthMethod::ApiKey(key.to_string());
+        return AuthMethod::ApiKey(key);
     }
 
     // Check session cookie
@@ -41,6 +61,22 @@ pub fn extract_auth_method(headers: &HeaderMap) -> AuthMethod {
     }
 
     AuthMethod::None
+}
+
+fn get_header_value(headers: &HeaderMap, header_name: &str) -> Option<String> {
+    let trimmed = header_name.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("authorization")
+        || trimmed.eq_ignore_ascii_case("cookie")
+    {
+        return None;
+    }
+
+    let header_name = HeaderName::try_from(trimmed).ok()?;
+    headers
+        .get(&header_name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
 }
 
 /// Check if a route is public (doesn't require authentication)

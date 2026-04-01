@@ -10,7 +10,7 @@ use crate::core::keys::KeyManager;
 use crate::core::keys::{CreateKeyConfig, KeyStatus, UpdateKeyConfig};
 use crate::core::models::user::types::{User, UserRole};
 use crate::core::types::context::RequestContext;
-use crate::server::middleware::extract_auth_method;
+use crate::server::middleware::extract_auth_method_with_api_key_header;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
@@ -86,7 +86,9 @@ async fn authenticate_request(
     req: &HttpRequest,
     state: &web::Data<AppState>,
 ) -> Result<Option<AuthResult>, HttpResponse> {
-    let auth_method = extract_auth_method(req.headers());
+    let api_key_header = state.config.load().auth().api_key_header.clone();
+    let auth_method =
+        extract_auth_method_with_api_key_header(req.headers(), api_key_header.as_str());
 
     if matches!(auth_method, AuthMethod::None) {
         return Ok(None);

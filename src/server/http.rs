@@ -4,7 +4,10 @@
 
 use crate::config::Config;
 use crate::config::models::server::ServerConfig;
-use crate::server::middleware::{AuthMiddleware, RequestIdMiddleware, SecurityHeadersMiddleware};
+use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter};
+use crate::server::middleware::{
+    AuthMiddleware, RateLimitMiddleware, RequestIdMiddleware, SecurityHeadersMiddleware,
+};
 use crate::server::routes;
 use crate::server::state::AppState;
 use crate::services::pricing::PricingService;
@@ -12,7 +15,7 @@ use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_cors::Cors;
 use actix_web::{
     App, HttpServer as ActixHttpServer,
-    middleware::{DefaultHeaders, Logger},
+    middleware::{Condition, DefaultHeaders, Logger},
     web,
 };
 use std::sync::Arc;
@@ -94,7 +97,16 @@ impl HttpServer {
         info!("Setting up routes and middleware");
 
         let cfg = state.config.load();
+        if cfg.gateway.rate_limit.enabled && get_global_rate_limiter().is_none() {
+            init_global_rate_limiter(cfg.gateway.rate_limit.clone());
+            info!(
+                "Global rate limiter initialized (strategy={:?}, rpm={})",
+                cfg.gateway.rate_limit.strategy, cfg.gateway.rate_limit.default_rpm
+            );
+        }
         let cors_config = &cfg.gateway.server.cors;
+        let rate_limit_enabled = cfg.gateway.rate_limit.enabled;
+        let rate_limit_rpm = cfg.gateway.rate_limit.default_rpm;
         let mut cors = Cors::default();
 
         if cors_config.enabled {
@@ -144,6 +156,10 @@ impl HttpServer {
             .wrap(DefaultHeaders::new().add(("Server", "LiteLLM-RS")))
             .wrap(SecurityHeadersMiddleware)
             .wrap(AuthMiddleware)
+            .wrap(Condition::new(
+                rate_limit_enabled,
+                RateLimitMiddleware::new(rate_limit_rpm),
+            ))
             .wrap(RequestIdMiddleware)
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)
