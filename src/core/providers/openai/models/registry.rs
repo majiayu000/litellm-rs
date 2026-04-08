@@ -172,6 +172,10 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT4
         } else if model_id.starts_with("gpt-3.5") {
             OpenAIModelFamily::GPT35
+        } else if model_id.starts_with("gpt-5.4-nano") {
+            OpenAIModelFamily::GPT54Nano
+        } else if model_id.starts_with("gpt-5.4-pro") {
+            OpenAIModelFamily::GPT54Pro
         } else if model_id.starts_with("gpt-5.4-mini") {
             OpenAIModelFamily::GPT54Mini
         } else if model_id.starts_with("gpt-5.4-turbo") {
@@ -194,6 +198,8 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT5Mini
         } else if model_id.starts_with("gpt-5") {
             OpenAIModelFamily::GPT5
+        } else if model_id.starts_with("computer-use") {
+            OpenAIModelFamily::ComputerUse
         } else if model_id.starts_with("gpt-audio") {
             OpenAIModelFamily::GPTAudio
         } else if model_id.starts_with("o4-mini") {
@@ -308,6 +314,9 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT54
                         | OpenAIModelFamily::GPT54Mini
                         | OpenAIModelFamily::GPT54Turbo
+                        | OpenAIModelFamily::GPT54Pro
+                        | OpenAIModelFamily::GPT54Nano
+                        | OpenAIModelFamily::ComputerUse
                 ),
                 supports_multimodal: matches!(
                     family,
@@ -330,6 +339,9 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT54
                         | OpenAIModelFamily::GPT54Mini
                         | OpenAIModelFamily::GPT54Turbo
+                        | OpenAIModelFamily::GPT54Pro
+                        | OpenAIModelFamily::GPT54Nano
+                        | OpenAIModelFamily::ComputerUse
                 ) || id.contains("vision"),
                 input_cost_per_1k_tokens: Some(input_cost),
                 output_cost_per_1k_tokens: Some(output_cost),
