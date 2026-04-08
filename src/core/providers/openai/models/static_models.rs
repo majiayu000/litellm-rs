@@ -515,7 +515,7 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
         (
             "computer-use-preview",
             "Computer Use Preview",
-            OpenAIModelFamily::GPT54,
+            OpenAIModelFamily::ComputerUse,
             1048576,
             Some(128000),
             0.0015,

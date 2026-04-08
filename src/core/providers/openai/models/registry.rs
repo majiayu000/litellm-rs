@@ -178,8 +178,6 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT54Pro
         } else if model_id.starts_with("gpt-5.4-mini") {
             OpenAIModelFamily::GPT54Mini
-        } else if model_id.starts_with("gpt-5.4-turbo") {
-            OpenAIModelFamily::GPT54Turbo
         } else if model_id.starts_with("gpt-5.4") {
             OpenAIModelFamily::GPT54
         } else if model_id.starts_with("gpt-5.2-pro") {
@@ -313,7 +311,6 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPTAudio
                         | OpenAIModelFamily::GPT54
                         | OpenAIModelFamily::GPT54Mini
-                        | OpenAIModelFamily::GPT54Turbo
                         | OpenAIModelFamily::GPT54Pro
                         | OpenAIModelFamily::GPT54Nano
                         | OpenAIModelFamily::ComputerUse
@@ -338,7 +335,6 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::O4Mini
                         | OpenAIModelFamily::GPT54
                         | OpenAIModelFamily::GPT54Mini
-                        | OpenAIModelFamily::GPT54Turbo
                         | OpenAIModelFamily::GPT54Pro
                         | OpenAIModelFamily::GPT54Nano
                         | OpenAIModelFamily::ComputerUse
