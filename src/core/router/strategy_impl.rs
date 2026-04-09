@@ -31,24 +31,25 @@ pub fn build_routing_contexts<'id>(
     candidate_ids: &'id [DeploymentId],
     deployments: &DashMap<DeploymentId, Deployment>,
 ) -> Vec<RoutingContext<'id>> {
-    candidate_ids
-        .iter()
-        .filter_map(|id| {
-            deployments
-                .get(id.as_str())
-                .map(|deployment| RoutingContext {
-                    deployment_id: id,
-                    weight: deployment.config.weight,
-                    priority: deployment.config.priority,
-                    active_requests: deployment.state.active_requests.load(Relaxed),
-                    tpm_current: deployment.state.tpm_current.load(Relaxed),
-                    tpm_limit: deployment.config.tpm_limit,
-                    rpm_current: deployment.state.rpm_current.load(Relaxed),
-                    rpm_limit: deployment.config.rpm_limit,
-                    avg_latency_us: deployment.state.avg_latency_us.load(Relaxed),
-                })
-        })
-        .collect()
+    let mut contexts = Vec::with_capacity(candidate_ids.len());
+
+    for id in candidate_ids {
+        if let Some(deployment) = deployments.get(id.as_str()) {
+            contexts.push(RoutingContext {
+                deployment_id: id,
+                weight: deployment.config.weight,
+                priority: deployment.config.priority,
+                active_requests: deployment.state.active_requests.load(Relaxed),
+                tpm_current: deployment.state.tpm_current.load(Relaxed),
+                tpm_limit: deployment.config.tpm_limit,
+                rpm_current: deployment.state.rpm_current.load(Relaxed),
+                rpm_limit: deployment.config.rpm_limit,
+                avg_latency_us: deployment.state.avg_latency_us.load(Relaxed),
+            });
+        }
+    }
+
+    contexts
 }
 
 /// Weighted random selection (SimpleShuffle) using snapshot contexts.
@@ -89,29 +90,29 @@ pub fn least_busy_from_context<'id>(contexts: &[RoutingContext<'id>]) -> Option<
         return None;
     }
 
-    let min_active = contexts
-        .iter()
-        .map(|ctx| ctx.active_requests)
-        .min()
-        .unwrap_or(0);
-
-    let tied: Vec<&DeploymentId> = contexts
-        .iter()
-        .filter(|ctx| ctx.active_requests == min_active)
-        .map(|ctx| ctx.deployment_id)
-        .collect();
-
-    if tied.is_empty() {
+    if contexts.len() == 1 {
         return Some(contexts[0].deployment_id);
     }
 
-    if tied.len() == 1 {
-        Some(tied[0])
-    } else {
-        let mut rng = rand::rng();
-        let index = rng.random_range(0..tied.len());
-        Some(tied[index])
+    let mut rng = rand::rng();
+    let mut best_id = contexts[0].deployment_id;
+    let mut min_active = contexts[0].active_requests;
+    let mut tied_count = 1usize;
+
+    for ctx in &contexts[1..] {
+        if ctx.active_requests < min_active {
+            min_active = ctx.active_requests;
+            best_id = ctx.deployment_id;
+            tied_count = 1;
+        } else if ctx.active_requests == min_active {
+            tied_count += 1;
+            if rng.random_range(0..tied_count) == 0 {
+                best_id = ctx.deployment_id;
+            }
+        }
     }
+
+    Some(best_id)
 }
 
 /// Select deployment with lowest TPM usage rate (UsageBased) using snapshot contexts.

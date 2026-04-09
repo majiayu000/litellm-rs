@@ -211,33 +211,42 @@ impl Router {
 
     /// Get all deployment IDs for a given model
     pub fn get_deployments_for_model(&self, model_name: &str) -> Vec<DeploymentId> {
-        let resolved_name = self.resolve_model_name(model_name);
+        let alias_guard = self.model_aliases.get(model_name);
+        let resolved_name = alias_guard
+            .as_ref()
+            .map(|alias| alias.value().as_str())
+            .unwrap_or(model_name);
 
         self.model_index
-            .get(&resolved_name)
+            .get(resolved_name)
             .map(|v| v.clone())
             .unwrap_or_default()
     }
 
     /// Get healthy deployment IDs for a given model
     pub fn get_healthy_deployments(&self, model_name: &str) -> Vec<DeploymentId> {
-        let resolved_name = self.resolve_model_name(model_name);
+        let alias_guard = self.model_aliases.get(model_name);
+        let resolved_name = alias_guard
+            .as_ref()
+            .map(|alias| alias.value().as_str())
+            .unwrap_or(model_name);
 
-        let Some(deployment_ids) = self.model_index.get(&resolved_name) else {
+        let Some(deployment_ids) = self.model_index.get(resolved_name) else {
             return Vec::new();
         };
 
-        deployment_ids
-            .iter()
-            .filter(|id| {
-                if let Some(deployment) = self.deployments.get(id.as_str()) {
-                    deployment.is_healthy() && !deployment.is_in_cooldown()
-                } else {
-                    false
-                }
-            })
-            .cloned()
-            .collect()
+        let mut healthy = Vec::with_capacity(deployment_ids.len());
+
+        for id in deployment_ids.iter() {
+            if let Some(deployment) = self.deployments.get(id.as_str())
+                && deployment.is_healthy()
+                && !deployment.is_in_cooldown()
+            {
+                healthy.push(id.clone());
+            }
+        }
+
+        healthy
     }
 
     /// List all model names
