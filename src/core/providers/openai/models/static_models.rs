@@ -516,10 +516,10 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             "computer-use-preview",
             "Computer Use Preview",
             OpenAIModelFamily::ComputerUse,
-            1048576,
-            Some(128000),
-            0.0015,
-            0.006,
+            8192,
+            Some(1024),
+            0.003,
+            0.012,
         ),
         // ==================== GPT-4 Legacy Models ====================
         (

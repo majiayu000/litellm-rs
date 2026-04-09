@@ -228,9 +228,9 @@
     "supports_system_message": true
   },
   "glm-4.6": {
-    "max_tokens": 131072,
-    "max_input_tokens": 131072,
-    "max_output_tokens": 4096,
+    "max_tokens": 200000,
+    "max_input_tokens": 200000,
+    "max_output_tokens": 131072,
     "input_cost_per_token": 6e-07,
     "output_cost_per_token": 2.2e-06,
     "litellm_provider": "zhipu",
