@@ -615,7 +615,7 @@ mod tests {
         // GPT-5.4 family supports vision (covered by gpt-5 prefix)
         assert!(ModelUtils::supports_vision("gpt-5.4"));
         assert!(ModelUtils::supports_vision("gpt-5.4-mini"));
-        assert!(ModelUtils::supports_vision("gpt-5.4-turbo"));
+        assert!(ModelUtils::supports_vision("gpt-5.4-pro"));
     }
 
     #[test]

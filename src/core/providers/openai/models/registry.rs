@@ -100,9 +100,15 @@ impl OpenAIModelRegistry {
             features.push(OpenAIModelFeature::ReasoningMode);
         }
 
-        if model_id.contains("gpt-4o-audio") {
+        if model_id.starts_with("gpt-4o-audio") || model_id.starts_with("gpt-audio") {
             features.push(OpenAIModelFeature::AudioInput);
             features.push(OpenAIModelFeature::AudioOutput);
+        }
+
+        if model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime") {
+            features.push(OpenAIModelFeature::AudioInput);
+            features.push(OpenAIModelFeature::AudioOutput);
+            features.push(OpenAIModelFeature::RealtimeAudio);
         }
 
         if model_id.starts_with("dall-e")
@@ -159,7 +165,7 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT41
         } else if model_id.starts_with("gpt-4o-audio") || model_id.contains("audio-preview") {
             OpenAIModelFamily::GPT4OAudio
-        } else if model_id.starts_with("gpt-4o-realtime") {
+        } else if model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime") {
             OpenAIModelFamily::Realtime
         } else if model_id.starts_with("gpt-4o") {
             OpenAIModelFamily::GPT4O
@@ -307,6 +313,7 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::O3
                         | OpenAIModelFamily::O3Mini
                         | OpenAIModelFamily::O4Mini
+                        | OpenAIModelFamily::Realtime
                         | OpenAIModelFamily::GPT4OAudio
                         | OpenAIModelFamily::GPTAudio
                         | OpenAIModelFamily::GPT54
@@ -327,12 +334,12 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT52
                         | OpenAIModelFamily::GPT52Pro
                         | OpenAIModelFamily::GPT52Codex
-                        | OpenAIModelFamily::GPTAudio
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
                         | OpenAIModelFamily::O3Mini
                         | OpenAIModelFamily::O4Mini
+                        | OpenAIModelFamily::Realtime
                         | OpenAIModelFamily::GPT54
                         | OpenAIModelFamily::GPT54Mini
                         | OpenAIModelFamily::GPT54Pro
@@ -514,6 +521,50 @@ mod tests {
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::CostOptimized),
             Some("gpt-5-nano".to_string())
+        );
+    }
+
+    #[test]
+    fn test_realtime_and_audio_capabilities() {
+        let registry = get_openai_registry();
+
+        assert!(
+            registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::FunctionCalling)
+        );
+        assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::VisionSupport));
+        assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::AudioInput));
+        assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::AudioOutput));
+        assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::RealtimeAudio));
+
+        assert!(registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::AudioInput));
+        assert!(registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::AudioOutput));
+        assert!(!registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::VisionSupport));
+    }
+
+    #[test]
+    fn test_determine_family_for_new_realtime_models() {
+        let registry = OpenAIModelRegistry::new();
+        let model_info = crate::core::types::model::ModelInfo {
+            id: "gpt-realtime-mini".to_string(),
+            name: "GPT Realtime Mini".to_string(),
+            provider: "openai".to_string(),
+            max_context_length: 32_000,
+            max_output_length: Some(4_096),
+            supports_streaming: true,
+            supports_tools: true,
+            supports_multimodal: true,
+            input_cost_per_1k_tokens: Some(0.0006),
+            output_cost_per_1k_tokens: Some(0.0024),
+            currency: "USD".to_string(),
+            capabilities: vec![],
+            created_at: None,
+            updated_at: None,
+            metadata: std::collections::HashMap::new(),
+        };
+
+        assert_eq!(
+            registry.determine_family(&model_info),
+            OpenAIModelFamily::Realtime
         );
     }
 }

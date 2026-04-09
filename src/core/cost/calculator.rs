@@ -236,6 +236,38 @@ fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError> {
     use chrono::Utc;
 
     let pricing = match model.to_lowercase().as_str() {
+        m if m.contains("gpt-5.4-pro") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.030,
+            output_cost_per_1k_tokens: 0.180,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("gpt-5.4-mini") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.00075,
+            output_cost_per_1k_tokens: 0.0045,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("gpt-5.4-nano") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0002,
+            output_cost_per_1k_tokens: 0.00125,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("gpt-5.4") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0025,
+            output_cost_per_1k_tokens: 0.015,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
         m if m.contains("gpt-5.2-pro") => ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.021,
@@ -324,6 +356,14 @@ fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError> {
             updated_at: Utc::now(),
             ..Default::default()
         },
+        m if m.contains("computer-use-preview") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.003,
+            output_cost_per_1k_tokens: 0.012,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
         m if m.contains("o3-pro") => ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.020,
@@ -332,10 +372,74 @@ fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError> {
             updated_at: Utc::now(),
             ..Default::default()
         },
-        m if m.contains("o3-mini") || m.contains("o4-mini") => ModelPricing {
+        m if m.contains("o3-deep-research") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.010,
+            output_cost_per_1k_tokens: 0.040,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("o3-mini") => ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.0011,
             output_cost_per_1k_tokens: 0.0044,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("o3") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.002,
+            output_cost_per_1k_tokens: 0.008,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("o4-mini-deep-research") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.002,
+            output_cost_per_1k_tokens: 0.008,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("o4-mini") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0011,
+            output_cost_per_1k_tokens: 0.0044,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("gpt-audio-1.5") || m == "gpt-audio" => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0025,
+            output_cost_per_1k_tokens: 0.010,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("gpt-audio-mini") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0006,
+            output_cost_per_1k_tokens: 0.0024,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("gpt-realtime-1.5") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.004,
+            output_cost_per_1k_tokens: 0.016,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("gpt-realtime-mini") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0006,
+            output_cost_per_1k_tokens: 0.0024,
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
@@ -411,6 +515,22 @@ fn get_anthropic_pricing(model: &str) -> Result<ModelPricing, CostError> {
             updated_at: Utc::now(),
             ..Default::default()
         },
+        m if m.contains("claude-opus-4-1") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.015,
+            output_cost_per_1k_tokens: 0.075,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("claude-opus-4") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.015,
+            output_cost_per_1k_tokens: 0.075,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
         m if m.contains("claude-sonnet-4-5") => ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.003,
@@ -436,6 +556,14 @@ fn get_anthropic_pricing(model: &str) -> Result<ModelPricing, CostError> {
             ..Default::default()
         },
         m if m.contains("claude-3-5-haiku") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.001,
+            output_cost_per_1k_tokens: 0.005,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        m if m.contains("claude-haiku-4-5") => ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.001,
             output_cost_per_1k_tokens: 0.005,
@@ -1329,6 +1457,36 @@ mod tests {
         assert!(result1.is_ok());
         assert!(result2.is_ok());
         assert!(result3.is_ok());
+    }
+
+    #[test]
+    fn test_new_openai_models_have_cost_pricing() {
+        let gpt54_pro = get_model_pricing("gpt-5.4-pro", "openai").unwrap();
+        assert_eq!(gpt54_pro.input_cost_per_1k_tokens, 0.030);
+        assert_eq!(gpt54_pro.output_cost_per_1k_tokens, 0.180);
+
+        let realtime = get_model_pricing("gpt-realtime-1.5", "openai").unwrap();
+        assert_eq!(realtime.input_cost_per_1k_tokens, 0.004);
+        assert_eq!(realtime.output_cost_per_1k_tokens, 0.016);
+
+        let deep_research = get_model_pricing("o3-deep-research", "openai").unwrap();
+        assert_eq!(deep_research.input_cost_per_1k_tokens, 0.010);
+        assert_eq!(deep_research.output_cost_per_1k_tokens, 0.040);
+    }
+
+    #[test]
+    fn test_new_anthropic_models_have_cost_pricing() {
+        let opus41 = get_model_pricing("claude-opus-4-1-20250805", "anthropic").unwrap();
+        assert_eq!(opus41.input_cost_per_1k_tokens, 0.015);
+        assert_eq!(opus41.output_cost_per_1k_tokens, 0.075);
+
+        let opus4 = get_model_pricing("claude-opus-4-20250514", "anthropic").unwrap();
+        assert_eq!(opus4.input_cost_per_1k_tokens, 0.015);
+        assert_eq!(opus4.output_cost_per_1k_tokens, 0.075);
+
+        let haiku45 = get_model_pricing("claude-haiku-4-5-20251001", "anthropic").unwrap();
+        assert_eq!(haiku45.input_cost_per_1k_tokens, 0.001);
+        assert_eq!(haiku45.output_cost_per_1k_tokens, 0.005);
     }
 
     #[test]
