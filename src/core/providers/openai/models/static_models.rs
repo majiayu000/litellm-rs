@@ -222,8 +222,8 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             OpenAIModelFamily::O3,
             200000,
             Some(100000),
-            0.005,
-            0.020,
+            0.01,
+            0.04,
         ),
         (
             "o3-pro",
@@ -259,8 +259,8 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             OpenAIModelFamily::O4Mini,
             200000,
             Some(100000),
-            0.0011,
-            0.0044,
+            0.002,
+            0.008,
         ),
         // ==================== GPT-5 Series (2025) ====================
         (
@@ -454,8 +454,8 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             OpenAIModelFamily::GPTAudio,
             128000,
             Some(16384),
-            0.004,
-            0.016,
+            0.0025,
+            0.010,
         ),
         (
             "gpt-realtime-1.5",

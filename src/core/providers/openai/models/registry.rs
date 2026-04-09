@@ -348,6 +348,11 @@ impl OpenAIModelRegistry {
                 metadata: HashMap::new(),
             };
 
+            // Deep-research models don't support developer-defined tool/function calling
+            if id.contains("deep-research") {
+                model_info.supports_tools = false;
+            }
+
             // Mark known deprecated/removed models
             if matches!(
                 id,
