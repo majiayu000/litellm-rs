@@ -149,16 +149,20 @@ pub fn lowest_latency_from_context<'id>(
         return None;
     }
 
-    let latencies: Vec<u64> = contexts
-        .iter()
-        .map(|ctx| ctx.avg_latency_us)
-        .filter(|&lat| lat > 0)
-        .collect();
-
-    let avg_latency = if latencies.is_empty() {
+    // New deployments report 0 latency until first success. Reuse the average
+    // observed latency as a fallback without allocating a temporary vector.
+    let mut non_zero_latency_sum = 0u64;
+    let mut non_zero_latency_count = 0u64;
+    for ctx in contexts {
+        if ctx.avg_latency_us > 0 {
+            non_zero_latency_sum = non_zero_latency_sum.saturating_add(ctx.avg_latency_us);
+            non_zero_latency_count += 1;
+        }
+    }
+    let avg_latency = if non_zero_latency_count == 0 {
         0
     } else {
-        latencies.iter().sum::<u64>() / latencies.len() as u64
+        non_zero_latency_sum / non_zero_latency_count
     };
 
     let mut best_id = contexts[0].deployment_id;
@@ -255,13 +259,18 @@ pub fn round_robin_from_context<'id>(
         return Some(contexts[0].deployment_id);
     }
 
-    // Get or create counter for this model
-    let counter = round_robin_counters
-        .entry(model_name.to_string())
-        .or_insert_with(|| AtomicUsize::new(0));
-
-    // Fetch and increment counter
-    let index = counter.fetch_add(1, Relaxed) % contexts.len();
+    // Fast path avoids allocating `model_name.to_string()` when the counter
+    // already exists (the common case in steady-state routing).
+    let candidate_count = contexts.len();
+    let index = if let Some(counter) = round_robin_counters.get(model_name) {
+        counter.fetch_add(1, Relaxed) % candidate_count
+    } else {
+        round_robin_counters
+            .entry(model_name.to_string())
+            .or_insert_with(|| AtomicUsize::new(0))
+            .fetch_add(1, Relaxed)
+            % candidate_count
+    };
 
     Some(contexts[index].deployment_id)
 }
