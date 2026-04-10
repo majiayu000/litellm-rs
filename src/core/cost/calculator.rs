@@ -835,9 +835,10 @@ fn get_zhipu_pricing(model: &str) -> Result<ModelPricing, CostError> {
             updated_at: Utc::now(),
             ..Default::default()
         }
-    } else if normalized_model.contains("glm-4.7-flash")
+    } else if (normalized_model.contains("glm-4.7-flash")
         || normalized_model.contains("glm-4.5-flash")
-        || normalized_model.contains("glm-4.6v-flash")
+        || normalized_model.contains("glm-4.6v-flash"))
+        && !normalized_model.contains("flashx")
     {
         // Free tier flash models
         ModelPricing {
