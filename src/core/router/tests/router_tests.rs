@@ -5,6 +5,7 @@ use crate::core::providers::openai::OpenAIProvider;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::deployment::Deployment;
 use crate::core::router::unified::Router;
+use crate::core::types::model::ProviderCapability;
 use std::sync::atomic::Ordering;
 
 async fn create_test_provider() -> Provider {
@@ -200,6 +201,33 @@ async fn test_get_healthy_deployments() {
 
     let healthy = router.get_healthy_deployments("gpt-4");
     assert_eq!(healthy.len(), 1);
+}
+
+#[tokio::test]
+async fn test_select_capability_deployment() {
+    let router = Router::default();
+    let deployment = create_test_deployment("test-1", "gpt-4").await;
+    router.add_deployment(deployment);
+
+    let selected = router
+        .select_capability_deployment("gpt-4", &ProviderCapability::ChatCompletion)
+        .expect("chat-capable deployment should exist");
+
+    assert_eq!(selected.deployment_id, "test-1");
+    assert_eq!(selected.model, "gpt-4-turbo");
+}
+
+#[tokio::test]
+async fn test_select_capability_deployment_with_alias() {
+    let router = Router::default();
+    router.add_deployment(create_test_deployment("test-1", "gpt-4").await);
+    router.add_model_alias("gpt4", "gpt-4").unwrap();
+
+    let selected = router
+        .select_capability_deployment("gpt4", &ProviderCapability::ChatCompletion)
+        .expect("alias should resolve to a chat-capable deployment");
+
+    assert_eq!(selected.deployment_id, "test-1");
 }
 
 #[tokio::test]

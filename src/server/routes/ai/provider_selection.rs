@@ -33,24 +33,13 @@ pub fn select_provider_for_optional_model<'a>(
     Ok((selection.provider, selection.model))
 }
 
-fn provider_supports_capability(provider: &Provider, capability: &ProviderCapability) -> bool {
-    provider.capabilities().iter().any(|cap| cap == capability)
-}
-
 fn select_provider_from_unified_router<'a>(
     router: &UnifiedRouter,
     model: &str,
     capability: ProviderCapability,
 ) -> Result<ProviderSelection<'a>, GatewayError> {
-    let deployment_id = router
-        .get_deployments_for_model(model)
-        .into_iter()
-        .find(|id| {
-            router
-                .get_deployment(id)
-                .map(|deployment| provider_supports_capability(&deployment.provider, &capability))
-                .unwrap_or(false)
-        })
+    let deployment = router
+        .select_capability_deployment(model, &capability)
         .ok_or_else(|| {
             GatewayError::validation(format!(
                 "Model '{}' does not support {:?}",
@@ -58,12 +47,8 @@ fn select_provider_from_unified_router<'a>(
             ))
         })?;
 
-    let deployment = router
-        .get_deployment(&deployment_id)
-        .ok_or_else(|| GatewayError::internal("Selected deployment not found"))?;
-
     Ok(ProviderSelection {
-        provider: Cow::Owned(deployment.provider.clone()),
-        model: deployment.model.clone(),
+        provider: Cow::Owned(deployment.provider),
+        model: deployment.model,
     })
 }

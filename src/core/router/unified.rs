@@ -8,7 +8,9 @@ use super::deployment::{Deployment, DeploymentId};
 use super::error::CooldownReason;
 use super::execution::infer_cooldown_reason;
 use super::fallback::{FallbackConfig, FallbackType};
+use crate::core::providers::Provider;
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::types::model::ProviderCapability;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use std::sync::Arc;
@@ -24,6 +26,14 @@ pub struct RoutingMetrics {
     pub strategy_used: u64,
     /// Total number of fallback model attempts in `execute`.
     pub fallback_triggered: u64,
+}
+
+/// Deployment snapshot for a capability-compatible model selection.
+#[derive(Debug, Clone)]
+pub struct CapabilityDeployment {
+    pub deployment_id: DeploymentId,
+    pub provider: Provider,
+    pub model: String,
 }
 
 /// Unified Router
@@ -247,6 +257,46 @@ impl Router {
         }
 
         healthy
+    }
+
+    /// Select the first deployment for `model_name` that supports `capability`.
+    ///
+    /// This is a core, transport-agnostic primitive used by HTTP routes and any
+    /// future lightweight AI executor that needs capability validation without
+    /// re-implementing router scans at the gateway layer.
+    pub fn select_capability_deployment(
+        &self,
+        model_name: &str,
+        capability: &ProviderCapability,
+    ) -> Option<CapabilityDeployment> {
+        let alias_guard = self.model_aliases.get(model_name);
+        let resolved_name = alias_guard
+            .as_ref()
+            .map(|alias| alias.value().as_str())
+            .unwrap_or(model_name);
+
+        let deployment_ids = self.model_index.get(resolved_name)?;
+
+        for id in deployment_ids.iter() {
+            let Some(deployment) = self.deployments.get(id.as_str()) else {
+                continue;
+            };
+
+            if deployment
+                .provider
+                .capabilities()
+                .iter()
+                .any(|cap| cap == capability)
+            {
+                return Some(CapabilityDeployment {
+                    deployment_id: id.clone(),
+                    provider: deployment.provider.clone(),
+                    model: deployment.model.clone(),
+                });
+            }
+        }
+
+        None
     }
 
     /// List all model names
