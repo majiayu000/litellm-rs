@@ -84,6 +84,7 @@ pub fn is_public_route(path: &str) -> bool {
     const PUBLIC_ROUTES: &[&str] = &[
         "/health",
         "/auth/login",
+        "/auth/login/callback",
         "/auth/register",
         "/auth/forgot-password",
         "/auth/reset-password",
@@ -92,9 +93,7 @@ pub fn is_public_route(path: &str) -> bool {
         "/openapi.json",
     ];
 
-    PUBLIC_ROUTES
-        .iter()
-        .any(|&route| path == route || path.starts_with(&format!("{route}/")))
+    PUBLIC_ROUTES.contains(&path)
 }
 
 /// Check if a route requires admin privileges
