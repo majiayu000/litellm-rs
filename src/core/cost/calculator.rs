@@ -808,11 +808,42 @@ fn get_zhipu_pricing(model: &str) -> Result<ModelPricing, CostError> {
             updated_at: Utc::now(),
             ..Default::default()
         }
+    } else if normalized_model.contains("glm-5.1") || normalized_model.contains("glm-5-1") {
+        ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0015,
+            output_cost_per_1k_tokens: 0.005,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        }
+    } else if normalized_model.contains("glm-5-turbo") || normalized_model.contains("glm-5v") {
+        ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0006,
+            output_cost_per_1k_tokens: 0.002,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        }
     } else if normalized_model.contains("glm-5") {
         ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.001,
             output_cost_per_1k_tokens: 0.0032,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        }
+    } else if normalized_model.contains("glm-4.7-flash")
+        || normalized_model.contains("glm-4.5-flash")
+        || normalized_model.contains("glm-4.6v-flash")
+    {
+        // Free tier flash models
+        ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.0,
+            output_cost_per_1k_tokens: 0.0,
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()

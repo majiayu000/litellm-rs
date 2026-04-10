@@ -923,6 +923,7 @@ impl AnthropicModelRegistry {
         self.register_alias("claude-opus-4-5", "claude-opus-4-5-20251101");
         self.register_alias("claude-opus-4-5-20251110", "claude-opus-4-5-20251101");
         self.register_alias("claude-opus-4-1", "claude-opus-4-1-20250805");
+        self.register_alias("claude-opus-4", "claude-opus-4-20250514");
         self.register_alias("claude-opus-4-0", "claude-opus-4-20250514");
         self.register_alias("claude-sonnet-4-6", "claude-sonnet-4-6-20251001");
         self.register_alias("claude-haiku-4-5", "claude-haiku-4-5-20251001");
