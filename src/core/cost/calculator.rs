@@ -820,8 +820,8 @@ fn get_zhipu_pricing(model: &str) -> Result<ModelPricing, CostError> {
     } else if normalized_model.contains("glm-5-turbo") || normalized_model.contains("glm-5v") {
         ModelPricing {
             model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0006,
-            output_cost_per_1k_tokens: 0.002,
+            input_cost_per_1k_tokens: 0.0012,
+            output_cost_per_1k_tokens: 0.004,
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
