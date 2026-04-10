@@ -14,7 +14,7 @@ use crate::core::types::model::ProviderCapability;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::time::Duration;
 
 /// Snapshot of routing metrics counters.
@@ -51,6 +51,12 @@ pub struct Router {
     /// Model name aliases: "gpt4" -> "gpt-4"
     pub(crate) model_aliases: DashMap<String, String>,
 
+    /// Fast-path gate for alias lookups in hot routing paths.
+    ///
+    /// Most deployments do not use aliases; this avoids an unnecessary DashMap
+    /// lookup when `model_aliases` is known to be empty.
+    pub(crate) has_model_aliases: AtomicBool,
+
     /// Router configuration
     pub(crate) config: RouterConfig,
 
@@ -77,6 +83,7 @@ impl Router {
             deployments: DashMap::new(),
             model_index: DashMap::new(),
             model_aliases: DashMap::new(),
+            has_model_aliases: AtomicBool::new(false),
             config,
             fallback_config: FallbackConfig::default(),
             round_robin_counters: DashMap::new(),
@@ -206,13 +213,22 @@ impl Router {
 
         self.model_aliases
             .insert(alias.to_string(), model_name.to_string());
+        self.has_model_aliases.store(true, Relaxed);
         Ok(())
+    }
+
+    #[inline]
+    pub(crate) fn maybe_model_alias<'a>(&'a self, name: &str) -> Option<Ref<'a, String, String>> {
+        if self.has_model_aliases.load(Relaxed) {
+            self.model_aliases.get(name)
+        } else {
+            None
+        }
     }
 
     /// Resolve a model name (handles aliases)
     pub fn resolve_model_name(&self, name: &str) -> String {
-        self.model_aliases
-            .get(name)
+        self.maybe_model_alias(name)
             .map(|v| v.clone())
             .unwrap_or_else(|| name.to_string())
     }
@@ -221,7 +237,7 @@ impl Router {
 
     /// Get all deployment IDs for a given model
     pub fn get_deployments_for_model(&self, model_name: &str) -> Vec<DeploymentId> {
-        let alias_guard = self.model_aliases.get(model_name);
+        let alias_guard = self.maybe_model_alias(model_name);
         let resolved_name = alias_guard
             .as_ref()
             .map(|alias| alias.value().as_str())
@@ -235,7 +251,7 @@ impl Router {
 
     /// Get healthy deployment IDs for a given model
     pub fn get_healthy_deployments(&self, model_name: &str) -> Vec<DeploymentId> {
-        let alias_guard = self.model_aliases.get(model_name);
+        let alias_guard = self.maybe_model_alias(model_name);
         let resolved_name = alias_guard
             .as_ref()
             .map(|alias| alias.value().as_str())
@@ -269,7 +285,7 @@ impl Router {
         model_name: &str,
         capability: &ProviderCapability,
     ) -> Option<CapabilityDeployment> {
-        let alias_guard = self.model_aliases.get(model_name);
+        let alias_guard = self.maybe_model_alias(model_name);
         let resolved_name = alias_guard
             .as_ref()
             .map(|alias| alias.value().as_str())

@@ -23,7 +23,7 @@ impl Router {
     pub fn select_deployment(&self, model_name: &str) -> Result<DeploymentId, RouterError> {
         // 1. Resolve model name with a borrowed fast path so the hot routing
         // path only allocates when we finally return the selected deployment ID.
-        let alias_guard = self.model_aliases.get(model_name);
+        let alias_guard = self.maybe_model_alias(model_name);
         let resolved_name = alias_guard
             .as_ref()
             .map(|alias| alias.value().as_str())
