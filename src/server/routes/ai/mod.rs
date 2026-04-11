@@ -8,6 +8,7 @@ mod batches;
 mod chat;
 mod context;
 mod embeddings;
+mod execution;
 mod images;
 mod models;
 mod provider_selection;

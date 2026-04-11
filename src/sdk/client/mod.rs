@@ -6,6 +6,7 @@
 mod completions;
 mod embeddings;
 mod llm_client;
+mod provider_payloads;
 mod routing;
 mod stats;
 mod types;

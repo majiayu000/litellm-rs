@@ -185,3 +185,4 @@ yarn.lock
 
 litellm/
 litellm-rs
+.omx/

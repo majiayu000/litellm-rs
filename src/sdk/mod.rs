@@ -3,14 +3,9 @@
 //! This module provides a simplified, unified interface for interacting with multiple LLM providers.
 //! It's built on top of the existing litellm-rs infrastructure but provides a more user-friendly API.
 
-pub mod cache;
+pub mod client;
 pub mod config;
 pub mod errors;
-pub mod middleware;
-pub mod monitoring;
-// pub mod providers; // Temporarily disabled
-// pub mod router; // Temporarily disabled
-pub mod client;
 pub mod types;
 
 // Re-exports for convenience

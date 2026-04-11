@@ -1,7 +1,6 @@
 //! Image generation endpoint
 
 use crate::core::models::openai::{ImageGenerationRequest, ImageGenerationResponse};
-use crate::core::providers::ProviderError;
 use crate::core::types::context::RequestContext;
 use crate::core::types::image::ImageGenerationRequest as CoreImageRequest;
 use crate::core::types::model::ProviderCapability;
@@ -11,6 +10,7 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use tracing::info;
 
 use super::context::handle_ai_request;
+use super::execution::execute_with_selected_deployment;
 use super::provider_selection::select_provider_for_optional_model;
 
 /// Image generation endpoint
@@ -47,12 +47,11 @@ async fn handle_image_generation_internal(
     request: ImageGenerationRequest,
     context: RequestContext,
 ) -> Result<ImageGenerationResponse, GatewayError> {
-    let (provider_hint, selected_model) = select_provider_for_optional_model(
+    let selected_model = select_provider_for_optional_model(
         unified_router,
         request.model.as_deref(),
         ProviderCapability::ImageGeneration,
     )?;
-    drop(provider_hint);
 
     let core_request = CoreImageRequest {
         prompt: request.prompt,
@@ -66,22 +65,13 @@ async fn handle_image_generation_internal(
     };
 
     let context_for_execution = context.clone();
-    let execution = unified_router
-        .execute_with_retry(&selected_model, move |deployment_id| {
+    let core_response = execute_with_selected_deployment(
+        unified_router,
+        &selected_model,
+        move |provider, selected_model| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             async move {
-                let deployment =
-                    unified_router
-                        .get_deployment(&deployment_id)
-                        .ok_or_else(|| {
-                            ProviderError::other("router", "Selected deployment not found")
-                        })?;
-
-                let provider = deployment.provider.clone();
-                let selected_model = deployment.model.clone();
-                drop(deployment);
-
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = Some(selected_model);
                 let response = provider
@@ -89,11 +79,9 @@ async fn handle_image_generation_internal(
                     .await?;
                 Ok((response, 0))
             }
-        })
-        .await
-        .map_err(|(e, _)| GatewayError::Provider(e))?;
-
-    let core_response = execution.0;
+        },
+    )
+    .await?;
 
     // Convert core response to OpenAI format
     let response = ImageGenerationResponse {

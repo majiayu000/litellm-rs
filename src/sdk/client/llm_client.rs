@@ -1,7 +1,8 @@
 //! Core LLM client implementation
 
 use super::types::{LoadBalancer, LoadBalancingStrategy, ProviderStats};
-use crate::sdk::{config::ClientConfig, errors::*};
+use crate::sdk::{config::ClientConfig, config::SdkProviderConfig, errors::*};
+use crate::utils::net::ClientUtils;
 use crate::utils::net::http::create_custom_client;
 use reqwest;
 use std::collections::HashMap;
@@ -84,6 +85,90 @@ impl LLMClient {
     /// Get configuration
     pub fn config(&self) -> &ClientConfig {
         &self.config
+    }
+
+    /// Find provider configuration by ID.
+    pub(crate) fn provider_config(&self, provider_id: &str) -> Result<&SdkProviderConfig> {
+        self.config
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .ok_or_else(|| SDKError::ProviderNotFound(provider_id.to_string()))
+    }
+
+    /// Return the configured default provider when it exists and is enabled.
+    pub(crate) fn default_enabled_provider(&self) -> Option<&SdkProviderConfig> {
+        self.config
+            .default_provider
+            .as_ref()
+            .and_then(|provider_id| self.provider_config(provider_id).ok())
+            .filter(|provider| provider.enabled)
+    }
+
+    /// Return the first enabled provider in config order.
+    pub(crate) fn first_enabled_provider(&self) -> Result<&SdkProviderConfig> {
+        self.config
+            .providers
+            .iter()
+            .find(|provider| provider.enabled)
+            .ok_or(SDKError::NoDefaultProvider)
+    }
+
+    /// Find the first enabled provider that explicitly supports `model`.
+    pub(crate) fn provider_for_model(&self, model: &str) -> Result<&SdkProviderConfig> {
+        self.config
+            .providers
+            .iter()
+            .find(|provider| {
+                provider.enabled && provider.models.iter().any(|candidate| candidate == model)
+            })
+            .ok_or_else(|| {
+                SDKError::ModelNotFound(format!("Model '{}' not supported by any provider", model))
+            })
+    }
+
+    /// Resolve the provider's default model without allocating a fallback `String`.
+    pub(crate) fn provider_default_model<'a>(
+        &self,
+        provider: &'a SdkProviderConfig,
+        fallback: &'a str,
+    ) -> &'a str {
+        provider
+            .models
+            .first()
+            .map(String::as_str)
+            .unwrap_or(fallback)
+    }
+
+    /// Resolve the provider's base URL without allocating a fallback `String`.
+    pub(crate) fn provider_base_url<'a>(
+        &self,
+        provider: &'a SdkProviderConfig,
+        fallback: &'a str,
+    ) -> &'a str {
+        provider.base_url.as_deref().unwrap_or(fallback)
+    }
+
+    /// Build a provider endpoint URL from its configured base URL.
+    pub(crate) fn provider_endpoint(
+        &self,
+        provider: &SdkProviderConfig,
+        fallback_base: &str,
+        endpoint: &str,
+    ) -> String {
+        ClientUtils::add_path_to_api_base(self.provider_base_url(provider, fallback_base), endpoint)
+    }
+
+    /// Build the Anthropic messages endpoint, avoiding duplicate `/v1` segments.
+    pub(crate) fn anthropic_messages_endpoint(&self, provider: &SdkProviderConfig) -> String {
+        let base_url = self.provider_base_url(provider, "https://api.anthropic.com");
+        let endpoint = if base_url.contains("/v1") {
+            "messages"
+        } else {
+            "v1/messages"
+        };
+
+        ClientUtils::add_path_to_api_base(base_url, endpoint)
     }
 
     /// Health check all providers
