@@ -56,13 +56,27 @@ impl LLMClient {
         let resolved_model = match model {
             Some(model) if model.contains('/') => model.to_string(),
             Some(model) => format!("{}/{}", provider_prefix, model),
-            None => format!(
-                "{}/{}",
-                provider_prefix,
-                self.provider_default_model(provider, "text-embedding-3-small")
-            ),
+            None => {
+                let default_model = provider.models.first().ok_or_else(|| {
+                    SDKError::NotSupported(format!(
+                        "Embedding requires an explicit embedding model for provider '{}'",
+                        provider.id
+                    ))
+                })?;
+                format!("{}/{}", provider_prefix, default_model)
+            }
         };
         let api_base = self.embedding_api_base(provider)?;
+
+        if model.is_none()
+            && matches!(provider.provider_type, ProviderType::OpenAI)
+            && !resolved_model.contains("embedding")
+        {
+            return Err(SDKError::NotSupported(format!(
+                "Embedding default model for provider '{}' must be an embedding model, got '{}'",
+                provider.id, resolved_model
+            )));
+        }
 
         let options = CoreEmbeddingOptions::new()
             .with_api_key(provider.api_key.clone())
@@ -74,8 +88,8 @@ impl LLMClient {
 
     fn embedding_provider(&self, model: Option<&str>) -> Result<&SdkProviderConfig> {
         if let Some(model) = model {
-            if let Some((prefix, _)) = model.split_once('/')
-                && let Some(provider) = self
+            if let Some((prefix, _)) = model.split_once('/') {
+                let provider = self
                     .default_enabled_provider()
                     .filter(|provider| provider.id == prefix)
                     .or_else(|| {
@@ -84,7 +98,7 @@ impl LLMClient {
                             .iter()
                             .find(|provider| provider.id == prefix && provider.enabled)
                     })
-            {
+                    .ok_or_else(|| SDKError::ProviderNotFound(prefix.to_string()))?;
                 self.ensure_embedding_supported(provider)?;
                 return Ok(provider);
             }
@@ -252,5 +266,41 @@ mod tests {
             options.api_base.as_deref(),
             Some("https://embeddings.example.com/v1")
         );
+    }
+
+    #[test]
+    fn test_prepare_embedding_request_rejects_unknown_provider_prefix() {
+        let config = ConfigBuilder::new()
+            .default_provider("openai")
+            .add_provider(test_provider_config(
+                "openai",
+                ProviderType::OpenAI,
+                "text-embedding-3-small",
+            ))
+            .build();
+
+        let client = LLMClient::new(config).unwrap();
+        let err = client
+            .prepare_embedding_request(Some("unknown/text-embedding-3-small"))
+            .unwrap_err();
+
+        assert!(matches!(err, SDKError::ProviderNotFound(ref provider) if provider == "unknown"));
+    }
+
+    #[test]
+    fn test_prepare_embedding_request_without_model_rejects_provider_without_embedding_model() {
+        let config = ConfigBuilder::new()
+            .default_provider("openai")
+            .add_provider(test_provider_config(
+                "openai",
+                ProviderType::OpenAI,
+                "gpt-5.2-chat",
+            ))
+            .build();
+
+        let client = LLMClient::new(config).unwrap();
+        let err = client.prepare_embedding_request(None).unwrap_err();
+
+        assert!(matches!(err, SDKError::NotSupported(_)));
     }
 }
