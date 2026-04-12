@@ -6,6 +6,7 @@ use crate::core::embedding::{
 };
 use crate::sdk::config::{ProviderType, SdkProviderConfig};
 use crate::sdk::errors::*;
+use crate::utils::net::ClientUtils;
 
 impl LLMClient {
     /// Generate embeddings for a single text via the core embedding path.
@@ -54,8 +55,7 @@ impl LLMClient {
         let provider = self.embedding_provider(model)?;
         let provider_prefix = self.embedding_provider_prefix(provider)?;
         let resolved_model = match model {
-            Some(model) if model.contains('/') => model.to_string(),
-            Some(model) => format!("{}/{}", provider_prefix, model),
+            Some(model) => self.qualify_embedding_model(model, provider, provider_prefix),
             None => {
                 let default_model = provider.models.first().ok_or_else(|| {
                     SDKError::NotSupported(format!(
@@ -63,14 +63,17 @@ impl LLMClient {
                         provider.id
                     ))
                 })?;
-                format!("{}/{}", provider_prefix, default_model)
+                self.qualify_embedding_model(default_model, provider, provider_prefix)
             }
         };
         let api_base = self.embedding_api_base(provider)?;
 
         if model.is_none()
-            && matches!(provider.provider_type, ProviderType::OpenAI)
-            && !resolved_model.contains("embedding")
+            && matches!(
+                provider.provider_type,
+                ProviderType::OpenAI | ProviderType::Azure
+            )
+            && !resolved_model.to_ascii_lowercase().contains("embedding")
         {
             return Err(SDKError::NotSupported(format!(
                 "Embedding default model for provider '{}' must be an embedding model, got '{}'",
@@ -91,12 +94,15 @@ impl LLMClient {
             if let Some((prefix, _)) = model.split_once('/') {
                 if let Some(provider) = self
                     .default_enabled_provider()
-                    .filter(|provider| provider.id == prefix)
+                    .filter(|provider| {
+                        self.embedding_prefix_matches_provider_for_model(prefix, provider)
+                    })
                     .or_else(|| {
-                        self.config
-                            .providers
-                            .iter()
-                            .find(|provider| provider.id == prefix && provider.enabled)
+                        self.config.providers.iter().find(|provider| {
+                            provider.enabled
+                                && self
+                                    .embedding_prefix_matches_provider_for_model(prefix, provider)
+                        })
                     })
                 {
                     self.ensure_embedding_supported(provider)?;
@@ -135,6 +141,45 @@ impl LLMClient {
         self.embedding_provider_prefix(provider).map(|_| ())
     }
 
+    fn qualify_embedding_model(
+        &self,
+        model: &str,
+        provider: &SdkProviderConfig,
+        provider_prefix: &str,
+    ) -> String {
+        if let Some((prefix, _)) = model.split_once('/')
+            && self.embedding_prefix_matches_provider(prefix, provider, provider_prefix)
+        {
+            return model.to_string();
+        }
+
+        format!("{}/{}", provider_prefix, model)
+    }
+
+    fn embedding_prefix_matches_provider_for_model(
+        &self,
+        prefix: &str,
+        provider: &SdkProviderConfig,
+    ) -> bool {
+        let Ok(provider_prefix) = self.embedding_provider_prefix(provider) else {
+            return false;
+        };
+
+        self.embedding_prefix_matches_provider(prefix, provider, provider_prefix)
+    }
+
+    fn embedding_prefix_matches_provider(
+        &self,
+        prefix: &str,
+        provider: &SdkProviderConfig,
+        provider_prefix: &str,
+    ) -> bool {
+        prefix == provider.id
+            || prefix == provider_prefix
+            || (matches!(provider.provider_type, ProviderType::Azure)
+                && matches!(prefix, "azure_ai" | "azure-ai"))
+    }
+
     fn embedding_provider_prefix<'a>(&self, provider: &'a SdkProviderConfig) -> Result<&'a str> {
         match &provider.provider_type {
             ProviderType::OpenAI => Ok("openai"),
@@ -149,9 +194,15 @@ impl LLMClient {
 
     fn embedding_api_base(&self, provider: &SdkProviderConfig) -> Result<String> {
         match &provider.provider_type {
-            ProviderType::OpenAI => Ok(self
-                .provider_base_url(provider, "https://api.openai.com/v1")
-                .to_string()),
+            ProviderType::OpenAI => {
+                let base_url = self.provider_base_url(provider, "https://api.openai.com");
+                let normalized = if base_url.contains("/v1") {
+                    base_url.trim_end_matches('/').to_string()
+                } else {
+                    ClientUtils::add_path_to_api_base(base_url, "v1")
+                };
+                Ok(normalized)
+            }
             ProviderType::Azure | ProviderType::Custom(_) => {
                 provider.base_url.clone().ok_or_else(|| {
                     SDKError::NotSupported(format!(
@@ -314,7 +365,7 @@ mod tests {
             .prepare_embedding_request(Some("google/text-embedding-004"))
             .unwrap();
 
-        assert_eq!(model, "google/text-embedding-004");
+        assert_eq!(model, "openrouter/google/text-embedding-004");
         assert_eq!(
             options.api_base.as_deref(),
             Some("https://openrouter.example.com/v1")
@@ -330,6 +381,49 @@ mod tests {
                 ProviderType::OpenAI,
                 "gpt-5.2-chat",
             ))
+            .build();
+
+        let client = LLMClient::new(config).unwrap();
+        let err = client.prepare_embedding_request(None).unwrap_err();
+
+        assert!(matches!(err, SDKError::NotSupported(_)));
+    }
+
+    #[test]
+    fn test_prepare_embedding_request_accepts_openai_prefixed_model_for_custom_provider_id() {
+        let config = ConfigBuilder::new()
+            .default_provider("primary-openai")
+            .add_provider(SdkProviderConfig {
+                id: "primary-openai".to_string(),
+                base_url: Some("https://api.openai.com".to_string()),
+                ..test_provider_config(
+                    "primary-openai",
+                    ProviderType::OpenAI,
+                    "text-embedding-3-small",
+                )
+            })
+            .build();
+
+        let client = LLMClient::new(config).unwrap();
+        let (model, options) = client
+            .prepare_embedding_request(Some("openai/text-embedding-3-large"))
+            .unwrap();
+
+        assert_eq!(model, "openai/text-embedding-3-large");
+        assert_eq!(
+            options.api_base.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+    }
+
+    #[test]
+    fn test_prepare_embedding_request_rejects_azure_non_embedding_default_model() {
+        let config = ConfigBuilder::new()
+            .default_provider("azure")
+            .add_provider(SdkProviderConfig {
+                base_url: Some("https://azure.example.com/openai/deployments/foo".to_string()),
+                ..test_provider_config("azure", ProviderType::Azure, "gpt-5.2-chat")
+            })
             .build();
 
         let client = LLMClient::new(config).unwrap();
