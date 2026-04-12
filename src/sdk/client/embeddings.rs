@@ -89,7 +89,7 @@ impl LLMClient {
     fn embedding_provider(&self, model: Option<&str>) -> Result<&SdkProviderConfig> {
         if let Some(model) = model {
             if let Some((prefix, _)) = model.split_once('/') {
-                let provider = self
+                if let Some(provider) = self
                     .default_enabled_provider()
                     .filter(|provider| provider.id == prefix)
                     .or_else(|| {
@@ -98,9 +98,17 @@ impl LLMClient {
                             .iter()
                             .find(|provider| provider.id == prefix && provider.enabled)
                     })
-                    .ok_or_else(|| SDKError::ProviderNotFound(prefix.to_string()))?;
-                self.ensure_embedding_supported(provider)?;
-                return Ok(provider);
+                {
+                    self.ensure_embedding_supported(provider)?;
+                    return Ok(provider);
+                }
+
+                if let Ok(provider) = self.provider_for_model(model) {
+                    self.ensure_embedding_supported(provider)?;
+                    return Ok(provider);
+                }
+
+                return Err(SDKError::ProviderNotFound(prefix.to_string()));
             }
 
             if let Ok(provider) = self.provider_for_model(model) {
@@ -285,6 +293,32 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, SDKError::ProviderNotFound(ref provider) if provider == "unknown"));
+    }
+
+    #[test]
+    fn test_prepare_embedding_request_supports_models_with_slashes_when_configured() {
+        let config = ConfigBuilder::new()
+            .default_provider("openrouter")
+            .add_provider(SdkProviderConfig {
+                base_url: Some("https://openrouter.example.com/v1".to_string()),
+                ..test_provider_config(
+                    "openrouter",
+                    ProviderType::Custom("openrouter".to_string()),
+                    "google/text-embedding-004",
+                )
+            })
+            .build();
+
+        let client = LLMClient::new(config).unwrap();
+        let (model, options) = client
+            .prepare_embedding_request(Some("google/text-embedding-004"))
+            .unwrap();
+
+        assert_eq!(model, "google/text-embedding-004");
+        assert_eq!(
+            options.api_base.as_deref(),
+            Some("https://openrouter.example.com/v1")
+        );
     }
 
     #[test]
