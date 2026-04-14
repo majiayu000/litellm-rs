@@ -265,10 +265,7 @@ impl LLMClient {
     }
 
     /// Convert content to Anthropic format
-    fn convert_content_to_anthropic(
-        &self,
-        content: Option<&Content>,
-    ) -> Result<serde_json::Value> {
+    fn convert_content_to_anthropic(&self, content: Option<&Content>) -> Result<serde_json::Value> {
         match content {
             Some(Content::Text(text)) => Ok(serde_json::json!(text)),
             Some(Content::Multimodal(parts)) => {
@@ -289,13 +286,12 @@ impl LLMClient {
                             // "data:image/png;name=foo;base64,..." or
                             // "data:image/svg+xml;charset=utf-8;base64,..."
                             if let Some(rest) = image_url.url.strip_prefix("data:") {
-                                let comma_pos =
-                                    rest.find(',').ok_or_else(|| {
-                                        SDKError::InvalidRequest(format!(
-                                            "malformed data URI (no comma separator): {}",
-                                            &image_url.url
-                                        ))
-                                    })?;
+                                let comma_pos = rest.find(',').ok_or_else(|| {
+                                    SDKError::InvalidRequest(format!(
+                                        "malformed data URI (no comma separator): {}",
+                                        &image_url.url
+                                    ))
+                                })?;
                                 let header = &rest[..comma_pos];
                                 let data = &rest[comma_pos + 1..];
                                 let mime = header
@@ -468,7 +464,9 @@ mod tests {
     fn test_malformed_data_uri_returns_error() {
         let client = make_client();
         let content = image_content("data:image/png;base64");
-        let err = client.convert_content_to_anthropic(Some(&content)).unwrap_err();
+        let err = client
+            .convert_content_to_anthropic(Some(&content))
+            .unwrap_err();
         assert!(matches!(err, SDKError::InvalidRequest(_)));
     }
 
@@ -476,7 +474,9 @@ mod tests {
     fn test_plain_url_returns_error() {
         let client = make_client();
         let content = image_content("https://example.com/image.png");
-        let err = client.convert_content_to_anthropic(Some(&content)).unwrap_err();
+        let err = client
+            .convert_content_to_anthropic(Some(&content))
+            .unwrap_err();
         assert!(matches!(err, SDKError::InvalidRequest(_)));
     }
 }
