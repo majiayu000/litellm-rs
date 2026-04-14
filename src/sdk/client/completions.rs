@@ -279,31 +279,41 @@ impl LLMClient {
                             }));
                         }
                         ContentPart::Image { image_url } => {
-                            // Parse data URI: "data:<mime>;base64,<data>"
-                            let (media_type, base64_data) = if let Some(rest) =
-                                image_url.url.strip_prefix("data:")
-                            {
-                                if let Some(semi) = rest.find(';') {
-                                    let mime = &rest[..semi];
-                                    let after_semi = &rest[semi + 1..];
-                                    let data =
-                                        after_semi.strip_prefix("base64,").unwrap_or(after_semi);
-                                    (mime.to_string(), data.to_string())
-                                } else {
-                                    ("image/jpeg".to_string(), rest.to_string())
+                            // Parse data URI: "data:<mime>[;<param>...];base64,<data>"
+                            // Split on the first comma to isolate the header from the payload,
+                            // then extract the MIME type from the header's first semicolon-delimited
+                            // segment. This correctly handles URIs with extra params such as
+                            // "data:image/png;name=foo;base64,..." or
+                            // "data:image/svg+xml;charset=utf-8;base64,..."
+                            if let Some(rest) = image_url.url.strip_prefix("data:") {
+                                if let Some(comma_pos) = rest.find(',') {
+                                    let header = &rest[..comma_pos];
+                                    let data = &rest[comma_pos + 1..];
+                                    let mime = header
+                                        .split(';')
+                                        .next()
+                                        .filter(|s| !s.is_empty())
+                                        .unwrap_or("image/jpeg");
+                                    anthropic_content.push(serde_json::json!({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": mime,
+                                            "data": data
+                                        }
+                                    }));
                                 }
+                                // Malformed data URI with no comma — skip silently
                             } else {
-                                // Not a data URI — pass through as-is with default type
-                                ("image/jpeg".to_string(), image_url.url.clone())
-                            };
-                            anthropic_content.push(serde_json::json!({
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": base64_data
-                                }
-                            }));
+                                // Plain URL — use Anthropic's URL source type
+                                anthropic_content.push(serde_json::json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "url",
+                                        "url": image_url.url
+                                    }
+                                }));
+                            }
                         }
                         _ => {} // Ignore other types
                     }
