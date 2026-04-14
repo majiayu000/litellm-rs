@@ -279,12 +279,29 @@ impl LLMClient {
                             }));
                         }
                         ContentPart::Image { image_url } => {
+                            // Parse data URI: "data:<mime>;base64,<data>"
+                            let (media_type, base64_data) = if let Some(rest) =
+                                image_url.url.strip_prefix("data:")
+                            {
+                                if let Some(semi) = rest.find(';') {
+                                    let mime = &rest[..semi];
+                                    let after_semi = &rest[semi + 1..];
+                                    let data =
+                                        after_semi.strip_prefix("base64,").unwrap_or(after_semi);
+                                    (mime.to_string(), data.to_string())
+                                } else {
+                                    ("image/jpeg".to_string(), rest.to_string())
+                                }
+                            } else {
+                                // Not a data URI — pass through as-is with default type
+                                ("image/jpeg".to_string(), image_url.url.clone())
+                            };
                             anthropic_content.push(serde_json::json!({
                                 "type": "image",
                                 "source": {
                                     "type": "base64",
-                                    "media_type": "image/jpeg",
-                                    "data": image_url.url.trim_start_matches("data:image/jpeg;base64,")
+                                    "media_type": media_type,
+                                    "data": base64_data
                                 }
                             }));
                         }
@@ -351,5 +368,85 @@ impl LLMClient {
                 .unwrap()
                 .as_secs(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sdk::{
+        config::{ClientConfig, ClientSettings, ProviderType, SdkProviderConfig},
+        types::{Content, ContentPart, ImageUrl},
+    };
+    use std::collections::HashMap;
+
+    fn make_client() -> LLMClient {
+        let config = ClientConfig {
+            default_provider: None,
+            providers: vec![SdkProviderConfig {
+                id: "test".to_string(),
+                provider_type: ProviderType::OpenAI,
+                name: "Test".to_string(),
+                api_key: "sk-test".to_string(),
+                base_url: None,
+                models: vec!["gpt-4o".to_string()],
+                enabled: true,
+                weight: 1.0,
+                rate_limit_rpm: None,
+                rate_limit_tpm: None,
+                settings: HashMap::new(),
+            }],
+            settings: ClientSettings::default(),
+        };
+        LLMClient::new(config).expect("client creation failed")
+    }
+
+    fn image_content(data_uri: &str) -> Content {
+        Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: data_uri.to_string(),
+                detail: None,
+            },
+        }])
+    }
+
+    #[test]
+    fn test_jpeg_data_uri() {
+        let client = make_client();
+        let content = image_content("data:image/jpeg;base64,/9j/abc123");
+        let val = client.convert_content_to_anthropic(Some(&content));
+        let source = &val[0]["source"];
+        assert_eq!(source["media_type"], "image/jpeg");
+        assert_eq!(source["data"], "/9j/abc123");
+    }
+
+    #[test]
+    fn test_png_data_uri() {
+        let client = make_client();
+        let content = image_content("data:image/png;base64,iVBORw==");
+        let val = client.convert_content_to_anthropic(Some(&content));
+        let source = &val[0]["source"];
+        assert_eq!(source["media_type"], "image/png");
+        assert_eq!(source["data"], "iVBORw==");
+    }
+
+    #[test]
+    fn test_webp_data_uri() {
+        let client = make_client();
+        let content = image_content("data:image/webp;base64,UklGR==");
+        let val = client.convert_content_to_anthropic(Some(&content));
+        let source = &val[0]["source"];
+        assert_eq!(source["media_type"], "image/webp");
+        assert_eq!(source["data"], "UklGR==");
+    }
+
+    #[test]
+    fn test_gif_data_uri() {
+        let client = make_client();
+        let content = image_content("data:image/gif;base64,R0lGOD==");
+        let val = client.convert_content_to_anthropic(Some(&content));
+        let source = &val[0]["source"];
+        assert_eq!(source["media_type"], "image/gif");
+        assert_eq!(source["data"], "R0lGOD==");
     }
 }
