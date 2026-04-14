@@ -102,7 +102,7 @@ impl LLMClient {
     ) -> Result<ChatResponse> {
         // Convert message format
         let (system_message, anthropic_messages) =
-            self.convert_messages_to_anthropic(&request.messages);
+            self.convert_messages_to_anthropic(&request.messages)?;
 
         // Build request body
         let mut body = serde_json::json!({
@@ -234,7 +234,7 @@ impl LLMClient {
     fn convert_messages_to_anthropic(
         &self,
         messages: &[Message],
-    ) -> (Option<String>, Vec<serde_json::Value>) {
+    ) -> Result<(Option<String>, Vec<serde_json::Value>)> {
         let mut system_message = None;
         let mut anthropic_messages = Vec::new();
 
@@ -248,26 +248,29 @@ impl LLMClient {
                 Role::User => {
                     anthropic_messages.push(serde_json::json!({
                         "role": "user",
-                        "content": self.convert_content_to_anthropic(message.content.as_ref())
+                        "content": self.convert_content_to_anthropic(message.content.as_ref())?
                     }));
                 }
                 Role::Assistant => {
                     anthropic_messages.push(serde_json::json!({
                         "role": "assistant",
-                        "content": self.convert_content_to_anthropic(message.content.as_ref())
+                        "content": self.convert_content_to_anthropic(message.content.as_ref())?
                     }));
                 }
                 _ => {} // Ignore other roles
             }
         }
 
-        (system_message, anthropic_messages)
+        Ok((system_message, anthropic_messages))
     }
 
     /// Convert content to Anthropic format
-    fn convert_content_to_anthropic(&self, content: Option<&Content>) -> serde_json::Value {
+    fn convert_content_to_anthropic(
+        &self,
+        content: Option<&Content>,
+    ) -> Result<serde_json::Value> {
         match content {
-            Some(Content::Text(text)) => serde_json::json!(text),
+            Some(Content::Text(text)) => Ok(serde_json::json!(text)),
             Some(Content::Multimodal(parts)) => {
                 let mut anthropic_content = Vec::new();
                 for part in parts {
@@ -286,41 +289,42 @@ impl LLMClient {
                             // "data:image/png;name=foo;base64,..." or
                             // "data:image/svg+xml;charset=utf-8;base64,..."
                             if let Some(rest) = image_url.url.strip_prefix("data:") {
-                                if let Some(comma_pos) = rest.find(',') {
-                                    let header = &rest[..comma_pos];
-                                    let data = &rest[comma_pos + 1..];
-                                    let mime = header
-                                        .split(';')
-                                        .next()
-                                        .filter(|s| !s.is_empty())
-                                        .unwrap_or("image/jpeg");
-                                    anthropic_content.push(serde_json::json!({
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": mime,
-                                            "data": data
-                                        }
-                                    }));
-                                }
-                                // Malformed data URI with no comma — skip silently
-                            } else {
-                                // Plain URL — use Anthropic's URL source type
+                                let comma_pos =
+                                    rest.find(',').ok_or_else(|| {
+                                        SDKError::InvalidRequest(format!(
+                                            "malformed data URI (no comma separator): {}",
+                                            &image_url.url
+                                        ))
+                                    })?;
+                                let header = &rest[..comma_pos];
+                                let data = &rest[comma_pos + 1..];
+                                let mime = header
+                                    .split(';')
+                                    .next()
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or("image/jpeg");
                                 anthropic_content.push(serde_json::json!({
                                     "type": "image",
                                     "source": {
-                                        "type": "url",
-                                        "url": image_url.url
+                                        "type": "base64",
+                                        "media_type": mime,
+                                        "data": data
                                     }
                                 }));
+                            } else {
+                                // Plain URLs are not supported for Anthropic image content;
+                                // the provider requires base64-encoded data URIs.
+                                return Err(SDKError::InvalidRequest(
+                                    "URL images are not supported for Anthropic; use a base64 data URI instead".to_string(),
+                                ));
                             }
                         }
                         _ => {} // Ignore other types
                     }
                 }
-                serde_json::json!(anthropic_content)
+                Ok(serde_json::json!(anthropic_content))
             }
-            None => serde_json::json!(""),
+            None => Ok(serde_json::json!("")),
         }
     }
 
@@ -424,7 +428,7 @@ mod tests {
     fn test_jpeg_data_uri() {
         let client = make_client();
         let content = image_content("data:image/jpeg;base64,/9j/abc123");
-        let val = client.convert_content_to_anthropic(Some(&content));
+        let val = client.convert_content_to_anthropic(Some(&content)).unwrap();
         let source = &val[0]["source"];
         assert_eq!(source["media_type"], "image/jpeg");
         assert_eq!(source["data"], "/9j/abc123");
@@ -434,7 +438,7 @@ mod tests {
     fn test_png_data_uri() {
         let client = make_client();
         let content = image_content("data:image/png;base64,iVBORw==");
-        let val = client.convert_content_to_anthropic(Some(&content));
+        let val = client.convert_content_to_anthropic(Some(&content)).unwrap();
         let source = &val[0]["source"];
         assert_eq!(source["media_type"], "image/png");
         assert_eq!(source["data"], "iVBORw==");
@@ -444,7 +448,7 @@ mod tests {
     fn test_webp_data_uri() {
         let client = make_client();
         let content = image_content("data:image/webp;base64,UklGR==");
-        let val = client.convert_content_to_anthropic(Some(&content));
+        let val = client.convert_content_to_anthropic(Some(&content)).unwrap();
         let source = &val[0]["source"];
         assert_eq!(source["media_type"], "image/webp");
         assert_eq!(source["data"], "UklGR==");
@@ -454,9 +458,25 @@ mod tests {
     fn test_gif_data_uri() {
         let client = make_client();
         let content = image_content("data:image/gif;base64,R0lGOD==");
-        let val = client.convert_content_to_anthropic(Some(&content));
+        let val = client.convert_content_to_anthropic(Some(&content)).unwrap();
         let source = &val[0]["source"];
         assert_eq!(source["media_type"], "image/gif");
         assert_eq!(source["data"], "R0lGOD==");
+    }
+
+    #[test]
+    fn test_malformed_data_uri_returns_error() {
+        let client = make_client();
+        let content = image_content("data:image/png;base64");
+        let err = client.convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_plain_url_returns_error() {
+        let client = make_client();
+        let content = image_content("https://example.com/image.png");
+        let err = client.convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
     }
 }
