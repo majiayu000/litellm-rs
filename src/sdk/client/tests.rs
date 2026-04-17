@@ -329,3 +329,115 @@ fn test_anthropic_messages_endpoint_avoids_duplicate_v1() {
         "https://api.anthropic.com/v1/messages"
     );
 }
+
+// ==================== Streaming Tests ====================
+
+#[tokio::test]
+async fn test_stream_unsupported_provider() {
+    let config = ConfigBuilder::new()
+        .add_provider(SdkProviderConfig {
+            id: "google-test".to_string(),
+            provider_type: ProviderType::Google,
+            name: "Google".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: None,
+            models: vec!["gemini-pro".to_string()],
+            enabled: true,
+            weight: 1.0,
+            rate_limit_rpm: Some(1000),
+            rate_limit_tpm: Some(10000),
+            settings: HashMap::new(),
+        })
+        .build();
+
+    let client = LLMClient::new(config).unwrap();
+    let result = client.execute_stream_request("google-test", vec![]).await;
+    assert!(matches!(result, Err(SDKError::NotSupported(_))));
+}
+
+#[tokio::test]
+async fn test_stream_provider_not_found() {
+    let config = ConfigBuilder::new()
+        .add_provider(SdkProviderConfig {
+            id: "openai-test".to_string(),
+            provider_type: ProviderType::OpenAI,
+            name: "OpenAI".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: None,
+            models: vec!["gpt-4".to_string()],
+            enabled: true,
+            weight: 1.0,
+            rate_limit_rpm: Some(1000),
+            rate_limit_tpm: Some(10000),
+            settings: HashMap::new(),
+        })
+        .build();
+
+    let client = LLMClient::new(config).unwrap();
+    let result = client.execute_stream_request("nonexistent", vec![]).await;
+    assert!(matches!(result, Err(SDKError::ProviderNotFound(_))));
+}
+
+#[test]
+fn test_parse_openai_sse_line_content() {
+    use super::completions::parse_openai_sse_line;
+
+    let line = r#"data: {"id":"chatcmpl-abc","model":"gpt-4","choices":[{"index":0,"delta":{"role":null,"content":"Hello","tool_calls":null},"finish_reason":null}]}"#;
+    let result = parse_openai_sse_line(line);
+    assert!(result.is_some());
+    let chunk = result.unwrap().unwrap();
+    assert_eq!(chunk.id, "chatcmpl-abc");
+    assert_eq!(chunk.model, "gpt-4");
+    assert_eq!(chunk.choices[0].delta.content, Some("Hello".to_string()));
+}
+
+#[test]
+fn test_parse_openai_sse_line_done() {
+    use super::completions::parse_openai_sse_line;
+
+    let result = parse_openai_sse_line("data: [DONE]");
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_parse_openai_sse_line_malformed() {
+    use super::completions::parse_openai_sse_line;
+
+    let result = parse_openai_sse_line("data: {not valid json}");
+    assert!(result.is_some());
+    assert!(matches!(result.unwrap(), Err(SDKError::ParseError(_))));
+}
+
+#[test]
+fn test_parse_anthropic_sse_record_delta() {
+    use super::completions::parse_anthropic_sse_record;
+
+    let data =
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+    let result = parse_anthropic_sse_record("content_block_delta", data);
+    assert!(result.is_some());
+    let chunk = result.unwrap().unwrap();
+    assert_eq!(chunk.choices[0].delta.content, Some("Hello".to_string()));
+}
+
+#[test]
+fn test_parse_anthropic_sse_record_stop() {
+    use super::completions::parse_anthropic_sse_record;
+
+    let result = parse_anthropic_sse_record("message_stop", r#"{"type":"message_stop"}"#);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_parse_anthropic_sse_record_ignored_events() {
+    use super::completions::parse_anthropic_sse_record;
+
+    let result = parse_anthropic_sse_record(
+        "message_start",
+        r#"{"type":"message_start","message":{"id":"msg_1","model":"claude-3"}}"#,
+    );
+    assert!(result.is_none());
+
+    let result = parse_anthropic_sse_record("ping", r#"{}"#);
+    assert!(result.is_none());
+}
