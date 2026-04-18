@@ -159,11 +159,7 @@ pub fn lowest_latency_from_context<'id>(
             non_zero_latency_count += 1;
         }
     }
-    let avg_latency = if non_zero_latency_count == 0 {
-        0
-    } else {
-        non_zero_latency_sum / non_zero_latency_count
-    };
+    let avg_latency = non_zero_latency_sum.checked_div(non_zero_latency_count).unwrap_or(0);
 
     let mut best_id = contexts[0].deployment_id;
     let mut best_latency = u64::MAX;

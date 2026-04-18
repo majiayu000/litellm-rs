@@ -198,10 +198,8 @@ pub fn redact_json_value(value: &mut Value, config: &RedactionConfig) {
                 redact_json_value(item, config);
             }
         }
-        Value::String(s) => {
-            if config.redact_by_pattern && looks_like_api_key(s) {
-                *value = Value::String(REDACTED.to_string());
-            }
+        Value::String(s) if config.redact_by_pattern && looks_like_api_key(s) => {
+            *value = Value::String(REDACTED.to_string());
         }
         _ => {}
     }

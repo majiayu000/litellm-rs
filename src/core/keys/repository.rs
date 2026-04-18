@@ -212,7 +212,7 @@ impl KeyRepository for InMemoryKeyRepository {
             .collect();
 
         // Sort by created_at descending
-        keys.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        keys.sort_by_key(|b| std::cmp::Reverse(b.created_at));
 
         // Apply pagination
         let offset = offset.unwrap_or(0);

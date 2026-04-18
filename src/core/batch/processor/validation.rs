@@ -50,19 +50,15 @@ impl BatchProcessor {
 
         // Validate URL matches batch type
         match batch_type {
-            BatchType::ChatCompletion => {
-                if !item.url.contains("/chat/completions") {
-                    return Err(GatewayError::BadRequest(
-                        "URL must be /v1/chat/completions for chat completion batches".to_string(),
-                    ));
-                }
+            BatchType::ChatCompletion if !item.url.contains("/chat/completions") => {
+                return Err(GatewayError::BadRequest(
+                    "URL must be /v1/chat/completions for chat completion batches".to_string(),
+                ));
             }
-            BatchType::Embedding => {
-                if !item.url.contains("/embeddings") {
-                    return Err(GatewayError::BadRequest(
-                        "URL must be /v1/embeddings for embedding batches".to_string(),
-                    ));
-                }
+            BatchType::Embedding if !item.url.contains("/embeddings") => {
+                return Err(GatewayError::BadRequest(
+                    "URL must be /v1/embeddings for embedding batches".to_string(),
+                ));
             }
             _ => {}
         }
