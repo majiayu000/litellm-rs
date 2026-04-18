@@ -142,7 +142,12 @@ pub(super) fn convert_content_to_anthropic(content: Option<&Content>) -> Result<
                             ));
                         }
                     }
-                    _ => {}
+                    ContentPart::Audio { .. } => {
+                        return Err(SDKError::InvalidRequest(
+                            "audio content parts are not supported by the Anthropic API"
+                                .to_string(),
+                        ));
+                    }
                 }
             }
             Ok(serde_json::json!(anthropic_content))
@@ -268,39 +273,32 @@ mod tests {
     }
 
     #[test]
-    fn test_multimodal_filters_audio_parts() {
+    fn test_multimodal_audio_part_returns_error() {
         let content = Content::Multimodal(vec![
             ContentPart::Text {
                 text: "hello".to_string(),
             },
-            ContentPart::Image {
-                image_url: ImageUrl {
-                    url: "data:image/jpeg;base64,YWJj".to_string(),
-                    detail: None,
-                },
-            },
             ContentPart::Audio {
                 audio: AudioData {
-                    data: "ignored".to_string(),
-                    format: None,
+                    data: "base64audiodata".to_string(),
+                    format: Some("mp3".to_string()),
                 },
             },
         ]);
-        let val = convert_content_to_anthropic(Some(&content)).unwrap();
-        assert_eq!(
-            val,
-            serde_json::json!([
-                { "type": "text", "text": "hello" },
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": "YWJj"
-                    }
-                }
-            ])
-        );
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_audio_only_multimodal_returns_error() {
+        let content = Content::Multimodal(vec![ContentPart::Audio {
+            audio: AudioData {
+                data: "base64audiodata".to_string(),
+                format: None,
+            },
+        }]);
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
     }
 
     #[test]
