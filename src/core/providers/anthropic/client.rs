@@ -425,8 +425,7 @@ impl AnthropicClient {
                                     // Handle
                                     if image_url.url.starts_with("data:") {
                                         // Base64 format image
-                                        let parts: Vec<&str> =
-                                            image_url.url.split(',').collect();
+                                        let parts: Vec<&str> = image_url.url.split(',').collect();
                                         if parts.len() == 2 {
                                             let media_type = parts[0]
                                                 .strip_prefix("data:")
