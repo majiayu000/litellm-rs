@@ -5,7 +5,7 @@ use super::llm_client::LLMClient;
 use crate::sdk::config::{ConfigBuilder, ProviderType, SdkProviderConfig};
 use crate::sdk::errors::SDKError;
 use crate::sdk::types::{
-    AudioData, ChatOptions, Content, ContentPart, ImageUrl, Message, Role, SdkChatRequest,
+    ChatOptions, Content, ContentPart, ImageUrl, Message, Role, SdkChatRequest,
 };
 use std::collections::HashMap;
 
@@ -294,43 +294,6 @@ async fn test_execute_chat_request_anthropic_malformed_data_uri_returns_invalid_
                 image_url: ImageUrl {
                     url: "data:image/png;base64,!!!invalid!!!".to_string(),
                     detail: None,
-                },
-            }])),
-            name: None,
-            tool_calls: None,
-        }],
-        options: ChatOptions::default(),
-    };
-
-    let err = client
-        .execute_chat_request("anthropic", request)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, SDKError::InvalidRequest(_)),
-        "expected InvalidRequest, got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn test_execute_chat_request_anthropic_audio_part_returns_invalid_request() {
-    let config = ConfigBuilder::new()
-        .add_provider(test_provider_config(
-            "anthropic",
-            ProviderType::Anthropic,
-            "claude-sonnet-4-5",
-        ))
-        .build();
-
-    let client = LLMClient::new(config).unwrap();
-    let request = SdkChatRequest {
-        model: String::new(),
-        messages: vec![Message {
-            role: Role::User,
-            content: Some(Content::Multimodal(vec![ContentPart::Audio {
-                audio: AudioData {
-                    data: "base64audiodata".to_string(),
-                    format: Some("mp3".to_string()),
                 },
             }])),
             name: None,

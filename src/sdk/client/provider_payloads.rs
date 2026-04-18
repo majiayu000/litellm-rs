@@ -76,18 +76,22 @@ pub(super) fn convert_messages_to_anthropic(
     Ok((system_message, anthropic_messages))
 }
 
+/// Anthropic vision accepts exactly these four raster types.
+const ANTHROPIC_IMAGE_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+
 /// Parse `data:<media_type>;base64,<data>` into `(media_type, base64_data)`.
 /// Returns `None` for plain URLs, non-base64 data URIs, or malformed data URIs.
-/// Requires the explicit `;base64,` marker and an `image/` MIME type.
-/// `data:text/plain;base64,…` and `data:image/png;charset=utf-8,…` both return `None`.
+/// Requires the explicit `;base64,` marker and a MIME type in `ANTHROPIC_IMAGE_TYPES`.
+/// `data:text/plain;base64,…`, `data:image/svg+xml;base64,…`, and
+/// `data:image/png;charset=utf-8,…` all return `None`.
 fn parse_data_uri(url: &str) -> Option<(&str, &str)> {
     let rest = url.strip_prefix("data:")?;
     // Split on the explicit ";base64," marker so non-base64 params are rejected.
     let (header, data) = rest.split_once(";base64,")?;
     // Strip any trailing media-type parameters (e.g. `image/png;charset=utf-8` → `image/png`).
     let media_type = header.split(';').next().filter(|s| !s.is_empty())?;
-    // Only image/* is a valid Anthropic image source type.
-    if !media_type.starts_with("image/") {
+    // Only Anthropic's raster whitelist is valid.
+    if !ANTHROPIC_IMAGE_TYPES.contains(&media_type) {
         return None;
     }
     // Reject empty payloads or payloads that fail strict base64 decoding.
@@ -142,12 +146,7 @@ pub(super) fn convert_content_to_anthropic(content: Option<&Content>) -> Result<
                             ));
                         }
                     }
-                    ContentPart::Audio { .. } => {
-                        return Err(SDKError::InvalidRequest(
-                            "audio content parts are not supported by the Anthropic API"
-                                .to_string(),
-                        ));
-                    }
+                    _ => {}
                 }
             }
             Ok(serde_json::json!(anthropic_content))
@@ -273,7 +272,8 @@ mod tests {
     }
 
     #[test]
-    fn test_multimodal_audio_part_returns_error() {
+    fn test_multimodal_audio_part_is_filtered() {
+        // Audio parts are silently dropped; only the text part survives.
         let content = Content::Multimodal(vec![
             ContentPart::Text {
                 text: "hello".to_string(),
@@ -285,20 +285,24 @@ mod tests {
                 },
             },
         ]);
-        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
-        assert!(matches!(err, SDKError::InvalidRequest(_)));
+        let val = convert_content_to_anthropic(Some(&content)).unwrap();
+        assert_eq!(
+            val,
+            serde_json::json!([{ "type": "text", "text": "hello" }])
+        );
     }
 
     #[test]
-    fn test_audio_only_multimodal_returns_error() {
+    fn test_audio_only_multimodal_yields_empty_array() {
+        // Audio-only content produces an empty parts array (same as the core Anthropic provider).
         let content = Content::Multimodal(vec![ContentPart::Audio {
             audio: AudioData {
                 data: "base64audiodata".to_string(),
                 format: None,
             },
         }]);
-        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
-        assert!(matches!(err, SDKError::InvalidRequest(_)));
+        let val = convert_content_to_anthropic(Some(&content)).unwrap();
+        assert_eq!(val, serde_json::json!([]));
     }
 
     #[test]
@@ -402,6 +406,27 @@ mod tests {
     fn test_parse_data_uri_non_image_mime_returns_none() {
         assert!(parse_data_uri("data:text/plain;base64,SGVsbG8=").is_none());
         assert!(parse_data_uri("data:application/pdf;base64,SGVsbG8=").is_none());
+    }
+
+    #[test]
+    fn test_parse_data_uri_unsupported_image_subtype_returns_none() {
+        // Non-whitelisted image/* subtypes must also be rejected locally.
+        assert!(parse_data_uri("data:image/svg+xml;base64,SGVsbG8=").is_none());
+        assert!(parse_data_uri("data:image/bmp;base64,SGVsbG8=").is_none());
+        assert!(parse_data_uri("data:image/tiff;base64,SGVsbG8=").is_none());
+    }
+
+    #[test]
+    fn test_unsupported_image_subtype_returns_error() {
+        // svg+xml passes `starts_with("image/")` but must be caught by the whitelist.
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/svg+xml;base64,SGVsbG8=".to_string(),
+                detail: None,
+            },
+        }]);
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
     }
 
     #[test]
