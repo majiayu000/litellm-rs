@@ -84,14 +84,17 @@ const ANTHROPIC_IMAGE_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif",
 /// Requires the explicit `;base64,` marker and a MIME type in `ANTHROPIC_IMAGE_TYPES`.
 /// `data:text/plain;base64,…`, `data:image/svg+xml;base64,…`, and
 /// `data:image/png;charset=utf-8,…` all return `None`.
-fn parse_data_uri(url: &str) -> Option<(&str, &str)> {
+/// The returned media type is normalized to ASCII lowercase per RFC 2045.
+fn parse_data_uri(url: &str) -> Option<(String, &str)> {
     let rest = url.strip_prefix("data:")?;
     // Split on the explicit ";base64," marker so non-base64 params are rejected.
     let (header, data) = rest.split_once(";base64,")?;
     // Strip any trailing media-type parameters (e.g. `image/png;charset=utf-8` → `image/png`).
     let media_type = header.split(';').next().filter(|s| !s.is_empty())?;
+    // Normalize to lowercase — MIME types are case-insensitive per RFC 2045.
+    let normalized = media_type.to_ascii_lowercase();
     // Only Anthropic's raster whitelist is valid.
-    if !ANTHROPIC_IMAGE_TYPES.contains(&media_type) {
+    if !ANTHROPIC_IMAGE_TYPES.contains(&normalized.as_str()) {
         return None;
     }
     // Reject empty payloads or payloads that fail strict base64 decoding.
@@ -101,7 +104,7 @@ fn parse_data_uri(url: &str) -> Option<(&str, &str)> {
     base64::engine::general_purpose::STANDARD
         .decode(data)
         .ok()?;
-    Some((media_type, data))
+    Some((normalized, data))
 }
 
 /// Convert content to Anthropic format.
@@ -146,7 +149,12 @@ pub(super) fn convert_content_to_anthropic(content: Option<&Content>) -> Result<
                             ));
                         }
                     }
-                    _ => {}
+                    ContentPart::Audio { .. } => {
+                        return Err(SDKError::InvalidRequest(
+                            "audio content is not supported by the Anthropic messages API"
+                                .to_string(),
+                        ));
+                    }
                 }
             }
             Ok(serde_json::json!(anthropic_content))
@@ -272,8 +280,8 @@ mod tests {
     }
 
     #[test]
-    fn test_multimodal_audio_part_is_filtered() {
-        // Audio parts are silently dropped; only the text part survives.
+    fn test_multimodal_audio_part_returns_error() {
+        // Audio parts are not supported by the Anthropic messages API.
         let content = Content::Multimodal(vec![
             ContentPart::Text {
                 text: "hello".to_string(),
@@ -285,24 +293,21 @@ mod tests {
                 },
             },
         ]);
-        let val = convert_content_to_anthropic(Some(&content)).unwrap();
-        assert_eq!(
-            val,
-            serde_json::json!([{ "type": "text", "text": "hello" }])
-        );
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
     }
 
     #[test]
-    fn test_audio_only_multimodal_yields_empty_array() {
-        // Audio-only content produces an empty parts array (same as the core Anthropic provider).
+    fn test_audio_only_multimodal_returns_error() {
+        // Audio-only content is not supported by the Anthropic messages API.
         let content = Content::Multimodal(vec![ContentPart::Audio {
             audio: AudioData {
                 data: "base64audiodata".to_string(),
                 format: None,
             },
         }]);
-        let val = convert_content_to_anthropic(Some(&content)).unwrap();
-        assert_eq!(val, serde_json::json!([]));
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
     }
 
     #[test]
@@ -406,6 +411,34 @@ mod tests {
     fn test_parse_data_uri_non_image_mime_returns_none() {
         assert!(parse_data_uri("data:text/plain;base64,SGVsbG8=").is_none());
         assert!(parse_data_uri("data:application/pdf;base64,SGVsbG8=").is_none());
+    }
+
+    #[test]
+    fn test_parse_data_uri_case_insensitive_mime() {
+        // RFC 2045: MIME types are case-insensitive; normalized to lowercase on return.
+        let (mt, data) = parse_data_uri("data:IMAGE/PNG;base64,iVBORw==").unwrap();
+        assert_eq!(mt, "image/png");
+        assert_eq!(data, "iVBORw==");
+
+        let (mt, _) = parse_data_uri("data:Image/WebP;base64,UklGRg==").unwrap();
+        assert_eq!(mt, "image/webp");
+
+        let (mt, _) = parse_data_uri("data:IMAGE/JPEG;base64,/9j/4AAQ").unwrap();
+        assert_eq!(mt, "image/jpeg");
+    }
+
+    #[test]
+    fn test_convert_content_uppercase_mime_accepted() {
+        // case-insensitive MIME: IMAGE/PNG should be accepted and normalized.
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:IMAGE/PNG;base64,iVBORw==".to_string(),
+                detail: None,
+            },
+        }]);
+        let val = convert_content_to_anthropic(Some(&content)).unwrap();
+        assert_eq!(val[0]["source"]["media_type"], "image/png");
+        assert_eq!(val[0]["source"]["data"], "iVBORw==");
     }
 
     #[test]
