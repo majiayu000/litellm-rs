@@ -1,13 +1,13 @@
 //! Provider-specific request/response payload helpers for the SDK client.
 
-use crate::sdk::{errors::Result, types::*};
+use crate::sdk::{errors::*, types::*};
 use std::time::SystemTime;
 
 pub(super) fn build_anthropic_request_body(
     request: &SdkChatRequest,
     model: &str,
-) -> serde_json::Value {
-    let (system_message, anthropic_messages) = convert_messages_to_anthropic(&request.messages);
+) -> Result<serde_json::Value> {
+    let (system_message, anthropic_messages) = convert_messages_to_anthropic(&request.messages)?;
 
     let mut body = serde_json::json!({
         "model": model,
@@ -27,7 +27,7 @@ pub(super) fn build_anthropic_request_body(
         body["top_p"] = serde_json::json!(top_p);
     }
 
-    body
+    Ok(body)
 }
 
 pub(super) fn build_openai_request_body(
@@ -45,7 +45,7 @@ pub(super) fn build_openai_request_body(
 
 pub(super) fn convert_messages_to_anthropic(
     messages: &[Message],
-) -> (Option<String>, Vec<serde_json::Value>) {
+) -> Result<(Option<String>, Vec<serde_json::Value>)> {
     let mut system_message = None;
     let mut anthropic_messages = Vec::new();
 
@@ -59,25 +59,48 @@ pub(super) fn convert_messages_to_anthropic(
             Role::User => {
                 anthropic_messages.push(serde_json::json!({
                     "role": "user",
-                    "content": convert_content_to_anthropic(message.content.as_ref())
+                    "content": convert_content_to_anthropic(message.content.as_ref())?
                 }));
             }
             Role::Assistant => {
                 anthropic_messages.push(serde_json::json!({
                     "role": "assistant",
-                    "content": convert_content_to_anthropic(message.content.as_ref())
+                    "content": convert_content_to_anthropic(message.content.as_ref())?
                 }));
             }
             _ => {}
         }
     }
 
-    (system_message, anthropic_messages)
+    Ok((system_message, anthropic_messages))
 }
 
-pub(super) fn convert_content_to_anthropic(content: Option<&Content>) -> serde_json::Value {
+/// Parse `data:<media_type>;base64,<data>` into `(media_type, base64_data)`.
+/// Returns `None` for plain URLs, non-base64 data URIs, or malformed data URIs.
+/// Requires the explicit `;base64,` marker — `data:image/png;charset=utf-8,…` returns `None`.
+fn parse_data_uri(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("data:")?;
+    // Split on the explicit ";base64," marker so non-base64 params are rejected.
+    let (header, data) = rest.split_once(";base64,")?;
+    // Strip any trailing media-type parameters (e.g. `image/png;charset=utf-8` → `image/png`).
+    let media_type = header.split(';').next().filter(|s| !s.is_empty())?;
+    // Reject empty payloads and payloads with characters outside the base64 alphabet.
+    if data.is_empty()
+        || !data
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+    {
+        return None;
+    }
+    Some((media_type, data))
+}
+
+/// Convert content to Anthropic format.
+/// Returns `Err(SDKError::InvalidRequest)` for URL images, non-base64 data URIs, or
+/// data URIs that lack the `;base64,` marker.
+pub(super) fn convert_content_to_anthropic(content: Option<&Content>) -> Result<serde_json::Value> {
     match content {
-        Some(Content::Text(text)) => serde_json::json!(text),
+        Some(Content::Text(text)) => Ok(serde_json::json!(text)),
         Some(Content::Multimodal(parts)) => {
             let mut anthropic_content = Vec::new();
             for part in parts {
@@ -89,21 +112,37 @@ pub(super) fn convert_content_to_anthropic(content: Option<&Content>) -> serde_j
                         }));
                     }
                     ContentPart::Image { image_url } => {
-                        anthropic_content.push(serde_json::json!({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": image_url.url.trim_start_matches("data:image/jpeg;base64,")
+                        let url = &image_url.url;
+                        if url.starts_with("data:") {
+                            match parse_data_uri(url) {
+                                Some((media_type, data)) => {
+                                    anthropic_content.push(serde_json::json!({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": media_type,
+                                            "data": data
+                                        }
+                                    }));
+                                }
+                                None => {
+                                    return Err(SDKError::InvalidRequest(
+                                        "data URI must use ';base64,' encoding with a valid, non-empty base64 payload".to_string(),
+                                    ));
+                                }
                             }
-                        }));
+                        } else {
+                            return Err(SDKError::InvalidRequest(
+                                "URL images are not supported for Anthropic; use a base64 data URI instead".to_string(),
+                            ));
+                        }
                     }
                     _ => {}
                 }
             }
-            serde_json::json!(anthropic_content)
+            Ok(serde_json::json!(anthropic_content))
         }
-        None => serde_json::json!(""),
+        None => Ok(serde_json::json!("")),
     }
 }
 
@@ -166,14 +205,66 @@ mod tests {
 
     #[test]
     fn test_convert_content_to_anthropic_text() {
-        let converted = convert_content_to_anthropic(Some(&Content::Text("hello".to_string())));
-
+        let converted =
+            convert_content_to_anthropic(Some(&Content::Text("hello".to_string()))).unwrap();
         assert_eq!(converted, serde_json::json!("hello"));
     }
 
     #[test]
-    fn test_convert_content_to_anthropic_multimodal_filters_supported_parts() {
-        let converted = convert_content_to_anthropic(Some(&Content::Multimodal(vec![
+    fn test_jpeg_data_uri() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/jpeg;base64,/9j/abc123".to_string(),
+                detail: None,
+            },
+        }]);
+        let val = convert_content_to_anthropic(Some(&content)).unwrap();
+        assert_eq!(val[0]["source"]["media_type"], "image/jpeg");
+        assert_eq!(val[0]["source"]["data"], "/9j/abc123");
+    }
+
+    #[test]
+    fn test_png_data_uri() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/png;base64,iVBORw==".to_string(),
+                detail: None,
+            },
+        }]);
+        let val = convert_content_to_anthropic(Some(&content)).unwrap();
+        assert_eq!(val[0]["source"]["media_type"], "image/png");
+        assert_eq!(val[0]["source"]["data"], "iVBORw==");
+    }
+
+    #[test]
+    fn test_webp_data_uri() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/webp;base64,UklGR==".to_string(),
+                detail: None,
+            },
+        }]);
+        let val = convert_content_to_anthropic(Some(&content)).unwrap();
+        assert_eq!(val[0]["source"]["media_type"], "image/webp");
+        assert_eq!(val[0]["source"]["data"], "UklGR==");
+    }
+
+    #[test]
+    fn test_gif_data_uri() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/gif;base64,R0lGOD==".to_string(),
+                detail: None,
+            },
+        }]);
+        let val = convert_content_to_anthropic(Some(&content)).unwrap();
+        assert_eq!(val[0]["source"]["media_type"], "image/gif");
+        assert_eq!(val[0]["source"]["data"], "R0lGOD==");
+    }
+
+    #[test]
+    fn test_multimodal_filters_audio_parts() {
+        let content = Content::Multimodal(vec![
             ContentPart::Text {
                 text: "hello".to_string(),
             },
@@ -189,10 +280,10 @@ mod tests {
                     format: None,
                 },
             },
-        ])));
-
+        ]);
+        let val = convert_content_to_anthropic(Some(&content)).unwrap();
         assert_eq!(
-            converted,
+            val,
             serde_json::json!([
                 { "type": "text", "text": "hello" },
                 {
@@ -205,6 +296,103 @@ mod tests {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn test_malformed_data_uri_returns_error() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/png;base64".to_string(),
+                detail: None,
+            },
+        }]);
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_plain_url_returns_error() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "https://example.com/image.png".to_string(),
+                detail: None,
+            },
+        }]);
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_non_base64_charset_param_returns_error() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/png;charset=utf-8,abc".to_string(),
+                detail: None,
+            },
+        }]);
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_invalid_base64_payload_returns_error() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/png;base64,invalid!!!".to_string(),
+                detail: None,
+            },
+        }]);
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_empty_base64_payload_returns_error() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:image/png;base64,".to_string(),
+                detail: None,
+            },
+        }]);
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_parse_data_uri_jpeg() {
+        let (mt, data) = parse_data_uri("data:image/jpeg;base64,/9j/abc").unwrap();
+        assert_eq!(mt, "image/jpeg");
+        assert_eq!(data, "/9j/abc");
+    }
+
+    #[test]
+    fn test_parse_data_uri_plain_url_returns_none() {
+        assert!(parse_data_uri("https://example.com/image.png").is_none());
+    }
+
+    #[test]
+    fn test_parse_data_uri_with_media_type_params() {
+        let (mt, data) = parse_data_uri("data:image/png;charset=utf-8;base64,iVBOR").unwrap();
+        assert_eq!(mt, "image/png");
+        assert_eq!(data, "iVBOR");
+    }
+
+    #[test]
+    fn test_parse_data_uri_non_base64_returns_none() {
+        assert!(parse_data_uri("data:image/png;charset=utf-8,abc").is_none());
+        assert!(parse_data_uri("data:image/png;name=foo,abc").is_none());
+        assert!(parse_data_uri("data:image/png,abc").is_none());
+    }
+
+    #[test]
+    fn test_parse_data_uri_empty_payload_returns_none() {
+        assert!(parse_data_uri("data:image/png;base64,").is_none());
+    }
+
+    #[test]
+    fn test_parse_data_uri_invalid_base64_chars_returns_none() {
+        assert!(parse_data_uri("data:image/png;base64,invalid!!!").is_none());
+        assert!(parse_data_uri("data:image/png;base64,abc def").is_none());
     }
 
     #[test]
@@ -261,7 +449,7 @@ mod tests {
             },
         };
 
-        let body = build_anthropic_request_body(&request, "claude-sonnet-4-5");
+        let body = build_anthropic_request_body(&request, "claude-sonnet-4-5").unwrap();
 
         assert_eq!(body["model"], "claude-sonnet-4-5");
         assert_eq!(body["system"], "system prompt");

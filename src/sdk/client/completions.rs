@@ -115,7 +115,7 @@ impl LLMClient {
         request: SdkChatRequest,
     ) -> Result<ChatResponse> {
         let model = self.provider_default_model(provider, "claude-sonnet-4-5");
-        let body = build_anthropic_request_body(&request, model);
+        let body = build_anthropic_request_body(&request, model)?;
         let url = self.anthropic_messages_endpoint(provider);
 
         debug!("Calling Anthropic API: {}", url);
