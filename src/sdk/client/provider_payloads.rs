@@ -1,6 +1,7 @@
 //! Provider-specific request/response payload helpers for the SDK client.
 
 use crate::sdk::{errors::*, types::*};
+use base64::Engine as _;
 use std::time::SystemTime;
 
 pub(super) fn build_anthropic_request_body(
@@ -77,21 +78,25 @@ pub(super) fn convert_messages_to_anthropic(
 
 /// Parse `data:<media_type>;base64,<data>` into `(media_type, base64_data)`.
 /// Returns `None` for plain URLs, non-base64 data URIs, or malformed data URIs.
-/// Requires the explicit `;base64,` marker — `data:image/png;charset=utf-8,…` returns `None`.
+/// Requires the explicit `;base64,` marker and an `image/` MIME type.
+/// `data:text/plain;base64,…` and `data:image/png;charset=utf-8,…` both return `None`.
 fn parse_data_uri(url: &str) -> Option<(&str, &str)> {
     let rest = url.strip_prefix("data:")?;
     // Split on the explicit ";base64," marker so non-base64 params are rejected.
     let (header, data) = rest.split_once(";base64,")?;
     // Strip any trailing media-type parameters (e.g. `image/png;charset=utf-8` → `image/png`).
     let media_type = header.split(';').next().filter(|s| !s.is_empty())?;
-    // Reject empty payloads and payloads with characters outside the base64 alphabet.
-    if data.is_empty()
-        || !data
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
-    {
+    // Only image/* is a valid Anthropic image source type.
+    if !media_type.starts_with("image/") {
         return None;
     }
+    // Reject empty payloads or payloads that fail strict base64 decoding.
+    if data.is_empty() {
+        return None;
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
     Some((media_type, data))
 }
 
@@ -214,13 +219,13 @@ mod tests {
     fn test_jpeg_data_uri() {
         let content = Content::Multimodal(vec![ContentPart::Image {
             image_url: ImageUrl {
-                url: "data:image/jpeg;base64,/9j/abc123".to_string(),
+                url: "data:image/jpeg;base64,/9j/4AAQ".to_string(),
                 detail: None,
             },
         }]);
         let val = convert_content_to_anthropic(Some(&content)).unwrap();
         assert_eq!(val[0]["source"]["media_type"], "image/jpeg");
-        assert_eq!(val[0]["source"]["data"], "/9j/abc123");
+        assert_eq!(val[0]["source"]["data"], "/9j/4AAQ");
     }
 
     #[test]
@@ -240,26 +245,26 @@ mod tests {
     fn test_webp_data_uri() {
         let content = Content::Multimodal(vec![ContentPart::Image {
             image_url: ImageUrl {
-                url: "data:image/webp;base64,UklGR==".to_string(),
+                url: "data:image/webp;base64,UklGRg==".to_string(),
                 detail: None,
             },
         }]);
         let val = convert_content_to_anthropic(Some(&content)).unwrap();
         assert_eq!(val[0]["source"]["media_type"], "image/webp");
-        assert_eq!(val[0]["source"]["data"], "UklGR==");
+        assert_eq!(val[0]["source"]["data"], "UklGRg==");
     }
 
     #[test]
     fn test_gif_data_uri() {
         let content = Content::Multimodal(vec![ContentPart::Image {
             image_url: ImageUrl {
-                url: "data:image/gif;base64,R0lGOD==".to_string(),
+                url: "data:image/gif;base64,R0lGODlh".to_string(),
                 detail: None,
             },
         }]);
         let val = convert_content_to_anthropic(Some(&content)).unwrap();
         assert_eq!(val[0]["source"]["media_type"], "image/gif");
-        assert_eq!(val[0]["source"]["data"], "R0lGOD==");
+        assert_eq!(val[0]["source"]["data"], "R0lGODlh");
     }
 
     #[test]
@@ -270,7 +275,7 @@ mod tests {
             },
             ContentPart::Image {
                 image_url: ImageUrl {
-                    url: "data:image/jpeg;base64,abc123".to_string(),
+                    url: "data:image/jpeg;base64,YWJj".to_string(),
                     detail: None,
                 },
             },
@@ -291,7 +296,7 @@ mod tests {
                     "source": {
                         "type": "base64",
                         "media_type": "image/jpeg",
-                        "data": "abc123"
+                        "data": "YWJj"
                     }
                 }
             ])
@@ -360,9 +365,9 @@ mod tests {
 
     #[test]
     fn test_parse_data_uri_jpeg() {
-        let (mt, data) = parse_data_uri("data:image/jpeg;base64,/9j/abc").unwrap();
+        let (mt, data) = parse_data_uri("data:image/jpeg;base64,/9j/4AAQ").unwrap();
         assert_eq!(mt, "image/jpeg");
-        assert_eq!(data, "/9j/abc");
+        assert_eq!(data, "/9j/4AAQ");
     }
 
     #[test]
@@ -372,9 +377,9 @@ mod tests {
 
     #[test]
     fn test_parse_data_uri_with_media_type_params() {
-        let (mt, data) = parse_data_uri("data:image/png;charset=utf-8;base64,iVBOR").unwrap();
+        let (mt, data) = parse_data_uri("data:image/png;charset=utf-8;base64,iVBORw==").unwrap();
         assert_eq!(mt, "image/png");
-        assert_eq!(data, "iVBOR");
+        assert_eq!(data, "iVBORw==");
     }
 
     #[test]
@@ -393,6 +398,32 @@ mod tests {
     fn test_parse_data_uri_invalid_base64_chars_returns_none() {
         assert!(parse_data_uri("data:image/png;base64,invalid!!!").is_none());
         assert!(parse_data_uri("data:image/png;base64,abc def").is_none());
+    }
+
+    #[test]
+    fn test_parse_data_uri_non_image_mime_returns_none() {
+        assert!(parse_data_uri("data:text/plain;base64,SGVsbG8=").is_none());
+        assert!(parse_data_uri("data:application/pdf;base64,SGVsbG8=").is_none());
+    }
+
+    #[test]
+    fn test_non_image_mime_type_returns_error() {
+        let content = Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "data:text/plain;base64,SGVsbG8=".to_string(),
+                detail: None,
+            },
+        }]);
+        let err = convert_content_to_anthropic(Some(&content)).unwrap_err();
+        assert!(matches!(err, SDKError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_parse_data_uri_length_invalid_base64_returns_none() {
+        // Single char — valid alphabet but invalid length
+        assert!(parse_data_uri("data:image/png;base64,a").is_none());
+        // 5 chars — valid alphabet but invalid length
+        assert!(parse_data_uri("data:image/png;base64,abcde").is_none());
     }
 
     #[test]
