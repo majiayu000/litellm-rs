@@ -300,11 +300,12 @@ impl LLMClient {
                 Vec::<u8>::new(),
                 VecDeque::<Result<ChatChunk>>::new(),
                 false,
+                Option::<(String, String)>::None,
             ),
-            |(mut byte_stream, mut buffer, mut pending, mut done)| async move {
+            |(mut byte_stream, mut buffer, mut pending, mut done, mut current_tool)| async move {
                 loop {
                     if let Some(item) = pending.pop_front() {
-                        return Some((item, (byte_stream, buffer, pending, done)));
+                        return Some((item, (byte_stream, buffer, pending, done, current_tool)));
                     }
 
                     if done {
@@ -326,13 +327,44 @@ impl LLMClient {
                                     }
                                 }
                                 if let (Some(event), Some(data)) = (event_line, data_line) {
-                                    match parse_anthropic_sse_record(&event, &data) {
-                                        Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
-                                        Some(Err(e)) => {
-                                            done = true;
-                                            pending.push_back(Err(e));
+                                    if event == "content_block_start" {
+                                        if let Ok(v) =
+                                            serde_json::from_str::<serde_json::Value>(&data)
+                                        {
+                                            if v.get("content_block")
+                                                .and_then(|cb| cb.get("type"))
+                                                .and_then(|t| t.as_str())
+                                                == Some("tool_use")
+                                            {
+                                                let id = v
+                                                    .get("content_block")
+                                                    .and_then(|cb| cb.get("id"))
+                                                    .and_then(|i| i.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let name = v
+                                                    .get("content_block")
+                                                    .and_then(|cb| cb.get("name"))
+                                                    .and_then(|n| n.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                current_tool = Some((id, name));
+                                            } else {
+                                                current_tool = None;
+                                            }
                                         }
-                                        None => {}
+                                    } else {
+                                        let tool_ref = current_tool
+                                            .as_ref()
+                                            .map(|(id, name)| (id.as_str(), name.as_str()));
+                                        match parse_anthropic_sse_record(&event, &data, tool_ref) {
+                                            Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
+                                            Some(Err(e)) => {
+                                                done = true;
+                                                pending.push_back(Err(e));
+                                            }
+                                            None => {}
+                                        }
                                     }
                                 }
                             }
@@ -353,7 +385,7 @@ impl LLMClient {
                         Some(Err(e)) => {
                             return Some((
                                 Err(SDKError::NetworkError(e.to_string())),
-                                (byte_stream, buffer, pending, true),
+                                (byte_stream, buffer, pending, true, current_tool),
                             ));
                         }
                         None => {
@@ -484,7 +516,14 @@ pub(crate) fn parse_openai_sse_line(line: &str) -> Option<Result<ChatChunk>> {
 /// Returns `Some(Ok(chunk))` for `content_block_delta` (text) and `message_delta` (finish_reason).
 /// Returns `Some(Err(...))` for `error` events or malformed data on handled event types.
 /// Returns `None` for lifecycle events that carry no user-visible content.
-pub(crate) fn parse_anthropic_sse_record(event: &str, data: &str) -> Option<Result<ChatChunk>> {
+///
+/// `current_tool` carries `(tool_id, tool_name)` captured from the preceding
+/// `content_block_start` event so `input_json_delta` chunks include the tool identity.
+pub(crate) fn parse_anthropic_sse_record(
+    event: &str,
+    data: &str,
+    current_tool: Option<(&str, &str)>,
+) -> Option<Result<ChatChunk>> {
     match event {
         "error" => {
             let msg = serde_json::from_str::<serde_json::Value>(data)
@@ -572,6 +611,7 @@ pub(crate) fn parse_anthropic_sse_record(event: &str, data: &str) -> Option<Resu
                         .and_then(|d| d.get("partial_json"))
                         .and_then(|j| j.as_str())
                         .unwrap_or("");
+                    let (tool_id, tool_name) = current_tool.unwrap_or(("", ""));
                     Some(Ok(ChatChunk {
                         id: String::new(),
                         model: String::new(),
@@ -581,10 +621,10 @@ pub(crate) fn parse_anthropic_sse_record(event: &str, data: &str) -> Option<Resu
                                 role: None,
                                 content: None,
                                 tool_calls: Some(vec![crate::sdk::types::ToolCall {
-                                    id: String::new(),
+                                    id: tool_id.to_string(),
                                     tool_type: "function".to_string(),
                                     function: crate::sdk::types::Function {
-                                        name: String::new(),
+                                        name: tool_name.to_string(),
                                         description: None,
                                         parameters: serde_json::Value::Null,
                                         arguments: Some(partial_json.to_string()),
