@@ -540,24 +540,63 @@ pub(crate) fn parse_anthropic_sse_record(event: &str, data: &str) -> Option<Resu
                     ))));
                 }
             };
-            let text = v
+            let delta_type = v
                 .get("delta")
-                .and_then(|d| d.get("text"))
+                .and_then(|d| d.get("type"))
                 .and_then(|t| t.as_str())
-                .unwrap_or("");
-            Some(Ok(ChatChunk {
-                id: String::new(),
-                model: String::new(),
-                choices: vec![ChunkChoice {
-                    index: 0,
-                    delta: MessageDelta {
-                        role: None,
-                        content: Some(text.to_string()),
-                        tool_calls: None,
-                    },
-                    finish_reason: None,
-                }],
-            }))
+                .unwrap_or("text_delta");
+            match delta_type {
+                "text_delta" => {
+                    let text = v
+                        .get("delta")
+                        .and_then(|d| d.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    Some(Ok(ChatChunk {
+                        id: String::new(),
+                        model: String::new(),
+                        choices: vec![ChunkChoice {
+                            index: 0,
+                            delta: MessageDelta {
+                                role: None,
+                                content: Some(text.to_string()),
+                                tool_calls: None,
+                            },
+                            finish_reason: None,
+                        }],
+                    }))
+                }
+                "input_json_delta" => {
+                    let partial_json = v
+                        .get("delta")
+                        .and_then(|d| d.get("partial_json"))
+                        .and_then(|j| j.as_str())
+                        .unwrap_or("");
+                    Some(Ok(ChatChunk {
+                        id: String::new(),
+                        model: String::new(),
+                        choices: vec![ChunkChoice {
+                            index: 0,
+                            delta: MessageDelta {
+                                role: None,
+                                content: None,
+                                tool_calls: Some(vec![crate::sdk::types::ToolCall {
+                                    id: String::new(),
+                                    tool_type: "function".to_string(),
+                                    function: crate::sdk::types::Function {
+                                        name: String::new(),
+                                        description: None,
+                                        parameters: serde_json::Value::Null,
+                                        arguments: Some(partial_json.to_string()),
+                                    },
+                                }]),
+                            },
+                            finish_reason: None,
+                        }],
+                    }))
+                }
+                _ => None,
+            }
         }
         _ => None,
     }
