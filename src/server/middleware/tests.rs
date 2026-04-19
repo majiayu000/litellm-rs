@@ -2,11 +2,34 @@
 
 use super::auth_rate_limiter::AuthRateLimiter;
 use super::helpers::{
-    extract_auth_method, extract_auth_method_with_api_key_header, is_admin_route, is_api_route,
-    is_public_route,
+    check_admin_authorization, extract_auth_method, extract_auth_method_with_api_key_header,
+    is_admin_route, is_api_route, is_public_route,
 };
 use crate::auth::AuthMethod;
+use crate::core::models::user::preferences::UserPreferences;
+use crate::core::models::user::types::{User, UserProfile, UserRole, UserStatus};
+use crate::core::models::{Metadata, UsageStats};
 use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue};
+
+fn make_user(role: UserRole) -> User {
+    User {
+        metadata: Metadata::new(),
+        username: "testuser".to_string(),
+        email: "test@example.com".to_string(),
+        display_name: None,
+        password_hash: "hash".to_string(),
+        role,
+        status: UserStatus::Active,
+        team_ids: vec![],
+        preferences: UserPreferences::default(),
+        usage_stats: UsageStats::default(),
+        rate_limits: None,
+        last_login_at: None,
+        email_verified: true,
+        two_factor_enabled: false,
+        profile: UserProfile::default(),
+    }
+}
 
 #[test]
 fn test_extract_auth_method_bearer() {
@@ -107,6 +130,51 @@ fn test_is_admin_route() {
     assert!(is_admin_route("/api/admin/config"));
     assert!(!is_admin_route("/api/users"));
     assert!(!is_admin_route("/health"));
+}
+
+// These tests exercise the authorization decision that the production auth
+// middleware runs (check_admin_authorization), not just the route classifier.
+#[test]
+fn test_check_admin_authorization_non_admin_paths_always_pass() {
+    let user = make_user(UserRole::User);
+    assert!(check_admin_authorization("/v1/chat/completions", Some(&user)));
+    assert!(check_admin_authorization("/health", Some(&user)));
+    assert!(check_admin_authorization("/v1/chat/completions", None));
+}
+
+#[test]
+fn test_check_admin_authorization_admin_path_with_admin_user() {
+    let admin = make_user(UserRole::Admin);
+    let super_admin = make_user(UserRole::SuperAdmin);
+    assert!(check_admin_authorization("/admin/users", Some(&admin)));
+    assert!(check_admin_authorization("/api/admin/config", Some(&admin)));
+    assert!(check_admin_authorization("/admin", Some(&super_admin)));
+}
+
+#[test]
+fn test_check_admin_authorization_admin_path_with_non_admin_user() {
+    let user = make_user(UserRole::User);
+    let manager = make_user(UserRole::Manager);
+    let viewer = make_user(UserRole::Viewer);
+    assert!(!check_admin_authorization("/admin/users", Some(&user)));
+    assert!(!check_admin_authorization("/api/admin/config", Some(&manager)));
+    assert!(!check_admin_authorization("/admin/settings", Some(&viewer)));
+}
+
+#[test]
+fn test_check_admin_authorization_admin_path_no_user() {
+    // API-key-only auth (no User object) must be rejected for admin routes.
+    assert!(!check_admin_authorization("/admin/users", None));
+    assert!(!check_admin_authorization("/api/admin/config", None));
+}
+
+#[test]
+fn test_check_admin_authorization_prefix_confusion_not_blocked() {
+    // /adminevil is not an admin route; any caller should pass.
+    let user = make_user(UserRole::User);
+    assert!(check_admin_authorization("/adminevil", Some(&user)));
+    assert!(check_admin_authorization("/administrator", Some(&user)));
+    assert!(check_admin_authorization("/adminevil", None));
 }
 
 #[test]

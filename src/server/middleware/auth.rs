@@ -5,7 +5,7 @@ use crate::core::models::{ApiKey, user::types::User};
 use crate::core::types::context::RequestContext;
 use crate::server::middleware::auth_rate_limiter::get_auth_rate_limiter;
 use crate::server::middleware::helpers::{
-    extract_auth_method_with_api_key_header, is_public_route,
+    check_admin_authorization, extract_auth_method_with_api_key_header, is_public_route,
 };
 use crate::server::state::AppState;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
@@ -129,6 +129,11 @@ where
                 Ok(result) if result.success => {
                     rate_limiter.record_success(&client_id);
                     debug!("Authentication succeeded");
+
+                    if !check_admin_authorization(req.path(), result.user.as_ref()) {
+                        warn!("Admin route access denied: {}", req.path());
+                        return Err(actix_web::error::ErrorForbidden("Admin access required"));
+                    }
 
                     req.extensions_mut().insert(result.context.clone());
                     if let Some(user) = result.user {
