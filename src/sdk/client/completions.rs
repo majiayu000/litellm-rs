@@ -143,7 +143,7 @@ impl LLMClient {
         debug!("Calling OpenAI stream API: {}", url);
 
         let response = self
-            .http_client
+            .stream_http_client
             .post(&url)
             .header("Authorization", format!("Bearer {}", provider.api_key))
             .header("content-type", "application/json")
@@ -166,7 +166,7 @@ impl LLMClient {
         let s = futures::stream::unfold(
             (
                 byte_stream,
-                String::new(),
+                Vec::<u8>::new(),
                 VecDeque::<Result<ChatChunk>>::new(),
                 false,
             ),
@@ -180,18 +180,28 @@ impl LLMClient {
                         return None;
                     }
 
-                    if let Some((pos, delim_len)) = find_sse_record_end(&buffer) {
-                        let record = buffer[..pos].to_string();
-                        buffer = buffer[pos + delim_len..].to_string();
-                        for line in record.lines() {
-                            match parse_openai_sse_line(line) {
-                                Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
-                                Some(Err(e)) => {
-                                    done = true;
-                                    pending.push_back(Err(e));
-                                    break;
+                    if let Some((pos, delim_len)) = find_sse_record_end_bytes(&buffer) {
+                        let record_bytes = buffer[..pos].to_vec();
+                        buffer.drain(..pos + delim_len);
+                        match String::from_utf8(record_bytes) {
+                            Ok(record) => {
+                                for line in record.lines() {
+                                    match parse_openai_sse_line(line) {
+                                        Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
+                                        Some(Err(e)) => {
+                                            done = true;
+                                            pending.push_back(Err(e));
+                                            break;
+                                        }
+                                        None => {}
+                                    }
                                 }
-                                None => {}
+                            }
+                            Err(_) => {
+                                done = true;
+                                pending.push_back(Err(SDKError::ParseError(
+                                    "SSE record contained invalid UTF-8".to_string(),
+                                )));
                             }
                         }
                         continue;
@@ -199,8 +209,7 @@ impl LLMClient {
 
                     match byte_stream.next().await {
                         Some(Ok(bytes)) => {
-                            let s = String::from_utf8_lossy(&bytes);
-                            buffer.push_str(&s);
+                            buffer.extend_from_slice(&bytes);
                         }
                         Some(Err(e)) => {
                             return Some((
@@ -211,14 +220,18 @@ impl LLMClient {
                         None => {
                             done = true;
                             let remaining = std::mem::take(&mut buffer);
-                            for line in remaining.lines() {
-                                match parse_openai_sse_line(line) {
-                                    Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
-                                    Some(Err(e)) => {
-                                        pending.push_back(Err(e));
-                                        break;
+                            if !remaining.is_empty() {
+                                let remaining_str =
+                                    String::from_utf8_lossy(&remaining).into_owned();
+                                for line in remaining_str.lines() {
+                                    match parse_openai_sse_line(line) {
+                                        Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
+                                        Some(Err(e)) => {
+                                            pending.push_back(Err(e));
+                                            break;
+                                        }
+                                        None => {}
                                     }
-                                    None => {}
                                 }
                             }
                         }
@@ -259,7 +272,7 @@ impl LLMClient {
         debug!("Calling Anthropic stream API: {}", url);
 
         let response = self
-            .http_client
+            .stream_http_client
             .post(&url)
             .header("x-api-key", &provider.api_key)
             .header("anthropic-version", "2023-06-01")
@@ -284,7 +297,7 @@ impl LLMClient {
         let s = futures::stream::unfold(
             (
                 byte_stream,
-                String::new(),
+                Vec::<u8>::new(),
                 VecDeque::<Result<ChatChunk>>::new(),
                 false,
             ),
@@ -298,26 +311,36 @@ impl LLMClient {
                         return None;
                     }
 
-                    if let Some((pos, delim_len)) = find_sse_record_end(&buffer) {
-                        let record = buffer[..pos].to_string();
-                        buffer = buffer[pos + delim_len..].to_string();
-                        let mut event_line = None;
-                        let mut data_line = None;
-                        for l in record.lines() {
-                            if let Some(ev) = l.strip_prefix("event: ") {
-                                event_line = Some(ev.to_string());
-                            } else if let Some(d) = l.strip_prefix("data: ") {
-                                data_line = Some(d.to_string());
-                            }
-                        }
-                        if let (Some(event), Some(data)) = (event_line, data_line) {
-                            match parse_anthropic_sse_record(&event, &data) {
-                                Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
-                                Some(Err(e)) => {
-                                    done = true;
-                                    pending.push_back(Err(e));
+                    if let Some((pos, delim_len)) = find_sse_record_end_bytes(&buffer) {
+                        let record_bytes = buffer[..pos].to_vec();
+                        buffer.drain(..pos + delim_len);
+                        match String::from_utf8(record_bytes) {
+                            Ok(record) => {
+                                let mut event_line = None;
+                                let mut data_line = None;
+                                for l in record.lines() {
+                                    if let Some(ev) = l.strip_prefix("event: ") {
+                                        event_line = Some(ev.to_string());
+                                    } else if let Some(d) = l.strip_prefix("data: ") {
+                                        data_line = Some(d.to_string());
+                                    }
                                 }
-                                None => {}
+                                if let (Some(event), Some(data)) = (event_line, data_line) {
+                                    match parse_anthropic_sse_record(&event, &data) {
+                                        Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
+                                        Some(Err(e)) => {
+                                            done = true;
+                                            pending.push_back(Err(e));
+                                        }
+                                        None => {}
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                done = true;
+                                pending.push_back(Err(SDKError::ParseError(
+                                    "SSE record contained invalid UTF-8".to_string(),
+                                )));
                             }
                         }
                         continue;
@@ -325,8 +348,7 @@ impl LLMClient {
 
                     match byte_stream.next().await {
                         Some(Ok(bytes)) => {
-                            let s = String::from_utf8_lossy(&bytes);
-                            buffer.push_str(&s);
+                            buffer.extend_from_slice(&bytes);
                         }
                         Some(Err(e)) => {
                             return Some((
@@ -416,17 +438,28 @@ impl LLMClient {
     }
 }
 
-/// Find the end of an SSE record, accepting both LF (`\n\n`) and CRLF (`\r\n\r\n`) framing.
+/// Find the end of an SSE record in a raw byte buffer, accepting both LF (`\n\n`) and CRLF
+/// (`\r\n\r\n`) framing.
 ///
 /// Returns `(record_end_pos, delimiter_len)` for the first boundary found, or `None`.
-fn find_sse_record_end(buffer: &str) -> Option<(usize, usize)> {
-    let lf = buffer.find("\n\n");
-    let crlf = buffer.find("\r\n\r\n");
+fn find_sse_record_end_bytes(buffer: &[u8]) -> Option<(usize, usize)> {
+    let lf = buffer.windows(2).position(|w| w == b"\n\n");
+    let crlf = buffer.windows(4).position(|w| w == b"\r\n\r\n");
     match (lf, crlf) {
         (Some(a), Some(b)) if b < a => Some((b, 4)),
         (Some(a), _) => Some((a, 2)),
         (None, Some(b)) => Some((b, 4)),
         (None, None) => None,
+    }
+}
+
+/// Map Anthropic-native `stop_reason` values to OpenAI-style `finish_reason` values.
+fn normalize_anthropic_stop_reason(stop_reason: &str) -> &str {
+    match stop_reason {
+        "end_turn" => "stop",
+        "max_tokens" => "length",
+        "tool_use" => "tool_calls",
+        other => other,
     }
 }
 
@@ -482,7 +515,7 @@ pub(crate) fn parse_anthropic_sse_record(event: &str, data: &str) -> Option<Resu
                 .get("delta")
                 .and_then(|d| d.get("stop_reason"))
                 .and_then(|r| r.as_str())
-                .map(|s| s.to_string());
+                .map(|s| normalize_anthropic_stop_reason(s).to_string());
             Some(Ok(ChatChunk {
                 id: String::new(),
                 model: String::new(),

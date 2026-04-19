@@ -3,7 +3,7 @@
 use super::types::{LoadBalancer, LoadBalancingStrategy, ProviderStats};
 use crate::sdk::{config::ClientConfig, config::SdkProviderConfig, errors::*};
 use crate::utils::net::ClientUtils;
-use crate::utils::net::http::create_custom_client;
+use crate::utils::net::http::{create_custom_client, create_streaming_client};
 use reqwest;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,6 +16,7 @@ use tracing::info;
 pub struct LLMClient {
     pub(crate) config: ClientConfig,
     pub(crate) http_client: reqwest::Client,
+    pub(crate) stream_http_client: reqwest::Client,
     pub(crate) provider_stats: Arc<RwLock<HashMap<String, ProviderStats>>>,
     pub(crate) load_balancer: Arc<LoadBalancer>,
 }
@@ -31,6 +32,9 @@ impl LLMClient {
         let http_client = create_custom_client(Duration::from_secs(config.settings.timeout))
             .map_err(|e| SDKError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
 
+        let stream_http_client = create_streaming_client()
+            .map_err(|e| SDKError::ConfigError(format!("Failed to create streaming HTTP client: {}", e)))?;
+
         let provider_stats = Arc::new(RwLock::new(HashMap::new()));
         let load_balancer = Arc::new(LoadBalancer::new(LoadBalancingStrategy::WeightedRandom));
 
@@ -42,6 +46,7 @@ impl LLMClient {
         Ok(Self {
             config,
             http_client,
+            stream_http_client,
             provider_stats,
             load_balancer,
         })

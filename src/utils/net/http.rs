@@ -201,6 +201,23 @@ pub fn create_custom_client(timeout: Duration) -> Result<Client, reqwest::Error>
     create_custom_client_with_config(timeout, &HttpClientPoolConfig::default())
 }
 
+/// Create an HTTP client for long-running SSE streams.
+///
+/// Unlike `create_custom_client`, this client does not set a total request timeout
+/// so streams lasting longer than the configured timeout value won't be cut off.
+/// Only the initial TCP connection is time-bounded via `connect_timeout`.
+pub fn create_streaming_client() -> Result<Client, reqwest::Error> {
+    let config = HttpClientPoolConfig::default();
+    ClientBuilder::new()
+        .pool_max_idle_per_host(config.pool_max_idle_per_host)
+        .pool_idle_timeout(config.pool_idle_timeout)
+        .connect_timeout(config.connect_timeout)
+        .tcp_keepalive(config.tcp_keepalive)
+        .tcp_nodelay(true)
+        .user_agent(config.user_agent)
+        .build()
+}
+
 /// Get or create an HTTP client with SSRF-safe DNS resolution for the given timeout.
 ///
 /// Unlike `get_client_with_timeout_fallible`, this client installs `SsrfSafeDnsResolver`
