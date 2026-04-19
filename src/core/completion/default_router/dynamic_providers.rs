@@ -92,20 +92,6 @@ fn resolve_dynamic_provider_route<'a>(
         }
     }
 
-    if model.starts_with("zai/") {
-        let actual_model = model.strip_prefix("zai/").unwrap_or(model);
-        let api_base = options
-            .api_base
-            .clone()
-            .unwrap_or_else(|| "https://open.bigmodel.cn/api/paas/v4".to_string());
-        return Some(DynamicProviderRoute {
-            provider_type: "zhipu",
-            provider_label: "Zhipu",
-            actual_model,
-            api_base,
-        });
-    }
-
     if model.starts_with("azure_ai/") || model.starts_with("azure-ai/") {
         let actual_model = model
             .strip_prefix("azure_ai/")
