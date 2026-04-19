@@ -7,7 +7,7 @@ mod tests {
     use actix_web::http::StatusCode;
     use actix_web::{App, HttpMessage, HttpRequest, HttpResponse, test, web};
     use litellm_rs::Config;
-    use litellm_rs::core::models::user::types::{User, UserStatus};
+    use litellm_rs::core::models::user::types::{User, UserRole, UserStatus};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::core::types::context::RequestContext;
     use litellm_rs::server::http::HttpServer;
@@ -227,6 +227,159 @@ mod tests {
                 .is_some_and(|value| !value.is_empty()),
             "request context should include a non-empty request id"
         );
+    }
+
+    async fn seed_admin_user_principal(state: &AppState) -> SeededPrincipal {
+        let mut user = User::new(
+            "auth-mw-admin-user".to_string(),
+            "auth-mw-admin@example.com".to_string(),
+            "hashed-password".to_string(),
+        );
+        user.status = UserStatus::Active;
+        user.role = UserRole::Admin;
+
+        let user = state
+            .storage
+            .db()
+            .create_user(&user)
+            .await
+            .expect("failed to insert admin user for auth middleware integration test");
+
+        let raw_api_key = "gw-admin-user-auth-middleware-key-1234".to_string();
+        let api_key = ApiKey {
+            metadata: Metadata::new(),
+            name: "admin-user-middleware-test-key".to_string(),
+            key_hash: hash_api_key(&raw_api_key, None),
+            key_prefix: extract_api_key_prefix(&raw_api_key),
+            user_id: Some(user.id()),
+            team_id: None,
+            permissions: vec!["use:api".to_string()],
+            rate_limits: None,
+            expires_at: None,
+            is_active: true,
+            last_used_at: None,
+            usage_stats: UsageStats::default(),
+        };
+
+        let api_key = state
+            .storage
+            .db()
+            .create_api_key(&api_key)
+            .await
+            .expect("failed to insert admin user API key for auth middleware integration test");
+
+        SeededPrincipal {
+            raw_api_key,
+            user_id: user.id().to_string(),
+            api_key_id: api_key.metadata.id.to_string(),
+        }
+    }
+
+    async fn seed_standalone_admin_key(state: &AppState) -> String {
+        let raw_api_key = "gw-standalone-admin-key-9876543210ab".to_string();
+        let api_key = ApiKey {
+            metadata: Metadata::new(),
+            name: "standalone-admin-middleware-test-key".to_string(),
+            key_hash: hash_api_key(&raw_api_key, None),
+            key_prefix: extract_api_key_prefix(&raw_api_key),
+            user_id: None,
+            team_id: None,
+            permissions: vec!["*".to_string()],
+            rate_limits: None,
+            expires_at: None,
+            is_active: true,
+            last_used_at: None,
+            usage_stats: UsageStats::default(),
+        };
+
+        state
+            .storage
+            .db()
+            .create_api_key(&api_key)
+            .await
+            .expect("failed to insert standalone admin key for auth middleware integration test");
+
+        raw_api_key
+    }
+
+    async fn admin_probe(_req: HttpRequest) -> HttpResponse {
+        HttpResponse::Ok().finish()
+    }
+
+    #[tokio::test]
+    async fn test_admin_route_rejects_regular_api_key_caller() {
+        let state = build_test_state(true, true).await;
+        let principal = seed_valid_principal(&state).await;
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .wrap(AuthMiddleware)
+                .route("/admin/probe", web::get().to(admin_probe)),
+        )
+        .await;
+
+        let error = test::try_call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/admin/probe")
+                .insert_header(("x-api-key", principal.raw_api_key.clone()))
+                .to_request(),
+        )
+        .await
+        .expect_err("regular key should be denied on admin route");
+
+        assert_eq!(error.as_response_error().status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_admin_route_allows_admin_user_caller() {
+        let state = build_test_state(true, true).await;
+        let principal = seed_admin_user_principal(&state).await;
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .wrap(AuthMiddleware)
+                .route("/admin/probe", web::get().to(admin_probe)),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/admin/probe")
+                .insert_header(("x-api-key", principal.raw_api_key.clone()))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_admin_route_allows_standalone_admin_api_key() {
+        let state = build_test_state(true, true).await;
+        let raw_key = seed_standalone_admin_key(&state).await;
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .wrap(AuthMiddleware)
+                .route("/admin/probe", web::get().to(admin_probe)),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/admin/probe")
+                .insert_header(("x-api-key", raw_key))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

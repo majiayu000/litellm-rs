@@ -8,7 +8,7 @@ use super::helpers::{
 use crate::auth::AuthMethod;
 use crate::core::models::user::preferences::UserPreferences;
 use crate::core::models::user::types::{User, UserProfile, UserRole, UserStatus};
-use crate::core::models::{Metadata, UsageStats};
+use crate::core::models::{ApiKey, Metadata, UsageStats};
 use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue};
 
 fn make_user(role: UserRole) -> User {
@@ -137,18 +137,18 @@ fn test_is_admin_route() {
 #[test]
 fn test_check_admin_authorization_non_admin_paths_always_pass() {
     let user = make_user(UserRole::User);
-    assert!(check_admin_authorization("/v1/chat/completions", Some(&user)));
-    assert!(check_admin_authorization("/health", Some(&user)));
-    assert!(check_admin_authorization("/v1/chat/completions", None));
+    assert!(check_admin_authorization("/v1/chat/completions", Some(&user), None));
+    assert!(check_admin_authorization("/health", Some(&user), None));
+    assert!(check_admin_authorization("/v1/chat/completions", None, None));
 }
 
 #[test]
 fn test_check_admin_authorization_admin_path_with_admin_user() {
     let admin = make_user(UserRole::Admin);
     let super_admin = make_user(UserRole::SuperAdmin);
-    assert!(check_admin_authorization("/admin/users", Some(&admin)));
-    assert!(check_admin_authorization("/api/admin/config", Some(&admin)));
-    assert!(check_admin_authorization("/admin", Some(&super_admin)));
+    assert!(check_admin_authorization("/admin/users", Some(&admin), None));
+    assert!(check_admin_authorization("/api/admin/config", Some(&admin), None));
+    assert!(check_admin_authorization("/admin", Some(&super_admin), None));
 }
 
 #[test]
@@ -156,25 +156,69 @@ fn test_check_admin_authorization_admin_path_with_non_admin_user() {
     let user = make_user(UserRole::User);
     let manager = make_user(UserRole::Manager);
     let viewer = make_user(UserRole::Viewer);
-    assert!(!check_admin_authorization("/admin/users", Some(&user)));
-    assert!(!check_admin_authorization("/api/admin/config", Some(&manager)));
-    assert!(!check_admin_authorization("/admin/settings", Some(&viewer)));
+    assert!(!check_admin_authorization("/admin/users", Some(&user), None));
+    assert!(!check_admin_authorization("/api/admin/config", Some(&manager), None));
+    assert!(!check_admin_authorization("/admin/settings", Some(&viewer), None));
 }
 
 #[test]
-fn test_check_admin_authorization_admin_path_no_user() {
-    // API-key-only auth (no User object) must be rejected for admin routes.
-    assert!(!check_admin_authorization("/admin/users", None));
-    assert!(!check_admin_authorization("/api/admin/config", None));
+fn test_check_admin_authorization_admin_path_no_user_no_key() {
+    // Neither user nor API key → denied.
+    assert!(!check_admin_authorization("/admin/users", None, None));
+    assert!(!check_admin_authorization("/api/admin/config", None, None));
+}
+
+#[test]
+fn test_check_admin_authorization_admin_path_admin_api_key_no_user() {
+    // API key with "*" or "system.admin" grants access even without a user.
+    let mut key = ApiKey {
+        metadata: Metadata::new(),
+        name: "admin-key".to_string(),
+        key_hash: "h".to_string(),
+        key_prefix: "gw-".to_string(),
+        user_id: None,
+        team_id: None,
+        permissions: vec!["*".to_string()],
+        rate_limits: None,
+        expires_at: None,
+        is_active: true,
+        last_used_at: None,
+        usage_stats: UsageStats::default(),
+    };
+    assert!(check_admin_authorization("/admin/users", None, Some(&key)));
+    assert!(check_admin_authorization("/api/admin/config", None, Some(&key)));
+
+    key.permissions = vec!["system.admin".to_string()];
+    assert!(check_admin_authorization("/admin/users", None, Some(&key)));
+}
+
+#[test]
+fn test_check_admin_authorization_admin_path_non_admin_api_key_no_user() {
+    // API key with only "use:api" is insufficient for admin routes.
+    let key = ApiKey {
+        metadata: Metadata::new(),
+        name: "regular-key".to_string(),
+        key_hash: "h".to_string(),
+        key_prefix: "gw-".to_string(),
+        user_id: None,
+        team_id: None,
+        permissions: vec!["use:api".to_string()],
+        rate_limits: None,
+        expires_at: None,
+        is_active: true,
+        last_used_at: None,
+        usage_stats: UsageStats::default(),
+    };
+    assert!(!check_admin_authorization("/admin/users", None, Some(&key)));
 }
 
 #[test]
 fn test_check_admin_authorization_prefix_confusion_not_blocked() {
     // /adminevil is not an admin route; any caller should pass.
     let user = make_user(UserRole::User);
-    assert!(check_admin_authorization("/adminevil", Some(&user)));
-    assert!(check_admin_authorization("/administrator", Some(&user)));
-    assert!(check_admin_authorization("/adminevil", None));
+    assert!(check_admin_authorization("/adminevil", Some(&user), None));
+    assert!(check_admin_authorization("/administrator", Some(&user), None));
+    assert!(check_admin_authorization("/adminevil", None, None));
 }
 
 #[test]

@@ -2,6 +2,7 @@
 
 use crate::auth::AuthMethod;
 use crate::core::models::user::types::{User, UserRole};
+use crate::core::models::ApiKey;
 use actix_web::http::header::HeaderMap;
 use actix_web::http::header::HeaderName;
 
@@ -109,14 +110,19 @@ pub fn is_admin_route(path: &str) -> bool {
 
 /// Return `true` when the request is allowed to proceed.
 ///
-/// Non-admin routes always pass. Admin routes require an authenticated user
-/// whose role is `Admin` or higher (`SuperAdmin`). A missing user (API-key-only
-/// auth with no associated account) is treated as insufficient privilege.
-pub fn check_admin_authorization(path: &str, user: Option<&User>) -> bool {
+/// Non-admin routes always pass. Admin routes require either an authenticated
+/// user with `Admin` or higher role, or an API key carrying `"*"` or
+/// `"system.admin"` permissions (matching the permission model in
+/// `check_permission`). A caller with neither is denied.
+pub fn check_admin_authorization(path: &str, user: Option<&User>, api_key: Option<&ApiKey>) -> bool {
     if !is_admin_route(path) {
         return true;
     }
-    user.map(|u| u.has_role(&UserRole::Admin)).unwrap_or(false)
+    let user_is_admin = user.map(|u| u.has_role(&UserRole::Admin)).unwrap_or(false);
+    let key_is_admin = api_key
+        .map(|k| k.permissions.iter().any(|p| p == "*" || p == "system.admin"))
+        .unwrap_or(false);
+    user_is_admin || key_is_admin
 }
 
 /// Check if a route is for API access

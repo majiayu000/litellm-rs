@@ -130,7 +130,7 @@ where
                     rate_limiter.record_success(&client_id);
                     debug!("Authentication succeeded");
 
-                    if !check_admin_authorization(req.path(), result.user.as_ref()) {
+                    if !check_admin_authorization(req.path(), result.user.as_ref(), result.api_key.as_ref()) {
                         warn!("Admin route access denied: {}", req.path());
                         return Err(actix_web::error::ErrorForbidden("Admin access required"));
                     }
