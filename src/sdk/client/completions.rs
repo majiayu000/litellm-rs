@@ -180,9 +180,9 @@ impl LLMClient {
                         return None;
                     }
 
-                    if let Some(pos) = buffer.find("\n\n") {
+                    if let Some((pos, delim_len)) = find_sse_record_end(&buffer) {
                         let record = buffer[..pos].to_string();
-                        buffer = buffer[pos + 2..].to_string();
+                        buffer = buffer[pos + delim_len..].to_string();
                         for line in record.lines() {
                             match parse_openai_sse_line(line) {
                                 Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
@@ -298,9 +298,9 @@ impl LLMClient {
                         return None;
                     }
 
-                    if let Some(pos) = buffer.find("\n\n") {
+                    if let Some((pos, delim_len)) = find_sse_record_end(&buffer) {
                         let record = buffer[..pos].to_string();
-                        buffer = buffer[pos + 2..].to_string();
+                        buffer = buffer[pos + delim_len..].to_string();
                         let mut event_line = None;
                         let mut data_line = None;
                         for l in record.lines() {
@@ -416,6 +416,20 @@ impl LLMClient {
     }
 }
 
+/// Find the end of an SSE record, accepting both LF (`\n\n`) and CRLF (`\r\n\r\n`) framing.
+///
+/// Returns `(record_end_pos, delimiter_len)` for the first boundary found, or `None`.
+fn find_sse_record_end(buffer: &str) -> Option<(usize, usize)> {
+    let lf = buffer.find("\n\n");
+    let crlf = buffer.find("\r\n\r\n");
+    match (lf, crlf) {
+        (Some(a), Some(b)) if b < a => Some((b, 4)),
+        (Some(a), _) => Some((a, 2)),
+        (None, Some(b)) => Some((b, 4)),
+        (None, None) => None,
+    }
+}
+
 /// Parse a single OpenAI SSE line.
 ///
 /// Returns `None` for non-data lines or the `[DONE]` terminator.
@@ -434,38 +448,84 @@ pub(crate) fn parse_openai_sse_line(line: &str) -> Option<Result<ChatChunk>> {
 
 /// Parse an Anthropic SSE record (event + data pair).
 ///
-/// Returns `Some(Ok(chunk))` only for `content_block_delta` events.
-/// Returns `None` for all other events (silently skipped).
-/// Returns `Some(Err(...))` for malformed data on a delta event.
+/// Returns `Some(Ok(chunk))` for `content_block_delta` (text) and `message_delta` (finish_reason).
+/// Returns `Some(Err(...))` for `error` events or malformed data on handled event types.
+/// Returns `None` for lifecycle events that carry no user-visible content.
 pub(crate) fn parse_anthropic_sse_record(event: &str, data: &str) -> Option<Result<ChatChunk>> {
-    if event != "content_block_delta" {
-        return None;
-    }
-    let v: serde_json::Value = match serde_json::from_str(data) {
-        Ok(v) => v,
-        Err(e) => {
-            return Some(Err(SDKError::ParseError(format!(
-                "Failed to parse Anthropic SSE record: {}",
-                e
-            ))));
+    match event {
+        "error" => {
+            let msg = serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| data.to_string());
+            Some(Err(SDKError::ApiError(format!(
+                "Anthropic stream error: {}",
+                msg
+            ))))
         }
-    };
-    let text = v
-        .get("delta")
-        .and_then(|d| d.get("text"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
-    Some(Ok(ChatChunk {
-        id: String::new(),
-        model: String::new(),
-        choices: vec![ChunkChoice {
-            index: 0,
-            delta: MessageDelta {
-                role: None,
-                content: Some(text.to_string()),
-                tool_calls: None,
-            },
-            finish_reason: None,
-        }],
-    }))
+        "message_delta" => {
+            let v: serde_json::Value = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(Err(SDKError::ParseError(format!(
+                        "Failed to parse Anthropic message_delta: {}",
+                        e
+                    ))));
+                }
+            };
+            let stop_reason = v
+                .get("delta")
+                .and_then(|d| d.get("stop_reason"))
+                .and_then(|r| r.as_str())
+                .map(|s| s.to_string());
+            Some(Ok(ChatChunk {
+                id: String::new(),
+                model: String::new(),
+                choices: vec![ChunkChoice {
+                    index: 0,
+                    delta: MessageDelta {
+                        role: None,
+                        content: None,
+                        tool_calls: None,
+                    },
+                    finish_reason: stop_reason,
+                }],
+            }))
+        }
+        "content_block_delta" => {
+            let v: serde_json::Value = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(Err(SDKError::ParseError(format!(
+                        "Failed to parse Anthropic SSE record: {}",
+                        e
+                    ))));
+                }
+            };
+            let text = v
+                .get("delta")
+                .and_then(|d| d.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            Some(Ok(ChatChunk {
+                id: String::new(),
+                model: String::new(),
+                choices: vec![ChunkChoice {
+                    index: 0,
+                    delta: MessageDelta {
+                        role: None,
+                        content: Some(text.to_string()),
+                        tool_calls: None,
+                    },
+                    finish_reason: None,
+                }],
+            }))
+        }
+        _ => None,
+    }
 }
