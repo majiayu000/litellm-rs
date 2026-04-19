@@ -32,8 +32,9 @@ impl LLMClient {
         let http_client = create_custom_client(Duration::from_secs(config.settings.timeout))
             .map_err(|e| SDKError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
 
-        let stream_http_client = create_streaming_client()
-            .map_err(|e| SDKError::ConfigError(format!("Failed to create streaming HTTP client: {}", e)))?;
+        let stream_http_client = create_streaming_client().map_err(|e| {
+            SDKError::ConfigError(format!("Failed to create streaming HTTP client: {}", e))
+        })?;
 
         let provider_stats = Arc::new(RwLock::new(HashMap::new()));
         let load_balancer = Arc::new(LoadBalancer::new(LoadBalancingStrategy::WeightedRandom));
