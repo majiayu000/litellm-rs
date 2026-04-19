@@ -333,6 +333,29 @@ fn test_anthropic_messages_endpoint_avoids_duplicate_v1() {
 // ==================== Streaming Tests ====================
 
 #[tokio::test]
+async fn test_stream_azure_unsupported() {
+    let config = ConfigBuilder::new()
+        .add_provider(SdkProviderConfig {
+            id: "azure-test".to_string(),
+            provider_type: ProviderType::Azure,
+            name: "Azure".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: Some("https://my-resource.openai.azure.com".to_string()),
+            models: vec!["gpt-4".to_string()],
+            enabled: true,
+            weight: 1.0,
+            rate_limit_rpm: Some(1000),
+            rate_limit_tpm: Some(10000),
+            settings: HashMap::new(),
+        })
+        .build();
+
+    let client = LLMClient::new(config).unwrap();
+    let result = client.execute_stream_request("azure-test", vec![]).await;
+    assert!(matches!(result, Err(SDKError::NotSupported(_))));
+}
+
+#[tokio::test]
 async fn test_stream_unsupported_provider() {
     let config = ConfigBuilder::new()
         .add_provider(SdkProviderConfig {

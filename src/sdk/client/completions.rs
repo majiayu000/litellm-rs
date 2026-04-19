@@ -107,9 +107,7 @@ impl LLMClient {
         let provider = self.provider_config(provider_id)?;
 
         match provider.provider_type {
-            crate::sdk::config::ProviderType::OpenAI
-            | crate::sdk::config::ProviderType::Azure
-            | crate::sdk::config::ProviderType::Ollama => {
+            crate::sdk::config::ProviderType::OpenAI | crate::sdk::config::ProviderType::Ollama => {
                 self.call_openai_stream_api(provider, messages).await
             }
             crate::sdk::config::ProviderType::Anthropic => {
@@ -135,7 +133,12 @@ impl LLMClient {
 
         let default_url = "https://api.openai.com".to_string();
         let base_url = provider.base_url.as_ref().unwrap_or(&default_url);
-        let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+        let base = base_url.trim_end_matches('/');
+        let url = if base.contains("/v1") {
+            format!("{}/chat/completions", base)
+        } else {
+            format!("{}/v1/chat/completions", base)
+        };
 
         debug!("Calling OpenAI stream API: {}", url);
 
