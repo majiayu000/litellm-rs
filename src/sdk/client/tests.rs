@@ -68,7 +68,11 @@ async fn test_provider_selection_accepts_anthropic_haiku_preset_aliases() {
         .build();
     let client = LLMClient::new(config).unwrap();
 
-    for model in ["claude-haiku-4-5", "claude-haiku-4-5-20251001"] {
+    for model in [
+        "claude-3-5-haiku-20241022",
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
+    ] {
         let provider = client
             .select_provider(&SdkChatRequest {
                 model: model.to_string(),
