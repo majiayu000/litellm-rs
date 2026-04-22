@@ -185,7 +185,8 @@ impl SdkConfigBuilder {
             models: vec![
                 "claude-opus-4-6".to_string(),
                 "claude-sonnet-4-5".to_string(),
-                "claude-3-5-haiku-20241022".to_string(),
+                "claude-haiku-4-5".to_string(),
+                "claude-haiku-4-5-20251001".to_string(),
             ],
             enabled: true,
             weight: 1.0,
@@ -601,7 +602,13 @@ mod tests {
             config.providers[0]
                 .models
                 .iter()
-                .any(|m| m.contains("claude"))
+                .any(|m| m == "claude-haiku-4-5")
+        );
+        assert!(
+            config.providers[0]
+                .models
+                .iter()
+                .any(|m| m == "claude-haiku-4-5-20251001")
         );
     }
 
