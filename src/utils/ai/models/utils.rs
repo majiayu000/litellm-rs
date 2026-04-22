@@ -125,6 +125,7 @@ impl ModelUtils {
             }
         } else if model_lower.starts_with("claude-opus-4")
             || model_lower.starts_with("claude-sonnet-4")
+            || model_lower.starts_with("claude-haiku-4-5")
             || model_lower.starts_with("claude-3")
         {
             ModelCapabilities {
@@ -526,6 +527,17 @@ mod tests {
     }
 
     #[test]
+    fn test_get_model_capabilities_claude_haiku_45() {
+        let caps = ModelUtils::get_model_capabilities("claude-haiku-4-5");
+        assert!(caps.supports_function_calling);
+        assert!(caps.supports_tool_choice);
+        assert!(caps.supports_vision);
+        assert!(caps.supports_streaming);
+        assert_eq!(caps.max_tokens, Some(200000));
+        assert_eq!(caps.context_window, Some(200000));
+    }
+
+    #[test]
     fn test_get_model_capabilities_claude2() {
         let caps = ModelUtils::get_model_capabilities("claude-2.1");
         assert!(!caps.supports_function_calling);
@@ -561,6 +573,7 @@ mod tests {
     #[test]
     fn test_supports_function_calling() {
         assert!(ModelUtils::supports_function_calling("gpt-4"));
+        assert!(ModelUtils::supports_function_calling("claude-haiku-4-5"));
         assert!(!ModelUtils::supports_function_calling("claude-2"));
     }
 
@@ -607,6 +620,7 @@ mod tests {
     fn test_supports_vision() {
         assert!(ModelUtils::supports_vision("gpt-4-turbo"));
         assert!(ModelUtils::supports_vision("claude-3-opus"));
+        assert!(ModelUtils::supports_vision("claude-haiku-4-5"));
         assert!(!ModelUtils::supports_vision("gpt-3.5-turbo"));
         // o3 and o4-mini support vision
         assert!(ModelUtils::supports_vision("o3"));
