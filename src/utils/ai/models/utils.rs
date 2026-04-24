@@ -1,3 +1,4 @@
+use crate::core::providers::shared::gemini_context_window;
 use crate::core::providers::unified_provider::ProviderError;
 
 use super::capabilities::ModelCapabilities;
@@ -166,7 +167,9 @@ impl ModelUtils {
                 supports_vision: model_lower.contains("vision") || model_lower.contains("pro"),
                 supports_streaming: true,
                 max_tokens: Some(32768),
-                context_window: Some(32768),
+                context_window: gemini_context_window(&model_lower)
+                    .map(|context_window| context_window as usize)
+                    .or(Some(32768)),
             }
         } else {
             ModelCapabilities::default()
@@ -465,6 +468,8 @@ impl ModelUtils {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "providers-extended")]
+    use crate::core::providers::gemini::get_gemini_registry;
 
     // ==================== get_model_capabilities Tests ====================
 
@@ -547,6 +552,30 @@ mod tests {
         assert!(caps.supports_web_search);
         assert!(caps.supports_vision);
         assert_eq!(caps.max_tokens, Some(32768));
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[test]
+    fn test_get_model_capabilities_gemini_15_pro_context_matches_registry() {
+        let registry_context = get_gemini_registry()
+            .get_model_limits("gemini-1.5-pro")
+            .unwrap()
+            .max_context_length;
+        let caps = ModelUtils::get_model_capabilities("gemini-1.5-pro");
+
+        assert_eq!(caps.context_window, Some(registry_context as usize));
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[test]
+    fn test_get_model_capabilities_gemini_20_flash_context_matches_registry() {
+        let registry_context = get_gemini_registry()
+            .get_model_limits("gemini-2.0-flash-exp")
+            .unwrap()
+            .max_context_length;
+        let caps = ModelUtils::get_model_capabilities("gemini-2.0-flash");
+
+        assert_eq!(caps.context_window, Some(registry_context as usize));
     }
 
     #[test]

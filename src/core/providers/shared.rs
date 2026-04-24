@@ -10,6 +10,28 @@ use crate::core::types::responses::FinishReason;
 use crate::core::types::{message::MessageContent, message::MessageRole};
 
 // ============================================================================
+// Shared Model Limits
+// ============================================================================
+
+pub const GEMINI_20_FLASH_CONTEXT_WINDOW: u32 = 1_000_000;
+pub const GEMINI_20_FLASH_THINKING_CONTEXT_WINDOW: u32 = 32_000;
+pub const GEMINI_15_PRO_CONTEXT_WINDOW: u32 = 2_000_000;
+
+pub fn gemini_context_window(model_name: &str) -> Option<u32> {
+    let model_lower = model_name.to_ascii_lowercase();
+
+    if model_lower.contains("gemini-2.0-flash-thinking") {
+        Some(GEMINI_20_FLASH_THINKING_CONTEXT_WINDOW)
+    } else if model_lower.contains("gemini-2.0-flash") || model_lower.contains("gemini-2-flash") {
+        Some(GEMINI_20_FLASH_CONTEXT_WINDOW)
+    } else if model_lower.contains("gemini-1.5-pro") || model_lower.contains("gemini-15-pro") {
+        Some(GEMINI_15_PRO_CONTEXT_WINDOW)
+    } else {
+        None
+    }
+}
+
+// ============================================================================
 // Message Transformation Utilities
 // ============================================================================
 
