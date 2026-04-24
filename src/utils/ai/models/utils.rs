@@ -556,26 +556,17 @@ mod tests {
 
     #[cfg(feature = "providers-extended")]
     #[test]
-    fn test_get_model_capabilities_gemini_15_pro_context_matches_registry() {
-        let registry_context = get_gemini_registry()
-            .get_model_limits("gemini-1.5-pro")
-            .unwrap()
-            .max_context_length;
-        let caps = ModelUtils::get_model_capabilities("gemini-1.5-pro");
+    fn test_get_model_capabilities_gemini_context_matches_registry() {
+        for spec in get_gemini_registry().list_models() {
+            let caps = ModelUtils::get_model_capabilities(&spec.model_info.id);
 
-        assert_eq!(caps.context_window, Some(registry_context as usize));
-    }
-
-    #[cfg(feature = "providers-extended")]
-    #[test]
-    fn test_get_model_capabilities_gemini_20_flash_context_matches_registry() {
-        let registry_context = get_gemini_registry()
-            .get_model_limits("gemini-2.0-flash-exp")
-            .unwrap()
-            .max_context_length;
-        let caps = ModelUtils::get_model_capabilities("gemini-2.0-flash");
-
-        assert_eq!(caps.context_window, Some(registry_context as usize));
+            assert_eq!(
+                caps.context_window,
+                Some(spec.limits.max_context_length as usize),
+                "{} utility context window drifted from registry",
+                spec.model_info.id
+            );
+        }
     }
 
     #[test]
