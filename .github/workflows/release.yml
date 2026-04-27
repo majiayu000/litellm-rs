@@ -220,7 +220,20 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'majiayu000/litellm-rs'
     steps:
+    - name: Check Homebrew tap token
+      id: homebrew_token
+      env:
+        HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      run: |
+        if [ -n "$HOMEBREW_TAP_TOKEN" ]; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Homebrew tap update skipped::Set HOMEBREW_TAP_TOKEN to update majiayu000/homebrew-tap during releases."
+        fi
+
     - name: Update Homebrew formula
+      if: steps.homebrew_token.outputs.available == 'true'
       uses: mislav/bump-homebrew-formula-action@v3
       with:
         formula-name: rust-litellm-gateway
