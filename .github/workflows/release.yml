@@ -16,13 +16,17 @@ jobs:
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
+      crate_version: ${{ steps.get_version.outputs.crate_version }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Get version
       id: get_version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: |
+        version="${GITHUB_REF#refs/tags/}"
+        echo "version=${version}" >> $GITHUB_OUTPUT
+        echo "crate_version=${version#v}" >> $GITHUB_OUTPUT
 
     - name: Create Release
       id: create_release
@@ -209,10 +213,10 @@ jobs:
     - name: Publish to crates.io
       run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
 
-  # Update Homebrew formula (for macOS users)
+  # Update Homebrew formula from the published crates.io tarball
   homebrew-release:
     name: Update Homebrew Formula
-    needs: [create-release, build-release]
+    needs: [create-release, publish-crate]
     runs-on: ubuntu-latest
     if: github.repository == 'majiayu000/litellm-rs'
     steps:
@@ -222,9 +226,9 @@ jobs:
         formula-name: rust-litellm-gateway
         homebrew-tap: majiayu000/homebrew-tap
         base-branch: main
-        download-url: https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.version }}/rust-litellm-gateway-${{ needs.create-release.outputs.version }}-macos-x86_64.tar.gz
+        download-url: https://crates.io/api/v1/crates/litellm-rs/${{ needs.create-release.outputs.crate_version }}/download
       env:
-        COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TOKEN }}
+        COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
   # Deploy to staging environment
   deploy-staging:
