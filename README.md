@@ -70,7 +70,7 @@ gateway
 
 Notes:
 
-- `gateway` and `google-gateway` binaries require `storage` feature at build time.
+- `gateway` requires the `storage` feature at build time.
 - Default features include `sqlite`, so default `cargo run`/`cargo install` satisfy this requirement.
 
 ## Installation
