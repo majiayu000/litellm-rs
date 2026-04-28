@@ -46,6 +46,12 @@ pub struct DatabaseConfig {
     /// Enable database (if false, use in-memory storage)
     #[serde(default)]
     pub enabled: bool,
+    /// Allow PostgreSQL connection failures to fall back to local SQLite.
+    ///
+    /// Disabled by default to avoid silently writing production data to a
+    /// local database when the configured PostgreSQL backend is unavailable.
+    #[serde(default)]
+    pub fallback_to_sqlite: bool,
 }
 
 impl Default for DatabaseConfig {
@@ -56,6 +62,7 @@ impl Default for DatabaseConfig {
             connection_timeout: default_connection_timeout(),
             ssl: false,
             enabled: false,
+            fallback_to_sqlite: false,
         }
     }
 }
@@ -78,6 +85,9 @@ impl DatabaseConfig {
         }
         if other.enabled {
             self.enabled = true;
+        }
+        if other.fallback_to_sqlite {
+            self.fallback_to_sqlite = true;
         }
         self
     }
@@ -156,6 +166,7 @@ mod tests {
         assert_eq!(config.connection_timeout, 5);
         assert!(!config.ssl);
         assert!(!config.enabled);
+        assert!(!config.fallback_to_sqlite);
     }
 
     #[test]
@@ -166,6 +177,7 @@ mod tests {
             connection_timeout: 60,
             ssl: true,
             enabled: true,
+            fallback_to_sqlite: false,
         };
         assert!(config.ssl);
         assert!(config.enabled);
@@ -180,6 +192,7 @@ mod tests {
             connection_timeout: 45,
             ssl: true,
             enabled: true,
+            fallback_to_sqlite: false,
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["url"], "postgresql://test");
@@ -204,6 +217,7 @@ mod tests {
             connection_timeout: 30,
             ssl: false,
             enabled: false,
+            fallback_to_sqlite: false,
         };
         let merged = base.merge(other);
         assert_eq!(merged.url, "postgresql://new-host/new-db");
@@ -218,6 +232,7 @@ mod tests {
             connection_timeout: 30,
             ssl: true,
             enabled: false,
+            fallback_to_sqlite: false,
         };
         let merged = base.merge(other);
         assert!(merged.ssl);
@@ -232,9 +247,21 @@ mod tests {
             connection_timeout: default_connection_timeout(),
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
         let merged = base.merge(other);
         assert!(merged.enabled);
+    }
+
+    #[test]
+    fn test_database_config_merge_fallback_to_sqlite_true() {
+        let base = DatabaseConfig::default();
+        let other = DatabaseConfig {
+            fallback_to_sqlite: true,
+            ..DatabaseConfig::default()
+        };
+        let merged = base.merge(other);
+        assert!(merged.fallback_to_sqlite);
     }
 
     #[test]
@@ -460,6 +487,7 @@ mod tests {
                 connection_timeout: 30,
                 ssl: false,
                 enabled: false,
+                fallback_to_sqlite: false,
             },
             redis: RedisConfig::default(),
             vector_db: None,

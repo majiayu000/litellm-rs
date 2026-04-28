@@ -29,11 +29,12 @@ impl SeaOrmDatabase {
                 Ok(Self { db, backend_type })
             }
             Err(e) => {
-                // If PostgreSQL connection fails, try SQLite fallback
-                if config.url.starts_with("postgresql://") || config.url.starts_with("postgres://")
+                if config.fallback_to_sqlite
+                    && (config.url.starts_with("postgresql://")
+                        || config.url.starts_with("postgres://"))
                 {
                     warn!(
-                        "PostgreSQL connection failed: {}. Attempting SQLite fallback...",
+                        "PostgreSQL connection failed: {}. Attempting SQLite fallback because storage.database.fallback_to_sqlite is enabled...",
                         e
                     );
                     Self::fallback_to_sqlite().await

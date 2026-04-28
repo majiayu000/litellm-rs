@@ -377,6 +377,7 @@ mod tests {
                 connection_timeout: 5,
                 ssl: false,
                 enabled: true,
+                fallback_to_sqlite: false,
             },
             redis: RedisConfig {
                 url: "redis://localhost:6379".to_string(),

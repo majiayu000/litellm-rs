@@ -20,6 +20,7 @@ mod tests {
             connection_timeout: 5,
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config).await;
@@ -48,6 +49,7 @@ mod tests {
             connection_timeout: 5,
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config)
@@ -65,6 +67,7 @@ mod tests {
             connection_timeout: 1,
             ssl: false,
             enabled: false,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config).await.expect(
@@ -87,6 +90,7 @@ mod tests {
             connection_timeout: 5,
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config)
@@ -109,6 +113,7 @@ mod tests {
             connection_timeout: 5,
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config)
@@ -131,6 +136,7 @@ mod tests {
             connection_timeout: 5,
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config)
@@ -150,6 +156,7 @@ mod tests {
             connection_timeout: 5,
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config)
@@ -297,6 +304,7 @@ mod tests {
             connection_timeout: 5,
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config)

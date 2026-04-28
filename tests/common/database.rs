@@ -25,6 +25,7 @@ impl TestDatabase {
             connection_timeout: 5,
             ssl: false,
             enabled: true,
+            fallback_to_sqlite: false,
         };
 
         let db = Database::new(&config)
@@ -74,6 +75,7 @@ pub fn test_db_config() -> DatabaseConfig {
         connection_timeout: 5,
         ssl: false,
         enabled: true,
+        fallback_to_sqlite: false,
     }
 }
 
