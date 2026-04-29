@@ -86,7 +86,9 @@ impl DatabaseConfig {
         if other.enabled {
             self.enabled = true;
         }
-        self.fallback_to_sqlite = other.fallback_to_sqlite;
+        if other.fallback_to_sqlite {
+            self.fallback_to_sqlite = true;
+        }
         self
     }
 }
@@ -263,13 +265,13 @@ mod tests {
     }
 
     #[test]
-    fn test_database_config_merge_fallback_to_sqlite_false_override() {
+    fn test_database_config_merge_preserves_fallback_to_sqlite_on_default_overlay() {
         let base = DatabaseConfig {
             fallback_to_sqlite: true,
             ..DatabaseConfig::default()
         };
         let merged = base.merge(DatabaseConfig::default());
-        assert!(!merged.fallback_to_sqlite);
+        assert!(merged.fallback_to_sqlite);
     }
 
     #[test]
