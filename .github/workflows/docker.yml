@@ -65,7 +65,7 @@ jobs:
 
     - name: Test Docker image
       run: |
-        docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} /bin/sh -lc 'test -x /usr/local/bin/gateway && test -x /usr/local/bin/google-gateway && ldd /usr/local/bin/gateway >/dev/null && ldd /usr/local/bin/google-gateway >/dev/null'
+        docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} /bin/sh -lc 'test -x /usr/local/bin/gateway && ldd /usr/local/bin/gateway >/dev/null'
 
   # Security scan
   security-scan:

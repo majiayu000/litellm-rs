@@ -152,4 +152,3 @@ jobs:
           name: litellm-gateway-linux
           path: |
             target/release/gateway
-            target/release/google-gateway

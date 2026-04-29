@@ -33,11 +33,6 @@ path = "src/main.rs"
 required-features = ["storage"]
 
 [[bin]]
-name = "google-gateway"
-path = "src/bin/google_gateway.rs"
-required-features = ["storage"]
-
-[[bin]]
 name = "pricing-tool"
 path = "src/bin/pricing-tool.rs"
 required-features = ["gateway"]

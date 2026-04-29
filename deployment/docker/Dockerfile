@@ -28,7 +28,6 @@ RUN mkdir -p src/bin && \
     mkdir -p benches && \
     echo "fn main() {}" > src/main.rs && \
     echo "#![allow(dead_code)] pub fn dummy() {}" > src/lib.rs && \
-    echo "fn main() {}" > src/bin/google_gateway.rs && \
     echo "fn main() {}" > src/bin/pricing-tool.rs && \
     echo "fn main() {}" > benches/performance_benchmarks.rs && \
     echo "fn main() {}" > benches/e2e_benchmarks.rs
@@ -63,7 +62,6 @@ WORKDIR /app
 
 # Copy binary from builder stage
 COPY --from=builder /app/target/release/gateway /usr/local/bin/gateway
-COPY --from=builder /app/target/release/google-gateway /usr/local/bin/google-gateway
 
 # Copy configuration files
 COPY --from=builder /app/config ./config
