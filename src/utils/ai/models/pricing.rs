@@ -30,6 +30,8 @@ impl ModelUtils {
             m if m.contains("claude-3-opus") => Some((0.015, 0.075)),
             m if m.contains("claude-3-sonnet") => Some((0.003, 0.015)),
             m if m.contains("claude-3-haiku") => Some((0.00025, 0.00125)),
+            m if m.starts_with("gemini-3.1-flash-lite") => Some((0.0000375, 0.00015)),
+            m if m.starts_with("gemini-3.1-flash") => Some((0.000075, 0.0003)),
             m if m.starts_with("gemini-1.5-flash") => Some((0.000075, 0.0003)),
             m if m.starts_with("gemini-pro") => Some((0.0005, 0.0015)),
             _ => None,
@@ -205,6 +207,24 @@ mod tests {
         let (input, output) = pricing.unwrap();
         assert!((input - 0.000075).abs() < f64::EPSILON);
         assert!((output - 0.0003).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_model_pricing_gemini_31_flash() {
+        let pricing = ModelUtils::get_model_pricing("gemini-3.1-flash");
+        assert!(pricing.is_some());
+        let (input, output) = pricing.unwrap();
+        assert!((input - 0.000075).abs() < f64::EPSILON);
+        assert!((output - 0.0003).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_model_pricing_gemini_31_flash_lite() {
+        let pricing = ModelUtils::get_model_pricing("gemini-3.1-flash-lite");
+        assert!(pricing.is_some());
+        let (input, output) = pricing.unwrap();
+        assert!((input - 0.0000375).abs() < f64::EPSILON);
+        assert!((output - 0.00015).abs() < f64::EPSILON);
     }
 
     #[test]
