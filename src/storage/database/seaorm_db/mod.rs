@@ -4,6 +4,8 @@ mod api_key_ops;
 mod batch_ops;
 mod connection;
 mod team_repository;
+#[cfg(test)]
+mod team_repository_tests;
 mod token_ops;
 mod types;
 mod user_management_ops;

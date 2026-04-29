@@ -58,7 +58,7 @@ pub async fn audio_speech(
 
     let unified_router = &state.unified_router;
 
-    let selection = match select_provider_for_model(
+    let selected_model = match select_provider_for_model(
         unified_router,
         &request.model,
         ProviderCapability::TextToSpeech,
@@ -69,7 +69,7 @@ pub async fn audio_speech(
 
     let speech_request = SpeechRequest {
         input: request.input.clone(),
-        model: selection.model,
+        model: selected_model,
         voice: request.voice.clone(),
         response_format: request.response_format.clone(),
         speed: request.speed,

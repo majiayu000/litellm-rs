@@ -14,20 +14,14 @@ impl LLMClient {
         &self,
         request: &SdkChatRequest,
     ) -> Result<&crate::sdk::config::SdkProviderConfig> {
-        // If model is specified, find provider that supports it
         if !request.model.is_empty() {
-            for provider in &self.config.providers {
-                if provider.models.contains(&request.model) && provider.enabled {
-                    return Ok(provider);
-                }
-            }
-            return Err(SDKError::ModelNotFound(format!(
-                "Model '{}' not supported by any provider",
-                request.model
-            )));
+            return self.provider_for_model(&request.model);
         }
 
-        // Use load balancing strategy to select provider
+        if let Some(provider) = self.default_enabled_provider() {
+            return Ok(provider);
+        }
+
         self.load_balancer
             .select_provider(&self.config.providers, &self.provider_stats)
             .await
@@ -38,17 +32,17 @@ impl LLMClient {
         &self,
         _messages: &[Message],
     ) -> Result<&crate::sdk::config::SdkProviderConfig> {
-        // Find provider that supports streaming
-        for provider in &self.config.providers {
-            if provider.enabled {
-                return Ok(provider);
-            }
+        if let Some(provider) = self.default_enabled_provider() {
+            return Ok(provider);
         }
-        Err(SDKError::NoDefaultProvider)
+
+        self.first_enabled_provider()
     }
 }
 
 // Load balancer implementation
+use std::sync::atomic::Ordering;
+
 use super::types::LoadBalancer;
 
 impl LoadBalancer {
@@ -67,8 +61,9 @@ impl LoadBalancer {
 
         match self.strategy {
             LoadBalancingStrategy::RoundRobin => {
-                // Simple round-robin: select first available provider
-                Ok(enabled_providers[0])
+                let idx = self.round_robin_counter.fetch_add(1, Ordering::Relaxed)
+                    % enabled_providers.len();
+                Ok(enabled_providers[idx])
             }
             LoadBalancingStrategy::WeightedRandom => {
                 // Weighted random selection

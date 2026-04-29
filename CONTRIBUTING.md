@@ -16,14 +16,20 @@ Thank you for your interest in contributing to litellm-rs!
 git clone https://github.com/majiayu000/litellm-rs.git
 cd litellm-rs
 
-# Build the project
-cargo build --all-features
+# Quick profile (recommended for most contributors)
+make build
+make test
+make lint
 
-# Run tests
-cargo test --all-features
+# Standard profile (gateway/common bundle)
+make build-standard
+make test-standard
+make lint-standard
 
-# Run lints
-cargo clippy --all-targets --all-features -- -D warnings
+# Full profile (heavy, release/nightly validation)
+make build-full
+make test-full
+make lint-full
 
 # Format code
 cargo fmt --all
@@ -99,14 +105,20 @@ This adds `Signed-off-by: Your Name <email>` to the commit.
 ## Testing
 
 ```bash
-# Run all tests
-cargo test --all-features
+# Quick profile (lightweight default)
+make test
 
-# Run specific test
-cargo test test_name --all-features
+# Standard gateway/common tests
+make test-standard
 
-# Run with logging
-RUST_LOG=debug cargo test --all-features
+# Full feature tests (heavy)
+make test-full
+
+# Run specific test (API-only profile)
+cargo test test_name --no-default-features --features "lite"
+
+# Run with logging (standard profile example)
+RUST_LOG=debug cargo test --lib --tests --features "postgres sqlite redis s3 metrics tracing websockets analytics"
 ```
 
 ## Adding a New Provider

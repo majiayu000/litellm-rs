@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- Removed the legacy `google-gateway` binary from Cargo, release archives, CI artifacts, and Docker images. The published gateway distribution now focuses on the main `gateway` executable.
+
 ## [0.4.2] - 2026-02-28
 
 ### Fixed

@@ -4,6 +4,7 @@
 
 use crate::config::Config;
 use crate::core::budget::UnifiedBudgetLimits;
+use crate::core::keys::{DatabaseKeyRepository, KeyManager};
 use crate::core::teams::TeamManager;
 use crate::services::pricing::PricingService;
 use crate::storage::database::SeaOrmTeamRepository;
@@ -35,6 +36,8 @@ pub struct AppState {
     pub budget_limits: Arc<UnifiedBudgetLimits>,
     /// Team manager for team lifecycle operations (shared, in-memory by default)
     pub team_manager: Arc<TeamManager>,
+    /// API key manager for `/v1/keys` route handlers (shared across requests)
+    pub key_manager: KeyManager,
 }
 
 impl AppState {
@@ -46,6 +49,9 @@ impl AppState {
         storage: crate::storage::StorageLayer,
         pricing: Arc<PricingService>,
     ) -> Self {
+        let storage = Arc::new(storage);
+        let key_manager = KeyManager::new(DatabaseKeyRepository::new(storage.clone()))
+            .with_hmac_secret(config.gateway.auth.api_key_hmac_secret.clone());
         let team_manager = Arc::new(TeamManager::new(Arc::new(SeaOrmTeamRepository::new(
             storage.database.clone(),
         ))));
@@ -53,10 +59,11 @@ impl AppState {
             config: AtomicValue::new(config),
             auth: Arc::new(auth),
             unified_router: Arc::new(unified_router),
-            storage: Arc::new(storage),
+            storage,
             pricing,
             budget_limits: Arc::new(UnifiedBudgetLimits::new()),
             team_manager,
+            key_manager,
         }
     }
 

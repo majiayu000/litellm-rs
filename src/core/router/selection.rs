@@ -4,36 +4,13 @@
 //! the best deployment for a given model.
 
 use super::config::RoutingStrategy;
-use super::deployment::{Deployment, DeploymentId};
+use super::deployment::DeploymentId;
 use super::error::RouterError;
 use super::strategy_impl;
 use super::unified::Router;
 use std::sync::atomic::Ordering::Relaxed;
 
 impl Router {
-    /// Check if deployment is within parallel request limit
-    pub(crate) fn check_parallel_limit(&self, deployment: &Deployment) -> bool {
-        match deployment.config.max_parallel_requests {
-            Some(limit) => deployment.state.active_requests.load(Relaxed) < limit,
-            None => true,
-        }
-    }
-
-    /// Check if deployment is within rate limits (TPM/RPM)
-    pub(crate) fn check_rate_limit(&self, deployment: &Deployment) -> bool {
-        let rpm_ok = match deployment.config.rpm_limit {
-            Some(limit) => deployment.state.rpm_current.load(Relaxed) < limit,
-            None => true,
-        };
-
-        let tpm_ok = match deployment.config.tpm_limit {
-            Some(limit) => deployment.state.tpm_current.load(Relaxed) < limit,
-            None => true,
-        };
-
-        rpm_ok && tpm_ok
-    }
-
     /// Select the best deployment for a given model (core routing method)
     ///
     /// # Flow
@@ -44,79 +21,109 @@ impl Router {
     /// 4. Select based on routing strategy
     /// 5. Increment active_requests counter
     pub fn select_deployment(&self, model_name: &str) -> Result<DeploymentId, RouterError> {
-        // 1. Resolve model name (handle aliases)
-        let resolved_name = self.resolve_model_name(model_name);
+        // 1. Resolve model name with a borrowed fast path so the hot routing
+        // path only allocates when we finally return the selected deployment ID.
+        let alias_guard = self.maybe_model_alias(model_name);
+        let resolved_name = alias_guard
+            .as_ref()
+            .map(|alias| alias.value().as_str())
+            .unwrap_or(model_name);
 
-        // 2. Get all deployment IDs for this model (hold DashMap guard, avoid Vec clone)
+        // 2. Get all deployment IDs for this model.
         let deployment_ids_ref = self
             .model_index
-            .get(&resolved_name)
+            .get(resolved_name)
             .ok_or_else(|| RouterError::ModelNotFound(model_name.to_string()))?;
 
         if deployment_ids_ref.is_empty() {
             return Err(RouterError::ModelNotFound(model_name.to_string()));
         }
 
-        // 3. Filter: healthy + not in cooldown + not rate limited
+        // 3. Filter and build routing contexts in one pass to avoid cloning a
+        // temporary candidate ID vector and then looking everything up again.
         let total_deployments = deployment_ids_ref.len();
-        let candidate_ids: Vec<DeploymentId> = deployment_ids_ref
-            .iter()
-            .filter(|id| {
-                if let Some(deployment) = self.deployments.get(id.as_str()) {
-                    // Check cooldown first: is_in_cooldown() resets health
-                    // from Cooldown to Degraded when the cooldown period expires.
-                    if deployment.is_in_cooldown() {
-                        tracing::trace!(
-                            deployment_id = id.as_str(),
-                            model = %resolved_name,
-                            reason = "in_cooldown",
-                            "deployment excluded from routing candidates"
-                        );
-                        return false;
-                    }
+        let mut routing_contexts = Vec::with_capacity(total_deployments);
 
-                    if !deployment.is_healthy() {
-                        tracing::trace!(
-                            deployment_id = id.as_str(),
-                            model = %resolved_name,
-                            reason = "unhealthy",
-                            "deployment excluded from routing candidates"
-                        );
-                        return false;
-                    }
+        for id in deployment_ids_ref.iter() {
+            let Some(deployment) = self.deployments.get(id.as_str()) else {
+                continue;
+            };
 
-                    if !self.check_parallel_limit(&deployment) {
-                        tracing::trace!(
-                            deployment_id = id.as_str(),
-                            model = %resolved_name,
-                            reason = "parallel_limit_reached",
-                            "deployment excluded from routing candidates"
-                        );
-                        return false;
-                    }
+            // Check cooldown first: is_in_cooldown() resets health
+            // from Cooldown to Degraded when the cooldown period expires.
+            if deployment.is_in_cooldown() {
+                tracing::trace!(
+                    deployment_id = id.as_str(),
+                    model = %resolved_name,
+                    reason = "in_cooldown",
+                    "deployment excluded from routing candidates"
+                );
+                continue;
+            }
 
-                    if !self.check_rate_limit(&deployment) {
-                        tracing::trace!(
-                            deployment_id = id.as_str(),
-                            model = %resolved_name,
-                            reason = "rate_limited",
-                            "deployment excluded from routing candidates"
-                        );
-                        return false;
-                    }
+            if !deployment.is_healthy() {
+                tracing::trace!(
+                    deployment_id = id.as_str(),
+                    model = %resolved_name,
+                    reason = "unhealthy",
+                    "deployment excluded from routing candidates"
+                );
+                continue;
+            }
 
-                    true
-                } else {
-                    false
-                }
-            })
-            .cloned()
-            .collect();
+            let active_requests = deployment.state.active_requests.load(Relaxed);
+            if let Some(limit) = deployment.config.max_parallel_requests
+                && active_requests >= limit
+            {
+                tracing::trace!(
+                    deployment_id = id.as_str(),
+                    model = %resolved_name,
+                    reason = "parallel_limit_reached",
+                    "deployment excluded from routing candidates"
+                );
+                continue;
+            }
 
-        // Drop the model_index read guard before strategy selection
-        drop(deployment_ids_ref);
+            let rpm_current = deployment.state.rpm_current.load(Relaxed);
+            if let Some(limit) = deployment.config.rpm_limit
+                && rpm_current >= limit
+            {
+                tracing::trace!(
+                    deployment_id = id.as_str(),
+                    model = %resolved_name,
+                    reason = "rate_limited",
+                    "deployment excluded from routing candidates"
+                );
+                continue;
+            }
 
-        if candidate_ids.is_empty() {
+            let tpm_current = deployment.state.tpm_current.load(Relaxed);
+            if let Some(limit) = deployment.config.tpm_limit
+                && tpm_current >= limit
+            {
+                tracing::trace!(
+                    deployment_id = id.as_str(),
+                    model = %resolved_name,
+                    reason = "rate_limited",
+                    "deployment excluded from routing candidates"
+                );
+                continue;
+            }
+
+            routing_contexts.push(strategy_impl::RoutingContext {
+                deployment_id: id,
+                weight: deployment.config.weight,
+                priority: deployment.config.priority,
+                active_requests,
+                tpm_current,
+                tpm_limit: deployment.config.tpm_limit,
+                rpm_current,
+                rpm_limit: deployment.config.rpm_limit,
+                avg_latency_us: deployment.state.avg_latency_us.load(Relaxed),
+            });
+        }
+
+        if routing_contexts.is_empty() {
             tracing::warn!(
                 model = %model_name,
                 total_deployments = total_deployments,
@@ -125,12 +132,7 @@ impl Router {
             return Err(RouterError::NoAvailableDeployment(model_name.to_string()));
         }
 
-        // 4. Build immutable routing context once, then let strategies read that snapshot.
-        let routing_contexts =
-            strategy_impl::build_routing_contexts(&candidate_ids, &self.deployments);
-
-        // 5. Select based on routing strategy
-        // Note: candidate_ids is guaranteed non-empty at this point (checked above)
+        // 4. Select based on the immutable routing contexts.
         let selected_id = match self.config.routing_strategy {
             RoutingStrategy::SimpleShuffle => {
                 strategy_impl::weighted_random_from_context(&routing_contexts)
@@ -149,23 +151,25 @@ impl Router {
                 strategy_impl::rate_limit_aware_from_context(&routing_contexts)
             }
             RoutingStrategy::RoundRobin => strategy_impl::round_robin_from_context(
-                &resolved_name,
+                resolved_name,
                 &routing_contexts,
                 &self.round_robin_counters,
             ),
         }
-        .cloned()
-        .ok_or_else(|| RouterError::NoAvailableDeployment(model_name.to_string()))?;
+        .ok_or_else(|| RouterError::NoAvailableDeployment(model_name.to_string()))?
+        .clone();
 
-        // 6. Increment active_requests counter
+        // 5. Increment active_requests counter and routing metrics.
         if let Some(deployment) = self.deployments.get(&selected_id) {
             deployment.state.active_requests.fetch_add(1, Relaxed);
         }
+        self.provider_selected_count.fetch_add(1, Relaxed);
+        self.strategy_used_count.fetch_add(1, Relaxed);
 
         tracing::debug!(
             model = %model_name,
             strategy = ?self.config.routing_strategy,
-            candidate_count = candidate_ids.len(),
+            candidate_count = routing_contexts.len(),
             selected_id = %selected_id,
             "deployment selected for routing"
         );

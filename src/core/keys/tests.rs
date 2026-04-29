@@ -84,6 +84,25 @@ async fn test_generate_multiple_keys() {
     }
 }
 
+#[tokio::test]
+async fn test_key_manager_clone_shares_repository_state() {
+    let manager = create_test_manager();
+    let cloned_manager = manager.clone();
+
+    let config = CreateKeyConfig {
+        name: "Shared State Key".to_string(),
+        ..Default::default()
+    };
+
+    let (key_id, raw_key) = manager.generate_key(config).await.unwrap();
+
+    let key_from_clone = cloned_manager.get_key(key_id).await.unwrap();
+    assert!(key_from_clone.is_some());
+
+    let verify_from_clone = cloned_manager.validate_key(&raw_key).await.unwrap();
+    assert!(verify_from_clone.valid);
+}
+
 // ==================== Key Validation Tests ====================
 
 #[tokio::test]

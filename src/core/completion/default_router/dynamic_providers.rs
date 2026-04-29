@@ -2,6 +2,125 @@
 
 use super::*;
 
+struct DynamicProviderRoute<'a> {
+    provider_type: &'static str,
+    provider_label: &'static str,
+    actual_model: &'a str,
+    api_base: String,
+}
+
+struct DynamicProviderPrefix {
+    prefix: &'static str,
+    provider_type: &'static str,
+    provider_label: &'static str,
+    default_api_base: &'static str,
+}
+
+const DYNAMIC_PROVIDER_PREFIXES: &[DynamicProviderPrefix] = &[
+    DynamicProviderPrefix {
+        prefix: "openrouter/",
+        provider_type: "openrouter",
+        provider_label: "OpenRouter",
+        default_api_base: "https://openrouter.ai/api/v1",
+    },
+    DynamicProviderPrefix {
+        prefix: "anthropic/",
+        provider_type: "anthropic",
+        provider_label: "Anthropic",
+        default_api_base: "https://api.anthropic.com",
+    },
+    DynamicProviderPrefix {
+        prefix: "deepseek/",
+        provider_type: "deepseek",
+        provider_label: "DeepSeek",
+        default_api_base: "https://api.deepseek.com",
+    },
+    DynamicProviderPrefix {
+        prefix: "moonshot/",
+        provider_type: "moonshot",
+        provider_label: "Moonshot",
+        default_api_base: "https://api.moonshot.cn/v1",
+    },
+    DynamicProviderPrefix {
+        prefix: "minimax/",
+        provider_type: "minimax",
+        provider_label: "MiniMax",
+        default_api_base: "https://api.minimax.chat/v1",
+    },
+    DynamicProviderPrefix {
+        prefix: "zhipu/",
+        provider_type: "zhipu",
+        provider_label: "Zhipu",
+        default_api_base: "https://open.bigmodel.cn/api/paas/v4",
+    },
+    DynamicProviderPrefix {
+        prefix: "glm/",
+        provider_type: "zhipu",
+        provider_label: "Zhipu",
+        default_api_base: "https://open.bigmodel.cn/api/paas/v4",
+    },
+    DynamicProviderPrefix {
+        prefix: "zai/",
+        provider_type: "zhipu",
+        provider_label: "Zhipu",
+        default_api_base: "https://open.bigmodel.cn/api/paas/v4",
+    },
+    DynamicProviderPrefix {
+        prefix: "openai/",
+        provider_type: "openai",
+        provider_label: "OpenAI",
+        default_api_base: "https://api.openai.com/v1",
+    },
+];
+
+fn resolve_dynamic_provider_route<'a>(
+    model: &'a str,
+    options: &CompletionOptions,
+) -> Option<DynamicProviderRoute<'a>> {
+    for config in DYNAMIC_PROVIDER_PREFIXES {
+        if let Some(actual_model) = model.strip_prefix(config.prefix) {
+            let api_base = options
+                .api_base
+                .clone()
+                .unwrap_or_else(|| config.default_api_base.to_string());
+            return Some(DynamicProviderRoute {
+                provider_type: config.provider_type,
+                provider_label: config.provider_label,
+                actual_model,
+                api_base,
+            });
+        }
+    }
+
+    if model.starts_with("azure_ai/") || model.starts_with("azure-ai/") {
+        let actual_model = model
+            .strip_prefix("azure_ai/")
+            .or_else(|| model.strip_prefix("azure-ai/"))
+            .unwrap_or(model);
+        let api_base = options
+            .api_base
+            .clone()
+            .or_else(|| std::env::var("AZURE_AI_API_BASE").ok())
+            .unwrap_or_else(|| "https://api.azure.com".to_string());
+        return Some(DynamicProviderRoute {
+            provider_type: "azure_ai",
+            provider_label: "Azure AI",
+            actual_model,
+            api_base,
+        });
+    }
+
+    options
+        .api_base
+        .clone()
+        .map(|api_base| DynamicProviderRoute {
+            provider_type: "openai-compatible",
+            provider_label: "OpenAI-Compatible",
+            actual_model: model,
+            api_base,
+        })
+}
+
 impl DefaultRouter {
     /// Dynamic provider creation (Python LiteLLM style)
     /// Creates providers on-demand based on model name and provided options
@@ -19,128 +138,49 @@ impl DefaultRouter {
             None => return Ok(None),
         };
 
-        // Determine provider type from model name
-        let (provider_type, actual_model, api_base) = if model.starts_with("openrouter/") {
-            let actual_model = model.strip_prefix("openrouter/").unwrap_or(model);
-            let api_base = options
-                .api_base
-                .clone()
-                .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
-            ("openrouter", actual_model, api_base)
-        } else if model.starts_with("anthropic/") {
-            let actual_model = model.strip_prefix("anthropic/").unwrap_or(model);
-            let api_base = options
-                .api_base
-                .clone()
-                .unwrap_or_else(|| "https://api.anthropic.com".to_string());
-            ("anthropic", actual_model, api_base)
-        } else if model.starts_with("deepseek/") {
-            let actual_model = model.strip_prefix("deepseek/").unwrap_or(model);
-            let api_base = options
-                .api_base
-                .clone()
-                .unwrap_or_else(|| "https://api.deepseek.com".to_string());
-            ("deepseek", actual_model, api_base)
-        } else if model.starts_with("azure_ai/") || model.starts_with("azure-ai/") {
-            let actual_model = model
-                .strip_prefix("azure_ai/")
-                .or_else(|| model.strip_prefix("azure-ai/"))
-                .unwrap_or(model);
-            let api_base = options
-                .api_base
-                .clone()
-                .or_else(|| std::env::var("AZURE_AI_API_BASE").ok())
-                .unwrap_or_else(|| "https://api.azure.com".to_string());
-            ("azure_ai", actual_model, api_base)
-        } else if model.starts_with("openai/") {
-            let actual_model = model.strip_prefix("openai/").unwrap_or(model);
-            let api_base = options
-                .api_base
-                .clone()
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            ("openai", actual_model, api_base)
-        } else {
-            // For models without provider prefix, try to infer or use custom api_base
-            if let Some(api_base) = &options.api_base {
-                ("openai-compatible", model.as_str(), api_base.clone())
-            } else {
-                return Ok(None);
-            }
+        let Some(route) = resolve_dynamic_provider_route(model, options) else {
+            return Ok(None);
         };
 
         debug!(
-            provider_type = %provider_type,
-            model = %actual_model,
+            provider_type = %route.provider_type,
+            model = %route.actual_model,
             "Creating dynamic provider for model"
         );
 
         // Create dynamic provider based on type
-        let response = match provider_type {
-            "openrouter" => {
-                self.create_dynamic_openai_compatible(
-                    actual_model,
-                    &api_key,
-                    &api_base,
-                    chat_request,
-                    context,
-                    "OpenRouter",
-                )
-                .await?
-            }
+        let response = match route.provider_type {
             "anthropic" => {
                 self.create_dynamic_anthropic(
-                    actual_model,
+                    route.actual_model,
                     &api_key,
-                    &api_base,
+                    &route.api_base,
                     chat_request,
                     context,
-                )
-                .await?
-            }
-            "deepseek" => {
-                self.create_dynamic_openai_compatible(
-                    actual_model,
-                    &api_key,
-                    &api_base,
-                    chat_request,
-                    context,
-                    "DeepSeek",
                 )
                 .await?
             }
             "azure_ai" => {
                 self.create_dynamic_azure_ai(
-                    actual_model,
+                    route.actual_model,
                     &api_key,
-                    &api_base,
+                    &route.api_base,
                     chat_request,
                     context,
                 )
                 .await?
             }
-            "openai" => {
+            _ => {
                 self.create_dynamic_openai_compatible(
-                    actual_model,
+                    route.actual_model,
                     &api_key,
-                    &api_base,
+                    &route.api_base,
                     chat_request,
                     context,
-                    "OpenAI",
+                    route.provider_label,
                 )
                 .await?
             }
-            "openai-compatible" => {
-                self.create_dynamic_openai_compatible(
-                    actual_model,
-                    &api_key,
-                    &api_base,
-                    chat_request,
-                    context,
-                    "OpenAI-Compatible",
-                )
-                .await?
-            }
-            _ => return Ok(None),
         };
 
         Ok(Some(response))
@@ -287,5 +327,76 @@ impl DefaultRouter {
         Err(GatewayError::not_implemented(
             "dynamic azure_ai requires the `providers-extra` feature",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_dynamic_route_for_moonshot() {
+        let options = CompletionOptions::default();
+        let route = resolve_dynamic_provider_route("moonshot/kimi-k2.5", &options).unwrap();
+
+        assert_eq!(route.provider_type, "moonshot");
+        assert_eq!(route.provider_label, "Moonshot");
+        assert_eq!(route.actual_model, "kimi-k2.5");
+        assert_eq!(route.api_base, "https://api.moonshot.cn/v1");
+    }
+
+    #[test]
+    fn test_resolve_dynamic_route_for_minimax() {
+        let options = CompletionOptions::default();
+        let route =
+            resolve_dynamic_provider_route("minimax/MiniMax-M2.5-lightning", &options).unwrap();
+
+        assert_eq!(route.provider_type, "minimax");
+        assert_eq!(route.provider_label, "MiniMax");
+        assert_eq!(route.actual_model, "MiniMax-M2.5-lightning");
+        assert_eq!(route.api_base, "https://api.minimax.chat/v1");
+    }
+
+    #[test]
+    fn test_resolve_dynamic_route_for_glm_alias() {
+        let options = CompletionOptions::default();
+        let route = resolve_dynamic_provider_route("glm/glm-5", &options).unwrap();
+
+        assert_eq!(route.provider_type, "zhipu");
+        assert_eq!(route.provider_label, "Zhipu");
+        assert_eq!(route.actual_model, "glm-5");
+        assert_eq!(route.api_base, "https://open.bigmodel.cn/api/paas/v4");
+    }
+
+    #[test]
+    fn test_resolve_dynamic_route_for_zai_alias() {
+        let options = CompletionOptions::default();
+        let route = resolve_dynamic_provider_route("zai/glm-5", &options).unwrap();
+
+        assert_eq!(route.provider_type, "zhipu");
+        assert_eq!(route.provider_label, "Zhipu");
+        assert_eq!(route.actual_model, "glm-5");
+        assert_eq!(route.api_base, "https://open.bigmodel.cn/api/paas/v4");
+    }
+
+    #[test]
+    fn test_resolve_dynamic_route_with_custom_api_base() {
+        let options = CompletionOptions {
+            api_base: Some("http://localhost:5567/v1".to_string()),
+            ..CompletionOptions::default()
+        };
+
+        let route = resolve_dynamic_provider_route("my-custom-model", &options).unwrap();
+        assert_eq!(route.provider_type, "openai-compatible");
+        assert_eq!(route.provider_label, "OpenAI-Compatible");
+        assert_eq!(route.actual_model, "my-custom-model");
+        assert_eq!(route.api_base, "http://localhost:5567/v1");
+    }
+
+    #[test]
+    fn test_resolve_dynamic_route_without_prefix_or_api_base() {
+        let options = CompletionOptions::default();
+        let route = resolve_dynamic_provider_route("my-custom-model", &options);
+        assert!(route.is_none());
     }
 }

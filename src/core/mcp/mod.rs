@@ -67,6 +67,7 @@ pub mod protocol;
 pub mod server;
 pub mod tools;
 pub mod transport;
+pub mod validation;
 
 // Re-export commonly used types
 pub use config::{AuthConfig, AuthType, McpServerConfig};

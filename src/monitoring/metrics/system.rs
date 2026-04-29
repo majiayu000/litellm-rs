@@ -86,6 +86,7 @@ pub(super) fn get_network_bytes_out() -> u64 {
 }
 
 pub(super) fn get_active_connections() -> u32 {
-    // Placeholder implementation
-    100
+    // We currently don't have a cross-platform socket-connection counter wired
+    // in this module. Return 0 (unknown) instead of a fabricated constant.
+    0
 }

@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use super::context::get_request_context;
+use super::execution::execute_with_selected_deployment;
 use super::provider_selection::select_provider_for_model;
 
 /// Chat completions endpoint
@@ -99,22 +100,13 @@ async fn handle_streaming_chat_completion(
 
     let requested_model = core_request.model.clone();
     let context_for_execution = context.clone();
-    match unified_router
-        .execute_with_retry(&requested_model, move |deployment_id| {
+    match execute_with_selected_deployment(
+        unified_router,
+        &requested_model,
+        move |provider, selected_model| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             async move {
-                let deployment =
-                    unified_router
-                        .get_deployment(&deployment_id)
-                        .ok_or_else(|| {
-                            ProviderError::other("router", "Selected deployment not found")
-                        })?;
-
-                let provider = deployment.provider.clone();
-                let selected_model = deployment.model.clone();
-                drop(deployment);
-
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model;
                 let stream = provider
@@ -122,10 +114,11 @@ async fn handle_streaming_chat_completion(
                     .await?;
                 Ok((stream, 0))
             }
-        })
-        .await
+        },
+    )
+    .await
     {
-        Ok((mut stream, _, _, _)) => {
+        Ok(mut stream) => {
             // Use a channel so that when the client disconnects and actix-web
             // drops the response stream, the receiver is dropped, which causes
             // the sender to fail. This breaks the upstream read loop and drops
@@ -232,9 +225,9 @@ async fn handle_streaming_chat_completion(
                 .insert_header(("X-Request-ID", context.request_id.as_str()))
                 .streaming(sse_stream))
         }
-        Err((e, _)) => {
+        Err(e) => {
             error!("Failed to create streaming response: {}", e);
-            Ok(GatewayError::Provider(e).error_response())
+            Ok(e.error_response())
         }
     }
 }
@@ -266,22 +259,13 @@ async fn handle_chat_completion_internal(
     let requested_model = core_request.model.clone();
     let context_for_execution = context.clone();
 
-    let execution = unified_router
-        .execute_with_retry(&requested_model, move |deployment_id| {
+    let core_response = execute_with_selected_deployment(
+        unified_router,
+        &requested_model,
+        move |provider, selected_model| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             async move {
-                let deployment =
-                    unified_router
-                        .get_deployment(&deployment_id)
-                        .ok_or_else(|| {
-                            ProviderError::other("router", "Selected deployment not found")
-                        })?;
-
-                let provider = deployment.provider.clone();
-                let selected_model = deployment.model.clone();
-                drop(deployment);
-
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model;
                 let response = provider
@@ -294,11 +278,11 @@ async fn handle_chat_completion_internal(
                     .unwrap_or_default();
                 Ok((response, tokens))
             }
-        })
-        .await
-        .map_err(|(e, _)| GatewayError::Provider(e))?;
+        },
+    )
+    .await?;
 
-    Ok(convert_core_chat_response(execution.0))
+    Ok(convert_core_chat_response(core_response))
 }
 
 pub(crate) fn build_core_chat_request(

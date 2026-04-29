@@ -1,5 +1,6 @@
 //! Type definitions for the LLM client
 
+use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
 
 /// Provider statistics
@@ -18,6 +19,7 @@ pub struct ProviderStats {
 #[derive(Debug)]
 pub struct LoadBalancer {
     pub(crate) strategy: LoadBalancingStrategy,
+    pub(crate) round_robin_counter: AtomicUsize,
 }
 
 /// Load balancing strategy
@@ -31,7 +33,10 @@ pub enum LoadBalancingStrategy {
 
 impl LoadBalancer {
     pub(crate) fn new(strategy: LoadBalancingStrategy) -> Self {
-        Self { strategy }
+        Self {
+            strategy,
+            round_robin_counter: AtomicUsize::new(0),
+        }
     }
 }
 

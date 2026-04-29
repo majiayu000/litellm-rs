@@ -112,7 +112,7 @@ pub async fn audio_translations(
 
     let unified_router = &state.unified_router;
 
-    let selection = match select_provider_for_model(
+    let selected_model = match select_provider_for_model(
         unified_router,
         &model,
         ProviderCapability::AudioTranslation,
@@ -124,7 +124,7 @@ pub async fn audio_translations(
     let translation_request = TranslationRequest {
         file,
         filename,
-        model: selection.model,
+        model: selected_model,
         prompt,
         response_format,
         temperature,

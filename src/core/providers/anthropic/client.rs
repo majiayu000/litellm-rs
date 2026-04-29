@@ -195,10 +195,8 @@ impl AnthropicClient {
                         }
                     }
                 }
-                Value::String(s) => {
-                    if !features.contains(s) {
-                        features.push(s.clone());
-                    }
+                Value::String(s) if !features.contains(s) => {
+                    features.push(s.clone());
                 }
                 _ => {}
             }
@@ -419,55 +417,52 @@ impl AnthropicClient {
                                         "text": text
                                     }));
                                 }
-                                ContentPart::ImageUrl { image_url } => {
+                                ContentPart::ImageUrl { image_url }
                                     if model_spec
                                         .features
-                                        .contains(&ModelFeature::MultimodalSupport)
-                                    {
-                                        // Handle
-                                        if image_url.url.starts_with("data:") {
-                                            // Base64 format image
-                                            let parts: Vec<&str> =
-                                                image_url.url.split(',').collect();
-                                            if parts.len() == 2 {
-                                                let media_type = parts[0]
-                                                    .strip_prefix("data:")
-                                                    .and_then(|s| s.split(';').next())
-                                                    .unwrap_or("image/jpeg");
+                                        .contains(&ModelFeature::MultimodalSupport) =>
+                                {
+                                    // Handle
+                                    if image_url.url.starts_with("data:") {
+                                        // Base64 format image
+                                        let parts: Vec<&str> = image_url.url.split(',').collect();
+                                        if parts.len() == 2 {
+                                            let media_type = parts[0]
+                                                .strip_prefix("data:")
+                                                .and_then(|s| s.split(';').next())
+                                                .unwrap_or("image/jpeg");
 
-                                                anthropic_parts.push(json!({
-                                                    "type": "image",
-                                                    "source": {
-                                                        "type": "base64",
-                                                        "media_type": media_type,
-                                                        "data": parts[1]
-                                                    }
-                                                }));
-                                            }
-                                        } else {
-                                            // URL format image - requires download and conversion
-                                            // NOTE: URL image download and conversion not yet implemented
-                                            return Err(anthropic_api_error(
-                                                400,
-                                                "URL images not yet supported, use base64 format",
-                                            ));
+                                            anthropic_parts.push(json!({
+                                                "type": "image",
+                                                "source": {
+                                                    "type": "base64",
+                                                    "media_type": media_type,
+                                                    "data": parts[1]
+                                                }
+                                            }));
                                         }
+                                    } else {
+                                        // URL format image - requires download and conversion
+                                        // NOTE: URL image download and conversion not yet implemented
+                                        return Err(anthropic_api_error(
+                                            400,
+                                            "URL images not yet supported, use base64 format",
+                                        ));
                                     }
                                 }
-                                ContentPart::Document { source, .. } => {
+                                ContentPart::Document { source, .. }
                                     if model_spec
                                         .features
-                                        .contains(&ModelFeature::MultimodalSupport)
-                                    {
-                                        anthropic_parts.push(json!({
-                                            "type": "document",
-                                            "source": {
-                                                "type": "base64",
-                                                "media_type": source.media_type,
-                                                "data": source.data
-                                            }
-                                        }));
-                                    }
+                                        .contains(&ModelFeature::MultimodalSupport) =>
+                                {
+                                    anthropic_parts.push(json!({
+                                        "type": "document",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": source.media_type,
+                                            "data": source.data
+                                        }
+                                    }));
                                 }
                                 _ => {
                                     // Other content types not yet supported

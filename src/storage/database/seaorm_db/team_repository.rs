@@ -5,11 +5,11 @@
 //! `m20240301_000002_create_teams_table`.  Works with both SQLite and
 //! PostgreSQL backends via the live `SeaOrmDatabase` connection.
 
-use crate::core::models::team::{Team, TeamMember, TeamRole, TeamStatus};
+use crate::core::models::team::{Team, TeamMember, TeamRole};
 use crate::core::teams::repository::TeamRepository;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use async_trait::async_trait;
-use sea_orm::{ConnectionTrait, DbBackend, Statement, Value};
+use sea_orm::{ConnectionTrait, DbBackend, Statement, TransactionTrait, Value};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -47,6 +47,18 @@ impl SeaOrmTeamRepository {
 
     fn from_json<T: serde::de::DeserializeOwned>(s: &str) -> Result<T> {
         serde_json::from_str(s).map_err(|e| GatewayError::Internal(e.to_string()))
+    }
+
+    /// SQL predicate for filtering logically deleted teams from JSON payload.
+    fn non_deleted_team_predicate(&self) -> &'static str {
+        match self.db.backend_type {
+            DatabaseBackendType::PostgreSQL => {
+                "((data::jsonb ->> 'status') IS NULL OR (data::jsonb ->> 'status') <> 'deleted')"
+            }
+            DatabaseBackendType::SQLite => {
+                "(json_extract(data, '$.status') IS NULL OR json_extract(data, '$.status') <> 'deleted')"
+            }
+        }
     }
 }
 
@@ -145,6 +157,8 @@ impl TeamRepository for SeaOrmTeamRepository {
 
     async fn delete(&self, id: Uuid) -> Result<()> {
         let id_str = id.to_string();
+        let txn = self.db.db.begin().await.map_err(GatewayError::from)?;
+
         // Remove members before the team row (no DB-level FK constraint).
         let sql = format!("DELETE FROM team_members WHERE team_id = {}", self.ph(1));
         let stmt = Statement::from_sql_and_values(
@@ -152,7 +166,7 @@ impl TeamRepository for SeaOrmTeamRepository {
             &sql,
             [Value::String(Some(Box::new(id_str.clone())))],
         );
-        self.db.db.execute(stmt).await.map_err(GatewayError::from)?;
+        txn.execute(stmt).await.map_err(GatewayError::from)?;
 
         let sql = format!("DELETE FROM teams WHERE id = {}", self.ph(1));
         let stmt = Statement::from_sql_and_values(
@@ -160,26 +174,16 @@ impl TeamRepository for SeaOrmTeamRepository {
             &sql,
             [Value::String(Some(Box::new(id_str)))],
         );
-        self.db.db.execute(stmt).await.map_err(GatewayError::from)?;
+        txn.execute(stmt).await.map_err(GatewayError::from)?;
+
+        txn.commit().await.map_err(GatewayError::from)?;
         Ok(())
     }
 
     async fn list(&self, offset: u32, limit: u32) -> Result<(Vec<Team>, u64)> {
-        let count_stmt = Statement::from_string(
-            self.backend(),
-            "SELECT COUNT(*) as cnt FROM teams".to_owned(),
-        );
-        let total: u64 = self
-            .db
-            .db
-            .query_one(count_stmt)
-            .await
-            .map_err(GatewayError::from)?
-            .map(|r| r.try_get::<i64>("", "cnt").unwrap_or(0) as u64)
-            .unwrap_or(0);
-
         let sql = format!(
-            "SELECT data FROM teams ORDER BY created_at ASC LIMIT {} OFFSET {}",
+            "SELECT data FROM teams WHERE {} ORDER BY created_at ASC LIMIT {} OFFSET {}",
+            self.non_deleted_team_predicate(),
             self.ph(1),
             self.ph(2)
         );
@@ -197,30 +201,44 @@ impl TeamRepository for SeaOrmTeamRepository {
             .query_all(stmt)
             .await
             .map_err(GatewayError::from)?;
+
         let teams: Result<Vec<Team>> = rows
             .into_iter()
-            .filter_map(|row| {
-                row.try_get::<String>("", "data")
-                    .ok()
-                    .map(|d| Self::from_json::<Team>(&d))
+            .map(|row| {
+                let data: String = row.try_get("", "data").map_err(GatewayError::from)?;
+                Self::from_json::<Team>(&data)
             })
-            .filter(|t| !matches!(t, Ok(team) if matches!(team.status, TeamStatus::Deleted)))
             .collect();
+        let count_sql = format!(
+            "SELECT COUNT(*) as cnt FROM teams WHERE {}",
+            self.non_deleted_team_predicate()
+        );
+        let count_stmt = Statement::from_string(self.backend(), count_sql);
+        let total = self
+            .db
+            .db
+            .query_one(count_stmt)
+            .await
+            .map_err(GatewayError::from)?
+            .map(|row| row.try_get::<i64>("", "cnt").unwrap_or(0) as u64)
+            .unwrap_or(0);
+
         Ok((teams?, total))
     }
 
     async fn count(&self) -> Result<u64> {
-        let stmt = Statement::from_string(
-            self.backend(),
-            "SELECT COUNT(*) as cnt FROM teams".to_owned(),
+        let sql = format!(
+            "SELECT COUNT(*) as cnt FROM teams WHERE {}",
+            self.non_deleted_team_predicate()
         );
+        let stmt = Statement::from_string(self.backend(), sql);
         Ok(self
             .db
             .db
             .query_one(stmt)
             .await
             .map_err(GatewayError::from)?
-            .map(|r| r.try_get::<i64>("", "cnt").unwrap_or(0) as u64)
+            .map(|row| row.try_get::<i64>("", "cnt").unwrap_or(0) as u64)
             .unwrap_or(0))
     }
 
@@ -282,9 +300,32 @@ impl TeamRepository for SeaOrmTeamRepository {
         user_id: Uuid,
         role: TeamRole,
     ) -> Result<TeamMember> {
-        let mut member = self.get_member(team_id, user_id).await?.ok_or_else(|| {
-            GatewayError::NotFound(format!("Member {} not found in team {}", user_id, team_id))
-        })?;
+        let txn = self.db.db.begin().await.map_err(GatewayError::from)?;
+
+        // Read the member inside the transaction to prevent TOCTOU
+        let read_sql = format!(
+            "SELECT data FROM team_members WHERE team_id = {} AND user_id = {}",
+            self.ph(1),
+            self.ph(2)
+        );
+        let read_stmt = Statement::from_sql_and_values(
+            self.backend(),
+            &read_sql,
+            [
+                Value::String(Some(Box::new(team_id.to_string()))),
+                Value::String(Some(Box::new(user_id.to_string()))),
+            ],
+        );
+        let row = txn
+            .query_one(read_stmt)
+            .await
+            .map_err(GatewayError::from)?
+            .ok_or_else(|| {
+                GatewayError::NotFound(format!("Member {} not found in team {}", user_id, team_id))
+            })?;
+        let raw_data: String = row.try_get("", "data").map_err(GatewayError::from)?;
+        let mut member: TeamMember = Self::from_json(&raw_data)?;
+
         member.role = role;
         member.metadata.touch();
         let data = Self::to_json(&member)?;
@@ -303,7 +344,9 @@ impl TeamRepository for SeaOrmTeamRepository {
                 Value::String(Some(Box::new(user_id.to_string()))),
             ],
         );
-        self.db.db.execute(stmt).await.map_err(GatewayError::from)?;
+        txn.execute(stmt).await.map_err(GatewayError::from)?;
+
+        txn.commit().await.map_err(GatewayError::from)?;
         Ok(member)
     }
 

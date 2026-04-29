@@ -147,7 +147,6 @@ This is a **high-performance AI Gateway** written in Rust that provides OpenAI-c
 ## Binaries
 
 - `gateway` (default) - Main gateway server
-- `google-gateway` - Specialized Google API gateway
 
 ## Features
 

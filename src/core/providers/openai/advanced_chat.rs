@@ -614,7 +614,7 @@ mod tests {
             "gpt-5.4-mini"
         ));
         assert!(AdvancedChatUtils::supports_structured_outputs(
-            "gpt-5.4-turbo"
+            "gpt-5.4-pro"
         ));
         // GA o-series
         assert!(AdvancedChatUtils::supports_structured_outputs("o3"));

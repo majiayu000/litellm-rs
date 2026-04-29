@@ -27,6 +27,18 @@ pub struct HealthMonitorConfig {
     pub auto_check_enabled: bool,
     /// Maximum response time before considering degraded
     pub degraded_threshold_ms: u64,
+    /// Minimum requests in the window before the circuit breaker can trip.
+    ///
+    /// Mirrors `RouterConfig::min_requests`: the circuit breaker will not open
+    /// until the provider has handled at least this many requests, preventing
+    /// premature tripping on small sample sizes.
+    pub min_requests: u32,
+    /// Consecutive successes required to close the circuit from half-open.
+    ///
+    /// Mirrors `RouterConfig::success_threshold`: after the open timeout
+    /// expires the circuit enters half-open; this many consecutive successful
+    /// health-checks must occur before it transitions back to closed.
+    pub success_threshold: u32,
 }
 
 impl Default for HealthMonitorConfig {
@@ -38,6 +50,8 @@ impl Default for HealthMonitorConfig {
             recovery_threshold: 2,
             auto_check_enabled: true,
             degraded_threshold_ms: 2000,
+            min_requests: 10,
+            success_threshold: 3,
         }
     }
 }
@@ -78,10 +92,15 @@ impl HealthMonitor {
             );
         }
 
-        // Initialize circuit breaker (wrapped in Arc for shared access)
+        // Initialize circuit breaker with configured thresholds (wrapped in Arc for shared access)
         {
             let mut breakers = self.circuit_breakers.write().await;
-            let breaker_config = CircuitBreakerConfig::default();
+            let breaker_config = CircuitBreakerConfig {
+                failure_threshold: self.config.failure_threshold,
+                success_threshold: self.config.success_threshold,
+                min_requests: self.config.min_requests,
+                ..CircuitBreakerConfig::default()
+            };
             breakers.insert(
                 provider_id.clone(),
                 Arc::new(CircuitBreaker::new(breaker_config)),

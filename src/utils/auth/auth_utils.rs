@@ -121,33 +121,27 @@ impl AuthUtils {
 
     pub fn validate_environment_for_provider(provider: &str) -> Result<(), ProviderError> {
         match provider.to_lowercase().as_str() {
-            "openai" => {
-                if Self::get_api_key_from_env("openai").is_none() {
-                    return Err(ProviderError::InvalidRequest {
-                        provider: "openai",
-                        message: "Missing OpenAI API key. Set OPENAI_API_KEY environment variable"
-                            .to_string(),
-                    });
-                }
+            "openai" if Self::get_api_key_from_env("openai").is_none() => {
+                return Err(ProviderError::InvalidRequest {
+                    provider: "openai",
+                    message: "Missing OpenAI API key. Set OPENAI_API_KEY environment variable"
+                        .to_string(),
+                });
             }
-            "anthropic" => {
-                if Self::get_api_key_from_env("anthropic").is_none() {
-                    return Err(ProviderError::InvalidRequest {
-                        provider: "anthropic",
-                        message:
-                            "Missing Anthropic API key. Set ANTHROPIC_API_KEY environment variable"
-                                .to_string(),
-                    });
-                }
-            }
-            "google" => {
-                if Self::get_api_key_from_env("google").is_none() {
-                    return Err(ProviderError::InvalidRequest {
-                        provider: "google",
-                        message: "Missing Google API key. Set GOOGLE_API_KEY environment variable"
+            "anthropic" if Self::get_api_key_from_env("anthropic").is_none() => {
+                return Err(ProviderError::InvalidRequest {
+                    provider: "anthropic",
+                    message:
+                        "Missing Anthropic API key. Set ANTHROPIC_API_KEY environment variable"
                             .to_string(),
-                    });
-                }
+                });
+            }
+            "google" if Self::get_api_key_from_env("google").is_none() => {
+                return Err(ProviderError::InvalidRequest {
+                    provider: "google",
+                    message: "Missing Google API key. Set GOOGLE_API_KEY environment variable"
+                        .to_string(),
+                });
             }
             _ => {}
         }

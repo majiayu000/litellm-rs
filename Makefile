@@ -1,7 +1,17 @@
 # Rust LiteLLM Gateway Makefile
 # Provides convenient commands for development and deployment
 
-.PHONY: help build test clean dev prod docker docs lint format check install deps start
+.PHONY: help build build-standard build-full test test-standard test-full clean dev prod docker docs lint lint-standard lint-full format check check-standard check-full install deps start
+
+# -----------------------------------------------------------------------------
+# Build/Test profiles
+# -----------------------------------------------------------------------------
+# API-first defaults (for most users who use this as a unified API library)
+API_FEATURES ?= lite
+# Gateway/common CI bundle
+STANDARD_FEATURES ?= postgres sqlite redis s3 metrics tracing websockets analytics
+DEV_BUILD_JOBS ?= 4
+DEV_TEST_THREADS ?= 4
 
 # Default target
 help: ## Show this help message
@@ -10,10 +20,10 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
-	@echo "  make dev          # Start development environment"
-	@echo "  make test         # Run all tests"
-	@echo "  make docker       # Build Docker image"
-	@echo "  make prod         # Build production release"
+	@echo "  make build        # API-only build (lightweight default)"
+	@echo "  make test         # API-only tests (lightweight default)"
+	@echo "  make test-standard # Gateway/common test bundle"
+	@echo "  make test-full    # Full feature test (heavy)"
 
 # =============================================================================
 # DEVELOPMENT
@@ -44,8 +54,14 @@ dev-logs: ## Show development services logs
 # BUILDING
 # =============================================================================
 
-build: ## Build debug version
-	cargo build --all-features
+build: ## Build API-only mode (lightweight default)
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo build --lib --no-default-features --features "$(API_FEATURES)"
+
+build-standard: ## Build standard gateway/common bundle
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo build --features "$(STANDARD_FEATURES)"
+
+build-full: ## Build with all features (heavy)
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo build --all-features
 
 build-release: ## Build optimized release version
 	cargo build --release --all-features
@@ -59,14 +75,20 @@ install: build-release ## Install binaries to system
 # TESTING
 # =============================================================================
 
-test: ## Run all tests
-	cargo test --all-features
+test: ## Run API-only tests (lightweight default)
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo test --lib --tests --no-default-features --features "$(API_FEATURES)" -- --test-threads=$(DEV_TEST_THREADS)
 
-test-unit: ## Run unit tests only
-	cargo test --lib --all-features
+test-standard: ## Run standard gateway/common test bundle
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo test --lib --tests --features "$(STANDARD_FEATURES)" -- --test-threads=$(DEV_TEST_THREADS)
 
-test-integration: ## Run integration tests only
-	cargo test --test integration_tests --all-features
+test-full: ## Run full feature test suite (heavy)
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo test --workspace --all-features -- --test-threads=$(DEV_TEST_THREADS)
+
+test-unit: ## Run API-only unit tests
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo test --lib --no-default-features --features "$(API_FEATURES)" -- --test-threads=$(DEV_TEST_THREADS)
+
+test-integration: ## Run integration tests with standard features
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo test --test lib --features "$(STANDARD_FEATURES)" -- --test-threads=$(DEV_TEST_THREADS)
 
 test-coverage: ## Generate test coverage report
 	cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
@@ -79,8 +101,14 @@ bench: ## Run benchmarks
 # CODE QUALITY
 # =============================================================================
 
-lint: ## Run clippy linter
-	cargo clippy --all-targets --all-features -- -D warnings
+lint: ## Run clippy for API-only mode (lightweight default)
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo clippy --lib --tests --no-default-features --features "$(API_FEATURES)" -- -D warnings
+
+lint-standard: ## Run clippy for standard gateway/common bundle
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo clippy --all-targets --features "$(STANDARD_FEATURES)" -- -D warnings
+
+lint-full: ## Run clippy with all features (heavy)
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo clippy --all-targets --all-features -- -D warnings
 
 format: ## Format code with rustfmt
 	cargo fmt --all
@@ -88,14 +116,20 @@ format: ## Format code with rustfmt
 format-check: ## Check code formatting
 	cargo fmt --all -- --check
 
-check: ## Run cargo check
-	cargo check --all-features
+check: ## Run cargo check for API-only mode (lightweight default)
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo check --lib --tests --no-default-features --features "$(API_FEATURES)"
+
+check-standard: ## Run cargo check for standard gateway/common bundle
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo check --features "$(STANDARD_FEATURES)"
+
+check-full: ## Run cargo check with all features (heavy)
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo check --all-features
 
 audit: ## Run security audit
 	cargo audit
 
 fix: ## Auto-fix code issues
-	cargo clippy --all-targets --all-features --fix --allow-dirty
+	CARGO_BUILD_JOBS=$(DEV_BUILD_JOBS) cargo clippy --lib --tests --no-default-features --features "$(API_FEATURES)" --fix --allow-dirty
 	cargo fmt --all
 
 # =============================================================================
@@ -247,7 +281,7 @@ sync-models-rust: ## Generate Rust code snippets for models (usage: make sync-mo
 # RELEASE
 # =============================================================================
 
-release-check: format-check lint test ## Run all checks before release
+release-check: format-check lint-full test-full ## Run all checks before release
 	@echo "All checks passed! Ready for release."
 
 release-build: ## Build release artifacts for all platforms

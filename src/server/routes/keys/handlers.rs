@@ -10,7 +10,7 @@ use crate::core::keys::KeyManager;
 use crate::core::keys::{CreateKeyConfig, KeyStatus, UpdateKeyConfig};
 use crate::core::models::user::types::{User, UserRole};
 use crate::core::types::context::RequestContext;
-use crate::server::middleware::extract_auth_method;
+use crate::server::middleware::extract_auth_method_with_api_key_header;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
@@ -86,7 +86,9 @@ async fn authenticate_request(
     req: &HttpRequest,
     state: &web::Data<AppState>,
 ) -> Result<Option<AuthResult>, HttpResponse> {
-    let auth_method = extract_auth_method(req.headers());
+    let api_key_header = state.config.load().auth().api_key_header.clone();
+    let auth_method =
+        extract_auth_method_with_api_key_header(req.headers(), api_key_header.as_str());
 
     if matches!(auth_method, AuthMethod::None) {
         return Ok(None);
@@ -110,22 +112,100 @@ async fn authenticate_request(
     }
 }
 
+/// Resolve and authorize create-key ownership scope from caller auth context.
+///
+/// Returns the effective `(user_id, team_id)` pair to persist.
+fn resolve_create_key_scope(
+    auth: &AuthResult,
+    request: &CreateKeyRequest,
+) -> std::result::Result<(Option<Uuid>, Option<Uuid>), &'static str> {
+    let requested_user_id = request.user_id;
+    let requested_team_id = request.team_id;
+    let requests_admin_key = request
+        .permissions
+        .as_ref()
+        .map(|p| p.is_admin)
+        .unwrap_or(false);
+
+    if let Some(ref user) = auth.user {
+        let is_admin = user.has_role(&UserRole::Admin);
+        if is_admin {
+            return Ok((requested_user_id, requested_team_id));
+        }
+
+        if requests_admin_key {
+            return Err("Only admin can create admin API keys");
+        }
+
+        match (requested_user_id, requested_team_id) {
+            (Some(user_id), None) if user_id == user.id() => Ok((Some(user_id), None)),
+            (None, Some(team_id))
+                if user.has_role(&UserRole::Manager) && user.team_ids.contains(&team_id) =>
+            {
+                Ok((None, Some(team_id)))
+            }
+            (None, None) => Ok((Some(user.id()), None)),
+            _ => Err("Not authorized to create API key for this scope"),
+        }
+    } else {
+        // Team-only API key caller.
+        if requests_admin_key {
+            return Err("Team-scoped API keys cannot create admin API keys");
+        }
+
+        let caller_team_id = auth.context.team_id();
+        match (requested_user_id, requested_team_id, caller_team_id) {
+            (None, Some(requested_team), Some(caller_team)) if requested_team == caller_team => {
+                Ok((None, Some(caller_team)))
+            }
+            (None, None, Some(caller_team)) => Ok((None, Some(caller_team))),
+            _ => Err("Not authorized to create API key for this scope"),
+        }
+    }
+}
+
 /// POST /v1/keys - Create a new API key
 pub async fn create_key(
+    req: HttpRequest,
     state: web::Data<AppState>,
     request: web::Json<CreateKeyRequest>,
 ) -> ActixResult<HttpResponse> {
     info!("Creating new API key: {}", request.name);
 
+    let (resolved_user_id, resolved_team_id) = if is_auth_enabled(&state) {
+        let auth = match authenticate_request(&req, &state).await {
+            Err(resp) => return Ok(resp),
+            Ok(None) => {
+                let error_response =
+                    KeyErrorResponse::unauthorized("Authentication required to create a key");
+                return Ok(HttpResponse::Unauthorized()
+                    .json(ApiResponse::<()>::error(error_response.error)));
+            }
+            Ok(Some(auth)) => auth,
+        };
+
+        match resolve_create_key_scope(&auth, &request) {
+            Ok(scope) => scope,
+            Err(message) => {
+                let error_response = KeyErrorResponse::forbidden(message);
+                return Ok(
+                    HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
+                );
+            }
+        }
+    } else {
+        (request.user_id, request.team_id)
+    };
+
     // Get key manager from state
-    let key_manager = get_key_manager(&state)?;
+    let key_manager = get_key_manager(&state);
 
     // Build creation config
     let config = CreateKeyConfig {
         name: request.name.clone(),
         description: request.description.clone(),
-        user_id: request.user_id,
-        team_id: request.team_id,
+        user_id: resolved_user_id,
+        team_id: resolved_team_id,
         budget_id: request.budget_id,
         permissions: request.permissions.clone().unwrap_or_default(),
         rate_limits: request.rate_limits.clone().unwrap_or_default(),
@@ -174,7 +254,7 @@ pub async fn list_keys(
 ) -> ActixResult<HttpResponse> {
     info!("Listing API keys");
 
-    let key_manager = get_key_manager(&state)?;
+    let key_manager = get_key_manager(&state);
 
     if is_auth_enabled(&state) {
         // All listing operations require authentication.
@@ -292,7 +372,7 @@ pub async fn get_key(
     let key_id = path.into_inner();
     info!("Getting API key: {}", key_id);
 
-    let key_manager = get_key_manager(&state)?;
+    let key_manager = get_key_manager(&state);
 
     // Authenticate before fetching the key to avoid leaking key existence to
     // unauthenticated callers (they should not be able to distinguish 404 from
@@ -355,7 +435,7 @@ pub async fn update_key(
     let key_id = path.into_inner();
     info!("Updating API key: {}", key_id);
 
-    let key_manager = get_key_manager(&state)?;
+    let key_manager = get_key_manager(&state);
 
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
@@ -445,7 +525,7 @@ pub async fn revoke_key(
     let key_id = path.into_inner();
     info!("Revoking API key: {}", key_id);
 
-    let key_manager = get_key_manager(&state)?;
+    let key_manager = get_key_manager(&state);
 
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
@@ -530,7 +610,7 @@ pub async fn rotate_key(
     let key_id = path.into_inner();
     info!("Rotating API key: {}", key_id);
 
-    let key_manager = get_key_manager(&state)?;
+    let key_manager = get_key_manager(&state);
 
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
@@ -631,7 +711,7 @@ pub async fn get_key_usage(
     let key_id = path.into_inner();
     info!("Getting usage stats for API key: {}", key_id);
 
-    let key_manager = get_key_manager(&state)?;
+    let key_manager = get_key_manager(&state);
 
     // Authenticate before fetching the key to avoid leaking key existence to
     // unauthenticated callers.
@@ -706,7 +786,7 @@ pub async fn verify_key(
 ) -> ActixResult<HttpResponse> {
     info!("Verifying API key");
 
-    let key_manager = get_key_manager(&state)?;
+    let key_manager = get_key_manager(&state);
 
     match key_manager.validate_key(&request.key).await {
         Ok(result) => {
@@ -722,19 +802,9 @@ pub async fn verify_key(
     }
 }
 
-/// Helper function to get KeyManager from AppState
-///
-/// Note: This is a placeholder. In a real implementation, the KeyManager
-/// would be stored in AppState or created with the appropriate repository.
-fn get_key_manager(_state: &web::Data<AppState>) -> ActixResult<KeyManager> {
-    // In production, this would retrieve the KeyManager from AppState
-    // For now, we create a new one with an in-memory repository
-    use crate::core::keys::InMemoryKeyRepository;
-
-    // NOTE: KeyManager should be retrieved from AppState, not re-created per request.
-    // The KeyManager should be initialized during application startup
-    // and stored in AppState for shared access across handlers
-    Ok(KeyManager::new(InMemoryKeyRepository::new()))
+/// Helper function to get the shared KeyManager from AppState.
+fn get_key_manager(state: &web::Data<AppState>) -> KeyManager {
+    state.key_manager.clone()
 }
 
 #[cfg(test)]
@@ -795,6 +865,30 @@ mod handler_tests {
         }
     }
 
+    fn make_user_auth(user: User) -> AuthResult {
+        AuthResult {
+            success: true,
+            user: Some(user),
+            api_key: None,
+            session: None,
+            error: None,
+            context: RequestContext::new(),
+        }
+    }
+
+    fn make_team_auth(team_id: Uuid) -> AuthResult {
+        let mut context = RequestContext::new();
+        context.set_team_id(team_id);
+        AuthResult {
+            success: true,
+            user: None,
+            api_key: None,
+            session: None,
+            error: None,
+            context,
+        }
+    }
+
     #[test]
     fn test_check_ownership_admin_bypasses() {
         let admin = make_user(UserRole::Admin, vec![]);
@@ -849,5 +943,86 @@ mod handler_tests {
         let regular_user = make_user(UserRole::User, vec![]);
         // Regular users must NOT pass the list-all-keys gate
         assert!(!check_ownership(&regular_user, None, None));
+    }
+
+    #[test]
+    fn test_resolve_create_key_scope_user_defaults_to_self() {
+        let user = make_user(UserRole::User, vec![]);
+        let user_id = user.id();
+        let auth = make_user_auth(user);
+        let request = CreateKeyRequest {
+            name: "self".to_string(),
+            description: None,
+            user_id: None,
+            team_id: None,
+            budget_id: None,
+            permissions: None,
+            rate_limits: None,
+            expires_at: None,
+            metadata: None,
+        };
+
+        let resolved = resolve_create_key_scope(&auth, &request).unwrap();
+        assert_eq!(resolved, (Some(user_id), None));
+    }
+
+    #[test]
+    fn test_resolve_create_key_scope_user_cannot_target_other_user() {
+        let user = make_user(UserRole::User, vec![]);
+        let auth = make_user_auth(user);
+        let request = CreateKeyRequest {
+            name: "other".to_string(),
+            description: None,
+            user_id: Some(Uuid::new_v4()),
+            team_id: None,
+            budget_id: None,
+            permissions: None,
+            rate_limits: None,
+            expires_at: None,
+            metadata: None,
+        };
+
+        assert!(resolve_create_key_scope(&auth, &request).is_err());
+    }
+
+    #[test]
+    fn test_resolve_create_key_scope_manager_can_target_own_team() {
+        let team_id = Uuid::new_v4();
+        let manager = make_user(UserRole::Manager, vec![team_id]);
+        let auth = make_user_auth(manager);
+        let request = CreateKeyRequest {
+            name: "team".to_string(),
+            description: None,
+            user_id: None,
+            team_id: Some(team_id),
+            budget_id: None,
+            permissions: None,
+            rate_limits: None,
+            expires_at: None,
+            metadata: None,
+        };
+
+        let resolved = resolve_create_key_scope(&auth, &request).unwrap();
+        assert_eq!(resolved, (None, Some(team_id)));
+    }
+
+    #[test]
+    fn test_resolve_create_key_scope_team_api_key_defaults_to_team_scope() {
+        let team_id = Uuid::new_v4();
+        let auth = make_team_auth(team_id);
+        let request = CreateKeyRequest {
+            name: "team-api".to_string(),
+            description: None,
+            user_id: None,
+            team_id: None,
+            budget_id: None,
+            permissions: None,
+            rate_limits: None,
+            expires_at: None,
+            metadata: None,
+        };
+
+        let resolved = resolve_create_key_scope(&auth, &request).unwrap();
+        assert_eq!(resolved, (None, Some(team_id)));
     }
 }

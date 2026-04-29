@@ -160,6 +160,21 @@ impl Router for DefaultRouter {
         })
         .or_else(|| {
             Self::select_provider_by_name(&providers, "groq", model, "groq/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "moonshot", model, "moonshot/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "minimax", model, "minimax/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "zhipu", model, "zhipu/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "zhipu", model, "glm/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "zhipu", model, "zai/", &chat_request)
         });
 
         // Handle special cases
@@ -245,6 +260,21 @@ impl Router for DefaultRouter {
         })
         .or_else(|| {
             Self::select_provider_by_name(&providers, "groq", model, "groq/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "moonshot", model, "moonshot/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "minimax", model, "minimax/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "zhipu", model, "zhipu/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "zhipu", model, "glm/", &chat_request)
+        })
+        .or_else(|| {
+            Self::select_provider_by_name(&providers, "zhipu", model, "zai/", &chat_request)
         });
 
         // Get the provider and execute streaming

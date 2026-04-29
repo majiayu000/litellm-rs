@@ -317,10 +317,8 @@ impl TransformEngine for DefaultTransformEngine {
                     issues.push("Logit bias is not supported by Anthropic".to_string());
                 }
             }
-            ProviderType::VertexAI => {
-                if request.functions.is_some() || request.tools.is_some() {
-                    issues.push("Function calling support limited in Vertex AI models".to_string());
-                }
+            ProviderType::VertexAI if request.functions.is_some() || request.tools.is_some() => {
+                issues.push("Function calling support limited in Vertex AI models".to_string());
             }
             _ => {}
         }

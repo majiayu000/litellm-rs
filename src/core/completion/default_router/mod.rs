@@ -57,6 +57,26 @@ impl DefaultRouter {
         None
     }
 
+    async fn register_openai_like_provider_from_env(
+        provider_registry: &mut ProviderRegistry,
+        provider_name: &str,
+        env_var: &str,
+    ) {
+        let Ok(api_key) = std::env::var(env_var) else {
+            return;
+        };
+        let Some(def) = crate::core::providers::registry::get_definition(provider_name) else {
+            return;
+        };
+
+        let config = def.to_openai_like_config(Some(&api_key), None);
+        if let Ok(provider) =
+            crate::core::providers::openai_like::OpenAILikeProvider::new(config).await
+        {
+            provider_registry.register(Provider::OpenAILike(provider));
+        }
+    }
+
     pub async fn new() -> Result<Self> {
         let mut provider_registry = ProviderRegistry::new();
 
@@ -88,16 +108,12 @@ impl DefaultRouter {
         }
 
         // Add OpenRouter provider if API key is available
-        if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY")
-            && let Some(def) = crate::core::providers::registry::get_definition("openrouter")
-        {
-            let config = def.to_openai_like_config(Some(&api_key), None);
-            if let Ok(provider) =
-                crate::core::providers::openai_like::OpenAILikeProvider::new(config).await
-            {
-                provider_registry.register(Provider::OpenAILike(provider));
-            }
-        }
+        Self::register_openai_like_provider_from_env(
+            &mut provider_registry,
+            "openrouter",
+            "OPENROUTER_API_KEY",
+        )
+        .await;
 
         // Add Anthropic provider if API key is available
         if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
@@ -112,8 +128,64 @@ impl DefaultRouter {
         }
 
         // Add DeepSeek provider if API key is available
-        if let Ok(api_key) = std::env::var("DEEPSEEK_API_KEY")
-            && let Some(def) = crate::core::providers::registry::get_definition("deepseek")
+        Self::register_openai_like_provider_from_env(
+            &mut provider_registry,
+            "deepseek",
+            "DEEPSEEK_API_KEY",
+        )
+        .await;
+
+        // Add Moonshot provider if API key is available
+        Self::register_openai_like_provider_from_env(
+            &mut provider_registry,
+            "moonshot",
+            "MOONSHOT_API_KEY",
+        )
+        .await;
+
+        // Add MiniMax provider if API key is available
+        Self::register_openai_like_provider_from_env(
+            &mut provider_registry,
+            "minimax",
+            "MINIMAX_API_KEY",
+        )
+        .await;
+
+        // Add Zhipu provider if API key is available
+        Self::register_openai_like_provider_from_env(
+            &mut provider_registry,
+            "zhipu",
+            "ZHIPU_API_KEY",
+        )
+        .await;
+
+        // Add Moonshot provider if API key is available
+        if let Ok(api_key) = std::env::var("MOONSHOT_API_KEY")
+            && let Some(def) = crate::core::providers::registry::get_definition("moonshot")
+        {
+            let config = def.to_openai_like_config(Some(&api_key), None);
+            if let Ok(provider) =
+                crate::core::providers::openai_like::OpenAILikeProvider::new(config).await
+            {
+                provider_registry.register(Provider::OpenAILike(provider));
+            }
+        }
+
+        // Add MiniMax provider if API key is available
+        if let Ok(api_key) = std::env::var("MINIMAX_API_KEY")
+            && let Some(def) = crate::core::providers::registry::get_definition("minimax")
+        {
+            let config = def.to_openai_like_config(Some(&api_key), None);
+            if let Ok(provider) =
+                crate::core::providers::openai_like::OpenAILikeProvider::new(config).await
+            {
+                provider_registry.register(Provider::OpenAILike(provider));
+            }
+        }
+
+        // Add Zhipu provider if API key is available
+        if let Ok(api_key) = std::env::var("ZHIPU_API_KEY")
+            && let Some(def) = crate::core::providers::registry::get_definition("zhipu")
         {
             let config = def.to_openai_like_config(Some(&api_key), None);
             if let Ok(provider) =
@@ -124,16 +196,12 @@ impl DefaultRouter {
         }
 
         // Add Groq provider if API key is available
-        if let Ok(api_key) = std::env::var("GROQ_API_KEY")
-            && let Some(def) = crate::core::providers::registry::get_definition("groq")
-        {
-            let config = def.to_openai_like_config(Some(&api_key), None);
-            if let Ok(provider) =
-                crate::core::providers::openai_like::OpenAILikeProvider::new(config).await
-            {
-                provider_registry.register(Provider::OpenAILike(provider));
-            }
-        }
+        Self::register_openai_like_provider_from_env(
+            &mut provider_registry,
+            "groq",
+            "GROQ_API_KEY",
+        )
+        .await;
 
         Ok(Self {
             provider_registry: Arc::new(provider_registry),

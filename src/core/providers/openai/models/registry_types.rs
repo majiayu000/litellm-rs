@@ -119,13 +119,15 @@ pub enum OpenAIModelFamily {
     TTS,
     Embedding,
     Moderation,
-    GPT4OAudio, // GPT-4O with audio capabilities
-    GPTAudio,   // GPT Audio models (2025)
-    GPTImage,   // GPT image generation models
-    Realtime,   // Realtime API models
-    GPT54,      // GPT-5.4 models (2026)
-    GPT54Mini,  // GPT-5.4 Mini models (2026)
-    GPT54Turbo, // GPT-5.4 Turbo models (2026)
+    GPT4OAudio,  // GPT-4O with audio capabilities
+    GPTAudio,    // GPT Audio models (2025)
+    GPTImage,    // GPT image generation models
+    Realtime,    // Realtime API models
+    GPT54,       // GPT-5.4 models (2026)
+    GPT54Mini,   // GPT-5.4 Mini models (2026)
+    GPT54Pro,    // GPT-5.4 Pro models (2026)
+    GPT54Nano,   // GPT-5.4 Nano models (2026)
+    ComputerUse, // Computer Use models
 }
 
 /// Model-specific configuration

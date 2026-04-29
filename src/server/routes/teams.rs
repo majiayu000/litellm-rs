@@ -14,13 +14,16 @@
 //! - `PUT    /v1/teams/{id}/members/{user_id}/role` - Update member role
 //! - `GET    /v1/teams/{id}/usage`                - Get team usage statistics
 
+use crate::core::models::user::types::{User, UserRole};
 use crate::core::teams::{
-    AddMemberRequest, CreateTeamRequest, Team, TeamManager, TeamRole, UpdateRoleRequest,
-    UpdateTeamRequest,
+    AddMemberRequest, CreateTeamRequest, Team, TeamManager, TeamRole, TeamStatus,
+    UpdateRoleRequest, UpdateTeamRequest,
 };
+use crate::core::types::context::RequestContext;
 use crate::server::routes::{ApiResponse, PaginatedResponse, PaginationQuery, errors};
 use crate::server::state::AppState;
-use actix_web::{HttpResponse, Result as ActixResult, web};
+use crate::utils::error::gateway_error::GatewayError;
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result as ActixResult, web};
 use std::sync::Arc;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -95,14 +98,150 @@ fn get_team_manager(state: &web::Data<AppState>) -> Arc<TeamManager> {
     state.team_manager.clone()
 }
 
+#[derive(Debug, Clone)]
+enum RequestCaller {
+    User(Box<User>),
+    Team(Uuid),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TeamPermission {
+    Member,
+    Admin,
+}
+
+/// Returns `true` when at least one auth backend is enabled.
+fn is_auth_enabled(state: &web::Data<AppState>) -> bool {
+    let cfg = state.config.load();
+    cfg.auth().enable_jwt || cfg.auth().enable_api_key
+}
+
+fn unauthorized_response(message: &str) -> HttpResponse {
+    HttpResponse::Unauthorized().json(ApiResponse::<()>::error(message.to_string()))
+}
+
+fn forbidden_response(message: &str) -> HttpResponse {
+    HttpResponse::Forbidden().json(ApiResponse::<()>::error(message.to_string()))
+}
+
+fn get_request_caller(req: &HttpRequest) -> Option<RequestCaller> {
+    if let Some(user) = req.extensions().get::<User>() {
+        return Some(RequestCaller::User(Box::new(user.clone())));
+    }
+
+    req.extensions()
+        .get::<RequestContext>()
+        .and_then(|ctx| ctx.team_id())
+        .map(RequestCaller::Team)
+}
+
+async fn has_team_access(
+    manager: &TeamManager,
+    caller: &RequestCaller,
+    team_id: Uuid,
+    required: TeamPermission,
+) -> Result<bool, GatewayError> {
+    match caller {
+        RequestCaller::User(user) => {
+            if user.has_role(&UserRole::Admin) {
+                return Ok(true);
+            }
+
+            match required {
+                TeamPermission::Member => {
+                    manager
+                        .check_user_role(
+                            team_id,
+                            user.id(),
+                            &[
+                                TeamRole::Owner,
+                                TeamRole::Admin,
+                                TeamRole::Manager,
+                                TeamRole::Member,
+                                TeamRole::Viewer,
+                            ],
+                        )
+                        .await
+                }
+                TeamPermission::Admin => manager.is_team_admin(team_id, user.id()).await,
+            }
+        }
+        RequestCaller::Team(caller_team_id) => {
+            Ok(*caller_team_id == team_id && matches!(required, TeamPermission::Member))
+        }
+    }
+}
+
+async fn authorize_team_operation(
+    req: &HttpRequest,
+    state: &web::Data<AppState>,
+    team_id: Uuid,
+    required: TeamPermission,
+) -> Result<(), HttpResponse> {
+    if !is_auth_enabled(state) {
+        return Ok(());
+    }
+
+    let caller = match get_request_caller(req) {
+        Some(caller) => caller,
+        None => return Err(unauthorized_response("Authentication required")),
+    };
+
+    let manager = get_team_manager(state);
+    match has_team_access(&manager, &caller, team_id, required).await {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            if matches!(&caller, RequestCaller::Team(_))
+                && matches!(required, TeamPermission::Admin)
+            {
+                Err(forbidden_response(
+                    "Team-scoped API keys cannot perform this operation",
+                ))
+            } else {
+                Err(forbidden_response("Not authorized for this team operation"))
+            }
+        }
+        Err(e) => Err(errors::gateway_error_to_response(e)),
+    }
+}
+
+/// Resolve inviter user ID from request auth context.
+///
+/// Priority:
+/// 1. Auth middleware injected `User` extension.
+/// 2. Fallback to `RequestContext.user_id` when present and parseable.
+fn resolve_invited_by(req: &HttpRequest) -> Option<Uuid> {
+    if let Some(user) = req.extensions().get::<User>() {
+        return Some(user.id());
+    }
+
+    req.extensions()
+        .get::<RequestContext>()
+        .and_then(|ctx| ctx.user_id.as_deref())
+        .and_then(|user_id| Uuid::parse_str(user_id).ok())
+}
+
 /// Create a new team
 ///
 /// POST /v1/teams
 pub async fn create_team(
+    req: HttpRequest,
     state: web::Data<AppState>,
     body: web::Json<CreateTeamBody>,
 ) -> ActixResult<HttpResponse> {
     info!("Creating team: {}", body.name);
+
+    if is_auth_enabled(&state) {
+        match get_request_caller(&req) {
+            Some(RequestCaller::User(user)) if user.has_role(&UserRole::Admin) => {}
+            Some(_) => {
+                return Ok(forbidden_response(
+                    "Admin privileges required to create teams",
+                ));
+            }
+            None => return Ok(unauthorized_response("Authentication required")),
+        }
+    }
 
     let manager = get_team_manager(&state);
 
@@ -134,6 +273,7 @@ pub async fn create_team(
 ///
 /// GET /v1/teams
 pub async fn list_teams(
+    req: HttpRequest,
     state: web::Data<AppState>,
     query: web::Query<PaginationQuery>,
 ) -> ActixResult<HttpResponse> {
@@ -142,8 +282,49 @@ pub async fn list_teams(
     }
 
     let manager = get_team_manager(&state);
+    let list_result = if !is_auth_enabled(&state) {
+        manager.list_teams(query.offset(), query.limit).await
+    } else {
+        match get_request_caller(&req) {
+            Some(RequestCaller::User(user)) if user.has_role(&UserRole::Admin) => {
+                manager.list_teams(query.offset(), query.limit).await
+            }
+            Some(RequestCaller::User(user)) => match manager.get_user_teams(user.id()).await {
+                Ok(teams) => {
+                    let visible: Vec<Team> = teams
+                        .into_iter()
+                        .filter(|t| !matches!(t.status, TeamStatus::Deleted))
+                        .collect();
+                    let total = visible.len() as u64;
+                    let paginated = visible
+                        .into_iter()
+                        .skip(query.offset() as usize)
+                        .take(query.limit as usize)
+                        .collect();
+                    Ok((paginated, total))
+                }
+                Err(e) => Err(e),
+            },
+            Some(RequestCaller::Team(team_id)) => match manager.get_team(team_id).await {
+                Ok(team) if !matches!(team.status, TeamStatus::Deleted) => {
+                    let mut teams = vec![team];
+                    let total = teams.len() as u64;
+                    let paginated = teams
+                        .drain(..)
+                        .skip(query.offset() as usize)
+                        .take(query.limit as usize)
+                        .collect();
+                    Ok((paginated, total))
+                }
+                Ok(_) => Ok((Vec::new(), 0)),
+                Err(GatewayError::NotFound(_)) => Ok((Vec::new(), 0)),
+                Err(e) => Err(e),
+            },
+            None => return Ok(unauthorized_response("Authentication required")),
+        }
+    };
 
-    match manager.list_teams(query.offset(), query.limit).await {
+    match list_result {
         Ok((teams, total)) => {
             let team_responses: Vec<TeamResponse> = teams
                 .into_iter()
@@ -173,9 +354,15 @@ pub async fn list_teams(
 ///
 /// GET /v1/teams/{id}
 pub async fn get_team(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<TeamPath>,
 ) -> ActixResult<HttpResponse> {
+    if let Err(resp) = authorize_team_operation(&req, &state, path.id, TeamPermission::Member).await
+    {
+        return Ok(resp);
+    }
+
     let manager = get_team_manager(&state);
 
     match manager.get_team(path.id).await {
@@ -203,11 +390,17 @@ pub async fn get_team(
 ///
 /// PUT /v1/teams/{id}
 pub async fn update_team(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<TeamPath>,
     body: web::Json<UpdateTeamBody>,
 ) -> ActixResult<HttpResponse> {
     info!("Updating team: {}", path.id);
+
+    if let Err(resp) = authorize_team_operation(&req, &state, path.id, TeamPermission::Admin).await
+    {
+        return Ok(resp);
+    }
 
     let manager = get_team_manager(&state);
 
@@ -238,10 +431,16 @@ pub async fn update_team(
 ///
 /// DELETE /v1/teams/{id}
 pub async fn delete_team(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<TeamPath>,
 ) -> ActixResult<HttpResponse> {
     info!("Deleting team: {}", path.id);
+
+    if let Err(resp) = authorize_team_operation(&req, &state, path.id, TeamPermission::Admin).await
+    {
+        return Ok(resp);
+    }
 
     let manager = get_team_manager(&state);
 
@@ -261,6 +460,7 @@ pub async fn delete_team(
 ///
 /// POST /v1/teams/{id}/members
 pub async fn add_member(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<TeamPath>,
     body: web::Json<AddMemberBody>,
@@ -270,6 +470,11 @@ pub async fn add_member(
         body.user_id, path.id, body.role
     );
 
+    if let Err(resp) = authorize_team_operation(&req, &state, path.id, TeamPermission::Admin).await
+    {
+        return Ok(resp);
+    }
+
     let manager = get_team_manager(&state);
 
     let request = AddMemberRequest {
@@ -277,8 +482,7 @@ pub async fn add_member(
         role: body.role.clone(),
     };
 
-    // Auth context not yet wired; invited_by is left unset.
-    let invited_by = None;
+    let invited_by = resolve_invited_by(&req);
 
     match manager.add_member(path.id, request, invited_by).await {
         Ok(member) => {
@@ -299,9 +503,15 @@ pub async fn add_member(
 ///
 /// GET /v1/teams/{id}/members
 pub async fn list_members(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<TeamPath>,
 ) -> ActixResult<HttpResponse> {
+    if let Err(resp) = authorize_team_operation(&req, &state, path.id, TeamPermission::Member).await
+    {
+        return Ok(resp);
+    }
+
     let manager = get_team_manager(&state);
 
     match manager.list_members(path.id).await {
@@ -317,10 +527,16 @@ pub async fn list_members(
 ///
 /// DELETE /v1/teams/{id}/members/{user_id}
 pub async fn remove_member(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<MemberPath>,
 ) -> ActixResult<HttpResponse> {
     info!("Removing member {} from team {}", path.user_id, path.id);
+
+    if let Err(resp) = authorize_team_operation(&req, &state, path.id, TeamPermission::Admin).await
+    {
+        return Ok(resp);
+    }
 
     let manager = get_team_manager(&state);
 
@@ -343,6 +559,7 @@ pub async fn remove_member(
 ///
 /// PUT /v1/teams/{id}/members/{user_id}/role
 pub async fn update_member_role(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<MemberPath>,
     body: web::Json<UpdateRoleBody>,
@@ -351,6 +568,11 @@ pub async fn update_member_role(
         "Updating role for member {} in team {} to {:?}",
         path.user_id, path.id, body.role
     );
+
+    if let Err(resp) = authorize_team_operation(&req, &state, path.id, TeamPermission::Admin).await
+    {
+        return Ok(resp);
+    }
 
     let manager = get_team_manager(&state);
 
@@ -383,9 +605,15 @@ pub async fn update_member_role(
 ///
 /// GET /v1/teams/{id}/usage
 pub async fn get_team_usage(
+    req: HttpRequest,
     state: web::Data<AppState>,
     path: web::Path<TeamPath>,
 ) -> ActixResult<HttpResponse> {
+    if let Err(resp) = authorize_team_operation(&req, &state, path.id, TeamPermission::Member).await
+    {
+        return Ok(resp);
+    }
+
     let manager = get_team_manager(&state);
 
     match manager.get_team_usage(path.id).await {
@@ -420,6 +648,23 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::teams::InMemoryTeamRepository;
+    use actix_web::{HttpMessage, test::TestRequest};
+    use std::sync::Arc;
+
+    fn make_user(role: UserRole) -> User {
+        let mut user = User::new(
+            "test-user".to_string(),
+            "test@example.com".to_string(),
+            "hash".to_string(),
+        );
+        user.role = role;
+        user
+    }
+
+    async fn create_team_manager() -> TeamManager {
+        TeamManager::new(Arc::new(InMemoryTeamRepository::new()))
+    }
 
     #[test]
     fn test_create_team_body_deserialize() {
@@ -522,5 +767,168 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("test-team"));
         assert!(!json.contains("member_count"));
+    }
+
+    #[test]
+    fn test_resolve_invited_by_from_authenticated_user() {
+        let req = TestRequest::default().to_http_request();
+        let user = User::new(
+            "inviter".to_string(),
+            "inviter@example.com".to_string(),
+            "hash".to_string(),
+        );
+        let expected = user.id();
+        req.extensions_mut().insert(user);
+
+        assert_eq!(resolve_invited_by(&req), Some(expected));
+    }
+
+    #[test]
+    fn test_resolve_invited_by_from_request_context_user_id() {
+        let req = TestRequest::default().to_http_request();
+        let mut ctx = RequestContext::new();
+        let expected = Uuid::new_v4();
+        ctx.user_id = Some(expected.to_string());
+        req.extensions_mut().insert(ctx);
+
+        assert_eq!(resolve_invited_by(&req), Some(expected));
+    }
+
+    #[test]
+    fn test_resolve_invited_by_returns_none_for_invalid_context_user_id() {
+        let req = TestRequest::default().to_http_request();
+        let mut ctx = RequestContext::new();
+        ctx.user_id = Some("not-a-uuid".to_string());
+        req.extensions_mut().insert(ctx);
+
+        assert_eq!(resolve_invited_by(&req), None);
+    }
+
+    #[test]
+    fn test_get_request_caller_prefers_user() {
+        let req = TestRequest::default().to_http_request();
+        let user = make_user(UserRole::User);
+        let expected_user_id = user.id();
+        req.extensions_mut().insert(user);
+
+        let mut ctx = RequestContext::new();
+        ctx.set_team_id(Uuid::new_v4());
+        req.extensions_mut().insert(ctx);
+
+        match get_request_caller(&req) {
+            Some(RequestCaller::User(u)) => assert_eq!(u.id(), expected_user_id),
+            other => panic!("expected user caller, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_request_caller_team_from_context() {
+        let req = TestRequest::default().to_http_request();
+        let team_id = Uuid::new_v4();
+        let mut ctx = RequestContext::new();
+        ctx.set_team_id(team_id);
+        req.extensions_mut().insert(ctx);
+
+        match get_request_caller(&req) {
+            Some(RequestCaller::Team(id)) => assert_eq!(id, team_id),
+            other => panic!("expected team caller, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_has_team_access_admin_user_can_manage_team() {
+        let manager = create_team_manager().await;
+        let team = manager
+            .create_team(CreateTeamRequest {
+                name: "team-admin-access".to_string(),
+                display_name: None,
+                description: None,
+                settings: None,
+            })
+            .await
+            .unwrap();
+
+        let caller = RequestCaller::User(Box::new(make_user(UserRole::Admin)));
+        let can_manage = has_team_access(&manager, &caller, team.id(), TeamPermission::Admin)
+            .await
+            .unwrap();
+        assert!(can_manage);
+    }
+
+    #[tokio::test]
+    async fn test_has_team_access_member_user_cannot_manage_team() {
+        let manager = create_team_manager().await;
+        let team = manager
+            .create_team(CreateTeamRequest {
+                name: "team-member-access".to_string(),
+                display_name: None,
+                description: None,
+                settings: None,
+            })
+            .await
+            .unwrap();
+
+        let user = make_user(UserRole::User);
+        manager
+            .add_member(
+                team.id(),
+                AddMemberRequest {
+                    user_id: user.id(),
+                    role: TeamRole::Member,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let caller = RequestCaller::User(Box::new(user));
+
+        let can_read = has_team_access(&manager, &caller, team.id(), TeamPermission::Member)
+            .await
+            .unwrap();
+        let can_manage = has_team_access(&manager, &caller, team.id(), TeamPermission::Admin)
+            .await
+            .unwrap();
+        assert!(can_read);
+        assert!(!can_manage);
+    }
+
+    #[tokio::test]
+    async fn test_has_team_access_team_scoped_caller_member_only() {
+        let manager = create_team_manager().await;
+        let team = manager
+            .create_team(CreateTeamRequest {
+                name: "team-scoped-access".to_string(),
+                display_name: None,
+                description: None,
+                settings: None,
+            })
+            .await
+            .unwrap();
+        let other_team = manager
+            .create_team(CreateTeamRequest {
+                name: "team-scoped-access-other".to_string(),
+                display_name: None,
+                description: None,
+                settings: None,
+            })
+            .await
+            .unwrap();
+
+        let caller = RequestCaller::Team(team.id());
+        let same_team_member =
+            has_team_access(&manager, &caller, team.id(), TeamPermission::Member)
+                .await
+                .unwrap();
+        let same_team_admin = has_team_access(&manager, &caller, team.id(), TeamPermission::Admin)
+            .await
+            .unwrap();
+        let other_team_member =
+            has_team_access(&manager, &caller, other_team.id(), TeamPermission::Member)
+                .await
+                .unwrap();
+
+        assert!(same_team_member);
+        assert!(!same_team_admin);
+        assert!(!other_team_member);
     }
 }

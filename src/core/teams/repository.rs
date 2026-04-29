@@ -174,7 +174,7 @@ impl TeamRepository for InMemoryTeamRepository {
             .collect();
 
         // Sort by created_at descending
-        team_list.sort_by(|a, b| b.metadata.created_at.cmp(&a.metadata.created_at));
+        team_list.sort_by_key(|b| std::cmp::Reverse(b.metadata.created_at));
 
         let paginated: Vec<Team> = team_list
             .into_iter()

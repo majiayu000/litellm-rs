@@ -1,7 +1,10 @@
 //! Middleware tests
 
 use super::auth_rate_limiter::AuthRateLimiter;
-use super::helpers::{extract_auth_method, is_admin_route, is_api_route, is_public_route};
+use super::helpers::{
+    extract_auth_method, extract_auth_method_with_api_key_header, is_admin_route, is_api_route,
+    is_public_route,
+};
 use crate::auth::AuthMethod;
 use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue};
 
@@ -39,6 +42,30 @@ fn test_extract_auth_method_x_api_key() {
 
     let auth_method = extract_auth_method(&headers);
     assert!(matches!(auth_method, AuthMethod::ApiKey(key) if key == "key123"));
+}
+
+#[test]
+fn test_extract_auth_method_custom_api_key_header() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("x-gateway-api-key"),
+        HeaderValue::from_static("gw-custom-123"),
+    );
+
+    let auth_method = extract_auth_method_with_api_key_header(&headers, "x-gateway-api-key");
+    assert!(matches!(auth_method, AuthMethod::ApiKey(key) if key == "gw-custom-123"));
+}
+
+#[test]
+fn test_extract_auth_method_custom_header_fallback_x_api_key() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("x-api-key"),
+        HeaderValue::from_static("fallback-key"),
+    );
+
+    let auth_method = extract_auth_method_with_api_key_header(&headers, "x-gateway-api-key");
+    assert!(matches!(auth_method, AuthMethod::ApiKey(key) if key == "fallback-key"));
 }
 
 #[test]

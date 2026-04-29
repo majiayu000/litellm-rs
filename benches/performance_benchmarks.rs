@@ -10,6 +10,7 @@ use litellm_rs::core::providers::openai::OpenAIProvider;
 use litellm_rs::core::router::{
     Deployment, DeploymentConfig, RouterConfig, UnifiedRouter, UnifiedRoutingStrategy,
 };
+use litellm_rs::core::types::model::ProviderCapability;
 use std::hint::black_box;
 
 use std::sync::Arc;
@@ -283,6 +284,37 @@ fn bench_concurrent_router(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark core capability-aware deployment selection used by AI routes.
+fn bench_capability_selection(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("capability_selection");
+
+    for num_deployments in [1, 5, 10, 50, 100].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("chat_capability_lookup", num_deployments),
+            num_deployments,
+            |b, &num| {
+                let router = UnifiedRouter::default();
+                let deployments = create_test_deployments(&rt, num, "gpt-4");
+                for deployment in deployments {
+                    router.add_deployment(deployment);
+                }
+
+                b.iter(|| {
+                    black_box(
+                        router.select_capability_deployment(
+                            "gpt-4",
+                            &ProviderCapability::ChatCompletion,
+                        ),
+                    )
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 /// Benchmark serialization/deserialization
 fn bench_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("serialization");
@@ -392,6 +424,7 @@ criterion_group!(
     benches,
     bench_unified_router,
     bench_concurrent_router,
+    bench_capability_selection,
     bench_serialization,
     bench_concurrent_operations,
     bench_memory_usage

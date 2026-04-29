@@ -59,4 +59,3 @@ jobs:
           name: litellm-gateway-${{ matrix.target }}
           path: |
             target/${{ matrix.target }}/release/gateway*
-            target/${{ matrix.target }}/release/google-gateway*

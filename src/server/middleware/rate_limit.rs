@@ -4,6 +4,7 @@ use crate::core::rate_limiter::get_global_rate_limiter;
 use crate::server::state::AppState;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::http::StatusCode;
+use actix_web::http::header::HeaderName;
 use actix_web::web;
 use actix_web::{HttpResponse, ResponseError};
 use dashmap::DashMap;
@@ -147,15 +148,21 @@ fn parse_peer_ip(peer: &str) -> String {
 /// Extract a client identifier from the request.
 ///
 /// Priority:
-/// 1. `Authorization` header value (API key / Bearer token) — identifies the authenticated caller
-/// 2. `X-Forwarded-For` first address — only when peer IP is in `trusted_proxies`
-/// 3. Direct peer address from connection info
-fn extract_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
-    if let Some(auth) = req.headers().get("Authorization")
-        && let Ok(val) = auth.to_str()
-    {
+/// 1. Configured API key header value
+/// 2. `Authorization` header value (API key / Bearer token)
+/// 3. `X-Forwarded-For` first address — only when peer IP is in `trusted_proxies`
+/// 4. Direct peer address from connection info
+fn extract_client_key(
+    req: &ServiceRequest,
+    trusted_proxies: &[String],
+    api_key_header: &str,
+) -> String {
+    let auth_token = header_value(req.headers(), api_key_header)
+        .or_else(|| header_value(req.headers(), "Authorization"));
+
+    if let Some(token) = auth_token {
         // Hash the token so raw secrets never reside in memory as map keys
-        let hash = Sha256::digest(val.as_bytes());
+        let hash = Sha256::digest(token.as_bytes());
         return format!("auth:{:x}", hash);
     }
 
@@ -175,6 +182,14 @@ fn extract_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> Strin
     peer_ip
 }
 
+fn header_value(headers: &actix_web::http::header::HeaderMap, header_name: &str) -> Option<String> {
+    let header_name = HeaderName::try_from(header_name.trim()).ok()?;
+    headers
+        .get(&header_name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
 impl<S, B> Service<ServiceRequest> for RateLimitMiddlewareService<S>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
@@ -189,16 +204,22 @@ where
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
         let app_state = req.app_data::<web::Data<AppState>>().cloned();
-        let trusted_proxies: Vec<String> = app_state
-            .as_ref()
-            .map(|s| s.config.load().server().trusted_proxies.clone())
-            .unwrap_or_default();
+        let (trusted_proxies, api_key_header): (Vec<String>, String) = match app_state.as_ref() {
+            Some(state) => {
+                let cfg = state.config.load();
+                (
+                    cfg.server().trusted_proxies.clone(),
+                    cfg.auth().api_key_header.clone(),
+                )
+            }
+            None => (Vec::new(), "x-api-key".to_string()),
+        };
         let requests_per_minute = self.requests_per_minute;
         let start_time = Instant::now();
         let path = req.path().to_string();
         let method = req.method().to_string();
 
-        let client_key = extract_client_key(&req, &trusted_proxies);
+        let client_key = extract_client_key(&req, &trusted_proxies, &api_key_header);
 
         // --- Try global rate limiter first ---
         if let Some(global_limiter) = get_global_rate_limiter() {

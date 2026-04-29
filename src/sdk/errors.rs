@@ -102,32 +102,61 @@ impl From<crate::utils::error::gateway_error::GatewayError> for SDKError {
     }
 }
 
-// Temporarily disabled old provider error mapping
-/*
 impl From<crate::core::providers::ProviderError> for SDKError {
     fn from(error: crate::core::providers::ProviderError) -> Self {
         match error {
-            crate::core::providers::ProviderError::Authentication(msg) => SDKError::AuthError(msg),
-            crate::core::providers::ProviderError::RateLimit(msg) => SDKError::RateLimitError(msg),
-            crate::core::providers::ProviderError::RateLimited(msg) => {
-                SDKError::RateLimitError(msg)
+            crate::core::providers::ProviderError::Authentication { message, .. } => {
+                SDKError::AuthError(message)
             }
-            crate::core::providers::ProviderError::ModelNotFound(msg) => {
-                SDKError::ModelNotFound(msg)
+            crate::core::providers::ProviderError::RateLimit { message, .. } => {
+                SDKError::RateLimitError(message)
             }
-            crate::core::providers::ProviderError::InvalidRequest(msg) => {
-                SDKError::InvalidRequest(msg)
+            crate::core::providers::ProviderError::ModelNotFound { model, .. } => {
+                SDKError::ModelNotFound(model)
             }
-            crate::core::providers::ProviderError::Unavailable(msg) => SDKError::ProviderError(msg),
-            crate::core::providers::ProviderError::Network(msg) => SDKError::NetworkError(msg),
-            crate::core::providers::ProviderError::Parsing(msg) => SDKError::Internal(msg),
-            crate::core::providers::ProviderError::Timeout(msg) => SDKError::NetworkError(msg),
-            crate::core::providers::ProviderError::Other(msg) => SDKError::Internal(msg),
-            crate::core::providers::ProviderError::Unknown(msg) => SDKError::Internal(msg),
+            crate::core::providers::ProviderError::InvalidRequest { message, .. } => {
+                SDKError::InvalidRequest(message)
+            }
+            crate::core::providers::ProviderError::Network { message, .. }
+            | crate::core::providers::ProviderError::Timeout { message, .. } => {
+                SDKError::NetworkError(message)
+            }
+            crate::core::providers::ProviderError::Configuration { message, .. } => {
+                SDKError::ConfigError(message)
+            }
+            crate::core::providers::ProviderError::ApiError {
+                message, status, ..
+            } => SDKError::ApiError(format!("HTTP {}: {}", status, message)),
+            crate::core::providers::ProviderError::NotSupported { feature, .. }
+            | crate::core::providers::ProviderError::NotImplemented { feature, .. }
+            | crate::core::providers::ProviderError::FeatureDisabled { feature, .. } => {
+                SDKError::NotSupported(feature)
+            }
+            crate::core::providers::ProviderError::ContentFiltered { reason, .. } => {
+                SDKError::InvalidRequest(reason)
+            }
+            crate::core::providers::ProviderError::ContextLengthExceeded {
+                max, actual, ..
+            } => SDKError::InvalidRequest(format!(
+                "Context length exceeded: max {} tokens, got {} tokens",
+                max, actual
+            )),
+            crate::core::providers::ProviderError::QuotaExceeded { .. }
+            | crate::core::providers::ProviderError::ProviderUnavailable { .. }
+            | crate::core::providers::ProviderError::Serialization { .. }
+            | crate::core::providers::ProviderError::TokenLimitExceeded { .. }
+            | crate::core::providers::ProviderError::DeploymentError { .. }
+            | crate::core::providers::ProviderError::ResponseParsing { .. }
+            | crate::core::providers::ProviderError::RoutingError { .. }
+            | crate::core::providers::ProviderError::TransformationError { .. }
+            | crate::core::providers::ProviderError::Cancelled { .. }
+            | crate::core::providers::ProviderError::Streaming { .. }
+            | crate::core::providers::ProviderError::Other { .. } => {
+                SDKError::ProviderError(error.to_string())
+            }
         }
     }
 }
-*/
 
 /// SDK result type
 pub type Result<T> = std::result::Result<T, SDKError>;
@@ -158,6 +187,7 @@ impl SDKError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::providers::ProviderError;
     use crate::utils::error::gateway_error::GatewayError;
 
     // ==================== SDKError Display Tests ====================
@@ -244,6 +274,24 @@ mod tests {
     fn test_sdk_error_parse_error() {
         let error = SDKError::ParseError("Invalid JSON".to_string());
         assert_eq!(error.to_string(), "Parse error: Invalid JSON");
+    }
+
+    #[test]
+    fn test_provider_error_auth_maps_to_sdk_auth_error() {
+        let error = SDKError::from(ProviderError::authentication("openai", "bad key"));
+        assert!(matches!(error, SDKError::AuthError(ref msg) if msg == "bad key"));
+    }
+
+    #[test]
+    fn test_provider_error_rate_limit_maps_to_sdk_rate_limit_error() {
+        let error = SDKError::from(ProviderError::rate_limit("openai", Some(30)));
+        assert!(matches!(error, SDKError::RateLimitError(ref msg) if !msg.is_empty()));
+    }
+
+    #[test]
+    fn test_provider_error_model_not_found_maps_to_sdk_model_not_found() {
+        let error = SDKError::from(ProviderError::model_not_found("openai", "gpt-missing"));
+        assert!(matches!(error, SDKError::ModelNotFound(ref model) if model == "gpt-missing"));
     }
 
     // ==================== SDKError is_retryable Tests ====================

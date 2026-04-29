@@ -4,9 +4,12 @@ use crate::auth::AuthMethod;
 use crate::core::models::{ApiKey, user::types::User};
 use crate::core::types::context::RequestContext;
 use crate::server::middleware::auth_rate_limiter::get_auth_rate_limiter;
-use crate::server::middleware::helpers::{extract_auth_method, is_public_route};
+use crate::server::middleware::helpers::{
+    extract_auth_method_with_api_key_header, is_public_route,
+};
 use crate::server::state::AppState;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
+use actix_web::http::header::{HeaderMap, HeaderName};
 use actix_web::{HttpMessage, HttpRequest, web};
 use futures::future::{Ready, ready};
 use std::collections::HashMap;
@@ -62,11 +65,6 @@ where
             // avoiding a per-request String allocation for the path.
             let is_public = is_public_route(req.path());
 
-            let context = build_request_context(&mut req);
-            let auth_method = extract_auth_method(req.headers());
-            let client_id = get_client_identifier(&req);
-            let rate_limiter = get_auth_rate_limiter();
-
             let app_state = match req.app_data::<web::Data<AppState>>().cloned() {
                 Some(state) => state,
                 None => {
@@ -75,14 +73,23 @@ where
                     ));
                 }
             };
+            let cfg = app_state.config.load();
+            let enable_jwt = cfg.auth().enable_jwt;
+            let enable_api_key = cfg.auth().enable_api_key;
+            let api_key_header = cfg.auth().api_key_header.clone();
+
+            let context = build_request_context(&mut req);
+            let auth_method =
+                extract_auth_method_with_api_key_header(req.headers(), api_key_header.as_str());
+            let client_id = get_client_identifier(&req, api_key_header.as_str());
+            let rate_limiter = get_auth_rate_limiter();
 
             if is_public {
                 req.extensions_mut().insert(context);
                 return service.call(req).await;
             }
 
-            let cfg = app_state.config.load();
-            let auth_enabled = cfg.auth().enable_jwt || cfg.auth().enable_api_key;
+            let auth_enabled = enable_jwt || enable_api_key;
             if !auth_enabled {
                 req.extensions_mut().insert(context);
                 return service.call(req).await;
@@ -96,13 +103,13 @@ where
             }
 
             let auth_method = match auth_method {
-                AuthMethod::Jwt(_) if !cfg.auth().enable_jwt => {
+                AuthMethod::Jwt(_) if !enable_jwt => {
                     rate_limiter.record_failure(&client_id);
                     return Err(actix_web::error::ErrorUnauthorized(
                         "JWT authentication disabled",
                     ));
                 }
-                AuthMethod::ApiKey(_) if !cfg.auth().enable_api_key => {
+                AuthMethod::ApiKey(_) if !enable_api_key => {
                     rate_limiter.record_failure(&client_id);
                     return Err(actix_web::error::ErrorUnauthorized(
                         "API key authentication disabled",
@@ -167,25 +174,38 @@ pub fn get_request_context(req: &HttpRequest) -> Result<RequestContext, actix_we
 }
 
 /// Extract a client identifier for rate limiting
-fn get_client_identifier(req: &ServiceRequest) -> String {
+fn get_client_identifier(req: &ServiceRequest, api_key_header: &str) -> String {
     let ip = req
         .connection_info()
         .peer_addr()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    if let Some(api_key) = req
-        .headers()
-        .get("x-api-key")
-        .or_else(|| req.headers().get("authorization"))
-        .and_then(|h| h.to_str().ok())
-    {
+    let api_key = get_header_value(req.headers(), api_key_header)
+        .or_else(|| {
+            if api_key_header.eq_ignore_ascii_case("x-api-key") {
+                None
+            } else {
+                get_header_value(req.headers(), "x-api-key")
+            }
+        })
+        .or_else(|| get_header_value(req.headers(), "authorization"));
+
+    if let Some(api_key) = api_key {
         use sha2::{Digest, Sha256};
         let hash = Sha256::digest(api_key.as_bytes());
         format!("{}:{:x}", ip, hash)
     } else {
         format!("ip:{}", ip)
     }
+}
+
+fn get_header_value(headers: &HeaderMap, header_name: &str) -> Option<String> {
+    let header_name = HeaderName::try_from(header_name.trim()).ok()?;
+    headers
+        .get(&header_name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
 }
 
 fn build_request_context(req: &mut ServiceRequest) -> RequestContext {

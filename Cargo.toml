@@ -33,11 +33,6 @@ path = "src/main.rs"
 required-features = ["storage"]
 
 [[bin]]
-name = "google-gateway"
-path = "src/bin/google_gateway.rs"
-required-features = ["storage"]
-
-[[bin]]
 name = "pricing-tool"
 path = "src/bin/pricing-tool.rs"
 required-features = ["gateway"]
@@ -49,6 +44,7 @@ actix-cors = { version = "0.7", optional = true }
 actix-multipart = { version = "0.7", optional = true }
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "signal"] }
 tokio-stream = "0.1"
+tokio-util = "0.7"
 futures = "0.3"
 async-trait = "0.1"
 async-stream = "0.3"
@@ -114,6 +110,9 @@ bytes = "1.5"
 # Configuration management
 clap = { version = "4.4", features = ["derive", "env"], optional = true }
 dotenvy = "0.15"
+
+# JSON Schema validation
+jsonschema = { version = "0.28", optional = true }
 
 # Error handling
 thiserror = "2.0"
@@ -187,6 +186,9 @@ cloud-secrets = ["aws-secrets", "gcp-secrets", "azure-secrets", "vault-secrets"]
 metrics = ["dep:sysinfo"]
 tracing = ["dep:tracing-subscriber"]
 
+# JSON Schema validation for MCP tool parameters
+mcp-validation = ["dep:jsonschema"]
+
 # Advanced features
 vector-db = []
 websockets = []
@@ -194,7 +196,7 @@ analytics = ["metrics"]
 enterprise = ["analytics", "vector-db"]
 
 # Full feature set
-full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "cloud-secrets", "providers-extra", "providers-extended"]
+full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "cloud-secrets", "providers-extra", "providers-extended", "mcp-validation"]
 
 # Metadata
 [package.metadata.docs.rs]

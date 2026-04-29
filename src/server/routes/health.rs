@@ -8,8 +8,16 @@ use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpResponse, Result as ActixResult, web};
 use std::borrow::Cow;
+#[cfg(feature = "metrics")]
+use std::sync::LazyLock;
+#[cfg(feature = "metrics")]
+use sysinfo::System;
 
 use tracing::{debug, error};
+
+#[cfg(feature = "metrics")]
+static HEALTH_SYSTEM: LazyLock<parking_lot::Mutex<System>> =
+    LazyLock::new(|| parking_lot::Mutex::new(System::new_all()));
 
 /// Configure health check routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
@@ -85,7 +93,7 @@ async fn detailed_health_check(state: web::Data<AppState>) -> ActixResult<HttpRe
     };
 
     let detailed_status = DetailedHealthStatus {
-        status: if storage_health.overall && provider_health.healthy_providers > 0 {
+        status: if storage_health.overall && !has_unhealthy_provider(&provider_health) {
             Cow::Borrowed("healthy")
         } else {
             Cow::Borrowed("degraded")
@@ -269,12 +277,9 @@ async fn check_provider_health(
     let mut healthy_count = 0;
 
     for provider_config in cfg.providers() {
-        let start_time = std::time::Instant::now();
-
-        // NOTE: Actual provider health checks not yet implemented.
-        // For now, assume all providers are healthy
-        let status: Cow<'static, str> = Cow::Borrowed("healthy");
-        let response_time = start_time.elapsed().as_millis() as u64;
+        // Provider-level live probes are not wired yet; expose explicit unknown
+        // state instead of reporting a fake healthy signal.
+        let status: Cow<'static, str> = Cow::Borrowed("unknown");
 
         if status == "healthy" {
             healthy_count += 1;
@@ -283,9 +288,9 @@ async fn check_provider_health(
         provider_details.push(ProviderHealth {
             name: provider_config.name.clone(),
             status,
-            response_time_ms: Some(response_time),
+            response_time_ms: None,
             last_check: chrono::Utc::now(),
-            error_message: None,
+            error_message: Some("Provider health check not implemented".to_string()),
         });
     }
 
@@ -294,6 +299,13 @@ async fn check_provider_health(
         total_providers: cfg.providers().len(),
         provider_details,
     })
+}
+
+fn has_unhealthy_provider(provider_health: &ProviderHealthStatus) -> bool {
+    provider_health
+        .provider_details
+        .iter()
+        .any(|provider| provider.status == "unhealthy")
 }
 
 /// Get system uptime in seconds
@@ -306,16 +318,30 @@ fn get_uptime_seconds() -> u64 {
 }
 
 /// Get memory usage in bytes
+#[cfg(feature = "metrics")]
 fn get_memory_usage() -> u64 {
-    // This is a placeholder implementation
-    // In a real application, you would use a proper memory monitoring library
+    let mut sys = HEALTH_SYSTEM.lock();
+    sys.refresh_memory();
+    sys.used_memory()
+}
+
+/// Get CPU usage percentage
+#[cfg(not(feature = "metrics"))]
+fn get_memory_usage() -> u64 {
     0
 }
 
 /// Get CPU usage percentage
+#[cfg(feature = "metrics")]
 fn get_cpu_usage() -> f64 {
-    // This is a placeholder implementation
-    // In a real application, you would use a proper CPU monitoring library
+    let mut sys = HEALTH_SYSTEM.lock();
+    sys.refresh_cpu_usage();
+    sys.global_cpu_usage() as f64
+}
+
+/// Get CPU usage percentage
+#[cfg(not(feature = "metrics"))]
+fn get_cpu_usage() -> f64 {
     0.0
 }
 
@@ -365,6 +391,58 @@ mod tests {
 
         assert_eq!(provider_health.healthy_providers, 2);
         assert_eq!(provider_health.total_providers, 3);
+    }
+
+    #[test]
+    fn test_has_unhealthy_provider_false_for_unknown_statuses() {
+        let provider_health = ProviderHealthStatus {
+            healthy_providers: 0,
+            total_providers: 2,
+            provider_details: vec![
+                ProviderHealth {
+                    name: "openai".to_string(),
+                    status: Cow::Borrowed("unknown"),
+                    response_time_ms: None,
+                    last_check: chrono::Utc::now(),
+                    error_message: Some("Provider health check not implemented".to_string()),
+                },
+                ProviderHealth {
+                    name: "anthropic".to_string(),
+                    status: Cow::Borrowed("unknown"),
+                    response_time_ms: None,
+                    last_check: chrono::Utc::now(),
+                    error_message: Some("Provider health check not implemented".to_string()),
+                },
+            ],
+        };
+
+        assert!(!has_unhealthy_provider(&provider_health));
+    }
+
+    #[test]
+    fn test_has_unhealthy_provider_true_when_contains_unhealthy() {
+        let provider_health = ProviderHealthStatus {
+            healthy_providers: 1,
+            total_providers: 2,
+            provider_details: vec![
+                ProviderHealth {
+                    name: "openai".to_string(),
+                    status: Cow::Borrowed("healthy"),
+                    response_time_ms: Some(10),
+                    last_check: chrono::Utc::now(),
+                    error_message: None,
+                },
+                ProviderHealth {
+                    name: "anthropic".to_string(),
+                    status: Cow::Borrowed("unhealthy"),
+                    response_time_ms: Some(2000),
+                    last_check: chrono::Utc::now(),
+                    error_message: Some("timeout".to_string()),
+                },
+            ],
+        };
+
+        assert!(has_unhealthy_provider(&provider_health));
     }
 
     #[test]

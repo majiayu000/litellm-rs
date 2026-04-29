@@ -12,11 +12,11 @@ use crate::core::providers::ProviderError;
 use crate::core::streaming::types::Event;
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
 use crate::server::routes::ai::chat::build_core_chat_request;
+use crate::server::routes::ai::execution::execute_with_selected_deployment;
 use crate::server::routes::ai::responses::{
     current_unix_ts, finish_reason_enum_to_status, uuid_v4_hex,
 };
 use crate::server::state::AppState;
-use crate::utils::error::gateway_error::GatewayError;
 use actix_web::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use actix_web::{HttpResponse, ResponseError, Result as ActixResult};
 use bytes::Bytes;
@@ -74,29 +74,23 @@ pub(crate) async fn handle_streaming_response(
     let requested_model = core_request.model.clone();
     let context_clone = context.clone();
 
-    match unified_router
-        .execute_with_retry(&requested_model, move |deployment_id| {
+    match execute_with_selected_deployment(
+        unified_router,
+        &requested_model,
+        move |provider, selected_model| {
             let core_request = core_request.clone();
             let ctx = context_clone.clone();
             async move {
-                let deployment =
-                    unified_router
-                        .get_deployment(&deployment_id)
-                        .ok_or_else(|| {
-                            ProviderError::other("router", "Selected deployment not found")
-                        })?;
-                let provider = deployment.provider.clone();
-                let selected_model = deployment.model.clone();
-                drop(deployment);
                 let mut req = core_request.clone();
                 req.model = selected_model;
                 let stream = provider.chat_completion_stream(req, ctx).await?;
                 Ok((stream, 0))
             }
-        })
-        .await
+        },
+    )
+    .await
     {
-        Ok((mut stream, _, _, _)) => {
+        Ok(mut stream) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout = state.config.load().gateway.server.stream_idle_timeout;
 
@@ -476,9 +470,9 @@ pub(crate) async fn handle_streaming_response(
                 .insert_header(("X-Request-ID", context.request_id.as_str()))
                 .streaming(body))
         }
-        Err((e, _)) => {
+        Err(e) => {
             error!("Failed to start Responses API stream: {e}");
-            Ok(GatewayError::Provider(e).error_response())
+            Ok(e.error_response())
         }
     }
 }

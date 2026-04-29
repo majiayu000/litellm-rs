@@ -1,6 +1,6 @@
 # litellm-rs
 
-A high-performance AI Gateway written in Rust - call 100+ LLM APIs using OpenAI format.
+A high-performance Rust library and gateway for calling 100+ LLM APIs in an OpenAI-compatible format.
 
 [![Crates.io](https://img.shields.io/crates/v/litellm-rs.svg)](https://crates.io/crates/litellm-rs)
 [![Documentation](https://docs.rs/litellm-rs/badge.svg)](https://docs.rs/litellm-rs)
@@ -14,7 +14,18 @@ A high-performance AI Gateway written in Rust - call 100+ LLM APIs using OpenAI 
 - **Intelligent Routing** - Load balancing, failover, cost optimization
 - **Enterprise Ready** - Auth, rate limiting, caching, observability
 
-## Quick Start
+## Quick Start (5 Minutes, API-Only Recommended)
+
+Most users use this project as a unified API library, not as a gateway server. Start with API-only mode first.
+
+```toml
+[dependencies]
+litellm-rs = { version = "0.4", default-features = false, features = ["lite"] }
+```
+
+For crate users, no `make` is required.
+
+## Usage
 
 ### As a Library (API Integration)
 
@@ -23,9 +34,6 @@ use litellm_rs::{completion, user_message, system_message};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Set your API key
-    std::env::set_var("OPENAI_API_KEY", "sk-...");
-
     let response = completion(
         "gpt-4",
         vec![
@@ -42,32 +50,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### As a Gateway Server
 
-```bash
-# Install
-cargo install litellm-rs
+#### Run from source repository
 
-# Run
-gateway --config config/gateway.yaml
+```bash
+git clone https://github.com/majiayu000/litellm-rs.git
+cd litellm-rs
+cp config/gateway.yaml.example config/gateway.yaml
+cargo run --bin gateway
 ```
+
+#### Install binary and run
+
+```bash
+cargo install litellm-rs --bin gateway
+mkdir -p config
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.yaml.example -o config/gateway.yaml
+gateway
+```
+
+Notes:
+
+- `gateway` requires the `storage` feature at build time.
+- Default features include `sqlite`, so default `cargo run`/`cargo install` satisfy this requirement.
 
 ## Installation
 
 ```toml
 # Full gateway with SQLite + Redis (default)
 [dependencies]
-litellm-rs = "0.3"
+litellm-rs = "0.4"
 
 # API-only - lightweight, no actix-web/argon2/aes-gcm/clap
 [dependencies]
-litellm-rs = { version = "0.3", default-features = false }
+litellm-rs = { version = "0.4", default-features = false }
 
 # API-only with metrics
 [dependencies]
-litellm-rs = { version = "0.3", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.4", default-features = false, features = ["lite"] }
 
-# Gateway server without storage
+# Gateway modules in library context (not standalone gateway binary runtime)
 [dependencies]
-litellm-rs = { version = "0.3", default-features = false, features = ["gateway"] }
+litellm-rs = { version = "0.4", default-features = false, features = ["gateway"] }
 ```
 
 ## Supported Providers
@@ -82,6 +105,9 @@ litellm-rs = { version = "0.3", default-features = false, features = ["gateway"]
 | Google Vertex AI | ✅ | ✅ | ✅ | - |
 | Groq | ✅ | - | - | ✅ |
 | DeepSeek | ✅ | - | - | - |
+| Kimi (Moonshot AI) | ✅ | - | - | - |
+| GLM (Zhipu AI) | ✅ | - | - | - |
+| MiniMax | ✅ | - | - | - |
 | Mistral | ✅ | ✅ | - | - |
 | Cohere | ✅ | ✅ | - | - |
 | OpenRouter | ✅ | - | - | - |
@@ -105,6 +131,9 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 GROQ_API_KEY=...
 DEEPSEEK_API_KEY=...
+MOONSHOT_API_KEY=...
+ZHIPU_API_KEY=...
+MINIMAX_API_KEY=...
 
 # Optional
 LITELLM_VERBOSE=true  # Enable verbose logging
@@ -171,11 +200,25 @@ while let Some(chunk) = stream.next().await {
 - **Memory**: ~50MB base footprint
 - **Concurrency**: Fully async with Tokio
 
+## Troubleshooting
+
+### Build/test uses too much CPU or memory
+
+- Use API-only defaults first: `cargo test --lib --tests --no-default-features --features "lite"`
+- Limit local parallelism when needed: `CARGO_BUILD_JOBS=4 cargo test --lib --tests --no-default-features --features "lite" -- --test-threads=4`
+- Avoid `--all-features` unless you are doing release/nightly validation
+
+### I only need provider API aggregation, not gateway
+
+- Prefer `default-features = false` with `features = ["lite"]`
+- Use gateway runtime commands only when you need HTTP server/auth/storage middleware
+
 ## Documentation
 
 - [API Documentation](https://docs.rs/litellm-rs)
+- [Documentation Index](./docs/README.md)
 - [Configuration Guide](./config/gateway.yaml.example)
-- [Examples](./examples/)
+- [Examples](./examples/README.md)
 
 ## Contributing
 
@@ -192,4 +235,3 @@ MIT License - see [LICENSE](./LICENSE) for details.
 ## Acknowledgments
 
 Inspired by [LiteLLM](https://github.com/BerriAI/litellm) (Python).
-
