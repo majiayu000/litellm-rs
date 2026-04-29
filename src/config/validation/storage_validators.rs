@@ -85,11 +85,21 @@ impl Validate for RedisConfig {
 
 impl Validate for VectorDbConfig {
     fn validate(&self) -> Result<(), String> {
-        let supported_types = ["qdrant", "weaviate", "pinecone"];
-        if !supported_types.contains(&self.db_type.as_str()) {
+        // Only Qdrant has a complete runtime implementation today. Weaviate
+        // and Pinecone modules are placeholders and should be rejected during
+        // config validation instead of failing later at runtime.
+        let implemented_types = ["qdrant"];
+        let planned_types = ["weaviate", "pinecone"];
+        if planned_types.contains(&self.db_type.as_str()) {
             return Err(format!(
-                "Unsupported vector DB type: {}. Supported types: {:?}",
-                self.db_type, supported_types
+                "Vector DB type '{}' is declared but not implemented yet. Implemented types: {:?}",
+                self.db_type, implemented_types
+            ));
+        }
+        if !implemented_types.contains(&self.db_type.as_str()) {
+            return Err(format!(
+                "Unsupported vector DB type: {}. Implemented types: {:?}",
+                self.db_type, implemented_types
             ));
         }
 
@@ -102,5 +112,34 @@ impl Validate for VectorDbConfig {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vector_config(db_type: &str) -> VectorDbConfig {
+        VectorDbConfig {
+            db_type: db_type.to_string(),
+            url: "http://localhost:6333".to_string(),
+            api_key: "test-key".to_string(),
+            index_name: "vectors".to_string(),
+        }
+    }
+
+    #[test]
+    fn vector_validation_accepts_qdrant() {
+        assert!(vector_config("qdrant").validate().is_ok());
+    }
+
+    #[test]
+    fn vector_validation_rejects_placeholder_backends() {
+        for db_type in ["pinecone", "weaviate"] {
+            let err = vector_config(db_type)
+                .validate()
+                .expect_err("placeholder vector backend must fail validation");
+            assert!(err.contains("not implemented yet"));
+        }
     }
 }

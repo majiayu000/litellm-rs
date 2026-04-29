@@ -27,12 +27,10 @@ impl VectorStoreBackend {
 
         match config.db_type.as_str() {
             "qdrant" => Ok(VectorStoreBackend::Qdrant(QdrantStore::new(config).await?)),
-            "weaviate" => Ok(VectorStoreBackend::Weaviate(
-                WeaviateStore::new(config).await?,
-            )),
-            "pinecone" => Ok(VectorStoreBackend::Pinecone(
-                PineconeStore::new(config).await?,
-            )),
+            "weaviate" | "pinecone" => Err(GatewayError::Config(format!(
+                "Vector DB type '{}' is declared but not implemented yet. Implemented types: [\"qdrant\"]",
+                config.db_type
+            ))),
             _ => Err(GatewayError::Config(format!(
                 "Unsupported vector DB type: {}",
                 config.db_type

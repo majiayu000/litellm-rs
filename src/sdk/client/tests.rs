@@ -62,6 +62,31 @@ async fn test_provider_selection() {
 }
 
 #[tokio::test]
+async fn test_provider_selection_accepts_anthropic_haiku_preset_aliases() {
+    let config = ConfigBuilder::new()
+        .add_anthropic("anthropic", "test-key")
+        .build();
+    let client = LLMClient::new(config).unwrap();
+
+    for model in [
+        "claude-3-5-haiku-20241022",
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
+    ] {
+        let provider = client
+            .select_provider(&SdkChatRequest {
+                model: model.to_string(),
+                messages: vec![],
+                options: ChatOptions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(provider.id, "anthropic");
+    }
+}
+
+#[tokio::test]
 async fn test_stream_provider_selection_prefers_default_provider() {
     let config = ConfigBuilder::new()
         .default_provider("openai")
