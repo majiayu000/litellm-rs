@@ -6,6 +6,7 @@
 use crate::config::Config;
 use crate::server::HttpServer;
 use crate::utils::error::gateway_error::{GatewayError, Result};
+use std::path::Path;
 use tracing::info;
 
 /// Server builder for easier configuration
@@ -43,13 +44,33 @@ impl Default for ServerBuilder {
 
 /// Run the server with automatic configuration loading
 pub async fn run_server() -> Result<()> {
+    run_server_with_config_path("config/gateway.yaml").await
+}
+
+/// Run the server with an explicit configuration path.
+pub async fn run_server_with_config_path<P>(config_path: P) -> Result<()>
+where
+    P: AsRef<Path>,
+{
+    run_server_with_config_overrides(config_path, None, None).await
+}
+
+/// Run the server with an explicit configuration path and CLI overrides.
+pub async fn run_server_with_config_overrides<P>(
+    config_path: P,
+    host: Option<&str>,
+    port: Option<u16>,
+) -> Result<()>
+where
+    P: AsRef<Path>,
+{
     info!("🚀 Starting Rust LiteLLM Gateway");
 
     // Auto-load configuration file
-    let config_path = "config/gateway.yaml";
-    info!("📄 Loading configuration file: {}", config_path);
+    let config_path = config_path.as_ref();
+    info!("📄 Loading configuration file: {}", config_path.display());
 
-    let config = match Config::from_file(config_path).await {
+    let mut config = match Config::from_file(config_path).await {
         Ok(config) => {
             info!("✅ Configuration file loaded successfully");
             config
@@ -57,7 +78,8 @@ pub async fn run_server() -> Result<()> {
         Err(file_error) => {
             info!(
                 "⚠️  Failed to load {}: {}. Trying environment variables.",
-                config_path, file_error
+                config_path.display(),
+                file_error
             );
             match Config::from_env() {
                 Ok(config) => {
@@ -73,6 +95,13 @@ pub async fn run_server() -> Result<()> {
             }
         }
     };
+
+    if let Some(host) = host {
+        config.gateway.server.host = host.to_string();
+    }
+    if let Some(port) = port {
+        config.gateway.server.port = port;
+    }
 
     // Ensure configuration is valid (including defaults)
     config.validate()?;
