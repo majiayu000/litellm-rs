@@ -131,18 +131,14 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release upload "${{ needs.create-release.outputs.version }}" \
-          ./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz \
-          --clobber
+        gh release upload "${{ needs.create-release.outputs.version }}" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz" --clobber
 
     - name: Upload Release Asset (Windows)
       if: matrix.os == 'windows-latest'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release upload "${{ needs.create-release.outputs.version }}" \
-          ./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip \
-          --clobber
+        gh release upload "${{ needs.create-release.outputs.version }}" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip" --clobber
 
   # Build and push Docker image
   docker-release:
