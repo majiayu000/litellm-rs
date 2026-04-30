@@ -9,11 +9,11 @@ use crate::server::middleware::helpers::{
 };
 use crate::server::state::AppState;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
-use actix_web::http::header::{HeaderMap, HeaderName};
 use actix_web::{HttpMessage, HttpRequest, web};
 use futures::future::{Ready, ready};
 use std::collections::HashMap;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::rc::Rc;
 use tracing::{debug, warn};
@@ -81,7 +81,7 @@ where
             let context = build_request_context(&mut req);
             let auth_method =
                 extract_auth_method_with_api_key_header(req.headers(), api_key_header.as_str());
-            let client_id = get_client_identifier(&req, api_key_header.as_str());
+            let client_id = get_client_identifier(&req, &auth_method);
             let rate_limiter = get_auth_rate_limiter();
 
             if is_public {
@@ -174,38 +174,32 @@ pub fn get_request_context(req: &HttpRequest) -> Result<RequestContext, actix_we
 }
 
 /// Extract a client identifier for rate limiting
-fn get_client_identifier(req: &ServiceRequest, api_key_header: &str) -> String {
+fn get_client_identifier(req: &ServiceRequest, auth_method: &AuthMethod) -> String {
     let ip = req
         .connection_info()
         .peer_addr()
-        .map(|s| s.to_string())
+        .map(parse_peer_ip)
         .unwrap_or_else(|| "unknown".to_string());
 
-    let api_key = get_header_value(req.headers(), api_key_header)
-        .or_else(|| {
-            if api_key_header.eq_ignore_ascii_case("x-api-key") {
-                None
-            } else {
-                get_header_value(req.headers(), "x-api-key")
-            }
-        })
-        .or_else(|| get_header_value(req.headers(), "authorization"));
-
-    if let Some(api_key) = api_key {
-        use sha2::{Digest, Sha256};
-        let hash = Sha256::digest(api_key.as_bytes());
-        format!("{}:{:x}", ip, hash)
-    } else {
-        format!("ip:{}", ip)
+    match auth_method {
+        AuthMethod::ApiKey(key) => format!("{}:api_key:{}", ip, hash_credential(key)),
+        AuthMethod::Jwt(token) => format!("{}:jwt:{}", ip, hash_credential(token)),
+        // Session cookies are untrusted until authentication succeeds, so keep
+        // failed session attempts in one stable per-IP lockout bucket.
+        AuthMethod::Session(_) => format!("ip:{}", ip),
+        AuthMethod::None => format!("ip:{}", ip),
     }
 }
 
-fn get_header_value(headers: &HeaderMap, header_name: &str) -> Option<String> {
-    let header_name = HeaderName::try_from(header_name.trim()).ok()?;
-    headers
-        .get(&header_name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
+fn parse_peer_ip(peer: &str) -> String {
+    peer.parse::<SocketAddr>()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|_| peer.to_string())
+}
+
+fn hash_credential(credential: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(credential.as_bytes()))
 }
 
 fn build_request_context(req: &mut ServiceRequest) -> RequestContext {
@@ -244,4 +238,97 @@ fn build_request_context(req: &mut ServiceRequest) -> RequestContext {
     context.headers = headers;
 
     context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::middleware::helpers::extract_auth_method_with_api_key_header;
+    use actix_web::test::TestRequest;
+
+    fn client_id_for_header(
+        header_name: &'static str,
+        header_value: &'static str,
+        api_key_header: &str,
+    ) -> String {
+        let req = TestRequest::default()
+            .peer_addr("203.0.113.55:1000".parse().unwrap())
+            .insert_header((header_name, header_value))
+            .to_srv_request();
+        let auth_method = extract_auth_method_with_api_key_header(req.headers(), api_key_header);
+        get_client_identifier(&req, &auth_method)
+    }
+
+    #[test]
+    fn client_identifier_normalizes_api_key_transports() {
+        let configured = client_id_for_header("x-litellm-key", "gw-same-key", "x-litellm-key");
+        let fallback = client_id_for_header("x-api-key", "gw-same-key", "x-litellm-key");
+        let authorization_scheme =
+            client_id_for_header("authorization", "ApiKey gw-same-key", "x-litellm-key");
+        let authorization_raw =
+            client_id_for_header("authorization", "gw-same-key", "x-litellm-key");
+
+        assert_eq!(configured, fallback);
+        assert_eq!(configured, authorization_scheme);
+        assert_eq!(configured, authorization_raw);
+    }
+
+    #[test]
+    fn client_identifier_distinguishes_different_credentials() {
+        let first = client_id_for_header("x-api-key", "gw-first-key", "x-api-key");
+        let second = client_id_for_header("x-api-key", "gw-second-key", "x-api-key");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn client_identifier_ignores_peer_port() {
+        let req_a = TestRequest::default()
+            .peer_addr("203.0.113.60:1000".parse().unwrap())
+            .insert_header(("x-api-key", "gw-same-key"))
+            .to_srv_request();
+        let req_b = TestRequest::default()
+            .peer_addr("203.0.113.60:2000".parse().unwrap())
+            .insert_header(("x-api-key", "gw-same-key"))
+            .to_srv_request();
+        let auth_a = extract_auth_method_with_api_key_header(req_a.headers(), "x-api-key");
+        let auth_b = extract_auth_method_with_api_key_header(req_b.headers(), "x-api-key");
+
+        assert_eq!(
+            get_client_identifier(&req_a, &auth_a),
+            get_client_identifier(&req_b, &auth_b)
+        );
+    }
+
+    #[test]
+    fn client_identifier_falls_back_to_ip_without_auth() {
+        let req = TestRequest::default()
+            .peer_addr("203.0.113.70:1000".parse().unwrap())
+            .to_srv_request();
+
+        assert_eq!(
+            get_client_identifier(&req, &AuthMethod::None),
+            "ip:203.0.113.70"
+        );
+    }
+
+    #[test]
+    fn client_identifier_keeps_session_failures_in_ip_bucket() {
+        let req_a = TestRequest::default()
+            .peer_addr("203.0.113.80:1000".parse().unwrap())
+            .insert_header(("cookie", "session=session-a"))
+            .to_srv_request();
+        let req_b = TestRequest::default()
+            .peer_addr("203.0.113.80:1000".parse().unwrap())
+            .insert_header(("cookie", "session=session-b"))
+            .to_srv_request();
+        let auth_a = extract_auth_method_with_api_key_header(req_a.headers(), "x-api-key");
+        let auth_b = extract_auth_method_with_api_key_header(req_b.headers(), "x-api-key");
+
+        assert_eq!(
+            get_client_identifier(&req_a, &auth_a),
+            get_client_identifier(&req_b, &auth_b)
+        );
+        assert_eq!(get_client_identifier(&req_a, &auth_a), "ip:203.0.113.80");
+    }
 }
