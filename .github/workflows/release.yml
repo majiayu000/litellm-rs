@@ -279,16 +279,80 @@ jobs:
           echo "::notice title=Homebrew tap update skipped::Set HOMEBREW_TAP_TOKEN to update majiayu000/homebrew-tap during releases."
         fi
 
+    - name: Checkout Homebrew tap
+      if: steps.homebrew_token.outputs.available == 'true'
+      uses: actions/checkout@v4
+      with:
+        repository: majiayu000/homebrew-tap
+        token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        path: homebrew-tap
+
     - name: Update Homebrew formula
       if: steps.homebrew_token.outputs.available == 'true'
-      uses: mislav/bump-homebrew-formula-action@v3
-      with:
-        formula-name: rust-litellm-gateway
-        homebrew-tap: majiayu000/homebrew-tap
-        base-branch: main
-        download-url: https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.version }}/rust-litellm-gateway-${{ needs.create-release.outputs.version }}-macos-x86_64.tar.gz
       env:
-        COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+        RELEASE_REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        formula_rel="Formula/rust-litellm-gateway.rb"
+        formula_path="homebrew-tap/${formula_rel}"
+        version="${RELEASE_VERSION#v}"
+        arm_url="https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_VERSION}/rust-litellm-gateway-${RELEASE_VERSION}-macos-aarch64.tar.gz"
+        intel_url="https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_VERSION}/rust-litellm-gateway-${RELEASE_VERSION}-macos-x86_64.tar.gz"
+        arm_sha="$(curl -fsSL "$arm_url" | shasum -a 256 | awk '{print $1}')"
+        intel_sha="$(curl -fsSL "$intel_url" | shasum -a 256 | awk '{print $1}')"
+
+        mkdir -p "$(dirname "$formula_path")"
+        RELEASE_VERSION="$RELEASE_VERSION" \
+        FORMULA_VERSION="$version" \
+        ARM_URL="$arm_url" \
+        ARM_SHA="$arm_sha" \
+        INTEL_URL="$intel_url" \
+        INTEL_SHA="$intel_sha" \
+        FORMULA_PATH="$formula_path" \
+        ruby <<'RUBY'
+        formula = <<~FORMULA
+          class RustLitellmGateway < Formula
+            desc "High-performance AI gateway with OpenAI-compatible APIs"
+            homepage "https://github.com/majiayu000/litellm-rs"
+            version "#{ENV.fetch("FORMULA_VERSION")}"
+            license "MIT"
+
+            depends_on :macos
+
+            if OS.mac? && Hardware::CPU.arm?
+              url "#{ENV.fetch("ARM_URL")}"
+              sha256 "#{ENV.fetch("ARM_SHA")}"
+            elsif OS.mac?
+              url "#{ENV.fetch("INTEL_URL")}"
+              sha256 "#{ENV.fetch("INTEL_SHA")}"
+            end
+
+            def install
+              bin.install "gateway"
+            end
+
+            test do
+              assert_match "gateway \#{version}", shell_output("\#{bin}/gateway --version")
+            end
+          end
+        FORMULA
+
+        File.write(ENV.fetch("FORMULA_PATH"), formula)
+        RUBY
+
+        ruby -c "$formula_path"
+        git -C homebrew-tap diff -- "$formula_rel"
+        git -C homebrew-tap config user.name "github-actions[bot]"
+        git -C homebrew-tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git -C homebrew-tap add "$formula_rel"
+        if git -C homebrew-tap diff --cached --quiet; then
+          echo "::notice title=Homebrew formula unchanged::rust-litellm-gateway is already at ${RELEASE_VERSION}."
+        else
+          git -C homebrew-tap commit -m "rust-litellm-gateway ${version}"
+          git -C homebrew-tap push origin HEAD:main
+        fi
 
   # Deploy to staging environment
   deploy-staging:
