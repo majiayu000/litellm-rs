@@ -33,16 +33,19 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         version="${{ steps.get_version.outputs.version }}"
+        target="$(git rev-list -n 1 "$version")"
         if gh release view "$version" >/dev/null 2>&1; then
           gh release edit "$version" \
             --title "Release $version" \
             --notes-file CHANGELOG.md \
+            --target "$target" \
             --draft=false \
             --prerelease=false
         else
           gh release create "$version" \
             --title "Release $version" \
             --notes-file CHANGELOG.md \
+            --target "$target" \
             --verify-tag
         fi
 
@@ -110,6 +113,7 @@ jobs:
         brew install postgresql openssl pkg-config
 
     - name: Build release binary
+      shell: bash
       run: cargo build --release --target ${{ matrix.target }} --bin gateway --no-default-features --features "$RELEASE_FEATURES"
 
     - name: Create archive (Unix)
