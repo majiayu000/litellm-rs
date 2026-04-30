@@ -6,6 +6,7 @@ use crate::core::router::execution::{
     calculate_retry_delay, infer_cooldown_reason, is_retryable_error,
     router_error_to_provider_error,
 };
+use crate::core::types::model::ProviderCapability;
 use crate::utils::error::gateway_error::GatewayError;
 use std::sync::Arc;
 use std::time::Instant;
@@ -63,6 +64,7 @@ impl Drop for StreamingDeploymentLease {
 pub(super) async fn execute_with_selected_deployment<T, F, Fut>(
     router: &UnifiedRouter,
     requested_model: &str,
+    capability: ProviderCapability,
     operation: F,
 ) -> Result<T, GatewayError>
 where
@@ -70,7 +72,7 @@ where
     Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
 {
     let execution = router
-        .execute_with_retry(requested_model, move |deployment_id| {
+        .execute_with_capability_retry(requested_model, &capability, move |deployment_id| {
             let operation = operation.clone();
             async move {
                 let deployment = router.get_deployment(&deployment_id).ok_or_else(|| {
@@ -98,6 +100,7 @@ where
 pub(super) async fn execute_stream_with_selected_deployment<T, F, Fut>(
     router: Arc<UnifiedRouter>,
     requested_model: &str,
+    capability: ProviderCapability,
     operation: F,
 ) -> Result<(T, StreamingDeploymentLease), GatewayError>
 where
@@ -110,21 +113,22 @@ where
     for attempt in 1..=max_attempts {
         let started_at = Instant::now();
 
-        let deployment_id = match router.select_deployment(requested_model) {
-            Ok(id) => id,
-            Err(router_err) => {
-                let provider_err = router_error_to_provider_error(router_err);
+        let deployment_id =
+            match router.select_deployment_for_capability(requested_model, &capability) {
+                Ok(id) => id,
+                Err(router_err) => {
+                    let provider_err = router_error_to_provider_error(router_err);
 
-                if is_retryable_error(&provider_err) && attempt < max_attempts {
-                    let delay = calculate_retry_delay(router.config(), attempt);
-                    last_error = Some(provider_err);
-                    tokio::time::sleep(delay).await;
-                    continue;
+                    if is_retryable_error(&provider_err) && attempt < max_attempts {
+                        let delay = calculate_retry_delay(router.config(), attempt);
+                        last_error = Some(provider_err);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+
+                    return Err(GatewayError::Provider(provider_err));
                 }
-
-                return Err(GatewayError::Provider(provider_err));
-            }
-        };
+            };
 
         let Some(deployment) = router.get_deployment(&deployment_id) else {
             router.release_deployment(&deployment_id);
@@ -182,8 +186,13 @@ mod tests {
     use super::{execute_stream_with_selected_deployment, execute_with_selected_deployment};
     use crate::core::providers::Provider;
     use crate::core::providers::ProviderError;
+    use crate::core::providers::anthropic::{AnthropicConfig, AnthropicProvider};
     use crate::core::providers::openai::OpenAIProvider;
-    use crate::core::router::{Deployment, UnifiedRouter};
+    use crate::core::router::RouterConfig;
+    use crate::core::router::{
+        Deployment, DeploymentConfig, HealthStatus, UnifiedRouter, UnifiedRoutingStrategy,
+    };
+    use crate::core::types::model::ProviderCapability;
     use crate::utils::error::gateway_error::GatewayError;
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
@@ -206,13 +215,60 @@ mod tests {
         router
     }
 
+    async fn build_mixed_capability_router() -> UnifiedRouter {
+        let router = UnifiedRouter::new(RouterConfig {
+            routing_strategy: UnifiedRoutingStrategy::PriorityBased,
+            ..Default::default()
+        });
+
+        let chat_only_provider = Provider::Anthropic(
+            AnthropicProvider::new(AnthropicConfig::new("sk-test-key"))
+                .expect("test provider should build"),
+        );
+        let embedding_provider = Provider::OpenAI(
+            OpenAIProvider::with_api_key("sk-test-key")
+                .await
+                .expect("test provider should build"),
+        );
+
+        router.add_deployment(
+            Deployment::new(
+                "chat-only".to_string(),
+                chat_only_provider,
+                "claude-3-haiku".to_string(),
+                "shared-model".to_string(),
+            )
+            .with_config(DeploymentConfig {
+                priority: 0,
+                ..Default::default()
+            }),
+        );
+        router.add_deployment(
+            Deployment::new(
+                "embedding-capable".to_string(),
+                embedding_provider,
+                "text-embedding-3-small".to_string(),
+                "shared-model".to_string(),
+            )
+            .with_config(DeploymentConfig {
+                priority: 10,
+                ..Default::default()
+            }),
+        );
+
+        router
+    }
+
     #[tokio::test]
     async fn test_execute_with_selected_deployment_uses_actual_deployment_model() {
         let router = build_test_router().await;
 
-        let model = execute_with_selected_deployment(&router, "gpt-4", |_provider, model| async {
-            Ok((model, 0))
-        })
+        let model = execute_with_selected_deployment(
+            &router,
+            "gpt-4",
+            ProviderCapability::ChatCompletion,
+            |_provider, model| async { Ok((model, 0)) },
+        )
         .await
         .expect("execution should succeed");
 
@@ -220,12 +276,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_execute_with_selected_deployment_uses_capability_selected_deployment() {
+        let router = build_mixed_capability_router().await;
+
+        let (provider, model) = execute_with_selected_deployment(
+            &router,
+            "shared-model",
+            ProviderCapability::Embeddings,
+            |provider, model| async move { Ok(((provider.name().to_string(), model), 0)) },
+        )
+        .await
+        .expect("execution should use an embeddings-capable deployment");
+
+        assert_eq!(provider, "openai");
+        assert_eq!(model, "text-embedding-3-small");
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_selected_deployment_rejects_unavailable_capability() {
+        let router = build_mixed_capability_router().await;
+        let deployment = router
+            .get_deployment("embedding-capable")
+            .expect("deployment should exist");
+        deployment
+            .state
+            .health
+            .store(HealthStatus::Unhealthy as u8, Ordering::Relaxed);
+        drop(deployment);
+
+        let err = execute_with_selected_deployment(
+            &router,
+            "shared-model",
+            ProviderCapability::Embeddings,
+            |_provider, _model| async { Ok::<_, ProviderError>(("should not run", 0)) },
+        )
+        .await
+        .expect_err("unavailable capability should fail before execution");
+
+        assert!(matches!(
+            err,
+            GatewayError::Provider(ProviderError::ProviderUnavailable { .. })
+        ));
+    }
+
+    #[tokio::test]
     async fn test_execute_with_selected_deployment_maps_provider_error() {
         let router = build_test_router().await;
 
-        let err = execute_with_selected_deployment(&router, "gpt-4", |_provider, _model| async {
-            Err::<(String, u64), _>(ProviderError::timeout("test", "timed out"))
-        })
+        let err = execute_with_selected_deployment(
+            &router,
+            "gpt-4",
+            ProviderCapability::ChatCompletion,
+            |_provider, _model| async {
+                Err::<(String, u64), _>(ProviderError::timeout("test", "timed out"))
+            },
+        )
         .await
         .expect_err("provider error should be mapped");
 
@@ -242,6 +347,7 @@ mod tests {
         let (_stream, lease) = execute_stream_with_selected_deployment(
             router.clone(),
             "gpt-4",
+            ProviderCapability::ChatCompletionStream,
             |_provider, model| async move { Ok(model) },
         )
         .await
@@ -271,6 +377,7 @@ mod tests {
         let (_stream, lease) = execute_stream_with_selected_deployment(
             router.clone(),
             "gpt-4",
+            ProviderCapability::ChatCompletionStream,
             |_provider, model| async move { Ok(model) },
         )
         .await
@@ -292,6 +399,7 @@ mod tests {
         let (_stream, lease) = execute_stream_with_selected_deployment(
             router.clone(),
             "gpt-4",
+            ProviderCapability::ChatCompletionStream,
             |_provider, model| async move { Ok(model) },
         )
         .await

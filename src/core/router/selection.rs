@@ -4,10 +4,11 @@
 //! the best deployment for a given model.
 
 use super::config::RoutingStrategy;
-use super::deployment::DeploymentId;
+use super::deployment::{Deployment, DeploymentId};
 use super::error::RouterError;
 use super::strategy_impl;
 use super::unified::Router;
+use crate::core::types::model::ProviderCapability;
 use std::sync::atomic::Ordering::Relaxed;
 
 impl Router {
@@ -21,6 +22,36 @@ impl Router {
     /// 4. Select based on routing strategy
     /// 5. Increment active_requests counter
     pub fn select_deployment(&self, model_name: &str) -> Result<DeploymentId, RouterError> {
+        self.select_deployment_matching(model_name, |_| true)
+    }
+
+    /// Select the best deployment for a model that supports `capability`.
+    ///
+    /// This uses the same health, cooldown, concurrency, rate-limit, and
+    /// strategy filters as `select_deployment`, then reserves the selected
+    /// deployment by incrementing its active request count.
+    pub fn select_deployment_for_capability(
+        &self,
+        model_name: &str,
+        capability: &ProviderCapability,
+    ) -> Result<DeploymentId, RouterError> {
+        self.select_deployment_matching(model_name, |deployment| {
+            deployment
+                .provider
+                .capabilities()
+                .iter()
+                .any(|cap| cap == capability)
+        })
+    }
+
+    fn select_deployment_matching<F>(
+        &self,
+        model_name: &str,
+        is_candidate: F,
+    ) -> Result<DeploymentId, RouterError>
+    where
+        F: Fn(&Deployment) -> bool,
+    {
         // 1. Resolve model name with a borrowed fast path so the hot routing
         // path only allocates when we finally return the selected deployment ID.
         let alias_guard = self.maybe_model_alias(model_name);
@@ -48,6 +79,16 @@ impl Router {
             let Some(deployment) = self.deployments.get(id.as_str()) else {
                 continue;
             };
+
+            if !is_candidate(&deployment) {
+                tracing::trace!(
+                    deployment_id = id.as_str(),
+                    model = %resolved_name,
+                    reason = "capability_mismatch",
+                    "deployment excluded from routing candidates"
+                );
+                continue;
+            }
 
             // Check cooldown first: is_in_cooldown() resets health
             // from Cooldown to Degraded when the cooldown period expires.

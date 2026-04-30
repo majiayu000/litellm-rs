@@ -26,7 +26,6 @@ use tracing::{error, info, warn};
 use super::context::get_request_context;
 use super::execution::{execute_stream_with_selected_deployment, execute_with_selected_deployment};
 use super::openai_errors;
-use super::provider_selection::select_provider_for_model;
 
 /// Chat completions endpoint
 ///
@@ -81,17 +80,6 @@ async fn handle_streaming_chat_completion(
         request.model
     );
 
-    let unified_router = &state.unified_router;
-
-    // Keep provider selection for capability validation before execution.
-    if let Err(e) = select_provider_for_model(
-        unified_router,
-        &request.model,
-        ProviderCapability::ChatCompletionStream,
-    ) {
-        return Ok(openai_errors::gateway_error_response(&e));
-    }
-
     let requested_model = request.model.clone();
     let core_request = match build_core_chat_request(request, requested_model, true) {
         Ok(req) => req,
@@ -103,6 +91,7 @@ async fn handle_streaming_chat_completion(
     match execute_stream_with_selected_deployment(
         state.unified_router.clone(),
         &requested_model,
+        ProviderCapability::ChatCompletionStream,
         move |provider, selected_model| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
@@ -272,13 +261,6 @@ async fn handle_chat_completion_internal(
     request: ChatCompletionRequest,
     context: RequestContext,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    // Keep provider selection for capability validation before execution.
-    select_provider_for_model(
-        unified_router,
-        &request.model,
-        ProviderCapability::ChatCompletion,
-    )?;
-
     let requested_model = request.model.clone();
     let core_request = build_core_chat_request(request, requested_model, false)?;
     let requested_model = core_request.model.clone();
@@ -287,6 +269,7 @@ async fn handle_chat_completion_internal(
     let core_response = execute_with_selected_deployment(
         unified_router,
         &requested_model,
+        ProviderCapability::ChatCompletion,
         move |provider, selected_model| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();

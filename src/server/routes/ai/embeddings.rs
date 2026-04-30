@@ -12,7 +12,6 @@ use tracing::info;
 
 use super::context::handle_ai_request;
 use super::execution::execute_with_selected_deployment;
-use super::provider_selection::select_provider_for_model;
 
 fn parse_embedding_input(input: &serde_json::Value) -> Result<EmbeddingInput, GatewayError> {
     match input {
@@ -85,12 +84,9 @@ async fn handle_embedding_internal(
     // Convert OpenAI format request to core format.
     let input = parse_embedding_input(&request.input)?;
 
-    // Keep provider selection for capability validation before execution.
-    select_provider_for_model(
-        unified_router,
-        &request.model,
-        ProviderCapability::Embeddings,
-    )?;
+    if request.model.trim().is_empty() {
+        return Err(GatewayError::validation("Model is required"));
+    }
 
     let requested_model = request.model.clone();
     let core_request = CoreEmbeddingRequest {
@@ -107,6 +103,7 @@ async fn handle_embedding_internal(
     let core_response = execute_with_selected_deployment(
         unified_router,
         &requested_model,
+        ProviderCapability::Embeddings,
         move |provider, selected_model| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();

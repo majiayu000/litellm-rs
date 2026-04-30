@@ -11,6 +11,7 @@ use super::execution::{
 use super::fallback::{ExecutionResult, FallbackType};
 use super::unified::Router;
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::types::model::ProviderCapability;
 
 impl Router {
     /// Execute a request for a single model with retry logic
@@ -87,6 +88,80 @@ impl Router {
             last_error.unwrap_or_else(|| ProviderError::Other {
                 provider: "router",
                 message: "Unknown error during retry".to_string(),
+            }),
+            max_attempts,
+        ))
+    }
+
+    /// Execute a request for a single model with retry logic, constrained to
+    /// deployments that support the requested provider capability.
+    pub async fn execute_with_capability_retry<T, F, Fut>(
+        &self,
+        model_name: &str,
+        capability: &ProviderCapability,
+        operation: F,
+    ) -> Result<(T, DeploymentId, u32, u64), (ProviderError, u32)>
+    where
+        F: Fn(DeploymentId) -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+    {
+        let max_attempts = self.config.num_retries + 1;
+        let mut last_error = None;
+
+        for attempt in 1..=max_attempts {
+            let start = std::time::Instant::now();
+
+            let deployment_id = match self.select_deployment_for_capability(model_name, capability)
+            {
+                Ok(id) => id,
+                Err(router_err) => {
+                    let provider_err = router_error_to_provider_error(router_err);
+
+                    if is_retryable_error(&provider_err) && attempt < max_attempts {
+                        let delay = calculate_retry_delay(&self.config, attempt);
+                        last_error = Some(provider_err);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    } else {
+                        return Err((provider_err, attempt));
+                    }
+                }
+            };
+
+            let result = operation(deployment_id.clone()).await;
+            let latency_us = start.elapsed().as_micros() as u64;
+
+            match result {
+                Ok((value, tokens_used)) => {
+                    self.release_deployment(&deployment_id);
+                    self.record_success(&deployment_id, tokens_used, latency_us);
+                    return Ok((value, deployment_id, attempt, latency_us));
+                }
+                Err(err) => {
+                    self.release_deployment(&deployment_id);
+
+                    if is_retryable_error(&err) && attempt < max_attempts {
+                        self.record_failure_with_reason(
+                            &deployment_id,
+                            CooldownReason::ConsecutiveFailures,
+                        );
+                        let delay = calculate_retry_delay(&self.config, attempt);
+                        last_error = Some(err);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    } else {
+                        let cooldown_reason = infer_cooldown_reason(&err);
+                        self.record_failure_with_reason(&deployment_id, cooldown_reason);
+                        return Err((err, attempt));
+                    }
+                }
+            }
+        }
+
+        Err((
+            last_error.unwrap_or_else(|| ProviderError::Other {
+                provider: "router",
+                message: "Unknown error during capability retry".to_string(),
             }),
             max_attempts,
         ))

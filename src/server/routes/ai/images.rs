@@ -11,7 +11,6 @@ use tracing::info;
 
 use super::context::handle_ai_request;
 use super::execution::execute_with_selected_deployment;
-use super::provider_selection::select_provider_for_optional_model;
 
 /// Image generation endpoint
 ///
@@ -47,15 +46,17 @@ async fn handle_image_generation_internal(
     request: ImageGenerationRequest,
     context: RequestContext,
 ) -> Result<ImageGenerationResponse, GatewayError> {
-    let selected_model = select_provider_for_optional_model(
-        unified_router,
-        request.model.as_deref(),
-        ProviderCapability::ImageGeneration,
-    )?;
+    let requested_model = request
+        .model
+        .clone()
+        .ok_or_else(|| GatewayError::validation("Model is required"))?;
+    if requested_model.trim().is_empty() {
+        return Err(GatewayError::validation("Model is required"));
+    }
 
     let core_request = CoreImageRequest {
         prompt: request.prompt,
-        model: Some(selected_model.clone()),
+        model: Some(requested_model.clone()),
         n: request.n,
         size: request.size,
         response_format: request.response_format,
@@ -67,7 +68,8 @@ async fn handle_image_generation_internal(
     let context_for_execution = context.clone();
     let core_response = execute_with_selected_deployment(
         unified_router,
-        &selected_model,
+        &requested_model,
+        ProviderCapability::ImageGeneration,
         move |provider, selected_model| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();

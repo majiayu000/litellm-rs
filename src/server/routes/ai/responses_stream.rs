@@ -50,16 +50,6 @@ pub(crate) async fn handle_streaming_response(
         chat_request.model
     );
 
-    let unified_router = &state.unified_router;
-
-    if let Err(e) = super::provider_selection::select_provider_for_model(
-        unified_router,
-        &chat_request.model,
-        ProviderCapability::ChatCompletionStream,
-    ) {
-        return Ok(openai_errors::gateway_error_response(&e));
-    }
-
     chat_request.stream = Some(true);
     let model_name = chat_request.model.clone();
     let resp_id = format!("resp_{}", uuid_v4_hex());
@@ -78,6 +68,7 @@ pub(crate) async fn handle_streaming_response(
     match execute_stream_with_selected_deployment(
         state.unified_router.clone(),
         &requested_model,
+        ProviderCapability::ChatCompletionStream,
         move |provider, selected_model| {
             let core_request = core_request.clone();
             let ctx = context_clone.clone();

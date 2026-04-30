@@ -298,6 +298,31 @@ impl Router {
                 continue;
             };
 
+            if deployment.is_in_cooldown() || !deployment.is_healthy() {
+                continue;
+            }
+
+            let active_requests = deployment.state.active_requests.load(Relaxed);
+            if let Some(limit) = deployment.config.max_parallel_requests
+                && active_requests >= limit
+            {
+                continue;
+            }
+
+            let rpm_current = deployment.state.rpm_current.load(Relaxed);
+            if let Some(limit) = deployment.config.rpm_limit
+                && rpm_current >= limit
+            {
+                continue;
+            }
+
+            let tpm_current = deployment.state.tpm_current.load(Relaxed);
+            if let Some(limit) = deployment.config.tpm_limit
+                && tpm_current >= limit
+            {
+                continue;
+            }
+
             if deployment
                 .provider
                 .capabilities()
