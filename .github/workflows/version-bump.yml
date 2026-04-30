@@ -120,7 +120,7 @@ jobs:
         if: steps.version.outputs.current_version != steps.version.outputs.new_version
         run: |
           git add Cargo.toml Cargo.lock CHANGELOG.md
-          git commit -m "chore(release): bump version to ${{ steps.version.outputs.new_version }} [skip ci]"
+          git commit -m "chore(release): bump version to ${{ steps.version.outputs.new_version }}"
           git push
 
       - name: Create Release Tag
