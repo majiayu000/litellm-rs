@@ -2,6 +2,7 @@
 
 use super::service::PricingService;
 use super::types::LiteLLMModelInfo;
+use crate::core::pricing::parse_litellm_pricing_json;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -35,7 +36,7 @@ impl PricingService {
             .await
             .map_err(|e| GatewayError::network(format!("Failed to read response: {}", e)))?;
 
-        let data: HashMap<String, LiteLLMModelInfo> = serde_json::from_str(&text)
+        let data = parse_litellm_pricing_json(&text)
             .map_err(|e| GatewayError::parsing(format!("Failed to parse pricing JSON: {}", e)))?;
 
         debug!("Loaded {} models from URL", data.len());
@@ -48,7 +49,7 @@ impl PricingService {
             .await
             .map_err(GatewayError::Io)?;
 
-        let data: HashMap<String, LiteLLMModelInfo> = serde_json::from_str(&content)
+        let data = parse_litellm_pricing_json(&content)
             .map_err(|e| GatewayError::parsing(format!("Failed to parse pricing JSON: {}", e)))?;
 
         debug!("Loaded {} models from file", data.len());

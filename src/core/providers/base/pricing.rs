@@ -34,31 +34,8 @@ impl PricingDatabase {
         let content =
             fs::read_to_string(path).map_err(|e| format!("Failed to read pricing file: {}", e))?;
 
-        let all_data: HashMap<String, serde_json::Value> = serde_json::from_str(&content)
+        let models = crate::core::pricing::parse_litellm_pricing_json(&content)
             .map_err(|e| format!("Failed to parse pricing JSON: {}", e))?;
-
-        // Filter out entries that are not actual models (e.g., sample_spec)
-        let mut models = HashMap::new();
-        for (key, value) in all_data {
-            // Skip documentation and sample entries
-            if key == "sample_spec" || key.starts_with("_") || key.contains("example") {
-                continue;
-            }
-
-            // Try to parse value as ModelPricing
-            match serde_json::from_value::<ModelPricing>(value) {
-                Ok(pricing) => {
-                    models.insert(key, pricing);
-                }
-                Err(e) => {
-                    warn!(
-                        model = %key,
-                        error = %e,
-                        "Failed to parse model pricing data, skipping model"
-                    );
-                }
-            }
-        }
 
         Ok(Self { models })
     }

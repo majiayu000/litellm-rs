@@ -924,6 +924,21 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E3 shared pricing parser convergence: `in_progress`
+    - Modified files:
+      - `src/core/pricing.rs`
+      - `src/core/providers/base/pricing.rs`
+      - `src/services/pricing/loader.rs`
+    - Main changes:
+      - Added a shared `parse_litellm_pricing_json` helper next to the canonical `LiteLLMModelInfo` model.
+      - Routed both provider-base pricing and the runtime pricing service loader through the same LiteLLM JSON filtering/parsing rule.
+      - Added regression coverage for metadata/sample entry filtering and malformed real model rejection.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test core::pricing` -> pass (`2` tests)
+      - `cargo test core::providers::base::pricing` -> pass (`4` tests)
+      - `cargo test services::pricing` -> pass (`74` tests)
+      - `cargo test pricing` -> pass (`178` lib filtered tests, `1` integration filtered test)
   - Step E7 provider module lifecycle decisions: `completed`
     - Modified files:
       - `src/core/providers/registry/lifecycle.rs`
