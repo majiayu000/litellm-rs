@@ -924,6 +924,24 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E3 core pricing database ownership: `in_progress`
+    - Modified files:
+      - `src/core/pricing.rs`
+      - `src/core/providers/base/pricing.rs`
+      - `src/core/cost/calculator.rs`
+    - Main changes:
+      - Moved `PricingDatabase`, `Usage`, the global pricing DB, and compatibility quick cost calculation into `core::pricing`.
+      - Reduced `core::providers::base::pricing` to compatibility re-exports so provider-base no longer owns a separate pricing database implementation.
+      - Routed the core cost calculator's shared LiteLLM pricing lookup directly through `core::pricing::get_pricing_db`.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test core::pricing` -> pass (`6` tests)
+      - `cargo test core::providers::base` -> pass (`23` tests)
+      - `cargo test core::cost::calculator` -> pass (`61` tests)
+      - `cargo test pricing` -> pass (`178` lib filtered tests, `1` integration filtered test)
+      - `git diff --check` -> pass
+      - `cargo check --all-features` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E3 shared pricing parser convergence: `in_progress`
     - Modified files:
       - `src/core/pricing.rs`

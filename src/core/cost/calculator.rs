@@ -130,7 +130,7 @@ where
 }
 
 fn get_shared_model_pricing(model: &str, provider_aliases: &[&str]) -> Option<ModelPricing> {
-    let db = crate::core::providers::base::pricing::get_pricing_db();
+    let db = crate::core::pricing::get_pricing_db();
 
     if let Some(info) = db.get_model_info(model)
         && litellm_provider_matches(&info.litellm_provider, provider_aliases)
