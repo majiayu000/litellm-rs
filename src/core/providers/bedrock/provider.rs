@@ -66,7 +66,7 @@ impl BedrockProvider {
         let available_models = CostCalculator::get_all_models();
 
         for model_id in available_models {
-            if let Some(pricing) = CostCalculator::get_model_pricing(model_id)
+            if let Some(pricing) = CostCalculator::get_core_model_pricing(model_id)
                 && let Ok(model_config) = get_model_config(model_id)
             {
                 models.push(ModelInfo {
@@ -81,9 +81,9 @@ impl BedrockProvider {
                     supports_streaming: model_config.supports_streaming,
                     supports_tools: model_config.supports_function_calling,
                     supports_multimodal: model_config.supports_multimodal,
-                    input_cost_per_1k_tokens: Some(pricing.input_cost_per_1k),
-                    output_cost_per_1k_tokens: Some(pricing.output_cost_per_1k),
-                    currency: pricing.currency.to_string(),
+                    input_cost_per_1k_tokens: Some(pricing.input_cost_per_1k_tokens),
+                    output_cost_per_1k_tokens: Some(pricing.output_cost_per_1k_tokens),
+                    currency: pricing.currency,
                     capabilities: vec![],
                     created_at: None,
                     updated_at: None,

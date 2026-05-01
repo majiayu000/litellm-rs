@@ -14,6 +14,20 @@ pub struct ModelPricing {
     pub currency: &'static str,
 }
 
+impl ModelPricing {
+    /// Convert Bedrock's static pricing entry into the shared cost model.
+    pub fn to_core_model_pricing(&self, model_id: &str) -> crate::core::cost::types::ModelPricing {
+        crate::core::cost::types::ModelPricing {
+            model: model_id.to_string(),
+            input_cost_per_1k_tokens: self.input_cost_per_1k,
+            output_cost_per_1k_tokens: self.output_cost_per_1k,
+            currency: self.currency.to_string(),
+            updated_at: chrono::Utc::now(),
+            ..Default::default()
+        }
+    }
+}
+
 /// Comprehensive pricing database for all Bedrock models
 static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::new(|| {
     let mut pricing = HashMap::new();
@@ -603,6 +617,15 @@ impl CostCalculator {
         MODEL_PRICING.get(model_id)
     }
 
+    /// Get pricing information in the shared core cost model shape.
+    pub fn get_core_model_pricing(
+        model_id: &str,
+    ) -> Option<crate::core::cost::types::ModelPricing> {
+        MODEL_PRICING
+            .get(model_id)
+            .map(|pricing| pricing.to_core_model_pricing(model_id))
+    }
+
     /// Get all available models with pricing
     pub fn get_all_models() -> Vec<&'static str> {
         MODEL_PRICING.keys().copied().collect()
@@ -770,6 +793,16 @@ mod tests {
             CostCalculator::get_model_pricing("anthropic.claude-3-opus-20240229").unwrap();
         assert_eq!(pricing.input_cost_per_1k, 0.015);
         assert_eq!(pricing.output_cost_per_1k, 0.075);
+        assert_eq!(pricing.currency, "USD");
+    }
+
+    #[test]
+    fn test_core_model_pricing_lookup() {
+        let pricing =
+            CostCalculator::get_core_model_pricing("anthropic.claude-3-opus-20240229").unwrap();
+        assert_eq!(pricing.model, "anthropic.claude-3-opus-20240229");
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.015);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.075);
         assert_eq!(pricing.currency, "USD");
     }
 

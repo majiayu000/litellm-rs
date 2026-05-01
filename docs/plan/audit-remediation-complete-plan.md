@@ -923,6 +923,25 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 
 ## 9. Execution Log
 
+- 2026-05-02
+  - Step E3 Bedrock pricing convergence: `in_progress`
+    - Modified files:
+      - `src/core/providers/bedrock/utils/cost.rs`
+      - `src/core/providers/bedrock/provider.rs`
+    - Main changes:
+      - Added a compatibility adapter from Bedrock's AWS-model static pricing entries into the shared `core::cost::types::ModelPricing` shape.
+      - Routed Bedrock provider model metadata through the shared cost model shape while preserving the existing Bedrock pricing table as the data source for AWS model IDs.
+      - Added a regression test proving the shared-shape adapter preserves model ID, input/output rates, and currency.
+    - Execute tests:
+      - `cargo test --features providers-extra core::providers::bedrock::utils::cost::tests::test_core_model_pricing_lookup -- --exact` -> pass (`1` test)
+      - `cargo test --features providers-extra core::providers::bedrock::utils::cost::tests::` -> pass (`50` tests)
+      - `cargo test --features providers-extra core::providers::bedrock::provider_tests::` -> pass (`48` tests)
+      - `cargo fmt --all -- --check` -> pass
+      - `git diff --check` -> pass
+      - `cargo test pricing` -> pass (`175` lib filtered tests, `1` integration filtered test)
+      - `cargo test cost` -> pass (`326` lib filtered tests)
+      - `cargo check --all-features` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
 - 2026-05-01
   - Step E3 OpenAI cost convergence: `in_progress`
     - Modified files:
