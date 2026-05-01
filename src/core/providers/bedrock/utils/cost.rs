@@ -6,25 +6,30 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-/// Model pricing information
-#[derive(Debug, Clone)]
-pub struct ModelPricing {
-    pub input_cost_per_1k: f64,
-    pub output_cost_per_1k: f64,
-    pub currency: &'static str,
+pub use crate::core::cost::types::ModelPricing;
+
+fn insert_pricing(
+    pricing: &mut HashMap<&'static str, ModelPricing>,
+    model_id: &'static str,
+    input_cost_per_1k_tokens: f64,
+    output_cost_per_1k_tokens: f64,
+) {
+    pricing.insert(
+        model_id,
+        ModelPricing {
+            model: model_id.to_string(),
+            input_cost_per_1k_tokens,
+            output_cost_per_1k_tokens,
+            ..Default::default()
+        },
+    );
 }
 
-impl ModelPricing {
-    /// Convert Bedrock's static pricing entry into the shared cost model.
-    pub fn to_core_model_pricing(&self, model_id: &str) -> crate::core::cost::types::ModelPricing {
-        crate::core::cost::types::ModelPricing {
-            model: model_id.to_string(),
-            input_cost_per_1k_tokens: self.input_cost_per_1k,
-            output_cost_per_1k_tokens: self.output_cost_per_1k,
-            currency: self.currency.to_string(),
-            updated_at: chrono::Utc::now(),
-            ..Default::default()
-        }
+fn currency(pricing: &ModelPricing) -> &'static str {
+    if pricing.currency == "USD" {
+        "USD"
+    } else {
+        "UNKNOWN"
     }
 }
 
@@ -33,395 +38,181 @@ static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::
     let mut pricing = HashMap::new();
 
     // Claude models
-    pricing.insert(
-        "anthropic.claude-opus-4-6-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.005,
-            output_cost_per_1k: 0.025,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "anthropic.claude-opus-4-6-v1",
-        ModelPricing {
-            input_cost_per_1k: 0.005,
-            output_cost_per_1k: 0.025,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "anthropic.claude-opus-4-6",
-        ModelPricing {
-            input_cost_per_1k: 0.005,
-            output_cost_per_1k: 0.025,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "anthropic.claude-opus-4-5-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.005,
-            output_cost_per_1k: 0.025,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "anthropic.claude-opus-4-5",
-        ModelPricing {
-            input_cost_per_1k: 0.005,
-            output_cost_per_1k: 0.025,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
+    insert_pricing(&mut pricing, "anthropic.claude-opus-4-6-v1:0", 0.005, 0.025);
+    insert_pricing(&mut pricing, "anthropic.claude-opus-4-6-v1", 0.005, 0.025);
+    insert_pricing(&mut pricing, "anthropic.claude-opus-4-6", 0.005, 0.025);
+    insert_pricing(&mut pricing, "anthropic.claude-opus-4-5-v1:0", 0.005, 0.025);
+    insert_pricing(&mut pricing, "anthropic.claude-opus-4-5", 0.005, 0.025);
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-sonnet-4-5-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
-            currency: "USD",
-        },
+        0.003,
+        0.015,
     );
-    pricing.insert(
-        "anthropic.claude-sonnet-4-5",
-        ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "anthropic.claude-sonnet-4-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "anthropic.claude-sonnet-4",
-        ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
-            currency: "USD",
-        },
-    );
+    insert_pricing(&mut pricing, "anthropic.claude-sonnet-4-5", 0.003, 0.015);
+    insert_pricing(&mut pricing, "anthropic.claude-sonnet-4-v1:0", 0.003, 0.015);
+    insert_pricing(&mut pricing, "anthropic.claude-sonnet-4", 0.003, 0.015);
 
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-3-opus-20240229",
-        ModelPricing {
-            input_cost_per_1k: 0.015,
-            output_cost_per_1k: 0.075,
-            currency: "USD",
-        },
+        0.015,
+        0.075,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-3-sonnet-20240229",
-        ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
-            currency: "USD",
-        },
+        0.003,
+        0.015,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-3-haiku-20240307",
-        ModelPricing {
-            input_cost_per_1k: 0.00025,
-            output_cost_per_1k: 0.00125,
-            currency: "USD",
-        },
+        0.00025,
+        0.00125,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-3-5-sonnet-20241022",
-        ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
-            currency: "USD",
-        },
+        0.003,
+        0.015,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
-            currency: "USD",
-        },
+        0.003,
+        0.015,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-3-5-haiku-20241022",
-        ModelPricing {
-            input_cost_per_1k: 0.001,
-            output_cost_per_1k: 0.005,
-            currency: "USD",
-        },
+        0.001,
+        0.005,
     );
-    pricing.insert(
-        "anthropic.claude-v2:1",
-        ModelPricing {
-            input_cost_per_1k: 0.008,
-            output_cost_per_1k: 0.024,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "anthropic.claude-v2",
-        ModelPricing {
-            input_cost_per_1k: 0.008,
-            output_cost_per_1k: 0.024,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
+    insert_pricing(&mut pricing, "anthropic.claude-v2:1", 0.008, 0.024);
+    insert_pricing(&mut pricing, "anthropic.claude-v2", 0.008, 0.024);
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-instant-v1",
-        ModelPricing {
-            input_cost_per_1k: 0.00163,
-            output_cost_per_1k: 0.00551,
-            currency: "USD",
-        },
+        0.00163,
+        0.00551,
     );
 
     // Titan models
-    pricing.insert(
-        "amazon.titan-text-express-v1",
-        ModelPricing {
-            input_cost_per_1k: 0.0002,
-            output_cost_per_1k: 0.0006,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "amazon.titan-text-lite-v1",
-        ModelPricing {
-            input_cost_per_1k: 0.00015,
-            output_cost_per_1k: 0.0002,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
+    insert_pricing(&mut pricing, "amazon.titan-text-express-v1", 0.0002, 0.0006);
+    insert_pricing(&mut pricing, "amazon.titan-text-lite-v1", 0.00015, 0.0002);
+    insert_pricing(
+        &mut pricing,
         "amazon.titan-text-premier-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.0005,
-            output_cost_per_1k: 0.0015,
-            currency: "USD",
-        },
+        0.0005,
+        0.0015,
     );
 
     // Nova models
-    pricing.insert(
-        "amazon.nova-micro-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.000035,
-            output_cost_per_1k: 0.00014,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "amazon.nova-lite-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.00006,
-            output_cost_per_1k: 0.00024,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "amazon.nova-pro-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.0008,
-            output_cost_per_1k: 0.0032,
-            currency: "USD",
-        },
-    );
+    insert_pricing(&mut pricing, "amazon.nova-micro-v1:0", 0.000035, 0.00014);
+    insert_pricing(&mut pricing, "amazon.nova-lite-v1:0", 0.00006, 0.00024);
+    insert_pricing(&mut pricing, "amazon.nova-pro-v1:0", 0.0008, 0.0032);
 
     // AI21 models
-    pricing.insert(
-        "ai21.jamba-1-5-large-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.002,
-            output_cost_per_1k: 0.008,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "ai21.jamba-1-5-mini-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.0002,
-            output_cost_per_1k: 0.0004,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "ai21.jamba-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.0005,
-            output_cost_per_1k: 0.0007,
-            currency: "USD",
-        },
-    );
+    insert_pricing(&mut pricing, "ai21.jamba-1-5-large-v1:0", 0.002, 0.008);
+    insert_pricing(&mut pricing, "ai21.jamba-1-5-mini-v1:0", 0.0002, 0.0004);
+    insert_pricing(&mut pricing, "ai21.jamba-instruct-v1:0", 0.0005, 0.0007);
 
     // Cohere models
-    pricing.insert(
-        "cohere.command-r-plus-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "cohere.command-r-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.0005,
-            output_cost_per_1k: 0.0015,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "cohere.command-text-v14",
-        ModelPricing {
-            input_cost_per_1k: 0.0015,
-            output_cost_per_1k: 0.002,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
+    insert_pricing(&mut pricing, "cohere.command-r-plus-v1:0", 0.003, 0.015);
+    insert_pricing(&mut pricing, "cohere.command-r-v1:0", 0.0005, 0.0015);
+    insert_pricing(&mut pricing, "cohere.command-text-v14", 0.0015, 0.002);
+    insert_pricing(
+        &mut pricing,
         "cohere.command-light-text-v14",
-        ModelPricing {
-            input_cost_per_1k: 0.0003,
-            output_cost_per_1k: 0.0006,
-            currency: "USD",
-        },
+        0.0003,
+        0.0006,
     );
 
     // Mistral models
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "mistral.mistral-7b-instruct-v0:2",
-        ModelPricing {
-            input_cost_per_1k: 0.00015,
-            output_cost_per_1k: 0.0002,
-            currency: "USD",
-        },
+        0.00015,
+        0.0002,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "mistral.mixtral-8x7b-instruct-v0:1",
-        ModelPricing {
-            input_cost_per_1k: 0.00045,
-            output_cost_per_1k: 0.0007,
-            currency: "USD",
-        },
+        0.00045,
+        0.0007,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "mistral.mistral-large-2402-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.004,
-            output_cost_per_1k: 0.012,
-            currency: "USD",
-        },
+        0.004,
+        0.012,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "mistral.mistral-large-2407-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.002,
-            output_cost_per_1k: 0.006,
-            currency: "USD",
-        },
+        0.002,
+        0.006,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "mistral.mistral-small-2402-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.001,
-            output_cost_per_1k: 0.003,
-            currency: "USD",
-        },
+        0.001,
+        0.003,
     );
 
     // Meta Llama models
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "meta.llama3-2-1b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.00001,
-            output_cost_per_1k: 0.00001,
-            currency: "USD",
-        },
+        0.00001,
+        0.00001,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "meta.llama3-2-3b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.000015,
-            output_cost_per_1k: 0.000015,
-            currency: "USD",
-        },
+        0.000015,
+        0.000015,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "meta.llama3-2-11b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.000032,
-            output_cost_per_1k: 0.000032,
-            currency: "USD",
-        },
+        0.000032,
+        0.000032,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "meta.llama3-2-90b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.00072,
-            output_cost_per_1k: 0.00072,
-            currency: "USD",
-        },
+        0.00072,
+        0.00072,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "meta.llama3-1-8b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.00022,
-            output_cost_per_1k: 0.00022,
-            currency: "USD",
-        },
+        0.00022,
+        0.00022,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "meta.llama3-1-70b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.00099,
-            output_cost_per_1k: 0.00099,
-            currency: "USD",
-        },
+        0.00099,
+        0.00099,
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "meta.llama3-1-405b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.00532,
-            output_cost_per_1k: 0.016,
-            currency: "USD",
-        },
+        0.00532,
+        0.016,
     );
-    pricing.insert(
-        "meta.llama3-8b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.0003,
-            output_cost_per_1k: 0.0006,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
+    insert_pricing(&mut pricing, "meta.llama3-8b-instruct-v1:0", 0.0003, 0.0006);
+    insert_pricing(
+        &mut pricing,
         "meta.llama3-70b-instruct-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.00265,
-            output_cost_per_1k: 0.0035,
-            currency: "USD",
-        },
+        0.00265,
+        0.0035,
     );
-    pricing.insert(
-        "meta.llama2-13b-chat-v1",
-        ModelPricing {
-            input_cost_per_1k: 0.00075,
-            output_cost_per_1k: 0.001,
-            currency: "USD",
-        },
-    );
-    pricing.insert(
-        "meta.llama2-70b-chat-v1",
-        ModelPricing {
-            input_cost_per_1k: 0.00195,
-            output_cost_per_1k: 0.00256,
-            currency: "USD",
-        },
-    );
+    insert_pricing(&mut pricing, "meta.llama2-13b-chat-v1", 0.00075, 0.001);
+    insert_pricing(&mut pricing, "meta.llama2-70b-chat-v1", 0.00195, 0.00256);
 
     // --------------------------------------------------------------------
     // 2025-2026 Bedrock catalog expansions (latest model IDs)
@@ -459,13 +250,11 @@ static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::
         "anthropic.claude-opus-4-1-20250805-v1:0",
         "anthropic.claude-opus-4-5-v1:0",
     );
-    pricing.insert(
+    insert_pricing(
+        &mut pricing,
         "anthropic.claude-haiku-4-5-20251001-v1:0",
-        ModelPricing {
-            input_cost_per_1k: 0.001,
-            output_cost_per_1k: 0.005,
-            currency: "USD",
-        },
+        0.001,
+        0.005,
     );
 
     // Generic converse-compatible chat/text models
@@ -510,14 +299,7 @@ static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::
         "writer.palmyra-x5-v1:0",
     ];
     for model_id in generic_converse_models {
-        pricing.insert(
-            model_id,
-            ModelPricing {
-                input_cost_per_1k: 0.0008,
-                output_cost_per_1k: 0.0032,
-                currency: "USD",
-            },
-        );
+        insert_pricing(&mut pricing, model_id, 0.0008, 0.0032);
     }
 
     // Embedding/rerank catalog
@@ -536,14 +318,7 @@ static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::
         "twelvelabs.pegasus-1-2-v1:0",
     ];
     for model_id in embedding_models {
-        pricing.insert(
-            model_id,
-            ModelPricing {
-                input_cost_per_1k: 0.0001,
-                output_cost_per_1k: 0.0,
-                currency: "USD",
-            },
-        );
+        insert_pricing(&mut pricing, model_id, 0.0001, 0.0);
     }
 
     // Image/video catalog
@@ -555,14 +330,7 @@ static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::
         "luma.ray-v2:0",
     ];
     for model_id in titan_image_models {
-        pricing.insert(
-            model_id,
-            ModelPricing {
-                input_cost_per_1k: 0.001,
-                output_cost_per_1k: 0.0,
-                currency: "USD",
-            },
-        );
+        insert_pricing(&mut pricing, model_id, 0.001, 0.0);
     }
 
     let stability_models = [
@@ -584,14 +352,7 @@ static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::
         "stability.stable-style-transfer-v1:0",
     ];
     for model_id in stability_models {
-        pricing.insert(
-            model_id,
-            ModelPricing {
-                input_cost_per_1k: 0.002,
-                output_cost_per_1k: 0.0,
-                currency: "USD",
-            },
-        );
+        insert_pricing(&mut pricing, model_id, 0.002, 0.0);
     }
 
     insert_like!("amazon.titan-tg1-large", "amazon.titan-text-express-v1");
@@ -606,8 +367,8 @@ impl CostCalculator {
     /// Calculate cost for a specific model and token usage
     pub fn calculate_cost(model_id: &str, input_tokens: u32, output_tokens: u32) -> Option<f64> {
         MODEL_PRICING.get(model_id).map(|pricing| {
-            let input_cost = (input_tokens as f64 / 1000.0) * pricing.input_cost_per_1k;
-            let output_cost = (output_tokens as f64 / 1000.0) * pricing.output_cost_per_1k;
+            let input_cost = (input_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
+            let output_cost = (output_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
             input_cost + output_cost
         })
     }
@@ -618,12 +379,8 @@ impl CostCalculator {
     }
 
     /// Get pricing information in the shared core cost model shape.
-    pub fn get_core_model_pricing(
-        model_id: &str,
-    ) -> Option<crate::core::cost::types::ModelPricing> {
-        MODEL_PRICING
-            .get(model_id)
-            .map(|pricing| pricing.to_core_model_pricing(model_id))
+    pub fn get_core_model_pricing(model_id: &str) -> Option<ModelPricing> {
+        MODEL_PRICING.get(model_id).cloned()
     }
 
     /// Get all available models with pricing
@@ -638,8 +395,8 @@ impl CostCalculator {
         output_tokens: u32,
     ) -> Option<CostBreakdown> {
         MODEL_PRICING.get(model_id).map(|pricing| {
-            let input_cost = (input_tokens as f64 / 1000.0) * pricing.input_cost_per_1k;
-            let output_cost = (output_tokens as f64 / 1000.0) * pricing.output_cost_per_1k;
+            let input_cost = (input_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
+            let output_cost = (output_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
 
             CostBreakdown {
                 input_tokens,
@@ -647,7 +404,7 @@ impl CostCalculator {
                 input_cost,
                 output_cost,
                 total_cost: input_cost + output_cost,
-                currency: pricing.currency,
+                currency: currency(pricing),
             }
         })
     }
@@ -791,8 +548,8 @@ mod tests {
     fn test_model_pricing_lookup() {
         let pricing =
             CostCalculator::get_model_pricing("anthropic.claude-3-opus-20240229").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.015);
-        assert_eq!(pricing.output_cost_per_1k, 0.075);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.015);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.075);
         assert_eq!(pricing.currency, "USD");
     }
 
@@ -810,68 +567,68 @@ mod tests {
     fn test_model_pricing_lookup_sonnet() {
         let pricing =
             CostCalculator::get_model_pricing("anthropic.claude-3-sonnet-20240229").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.003);
-        assert_eq!(pricing.output_cost_per_1k, 0.015);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.003);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.015);
     }
 
     #[test]
     fn test_model_pricing_lookup_haiku() {
         let pricing =
             CostCalculator::get_model_pricing("anthropic.claude-3-haiku-20240307").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.00025);
-        assert_eq!(pricing.output_cost_per_1k, 0.00125);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.00025);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.00125);
     }
 
     #[test]
     fn test_model_pricing_lookup_claude_35_sonnet() {
         let pricing =
             CostCalculator::get_model_pricing("anthropic.claude-3-5-sonnet-20241022").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.003);
-        assert_eq!(pricing.output_cost_per_1k, 0.015);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.003);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.015);
     }
 
     #[test]
     fn test_model_pricing_lookup_titan() {
         let pricing = CostCalculator::get_model_pricing("amazon.titan-text-express-v1").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.0002);
-        assert_eq!(pricing.output_cost_per_1k, 0.0006);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.0002);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.0006);
     }
 
     #[test]
     fn test_model_pricing_lookup_nova() {
         let pricing = CostCalculator::get_model_pricing("amazon.nova-pro-v1:0").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.0008);
-        assert_eq!(pricing.output_cost_per_1k, 0.0032);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.0008);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.0032);
     }
 
     #[test]
     fn test_model_pricing_lookup_mistral() {
         let pricing =
             CostCalculator::get_model_pricing("mistral.mixtral-8x7b-instruct-v0:1").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.00045);
-        assert_eq!(pricing.output_cost_per_1k, 0.0007);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.00045);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.0007);
     }
 
     #[test]
     fn test_model_pricing_lookup_llama() {
         let pricing =
             CostCalculator::get_model_pricing("meta.llama3-1-405b-instruct-v1:0").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.00532);
-        assert_eq!(pricing.output_cost_per_1k, 0.016);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.00532);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.016);
     }
 
     #[test]
     fn test_model_pricing_lookup_cohere() {
         let pricing = CostCalculator::get_model_pricing("cohere.command-r-v1:0").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.0005);
-        assert_eq!(pricing.output_cost_per_1k, 0.0015);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.0005);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.0015);
     }
 
     #[test]
     fn test_model_pricing_lookup_ai21() {
         let pricing = CostCalculator::get_model_pricing("ai21.jamba-instruct-v1:0").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.0005);
-        assert_eq!(pricing.output_cost_per_1k, 0.0007);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.0005);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.0007);
     }
 
     #[test]
@@ -1041,9 +798,10 @@ mod tests {
     #[test]
     fn test_model_pricing_debug() {
         let pricing = ModelPricing {
-            input_cost_per_1k: 0.01,
-            output_cost_per_1k: 0.02,
-            currency: "USD",
+            model: "test-model".to_string(),
+            input_cost_per_1k_tokens: 0.01,
+            output_cost_per_1k_tokens: 0.02,
+            ..Default::default()
         };
         let debug = format!("{:?}", pricing);
         assert!(debug.contains("ModelPricing"));
@@ -1054,13 +812,14 @@ mod tests {
     #[test]
     fn test_model_pricing_clone() {
         let pricing = ModelPricing {
-            input_cost_per_1k: 0.01,
-            output_cost_per_1k: 0.02,
-            currency: "USD",
+            model: "test-model".to_string(),
+            input_cost_per_1k_tokens: 0.01,
+            output_cost_per_1k_tokens: 0.02,
+            ..Default::default()
         };
         let cloned = pricing.clone();
-        assert_eq!(cloned.input_cost_per_1k, 0.01);
-        assert_eq!(cloned.output_cost_per_1k, 0.02);
+        assert_eq!(cloned.input_cost_per_1k_tokens, 0.01);
+        assert_eq!(cloned.output_cost_per_1k_tokens, 0.02);
         assert_eq!(cloned.currency, "USD");
     }
 
@@ -1103,21 +862,21 @@ mod tests {
     #[test]
     fn test_claude_v2_pricing() {
         let pricing = CostCalculator::get_model_pricing("anthropic.claude-v2").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.008);
-        assert_eq!(pricing.output_cost_per_1k, 0.024);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.008);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.024);
     }
 
     #[test]
     fn test_claude_instant_pricing() {
         let pricing = CostCalculator::get_model_pricing("anthropic.claude-instant-v1").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.00163);
-        assert_eq!(pricing.output_cost_per_1k, 0.00551);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.00163);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.00551);
     }
 
     #[test]
     fn test_llama2_pricing() {
         let pricing = CostCalculator::get_model_pricing("meta.llama2-70b-chat-v1").unwrap();
-        assert_eq!(pricing.input_cost_per_1k, 0.00195);
-        assert_eq!(pricing.output_cost_per_1k, 0.00256);
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.00195);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.00256);
     }
 }

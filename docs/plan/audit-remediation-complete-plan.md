@@ -924,6 +924,20 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E3 Bedrock pricing model convergence: `in_progress`
+    - Modified files:
+      - `src/core/providers/bedrock/utils/cost.rs`
+    - Main changes:
+      - Removed Bedrock's provider-local `ModelPricing` struct.
+      - Stored the Bedrock static pricing catalog directly in `core::cost::types::ModelPricing` while keeping the existing `bedrock::utils::ModelPricing` re-export path as a compatibility alias.
+      - Replaced repeated pricing struct literals with a model-id-aware insertion helper so returned pricing entries carry the model id.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test --all-features core::providers::bedrock::utils::cost` -> pass (`50` tests)
+      - `cargo test pricing` -> pass (`179` lib filtered tests, `1` integration filtered test)
+      - `cargo check --all-features` -> pass
+      - `git diff --check` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E3 Spark pricing model convergence: `in_progress`
     - Modified files:
       - `src/core/providers/spark/model_info.rs`
