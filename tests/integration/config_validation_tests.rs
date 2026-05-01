@@ -93,6 +93,7 @@ mod tests {
     #[test]
     fn test_gateway_config_empty_jwt_secret() {
         let mut config = create_valid_gateway_config();
+        config.auth.enable_jwt = true;
         config.auth.jwt_secret = String::new();
 
         let result = config.validate();

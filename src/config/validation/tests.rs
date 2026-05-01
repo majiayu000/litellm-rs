@@ -153,6 +153,7 @@ fn test_provider_config_empty_name() {
 #[test]
 fn test_auth_config_validation() {
     let mut config = AuthConfig {
+        enable_jwt: true,
         jwt_secret: "A-very-long-secret-key-for-testing-purposes123!".to_string(),
         ..Default::default()
     };
@@ -169,6 +170,7 @@ fn test_auth_config_validation() {
 fn test_auth_config_jwt_secret_min_length() {
     // Exactly minimum length with mixed characters (required by validation)
     let config = AuthConfig {
+        enable_jwt: true,
         jwt_secret: "aA1!".repeat(8), // 32 bytes with mixed case, numbers, and special chars
         ..Default::default()
     };
@@ -176,6 +178,7 @@ fn test_auth_config_jwt_secret_min_length() {
 
     // Just under minimum length
     let config = AuthConfig {
+        enable_jwt: true,
         jwt_secret: "aA1!".repeat(7) + "aA1", // 31 bytes
         ..Default::default()
     };

@@ -8,12 +8,13 @@ use tracing::warn;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// Enable JWT authentication
-    #[serde(default = "default_true")]
+    #[serde(default = "default_auth_enable_jwt")]
     pub enable_jwt: bool,
     /// Enable API key authentication
     #[serde(default = "default_true")]
     pub enable_api_key: bool,
     /// JWT secret
+    #[serde(default)]
     pub jwt_secret: String,
     /// JWT expiration in seconds
     #[serde(default = "default_jwt_expiration")]
@@ -51,7 +52,7 @@ impl std::fmt::Debug for AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            enable_jwt: true,
+            enable_jwt: default_auth_enable_jwt(),
             enable_api_key: true,
             jwt_secret: String::new(),
             jwt_expiration: default_jwt_expiration(),
@@ -146,6 +147,10 @@ impl AuthConfig {
     pub fn is_production_ready(&self) -> bool {
         self.enable_jwt || self.enable_api_key
     }
+}
+
+fn default_auth_enable_jwt() -> bool {
+    false
 }
 
 fn is_forbidden_jwt_placeholder(secret: &str) -> bool {
@@ -310,17 +315,27 @@ mod tests {
     #[test]
     fn test_auth_config_default() {
         let config = AuthConfig::default();
-        assert!(config.enable_jwt);
+        assert!(!config.enable_jwt);
         assert!(config.enable_api_key);
         assert!(config.jwt_secret.is_empty());
         assert_eq!(config.jwt_expiration, 86400); // 24 hours
         assert_eq!(config.api_key_header, "Authorization");
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.contains("jwt_secret is empty"),
-            "Expected empty secret error, got: {}",
-            err
-        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_auth_config_deserialize_missing_enable_jwt_defaults_disabled() {
+        let json = r#"{
+            "enable_api_key": true,
+            "jwt_expiration": 3600,
+            "api_key_header": "Authorization"
+        }"#;
+        let config: AuthConfig = serde_json::from_str(json).unwrap();
+
+        assert!(!config.enable_jwt);
+        assert!(config.enable_api_key);
+        assert!(config.jwt_secret.is_empty());
+        assert!(config.validate().is_ok());
     }
 
     #[test]

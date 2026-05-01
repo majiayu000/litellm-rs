@@ -300,6 +300,7 @@ fn test_gateway_config_validate_empty_database_url() {
 #[test]
 fn test_gateway_config_validate_empty_jwt_secret() {
     let mut config = create_valid_config();
+    config.auth.enable_jwt = true;
     config.auth.jwt_secret = "".to_string();
     let result = config.validate();
     assert!(result.is_err());

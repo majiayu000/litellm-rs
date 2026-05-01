@@ -663,7 +663,7 @@ Goal: remove parallel systems after correctness/security work is stable.
 
 ### Step E5 C16 AuthConfig default consistency
 
-- status: `pending`
+- status: `completed`
 - Expected changes:
   - `src/config/models/auth.rs`
   - config builder/tests
@@ -924,6 +924,27 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E5 AuthConfig default consistency: `completed`
+    - Modified files:
+      - `src/config/models/auth.rs`
+      - `src/config/models/gateway_tests.rs`
+      - `src/config/validation/tests.rs`
+      - `tests/integration/config_validation_tests.rs`
+    - Main changes:
+      - Changed the model-level and serde default for `enable_jwt` to `false`, while preserving API key authentication as enabled by default.
+      - Kept explicit JWT configurations fail-closed: empty, short, placeholder, or weak secrets still fail whenever JWT is enabled.
+      - Added a regression test proving configs that omit `enable_jwt` and `jwt_secret` deserialize with JWT disabled and validate without a generated secret.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test auth_config_default` -> pass (`1` matching test)
+      - `cargo test config::models::auth` -> pass (`24` tests)
+      - `cargo test config::validation` -> pass (`158` tests)
+      - `cargo test config_validation_tests` -> pass (`31` integration tests)
+      - `cargo test test_gateway_config_validate_empty_jwt_secret` -> pass (`1` matching test)
+      - `cargo test test_gateway_config_empty_jwt_secret` -> pass (`1` integration matching test)
+      - `git diff --check` -> pass
+      - `cargo check --all-features` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E3 Bedrock pricing convergence: `in_progress`
     - Modified files:
       - `src/core/providers/bedrock/utils/cost.rs`
