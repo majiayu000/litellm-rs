@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use crate::core::cost::types::ModelPricing;
 use crate::core::types::model::ModelInfo;
 
 /// Model features
@@ -22,26 +23,16 @@ pub enum ModelFeature {
     WebSocketSupport,
 }
 
-/// Model pricing information
-#[derive(Debug, Clone)]
-pub struct ModelPricing {
-    /// Input token price (USD per million tokens)
-    pub input_price: f64,
-    /// Output token price (USD per million tokens)
-    pub output_price: f64,
-}
-
-impl ModelPricing {
-    /// Convert Spark's per-million-token registry pricing into the shared cost model.
-    pub fn to_core_model_pricing(&self, model_id: &str) -> crate::core::cost::types::ModelPricing {
-        crate::core::cost::types::ModelPricing {
-            model: model_id.to_string(),
-            input_cost_per_1k_tokens: self.input_price / 1000.0,
-            output_cost_per_1k_tokens: self.output_price / 1000.0,
-            currency: "USD".to_string(),
-            updated_at: chrono::Utc::now(),
-            ..Default::default()
-        }
+fn spark_pricing(
+    model_id: &str,
+    input_price_per_million: f64,
+    output_price_per_million: f64,
+) -> ModelPricing {
+    ModelPricing {
+        model: model_id.to_string(),
+        input_cost_per_1k_tokens: input_price_per_million / 1000.0,
+        output_cost_per_1k_tokens: output_price_per_million / 1000.0,
+        ..Default::default()
     }
 }
 
@@ -114,10 +105,7 @@ impl SparkModelRegistry {
                     ModelFeature::SystemMessages,
                     ModelFeature::WebSocketSupport,
                 ],
-                pricing: ModelPricing {
-                    input_price: 3.0,  // $3 per million tokens
-                    output_price: 6.0, // $6 per million tokens
-                },
+                pricing: spark_pricing("spark-desk-v3.5", 3.0, 6.0),
                 limits: ModelLimits {
                     max_context_length: 8192,
                     max_output_tokens: 4096,
@@ -154,10 +142,7 @@ impl SparkModelRegistry {
                     ModelFeature::SystemMessages,
                     ModelFeature::WebSocketSupport,
                 ],
-                pricing: ModelPricing {
-                    input_price: 2.5,  // $2.5 per million tokens
-                    output_price: 5.0, // $5 per million tokens
-                },
+                pricing: spark_pricing("spark-desk-v3", 2.5, 5.0),
                 limits: ModelLimits {
                     max_context_length: 8192,
                     max_output_tokens: 4096,
@@ -193,10 +178,7 @@ impl SparkModelRegistry {
                     ModelFeature::SystemMessages,
                     ModelFeature::WebSocketSupport,
                 ],
-                pricing: ModelPricing {
-                    input_price: 2.0,  // $2 per million tokens
-                    output_price: 4.0, // $4 per million tokens
-                },
+                pricing: spark_pricing("spark-desk-v2", 2.0, 4.0),
                 limits: ModelLimits {
                     max_context_length: 4096,
                     max_output_tokens: 2048,
@@ -232,10 +214,7 @@ impl SparkModelRegistry {
                     ModelFeature::SystemMessages,
                     ModelFeature::WebSocketSupport,
                 ],
-                pricing: ModelPricing {
-                    input_price: 1.5,  // $1.5 per million tokens
-                    output_price: 3.0, // $3 per million tokens
-                },
+                pricing: spark_pricing("spark-desk-v1.5", 1.5, 3.0),
                 limits: ModelLimits {
                     max_context_length: 4096,
                     max_output_tokens: 2048,
@@ -255,12 +234,9 @@ impl SparkModelRegistry {
     }
 
     /// Get model pricing in the shared core cost model shape.
-    pub fn get_core_model_pricing(
-        &self,
-        model_id: &str,
-    ) -> Option<crate::core::cost::types::ModelPricing> {
+    pub fn get_core_model_pricing(&self, model_id: &str) -> Option<ModelPricing> {
         self.get_model_spec(model_id)
-            .map(|spec| spec.pricing.to_core_model_pricing(model_id))
+            .map(|spec| spec.pricing.clone())
     }
 
     /// List all models
