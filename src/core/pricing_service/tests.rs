@@ -1,7 +1,7 @@
 //! Tests for the pricing service
 
 #[cfg(test)]
-use crate::services::pricing::{LiteLLMModelInfo, PricingService};
+use crate::core::pricing_service::{LiteLLMModelInfo, PricingService};
 use std::collections::HashMap;
 
 #[test]

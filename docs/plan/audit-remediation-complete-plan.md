@@ -924,6 +924,27 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E3 core pricing service ownership: `in_progress`
+    - Modified files:
+      - `src/core/mod.rs`
+      - `src/core/pricing_service/{cache,events,loader,mod,service,tests,types}.rs`
+      - `src/server/http.rs`
+      - `src/server/state.rs`
+      - `src/services/pricing/mod.rs`
+    - Main changes:
+      - Moved the runtime `PricingService` implementation from `services::pricing` into `core::pricing_service`.
+      - Left `services::pricing` as a compatibility re-export module for downstream callers, while server state now imports the canonical core service directly.
+      - Kept the moved service implementation behavior unchanged; only module ownership and import paths changed.
+      - Confirmed no remaining `crate::services::pricing` or `services::pricing` imports under `src/`.
+    - Execute tests:
+      - `cargo fmt --all`
+      - `cargo test pricing` -> pass (`179` lib filtered tests, `1` integration filtered test)
+      - `cargo test pricing_service` -> pass (`74` lib filtered tests)
+      - `cargo check --all-features` -> pass
+      - `cargo fmt --all -- --check` -> pass
+      - `git diff --check` -> pass
+      - `rg -n "crate::services::pricing|services::pricing" src -g '*.rs'` -> no matches
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E3 Anthropic/Gemini pricing model convergence: `in_progress`
     - Modified files:
       - `src/core/cost/types.rs`

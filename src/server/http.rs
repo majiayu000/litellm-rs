@@ -5,6 +5,7 @@
 use crate::config::Config;
 use crate::config::models::server::{CorsConfig, ServerConfig};
 use crate::core::budget::UnifiedBudgetLimits;
+use crate::core::pricing_service::PricingService;
 use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter_with_redis};
 use crate::server::middleware::{
     AuthMiddleware, RateLimitMiddleware, RequestIdMiddleware, SecurityHeadersMiddleware,
@@ -12,7 +13,6 @@ use crate::server::middleware::{
 };
 use crate::server::routes;
 use crate::server::state::AppState;
-use crate::services::pricing::PricingService;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_cors::Cors;
 use actix_web::{

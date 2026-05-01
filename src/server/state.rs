@@ -5,8 +5,8 @@
 use crate::config::Config;
 use crate::core::budget::UnifiedBudgetLimits;
 use crate::core::keys::{DatabaseKeyRepository, KeyManager};
+use crate::core::pricing_service::PricingService;
 use crate::core::teams::TeamManager;
-use crate::services::pricing::PricingService;
 use crate::storage::database::SeaOrmTeamRepository;
 use crate::utils::sync::AtomicValue;
 use std::sync::Arc;
