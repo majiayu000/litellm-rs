@@ -698,7 +698,7 @@ Goal: remove parallel systems after correctness/security work is stable.
 
 ### Step E7 H13/H17 orphan provider decisions
 
-- status: `pending`
+- status: `completed`
 - Expected changes:
   - provider modules under `src/core/providers/`
   - provider registry/factory
@@ -924,6 +924,21 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E7 provider module lifecycle decisions: `completed`
+    - Modified files:
+      - `src/core/providers/registry/lifecycle.rs`
+      - `src/core/providers/registry/mod.rs`
+    - Main changes:
+      - Added a provider module lifecycle manifest covering every directory under `src/core/providers`.
+      - Classified currently reachable provider modules as `Wire`, shared infrastructure as `Internal`, and retained-but-unwired provider modules as `Stub`.
+      - Added regression tests so new provider directories must declare a lifecycle decision, and `Delete` decisions cannot appear without explicit owner confirmation.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test core::providers::registry::lifecycle` -> pass (`3` tests)
+      - `cargo test provider_factory` -> pass (`14` integration matching tests)
+      - `find src/core/providers -mindepth 2 -maxdepth 2 -name mod.rs -print | sort` -> pass (inventory recorded)
+      - `cargo check --all-features` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E6 provider source-of-truth convergence: `completed`
     - Modified files:
       - `src/core/providers/provider_type.rs`
