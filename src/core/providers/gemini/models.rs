@@ -95,6 +95,26 @@ pub struct ModelPricing {
     pub audio_price_per_second: Option<f64>,
 }
 
+impl ModelPricing {
+    /// Convert Gemini's per-million-token registry pricing into the shared cost model.
+    pub fn to_core_model_pricing(&self, model_id: &str) -> crate::core::cost::types::ModelPricing {
+        crate::core::cost::types::ModelPricing {
+            model: model_id.to_string(),
+            input_cost_per_1k_tokens: self.input_price / 1000.0,
+            output_cost_per_1k_tokens: self.output_price / 1000.0,
+            cache_read_input_token_cost: self.cached_input_price.map(|price| price / 1000.0),
+            cost_per_image: self.image_price.map(|price| {
+                let mut costs = HashMap::new();
+                costs.insert("default".to_string(), price);
+                costs
+            }),
+            currency: "USD".to_string(),
+            updated_at: chrono::Utc::now(),
+            ..Default::default()
+        }
+    }
+}
+
 /// Model limits
 #[derive(Debug, Clone)]
 pub struct ModelLimits {
@@ -1121,6 +1141,15 @@ impl GeminiModelRegistry {
         self.get_model_spec(model_id).map(|spec| &spec.pricing)
     }
 
+    /// Get model pricing in the shared core cost model shape.
+    pub fn get_core_model_pricing(
+        &self,
+        model_id: &str,
+    ) -> Option<crate::core::cost::types::ModelPricing> {
+        self.get_model_spec(model_id)
+            .map(|spec| spec.pricing.to_core_model_pricing(model_id))
+    }
+
     /// Model
     pub fn get_model_limits(&self, model_id: &str) -> Option<&ModelLimits> {
         self.get_model_spec(model_id).map(|spec| &spec.limits)
@@ -1219,10 +1248,10 @@ impl CostCalculator {
         }
 
         let registry = get_gemini_registry();
-        let pricing = registry.get_model_pricing(model_id)?;
+        let pricing = registry.get_core_model_pricing(model_id)?;
 
-        let input_cost = (prompt_tokens as f64 / 1_000_000.0) * pricing.input_price;
-        let output_cost = (completion_tokens as f64 / 1_000_000.0) * pricing.output_price;
+        let input_cost = (prompt_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
+        let output_cost = (completion_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
 
         Some(input_cost + output_cost)
     }
@@ -1238,41 +1267,45 @@ impl CostCalculator {
         audio_seconds: Option<u32>,
     ) -> Option<f64> {
         let registry = get_gemini_registry();
-        let pricing = registry.get_model_pricing(model_id)?;
+        let pricing = registry.get_core_model_pricing(model_id)?;
+        let legacy_pricing = registry.get_model_pricing(model_id)?;
 
         let mut total_cost = 0.0;
         let mut remaining_prompt_tokens = prompt_tokens;
 
         // Handle
-        if let (Some(cached), Some(cached_price)) = (cached_tokens, pricing.cached_input_price) {
-            let cached_cost = (cached as f64 / 1_000_000.0) * cached_price;
+        if let (Some(cached), Some(cached_price)) =
+            (cached_tokens, pricing.cache_read_input_token_cost)
+        {
+            let cached_cost = (cached as f64 / 1000.0) * cached_price;
             total_cost += cached_cost;
             remaining_prompt_tokens = remaining_prompt_tokens.saturating_sub(cached);
         }
 
         // Regular input tokens
-        let input_cost = (remaining_prompt_tokens as f64 / 1_000_000.0) * pricing.input_price;
+        let input_cost =
+            (remaining_prompt_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
         total_cost += input_cost;
 
         // Output tokens
-        let output_cost = (completion_tokens as f64 / 1_000_000.0) * pricing.output_price;
+        let output_cost = (completion_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
         total_cost += output_cost;
 
         // Image cost
-        if let (Some(img_count), Some(img_price)) = (images, pricing.image_price) {
+        if let (Some(img_count), Some(img_price)) = (images, legacy_pricing.image_price) {
             total_cost += img_count as f64 * img_price;
         }
 
         // Video cost
         if let (Some(video_secs), Some(video_price)) =
-            (video_seconds, pricing.video_price_per_second)
+            (video_seconds, legacy_pricing.video_price_per_second)
         {
             total_cost += video_secs as f64 * video_price;
         }
 
         // Audio cost
         if let (Some(audio_secs), Some(audio_price)) =
-            (audio_seconds, pricing.audio_price_per_second)
+            (audio_seconds, legacy_pricing.audio_price_per_second)
         {
             total_cost += audio_secs as f64 * audio_price;
         }
@@ -1399,6 +1432,28 @@ mod tests {
         assert_eq!(pricing_value.input_price, 0.075);
         assert_eq!(pricing_value.output_price, 0.30);
         assert!(pricing_value.cached_input_price.is_some());
+    }
+
+    #[test]
+    fn test_core_model_pricing_conversion() {
+        let registry = get_gemini_registry();
+        let pricing = registry
+            .get_core_model_pricing("gemini-1.5-flash")
+            .expect("registry pricing should convert to core pricing");
+
+        assert_eq!(pricing.model, "gemini-1.5-flash");
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.000075);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.0003);
+        assert_eq!(pricing.cache_read_input_token_cost, Some(0.00001875));
+        assert_eq!(
+            pricing
+                .cost_per_image
+                .as_ref()
+                .and_then(|costs| costs.get("default"))
+                .copied(),
+            Some(0.0002)
+        );
+        assert_eq!(pricing.currency, "USD");
     }
 
     #[test]
