@@ -570,7 +570,7 @@ impl LLMProvider for DatabricksProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        let usage = crate::core::providers::base::pricing::Usage {
+        let usage = crate::core::pricing::Usage {
             prompt_tokens: input_tokens,
             completion_tokens: output_tokens,
             total_tokens: input_tokens + output_tokens,

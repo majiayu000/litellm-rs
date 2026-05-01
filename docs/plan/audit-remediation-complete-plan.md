@@ -924,6 +924,30 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E3 core pricing consumer migration batch 1: `in_progress`
+    - Modified files:
+      - `src/core/providers/mod.rs`
+      - `src/core/providers/ai21/models.rs`
+      - `src/core/providers/ai21/provider.rs`
+      - `src/core/providers/amazon_nova/provider.rs`
+      - `src/core/providers/cohere/provider.rs`
+      - `src/core/providers/databricks/provider.rs`
+      - `src/core/providers/datarobot/provider.rs`
+      - `src/core/providers/exa_ai/provider.rs`
+      - `src/core/providers/firecrawl/provider.rs`
+      - `src/core/providers/openai/models/registry.rs`
+    - Main changes:
+      - Migrated the first direct consumers from `core::providers::base::pricing::Usage` / `base::get_pricing_db` to `core::pricing`.
+      - Kept provider-base compatibility exports in place while reducing real usage of the legacy path.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test core::providers::openai::models` -> pass (`6` tests)
+      - `cargo test core::providers::ai21` -> pass (`0` matching tests)
+      - `cargo test core::providers::cohere` -> pass (`0` matching tests)
+      - `cargo test pricing` -> pass (`178` lib filtered tests, `1` integration filtered test)
+      - `git diff --check` -> pass
+      - `cargo check --all-features` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E3 core pricing database ownership: `in_progress`
     - Modified files:
       - `src/core/pricing.rs`
