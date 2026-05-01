@@ -31,6 +31,20 @@ pub struct ModelPricing {
     pub output_price: f64,
 }
 
+impl ModelPricing {
+    /// Convert Spark's per-million-token registry pricing into the shared cost model.
+    pub fn to_core_model_pricing(&self, model_id: &str) -> crate::core::cost::types::ModelPricing {
+        crate::core::cost::types::ModelPricing {
+            model: model_id.to_string(),
+            input_cost_per_1k_tokens: self.input_price / 1000.0,
+            output_cost_per_1k_tokens: self.output_price / 1000.0,
+            currency: "USD".to_string(),
+            updated_at: chrono::Utc::now(),
+            ..Default::default()
+        }
+    }
+}
+
 /// Model limits
 #[derive(Debug, Clone)]
 pub struct ModelLimits {
@@ -240,6 +254,15 @@ impl SparkModelRegistry {
         self.models.get(model_id)
     }
 
+    /// Get model pricing in the shared core cost model shape.
+    pub fn get_core_model_pricing(
+        &self,
+        model_id: &str,
+    ) -> Option<crate::core::cost::types::ModelPricing> {
+        self.get_model_spec(model_id)
+            .map(|spec| spec.pricing.to_core_model_pricing(model_id))
+    }
+
     /// List all models
     pub fn list_models(&self) -> Vec<&ModelSpec> {
         self.models.values().collect()
@@ -272,10 +295,10 @@ impl CostCalculator {
     /// Calculate cost for a request
     pub fn calculate_cost(model_id: &str, input_tokens: u32, output_tokens: u32) -> Option<f64> {
         let registry = get_spark_registry();
-        let spec = registry.get_model_spec(model_id)?;
+        let pricing = registry.get_core_model_pricing(model_id)?;
 
-        let input_cost = (input_tokens as f64 / 1_000_000.0) * spec.pricing.input_price;
-        let output_cost = (output_tokens as f64 / 1_000_000.0) * spec.pricing.output_price;
+        let input_cost = (input_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
+        let output_cost = (output_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
 
         Some(input_cost + output_cost)
     }
@@ -321,6 +344,19 @@ mod tests {
         let v2_spec = registry.get_model_spec("spark-desk-v2").unwrap();
         assert_eq!(v2_spec.limits.max_context_length, 4096);
         assert_eq!(v2_spec.limits.max_output_tokens, 2048);
+    }
+
+    #[test]
+    fn test_core_model_pricing_conversion() {
+        let registry = get_spark_registry();
+        let pricing = registry
+            .get_core_model_pricing("spark-desk-v3.5")
+            .expect("registry pricing should convert to core pricing");
+
+        assert_eq!(pricing.model, "spark-desk-v3.5");
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.003);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.006);
+        assert_eq!(pricing.currency, "USD");
     }
 
     #[test]

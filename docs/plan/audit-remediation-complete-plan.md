@@ -959,6 +959,21 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
       - `cargo test cost` -> pass (`326` lib filtered tests)
       - `cargo check --all-features` -> pass
       - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
+  - Step E3 Spark registry convergence: `in_progress`
+    - Modified files:
+      - `src/core/providers/spark/model_info.rs`
+    - Main changes:
+      - Added an adapter from Spark per-million-token registry pricing into the shared `core::cost::types::ModelPricing` shape.
+      - Routed Spark fallback cost calculation through the shared cost model shape.
+      - Added a regression test for Spark unit conversion and currency preservation.
+    - Execute tests:
+      - `cargo test --features providers-extended core::providers::spark::model_info::tests::` -> pass (`6` tests)
+      - `cargo fmt --all -- --check` -> pass
+      - `git diff --check` -> pass
+      - `cargo test pricing` -> pass (`176` lib filtered tests, `1` integration filtered test)
+      - `cargo test cost` -> pass (`326` lib filtered tests)
+      - `cargo check --all-features` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
 - 2026-05-01
   - Step E3 OpenAI cost convergence: `in_progress`
     - Modified files:
