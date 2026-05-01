@@ -1,9 +1,11 @@
 //! Canonical provider registry matrix.
 //!
-//! This module is intentionally observational for now: it records provider
-//! identity, aliases, and dispatch class without replacing factory routing yet.
+//! This module is the canonical provider identity matrix for enum variants:
+//! aliases, display names, dispatchability, and factory support are derived
+//! from these entries.
 
 use crate::core::providers::provider_type::ProviderType;
+use std::sync::LazyLock;
 
 /// How a provider selector is currently dispatched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +279,14 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
     ),
 ];
 
+static DISPATCHABLE_PROVIDER_TYPES: LazyLock<Vec<ProviderType>> = LazyLock::new(|| {
+    PROVIDER_TYPE_REGISTRY
+        .iter()
+        .filter(|entry| entry.is_dispatchable())
+        .map(|entry| entry.provider_type.clone())
+        .collect()
+});
+
 pub fn provider_type_registry() -> &'static [ProviderRegistryEntry] {
     PROVIDER_TYPE_REGISTRY
 }
@@ -294,11 +304,11 @@ pub fn entry_for_name(name: &str) -> Option<&'static ProviderRegistryEntry> {
 }
 
 pub fn dispatchable_provider_types() -> Vec<ProviderType> {
-    PROVIDER_TYPE_REGISTRY
-        .iter()
-        .filter(|entry| entry.is_dispatchable())
-        .map(|entry| entry.provider_type.clone())
-        .collect()
+    dispatchable_provider_types_slice().to_vec()
+}
+
+pub fn dispatchable_provider_types_slice() -> &'static [ProviderType] {
+    DISPATCHABLE_PROVIDER_TYPES.as_slice()
 }
 
 const fn entry(

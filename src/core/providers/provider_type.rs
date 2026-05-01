@@ -40,43 +40,9 @@ pub enum ProviderType {
 
 impl From<&str> for ProviderType {
     fn from(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "openai" => ProviderType::OpenAI,
-            "anthropic" => ProviderType::Anthropic,
-            "bedrock" | "aws-bedrock" => ProviderType::Bedrock,
-            "openrouter" => ProviderType::OpenRouter,
-            "vertex_ai" | "vertexai" | "vertex-ai" => ProviderType::VertexAI,
-            "azure" | "azure-openai" => ProviderType::Azure,
-            "azure_ai" | "azureai" | "azure-ai" => ProviderType::AzureAI,
-            "deepseek" | "deep-seek" => ProviderType::DeepSeek,
-            "deepinfra" | "deep-infra" => ProviderType::DeepInfra,
-            "v0" => ProviderType::V0,
-            "meta_llama" | "llama" | "meta-llama" => ProviderType::MetaLlama,
-            "mistral" | "mistralai" => ProviderType::Mistral,
-            "moonshot" | "moonshot-ai" => ProviderType::Moonshot,
-            "minimax" | "minimax-ai" => ProviderType::Minimax,
-            "dashscope" | "alibaba" | "qwen" | "tongyi" => ProviderType::Dashscope,
-            "groq" => ProviderType::Groq,
-            "xai" => ProviderType::XAI,
-            "cloudflare" | "cf" | "workers-ai" => ProviderType::Cloudflare,
-            "perplexity" | "perplexity-ai" | "pplx" => ProviderType::Perplexity,
-            "replicate" | "replicate-ai" => ProviderType::Replicate,
-            "fal_ai" | "fal-ai" | "fal" => ProviderType::FalAI,
-            "amazon_nova" | "amazon-nova" | "nova" => ProviderType::AmazonNova,
-            "github" | "github-models" => ProviderType::GitHub,
-            "github_copilot" | "github-copilot" | "copilot" => ProviderType::GitHubCopilot,
-            "hyperbolic" | "hyperbolic-ai" => ProviderType::Hyperbolic,
-            "infinity" | "infinity-embedding" => ProviderType::Infinity,
-            "novita" | "novita-ai" => ProviderType::Novita,
-            "volcengine" | "volc" | "doubao" | "bytedance" => ProviderType::Volcengine,
-            "nebius" | "nebius-ai" => ProviderType::Nebius,
-            "nscale" | "nscale-ai" => ProviderType::Nscale,
-            "pydantic_ai" | "pydantic-ai" | "pydantic" => ProviderType::PydanticAI,
-            "openai_compatible" | "openai-compatible" | "openai_like" | "openai-like" => {
-                ProviderType::OpenAICompatible
-            }
-            _ => ProviderType::Custom(s.to_string()),
-        }
+        crate::core::providers::registry::entry_for_name(s)
+            .map(|entry| entry.provider_type.clone())
+            .unwrap_or_else(|| ProviderType::Custom(s.to_string()))
     }
 }
 
@@ -94,89 +60,29 @@ impl std::str::FromStr for ProviderType {
     type Err = crate::core::types::errors::ConfigError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "openai" => Ok(ProviderType::OpenAI),
-            "anthropic" => Ok(ProviderType::Anthropic),
-            "bedrock" | "aws-bedrock" => Ok(ProviderType::Bedrock),
-            "openrouter" => Ok(ProviderType::OpenRouter),
-            "vertex_ai" | "vertexai" | "vertex-ai" => Ok(ProviderType::VertexAI),
-            "azure" | "azure-openai" => Ok(ProviderType::Azure),
-            "azure_ai" | "azureai" | "azure-ai" => Ok(ProviderType::AzureAI),
-            "deepseek" | "deep-seek" => Ok(ProviderType::DeepSeek),
-            "deepinfra" | "deep-infra" => Ok(ProviderType::DeepInfra),
-            "v0" => Ok(ProviderType::V0),
-            "meta_llama" | "llama" | "meta-llama" => Ok(ProviderType::MetaLlama),
-            "mistral" | "mistralai" => Ok(ProviderType::Mistral),
-            "moonshot" | "moonshot-ai" => Ok(ProviderType::Moonshot),
-            "minimax" | "minimax-ai" => Ok(ProviderType::Minimax),
-            "dashscope" | "alibaba" | "qwen" | "tongyi" => Ok(ProviderType::Dashscope),
-            "groq" => Ok(ProviderType::Groq),
-            "xai" => Ok(ProviderType::XAI),
-            "cloudflare" | "cf" | "workers-ai" => Ok(ProviderType::Cloudflare),
-            "perplexity" | "perplexity-ai" | "pplx" => Ok(ProviderType::Perplexity),
-            "replicate" | "replicate-ai" => Ok(ProviderType::Replicate),
-            "fal_ai" | "fal-ai" | "fal" => Ok(ProviderType::FalAI),
-            "amazon_nova" | "amazon-nova" | "nova" => Ok(ProviderType::AmazonNova),
-            "github" | "github-models" => Ok(ProviderType::GitHub),
-            "github_copilot" | "github-copilot" | "copilot" => Ok(ProviderType::GitHubCopilot),
-            "hyperbolic" | "hyperbolic-ai" => Ok(ProviderType::Hyperbolic),
-            "infinity" | "infinity-embedding" => Ok(ProviderType::Infinity),
-            "novita" | "novita-ai" => Ok(ProviderType::Novita),
-            "volcengine" | "volc" | "doubao" | "bytedance" => Ok(ProviderType::Volcengine),
-            "nebius" | "nebius-ai" => Ok(ProviderType::Nebius),
-            "nscale" | "nscale-ai" => Ok(ProviderType::Nscale),
-            "pydantic_ai" | "pydantic-ai" | "pydantic" => Ok(ProviderType::PydanticAI),
-            "openai_compatible" | "openai-compatible" | "openai_like" | "openai-like" => {
-                Ok(ProviderType::OpenAICompatible)
-            }
-            _ => Err(crate::core::types::errors::ConfigError::InvalidValue {
+        crate::core::providers::registry::entry_for_name(s)
+            .map(|entry| entry.provider_type.clone())
+            .ok_or_else(|| crate::core::types::errors::ConfigError::InvalidValue {
                 field: "provider_type".to_string(),
                 value: format!(
                     "unknown provider type '{}'; use a recognised provider name or construct \
                      ProviderType::Custom explicitly",
                     s
                 ),
-            }),
-        }
+            })
     }
 }
 
 impl std::fmt::Display for ProviderType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProviderType::OpenAI => write!(f, "openai"),
-            ProviderType::Anthropic => write!(f, "anthropic"),
-            ProviderType::Bedrock => write!(f, "bedrock"),
-            ProviderType::OpenRouter => write!(f, "openrouter"),
-            ProviderType::VertexAI => write!(f, "vertex_ai"),
-            ProviderType::Azure => write!(f, "azure"),
-            ProviderType::AzureAI => write!(f, "azure_ai"),
-            ProviderType::DeepSeek => write!(f, "deepseek"),
-            ProviderType::DeepInfra => write!(f, "deepinfra"),
-            ProviderType::V0 => write!(f, "v0"),
-            ProviderType::MetaLlama => write!(f, "meta_llama"),
-            ProviderType::Mistral => write!(f, "mistral"),
-            ProviderType::Moonshot => write!(f, "moonshot"),
-            ProviderType::Minimax => write!(f, "minimax"),
-            ProviderType::Dashscope => write!(f, "dashscope"),
-            ProviderType::Groq => write!(f, "groq"),
-            ProviderType::XAI => write!(f, "xai"),
-            ProviderType::Cloudflare => write!(f, "cloudflare"),
-            ProviderType::Perplexity => write!(f, "perplexity"),
-            ProviderType::Replicate => write!(f, "replicate"),
-            ProviderType::FalAI => write!(f, "fal_ai"),
-            ProviderType::AmazonNova => write!(f, "amazon_nova"),
-            ProviderType::GitHub => write!(f, "github"),
-            ProviderType::GitHubCopilot => write!(f, "github_copilot"),
-            ProviderType::Hyperbolic => write!(f, "hyperbolic"),
-            ProviderType::Infinity => write!(f, "infinity"),
-            ProviderType::Novita => write!(f, "novita"),
-            ProviderType::Volcengine => write!(f, "volcengine"),
-            ProviderType::Nebius => write!(f, "nebius"),
-            ProviderType::Nscale => write!(f, "nscale"),
-            ProviderType::PydanticAI => write!(f, "pydantic_ai"),
-            ProviderType::OpenAICompatible => write!(f, "openai_compatible"),
             ProviderType::Custom(name) => write!(f, "{}", name),
+            provider_type => {
+                match crate::core::providers::registry::entry_for_type(provider_type) {
+                    Some(entry) => write!(f, "{}", entry.canonical_name),
+                    None => write!(f, "{:?}", provider_type),
+                }
+            }
         }
     }
 }

@@ -678,7 +678,7 @@ Goal: remove parallel systems after correctness/security work is stable.
 
 ### Step E6 C17/C18 provider source-of-truth convergence
 
-- status: `pending`
+- status: `completed`
 - Expected changes:
   - `src/core/providers/provider_type.rs`
   - `src/core/providers/factory/registry.rs`
@@ -694,7 +694,7 @@ Goal: remove parallel systems after correctness/security work is stable.
 - Completion judgment:
   - Parseable provider types cannot be silently unreachable.
 - Owner decision:
-  - Confirm enum dispatch versus trait-object direction.
+  - Resolved for E6: keep enum dispatch; registry convergence removes list drift without a trait-object refactor.
 
 ### Step E7 H13/H17 orphan provider decisions
 
@@ -924,6 +924,24 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E6 provider source-of-truth convergence: `completed`
+    - Modified files:
+      - `src/core/providers/provider_type.rs`
+      - `src/core/providers/registry/types.rs`
+      - `src/core/providers/registry/mod.rs`
+      - `src/core/providers/mod.rs`
+    - Main changes:
+      - Routed `ProviderType::from`, strict `FromStr`, and `Display` through the canonical provider registry entry matrix.
+      - Replaced the hand-maintained `factory_supported_provider_types` list with the registry-derived dispatchable provider slice.
+      - Kept enum dispatch while making unsupported enum variants explicit via `ProviderDispatchKind::UnsupportedEnum`.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test provider_type` -> pass (`60` matching tests)
+      - `cargo test core::providers::factory::` -> pass (`28` tests)
+      - `cargo test core::providers::registry::types` -> pass (`6` tests)
+      - `git diff --check` -> pass
+      - `cargo check --all-features` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E5 AuthConfig default consistency: `completed`
     - Modified files:
       - `src/config/models/auth.rs`

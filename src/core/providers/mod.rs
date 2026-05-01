@@ -363,42 +363,7 @@ impl Provider {
 
     /// Single source of truth for factory branches currently wired in `from_config_async`.
     pub fn factory_supported_provider_types() -> &'static [ProviderType] {
-        static SUPPORTED: &[ProviderType] = &[
-            ProviderType::OpenAI,
-            ProviderType::Anthropic,
-            ProviderType::Mistral,
-            ProviderType::Cloudflare,
-            ProviderType::OpenAICompatible,
-            // Tier 2: providers with explicit OpenAI-compatible factory branches
-            ProviderType::MetaLlama,
-            ProviderType::V0,
-            ProviderType::AzureAI,
-            ProviderType::AmazonNova,
-            ProviderType::FalAI,
-            ProviderType::Azure,
-            ProviderType::Bedrock,
-            ProviderType::VertexAI,
-            ProviderType::Replicate,
-            ProviderType::GitHub,
-            ProviderType::GitHubCopilot,
-            // Catalog-covered provider types (Tier 1)
-            ProviderType::Groq,
-            ProviderType::OpenRouter,
-            ProviderType::DeepSeek,
-            ProviderType::DeepInfra,
-            ProviderType::Moonshot,
-            ProviderType::Minimax,
-            ProviderType::Dashscope,
-            ProviderType::XAI,
-            ProviderType::Perplexity,
-            ProviderType::Hyperbolic,
-            ProviderType::Infinity,
-            ProviderType::Novita,
-            ProviderType::Volcengine,
-            ProviderType::Nebius,
-            ProviderType::Nscale,
-        ];
-        SUPPORTED
+        registry::dispatchable_provider_types_slice()
     }
 
     /// Check if provider supports a specific model
