@@ -338,6 +338,8 @@ pub fn is_litellm_pricing_metadata_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn parse_litellm_pricing_json_filters_metadata_entries() {
@@ -428,5 +430,58 @@ mod tests {
                 }
             ) > 0.0
         );
+    }
+
+    #[test]
+    fn provider_code_uses_core_pricing_directly() {
+        let providers_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers");
+        let mut rust_files = Vec::new();
+        collect_rust_files(&providers_dir, &mut rust_files);
+
+        for path in rust_files {
+            if is_pricing_compatibility_module(&path) {
+                continue;
+            }
+
+            let content = fs::read_to_string(&path).unwrap_or_else(|err| {
+                panic!("failed to read provider source {}: {}", path.display(), err)
+            });
+
+            for forbidden in [
+                "providers::base::pricing",
+                "providers::base::get_pricing_db",
+                "providers::base::PricingDatabase",
+                "providers::base::{get_pricing_db",
+                "providers::base::{PricingDatabase",
+            ] {
+                assert!(
+                    !content.contains(forbidden),
+                    "{} should import pricing database APIs from core::pricing, not {}",
+                    path.display(),
+                    forbidden
+                );
+            }
+        }
+    }
+
+    fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("provider source directory should be readable") {
+            let entry = entry.expect("provider source entry should be readable");
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .expect("provider source file type should be readable");
+
+            if file_type.is_dir() {
+                collect_rust_files(&path, files);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+    }
+
+    fn is_pricing_compatibility_module(path: &Path) -> bool {
+        path.ends_with("src/core/providers/base/pricing.rs")
+            || path.ends_with("src/core/providers/base/mod.rs")
     }
 }

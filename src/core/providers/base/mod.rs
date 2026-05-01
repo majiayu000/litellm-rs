@@ -8,6 +8,7 @@ pub mod http;
 pub mod pricing;
 pub mod sse;
 
+pub use crate::core::pricing::{PricingDatabase, get_pricing_db};
 pub use config::BaseConfig;
 pub use connection_pool::{
     ConnectionPool, GlobalPoolManager, HeaderPair, HttpMethod, PoolConfig, apply_headers,
@@ -17,7 +18,6 @@ pub use http::{
     BaseHttpClient, HttpErrorMapper, OpenAIRequestTransformer, UrlBuilder, create_http_client,
     validate_chat_request_common,
 };
-pub use pricing::{PricingDatabase, get_pricing_db};
 pub use sse::{
     AnthropicTransformer, CohereTransformer, DatabricksTransformer, GeminiTransformer,
     OpenAICompatibleTransformer, SSEEvent, SSEEventType, SSETransformer, UnifiedSSEParser,
