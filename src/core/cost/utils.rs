@@ -16,6 +16,9 @@ pub fn get_cost_per_unit(pricing: &ModelPricing, cost_key: &str) -> f64 {
         "image_cost_per_token" => pricing.image_cost_per_token.unwrap_or(0.0),
         "reasoning_cost_per_token" => pricing.reasoning_cost_per_token.unwrap_or(0.0),
         "cost_per_second" => pricing.cost_per_second.unwrap_or(0.0),
+        "video_cost_per_second" => pricing.video_cost_per_second.unwrap_or(0.0),
+        "audio_cost_per_second" => pricing.audio_cost_per_second.unwrap_or(0.0),
+        "batch_discount" => pricing.batch_discount.unwrap_or(0.0),
         _ => 0.0,
     }
 }

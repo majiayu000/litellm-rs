@@ -59,7 +59,10 @@ pub fn is_model_supported(model_id: &str) -> bool {
 
 /// Get model pricing
 pub fn get_model_pricing(model_id: &str) -> Option<(f64, f64)> {
-    get_gemini_registry()
-        .get_model_pricing(model_id)
-        .map(|p| (p.input_price, p.output_price))
+    get_gemini_registry().get_model_pricing(model_id).map(|p| {
+        (
+            p.input_cost_per_1k_tokens * 1000.0,
+            p.output_cost_per_1k_tokens * 1000.0,
+        )
+    })
 }

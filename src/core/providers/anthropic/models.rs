@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+pub use crate::core::cost::types::ModelPricing;
 use crate::core::types::model::ModelInfo;
 
 /// Model
@@ -67,34 +68,22 @@ pub enum AnthropicModelFamily {
     ClaudeInstant,
 }
 
-/// Model pricing information
-#[derive(Debug, Clone)]
-pub struct ModelPricing {
-    /// Input token price (USD per million tokens)
-    pub input_price: f64,
-    /// Output token price (USD per million tokens)
-    pub output_price: f64,
-    /// Cache write price (optional)
-    pub cache_write_price: Option<f64>,
-    /// Cache read price (optional)
-    pub cache_read_price: Option<f64>,
-    /// Batch processing discount
-    pub batch_discount: Option<f64>,
-}
-
-impl ModelPricing {
-    /// Convert Anthropic's per-million-token registry pricing into the shared cost model.
-    pub fn to_core_model_pricing(&self, model_id: &str) -> crate::core::cost::types::ModelPricing {
-        crate::core::cost::types::ModelPricing {
-            model: model_id.to_string(),
-            input_cost_per_1k_tokens: self.input_price / 1000.0,
-            output_cost_per_1k_tokens: self.output_price / 1000.0,
-            cache_creation_input_token_cost: self.cache_write_price.map(|price| price / 1000.0),
-            cache_read_input_token_cost: self.cache_read_price.map(|price| price / 1000.0),
-            currency: "USD".to_string(),
-            updated_at: chrono::Utc::now(),
-            ..Default::default()
-        }
+fn pricing_per_million(
+    input_price: f64,
+    output_price: f64,
+    cache_write_price: Option<f64>,
+    cache_read_price: Option<f64>,
+    batch_discount: Option<f64>,
+) -> ModelPricing {
+    ModelPricing {
+        input_cost_per_1k_tokens: input_price / 1000.0,
+        output_cost_per_1k_tokens: output_price / 1000.0,
+        cache_creation_input_token_cost: cache_write_price.map(|price| price / 1000.0),
+        cache_read_input_token_cost: cache_read_price.map(|price| price / 1000.0),
+        batch_discount,
+        currency: "USD".to_string(),
+        updated_at: chrono::Utc::now(),
+        ..Default::default()
     }
 }
 
@@ -194,13 +183,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 5.0,
-                    output_price: 25.0,
-                    cache_write_price: Some(6.25),
-                    cache_read_price: Some(0.50),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(5.0, 25.0, Some(6.25), Some(0.50), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 128_000,
@@ -248,13 +231,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 5.0,
-                    output_price: 25.0,
-                    cache_write_price: Some(6.25),
-                    cache_read_price: Some(0.50),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(5.0, 25.0, Some(6.25), Some(0.50), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 128_000,
@@ -302,13 +279,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 5.0,              // $5/1M input (updated from OpenRouter)
-                    output_price: 25.0,            // $25/1M output (updated from OpenRouter)
-                    cache_write_price: Some(6.25), // 1.25x input
-                    cache_read_price: Some(0.50),  // 0.1x input
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(5.0, 25.0, Some(6.25), Some(0.50), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 64_000,
@@ -356,13 +327,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 3.0,
-                    output_price: 15.0,
-                    cache_write_price: Some(3.75),
-                    cache_read_price: Some(0.30),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(3.0, 15.0, Some(3.75), Some(0.30), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 64_000,
@@ -410,13 +375,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 3.0,
-                    output_price: 15.0,
-                    cache_write_price: Some(3.75),
-                    cache_read_price: Some(0.30),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(3.0, 15.0, Some(3.75), Some(0.30), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 64_000,
@@ -463,13 +422,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::BatchProcessing,
                     ModelFeature::ThinkingMode,
                 ],
-                pricing: ModelPricing {
-                    input_price: 1.0,
-                    output_price: 5.0,
-                    cache_write_price: Some(1.25),
-                    cache_read_price: Some(0.10),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(1.0, 5.0, Some(1.25), Some(0.10), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 64_000,
@@ -517,13 +470,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 3.0,
-                    output_price: 15.0,
-                    cache_write_price: Some(3.75),
-                    cache_read_price: Some(0.30),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(3.0, 15.0, Some(3.75), Some(0.30), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 16_000,
@@ -571,13 +518,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 15.0,
-                    output_price: 75.0,
-                    cache_write_price: Some(18.75),
-                    cache_read_price: Some(1.50),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(15.0, 75.0, Some(18.75), Some(1.50), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 32_000,
@@ -625,13 +566,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 15.0,
-                    output_price: 75.0,
-                    cache_write_price: Some(18.75),
-                    cache_read_price: Some(1.50),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(15.0, 75.0, Some(18.75), Some(1.50), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 32_000,
@@ -677,13 +612,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::SystemMessages,
                     ModelFeature::BatchProcessing,
                 ],
-                pricing: ModelPricing {
-                    input_price: 1.0,
-                    output_price: 5.0,
-                    cache_write_price: Some(1.25),
-                    cache_read_price: Some(0.10),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(1.0, 5.0, Some(1.25), Some(0.10), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 8_192,
@@ -731,13 +660,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::ThinkingMode,
                     ModelFeature::ComputerUse,
                 ],
-                pricing: ModelPricing {
-                    input_price: 3.0,
-                    output_price: 15.0,
-                    cache_write_price: Some(3.75),
-                    cache_read_price: Some(0.30),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(3.0, 15.0, Some(3.75), Some(0.30), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 8_192,
@@ -783,13 +706,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::SystemMessages,
                     ModelFeature::BatchProcessing,
                 ],
-                pricing: ModelPricing {
-                    input_price: 15.0,
-                    output_price: 75.0,
-                    cache_write_price: Some(18.75),
-                    cache_read_price: Some(1.50),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(15.0, 75.0, Some(18.75), Some(1.50), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 4_096,
@@ -835,13 +752,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::SystemMessages,
                     ModelFeature::BatchProcessing,
                 ],
-                pricing: ModelPricing {
-                    input_price: 3.0,
-                    output_price: 15.0,
-                    cache_write_price: Some(3.75),
-                    cache_read_price: Some(0.30),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(3.0, 15.0, Some(3.75), Some(0.30), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 4_096,
@@ -887,13 +798,7 @@ impl AnthropicModelRegistry {
                     ModelFeature::SystemMessages,
                     ModelFeature::BatchProcessing,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.25,
-                    output_price: 1.25,
-                    cache_write_price: Some(0.30),
-                    cache_read_price: Some(0.03),
-                    batch_discount: Some(0.5),
-                },
+                pricing: pricing_per_million(0.25, 1.25, Some(0.30), Some(0.03), Some(0.5)),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 4_096,
@@ -930,13 +835,7 @@ impl AnthropicModelRegistry {
                 },
                 family: AnthropicModelFamily::Claude21,
                 features: vec![ModelFeature::StreamingSupport, ModelFeature::SystemMessages],
-                pricing: ModelPricing {
-                    input_price: 8.0,
-                    output_price: 24.0,
-                    cache_write_price: None,
-                    cache_read_price: None,
-                    batch_discount: None,
-                },
+                pricing: pricing_per_million(8.0, 24.0, None, None, None),
                 limits: ModelLimits {
                     max_context_length: 200_000,
                     max_output_tokens: 4_096,
@@ -973,13 +872,7 @@ impl AnthropicModelRegistry {
                 },
                 family: AnthropicModelFamily::ClaudeInstant,
                 features: vec![ModelFeature::StreamingSupport, ModelFeature::SystemMessages],
-                pricing: ModelPricing {
-                    input_price: 0.80,
-                    output_price: 2.40,
-                    cache_write_price: None,
-                    cache_read_price: None,
-                    batch_discount: None,
-                },
+                pricing: pricing_per_million(0.80, 2.40, None, None, None),
                 limits: ModelLimits {
                     max_context_length: 100_000,
                     max_output_tokens: 4_096,
@@ -1014,7 +907,8 @@ impl AnthropicModelRegistry {
     }
 
     /// Register a model
-    fn register_model(&mut self, id: &str, spec: ModelSpec) {
+    fn register_model(&mut self, id: &str, mut spec: ModelSpec) {
+        spec.pricing.model = id.to_string();
         self.models.insert(id.to_string(), spec);
     }
 
@@ -1022,6 +916,7 @@ impl AnthropicModelRegistry {
         if let Some(spec) = self.models.get(target) {
             let mut alias_spec = spec.clone();
             alias_spec.model_info.id = alias.to_string();
+            alias_spec.pricing.model = alias.to_string();
             self.models.insert(alias.to_string(), alias_spec);
         }
     }
@@ -1054,12 +949,9 @@ impl AnthropicModelRegistry {
     }
 
     /// Get model pricing in the shared core cost model shape.
-    pub fn get_core_model_pricing(
-        &self,
-        model_id: &str,
-    ) -> Option<crate::core::cost::types::ModelPricing> {
+    pub fn get_core_model_pricing(&self, model_id: &str) -> Option<ModelPricing> {
         self.get_model_spec(model_id)
-            .map(|spec| spec.pricing.to_core_model_pricing(model_id))
+            .map(|spec| spec.pricing.clone())
     }
 
     /// Get model limits
@@ -1181,10 +1073,9 @@ impl CostCalculator {
     ) -> Option<f64> {
         let registry = get_anthropic_registry();
         let pricing = registry.get_core_model_pricing(model_id)?;
-        let legacy_pricing = registry.get_model_pricing(model_id)?;
 
         let batch_multiplier = if is_batch {
-            legacy_pricing.batch_discount.unwrap_or(1.0)
+            pricing.batch_discount.unwrap_or(1.0)
         } else {
             1.0
         };
@@ -1252,8 +1143,8 @@ mod tests {
         assert!(opus_spec.features.contains(&ModelFeature::ComputerUse));
 
         // Test pricing
-        assert_eq!(opus_spec.pricing.input_price, 5.0);
-        assert_eq!(opus_spec.pricing.output_price, 25.0);
+        assert_eq!(opus_spec.pricing.input_cost_per_1k_tokens, 0.005);
+        assert_eq!(opus_spec.pricing.output_cost_per_1k_tokens, 0.025);
     }
 
     #[test]
@@ -1268,6 +1159,7 @@ mod tests {
         assert_eq!(pricing.output_cost_per_1k_tokens, 0.025);
         assert_eq!(pricing.cache_creation_input_token_cost, Some(0.00625));
         assert_eq!(pricing.cache_read_input_token_cost, Some(0.0005));
+        assert_eq!(pricing.batch_discount, Some(0.5));
         assert_eq!(pricing.currency, "USD");
     }
 

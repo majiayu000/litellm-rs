@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+pub use crate::core::cost::types::ModelPricing;
 use crate::core::providers::shared::{
     GEMINI_15_PRO_CONTEXT_WINDOW, GEMINI_20_FLASH_CONTEXT_WINDOW,
     GEMINI_20_FLASH_THINKING_CONTEXT_WINDOW,
@@ -78,40 +79,28 @@ pub enum GeminiModelFamily {
     GeminiExperimental,
 }
 
-/// Model
-#[derive(Debug, Clone)]
-pub struct ModelPricing {
-    /// Input token price (USD per million tokens)
-    pub input_price: f64,
-    /// Output token price (USD per million tokens)
-    pub output_price: f64,
-    /// Cached input price (optional)
-    pub cached_input_price: Option<f64>,
-    /// Image price (per image)
-    pub image_price: Option<f64>,
-    /// Video price (per second)
-    pub video_price_per_second: Option<f64>,
-    /// Audio price (per second)
-    pub audio_price_per_second: Option<f64>,
-}
-
-impl ModelPricing {
-    /// Convert Gemini's per-million-token registry pricing into the shared cost model.
-    pub fn to_core_model_pricing(&self, model_id: &str) -> crate::core::cost::types::ModelPricing {
-        crate::core::cost::types::ModelPricing {
-            model: model_id.to_string(),
-            input_cost_per_1k_tokens: self.input_price / 1000.0,
-            output_cost_per_1k_tokens: self.output_price / 1000.0,
-            cache_read_input_token_cost: self.cached_input_price.map(|price| price / 1000.0),
-            cost_per_image: self.image_price.map(|price| {
-                let mut costs = HashMap::new();
-                costs.insert("default".to_string(), price);
-                costs
-            }),
-            currency: "USD".to_string(),
-            updated_at: chrono::Utc::now(),
-            ..Default::default()
-        }
+fn pricing_per_million(
+    input_price: f64,
+    output_price: f64,
+    cached_input_price: Option<f64>,
+    image_price: Option<f64>,
+    video_price_per_second: Option<f64>,
+    audio_price_per_second: Option<f64>,
+) -> ModelPricing {
+    ModelPricing {
+        input_cost_per_1k_tokens: input_price / 1000.0,
+        output_cost_per_1k_tokens: output_price / 1000.0,
+        cache_read_input_token_cost: cached_input_price.map(|price| price / 1000.0),
+        cost_per_image: image_price.map(|price| {
+            let mut costs = HashMap::new();
+            costs.insert("default".to_string(), price);
+            costs
+        }),
+        video_cost_per_second: video_price_per_second,
+        audio_cost_per_second: audio_price_per_second,
+        currency: "USD".to_string(),
+        updated_at: chrono::Utc::now(),
+        ..Default::default()
     }
 }
 
@@ -212,14 +201,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 2.0,
-                    output_price: 12.0,
-                    cached_input_price: Some(0.2),
-                    image_price: Some(0.005),
-                    video_price_per_second: Some(0.005),
-                    audio_price_per_second: Some(0.0005),
-                },
+                pricing: pricing_per_million(
+                    2.0,
+                    12.0,
+                    Some(0.2),
+                    Some(0.005),
+                    Some(0.005),
+                    Some(0.0005),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_048_576,
                     max_output_tokens: 65536,
@@ -272,14 +261,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.075,
-                    output_price: 0.30,
-                    cached_input_price: Some(0.01875),
-                    image_price: Some(0.0002),
-                    video_price_per_second: Some(0.0002),
-                    audio_price_per_second: Some(0.00002),
-                },
+                pricing: pricing_per_million(
+                    0.075,
+                    0.30,
+                    Some(0.01875),
+                    Some(0.0002),
+                    Some(0.0002),
+                    Some(0.00002),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_048_576,
                     max_output_tokens: 65536,
@@ -332,14 +321,7 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.25,
-                    output_price: 1.5,
-                    cached_input_price: Some(0.025),
-                    image_price: None,
-                    video_price_per_second: None,
-                    audio_price_per_second: None,
-                },
+                pricing: pricing_per_million(0.25, 1.5, Some(0.025), None, None, None),
                 limits: ModelLimits {
                     max_context_length: 1_048_576,
                     max_output_tokens: 65536,
@@ -394,14 +376,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 2.0,   // $2 per 1M tokens (<=200K)
-                    output_price: 12.0, // $12 per 1M tokens (<=200K)
-                    cached_input_price: Some(0.5),
-                    image_price: Some(0.005),
-                    video_price_per_second: Some(0.005),
-                    audio_price_per_second: Some(0.0005),
-                },
+                pricing: pricing_per_million(
+                    2.0,
+                    12.0,
+                    Some(0.5),
+                    Some(0.005),
+                    Some(0.005),
+                    Some(0.0005),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 65536,
@@ -453,14 +435,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 4.0,   // $4 per 1M tokens (deep think mode)
-                    output_price: 24.0, // $24 per 1M tokens (deep think mode)
-                    cached_input_price: Some(1.0),
-                    image_price: Some(0.01),
-                    video_price_per_second: Some(0.01),
-                    audio_price_per_second: Some(0.001),
-                },
+                pricing: pricing_per_million(
+                    4.0,
+                    24.0,
+                    Some(1.0),
+                    Some(0.01),
+                    Some(0.01),
+                    Some(0.001),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 65536,
@@ -513,14 +495,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.5,  // $0.50 per 1M tokens
-                    output_price: 3.0, // $3 per 1M tokens
-                    cached_input_price: Some(0.05),
-                    image_price: Some(0.002),
-                    video_price_per_second: Some(0.002),
-                    audio_price_per_second: Some(0.0002),
-                },
+                pricing: pricing_per_million(
+                    0.5,
+                    3.0,
+                    Some(0.05),
+                    Some(0.002),
+                    Some(0.002),
+                    Some(0.0002),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_048_576,
                     max_output_tokens: 65536,
@@ -565,14 +547,7 @@ impl GeminiModelRegistry {
                     ModelFeature::SystemInstructions,
                     ModelFeature::JsonMode,
                 ],
-                pricing: ModelPricing {
-                    input_price: 2.0,   // $2 per 1M tokens
-                    output_price: 12.0, // $12 per 1M tokens
-                    cached_input_price: Some(0.5),
-                    image_price: Some(0.04), // Image generation pricing
-                    video_price_per_second: None,
-                    audio_price_per_second: None,
-                },
+                pricing: pricing_per_million(2.0, 12.0, Some(0.5), Some(0.04), None, None),
                 limits: ModelLimits {
                     max_context_length: 65536,
                     max_output_tokens: 8192,
@@ -627,14 +602,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 1.25,  // $1.25 per 1M tokens (<=200K)
-                    output_price: 10.0, // $10 per 1M tokens (<=200K)
-                    cached_input_price: Some(0.3125),
-                    image_price: Some(0.005),
-                    video_price_per_second: Some(0.005),
-                    audio_price_per_second: Some(0.0005),
-                },
+                pricing: pricing_per_million(
+                    1.25,
+                    10.0,
+                    Some(0.3125),
+                    Some(0.005),
+                    Some(0.005),
+                    Some(0.0005),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 65536,
@@ -687,14 +662,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.30,  // $0.30 per 1M tokens
-                    output_price: 2.50, // $2.50 per 1M tokens
-                    cached_input_price: Some(0.075),
-                    image_price: Some(0.0002),
-                    video_price_per_second: Some(0.0002),
-                    audio_price_per_second: Some(0.0001),
-                },
+                pricing: pricing_per_million(
+                    0.30,
+                    2.50,
+                    Some(0.075),
+                    Some(0.0002),
+                    Some(0.0002),
+                    Some(0.0001),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 65536,
@@ -745,14 +720,7 @@ impl GeminiModelRegistry {
                     ModelFeature::CodeExecution,
                     ModelFeature::SearchGrounding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.10,  // $0.10 per 1M tokens
-                    output_price: 0.40, // $0.40 per 1M tokens
-                    cached_input_price: Some(0.025),
-                    image_price: Some(0.0001),
-                    video_price_per_second: None,
-                    audio_price_per_second: None,
-                },
+                pricing: pricing_per_million(0.10, 0.40, Some(0.025), Some(0.0001), None, None),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 65536,
@@ -807,14 +775,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.01,  // $0.01 per 1M tokens
-                    output_price: 0.04, // $0.04 per 1M tokens
-                    cached_input_price: Some(0.0025),
-                    image_price: Some(0.0001),
-                    video_price_per_second: Some(0.001),
-                    audio_price_per_second: Some(0.0001),
-                },
+                pricing: pricing_per_million(
+                    0.01,
+                    0.04,
+                    Some(0.0025),
+                    Some(0.0001),
+                    Some(0.001),
+                    Some(0.0001),
+                ),
                 limits: ModelLimits {
                     max_context_length: GEMINI_20_FLASH_CONTEXT_WINDOW,
                     max_output_tokens: 8192,
@@ -857,14 +825,7 @@ impl GeminiModelRegistry {
                     ModelFeature::StreamingSupport,
                     ModelFeature::SystemInstructions,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.01,
-                    output_price: 0.04,
-                    cached_input_price: None,
-                    image_price: Some(0.0001),
-                    video_price_per_second: None,
-                    audio_price_per_second: None,
-                },
+                pricing: pricing_per_million(0.01, 0.04, None, Some(0.0001), None, None),
                 limits: ModelLimits {
                     max_context_length: GEMINI_20_FLASH_THINKING_CONTEXT_WINDOW,
                     max_output_tokens: 8192,
@@ -917,14 +878,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 1.25, // $1.25 per 1M tokens (<=128K)
-                    output_price: 5.0, // $5.00 per 1M tokens (<=128K)
-                    cached_input_price: Some(0.3125),
-                    image_price: Some(0.002625),
-                    video_price_per_second: Some(0.002625),
-                    audio_price_per_second: Some(0.000125),
-                },
+                pricing: pricing_per_million(
+                    1.25,
+                    5.0,
+                    Some(0.3125),
+                    Some(0.002625),
+                    Some(0.002625),
+                    Some(0.000125),
+                ),
                 limits: ModelLimits {
                     max_context_length: GEMINI_15_PRO_CONTEXT_WINDOW,
                     max_output_tokens: 8192,
@@ -977,14 +938,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.075, // $0.075 per 1M tokens (<=128K)
-                    output_price: 0.30, // $0.30 per 1M tokens (<=128K)
-                    cached_input_price: Some(0.01875),
-                    image_price: Some(0.0002),
-                    video_price_per_second: Some(0.0002),
-                    audio_price_per_second: Some(0.0001),
-                },
+                pricing: pricing_per_million(
+                    0.075,
+                    0.30,
+                    Some(0.01875),
+                    Some(0.0002),
+                    Some(0.0002),
+                    Some(0.0001),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 8192,
@@ -1035,14 +996,14 @@ impl GeminiModelRegistry {
                     ModelFeature::VideoUnderstanding,
                     ModelFeature::AudioUnderstanding,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.0375, // $0.0375 per 1M tokens
-                    output_price: 0.15,  // $0.15 per 1M tokens
-                    cached_input_price: Some(0.01),
-                    image_price: Some(0.0001),
-                    video_price_per_second: Some(0.0001),
-                    audio_price_per_second: Some(0.00005),
-                },
+                pricing: pricing_per_million(
+                    0.0375,
+                    0.15,
+                    Some(0.01),
+                    Some(0.0001),
+                    Some(0.0001),
+                    Some(0.00005),
+                ),
                 limits: ModelLimits {
                     max_context_length: 1_000_000,
                     max_output_tokens: 8192,
@@ -1088,14 +1049,7 @@ impl GeminiModelRegistry {
                     ModelFeature::SystemInstructions,
                     ModelFeature::BatchProcessing,
                 ],
-                pricing: ModelPricing {
-                    input_price: 0.50,  // $0.50 per 1M tokens
-                    output_price: 1.50, // $1.50 per 1M tokens
-                    cached_input_price: None,
-                    image_price: None,
-                    video_price_per_second: None,
-                    audio_price_per_second: None,
-                },
+                pricing: pricing_per_million(0.50, 1.50, None, None, None, None),
                 limits: ModelLimits {
                     max_context_length: 32_000,
                     max_output_tokens: 8192,
@@ -1110,7 +1064,8 @@ impl GeminiModelRegistry {
     }
 
     /// Model
-    fn register_model(&mut self, id: &str, spec: ModelSpec) {
+    fn register_model(&mut self, id: &str, mut spec: ModelSpec) {
+        spec.pricing.model = id.to_string();
         self.models.insert(id.to_string(), spec);
     }
 
@@ -1142,12 +1097,9 @@ impl GeminiModelRegistry {
     }
 
     /// Get model pricing in the shared core cost model shape.
-    pub fn get_core_model_pricing(
-        &self,
-        model_id: &str,
-    ) -> Option<crate::core::cost::types::ModelPricing> {
+    pub fn get_core_model_pricing(&self, model_id: &str) -> Option<ModelPricing> {
         self.get_model_spec(model_id)
-            .map(|spec| spec.pricing.to_core_model_pricing(model_id))
+            .map(|spec| spec.pricing.clone())
     }
 
     /// Model
@@ -1268,7 +1220,6 @@ impl CostCalculator {
     ) -> Option<f64> {
         let registry = get_gemini_registry();
         let pricing = registry.get_core_model_pricing(model_id)?;
-        let legacy_pricing = registry.get_model_pricing(model_id)?;
 
         let mut total_cost = 0.0;
         let mut remaining_prompt_tokens = prompt_tokens;
@@ -1292,20 +1243,25 @@ impl CostCalculator {
         total_cost += output_cost;
 
         // Image cost
-        if let (Some(img_count), Some(img_price)) = (images, legacy_pricing.image_price) {
+        let image_price = pricing
+            .cost_per_image
+            .as_ref()
+            .and_then(|costs| costs.get("default"))
+            .copied();
+        if let (Some(img_count), Some(img_price)) = (images, image_price) {
             total_cost += img_count as f64 * img_price;
         }
 
         // Video cost
         if let (Some(video_secs), Some(video_price)) =
-            (video_seconds, legacy_pricing.video_price_per_second)
+            (video_seconds, pricing.video_cost_per_second)
         {
             total_cost += video_secs as f64 * video_price;
         }
 
         // Audio cost
         if let (Some(audio_secs), Some(audio_price)) =
-            (audio_seconds, legacy_pricing.audio_price_per_second)
+            (audio_seconds, pricing.audio_cost_per_second)
         {
             total_cost += audio_secs as f64 * audio_price;
         }
@@ -1343,8 +1299,8 @@ mod tests {
         );
 
         // Test pricing
-        assert_eq!(flash_spec.pricing.input_price, 0.01);
-        assert_eq!(flash_spec.pricing.output_price, 0.04);
+        assert_eq!(flash_spec.pricing.input_cost_per_1k_tokens, 0.00001);
+        assert_eq!(flash_spec.pricing.output_cost_per_1k_tokens, 0.00004);
     }
 
     #[test]
@@ -1429,9 +1385,9 @@ mod tests {
         let pricing = registry.get_model_pricing("gemini-1.5-flash");
         assert!(pricing.is_some());
         let pricing_value = pricing.unwrap();
-        assert_eq!(pricing_value.input_price, 0.075);
-        assert_eq!(pricing_value.output_price, 0.30);
-        assert!(pricing_value.cached_input_price.is_some());
+        assert_eq!(pricing_value.input_cost_per_1k_tokens, 0.000075);
+        assert_eq!(pricing_value.output_cost_per_1k_tokens, 0.0003);
+        assert!(pricing_value.cache_read_input_token_cost.is_some());
     }
 
     #[test]
@@ -1445,6 +1401,8 @@ mod tests {
         assert_eq!(pricing.input_cost_per_1k_tokens, 0.000075);
         assert_eq!(pricing.output_cost_per_1k_tokens, 0.0003);
         assert_eq!(pricing.cache_read_input_token_cost, Some(0.00001875));
+        assert_eq!(pricing.video_cost_per_second, Some(0.0002));
+        assert_eq!(pricing.audio_cost_per_second, Some(0.0001));
         assert_eq!(
             pricing
                 .cost_per_image

@@ -924,6 +924,30 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E3 Anthropic/Gemini pricing model convergence: `in_progress`
+    - Modified files:
+      - `src/core/cost/types.rs`
+      - `src/core/cost/calculator.rs`
+      - `src/core/cost/utils.rs`
+      - `src/core/providers/anthropic/models.rs`
+      - `src/core/providers/gemini/mod.rs`
+      - `src/core/providers/gemini/models.rs`
+    - Main changes:
+      - Extended the shared `core::cost::types::ModelPricing` shape with provider-needed batch/video/audio fields so Anthropic and Gemini no longer need provider-local pricing structs.
+      - Re-exported the shared model from the Anthropic and Gemini registry modules to preserve the existing public import paths.
+      - Kept per-million-token authoring helpers inside the registries, while storing normalized per-1K token costs in the shared model.
+      - Preserved Gemini's public `get_model_pricing()` return units by converting shared per-1K costs back to the previous per-million tuple.
+      - Confirmed provider-local `pub struct ModelPricing`, `impl ModelPricing`, and `to_core_model_pricing` adapters are gone from `src/core/providers`.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test --all-features core::providers::anthropic::models::tests::` -> pass (`5` tests)
+      - `cargo test --all-features core::providers::gemini::models::tests::` -> pass (`25` tests)
+      - `cargo test pricing` -> pass (`179` lib filtered tests, `1` integration filtered test)
+      - `cargo test cost` -> pass (`326` lib filtered tests)
+      - `cargo check --all-features` -> pass
+      - `git diff --check` -> pass
+      - `rg -n "pub struct ModelPricing|impl ModelPricing|to_core_model_pricing" src/core/providers -g '*.rs'` -> no matches
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E3 Bedrock pricing model convergence: `in_progress`
     - Modified files:
       - `src/core/providers/bedrock/utils/cost.rs`

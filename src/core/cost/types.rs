@@ -86,10 +86,16 @@ pub struct ModelPricing {
     pub reasoning_cost_per_token: Option<f64>,
     /// Cost per second (for speech/TTS models)
     pub cost_per_second: Option<f64>,
+    /// Video processing cost per second
+    pub video_cost_per_second: Option<f64>,
+    /// Audio processing cost per second
+    pub audio_cost_per_second: Option<f64>,
     /// Cost per image (for image generation)
     pub cost_per_image: Option<HashMap<String, f64>>,
     /// Tiered pricing for high volume (above threshold pricing)
     pub tiered_pricing: Option<HashMap<String, f64>>,
+    /// Batch processing discount multiplier, when a provider exposes one
+    pub batch_discount: Option<f64>,
     /// Currency (usually "USD")
     pub currency: String,
     /// Last updated timestamp
@@ -109,8 +115,11 @@ impl Default for ModelPricing {
             image_cost_per_token: None,
             reasoning_cost_per_token: None,
             cost_per_second: None,
+            video_cost_per_second: None,
+            audio_cost_per_second: None,
             cost_per_image: None,
             tiered_pricing: None,
+            batch_discount: None,
             currency: "USD".to_string(),
             updated_at: Utc::now(),
         }

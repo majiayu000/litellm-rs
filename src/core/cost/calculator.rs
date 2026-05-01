@@ -193,8 +193,11 @@ fn litellm_to_cost_pricing(
         image_cost_per_token: extra_f64(info, "image_cost_per_token"),
         reasoning_cost_per_token: extra_f64(info, "output_cost_per_reasoning_token"),
         cost_per_second: info.cost_per_second,
+        video_cost_per_second: extra_f64(info, "video_cost_per_second"),
+        audio_cost_per_second: extra_f64(info, "audio_cost_per_second"),
         cost_per_image: None,
         tiered_pricing: None,
+        batch_discount: extra_f64(info, "batch_discount"),
         currency: "USD".to_string(),
         updated_at: Utc::now(),
     }
