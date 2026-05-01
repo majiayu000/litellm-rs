@@ -367,7 +367,7 @@ impl LLMProvider for StabilityProvider {
     ) -> Result<f64, ProviderError> {
         // Stability AI pricing is per image, not per token
         // Use the pricing database for estimation
-        let usage = crate::core::providers::base::pricing::Usage {
+        let usage = crate::core::pricing::Usage {
             prompt_tokens: input_tokens,
             completion_tokens: output_tokens,
             total_tokens: input_tokens + output_tokens,

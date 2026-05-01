@@ -924,6 +924,28 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
 ## 9. Execution Log
 
 - 2026-05-02
+  - Step E3 core pricing consumer migration batch 2: `in_progress`
+    - Modified files:
+      - `src/core/providers/empower/provider.rs`
+      - `src/core/providers/gigachat/mod.rs`
+      - `src/core/providers/google_pse/mod.rs`
+      - `src/core/providers/jina/mod.rs`
+      - `src/core/providers/langgraph/provider.rs`
+      - `src/core/providers/mistral/mod.rs`
+      - `src/core/providers/runwayml/provider.rs`
+      - `src/core/providers/stability/provider.rs`
+    - Main changes:
+      - Migrated the remaining direct `core::providers::base::pricing::Usage` consumers to `core::pricing::Usage`.
+      - Confirmed no direct provider code still imports `core::providers::base::pricing::Usage` or `core::providers::base::get_pricing_db`.
+    - Execute tests:
+      - `cargo fmt --all -- --check` -> pass
+      - `cargo test core::providers::mistral` -> pass (`63` tests)
+      - `cargo test core::providers::jina` -> pass (`0` matching tests)
+      - `cargo test core::providers::stability` -> pass (`0` matching tests)
+      - `cargo test pricing` -> pass (`178` lib filtered tests, `1` integration filtered test)
+      - `git diff --check` -> pass
+      - `cargo check --all-features` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E3 core pricing consumer migration batch 1: `in_progress`
     - Modified files:
       - `src/core/providers/mod.rs`
