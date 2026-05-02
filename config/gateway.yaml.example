@@ -88,7 +88,9 @@ storage:
     enabled: false
   redis:
     url: "redis://localhost:6379"
-    enabled: true
+    # Enable only when Redis is deployed; otherwise the gateway uses local
+    # in-process/no-op fallbacks for Redis-backed features.
+    enabled: false
     max_connections: 20
     connection_timeout: 5
     cluster: false

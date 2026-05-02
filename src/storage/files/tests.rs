@@ -2,7 +2,27 @@
 
 use super::default_data_path;
 use super::local::LocalStorage;
+use std::path::PathBuf;
 use tempfile::TempDir;
+
+struct DataDirEnvRestore(Option<String>);
+
+impl DataDirEnvRestore {
+    fn capture() -> Self {
+        Self(std::env::var("LITELLM_DATA_DIR").ok())
+    }
+}
+
+impl Drop for DataDirEnvRestore {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.0 {
+                Some(value) => std::env::set_var("LITELLM_DATA_DIR", value),
+                None => std::env::remove_var("LITELLM_DATA_DIR"),
+            }
+        }
+    }
+}
 
 #[tokio::test]
 async fn test_local_storage() {
@@ -35,6 +55,12 @@ async fn test_local_storage() {
 
 #[test]
 fn test_default_data_path_is_absolute() {
+    let _guard = crate::storage::ENV_LOCK.lock().unwrap();
+    let _restore = DataDirEnvRestore::capture();
+    unsafe {
+        std::env::remove_var("LITELLM_DATA_DIR");
+    }
+
     // Ensure the default path is absolute, not relative like the old "./data"
     let path = default_data_path();
     assert!(
@@ -46,6 +72,12 @@ fn test_default_data_path_is_absolute() {
 
 #[test]
 fn test_default_data_path_ends_with_data() {
+    let _guard = crate::storage::ENV_LOCK.lock().unwrap();
+    let _restore = DataDirEnvRestore::capture();
+    unsafe {
+        std::env::remove_var("LITELLM_DATA_DIR");
+    }
+
     let path = default_data_path();
     assert!(
         path.ends_with("litellm-rs/data"),
@@ -56,26 +88,20 @@ fn test_default_data_path_ends_with_data() {
 
 #[test]
 fn test_default_data_path_env_override() {
-    let original = std::env::var("LITELLM_DATA_DIR").ok();
-    // SAFETY: This test is not run in parallel with other tests that read
-    // LITELLM_DATA_DIR. set_var/remove_var are unsafe because they are not
-    // thread-safe, but #[test] functions run serially by default.
+    let _guard = crate::storage::ENV_LOCK.lock().unwrap();
+    let _restore = DataDirEnvRestore::capture();
+    // SAFETY: ENV_LOCK serializes tests in this crate that mutate
+    // LITELLM_DATA_DIR. set_var/remove_var are unsafe because environment
+    // mutation is process-global.
     unsafe {
         std::env::set_var("LITELLM_DATA_DIR", "/custom/storage/path");
     }
     let path = default_data_path();
     assert_eq!(
         path,
-        std::path::PathBuf::from("/custom/storage/path"),
-        "LITELLM_DATA_DIR should override the default path"
+        PathBuf::from("/custom/storage/path/data"),
+        "LITELLM_DATA_DIR should define the shared state directory"
     );
-    // Restore original env
-    unsafe {
-        match original {
-            Some(val) => std::env::set_var("LITELLM_DATA_DIR", val),
-            None => std::env::remove_var("LITELLM_DATA_DIR"),
-        }
-    }
 }
 
 #[test]

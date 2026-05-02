@@ -13,8 +13,29 @@ pub mod vector;
 
 use crate::config::models::storage::StorageConfig;
 use crate::utils::error::gateway_error::{GatewayError, Result};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+
+/// Returns the default base directory for local gateway state.
+///
+/// Resolution order:
+/// 1. `LITELLM_DATA_DIR` environment variable (if set and non-empty)
+/// 2. `<data_local_dir>/litellm-rs` (platform-specific)
+/// 3. `/tmp/litellm-rs` (ultimate fallback)
+pub fn default_data_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("LITELLM_DATA_DIR")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p);
+    }
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("litellm-rs")
+}
+
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Main storage layer that orchestrates all storage backends
 #[derive(Debug, Clone)]

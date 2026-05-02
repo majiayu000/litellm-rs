@@ -17,17 +17,9 @@ pub use types::{FileMetadata, FileStorage};
 /// Returns the default absolute path for local file storage.
 ///
 /// Resolution order:
-/// 1. `LITELLM_DATA_DIR` environment variable (if set and non-empty)
+/// 1. `LITELLM_DATA_DIR/data` (if `LITELLM_DATA_DIR` is set and non-empty)
 /// 2. `<data_local_dir>/litellm-rs/data` (platform-specific)
 /// 3. `/tmp/litellm-rs/data` (ultimate fallback)
 pub fn default_data_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("LITELLM_DATA_DIR")
-        && !p.is_empty()
-    {
-        return std::path::PathBuf::from(p);
-    }
-    dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("litellm-rs")
-        .join("data")
+    super::default_data_dir().join("data")
 }

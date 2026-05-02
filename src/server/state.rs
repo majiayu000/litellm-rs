@@ -17,12 +17,12 @@ use std::sync::Arc;
 /// multiple request handlers. All fields are wrapped in Arc for efficient
 /// sharing across threads.
 ///
-/// `config` uses [`AtomicValue`] so the entire configuration can be swapped
-/// atomically at runtime (hot reload) while readers obtain lock-free
-/// `Arc<Config>` snapshots.
+/// `config` uses [`AtomicValue`] so callers can explicitly swap the entire
+/// configuration at runtime while readers obtain lock-free `Arc<Config>`
+/// snapshots. This type does not start a file watcher by itself.
 #[derive(Clone)]
 pub struct AppState {
-    /// Gateway configuration (atomically swappable for hot reload)
+    /// Gateway configuration (atomically swappable by explicit callers)
     pub config: AtomicValue<Config>,
     /// Authentication system
     pub auth: Arc<crate::auth::AuthSystem>,
@@ -71,7 +71,7 @@ impl AppState {
     /// Load a snapshot of the current gateway configuration.
     ///
     /// Returns an `Arc<Config>` that is valid for the lifetime of the
-    /// caller — subsequent hot-reload swaps will not affect already-loaded
+    /// caller — subsequent explicit swaps will not affect already-loaded
     /// snapshots.
     pub fn config(&self) -> Arc<Config> {
         self.config.load()

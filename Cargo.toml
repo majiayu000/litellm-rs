@@ -171,7 +171,7 @@ providers-extra = []
 providers-extended = []
 
 # Storage backends (implies gateway since auth/server/monitoring require it)
-storage = ["dep:sea-orm", "dep:sea-orm-migration", "gateway"]
+storage = ["dep:sea-orm", "dep:sea-orm-migration", "gateway", "redis"]
 postgres = ["storage", "sea-orm/sqlx-postgres", "sea-orm/runtime-tokio-rustls"]
 sqlite = ["storage", "sea-orm/sqlx-sqlite", "sea-orm/runtime-tokio-rustls"]
 redis = ["dep:redis"]
@@ -192,9 +192,9 @@ tracing = ["dep:tracing-subscriber"]
 mcp-validation = ["dep:jsonschema"]
 
 # Advanced features
-vector-db = []
+vector-db = ["storage"]
 websockets = []
-analytics = ["metrics"]
+analytics = []
 enterprise = ["analytics", "vector-db"]
 
 # Full feature set

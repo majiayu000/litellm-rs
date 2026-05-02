@@ -804,7 +804,7 @@ Goal: close remaining medium issues after the main architecture is stable.
 
 ### Step F3 Runtime/config hygiene sweep
 
-- status: `pending`
+- status: `completed`
 - Covers: M13, M14, M15, M20, M21, M22
 - Expected changes:
   - `src/storage/database/mod.rs`
@@ -1053,6 +1053,38 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
       - `cargo test --all-features openai_like` -> pass (`48` lib-filtered tests)
       - `cargo test server::routes::auth::password::tests::password_reset_padding_equalizes_fast_paths` -> pass
       - `cargo check --all-features` -> pass
+      - `cargo fmt --all -- --check` -> pass
+      - `git diff --check` -> pass
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
+  - Step F3 runtime/config hygiene sweep: `completed`
+    - Modified files:
+      - `Cargo.toml`
+      - `config/gateway.yaml.example`
+      - `src/server/state.rs`
+      - `src/storage/mod.rs`
+      - `src/storage/database/mod.rs`
+      - `src/storage/files/mod.rs`
+      - `src/storage/files/tests.rs`
+    - Main changes:
+      - Introduced a shared local state directory resolver from `LITELLM_DATA_DIR`; SQLite fallback now uses `$LITELLM_DATA_DIR/gateway.db` unless `LITELLM_SQLITE_PATH` explicitly overrides it, and local file storage defaults to `$LITELLM_DATA_DIR/data`.
+      - Removed implicit hot-reload claims from `AppState` comments; `AtomicValue` now documents explicit config swaps only.
+      - Changed `config/gateway.yaml.example` so Redis is disabled unless explicitly deployed, with a fallback comment.
+      - Decoupled `analytics` from `metrics` and `sysinfo`; `analytics` no longer pulls system metrics.
+      - Made `vector-db` a real feature by depending on storage, and made storage declare its current Redis dependency so `sqlite`, `postgres`, and `vector-db` compile independently of defaults.
+      - Verified M20/M15 prior fixes: lite feature compiles in the local and CI matrix; rate limiter and budget persistence already use Redis/DB-backed paths when configured.
+    - Execute tests:
+      - `cargo test storage` -> pass (`188` lib-filtered tests)
+      - `cargo test config` -> pass (`1097` lib-filtered tests, `2` main-filtered tests, `45` integration-filtered tests, `2` connection-pool-filtered tests)
+      - `cargo test gateway_yaml_example` -> pass (`1` lib-filtered test)
+      - `cargo test --all-features storage` -> pass (`189` lib-filtered tests)
+      - `cargo test --all-features config` -> pass (`1551` lib-filtered tests, `2` main-filtered tests, `45` integration-filtered tests, `2` connection-pool-filtered tests)
+      - `cargo check --no-default-features --features lite` -> pass
+      - `cargo check --no-default-features --features analytics` -> pass
+      - `cargo check --no-default-features --features vector-db` -> pass
+      - `cargo check --no-default-features --features sqlite` -> pass
+      - `cargo check --no-default-features --features postgres` -> pass
+      - `cargo check --all-features` -> pass
+      - `cargo tree -e features --no-default-features --features analytics | rg sysinfo` -> pass (no `sysinfo`)
       - `cargo fmt --all -- --check` -> pass
       - `git diff --check` -> pass
       - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
