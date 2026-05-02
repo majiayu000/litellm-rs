@@ -276,20 +276,18 @@ fn transform_to_converse(request: &ChatRequest) -> Result<ConverseRequest, Provi
                     vec![]
                 };
 
-                if msg.role == MessageRole::Assistant {
-                    if let Some(tool_calls) = &msg.tool_calls {
-                        for tool_call in tool_calls {
-                            content.push(ContentBlock::ToolUse {
-                                tool_use: ToolUseBlock {
-                                    tool_use_id: tool_call.id.clone(),
-                                    name: tool_call.function.name.clone(),
-                                    input: serde_json::from_str::<Value>(
-                                        &tool_call.function.arguments,
-                                    )
+                if msg.role == MessageRole::Assistant
+                    && let Some(tool_calls) = &msg.tool_calls
+                {
+                    for tool_call in tool_calls {
+                        content.push(ContentBlock::ToolUse {
+                            tool_use: ToolUseBlock {
+                                tool_use_id: tool_call.id.clone(),
+                                name: tool_call.function.name.clone(),
+                                input: serde_json::from_str::<Value>(&tool_call.function.arguments)
                                     .unwrap_or(Value::Object(Default::default())),
-                                },
-                            });
-                        }
+                            },
+                        });
                     }
                 }
 
