@@ -173,7 +173,7 @@ impl McpServerConfig {
 pub struct AuthConfig {
     /// Authentication type
     #[serde(rename = "type")]
-    pub auth_type: AuthType,
+    pub auth_type: McpAuthType,
 
     /// Authentication value (API key, token, etc.)
     /// Can use environment variable syntax: ${ENV_VAR}
@@ -209,7 +209,7 @@ impl AuthConfig {
     /// Create API key authentication
     pub fn api_key(value: impl Into<String>) -> Self {
         Self {
-            auth_type: AuthType::ApiKey,
+            auth_type: McpAuthType::ApiKey,
             value: Some(value.into()),
             client_id: None,
             client_secret: None,
@@ -223,7 +223,7 @@ impl AuthConfig {
     /// Create Bearer token authentication
     pub fn bearer(token: impl Into<String>) -> Self {
         Self {
-            auth_type: AuthType::BearerToken,
+            auth_type: McpAuthType::BearerToken,
             value: Some(token.into()),
             client_id: None,
             client_secret: None,
@@ -240,7 +240,7 @@ impl AuthConfig {
         let credentials = format!("{}:{}", username.into(), password.into());
         let encoded = STANDARD.encode(credentials.as_bytes());
         Self {
-            auth_type: AuthType::Basic,
+            auth_type: McpAuthType::Basic,
             value: Some(encoded),
             client_id: None,
             client_secret: None,
@@ -258,7 +258,7 @@ impl AuthConfig {
         token_url: impl Into<String>,
     ) -> Self {
         Self {
-            auth_type: AuthType::OAuth2,
+            auth_type: McpAuthType::OAuth2,
             value: None,
             client_id: Some(client_id.into()),
             client_secret: Some(client_secret.into()),
@@ -284,7 +284,7 @@ impl AuthConfig {
     /// Validate the authentication configuration
     pub fn validate(&self) -> Result<(), String> {
         match self.auth_type {
-            AuthType::ApiKey | AuthType::BearerToken => {
+            McpAuthType::ApiKey | McpAuthType::BearerToken => {
                 if self.value.is_none() {
                     return Err(format!(
                         "{:?} authentication requires a value",
@@ -292,12 +292,12 @@ impl AuthConfig {
                     ));
                 }
             }
-            AuthType::Basic => {
+            McpAuthType::Basic => {
                 if self.value.is_none() {
                     return Err("Basic authentication requires credentials".to_string());
                 }
             }
-            AuthType::OAuth2 => {
+            McpAuthType::OAuth2 => {
                 if self.client_id.is_none() {
                     return Err("OAuth2 authentication requires client_id".to_string());
                 }
@@ -308,7 +308,7 @@ impl AuthConfig {
                     return Err("OAuth2 authentication requires token_url".to_string());
                 }
             }
-            AuthType::None => {}
+            McpAuthType::None => {}
         }
         Ok(())
     }
@@ -316,17 +316,17 @@ impl AuthConfig {
     /// Get the authorization header value
     pub fn get_header_value(&self) -> Option<String> {
         match self.auth_type {
-            AuthType::None => None,
-            AuthType::ApiKey => self.value.as_ref().map(|v| {
+            McpAuthType::None => None,
+            McpAuthType::ApiKey => self.value.as_ref().map(|v| {
                 if let Some(prefix) = &self.header_prefix {
                     format!("{} {}", prefix, v)
                 } else {
                     v.clone()
                 }
             }),
-            AuthType::BearerToken => self.value.as_ref().map(|v| format!("Bearer {}", v)),
-            AuthType::Basic => self.value.as_ref().map(|v| format!("Basic {}", v)),
-            AuthType::OAuth2 => {
+            McpAuthType::BearerToken => self.value.as_ref().map(|v| format!("Bearer {}", v)),
+            McpAuthType::Basic => self.value.as_ref().map(|v| format!("Basic {}", v)),
+            McpAuthType::OAuth2 => {
                 // OAuth2 tokens are obtained separately
                 None
             }
@@ -342,7 +342,7 @@ impl AuthConfig {
 /// Authentication type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum AuthType {
+pub enum McpAuthType {
     /// No authentication
     #[default]
     None,
@@ -355,6 +355,10 @@ pub enum AuthType {
     /// OAuth 2.0 client credentials
     OAuth2,
 }
+
+/// Backward-compatible alias for the prefixed MCP authentication type.
+#[doc(hidden)]
+pub type AuthType = McpAuthType;
 
 /// MCP gateway configuration (collection of servers)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -531,7 +535,7 @@ mod tests {
     #[test]
     fn test_auth_config_api_key() {
         let auth = AuthConfig::api_key("my-api-key");
-        assert_eq!(auth.auth_type, AuthType::ApiKey);
+        assert_eq!(auth.auth_type, McpAuthType::ApiKey);
         assert_eq!(auth.value.as_deref(), Some("my-api-key"));
         assert!(auth.validate().is_ok());
     }
@@ -539,14 +543,14 @@ mod tests {
     #[test]
     fn test_auth_config_bearer() {
         let auth = AuthConfig::bearer("my-token");
-        assert_eq!(auth.auth_type, AuthType::BearerToken);
+        assert_eq!(auth.auth_type, McpAuthType::BearerToken);
         assert_eq!(auth.get_header_value(), Some("Bearer my-token".to_string()));
     }
 
     #[test]
     fn test_auth_config_basic() {
         let auth = AuthConfig::basic("user", "pass");
-        assert_eq!(auth.auth_type, AuthType::Basic);
+        assert_eq!(auth.auth_type, McpAuthType::Basic);
         let header = auth.get_header_value().unwrap();
         assert!(header.starts_with("Basic "));
     }
@@ -559,7 +563,7 @@ mod tests {
             "https://auth.example.com/token",
         )
         .with_scopes(vec!["read".to_string(), "write".to_string()]);
-        assert_eq!(auth.auth_type, AuthType::OAuth2);
+        assert_eq!(auth.auth_type, McpAuthType::OAuth2);
         assert_eq!(auth.client_id.as_deref(), Some("client-id"));
         assert_eq!(auth.scopes.len(), 2);
         assert!(auth.validate().is_ok());
@@ -568,7 +572,7 @@ mod tests {
     #[test]
     fn test_auth_config_oauth2_missing_client_id() {
         let auth = AuthConfig {
-            auth_type: AuthType::OAuth2,
+            auth_type: McpAuthType::OAuth2,
             value: None,
             client_id: None,
             client_secret: Some("secret".to_string()),
@@ -606,8 +610,8 @@ mod tests {
 
     #[test]
     fn test_auth_type_default() {
-        let auth_type = AuthType::default();
-        assert_eq!(auth_type, AuthType::None);
+        let auth_type = McpAuthType::default();
+        assert_eq!(auth_type, McpAuthType::None);
     }
 
     #[test]

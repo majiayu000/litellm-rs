@@ -337,7 +337,7 @@ pub enum Provider {
 
 impl Provider {
     /// Get provider name
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> &str {
         match self {
             Provider::OpenAI(_) => "openai",
             Provider::Anthropic(_) => "anthropic",
@@ -413,7 +413,13 @@ impl Provider {
             reasoning_tokens: None,
         };
 
-        Ok(crate::core::pricing::get_pricing_db().calculate(model, &usage))
+        Ok(
+            crate::core::pricing::get_pricing_db().calculate_for_provider(
+                self.name(),
+                model,
+                &usage,
+            ),
+        )
     }
 
     /// Execute streaming chat completion

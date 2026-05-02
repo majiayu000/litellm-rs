@@ -46,11 +46,20 @@ pub trait LLMProvider: Send + Sync + Debug + 'static {
     /// Get provider name
     ///
     /// # Returns
-    /// Static string identifier for the provider, such as "openai", "anthropic", "v0", etc.
+    /// String identifier for the provider, such as "openai", "anthropic", "v0", etc.
     ///
     /// # Note
-    /// This name is used for routing and logging, must be unique across the entire system
-    fn name(&self) -> &'static str;
+    /// This name is used for routing and logging, must be unique across the entire system.
+    /// Implementations may return either a static literal or a value borrowed from `self`.
+    fn name(&self) -> &str;
+
+    /// Static provider name used by legacy `ProviderError` constructors.
+    ///
+    /// Providers with dynamic names should return a stable family name here and
+    /// keep the specific provider identity in `name()`.
+    fn error_provider_name(&self) -> &'static str {
+        "provider"
+    }
 
     /// Get provider capabilities
     ///
@@ -293,7 +302,10 @@ pub trait LLMProvider: Send + Sync + Debug + 'static {
         _context: RequestContext,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
     {
-        Err(ProviderError::not_supported(self.name(), "streaming"))
+        Err(ProviderError::not_supported(
+            self.error_provider_name(),
+            "streaming",
+        ))
     }
 
     // ==================== Optional Features ====================
@@ -322,7 +334,10 @@ pub trait LLMProvider: Send + Sync + Debug + 'static {
         _request: EmbeddingRequest,
         _context: RequestContext,
     ) -> Result<EmbeddingResponse, ProviderError> {
-        Err(ProviderError::not_supported(self.name(), "embeddings"))
+        Err(ProviderError::not_supported(
+            self.error_provider_name(),
+            "embeddings",
+        ))
     }
 
     /// Generate images
@@ -349,7 +364,7 @@ pub trait LLMProvider: Send + Sync + Debug + 'static {
         _context: RequestContext,
     ) -> Result<ImageGenerationResponse, ProviderError> {
         Err(ProviderError::not_supported(
-            self.name(),
+            self.error_provider_name(),
             "image_generation",
         ))
     }

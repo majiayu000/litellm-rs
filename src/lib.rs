@@ -91,6 +91,21 @@ pub use config::Config;
 pub use utils::error::gateway_error::{GatewayError, Result};
 pub use version::{BuildInfo, GIT_HASH, VERSION, build_info, full_version};
 
+/// Curated imports for applications using the stable high-level LiteLLM-RS API.
+pub mod prelude {
+    pub use crate::config::Config;
+    pub use crate::core::completion::{
+        CompletionOptions, CompletionResponse, LiteLLMError, Message, Router, Usage, acompletion,
+        assistant_message, completion, completion_stream, system_message, user_message,
+    };
+    pub use crate::core::embedding::{
+        EmbeddingInput, EmbeddingOptions, EmbeddingResponse, aembedding, embed_text, embed_texts,
+        embed_texts_with_options, embedding,
+    };
+    pub use crate::utils::error::gateway_error::{GatewayError, Result};
+    pub use crate::version::{BuildInfo, GIT_HASH, VERSION, build_info, full_version};
+}
+
 // Export core completion functionality (Python LiteLLM compatible)
 pub use core::completion::{
     Choice, CompletionOptions, CompletionResponse, ContentPart, LiteLLMError, Message, Router,
@@ -115,6 +130,7 @@ pub use core::types::message::{MessageContent, MessageRole};
 
 // Export core functionality
 pub use core::models::RequestContext;
+#[doc(hidden)]
 pub use core::models::openai::{
     AudioContent, AudioDelta, AudioParams, CacheControl, ChatChoice, ChatChoiceDelta,
     ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
@@ -125,9 +141,11 @@ pub use core::models::openai::{
     StreamOptions, Tool, ToolCall, ToolCallDelta, ToolChoice, ToolChoiceFunction,
     ToolChoiceFunctionSpec, TopLogprob,
 };
+#[doc(hidden)]
 pub use core::providers::{Provider, ProviderError, ProviderRegistry, ProviderType};
 
 // Export unified router
+#[doc(hidden)]
 pub use core::router::{
     CooldownReason, Deployment, DeploymentConfig, FallbackConfig, FallbackType, RouterConfig,
     RouterError, UnifiedRouter, UnifiedRoutingStrategy as RoutingStrategy,

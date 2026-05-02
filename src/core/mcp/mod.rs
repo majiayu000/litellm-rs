@@ -70,10 +70,14 @@ pub mod transport;
 pub mod validation;
 
 // Re-export commonly used types
-pub use config::{AuthConfig, AuthType, McpServerConfig};
+#[doc(hidden)]
+pub use config::AuthType;
+pub use config::{AuthConfig, McpAuthType, McpServerConfig};
 pub use error::{McpError, McpResult};
 pub use gateway::McpGateway;
-pub use permissions::{PermissionLevel, PermissionManager, PermissionPolicy, PermissionRule};
+#[doc(hidden)]
+pub use permissions::PermissionLevel;
+pub use permissions::{McpPermissionLevel, PermissionManager, PermissionPolicy, PermissionRule};
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, McpMessage};
 pub use server::McpServer;
 pub use tools::{Tool, ToolCall, ToolResult};
@@ -87,6 +91,6 @@ mod tests {
     fn test_module_exports() {
         // Verify all public types are accessible
         let _ = Transport::Http;
-        let _ = AuthType::ApiKey;
+        let _ = McpAuthType::ApiKey;
     }
 }

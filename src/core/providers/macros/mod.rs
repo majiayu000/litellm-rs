@@ -7,6 +7,9 @@
 //! - `openai_compatible`: `define_openai_compatible_provider!` macro
 //! - `http_hooks`: `define_http_provider_with_hooks!` macro
 //! - `pooled_hooks`: `define_pooled_http_provider_with_hooks!` macro
+//!
+//! See `MACROS.md` in this directory for the current in-tree usage audit and
+//! compatibility status of each exported provider macro.
 mod config_helpers;
 
 // All macro modules contain #[macro_export] macros, which are hoisted to crate root.

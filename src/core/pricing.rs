@@ -117,6 +117,26 @@ impl PricingDatabase {
         0.0
     }
 
+    /// Calculate cost for a provider/model pair and token usage.
+    ///
+    /// Provider dispatch should use this method instead of `calculate` so a
+    /// same-named model on another provider does not accidentally supply prices.
+    pub fn calculate_for_provider(&self, provider: &str, model: &str, usage: &Usage) -> f64 {
+        if let Some(pricing) = self.models.get(model)
+            && pricing_matches_provider(model, pricing, provider)
+        {
+            return self.calculate_with_pricing(pricing, usage);
+        }
+
+        for (key, pricing) in &self.models {
+            if pricing_matches_provider(key, pricing, provider) && model_matches_key(model, key) {
+                return self.calculate_with_pricing(pricing, usage);
+            }
+        }
+
+        0.0
+    }
+
     fn calculate_with_pricing(&self, pricing: &ModelPricing, usage: &Usage) -> f64 {
         let mut cost = 0.0;
 
@@ -201,6 +221,18 @@ impl PricingDatabase {
             })
             .unwrap_or(false)
     }
+}
+
+fn pricing_matches_provider(model_key: &str, pricing: &ModelPricing, provider: &str) -> bool {
+    let provider = provider.to_ascii_lowercase();
+    let pricing_provider = pricing.litellm_provider.to_ascii_lowercase();
+    let model_key = model_key.to_ascii_lowercase();
+
+    pricing_provider == provider || model_key.starts_with(&format!("{provider}/"))
+}
+
+fn model_matches_key(model: &str, key: &str) -> bool {
+    model == key || model.contains(key) || key.contains(model)
 }
 
 fn extra_f64(pricing: &ModelPricing, key: &str) -> f64 {
@@ -393,6 +425,27 @@ mod tests {
 
         let cost = db.calculate("claude-3-opus", &usage);
         assert!(cost > 0.0);
+    }
+
+    #[test]
+    fn calculate_for_provider_uses_matching_provider_rates() {
+        let db = PricingDatabase::default();
+        let usage = Usage {
+            prompt_tokens: 1000,
+            completion_tokens: 500,
+            total_tokens: 1500,
+            reasoning_tokens: None,
+        };
+
+        assert_eq!(
+            db.calculate_for_provider("openai", "gpt-4", &usage),
+            1000.0 * 0.00003 + 500.0 * 0.00006
+        );
+        assert_eq!(db.calculate_for_provider("anthropic", "gpt-4", &usage), 0.0);
+        assert_eq!(
+            db.calculate_for_provider("openai", "claude-3-opus", &usage),
+            0.0
+        );
     }
 
     #[test]

@@ -116,6 +116,10 @@ impl LLMProvider for AnthropicProvider {
         "anthropic"
     }
 
+    fn error_provider_name(&self) -> &'static str {
+        "anthropic"
+    }
+
     fn capabilities(&self) -> &'static [ProviderCapability] {
         &[
             ProviderCapability::ChatCompletion,

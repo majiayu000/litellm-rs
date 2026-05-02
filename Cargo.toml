@@ -49,7 +49,7 @@ futures = "0.3"
 async-trait = "0.1"
 async-stream = "0.3"
 pin-project-lite = "0.2"
-paste = { package = "pastey", version = "0.2.2" }
+pastey = "0.2.2"
 
 # HTTP client
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart"], default-features = false }

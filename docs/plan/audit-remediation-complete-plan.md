@@ -821,7 +821,7 @@ Goal: close remaining medium issues after the main architecture is stable.
 
 ### Step F4 Provider/cost API cleanup sweep
 
-- status: `pending`
+- status: `completed`
 - Covers: M16, M17, M18, M19, M23, M24, M25, M29
 - Expected changes:
   - `src/core/providers/mod.rs`
@@ -1088,6 +1088,35 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
       - `cargo fmt --all -- --check` -> pass
       - `git diff --check` -> pass
       - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
+  - Step F4 provider/cost API cleanup sweep: `completed`
+    - Modified files:
+      - `Cargo.toml`
+      - `src/core/mcp/config.rs`
+      - `src/core/mcp/mod.rs`
+      - `src/core/mcp/permissions.rs`
+      - `src/core/pricing.rs`
+      - `src/core/providers/mod.rs`
+      - `src/core/providers/openai_like/provider.rs`
+      - `src/core/providers/unified_provider.rs`
+      - `src/core/providers/macros/MACROS.md`
+      - `src/core/providers/macros/mod.rs`
+      - `src/core/traits/provider/llm_provider/trait_definition.rs`
+      - `src/lib.rs`
+    - Main changes:
+      - Removed the OpenAI-like provider-name leak by changing `LLMProvider::name()` to borrow from `self`; default error constructors use a separate static `error_provider_name()` until `ProviderError` can be made fully owned.
+      - Added provider-aware `PricingDatabase::calculate_for_provider()` and routed `Provider::calculate_cost()` through it so a model on one provider does not borrow another provider's rate.
+      - Renamed MCP public concepts to `McpAuthType` and `McpPermissionLevel`, keeping hidden compatibility aliases for the old unprefixed names.
+      - Dropped the `paste = { package = "pastey" }` rename and switched macro code to `::pastey::paste!`.
+      - Added a curated crate `prelude` and hid broad lower-level root re-exports from generated docs without removing compatibility.
+      - Documented provider macro status in `src/core/providers/macros/MACROS.md`; active hook macros are kept, compatibility-only exports are documented as legacy.
+      - Verified M16/M29 were already closed by earlier steps: the stale `providers::ModelPricing` struct is gone, and cache keys are SHA-256/versioned via the C20 key policy.
+    - Execute tests:
+      - `cargo test providers` -> pass (`901` lib-filtered tests, `9` integration-filtered tests)
+      - `cargo test mcp` -> pass (`138` lib-filtered tests)
+      - `cargo test cache` -> pass (`299` lib-filtered tests)
+      - `cargo test calculate_for_provider` -> pass (`1` lib-filtered test)
+      - `cargo check --all-features` -> pass
+      - `cargo fmt --all -- --check` -> pass
   - Step E8 SDK router convergence: `completed`
     - Modified files:
       - `src/core/router/selection.rs`

@@ -196,6 +196,10 @@ impl LLMProvider for CloudflareProvider {
         "cloudflare"
     }
 
+    fn error_provider_name(&self) -> &'static str {
+        "cloudflare"
+    }
+
     fn capabilities(&self) -> &'static [ProviderCapability] {
         CLOUDFLARE_CAPABILITIES
     }

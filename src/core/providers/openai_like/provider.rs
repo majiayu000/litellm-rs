@@ -40,20 +40,8 @@ pub struct OpenAILikeProvider {
     config: OpenAILikeConfig,
     /// Model registry
     model_registry: &'static OpenAILikeModelRegistry,
-    /// Interned provider name for `&'static str` return in `name()`
-    provider_name: &'static str,
-}
-
-/// Intern a provider name as `&'static str`.
-///
-/// Returns the pre-existing constant for the default name to avoid allocation,
-/// and leaks the string for custom names. Providers are long-lived singletons,
-/// so the small allocation is acceptable.
-fn intern_provider_name(name: &str) -> &'static str {
-    if name == PROVIDER_NAME {
-        return PROVIDER_NAME;
-    }
-    Box::leak(name.to_string().into_boxed_str())
+    /// Provider name returned by the LLM provider trait.
+    provider_name: String,
 }
 
 impl OpenAILikeProvider {
@@ -69,7 +57,7 @@ impl OpenAILikeProvider {
                 .map_err(|e| OpenAILikeError::network(PROVIDER_NAME, e.to_string()))?,
         );
         let model_registry = get_openai_like_registry();
-        let provider_name = intern_provider_name(&config.provider_name);
+        let provider_name = config.provider_name.clone();
 
         Ok(Self {
             pool_manager,
@@ -438,8 +426,12 @@ where
 }
 
 impl LLMProvider for OpenAILikeProvider {
-    fn name(&self) -> &'static str {
-        self.provider_name
+    fn name(&self) -> &str {
+        &self.provider_name
+    }
+
+    fn error_provider_name(&self) -> &'static str {
+        PROVIDER_NAME
     }
 
     fn capabilities(&self) -> &'static [ProviderCapability] {
@@ -740,18 +732,6 @@ mod tests {
             .with_skip_api_key(true);
         let provider = OpenAILikeProvider::new(config).await.unwrap();
         assert_eq!(provider.name(), "deepseek");
-    }
-
-    #[test]
-    fn test_intern_provider_name_default() {
-        let name = intern_provider_name("openai_like");
-        assert_eq!(name, PROVIDER_NAME);
-    }
-
-    #[test]
-    fn test_intern_provider_name_custom() {
-        let name = intern_provider_name("xai");
-        assert_eq!(name, "xai");
     }
 
     /// OR_SITE_URL → HTTP-Referer and OR_APP_NAME → X-Title are injected via

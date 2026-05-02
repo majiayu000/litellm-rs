@@ -340,6 +340,10 @@ impl LLMProvider for OpenAIProvider {
         "openai"
     }
 
+    fn error_provider_name(&self) -> &'static str {
+        "openai"
+    }
+
     fn capabilities(&self) -> &'static [ProviderCapability] {
         static CAPABILITIES: &[ProviderCapability] = &[
             ProviderCapability::ChatCompletion,

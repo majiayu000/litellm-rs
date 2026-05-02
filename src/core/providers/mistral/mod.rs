@@ -467,6 +467,10 @@ impl LLMProvider for MistralProvider {
         "mistral"
     }
 
+    fn error_provider_name(&self) -> &'static str {
+        "mistral"
+    }
+
     fn capabilities(&self) -> &'static [ProviderCapability] {
         MISTRAL_CAPABILITIES
     }

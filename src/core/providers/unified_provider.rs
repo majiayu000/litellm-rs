@@ -751,7 +751,7 @@ impl ProviderError {
 #[macro_export]
 macro_rules! define_provider_error_helpers {
     ($provider:expr, $prefix:ident) => {
-        ::paste::paste! {
+        ::pastey::paste! {
             /// Create configuration error
             pub fn [<$prefix _config_error>](msg: impl Into<String>) -> $crate::core::providers::unified_provider::ProviderError {
                 $crate::core::providers::unified_provider::ProviderError::configuration($provider, msg.into())
@@ -817,7 +817,7 @@ macro_rules! define_provider_error_helpers {
 #[macro_export]
 macro_rules! impl_provider_error_helpers {
     ($provider:expr, $prefix:ident) => {
-        ::paste::paste! {
+        ::pastey::paste! {
             impl $crate::core::providers::unified_provider::ProviderError {
                 /// Create authentication error
                 pub fn [<$prefix _authentication>](message: impl Into<String>) -> Self {
@@ -934,7 +934,7 @@ pub fn parse_error_message_from_body(response_body: &str) -> Option<String> {
 #[macro_export]
 macro_rules! define_standard_error_mapper {
     ($provider:expr, $name:ident) => {
-        ::paste::paste! {
+        ::pastey::paste! {
             /// Error mapper for the provider, using the standard HTTP status code mapping.
             #[derive(Debug)]
             pub struct [<$name ErrorMapper>];
@@ -988,7 +988,7 @@ pub fn extended_http_error_mapper(
 #[macro_export]
 macro_rules! define_extended_error_mapper {
     ($provider:expr, $name:ident) => {
-        ::paste::paste! {
+        ::pastey::paste! {
             /// Error mapper for the provider, using the extended HTTP status code mapping.
             #[derive(Debug)]
             pub struct [<$name ErrorMapper>];
