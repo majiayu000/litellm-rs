@@ -196,6 +196,14 @@ impl From<McpError> for GatewayError {
             McpError::ServerAlreadyExists { server_name } => {
                 GatewayError::Conflict(format!("MCP server already registered: {}", server_name))
             }
+            McpError::ToolDefinitionChanged {
+                server_name,
+                expected_hash,
+                actual_hash,
+            } => GatewayError::Conflict(format!(
+                "MCP tool definitions changed for server '{}': expected hash {}, got {}",
+                server_name, expected_hash, actual_hash
+            )),
             McpError::InvalidUrl { url, message } => {
                 GatewayError::BadRequest(format!("Invalid MCP server URL '{}': {}", url, message))
             }

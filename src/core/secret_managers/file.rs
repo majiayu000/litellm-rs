@@ -3,7 +3,7 @@
 //! Reads secrets from files on disk. Useful for development and Kubernetes secrets.
 
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 use tracing::debug;
 
@@ -63,6 +63,24 @@ impl FileSecretManager {
         self.base_path.join(filename)
     }
 
+    fn validate_secret_name(&self, name: &str) -> SecretResult<()> {
+        let path = Path::new(name);
+        if name.is_empty()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::CurDir
+                        | Component::ParentDir
+                        | Component::RootDir
+                        | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(SecretError::access_denied(name));
+        }
+        Ok(())
+    }
+
     /// Validate that a path is within the base directory (prevent path traversal)
     fn validate_path(&self, path: &Path) -> SecretResult<()> {
         let canonical_base = self
@@ -114,15 +132,19 @@ impl SecretManager for FileSecretManager {
     }
 
     async fn read_secret(&self, name: &str) -> SecretResult<Option<String>> {
+        self.validate_secret_name(name)?;
         let path = self.get_secret_path(name);
 
-        // Check if file exists first
-        if !path.exists() {
-            debug!("Secret file not found: {}", path.display());
+        if !self.base_path.exists() {
             return Ok(None);
         }
 
         self.validate_path(&path)?;
+
+        if !path.exists() {
+            debug!("Secret file not found: {}", path.display());
+            return Ok(None);
+        }
 
         match fs::read_to_string(&path).await {
             Ok(content) => {
@@ -142,6 +164,7 @@ impl SecretManager for FileSecretManager {
     }
 
     async fn write_secret(&self, name: &str, value: &str) -> SecretResult<()> {
+        self.validate_secret_name(name)?;
         let path = self.get_secret_path(name);
 
         // Ensure base directory exists
@@ -166,13 +189,18 @@ impl SecretManager for FileSecretManager {
     }
 
     async fn delete_secret(&self, name: &str) -> SecretResult<()> {
+        self.validate_secret_name(name)?;
         let path = self.get_secret_path(name);
 
-        if !path.exists() {
+        if !self.base_path.exists() {
             return Ok(());
         }
 
         self.validate_path(&path)?;
+
+        if !path.exists() {
+            return Ok(());
+        }
 
         fs::remove_file(&path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
@@ -402,9 +430,26 @@ mod tests {
         let (_temp_dir, manager) = setup().await;
 
         let result = manager.read_secret("../../../etc/passwd").await;
-        // Should either return None (file not found) or error (path traversal)
-        // The exact behavior depends on whether the path exists
-        assert!(result.is_ok() || result.is_err());
+        assert!(matches!(result, Err(SecretError::AccessDenied { .. })));
+
+        let result = manager
+            .read_secret("../../../definitely-not-a-secret")
+            .await;
+        assert!(matches!(result, Err(SecretError::AccessDenied { .. })));
+
+        let result = manager.read_secret(".").await;
+        assert!(matches!(result, Err(SecretError::AccessDenied { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_missing_base_path_returns_none_after_name_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing_base = temp_dir.path().join("missing");
+        let manager = FileSecretManager::new(missing_base);
+
+        assert_eq!(manager.read_secret("nonexistent").await.unwrap(), None);
+        let traversal = manager.read_secret("../outside").await;
+        assert!(matches!(traversal, Err(SecretError::AccessDenied { .. })));
     }
 
     #[tokio::test]

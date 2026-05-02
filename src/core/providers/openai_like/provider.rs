@@ -370,7 +370,7 @@ impl OpenAILikeProvider {
             500..=599 => {
                 OpenAILikeError::openai_like_unavailable(format!("Server error: {}", status))
             }
-            _ => OpenAILikeError::openai_like_api_error(status, body.to_string()),
+            _ => OpenAILikeError::openai_like_api_error(status, sanitized_upstream_error(status)),
         }
     }
 
@@ -383,6 +383,13 @@ impl OpenAILikeProvider {
     pub fn config(&self) -> &OpenAILikeConfig {
         &self.config
     }
+}
+
+fn sanitized_upstream_error(status: u16) -> String {
+    format!(
+        "Upstream OpenAI-compatible provider returned HTTP {}",
+        status
+    )
 }
 
 /// Error mapper for OpenAI-like provider
@@ -403,7 +410,7 @@ where
             401 => E::authentication_failed("Authentication failed"),
             429 => E::rate_limited(None),
             404 => E::not_supported("Resource not found"),
-            _ => E::network_error(&format!("HTTP error {}: {}", status_code, response_body)),
+            _ => E::network_error(&sanitized_upstream_error(status_code)),
         }
     }
 
@@ -662,6 +669,51 @@ mod tests {
         let err = OpenAILikeError::openai_like_rate_limit(Some(60));
         assert!(err.is_retryable());
         assert_eq!(err.retry_delay(), Some(60));
+    }
+
+    #[tokio::test]
+    async fn test_non_json_upstream_error_body_is_not_forwarded() {
+        let provider = OpenAILikeProvider::with_api_base("http://localhost:8000/v1")
+            .await
+            .unwrap();
+        let err = provider.map_error_response(
+            418,
+            "trace_id=abc secret=sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+        );
+
+        match err {
+            ProviderError::ApiError {
+                status, message, ..
+            } => {
+                assert_eq!(status, 418);
+                assert_eq!(
+                    message,
+                    "Upstream OpenAI-compatible provider returned HTTP 418"
+                );
+                assert!(!message.contains("sk-ant"));
+            }
+            other => panic!("expected api error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_error_mapper_non_json_body_is_not_forwarded() {
+        let mapper = OpenAILikeErrorMapper;
+        let err: ProviderError = mapper.map_http_error(
+            502,
+            "upstream panic included Authorization: Bearer eyJsecret.token.value",
+        );
+
+        match err {
+            ProviderError::Network { message, .. } => {
+                assert_eq!(
+                    message,
+                    "Upstream OpenAI-compatible provider returned HTTP 502"
+                );
+                assert!(!message.contains("Bearer"));
+            }
+            other => panic!("expected network error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

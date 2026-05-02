@@ -186,6 +186,7 @@ impl JsonRpcError {
             McpError::ConfigurationError { .. } => -32602,
             McpError::ToolExecutionError { .. } | McpError::SerializationError { .. } => -32603,
             McpError::ServerAlreadyExists { .. } => -32009,
+            McpError::ToolDefinitionChanged { .. } => -32009,
             McpError::ValidationError { .. } => -32602,
         };
 

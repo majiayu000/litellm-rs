@@ -7,6 +7,7 @@ use crate::utils::data::validation::DataValidator;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 use super::models::{ChangePasswordRequest, ForgotPasswordRequest, ResetPasswordRequest};
@@ -59,6 +60,21 @@ fn extract_client_ip(req: &HttpRequest, trusted_proxies: &[String]) -> String {
 
 /// Counter for probabilistic cleanup of rate limiter entries
 static PASSWORD_RESET_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+const PASSWORD_RESET_MIN_RESPONSE_TIME: Duration = Duration::from_millis(250);
+
+fn password_reset_padding(elapsed: Duration) -> Option<Duration> {
+    if elapsed < PASSWORD_RESET_MIN_RESPONSE_TIME {
+        Some(PASSWORD_RESET_MIN_RESPONSE_TIME - elapsed)
+    } else {
+        None
+    }
+}
+
+async fn enforce_password_reset_min_response_time(started_at: Instant) {
+    if let Some(delay) = password_reset_padding(started_at.elapsed()) {
+        tokio::time::sleep(delay).await;
+    }
+}
 
 /// Forgot password endpoint
 pub async fn forgot_password(
@@ -66,6 +82,7 @@ pub async fn forgot_password(
     state: web::Data<AppState>,
     request: web::Json<ForgotPasswordRequest>,
 ) -> ActixResult<HttpResponse> {
+    let started_at = Instant::now();
     let cfg = state.config.load();
     let client_ip = extract_client_ip(&req, &cfg.gateway.server.trusted_proxies);
 
@@ -100,12 +117,14 @@ pub async fn forgot_password(
             // Record as failure to count against the rate limit regardless of outcome,
             // preventing enumeration attacks
             limiter.record_failure(&client_ip);
+            enforce_password_reset_min_response_time(started_at).await;
             Ok(HttpResponse::Ok().json(ApiResponse::success(())))
         }
         Err(e) => {
             // Don't reveal if email exists or not
             warn!("Password reset request failed: {}", e);
             limiter.record_failure(&client_ip);
+            enforce_password_reset_min_response_time(started_at).await;
             Ok(HttpResponse::Ok().json(ApiResponse::success(())))
         }
     }
@@ -204,5 +223,20 @@ pub async fn change_password(
             warn!("Password change failed: {}", e);
             Ok(HttpResponse::Ok().json(ApiResponse::<()>::error_for_type(e.to_string())))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_reset_padding_equalizes_fast_paths() {
+        assert_eq!(
+            password_reset_padding(Duration::from_millis(10)),
+            Some(Duration::from_millis(240))
+        );
+        assert_eq!(password_reset_padding(Duration::from_millis(250)), None);
+        assert_eq!(password_reset_padding(Duration::from_millis(500)), None);
     }
 }

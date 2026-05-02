@@ -191,7 +191,9 @@ impl CanonicalError for McpError {
             McpError::Timeout { .. } => ErrorCode::Timeout,
             McpError::ConfigurationError { .. } => ErrorCode::Configuration,
             McpError::SerializationError { .. } => ErrorCode::Parsing,
-            McpError::ServerAlreadyExists { .. } => ErrorCode::Conflict,
+            McpError::ServerAlreadyExists { .. } | McpError::ToolDefinitionChanged { .. } => {
+                ErrorCode::Conflict
+            }
             McpError::RateLimitExceeded { .. } => ErrorCode::RateLimited,
             McpError::ValidationError { .. } => ErrorCode::InvalidRequest,
         }

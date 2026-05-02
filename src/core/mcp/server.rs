@@ -15,6 +15,8 @@ use super::protocol::{
 use super::tools::{Tool, ToolCall, ToolList, ToolResult};
 use super::transport::Transport;
 use crate::utils::net::http::get_client_with_timeout;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// MCP Server connection state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +50,9 @@ pub struct McpServer {
 
     /// Cached tools list
     tools_cache: RwLock<Option<Vec<Tool>>>,
+
+    /// Stable hash of the first trusted tool definition set
+    tools_baseline_hash: RwLock<Option<String>>,
 
     /// Server capabilities (from initialize response)
     capabilities: RwLock<Option<McpCapabilities>>,
@@ -97,6 +102,7 @@ impl McpServer {
             http_client,
             custom_headers: headers,
             tools_cache: RwLock::new(None),
+            tools_baseline_hash: RwLock::new(None),
             capabilities: RwLock::new(None),
             request_id: std::sync::atomic::AtomicU64::new(1),
         })
@@ -198,8 +204,7 @@ impl McpServer {
         if let Some(result) = response.result {
             let list: ToolList = serde_json::from_value(result)?;
 
-            // Cache the tools
-            *self.tools_cache.write().await = Some(list.tools.clone());
+            self.cache_tools_with_baseline(&list).await?;
 
             Ok(list)
         } else if let Some(error) = response.error {
@@ -354,6 +359,26 @@ impl McpServer {
         *self.tools_cache.write().await = None;
     }
 
+    async fn cache_tools_with_baseline(&self, list: &ToolList) -> McpResult<()> {
+        let hash = stable_tools_hash(&list.tools)?;
+        let mut baseline = self.tools_baseline_hash.write().await;
+
+        if let Some(expected_hash) = baseline.as_ref() {
+            if expected_hash != &hash {
+                return Err(McpError::ToolDefinitionChanged {
+                    server_name: self.config.name.clone(),
+                    expected_hash: expected_hash.clone(),
+                    actual_hash: hash,
+                });
+            }
+        } else {
+            *baseline = Some(hash);
+        }
+
+        *self.tools_cache.write().await = Some(list.tools.clone());
+        Ok(())
+    }
+
     /// Get server capabilities
     pub async fn capabilities(&self) -> Option<McpCapabilities> {
         self.capabilities.read().await.clone()
@@ -362,6 +387,58 @@ impl McpServer {
 
 /// Thread-safe MCP Server handle
 pub type McpServerHandle = Arc<McpServer>;
+
+fn stable_tools_hash(tools: &[Tool]) -> McpResult<String> {
+    let mut values = tools
+        .iter()
+        .map(|tool| {
+            serde_json::to_value(tool).map_err(|e| McpError::SerializationError {
+                message: e.to_string(),
+            })
+        })
+        .collect::<McpResult<Vec<_>>>()?;
+
+    for value in &mut values {
+        canonicalize_json(value);
+    }
+    values.sort_by(|left, right| {
+        tool_sort_key(left)
+            .cmp(&tool_sort_key(right))
+            .then_with(|| left.to_string().cmp(&right.to_string()))
+    });
+
+    let canonical = serde_json::to_string(&values).map_err(|e| McpError::SerializationError {
+        message: e.to_string(),
+    })?;
+    Ok(hex::encode(Sha256::digest(canonical.as_bytes())))
+}
+
+fn tool_sort_key(value: &Value) -> String {
+    value
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn canonicalize_json(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let mut entries = std::mem::take(map).into_iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            for (key, mut child) in entries {
+                canonicalize_json(&mut child);
+                map.insert(key, child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                canonicalize_json(item);
+            }
+        }
+        _ => {}
+    }
+}
 
 /// MCP Server registry
 #[derive(Debug, Default)]
@@ -413,6 +490,7 @@ impl McpServerRegistry {
 mod tests {
     use super::*;
     use crate::core::mcp::config::AuthConfig;
+    use crate::core::mcp::tools::ToolInputSchema;
 
     #[test]
     fn test_server_state_variants() {
@@ -498,6 +576,69 @@ mod tests {
         let server = McpServer::new(config).unwrap();
 
         assert_eq!(server.state().await, ServerState::Disconnected);
+    }
+
+    #[test]
+    fn test_tools_hash_is_stable_across_ordering() {
+        let schema_a = ToolInputSchema::object()
+            .with_property("city", super::super::tools::PropertySchema::string(), true)
+            .with_property(
+                "units",
+                super::super::tools::PropertySchema::string(),
+                false,
+            );
+        let schema_b = ToolInputSchema::object()
+            .with_property(
+                "units",
+                super::super::tools::PropertySchema::string(),
+                false,
+            )
+            .with_property("city", super::super::tools::PropertySchema::string(), true);
+
+        let tools_a = vec![
+            Tool::new("search").with_description("Search docs"),
+            Tool::new("weather")
+                .with_description("Get weather")
+                .with_schema(schema_a),
+        ];
+        let tools_b = vec![
+            Tool::new("weather")
+                .with_description("Get weather")
+                .with_schema(schema_b),
+            Tool::new("search").with_description("Search docs"),
+        ];
+
+        assert_eq!(
+            stable_tools_hash(&tools_a).unwrap(),
+            stable_tools_hash(&tools_b).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tools_baseline_rejects_definition_change() {
+        let config = McpServerConfig::new("test", "https://example.com/mcp");
+        let server = McpServer::new(config).unwrap();
+        let initial = ToolList {
+            tools: vec![Tool::new("search").with_description("Search docs")],
+            next_cursor: None,
+        };
+        let changed = ToolList {
+            tools: vec![Tool::new("search").with_description("Read private files")],
+            next_cursor: None,
+        };
+
+        server.cache_tools_with_baseline(&initial).await.unwrap();
+        server.invalidate_cache().await;
+
+        let result = server.cache_tools_with_baseline(&changed).await;
+        assert!(matches!(
+            result,
+            Err(McpError::ToolDefinitionChanged {
+                server_name,
+                expected_hash: _,
+                actual_hash: _
+            }) if server_name == "test"
+        ));
     }
 
     #[test]

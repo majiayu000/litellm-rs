@@ -789,7 +789,7 @@ Goal: close remaining medium issues after the main architecture is stable.
 
 ### Step F2 Security/privacy hygiene sweep
 
-- status: `pending`
+- status: `completed`
 - Covers: M8, M9, M10, M11, M12
 - Expected changes:
   - `src/core/mcp/server.rs`
@@ -1023,6 +1023,38 @@ No parallel agents are launched by this plan. If the owner chooses to paralleliz
       - `cargo fmt --all -- --check` -> pass
       - `git diff --check` -> pass
       - `rg "streaming::providers|OpenAIStreaming|AnthropicStreaming|GenericStreaming" src tests` -> pass (no references)
+      - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
+  - Step F2 security/privacy hygiene sweep: `completed`
+    - Modified files:
+      - `src/core/mcp/error.rs`
+      - `src/core/mcp/protocol.rs`
+      - `src/core/mcp/server.rs`
+      - `src/core/providers/openai_like/provider.rs`
+      - `src/core/secret_managers/file.rs`
+      - `src/server/routes/auth/password.rs`
+      - `src/utils/error/canonical.rs`
+      - `src/utils/error/gateway_error/conversions.rs`
+    - Main changes:
+      - Added stable MCP tool definition hash baselines so changed tool descriptions or schemas are rejected after cache refresh instead of silently replacing trusted tool metadata.
+      - Reused existing audit redaction coverage for common Bearer/JWT/AWS/Anthropic/gateway key shapes and reconfirmed it through the audit test filter.
+      - Added minimum forgot-password response timing on both success and hidden-not-found paths while preserving the same public OK response.
+      - Validated file secret names before path existence checks so traversal attempts are denied consistently for existing and non-existing targets.
+      - Stopped forwarding raw non-JSON OpenAI-compatible upstream error bodies into provider errors.
+    - Execute tests:
+      - `cargo test mcp` -> pass (`138` lib-filtered tests)
+      - `cargo test audit` -> pass (`55` lib-filtered tests)
+      - `cargo test auth` -> pass (`820` lib-filtered tests, `8` integration-filtered tests)
+      - `cargo test secret_managers` -> pass (`30` lib-filtered tests)
+      - `cargo test openai_like` -> pass (`48` lib-filtered tests)
+      - `cargo test --all-features mcp` -> pass (`141` lib-filtered tests)
+      - `cargo test --all-features audit` -> pass (`55` lib-filtered tests)
+      - `cargo test --all-features auth` -> pass (`820` lib-filtered tests, `8` integration-filtered tests)
+      - `cargo test --all-features secret_managers` -> pass (`35` lib-filtered tests)
+      - `cargo test --all-features openai_like` -> pass (`48` lib-filtered tests)
+      - `cargo test server::routes::auth::password::tests::password_reset_padding_equalizes_fast_paths` -> pass
+      - `cargo check --all-features` -> pass
+      - `cargo fmt --all -- --check` -> pass
+      - `git diff --check` -> pass
       - `cargo clippy --lib --tests --bins --all-features -- -D warnings --force-warn clippy::collapsible-if` -> pass (`collapsible_if` remains warning by command design)
   - Step E8 SDK router convergence: `completed`
     - Modified files:

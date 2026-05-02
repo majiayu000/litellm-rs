@@ -83,6 +83,13 @@ pub enum McpError {
         tool_name: String,
         errors: Vec<String>,
     },
+
+    /// Tool definitions changed after the initial trust baseline
+    ToolDefinitionChanged {
+        server_name: String,
+        expected_hash: String,
+        actual_hash: String,
+    },
 }
 
 impl fmt::Display for McpError {
@@ -205,6 +212,17 @@ impl fmt::Display for McpError {
                     tool_name,
                     server_name,
                     errors.join("; ")
+                )
+            }
+            McpError::ToolDefinitionChanged {
+                server_name,
+                expected_hash,
+                actual_hash,
+            } => {
+                write!(
+                    f,
+                    "MCP tool definitions changed for server '{}': expected hash {}, got {}",
+                    server_name, expected_hash, actual_hash
                 )
             }
         }
