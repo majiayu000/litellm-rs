@@ -50,14 +50,12 @@ pub struct LiteLLMModelInfo {
 /// Compatibility alias for callers that still import provider-base pricing.
 pub type ModelPricing = LiteLLMModelInfo;
 
-/// Usage information for simple pricing database calculations.
-#[derive(Debug, Clone)]
-pub struct Usage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-    pub reasoning_tokens: Option<u32>,
-}
+// Usage is re-exported from the canonical types tree
+// (core::types::responses::Usage). The richer canonical shape carries
+// nested CompletionTokensDetails (reasoning_tokens lives there now)
+// plus PromptTokensDetails and ThinkingUsage, which the per-request
+// cost path can consume in future without further breaking changes.
+pub use crate::core::types::responses::Usage;
 
 /// Pricing database backed by the shared LiteLLM model info shape.
 #[derive(Debug, Clone)]
@@ -143,7 +141,11 @@ impl PricingDatabase {
         cost += usage.prompt_tokens as f64 * pricing.input_cost_per_token.unwrap_or(0.0);
         cost += usage.completion_tokens as f64 * pricing.output_cost_per_token.unwrap_or(0.0);
 
-        if let Some(reasoning_tokens) = usage.reasoning_tokens {
+        let reasoning_tokens = usage
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|d| d.reasoning_tokens);
+        if let Some(reasoning_tokens) = reasoning_tokens {
             cost += reasoning_tokens as f64 * extra_f64(pricing, "output_cost_per_reasoning_token");
         }
 
@@ -337,13 +339,7 @@ pub fn get_pricing_db() -> &'static PricingDatabase {
 
 /// Quick cost calculation for compatibility callers.
 pub fn calculate_cost(model: &str, prompt_tokens: u32, completion_tokens: u32) -> f64 {
-    let usage = Usage {
-        prompt_tokens,
-        completion_tokens,
-        total_tokens: prompt_tokens + completion_tokens,
-        reasoning_tokens: None,
-    };
-
+    let usage = Usage::new(prompt_tokens, completion_tokens);
     GLOBAL_PRICING_DB.calculate(model, &usage)
 }
 
@@ -412,12 +408,7 @@ mod tests {
     fn test_default_pricing() {
         let db = PricingDatabase::default();
 
-        let usage = Usage {
-            prompt_tokens: 1000,
-            completion_tokens: 500,
-            total_tokens: 1500,
-            reasoning_tokens: None,
-        };
+        let usage = Usage::new(1000, 500);
 
         let cost = db.calculate("gpt-4", &usage);
         assert!(cost > 0.0);
@@ -430,12 +421,7 @@ mod tests {
     #[test]
     fn calculate_for_provider_uses_matching_provider_rates() {
         let db = PricingDatabase::default();
-        let usage = Usage {
-            prompt_tokens: 1000,
-            completion_tokens: 500,
-            total_tokens: 1500,
-            reasoning_tokens: None,
-        };
+        let usage = Usage::new(1000, 500);
 
         assert_eq!(
             db.calculate_for_provider("openai", "gpt-4", &usage),
@@ -472,17 +458,7 @@ mod tests {
         let db = PricingDatabase::from_default_source().unwrap();
 
         assert!(db.get_model_info("gpt-4o").is_some());
-        assert!(
-            db.calculate(
-                "gpt-4o",
-                &Usage {
-                    prompt_tokens: 1000,
-                    completion_tokens: 500,
-                    total_tokens: 1500,
-                    reasoning_tokens: None,
-                }
-            ) > 0.0
-        );
+        assert!(db.calculate("gpt-4o", &Usage::new(1000, 500)) > 0.0);
     }
 
     #[test]

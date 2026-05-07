@@ -185,12 +185,7 @@ crate::define_pooled_http_provider_with_hooks!(
             return Ok(input_cost + output_cost);
         }
 
-        let usage = crate::core::pricing::Usage {
-            prompt_tokens: input_tokens,
-            completion_tokens: output_tokens,
-            total_tokens: input_tokens + output_tokens,
-            reasoning_tokens: None,
-        };
+        let usage = crate::core::pricing::Usage::new(input_tokens, output_tokens);
 
         Ok(get_pricing_db().calculate(model, &usage))
     },

@@ -568,12 +568,7 @@ impl LLMProvider for LangGraphProvider {
     ) -> Result<f64, ProviderError> {
         // LangGraph itself doesn't have fixed costs - costs depend on the underlying LLM
         // Use the pricing database for estimation
-        let usage = crate::core::pricing::Usage {
-            prompt_tokens: input_tokens,
-            completion_tokens: output_tokens,
-            total_tokens: input_tokens + output_tokens,
-            reasoning_tokens: None,
-        };
+        let usage = crate::core::pricing::Usage::new(input_tokens, output_tokens);
 
         Ok(get_pricing_db().calculate(model, &usage))
     }

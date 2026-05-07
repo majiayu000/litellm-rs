@@ -519,12 +519,7 @@ impl LLMProvider for RunwayMLProvider {
     ) -> Result<f64, ProviderError> {
         // Runway pricing is per-second of video, not per token
         // Use pricing database for estimation if available
-        let usage = crate::core::pricing::Usage {
-            prompt_tokens: input_tokens,
-            completion_tokens: output_tokens,
-            total_tokens: input_tokens + output_tokens,
-            reasoning_tokens: None,
-        };
+        let usage = crate::core::pricing::Usage::new(input_tokens, output_tokens);
 
         Ok(get_pricing_db().calculate(model, &usage))
     }

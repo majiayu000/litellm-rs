@@ -669,12 +669,7 @@ impl LLMProvider for JinaProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        let usage = crate::core::pricing::Usage {
-            prompt_tokens: input_tokens,
-            completion_tokens: output_tokens,
-            total_tokens: input_tokens + output_tokens,
-            reasoning_tokens: None,
-        };
+        let usage = crate::core::pricing::Usage::new(input_tokens, output_tokens);
         Ok(get_pricing_db().calculate(model, &usage))
     }
 }
