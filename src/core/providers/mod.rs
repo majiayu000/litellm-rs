@@ -180,7 +180,6 @@ pub mod watsonx;
 pub mod macros; // Macros for reducing boilerplate
 pub mod shared; // Shared utilities for all providers // Compile-time capability verification
 pub mod thinking; // Thinking/reasoning provider trait (modular)
-pub mod transform; // Request/Response transformation engine // Request/Response context and metadata
 
 // Provider type enumeration (extracted from this module)
 pub mod provider_type;

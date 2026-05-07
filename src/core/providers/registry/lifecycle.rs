@@ -240,10 +240,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "topaz",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    internal(
-        "transform",
-        "shared request/response transformation infrastructure",
-    ),
     stub(
         "triton",
         "specialized provider module; not wired through the LLM factory yet",
