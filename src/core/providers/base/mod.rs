@@ -5,6 +5,7 @@
 pub mod config;
 pub mod connection_pool;
 pub mod http;
+pub mod model_entry;
 pub mod pricing;
 pub mod sse;
 
@@ -18,6 +19,7 @@ pub use http::{
     BaseHttpClient, HttpErrorMapper, OpenAIRequestTransformer, UrlBuilder, create_http_client,
     validate_chat_request_common,
 };
+pub use model_entry::ProviderModelEntry;
 pub use sse::{
     AnthropicTransformer, CohereTransformer, DatabricksTransformer, GeminiTransformer,
     OpenAICompatibleTransformer, SSEEvent, SSEEventType, SSETransformer, UnifiedSSEParser,

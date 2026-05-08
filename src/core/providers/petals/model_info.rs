@@ -11,18 +11,7 @@ pub enum PetalsModel {
     Llama2_70B,
 }
 
-#[derive(Debug, Clone)]
-pub struct ModelInfo {
-    pub model_id: &'static str,
-    pub display_name: &'static str,
-    pub max_context_length: u32,
-    pub max_output_length: u32,
-    pub supports_tools: bool,
-    pub supports_multimodal: bool,
-    pub input_cost_per_million: f64,
-    pub output_cost_per_million: f64,
-}
-
+pub use crate::core::providers::base::ProviderModelEntry as ModelInfo;
 static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new(|| {
     let mut configs = HashMap::new();
 
