@@ -116,25 +116,8 @@ impl From<crate::core::types::tools::ToolCall> for ToolCall {
     }
 }
 
-/// Function call delta (legacy)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionCallDelta {
-    /// Function name
-    pub name: Option<String>,
-    /// Function arguments delta
-    pub arguments: Option<String>,
-}
-
-/// Tool call delta
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallDelta {
-    /// Tool call index
-    pub index: u32,
-    /// Tool call ID
-    pub id: Option<String>,
-    /// Tool type
-    #[serde(rename = "type")]
-    pub tool_type: Option<String>,
-    /// Function call delta
-    pub function: Option<FunctionCallDelta>,
-}
+// FunctionCallDelta and ToolCallDelta are re-exported from the canonical
+// types tree (core::types::responses::*). The duplicates that lived here
+// had field-compatible layouts and were a downstream of the
+// parallel-type-tree schism (#519, audit A-2/A-5).
+pub use crate::core::types::responses::{FunctionCallDelta, ToolCallDelta};

@@ -111,32 +111,10 @@ pub struct ChatCompletionDelta {
     pub function_call: Option<FunctionCallDelta>,
 }
 
-/// Tool call delta for streaming function calls
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ToolCallDelta {
-    /// Index of the tool call
-    pub index: u32,
-    /// Tool call ID (only in first chunk)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// Type of tool call (only in first chunk)
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub tool_type: Option<String>,
-    /// Function call details
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub function: Option<FunctionCallDelta>,
-}
-
-/// Function call delta for streaming
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FunctionCallDelta {
-    /// Function name (only in first chunk)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Incremental function arguments
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arguments: Option<String>,
-}
+// ToolCallDelta and FunctionCallDelta are re-exported from the canonical
+// types tree (core::types::responses::*). Duplicates eliminated as part
+// of the parallel-type-tree collapse tracked in #519.
+pub use crate::core::types::responses::{FunctionCallDelta, ToolCallDelta};
 
 #[cfg(test)]
 mod tests {
