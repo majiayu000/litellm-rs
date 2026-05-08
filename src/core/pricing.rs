@@ -50,12 +50,54 @@ pub struct LiteLLMModelInfo {
 /// Compatibility alias for callers that still import provider-base pricing.
 pub type ModelPricing = LiteLLMModelInfo;
 
-// Usage is re-exported from the canonical types tree
-// (core::types::responses::Usage). The richer canonical shape carries
-// nested CompletionTokensDetails (reasoning_tokens lives there now)
-// plus PromptTokensDetails and ThinkingUsage, which the per-request
-// cost path can consume in future without further breaking changes.
-pub use crate::core::types::responses::Usage;
+/// Usage information for simple pricing database calculations.
+///
+/// Kept as a stable public type so downstream library consumers can continue
+/// to construct `litellm_rs::core::pricing::Usage { prompt_tokens, ..., reasoning_tokens }`
+/// with struct-literal syntax. The richer
+/// [`crate::core::types::responses::Usage`] (with nested
+/// `PromptTokensDetails` / `CompletionTokensDetails` / `ThinkingUsage`) is
+/// the canonical shape used elsewhere; conversion helpers below bridge
+/// between the two when the per-request cost path needs the canonical
+/// metadata. See PR #519 architecture roadmap for the broader convergence.
+#[derive(Debug, Clone)]
+pub struct Usage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    pub reasoning_tokens: Option<u32>,
+}
+
+impl Usage {
+    /// Build a Usage from prompt + completion token counts.
+    ///
+    /// Auto-computes `total_tokens = prompt + completion` and leaves
+    /// `reasoning_tokens` unset. Mirrors the canonical
+    /// [`crate::core::types::responses::Usage::new`] signature so internal
+    /// pricing call sites can use the same constructor on either type.
+    pub fn new(prompt_tokens: u32, completion_tokens: u32) -> Self {
+        Self {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: prompt_tokens + completion_tokens,
+            reasoning_tokens: None,
+        }
+    }
+}
+
+impl From<&crate::core::types::responses::Usage> for Usage {
+    fn from(usage: &crate::core::types::responses::Usage) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+            reasoning_tokens: usage
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens),
+        }
+    }
+}
 
 /// Pricing database backed by the shared LiteLLM model info shape.
 #[derive(Debug, Clone)]
@@ -141,11 +183,7 @@ impl PricingDatabase {
         cost += usage.prompt_tokens as f64 * pricing.input_cost_per_token.unwrap_or(0.0);
         cost += usage.completion_tokens as f64 * pricing.output_cost_per_token.unwrap_or(0.0);
 
-        let reasoning_tokens = usage
-            .completion_tokens_details
-            .as_ref()
-            .and_then(|d| d.reasoning_tokens);
-        if let Some(reasoning_tokens) = reasoning_tokens {
+        if let Some(reasoning_tokens) = usage.reasoning_tokens {
             cost += reasoning_tokens as f64 * extra_f64(pricing, "output_cost_per_reasoning_token");
         }
 
