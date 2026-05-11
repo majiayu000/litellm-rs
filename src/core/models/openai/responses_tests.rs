@@ -681,15 +681,10 @@ fn test_model_list_response_serialize() {
 
 // ==================== Wire-shape Regression (PR #535) ====================
 //
-// Documents the intentional serialization change introduced when
-// core::models::openai::{Usage, PromptTokensDetails, CompletionTokensDetails}
-// was re-exported from core::types::responses::*. The canonical types skip
-// `None` Option fields via `#[serde(skip_serializing_if = "Option::is_none")]`;
-// the previous openai-models duplicates emitted some of those fields as
-// JSON `null`. The new serialization shape matches the actual OpenAI API,
-// which omits these fields rather than emitting `null`. Deserialization
-// remains symmetric: both old (null-bearing) and new (omitted) JSON forms
-// parse into the same Rust value.
+// core::models::openai re-exports these usage detail DTOs from
+// core::types::responses. Keep the previous OpenAI-compatible serialization
+// contract: nested token detail fields that existed in the old local DTOs
+// continue to serialize missing values as JSON null.
 
 #[test]
 fn test_prompt_tokens_details_deserialize_accepts_null_and_missing() {
@@ -720,7 +715,7 @@ fn test_completion_tokens_details_deserialize_accepts_null_and_missing() {
 }
 
 #[test]
-fn test_token_details_serialization_omits_none_fields() {
+fn test_token_details_serialization_preserves_openai_null_fields() {
     let details = PromptTokensDetails {
         cached_tokens: Some(20),
         cache_creation_tokens: None,
@@ -732,7 +727,7 @@ fn test_token_details_serialization_omits_none_fields() {
     let obj = json.as_object().expect("serializes as object");
     assert!(!obj.contains_key("cache_creation_tokens"));
     assert!(!obj.contains_key("cache_read_tokens"));
-    assert!(!obj.contains_key("audio_tokens"));
+    assert_eq!(obj.get("audio_tokens"), Some(&serde_json::Value::Null));
 
     let comp = CompletionTokensDetails {
         reasoning_tokens: Some(15),
@@ -744,5 +739,20 @@ fn test_token_details_serialization_omits_none_fields() {
         comp_obj.get("reasoning_tokens"),
         Some(&serde_json::json!(15))
     );
-    assert!(!comp_obj.contains_key("audio_tokens"));
+    assert_eq!(comp_obj.get("audio_tokens"), Some(&serde_json::Value::Null));
+}
+
+#[test]
+fn test_token_details_serialization_preserves_null_reasoning_tokens() {
+    let comp = CompletionTokensDetails {
+        reasoning_tokens: None,
+        audio_tokens: Some(4),
+    };
+    let comp_obj = serde_json::to_value(&comp).unwrap();
+    let comp_obj = comp_obj.as_object().unwrap();
+    assert_eq!(
+        comp_obj.get("reasoning_tokens"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(comp_obj.get("audio_tokens"), Some(&serde_json::json!(4)));
 }

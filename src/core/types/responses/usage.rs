@@ -69,7 +69,6 @@ impl Usage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptTokensDetails {
     /// Cached token count
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_tokens: Option<u32>,
 
     /// Tokens written into provider-side prompt cache
@@ -81,7 +80,6 @@ pub struct PromptTokensDetails {
     pub cache_read_tokens: Option<u32>,
 
     /// Audio token count
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_tokens: Option<u32>,
 }
 
@@ -89,11 +87,9 @@ pub struct PromptTokensDetails {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletionTokensDetails {
     /// Reasoning token count
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u32>,
 
     /// Audio token count
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_tokens: Option<u32>,
 }
 
