@@ -26,7 +26,7 @@ pub fn stable_digest_value(value: &Value) -> String {
 /// Convert a JSON value to canonical JSON by sorting object keys and removing
 /// fields that cannot affect model output identity.
 pub fn canonical_json_string(value: &Value) -> String {
-    let canonical = canonicalize_json_value(value, 0);
+    let canonical = canonicalize_json_value(value, &mut Vec::new());
     serde_json::to_string(&canonical).unwrap_or_else(|_| "null".to_string())
 }
 
@@ -62,28 +62,38 @@ pub fn versioned_key(prefix: &str, namespace: Option<&str>, digest: &str) -> Str
     }
 }
 
-fn should_exclude_field(depth: usize, field: &str) -> bool {
-    depth == 0 && is_non_deterministic_field(field)
+fn should_exclude_field(path: &[String], field: &str) -> bool {
+    if !is_non_deterministic_field(field) {
+        return false;
+    }
+
+    path.is_empty() || (path.len() == 1 && path[0] == "extra_body")
 }
 
-fn canonicalize_json_value(value: &Value, depth: usize) -> Value {
+fn canonicalize_json_value(value: &Value, path: &mut Vec<String>) -> Value {
     match value {
         Value::Object(map) => {
             let mut sorted = Map::new();
             for (key, value) in map {
-                if should_exclude_field(depth, key) {
+                if should_exclude_field(path, key) {
                     continue;
                 }
-                sorted.insert(key.clone(), canonicalize_json_value(value, depth + 1));
+                path.push(key.clone());
+                let canonical = canonicalize_json_value(value, path);
+                path.pop();
+                sorted.insert(key.clone(), canonical);
             }
             Value::Object(sorted)
         }
-        Value::Array(values) => Value::Array(
-            values
+        Value::Array(values) => {
+            path.push("[]".to_string());
+            let canonical = values
                 .iter()
-                .map(|value| canonicalize_json_value(value, depth + 1))
-                .collect(),
-        ),
+                .map(|value| canonicalize_json_value(value, path))
+                .collect();
+            path.pop();
+            Value::Array(canonical)
+        }
         _ => value.clone(),
     }
 }
@@ -175,6 +185,98 @@ mod tests {
             canonical_json_string(&string_id_schema),
             canonical_json_string(&integer_id_schema)
         );
+    }
+
+    #[test]
+    fn canonical_json_filters_flattened_extra_body_transport_fields() {
+        let without_request_id = canonical_json_string(&json!({
+            "extra_body": {
+                "provider_specific": "value"
+            }
+        }));
+        let with_request_id = canonical_json_string(&json!({
+            "extra_body": {
+                "provider_specific": "value",
+                "request_id": "abc"
+            }
+        }));
+
+        assert_eq!(without_request_id, with_request_id);
+    }
+
+    #[test]
+    fn canonical_json_preserves_nested_output_schema_transport_names() {
+        let canonical = canonical_json_string(&json!({
+            "response_format": {
+                "json_schema": {
+                    "schema": {
+                        "properties": {
+                            "timestamp": { "type": "string" },
+                            "request_id": { "type": "string" },
+                            "created_at": { "type": "string" },
+                            "updated_at": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        }));
+        let value: Value = serde_json::from_str(&canonical).unwrap();
+
+        assert_eq!(
+            value["response_format"]["json_schema"]["schema"]["properties"]["timestamp"]["type"],
+            "string"
+        );
+        assert_eq!(
+            value["response_format"]["json_schema"]["schema"]["properties"]["request_id"]["type"],
+            "string"
+        );
+        assert_eq!(
+            value["response_format"]["json_schema"]["schema"]["properties"]["created_at"]["type"],
+            "string"
+        );
+        assert_eq!(
+            value["response_format"]["json_schema"]["schema"]["properties"]["updated_at"]["type"],
+            "string"
+        );
+    }
+
+    #[test]
+    fn canonical_json_keeps_nested_timestamp_identity_distinct() {
+        let string_timestamp_schema = json!({
+            "response_format": {
+                "json_schema": {
+                    "schema": {
+                        "properties": {
+                            "timestamp": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        });
+        let integer_timestamp_schema = json!({
+            "response_format": {
+                "json_schema": {
+                    "schema": {
+                        "properties": {
+                            "timestamp": { "type": "integer" }
+                        }
+                    }
+                }
+            }
+        });
+
+        assert_ne!(
+            canonical_json_string(&string_timestamp_schema),
+            canonical_json_string(&integer_timestamp_schema)
+        );
+    }
+
+    #[test]
+    fn canonical_json_preserves_array_element_identity_fields() {
+        let id_a = json!([{ "id": "a" }]);
+        let id_b = json!([{ "id": "b" }]);
+
+        assert_ne!(canonical_json_string(&id_a), canonical_json_string(&id_b));
     }
 
     #[test]

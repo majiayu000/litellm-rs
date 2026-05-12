@@ -369,6 +369,25 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_chat_key_filters_volatile_extra_body_fields() {
+        let base = ChatCompletionRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![create_user_message("hi")],
+            ..Default::default()
+        };
+
+        let mut with_request_id = base.clone();
+        with_request_id
+            .extra_body
+            .insert("request_id".to_string(), serde_json::json!("req_123"));
+
+        assert_eq!(
+            generate_chat_key(&base),
+            generate_chat_key(&with_request_id)
+        );
+    }
+
+    #[test]
     fn test_generate_chat_key_includes_response_format_schema() {
         let base = ChatCompletionRequest {
             model: "gpt-4".to_string(),
@@ -446,6 +465,48 @@ mod tests {
         assert_ne!(
             generate_chat_key(&base),
             generate_chat_key(&changed_id_schema)
+        );
+    }
+
+    #[test]
+    fn test_generate_chat_key_preserves_response_format_timestamp_identity() {
+        let base = ChatCompletionRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![create_user_message("Return JSON")],
+            response_format: Some(ResponseFormat {
+                format_type: "json_schema".to_string(),
+                json_schema: Some(serde_json::json!({
+                    "name": "answer",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "timestamp": { "type": "string" }
+                        }
+                    }
+                })),
+                response_type: None,
+            }),
+            ..Default::default()
+        };
+
+        let mut changed_timestamp_schema = base.clone();
+        changed_timestamp_schema.response_format = Some(ResponseFormat {
+            format_type: "json_schema".to_string(),
+            json_schema: Some(serde_json::json!({
+                "name": "answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "timestamp": { "type": "integer" }
+                    }
+                }
+            })),
+            response_type: None,
+        });
+
+        assert_ne!(
+            generate_chat_key(&base),
+            generate_chat_key(&changed_timestamp_schema)
         );
     }
 
