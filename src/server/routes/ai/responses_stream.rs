@@ -6,7 +6,8 @@
 use crate::core::models::openai::requests::ChatCompletionRequest;
 use crate::core::models::openai::responses_api::{
     ResponseFunctionCall, ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage,
-    ResponseStreamEvent, ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
+    ResponseReasoningItem, ResponseStreamEvent, ResponseUsage, ResponsesApiRequest,
+    ResponsesApiResponse,
 };
 use crate::core::providers::ProviderError;
 use crate::core::streaming::types::Event;
@@ -126,6 +127,7 @@ pub(crate) async fn handle_streaming_response(
                 // assumption. If a provider ever violates the convention, a `warn!`
                 // is emitted so operators can detect the inversion.
                 let mut full_reasoning = String::new();
+                let mut reasoning_item_id = String::new();
                 let mut reasoning_output_index: u32 = 0;
                 let mut reasoning_started = false;
 
@@ -194,6 +196,22 @@ pub(crate) async fn handle_streaming_response(
                                         reasoning_started = true;
                                         reasoning_output_index = next_output_index;
                                         next_output_index += 1;
+                                        reasoning_item_id = format!("rs_{}", uuid_v4_hex());
+
+                                        if emit(
+                                            &tx,
+                                            &ResponseStreamEvent::ResponseOutputItemAdded {
+                                                output_index: reasoning_output_index,
+                                                item: in_progress_reasoning_item(
+                                                    reasoning_item_id.clone(),
+                                                ),
+                                            },
+                                        )
+                                        .await
+                                        .is_err()
+                                        {
+                                            return;
+                                        }
                                     }
                                     full_reasoning.push_str(reasoning_text);
                                     if emit(
@@ -379,8 +397,8 @@ pub(crate) async fn handle_streaming_response(
                 let mut all_output: Vec<(u32, ResponseOutputItem)> = Vec::new();
 
                 // ── reasoning done events ─────────────────────────────────────
-                if reasoning_started
-                    && emit(
+                if reasoning_started {
+                    if emit(
                         &tx,
                         &ResponseStreamEvent::ResponseReasoningSummaryTextDone {
                             output_index: reasoning_output_index,
@@ -390,8 +408,25 @@ pub(crate) async fn handle_streaming_response(
                     )
                     .await
                     .is_err()
-                {
-                    return;
+                    {
+                        return;
+                    }
+
+                    let reasoning_done =
+                        completed_reasoning_item(reasoning_item_id, item_status, full_reasoning);
+                    if emit(
+                        &tx,
+                        &ResponseStreamEvent::ResponseOutputItemDone {
+                            output_index: reasoning_output_index,
+                            item: reasoning_done.clone(),
+                        },
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    all_output.push((reasoning_output_index, reasoning_done));
                 }
 
                 // ── text done events ──────────────────────────────────────────
@@ -493,10 +528,7 @@ pub(crate) async fn handle_streaming_response(
                     }
                 }
 
-                // Sort by output_index to preserve stream order
-                all_output.sort_by_key(|(i, _)| *i);
-                let output_items: Vec<ResponseOutputItem> =
-                    all_output.into_iter().map(|(_, item)| item).collect();
+                let output_items = output_items_in_stream_order(all_output);
 
                 // ── response.completed ────────────────────────────────────────
                 let total = in_tokens + out_tokens;
@@ -552,6 +584,36 @@ pub(crate) async fn handle_streaming_response(
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+fn completed_reasoning_item(
+    item_id: String,
+    status: &str,
+    summary_text: String,
+) -> ResponseOutputItem {
+    ResponseOutputItem::Reasoning(ResponseReasoningItem {
+        id: item_id,
+        status: status.to_string(),
+        summary: Some(vec![json!({
+            "type": "summary_text",
+            "text": summary_text,
+        })]),
+    })
+}
+
+fn in_progress_reasoning_item(item_id: String) -> ResponseOutputItem {
+    ResponseOutputItem::Reasoning(ResponseReasoningItem {
+        id: item_id,
+        status: "in_progress".to_string(),
+        summary: Some(vec![]),
+    })
+}
+
+fn output_items_in_stream_order(
+    mut all_output: Vec<(u32, ResponseOutputItem)>,
+) -> Vec<ResponseOutputItem> {
+    all_output.sort_by_key(|(i, _)| *i);
+    all_output.into_iter().map(|(_, item)| item).collect()
+}
 
 fn make_shell(
     id: &str,
@@ -638,5 +700,66 @@ mod tests {
         let (t, c) = classify(&e);
         assert_eq!(t, "server_error");
         assert_eq!(c, "timeout");
+    }
+
+    #[test]
+    fn test_completed_response_output_contains_reasoning_item() {
+        let added = serde_json::to_value(ResponseStreamEvent::ResponseOutputItemAdded {
+            output_index: 0,
+            item: in_progress_reasoning_item("rs_test".to_string()),
+        })
+        .unwrap();
+        let reasoning = completed_reasoning_item(
+            "rs_test".to_string(),
+            "completed",
+            "checked constraints".to_string(),
+        );
+        let message = ResponseOutputItem::Message(ResponseOutputMessage {
+            id: "msg_test".to_string(),
+            role: "assistant".to_string(),
+            status: "completed".to_string(),
+            content: vec![ResponseOutputContent::OutputText {
+                text: "final answer".to_string(),
+                annotations: None,
+                logprobs: None,
+            }],
+        });
+        let output = output_items_in_stream_order(vec![(1, message), (0, reasoning)]);
+        let completed = ResponsesApiResponse {
+            id: "resp_test".to_string(),
+            object: "response".to_string(),
+            created_at: 1,
+            status: "completed".to_string(),
+            model: "gpt-test".to_string(),
+            output,
+            usage: None,
+            error: None,
+            previous_response_id: None,
+            metadata: None,
+        };
+
+        let event = serde_json::to_value(ResponseStreamEvent::ResponseCompleted {
+            response: Box::new(completed),
+        })
+        .unwrap();
+
+        assert_eq!(added["type"], "response.output_item.added");
+        assert_eq!(added["output_index"], 0);
+        assert_eq!(added["item"]["type"], "reasoning");
+        assert_eq!(added["item"]["id"], "rs_test");
+        assert_eq!(added["item"]["status"], "in_progress");
+
+        assert_eq!(event["type"], "response.completed");
+        assert_eq!(event["response"]["output"][0]["type"], "reasoning");
+        assert_eq!(event["response"]["output"][0]["id"], "rs_test");
+        assert_eq!(
+            event["response"]["output"][0]["summary"][0]["type"],
+            "summary_text"
+        );
+        assert_eq!(
+            event["response"]["output"][0]["summary"][0]["text"],
+            "checked constraints"
+        );
+        assert_eq!(event["response"]["output"][1]["type"], "message");
     }
 }
