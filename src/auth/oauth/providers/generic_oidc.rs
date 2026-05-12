@@ -408,7 +408,11 @@ impl OidcProvider {
             .map_err(|e| GatewayError::Network(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
-            error!("Token exchange failed: {} - {}", status, body);
+            error!(
+                "Token exchange failed with status {} (response body redacted, {} bytes)",
+                status,
+                body.len()
+            );
             return Err(GatewayError::Auth(format!(
                 "Token exchange failed: {}",
                 status
@@ -448,7 +452,11 @@ impl OidcProvider {
             .map_err(|e| GatewayError::Network(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
-            error!("UserInfo request failed: {} - {}", status, body);
+            error!(
+                "UserInfo request failed with status {} (response body redacted, {} bytes)",
+                status,
+                body.len()
+            );
             return Err(GatewayError::Auth(format!(
                 "UserInfo request failed: {}",
                 status
@@ -556,7 +564,11 @@ impl OidcProvider {
             .map_err(|e| GatewayError::Network(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
-            error!("Token refresh failed: {} - {}", status, body);
+            error!(
+                "Token refresh failed with status {} (response body redacted, {} bytes)",
+                status,
+                body.len()
+            );
             return Err(GatewayError::Auth(format!(
                 "Token refresh failed: {}",
                 status

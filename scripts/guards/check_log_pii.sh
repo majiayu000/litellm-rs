@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
-MAX_ALLOWED="${LITELLM_LOG_PII_BASELINE_MAX:-14}"
+MAX_ALLOWED="${LITELLM_LOG_PII_BASELINE_MAX:-8}"
 
 if ! command -v rg >/dev/null 2>&1; then
     echo "Log PII guard failed: 'rg' is required." >&2
