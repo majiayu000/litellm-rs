@@ -100,10 +100,13 @@ impl GeminiClient {
         let headers = self.get_request_headers();
 
         if self.config.debug {
-            tracing::debug!("Gemini request URL: {}", url);
+            let request_bytes = serde_json::to_vec(&body)
+                .map(|bytes| bytes.len())
+                .unwrap_or(0);
             tracing::debug!(
-                "Gemini request body: {}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
+                %url,
+                request_bytes,
+                "Gemini request prepared"
             );
         }
 
@@ -129,10 +132,13 @@ impl GeminiClient {
         let headers = self.get_request_headers();
 
         if self.config.debug {
-            tracing::debug!("Gemini stream request URL: {}", url);
+            let request_bytes = serde_json::to_vec(&body)
+                .map(|bytes| bytes.len())
+                .unwrap_or(0);
             tracing::debug!(
-                "Gemini stream request body: {}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
+                %url,
+                request_bytes,
+                "Gemini stream request prepared"
             );
         }
 
@@ -189,8 +195,9 @@ impl GeminiClient {
             .map_err(|e| gemini_network_error(format!("Failed to read response: {}", e)))?;
 
         if self.config.debug {
+            let response_bytes = response_text.len();
             tracing::debug!("Gemini response status: {}", status);
-            tracing::debug!("Gemini response body: {}", response_text);
+            tracing::debug!(%status, response_bytes, "Gemini response received");
         }
 
         if !status.is_success() {

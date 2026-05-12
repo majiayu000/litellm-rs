@@ -227,9 +227,9 @@ fn resolve_invited_by(req: &HttpRequest) -> Option<Uuid> {
 pub async fn create_team(
     req: HttpRequest,
     state: web::Data<AppState>,
-    body: web::Json<CreateTeamBody>,
+    payload: web::Json<CreateTeamBody>,
 ) -> ActixResult<HttpResponse> {
-    info!("Creating team: {}", body.name);
+    info!("Creating team: {}", payload.name);
 
     if is_auth_enabled(&state) {
         match get_request_caller(&req) {
@@ -246,9 +246,9 @@ pub async fn create_team(
     let manager = get_team_manager(&state);
 
     let request = CreateTeamRequest {
-        name: body.name.clone(),
-        display_name: body.display_name.clone(),
-        description: body.description.clone(),
+        name: payload.name.clone(),
+        display_name: payload.display_name.clone(),
+        description: payload.description.clone(),
         settings: None,
     };
 

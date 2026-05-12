@@ -390,8 +390,12 @@ impl DataDogIntegration {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!("DataDog metrics API returned {}: {}", status, body);
+            let response_bytes = response.bytes().await.map(|bytes| bytes.len()).unwrap_or(0);
+            warn!(
+                %status,
+                response_bytes,
+                "DataDog metrics API returned non-success status"
+            );
         }
 
         Ok(())
@@ -415,8 +419,12 @@ impl DataDogIntegration {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!("DataDog logs API returned {}: {}", status, body);
+            let response_bytes = response.bytes().await.map(|bytes| bytes.len()).unwrap_or(0);
+            warn!(
+                %status,
+                response_bytes,
+                "DataDog logs API returned non-success status"
+            );
         }
 
         Ok(())

@@ -298,7 +298,11 @@ impl LLMClient {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            error!("Anthropic stream API error: {} - {}", status, error_text);
+            error!(
+                %status,
+                response_bytes = error_text.len(),
+                "Anthropic stream API error"
+            );
             return Err(SDKError::ApiError(format!(
                 "HTTP {}: {}",
                 status, error_text

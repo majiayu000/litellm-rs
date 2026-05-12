@@ -273,8 +273,12 @@ impl HeliconeIntegration {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!("Helicone API returned {}: {}", status, body);
+            let response_bytes = response.bytes().await.map(|bytes| bytes.len()).unwrap_or(0);
+            warn!(
+                %status,
+                response_bytes,
+                "Helicone API returned non-success status"
+            );
         }
 
         Ok(())

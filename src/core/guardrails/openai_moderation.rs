@@ -64,7 +64,7 @@ impl OpenAIModerationGuardrail {
             let status = response.status();
             let body = response.text().await.unwrap_or_else(|e| {
                 warn!(
-                    "Failed to read OpenAI moderation error response body: {}",
+                    "Failed to read OpenAI moderation error response payload: {}",
                     e
                 );
                 String::new()

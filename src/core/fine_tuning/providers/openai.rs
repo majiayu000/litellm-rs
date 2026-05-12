@@ -105,14 +105,20 @@ impl OpenAIFineTuningProvider {
                 .await
                 .map_err(|e| FineTuningError::other(format!("Failed to parse response: {}", e)))
         } else {
-            let error_body = response.text().await.unwrap_or_else(|e| {
+            let error_text = response.text().await.unwrap_or_else(|e| {
                 warn!(
-                    "Failed to read OpenAI fine-tuning error response body: {}",
+                    "Failed to read OpenAI fine-tuning error response payload: {}",
                     e
                 );
                 String::new()
             });
-            warn!("OpenAI API error: {} - {}", status, error_body);
+            let response_bytes = error_text.len();
+            let safe_error_message = extract_openai_error_message(&error_text);
+            warn!(
+                %status,
+                response_bytes,
+                "OpenAI fine-tuning API returned non-success status"
+            );
 
             match status.as_u16() {
                 401 => Err(FineTuningError::auth("Invalid API key")),
@@ -128,10 +134,27 @@ impl OpenAIFineTuningProvider {
                 }
                 _ => Err(FineTuningError::provider(format!(
                     "API error {}: {}",
-                    status, error_body
+                    status,
+                    safe_error_message.unwrap_or_else(|| format!(
+                        "upstream response omitted a safe error message (response_bytes={})",
+                        response_bytes
+                    ))
                 ))),
             }
         }
+    }
+}
+
+fn extract_openai_error_message(error_text: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(error_text).ok()?;
+    let error = value.get("error").unwrap_or(&value);
+    let message = error.get("message").and_then(|message| message.as_str())?;
+    let message = message.trim();
+
+    if message.is_empty() {
+        None
+    } else {
+        Some(message.to_string())
     }
 }
 
@@ -353,5 +376,21 @@ mod tests {
         let provider = OpenAIFineTuningProvider::new(ProviderFineTuningConfig::new());
         let result = provider.auth_header();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_openai_error_message_from_nested_error() {
+        let message = extract_openai_error_message(
+            r#"{"error":{"message":"Invalid training_file","type":"invalid_request_error"}}"#,
+        );
+
+        assert_eq!(message.as_deref(), Some("Invalid training_file"));
+    }
+
+    #[test]
+    fn test_extract_openai_error_message_rejects_non_json_body() {
+        let message = extract_openai_error_message("raw upstream failure with possible content");
+
+        assert_eq!(message, None);
     }
 }

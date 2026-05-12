@@ -24,12 +24,12 @@ use super::openai_errors;
 pub async fn create_response(
     state: web::Data<AppState>,
     req: HttpRequest,
-    body: web::Json<ResponsesApiRequest>,
+    payload: web::Json<ResponsesApiRequest>,
 ) -> ActixResult<HttpResponse> {
-    info!("Responses API request for model: {}", body.model);
+    info!("Responses API request for model: {}", payload.model);
 
     let context = super::context::get_request_context(&req)?;
-    let request = body.into_inner();
+    let request = payload.into_inner();
 
     if request.model.trim().is_empty() {
         return Ok(openai_errors::validation_error("model must not be empty"));
