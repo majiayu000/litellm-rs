@@ -109,19 +109,18 @@ impl S3Storage {
             if let Some(client) = &self.client {
                 use aws_s3::primitives::ByteStream;
 
-                let file_id = Uuid::new_v4().to_string();
-                let key = format!("{}/{}", file_id, filename);
+                let file_id = Self::file_id_for_object(&Uuid::new_v4().to_string(), filename);
 
                 client
                     .put_object()
                     .bucket(&self.bucket)
-                    .key(&key)
+                    .key(&file_id)
                     .body(ByteStream::from(content.to_vec()))
                     .send()
                     .await
                     .map_err(|e| GatewayError::Internal(format!("S3 upload failed: {}", e)))?;
 
-                debug!("File uploaded to S3: {}", key);
+                debug!("File uploaded to S3: {}", file_id);
                 Ok(file_id)
             } else {
                 Err(GatewayError::Internal(
@@ -262,8 +261,7 @@ impl S3Storage {
                     .and_then(|t| chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos()))
                     .unwrap_or_else(chrono::Utc::now);
 
-                // Extract filename from the key (last path segment)
-                let filename = file_id.rsplit('/').next().unwrap_or(file_id).to_string();
+                let filename = Self::filename_from_file_id(file_id);
 
                 let checksum = head.e_tag().unwrap_or("").trim_matches('"').to_string();
 
@@ -360,5 +358,35 @@ impl S3Storage {
     /// Close storage (placeholder implementation)
     pub async fn close(&self) -> Result<()> {
         Ok(())
+    }
+
+    #[cfg_attr(not(feature = "s3"), allow(dead_code))]
+    fn file_id_for_object(object_id: &str, filename: &str) -> String {
+        format!("{}/{}", object_id, filename)
+    }
+
+    #[cfg_attr(not(feature = "s3"), allow(dead_code))]
+    fn filename_from_file_id(file_id: &str) -> String {
+        file_id.rsplit('/').next().unwrap_or(file_id).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::S3Storage;
+
+    #[test]
+    fn store_identifier_matches_s3_object_key() {
+        let object_id = "550e8400-e29b-41d4-a716-446655440000";
+        let file_id = S3Storage::file_id_for_object(object_id, "batch.jsonl");
+
+        assert_eq!(file_id, "550e8400-e29b-41d4-a716-446655440000/batch.jsonl");
+    }
+
+    #[test]
+    fn metadata_filename_is_derived_from_returned_s3_file_id() {
+        let file_id = "550e8400-e29b-41d4-a716-446655440000/nested/batch.jsonl";
+
+        assert_eq!(S3Storage::filename_from_file_id(file_id), "batch.jsonl");
     }
 }
