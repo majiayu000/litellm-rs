@@ -21,6 +21,7 @@ use actix_web::{
     web,
 };
 use std::sync::Arc;
+use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 /// HTTP server
@@ -29,6 +30,8 @@ pub struct HttpServer {
     config: ServerConfig,
     /// Application state
     state: AppState,
+    /// Background worker that drains budget persistence events on shutdown.
+    budget_persistence_task: Option<JoinHandle<()>>,
 }
 
 impl HttpServer {
@@ -40,11 +43,13 @@ impl HttpServer {
         start_auth_rate_limiter_cleanup_task();
 
         let storage = crate::storage::StorageLayer::new(&config.gateway.storage).await?;
+        let mut budget_persistence_task = None;
         let budget_limits = match storage.database.load_budget_limit_snapshots().await {
             Ok(snapshots) => {
                 let count = snapshots.len();
-                let persistence_tx =
+                let (persistence_tx, persistence_task) =
                     Arc::clone(&storage.database).start_budget_limit_persistence_task();
+                budget_persistence_task = Some(persistence_task);
                 info!("Loaded {} persisted budget limit snapshots", count);
                 Arc::new(UnifiedBudgetLimits::from_snapshots_with_persistence(
                     snapshots,
@@ -99,6 +104,7 @@ impl HttpServer {
         Ok(Self {
             config: config.gateway.server.clone(),
             state,
+            budget_persistence_task,
         })
     }
 
@@ -234,9 +240,10 @@ impl HttpServer {
     /// signal fires, the actix server is told to stop gracefully (in-flight
     /// requests get a chance to finish), then the storage layer is closed
     /// so connection pools and pending writes are released cleanly.
-    pub async fn start(self) -> Result<()> {
+    pub async fn start(mut self) -> Result<()> {
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
         let port = self.config.port;
+        let budget_persistence_task = self.budget_persistence_task.take();
 
         info!("Starting HTTP server on {}", bind_addr);
 
@@ -251,28 +258,51 @@ impl HttpServer {
         info!("HTTP server listening on {}", bind_addr);
 
         let server_handle = server.handle();
+        let mut server_task = tokio::spawn(server);
 
-        let server_task = tokio::spawn(server);
         let shutdown = Self::shutdown_signal();
+        let mut stopped_by_signal = false;
 
         tokio::select! {
-            result = server_task => {
+            result = &mut server_task => {
                 match result {
                     Ok(Ok(())) => info!("HTTP server exited"),
                     Ok(Err(e)) => {
                         return Err(GatewayError::server(format!("Server error: {}", e)));
                     }
                     Err(e) => {
-                        return Err(GatewayError::server(format!(
-                            "Server task panicked: {}",
-                            e
-                        )));
+                        return Err(GatewayError::server(format!("Server task failed: {}", e)));
                     }
                 }
             }
             _ = shutdown => {
                 info!("Shutdown signal received; stopping accept loop");
                 server_handle.stop(true).await;
+                stopped_by_signal = true;
+            }
+        }
+
+        if stopped_by_signal {
+            match server_task.await {
+                Ok(Ok(())) => info!("HTTP server exited after graceful stop"),
+                Ok(Err(e)) => {
+                    return Err(GatewayError::server(format!("Server error: {}", e)));
+                }
+                Err(e) => {
+                    return Err(GatewayError::server(format!("Server task failed: {}", e)));
+                }
+            }
+        }
+
+        // The server task owns the app factory, which owns AppState clones that
+        // hold budget persistence senders. It has completed here, so the channel
+        // can close after all queued events are drained by the worker.
+        drop(server_handle);
+
+        if let Some(task) = budget_persistence_task {
+            info!("Waiting for budget persistence worker to drain");
+            if let Err(e) = task.await {
+                warn!("Budget persistence worker join failed: {}", e);
             }
         }
 

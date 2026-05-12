@@ -6,7 +6,7 @@ use crate::utils::error::gateway_error::{GatewayError, Result};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::*;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{debug, warn};
 
 use super::super::entities::{self, budget_limit_snapshot};
@@ -148,9 +148,11 @@ impl SeaOrmDatabase {
     }
 
     /// Start a lightweight background worker that persists budget mutations.
-    pub fn start_budget_limit_persistence_task(self: Arc<Self>) -> BudgetPersistenceSender {
+    pub fn start_budget_limit_persistence_task(
+        self: Arc<Self>,
+    ) -> (BudgetPersistenceSender, JoinHandle<()>) {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             while let Some(event) = rx.recv().await {
                 let result = match event {
                     BudgetPersistenceEvent::Upsert(snapshot) => {
@@ -166,7 +168,7 @@ impl SeaOrmDatabase {
                 }
             }
         });
-        tx
+        (tx, handle)
     }
 }
 
@@ -218,5 +220,42 @@ mod tests {
                 .expect("snapshots should load")
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn budget_persistence_worker_drains_queued_events_when_sender_drops() {
+        let db = Arc::new(
+            SeaOrmDatabase::new(&DatabaseConfig::default())
+                .await
+                .expect("database should initialize"),
+        );
+        db.migrate().await.expect("migrations should run");
+
+        let (tx, handle) = Arc::clone(&db).start_budget_limit_persistence_task();
+        tx.send(BudgetPersistenceEvent::Upsert(BudgetLimitSnapshot {
+            kind: BudgetLimitKind::Provider,
+            name: "openai".to_string(),
+            max_budget: 100.0,
+            current_spend: 12.5,
+            soft_limit: 80.0,
+            reset_period: ResetPeriod::Monthly,
+            currency: Currency::USD,
+            enabled: true,
+            last_reset_at: None,
+            request_count: 1,
+        }))
+        .expect("worker should accept queued event");
+
+        drop(tx);
+        handle.await.expect("worker should exit after sender drop");
+
+        let snapshots = db
+            .load_budget_limit_snapshots()
+            .await
+            .expect("snapshot should load");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].name, "openai");
+        assert_eq!(snapshots[0].current_spend, 12.5);
+        assert_eq!(snapshots[0].request_count, 1);
     }
 }
