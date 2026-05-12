@@ -704,6 +704,7 @@ impl AnthropicClient {
                 ))
             },
             thinking,
+            audio: None,
             name: None,
             tool_calls: if tool_calls.is_empty() {
                 None

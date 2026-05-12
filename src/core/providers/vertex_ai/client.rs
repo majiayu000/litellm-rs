@@ -826,6 +826,7 @@ impl LLMProvider for VertexAIProvider {
                     role: crate::core::types::message::MessageRole::Assistant,
                     content: Some(crate::core::types::message::MessageContent::Text(content)),
                     thinking: None,
+                    audio: None,
                     name: None,
                     tool_calls: None, // Handle
                     tool_call_id: None,

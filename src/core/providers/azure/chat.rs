@@ -336,6 +336,7 @@ impl AzureChatHandler {
                         },
                         content,
                         thinking: None,
+                        audio: None,
                         name: message["name"].as_str().map(|s| s.to_string()),
                         function_call: message["function_call"].as_object().and_then(|_| {
                             serde_json::from_value(message["function_call"].clone()).ok()
@@ -486,6 +487,7 @@ mod tests {
             role,
             content: Some(MessageContent::Text(content.to_string())),
             thinking: None,
+            audio: None,
             name: None,
             function_call: None,
             tool_calls: None,

@@ -496,6 +496,7 @@ impl GeminiClient {
                     role: MessageRole::Assistant,
                     content: msg_content,
                     thinking: None,
+                    audio: None,
                     name: None,
                     tool_calls: if tool_calls.is_empty() {
                         None
@@ -607,6 +608,7 @@ mod tests {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello, world!".to_string())),
             thinking: None,
+            audio: None,
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -639,6 +641,7 @@ mod tests {
                 },
             ])),
             thinking: None,
+            audio: None,
             name: None,
             tool_calls: None,
             tool_call_id: None,

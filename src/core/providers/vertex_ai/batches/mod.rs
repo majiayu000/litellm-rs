@@ -304,6 +304,7 @@ fn parse_default_batch_response(
                 role: MessageRole::Assistant,
                 content: content.map(MessageContent::Text),
                 thinking: None,
+                audio: None,
                 name: None,
                 tool_calls: None,
                 function_call: None,

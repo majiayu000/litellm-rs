@@ -416,6 +416,7 @@ impl AzureAIChatUtils {
             role,
             content: Some(content),
             thinking: None,
+            audio: None,
             name: message_data["name"].as_str().map(|s| s.to_string()),
             function_call: None, // NOTE: function call parsing not yet implemented
             tool_calls: None,    // NOTE: tool call parsing not yet implemented
@@ -552,6 +553,7 @@ mod tests {
                 role: MessageRole::User,
                 content: Some(MessageContent::Text("Hello".to_string())),
                 thinking: None,
+                audio: None,
                 name: None,
                 function_call: None,
                 tool_calls: None,
@@ -772,6 +774,7 @@ mod tests {
                 role: MessageRole::User,
                 content: Some(MessageContent::Text("Hello".to_string())),
                 thinking: None,
+                audio: None,
                 name: Some("TestUser".to_string()),
                 function_call: None,
                 tool_calls: None,
@@ -793,6 +796,7 @@ mod tests {
                 role: MessageRole::Tool,
                 content: Some(MessageContent::Text("Result".to_string())),
                 thinking: None,
+                audio: None,
                 name: None,
                 function_call: None,
                 tool_calls: None,

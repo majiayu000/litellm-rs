@@ -263,6 +263,7 @@ impl LLMProvider for SnowflakeProvider {
                         content.to_string(),
                     )),
                     thinking: None,
+                    audio: None,
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,

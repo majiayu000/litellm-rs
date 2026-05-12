@@ -170,6 +170,7 @@ mod tests {
             role: MessageRole::Assistant,
             content: Some(MessageContent::Text(content.to_string())),
             thinking: None,
+            audio: None,
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -273,6 +274,7 @@ mod tests {
                     role: MessageRole::Assistant,
                     content: None,
                     thinking: None,
+                    audio: None,
                     name: None,
                     tool_calls: Some(vec![ToolCall {
                         id: "call_123".to_string(),
@@ -308,6 +310,7 @@ mod tests {
                     role: MessageRole::Assistant,
                     content: None,
                     thinking: None,
+                    audio: None,
                     name: None,
                     tool_calls: Some(vec![
                         ToolCall {

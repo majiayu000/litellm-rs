@@ -125,6 +125,10 @@ impl OpenAIResponseTransformer {
 
     /// Transform message response
     fn transform_message_response(message: OpenAIMessage) -> Result<ChatMessage, OpenAIError> {
+        let audio = message
+            .audio
+            .clone()
+            .and_then(OpenAIMessageAudio::into_core_audio);
         // Extract thinking content from reasoning fields
         // Priority: reasoning_content (DeepSeek) > reasoning (OpenAI)
         let thinking = message
@@ -145,6 +149,7 @@ impl OpenAIResponseTransformer {
                 })?;
         let mut core_message: ChatMessage = compatible_message.into();
         core_message.thinking = thinking;
+        core_message.audio = audio;
         Ok(core_message)
     }
 
@@ -240,6 +245,7 @@ mod tests {
                     reasoning: None,
                     reasoning_details: None,
                     reasoning_content: None,
+                    audio: None,
                 },
                 finish_reason: Some("stop".to_string()),
                 logprobs: None,
@@ -262,6 +268,42 @@ mod tests {
             result.choices.first().unwrap().finish_reason,
             Some(FinishReason::Stop)
         ));
+    }
+
+    #[test]
+    fn test_transform_response_preserves_top_level_audio() {
+        let response: OpenAIChatResponse = serde_json::from_str(
+            r#"{
+                "id": "chatcmpl-audio",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "gpt-4o-audio",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "audio": {
+                            "id": "audio_123",
+                            "expires_at": 1677655888,
+                            "data": "base64-response-audio",
+                            "transcript": "spoken response"
+                        }
+                    },
+                    "finish_reason": "stop"
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let result = OpenAIResponseTransformer::transform(response).unwrap();
+        let audio = result.choices[0]
+            .message
+            .audio
+            .as_ref()
+            .expect("top-level audio should be preserved");
+        assert_eq!(audio.data, "base64-response-audio");
+        assert_eq!(audio.format, None);
     }
 
     #[test]
@@ -330,6 +372,7 @@ mod tests {
                         reasoning: None,
                         reasoning_details: None,
                         reasoning_content: None,
+                        audio: None,
                     },
                     finish_reason: None,
                     logprobs: None,
@@ -372,6 +415,7 @@ mod tests {
                         reasoning: None,
                         reasoning_details: None,
                         reasoning_content: None,
+                        audio: None,
                     },
                     finish_reason: Some(reason_str.to_string()),
                     logprobs: None,
@@ -414,6 +458,7 @@ mod tests {
                     reasoning: None,
                     reasoning_details: None,
                     reasoning_content: None,
+                    audio: None,
                 },
                 finish_reason: Some("tool_calls".to_string()),
                 logprobs: None,
@@ -455,6 +500,7 @@ mod tests {
                     reasoning: Some("Let me think about this...".to_string()),
                     reasoning_details: None,
                     reasoning_content: None,
+                    audio: None,
                 },
                 finish_reason: Some("stop".to_string()),
                 logprobs: None,
@@ -486,6 +532,7 @@ mod tests {
                     reasoning: None,
                     reasoning_details: None,
                     reasoning_content: Some("DeepSeek thinking process...".to_string()),
+                    audio: None,
                 },
                 finish_reason: Some("stop".to_string()),
                 logprobs: None,
@@ -517,6 +564,7 @@ mod tests {
                     reasoning: None,
                     reasoning_details: None,
                     reasoning_content: None,
+                    audio: None,
                 },
                 finish_reason: None,
                 logprobs: None,
@@ -548,6 +596,7 @@ mod tests {
                     reasoning: None,
                     reasoning_details: None,
                     reasoning_content: None,
+                    audio: None,
                 },
                 finish_reason: None,
                 logprobs: None,
@@ -579,6 +628,7 @@ mod tests {
                     reasoning: None,
                     reasoning_details: None,
                     reasoning_content: None,
+                    audio: None,
                 },
                 finish_reason: Some("stop".to_string()),
                 logprobs: Some(serde_json::json!({
@@ -623,6 +673,7 @@ mod tests {
                     reasoning: None,
                     reasoning_details: None,
                     reasoning_content: None,
+                    audio: None,
                 },
                 finish_reason: None,
                 logprobs: None,
@@ -657,6 +708,7 @@ mod tests {
                     reasoning: None,
                     reasoning_details: None,
                     reasoning_content: None,
+                    audio: None,
                 },
                 finish_reason: Some("function_call".to_string()),
                 logprobs: None,

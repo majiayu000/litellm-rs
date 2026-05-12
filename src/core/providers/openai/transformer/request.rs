@@ -303,6 +303,30 @@ mod tests {
     }
 
     #[test]
+    fn test_transform_message_preserves_top_level_audio() {
+        let request = ChatRequest {
+            model: "gpt-4o-audio".to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::Assistant,
+                audio: Some(AudioData {
+                    data: "base64-response-audio".to_string(),
+                    format: Some("wav".to_string()),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let result = OpenAIRequestTransformer::transform(request).unwrap();
+        let audio = result.messages[0]
+            .audio
+            .as_ref()
+            .expect("top-level audio should be preserved");
+        assert_eq!(audio.data.as_deref(), Some("base64-response-audio"));
+        assert_eq!(audio.format.as_deref(), Some("wav"));
+    }
+
+    #[test]
     fn test_transform_content_parts_image_source() {
         let request = ChatRequest {
             model: "gpt-4-vision".to_string(),

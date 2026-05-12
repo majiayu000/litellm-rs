@@ -202,6 +202,7 @@ fn test_separate_system_messages_no_system() {
         tool_call_id: None,
         function_call: None,
         thinking: None,
+        audio: None,
     }];
 
     let (system, user_msgs) = client.separate_system_messages(&messages).unwrap();
@@ -225,6 +226,7 @@ fn test_separate_system_messages_with_system() {
             tool_call_id: None,
             function_call: None,
             thinking: None,
+            audio: None,
         },
         ChatMessage {
             role: MessageRole::User,
@@ -234,6 +236,7 @@ fn test_separate_system_messages_with_system() {
             tool_call_id: None,
             function_call: None,
             thinking: None,
+            audio: None,
         },
     ];
 
@@ -256,6 +259,7 @@ fn test_separate_system_messages_multiple_system() {
             tool_call_id: None,
             function_call: None,
             thinking: None,
+            audio: None,
         },
         ChatMessage {
             role: MessageRole::System,
@@ -265,6 +269,7 @@ fn test_separate_system_messages_multiple_system() {
             tool_call_id: None,
             function_call: None,
             thinking: None,
+            audio: None,
         },
     ];
 
@@ -295,6 +300,7 @@ fn test_anthropic_transform_messages_preserves_assistant_text_with_tool_use() {
         tool_call_id: None,
         function_call: None,
         thinking: None,
+        audio: None,
     }];
 
     let transformed = client.transform_messages(messages, model_spec).unwrap();
@@ -324,6 +330,7 @@ fn test_anthropic_transform_messages_tool_role_to_tool_result() {
         tool_call_id: Some("toolu_123".to_string()),
         function_call: None,
         thinking: None,
+        audio: None,
     }];
 
     let transformed = client.transform_messages(messages, model_spec).unwrap();

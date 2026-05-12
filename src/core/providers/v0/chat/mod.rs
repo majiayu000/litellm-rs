@@ -269,6 +269,7 @@ impl V0ChatHandler {
                         choice.message.content,
                     )),
                     thinking: None,
+                    audio: None,
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,

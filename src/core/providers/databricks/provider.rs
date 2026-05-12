@@ -267,6 +267,7 @@ impl DatabricksProvider {
                         role,
                         content,
                         thinking: None,
+                        audio: None,
                         name: None,
                         tool_calls: msg
                             .get("tool_calls")
@@ -279,6 +280,7 @@ impl DatabricksProvider {
                         role: crate::core::types::message::MessageRole::Assistant,
                         content: None,
                         thinking: None,
+                        audio: None,
                         name: None,
                         tool_calls: None,
                         tool_call_id: None,
@@ -644,6 +646,7 @@ mod tests {
             role: crate::core::types::message::MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             thinking: None,
+            audio: None,
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -668,6 +671,7 @@ mod tests {
                 role: crate::core::types::message::MessageRole::User,
                 content: Some(MessageContent::Text("Test".to_string())),
                 thinking: None,
+                audio: None,
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,

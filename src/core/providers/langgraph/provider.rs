@@ -348,6 +348,7 @@ impl LangGraphProvider {
                     role: MessageRole::Assistant,
                     content: Some(MessageContent::Text(content)),
                     thinking: None,
+                    audio: None,
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,

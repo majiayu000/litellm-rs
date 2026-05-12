@@ -295,6 +295,7 @@ impl LLMProvider for GooglePSEProvider {
                     role: MessageRole::Assistant,
                     content: Some(crate::core::types::message::MessageContent::Text(content)),
                     thinking: None,
+                    audio: None,
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,

@@ -567,6 +567,7 @@ mod tests {
                 role: MessageRole::User,
                 content: Some(MessageContent::Text("Hello".to_string())),
                 thinking: None,
+                audio: None,
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,

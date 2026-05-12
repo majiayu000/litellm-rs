@@ -438,6 +438,7 @@ impl OllamaProvider {
                     role: MessageRole::Assistant,
                     content: content.map(MessageContent::Text),
                     thinking,
+                    audio: None,
                     tool_calls,
                     function_call: None,
                     name: None,

@@ -1,6 +1,6 @@
 //! Chat request and message types
 
-use super::content::ContentPart;
+use super::content::{AudioData, ContentPart};
 use super::message::{MessageContent, MessageRole};
 use super::thinking::{ThinkingConfig, ThinkingContent};
 use super::tools::{FunctionCall, ResponseFormat, Tool, ToolCall, ToolChoice};
@@ -32,6 +32,12 @@ pub struct ChatMessage {
     /// - Gemini with thinking mode
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingContent>,
+    /// Audio content attached to the message.
+    ///
+    /// This preserves provider-native top-level audio payloads, such as OpenAI
+    /// assistant audio, when messages pass through the core representation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioData>,
     /// Name of message sender
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -52,6 +58,7 @@ impl Default for ChatMessage {
             role: MessageRole::User,
             content: None,
             thinking: None,
+            audio: None,
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -182,7 +189,6 @@ impl ChatRequest {
         self.messages.push(ChatMessage {
             role,
             content: Some(content.into()),
-            thinking: None,
             ..Default::default()
         });
         self

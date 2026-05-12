@@ -157,6 +157,7 @@ impl CohereChatHandler {
             role: MessageRole::Assistant,
             content: Some(MessageContent::Text(content)),
             thinking: None,
+            audio: None,
             tool_calls: Self::parse_tool_calls(&response_json),
             name: None,
             function_call: None,

@@ -499,6 +499,7 @@ fn transform_oci_response(response: serde_json::Value) -> Result<ChatResponse, P
                 role: crate::core::types::message::MessageRole::Assistant,
                 content: Some(crate::core::types::message::MessageContent::Text(text)),
                 thinking: None,
+                audio: None,
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,

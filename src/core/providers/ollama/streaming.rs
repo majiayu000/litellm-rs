@@ -510,6 +510,7 @@ mod tests {
                     role: MessageRole::Assistant,
                     content: Some(MessageContent::Text("Hello world".to_string())),
                     thinking: None,
+                    audio: None,
                     tool_calls: None,
                     function_call: None,
                     name: None,

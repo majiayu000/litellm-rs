@@ -382,6 +382,7 @@ fn test_transform_chat_request_to_langgraph() {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello, how are you?".to_string())),
             thinking: None,
+            audio: None,
             name: None,
             tool_calls: None,
             tool_call_id: None,

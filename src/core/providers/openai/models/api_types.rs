@@ -79,6 +79,53 @@ pub struct OpenAIMessage {
     /// DeepSeek reasoning content field
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<OpenAIMessageAudio>,
+}
+
+/// Top-level assistant audio payload.
+///
+/// Request messages use `data` and `format`; chat completion responses can
+/// include server metadata such as `id`, `expires_at`, and `transcript` without
+/// a format field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIMessageAudio {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+impl OpenAIMessageAudio {
+    fn from_compatible_content(audio: crate::core::models::openai::AudioContent) -> Self {
+        Self {
+            id: None,
+            expires_at: None,
+            data: Some(audio.data),
+            transcript: None,
+            format: Some(audio.format),
+        }
+    }
+
+    fn into_compatible_content(self) -> Option<crate::core::models::openai::AudioContent> {
+        Some(crate::core::models::openai::AudioContent {
+            data: self.data?,
+            format: self.format?,
+        })
+    }
+
+    pub fn into_core_audio(self) -> Option<crate::core::types::content::AudioData> {
+        Some(crate::core::types::content::AudioData {
+            data: self.data?,
+            format: self.format,
+        })
+    }
 }
 
 impl OpenAIMessage {
@@ -138,6 +185,9 @@ impl OpenAIMessage {
             reasoning: None,
             reasoning_details: None,
             reasoning_content: None,
+            audio: message
+                .audio
+                .map(OpenAIMessageAudio::from_compatible_content),
         })
     }
 
@@ -206,7 +256,9 @@ impl OpenAIMessage {
                     .collect()
             }),
             tool_call_id: self.tool_call_id,
-            audio: None,
+            audio: self
+                .audio
+                .and_then(OpenAIMessageAudio::into_compatible_content),
         })
     }
 }

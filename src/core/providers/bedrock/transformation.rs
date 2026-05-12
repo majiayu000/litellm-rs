@@ -237,6 +237,7 @@ fn create_chat_choice(content: String) -> ChatChoice {
             role: MessageRole::Assistant,
             content: Some(MessageContent::Text(content)),
             thinking: None,
+            audio: None,
             name: None,
             function_call: None,
             tool_calls: None,

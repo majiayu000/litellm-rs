@@ -402,6 +402,12 @@ impl From<ChatMessage> for crate::core::types::chat::ChatMessage {
             role: value.role.into(),
             content: value.content.map(Into::into),
             thinking: None,
+            audio: value
+                .audio
+                .map(|audio| crate::core::types::content::AudioData {
+                    data: audio.data,
+                    format: Some(audio.format),
+                }),
             name: value.name,
             tool_calls: value
                 .tool_calls
@@ -423,7 +429,10 @@ impl From<crate::core::types::chat::ChatMessage> for ChatMessage {
                 .tool_calls
                 .map(|calls| calls.into_iter().map(Into::into).collect()),
             tool_call_id: value.tool_call_id,
-            audio: None,
+            audio: value.audio.map(|audio| AudioContent {
+                data: audio.data,
+                format: audio.format.unwrap_or_else(|| "mp3".to_string()),
+            }),
         }
     }
 }
@@ -473,6 +482,7 @@ mod tests {
                 "hello".to_string(),
             )),
             thinking: None,
+            audio: None,
             name: Some("user".to_string()),
             tool_calls: None,
             tool_call_id: None,
@@ -483,6 +493,29 @@ mod tests {
         assert_eq!(openai_msg.role, MessageRole::User);
         assert!(matches!(openai_msg.content, Some(MessageContent::Text(_))));
         assert!(openai_msg.audio.is_none());
+    }
+
+    #[test]
+    fn test_chat_message_audio_roundtrip() {
+        let msg = ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Text("audio response".to_string())),
+            name: None,
+            function_call: None,
+            tool_calls: None,
+            tool_call_id: None,
+            audio: Some(AudioContent {
+                data: "base64-audio".to_string(),
+                format: "wav".to_string(),
+            }),
+        };
+
+        let core_msg: crate::core::types::chat::ChatMessage = msg.into();
+        let roundtripped: ChatMessage = core_msg.into();
+
+        let audio = roundtripped.audio.expect("audio should round-trip");
+        assert_eq!(audio.data, "base64-audio");
+        assert_eq!(audio.format, "wav");
     }
 
     #[test]
