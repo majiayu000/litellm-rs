@@ -16,34 +16,6 @@ impl Validate for GatewayRouterConfig {
         self.circuit_breaker.validate()?;
         self.load_balancer.validate()?;
 
-        if self.circuit_breaker.min_requests != crate::config::models::default_min_requests() {
-            return Err(
-                "router.circuit_breaker.min_requests is not supported by runtime router yet"
-                    .to_string(),
-            );
-        }
-
-        if self.circuit_breaker.success_threshold != 3 {
-            return Err(
-                "router.circuit_breaker.success_threshold is not supported by runtime router yet"
-                    .to_string(),
-            );
-        }
-
-        if self.load_balancer.sticky_sessions {
-            return Err(
-                "router.load_balancer.sticky_sessions is not supported by runtime router yet"
-                    .to_string(),
-            );
-        }
-
-        if self.load_balancer.session_timeout != 3600 {
-            return Err(
-                "router.load_balancer.session_timeout is not supported by runtime router yet"
-                    .to_string(),
-            );
-        }
-
         Ok(())
     }
 }
@@ -71,8 +43,20 @@ impl Validate for CircuitBreakerConfig {
 
 impl Validate for LoadBalancerConfig {
     fn validate(&self) -> Result<(), String> {
-        // Basic validation for load balancer config
-        // Specific validation can be added based on strategy type
+        if self.sticky_sessions {
+            return Err(
+                "router.load_balancer.sticky_sessions is not implemented by runtime router yet"
+                    .to_string(),
+            );
+        }
+
+        if self.session_timeout != 3600 {
+            return Err(
+                "router.load_balancer.session_timeout is not implemented by runtime router yet"
+                    .to_string(),
+            );
+        }
+
         Ok(())
     }
 }
@@ -290,11 +274,44 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_router_config_accepts_runtime_mapped_circuit_breaker_fields() {
+        let mut config = GatewayRouterConfig::default();
+        config.circuit_breaker.min_requests = 25;
+        config.circuit_breaker.success_threshold = 4;
+
+        assert!(validate_config(&config).is_ok());
+    }
+
     // ==================== LoadBalancerConfig Validation Tests ====================
 
     #[test]
     fn test_load_balancer_config_valid() {
         let config = LoadBalancerConfig::default();
         assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_load_balancer_rejects_sticky_sessions() {
+        let config = LoadBalancerConfig {
+            sticky_sessions: true,
+            ..Default::default()
+        };
+
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("sticky_sessions"));
+    }
+
+    #[test]
+    fn test_load_balancer_rejects_session_timeout() {
+        let config = LoadBalancerConfig {
+            session_timeout: 900,
+            ..Default::default()
+        };
+
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("session_timeout"));
     }
 }

@@ -76,8 +76,10 @@ router:
     success_threshold: 3
   load_balancer:
     health_check_enabled: true
-    sticky_sessions: false
-    session_timeout: 3600
+    # Sticky sessions are not implemented yet. Leave these unset; non-default
+    # values are rejected during config validation until runtime affinity exists.
+    # sticky_sessions: false
+    # session_timeout: 3600
 
 storage:
   database:

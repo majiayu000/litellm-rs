@@ -78,7 +78,8 @@ impl HttpServer {
         let runtime_router_config =
             crate::core::router::gateway_config::runtime_router_config_from_gateway(
                 &config.gateway.router,
-            );
+            )
+            .map_err(|e| GatewayError::Config(format!("Invalid router config: {}", e)))?;
 
         let unified_router = crate::core::router::UnifiedRouter::from_gateway_config(
             &config.gateway.providers,

@@ -73,6 +73,19 @@ Notes:
 - `gateway` requires the `storage` feature at build time.
 - Default features include `sqlite`, so default `cargo run`/`cargo install` satisfy this requirement.
 
+#### Router Configuration
+
+The gateway router config maps these fields into the runtime router:
+
+- `router.strategy` selects the deployment routing strategy.
+- `router.circuit_breaker.failure_threshold` controls consecutive failures before cooldown.
+- `router.circuit_breaker.recovery_timeout` controls cooldown duration in seconds.
+- `router.circuit_breaker.min_requests` sets the sample size required before cooldown.
+- `router.circuit_breaker.success_threshold` sets the successes required to recover from cooldown.
+- `router.load_balancer.health_check_enabled` enables pre-call deployment health checks.
+
+`router.load_balancer.sticky_sessions` and `router.load_balancer.session_timeout` are reserved for future session affinity. Non-default values fail config validation until runtime affinity is implemented.
+
 ## Installation
 
 ```toml
