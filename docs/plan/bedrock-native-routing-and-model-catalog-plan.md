@@ -3,7 +3,7 @@
 ## 0. Metadata
 
 - Task: GitHub issue #553, "Design: long-term Bedrock native routing and current model catalog"
-- Repository: `/Users/apple/Library/Application Support/harness/workspaces/54be1cf8__majiayu000_litellm-rs__issue_553`
+- Repository: litellm-rs
 - Compatibility strategy: required
 - Submit strategy: final_only
 - Scope: design only; implementation PRs should be split after this plan lands
@@ -24,7 +24,8 @@ The long-term design must support:
 - Geo and global inference profile IDs, such as `us.anthropic...` and
   `global.anthropic...`, without stripping the execution model ID.
 - Model-specific parameter policies, including Claude Opus 4.7's adaptive
-  thinking behavior and sampling parameter restrictions.
+  thinking behavior and sampling parameter restrictions as documented for the
+  Anthropic Messages API.
 - Offline default CI, with live AWS smoke tests gated by explicit opt-in env.
 
 ## 2. Current State
@@ -70,7 +71,7 @@ Implementation PRs should validate behavior against these contracts:
   `https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetInferenceProfile.html`
 - AWS Bedrock inference profile support:
   `https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html`
-- Anthropic Claude model overview:
+- Anthropic Claude model overview, including Claude API and AWS Bedrock IDs:
   `https://platform.claude.com/docs/en/about-claude/models/overview`
 - Anthropic Claude Opus 4.7 migration notes:
   `https://platform.claude.com/docs/en/about-claude/models/whats-new-claude-4-7`
@@ -84,7 +85,7 @@ Bedrock must have three explicit surfaces:
 | Surface | Auth | Transport | Provider selector |
 | --- | --- | --- | --- |
 | Native Bedrock runtime | AWS SigV4 | `bedrock-runtime.{region}.amazonaws.com` | `bedrock` / `aws-bedrock` |
-| Bedrock Mantle Anthropic Messages | Bedrock API key or SigV4 | `bedrock-mantle.{region}.api.aws/anthropic/v1/messages` | Native Bedrock endpoint mode |
+| Bedrock Mantle Anthropic Messages | AWS SigV4 in current `BedrockConfig`; Bedrock API key only after config support exists | `bedrock-mantle.{region}.api.aws/anthropic/v1/messages` | Native Bedrock endpoint mode |
 | OpenAI-compatible Bedrock proxy | Proxy API key | Proxy `/v1` chat/completions contract | `openai_compatible` |
 
 The native Bedrock provider should own AWS model IDs, SigV4, Converse, Invoke,
@@ -172,9 +173,12 @@ Parameter policy should be enforced before serialization. Unsupported or
 forbidden parameters should raise a typed invalid-request error rather than
 being dropped or sent to AWS to fail later.
 
-Claude Opus 4.7 seed entry:
+Claude Opus 4.7 Messages-API Bedrock seed entry:
 
 - Bedrock ID: `anthropic.claude-opus-4-7`
+- Source: Anthropic model overview lists this as the AWS Bedrock ID for Claude
+  Opus 4.7 through the Messages-API Bedrock endpoint; implementation must still
+  verify account and region availability before enabling live runtime support.
 - Context: 1M tokens
 - Max synchronous output: 128K tokens
 - Thinking: adaptive thinking only when explicitly enabled
@@ -231,7 +235,9 @@ providers:
     provider_type: bedrock
     endpoint_mode: mantle_messages
     aws_region: us-east-1
-    api_key: ${BEDROCK_API_KEY}
+    aws_access_key_id: ${AWS_ACCESS_KEY_ID}
+    aws_secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+    aws_session_token: ${AWS_SESSION_TOKEN}
 ```
 
 OpenAI-compatible proxy mode should not use `provider_type: bedrock`:
