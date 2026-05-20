@@ -1,0 +1,115 @@
+# LiteLLM-RS Gateway Development Configuration Example
+# Local smoke-test config: no provider credentials and no auth secrets required.
+# Use config/gateway.yaml.example for production-style deployments.
+
+schema_version: "1.0"
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+  dev_mode: true
+  cors:
+    enabled: true
+    allowed_origins:
+      - "http://localhost:3000"
+      - "http://127.0.0.1:3000"
+    allowed_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    allowed_headers: ["authorization", "content-type", "x-requested-with"]
+    max_age: 3600
+    allow_credentials: false
+
+providers:
+  - name: "local-vllm"
+    provider_type: "vllm"
+    api_key: ""
+    weight: 1.0
+    rpm: 1000
+    tpm: 100000
+    max_concurrent_requests: 32
+    timeout: 30
+    max_retries: 1
+    models:
+      - "local-model"
+    tags: ["local", "development"]
+    enabled: true
+
+router:
+  strategy: "round_robin"
+  circuit_breaker:
+    failure_threshold: 5
+    recovery_timeout: 60
+    min_requests: 10
+    success_threshold: 3
+  load_balancer:
+    health_check_enabled: false
+    sticky_sessions: false
+    session_timeout: 3600
+
+storage:
+  database:
+    url: "postgresql://localhost/litellm"
+    max_connections: 10
+    connection_timeout: 5
+    ssl: false
+    enabled: false
+  redis:
+    url: "redis://localhost:6379"
+    enabled: false
+    max_connections: 20
+    connection_timeout: 5
+    cluster: false
+  vector_db: null
+
+auth:
+  enable_jwt: false
+  enable_api_key: false
+  jwt_secret: ""
+  jwt_expiration: 86400
+  api_key_header: "Authorization"
+  rbac:
+    enabled: false
+    default_role: "user"
+    admin_roles: ["admin", "superuser"]
+
+monitoring:
+  metrics:
+    enabled: false
+    port: 9090
+    path: "/metrics"
+    interval_seconds: 15
+  tracing:
+    enabled: false
+    endpoint: null
+    service_name: "litellm-rs-dev"
+    sampling_rate: 0.1
+    jaeger: null
+  health:
+    path: "/health"
+    detailed: true
+  logging: null
+
+cache:
+  enabled: false
+  ttl: 3600
+  max_size: 1000
+  semantic_cache: false
+  similarity_threshold: 0.95
+
+pricing:
+  source: "config/model_prices_extended.json"
+
+rate_limit:
+  enabled: false
+  strategy: token_bucket
+  default_rpm: 1000
+  default_tpm: 100000
+  requests_per_second: null
+  requests_per_minute: null
+  tokens_per_minute: null
+  burst_size: null
+
+enterprise:
+  enabled: false
+  sso: null
+  audit_logging: false
+  advanced_analytics: false

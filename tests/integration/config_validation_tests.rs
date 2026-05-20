@@ -6,11 +6,13 @@
 
 #[cfg(test)]
 mod tests {
+    use litellm_rs::Config;
     use litellm_rs::config::models::gateway::GatewayConfig;
     use litellm_rs::config::models::provider::{
         ProviderConfig, ProviderHealthCheckConfig, RetryConfig,
     };
     use litellm_rs::config::models::server::{CorsConfig, ServerConfig, TlsConfig};
+    use std::path::Path;
 
     // ==================== GatewayConfig Validation ====================
 
@@ -19,6 +21,26 @@ mod tests {
     fn test_valid_gateway_config() {
         let config = create_valid_gateway_config();
         assert!(config.validate().is_ok());
+    }
+
+    /// Test that the README gateway quickstart config validates without secrets.
+    #[tokio::test]
+    async fn test_gateway_dev_example_validates_without_secrets() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/gateway.dev.yaml.example");
+        let content = std::fs::read_to_string(&path).expect("dev gateway example should exist");
+
+        assert!(
+            !content.contains("${"),
+            "dev gateway example must not require environment placeholders"
+        );
+
+        let config = Config::from_file(&path)
+            .await
+            .expect("dev gateway example should validate");
+
+        assert!(!config.auth().enable_jwt);
+        assert!(!config.auth().enable_api_key);
+        assert_eq!(config.providers()[0].provider_type, "vllm");
     }
 
     /// Test that server port 0 fails validation

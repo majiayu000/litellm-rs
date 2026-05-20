@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```bash
 git clone https://github.com/majiayu000/litellm-rs.git
 cd litellm-rs
-cp config/gateway.yaml.example config/gateway.yaml
+cp config/gateway.dev.yaml.example config/gateway.yaml
 cargo run --bin gateway
 ```
 
@@ -64,7 +64,7 @@ cargo run --bin gateway
 ```bash
 cargo install litellm-rs --bin gateway
 mkdir -p config
-curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.yaml.example -o config/gateway.yaml
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
 ```
 
@@ -72,6 +72,7 @@ Notes:
 
 - `gateway` requires the `storage` feature at build time.
 - Default features include `sqlite`, so default `cargo run`/`cargo install` satisfy this requirement.
+- The development config starts without provider credentials or auth secrets and uses the local `vllm` catalog provider. Use `config/gateway.yaml.example` for production-style deployments with real provider keys and auth enabled.
 
 ## Installation
 
@@ -217,7 +218,8 @@ while let Some(chunk) = stream.next().await {
 
 - [API Documentation](https://docs.rs/litellm-rs)
 - [Documentation Index](./docs/README.md)
-- [Configuration Guide](./config/gateway.yaml.example)
+- [Development Gateway Config](./config/gateway.dev.yaml.example)
+- [Production Gateway Config](./config/gateway.yaml.example)
 - [Examples](./examples/README.md)
 
 ## Contributing
