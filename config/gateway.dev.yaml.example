@@ -96,7 +96,7 @@ cache:
   similarity_threshold: 0.95
 
 pricing:
-  source: "config/model_prices_extended.json"
+  source: null
 
 rate_limit:
   enabled: false

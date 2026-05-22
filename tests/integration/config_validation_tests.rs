@@ -27,7 +27,9 @@ mod tests {
     #[tokio::test]
     async fn test_gateway_dev_example_validates_without_secrets() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/gateway.dev.yaml.example");
-        let content = std::fs::read_to_string(&path).expect("dev gateway example should exist");
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .expect("dev gateway example should exist");
 
         assert!(
             !content.contains("${"),
@@ -40,6 +42,7 @@ mod tests {
 
         assert!(!config.auth().enable_jwt);
         assert!(!config.auth().enable_api_key);
+        assert!(config.gateway.pricing.source.is_none());
         assert_eq!(config.providers()[0].provider_type, "vllm");
     }
 
