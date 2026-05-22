@@ -3,7 +3,7 @@
 ## 0. Metadata
 
 - Task: `bedrock-native-routing-and-current-model-catalog`
-- Repository: `/Users/apple/Desktop/code/AI/gateway/litellm-rs`
+- Repository: `litellm-rs`
 - Compatibility strategy: required
 - Commit strategy: milestone
 - Date: 2026-05-20
@@ -126,9 +126,8 @@ pub struct BedrockModelCatalogEntry {
     pub model_id: &'static str,
     pub family: BedrockModelFamily,
     pub provider: BedrockFoundationProvider,
-    pub supported_endpoints: &'static [BedrockEndpointKind],
+    pub endpoint_configs: &'static [BedrockEndpointConfig],
     pub preferred_endpoint: BedrockEndpointKind,
-    pub runtime_api: BedrockRuntimeApi,
     pub context_window: u32,
     pub max_output_tokens: Option<u32>,
     pub supports_streaming: bool,
@@ -144,6 +143,12 @@ pub struct BedrockModelCatalogEntry {
 Endpoint and API enums:
 
 ```rust
+pub struct BedrockEndpointConfig {
+    pub kind: BedrockEndpointKind,
+    pub request_api: BedrockRuntimeApi,
+    pub streaming_api: Option<BedrockRuntimeApi>,
+}
+
 pub enum BedrockEndpointKind {
     Runtime,
     Mantle,
@@ -173,7 +178,8 @@ pub struct BedrockParameterPolicy {
 Claude Opus 4.7 should be represented as:
 
 - `model_id`: `anthropic.claude-opus-4-7`
-- `supported_endpoints`: `Runtime`, `Mantle`
+- `endpoint_configs`: `Runtime` with `Converse` / `ConverseStream`, and
+  `Mantle` with `MantleMessages`
 - `preferred_endpoint`: `Runtime` for existing `completion()` compatibility
 - `context_window`: `1_000_000`
 - `max_output_tokens`: `128_000`
@@ -288,17 +294,21 @@ Do not use `provider_type: "bedrock"` for an OpenAI-compatible proxy.
   - `src/core/providers/bedrock/provider_tests.rs`
   - `docs/providers/README.md`
 - Changes:
-  - Add/refresh Claude Opus 4.7, Sonnet 4.6, Haiku 4.5, current Nova,
+  - Add/refresh current Claude Opus 4.7, Sonnet 4.6, Haiku 4.5, Nova,
     DeepSeek, MiniMax, Mistral, Moonshot, Qwen, OpenAI OSS, Writer, and Z.AI
     entries according to endpoint availability.
-  - Represent `bedrock-runtime` vs `bedrock-mantle` support explicitly.
+  - Preserve the issue #6 Sonnet 3.5 ID as a legacy regression entry so the
+    original failing route keeps resolving.
+  - Represent each `bedrock-runtime` and `bedrock-mantle` endpoint with its
+    required API protocol explicitly.
   - Mark legacy/EOL models instead of deleting them immediately.
   - Add catalog tests for latest model IDs and older issue #6 model ID.
 - Step test commands:
   - `cargo test --lib --no-default-features --features "lite,providers-extra" bedrock_catalog`
   - `cargo test --lib --no-default-features --features "lite,providers-extra" bedrock`
 - Completion criteria:
-  - Claude Opus 4.7 and the issue #6 Sonnet 3.5 model both resolve correctly.
+  - Claude Opus 4.7, current Sonnet 4.6, and the issue #6 Sonnet 3.5 model all
+    resolve correctly.
   - Endpoint support and parameter policy are visible in one catalog entry.
 
 ### Step A4 - Parameter Policy Validation
