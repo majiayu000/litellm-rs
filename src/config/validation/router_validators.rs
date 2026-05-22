@@ -50,7 +50,7 @@ impl Validate for LoadBalancerConfig {
             );
         }
 
-        if self.session_timeout != 3600 {
+        if self.session_timeout != LoadBalancerConfig::default().session_timeout {
             return Err(
                 "router.load_balancer.session_timeout is not implemented by runtime router yet"
                     .to_string(),
