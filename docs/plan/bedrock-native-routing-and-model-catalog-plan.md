@@ -267,8 +267,9 @@ providers:
   - Keep proxy deployments on `ProviderType::OpenAICompatible`.
   - Update lifecycle/dispatch metadata from `ExplicitOpenAiLike` to native.
 - Test commands:
-  - `cargo test provider_factory bedrock --lib`
-  - `cargo test --test integration provider_factory`
+  - `cargo test factory --lib`
+  - `cargo test bedrock --lib`
+  - `cargo test --test lib provider_factory`
 - Done when:
   - Native Bedrock provider creation no longer requires a generic `api_key`.
   - OpenAI-compatible proxy examples still route through OpenAI-like provider.
@@ -331,7 +332,8 @@ providers:
     extended thinking budgets.
 - Test commands:
   - `cargo test bedrock_parameter_policy --lib`
-  - `cargo test bedrock anthropic --lib`
+  - `cargo test bedrock --lib`
+  - `cargo test anthropic --lib`
 - Done when:
   - Unsupported sampling and thinking settings fail before HTTP calls.
   - Allowed model settings serialize into the documented Bedrock shape.
