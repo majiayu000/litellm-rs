@@ -441,14 +441,29 @@ pub(super) fn get_deepseek_pricing(model: &str) -> Result<ModelPricing, CostErro
     use chrono::Utc;
 
     let pricing = match model.to_lowercase().as_str() {
-        m if m.contains("deepseek-chat") => ModelPricing {
+        m if m.contains("deepseek-v4-pro") => ModelPricing {
             model: model.to_string(),
-            input_cost_per_1k_tokens: 0.00014,
-            output_cost_per_1k_tokens: 0.00028,
+            input_cost_per_1k_tokens: 0.000435,
+            output_cost_per_1k_tokens: 0.00087,
+            cache_read_input_token_cost: Some(0.000003625),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
         },
+        m if m.contains("deepseek-v4-flash")
+            || m.contains("deepseek-chat")
+            || m.contains("deepseek-reasoner") =>
+        {
+            ModelPricing {
+                model: model.to_string(),
+                input_cost_per_1k_tokens: 0.00014,
+                output_cost_per_1k_tokens: 0.00028,
+                cache_read_input_token_cost: Some(0.0000028),
+                currency: "USD".to_string(),
+                updated_at: Utc::now(),
+                ..Default::default()
+            }
+        }
         _ => {
             return Err(CostError::ModelNotSupported {
                 model: model.to_string(),

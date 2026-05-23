@@ -219,7 +219,13 @@ pub mod deepseek_thinking {
     use super::*;
 
     /// DeepSeek thinking models
-    const DEEPSEEK_THINKING_MODELS: &[&str] = &["deepseek-r1", "deepseek-reasoner", "r1"];
+    const DEEPSEEK_THINKING_MODELS: &[&str] = &[
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-r1",
+        "deepseek-reasoner",
+        "r1",
+    ];
 
     /// Check if a DeepSeek model supports thinking
     pub fn supports_thinking(model: &str) -> bool {
@@ -231,6 +237,8 @@ pub mod deepseek_thinking {
 
     /// Get thinking capabilities for DeepSeek models
     pub fn capabilities(model: &str) -> ThinkingCapabilities {
+        let model_lower = model.to_lowercase();
+
         if supports_thinking(model) {
             ThinkingCapabilities {
                 supports_thinking: true,
@@ -246,7 +254,7 @@ pub mod deepseek_thinking {
                     .map(|s| s.to_string())
                     .collect(),
                 can_return_thinking: true,
-                thinking_always_on: true, // DeepSeek R1 always thinks
+                thinking_always_on: !model_lower.contains("deepseek-v4"),
             }
         } else {
             ThinkingCapabilities::unsupported()
@@ -407,7 +415,10 @@ pub mod openrouter_thinking {
         }
 
         // Check for DeepSeek reasoning models
-        if model_lower.contains("deepseek-r1") || model_lower.contains("reasoner") {
+        if model_lower.contains("deepseek-v4")
+            || model_lower.contains("deepseek-r1")
+            || model_lower.contains("reasoner")
+        {
             return true;
         }
 
@@ -543,5 +554,21 @@ pub mod openrouter_thinking {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod deepseek_v4_tests {
+    use super::deepseek_thinking;
+
+    #[test]
+    fn supports_deepseek_v4_thinking_models() {
+        assert!(deepseek_thinking::supports_thinking("deepseek-v4-flash"));
+        assert!(deepseek_thinking::supports_thinking("deepseek-v4-pro"));
+
+        let caps = deepseek_thinking::capabilities("deepseek-v4-flash");
+        assert!(caps.supports_thinking);
+        assert!(caps.supports_streaming_thinking);
+        assert!(!caps.thinking_always_on);
     }
 }

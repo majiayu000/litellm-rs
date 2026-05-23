@@ -341,17 +341,25 @@ impl Default for PricingDatabase {
             builtin_model("anthropic", 0.000003, 0.000015, 200000, 4096, true, true),
         );
 
-        models.insert(
-            "deepseek-chat".to_string(),
-            builtin_model(
-                "deepseek", 0.00000056, 0.00000168, 128000, 8192, true, false,
-            ),
-        );
+        for model in ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"] {
+            models.insert(
+                model.to_string(),
+                builtin_model(
+                    "deepseek", 0.00000014, 0.00000028, 1048576, 393216, true, false,
+                ),
+            );
+        }
 
         models.insert(
-            "deepseek-reasoner".to_string(),
+            "deepseek-v4-pro".to_string(),
             builtin_model(
-                "deepseek", 0.00000056, 0.00000168, 128000, 8192, true, false,
+                "deepseek",
+                0.000000435,
+                0.00000087,
+                1048576,
+                393216,
+                true,
+                false,
             ),
         );
 
