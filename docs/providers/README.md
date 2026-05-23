@@ -5,7 +5,7 @@ LiteLLM-RS supports 100+ AI providers through a unified interface. This section 
 ## 🎯 Supported Providers
 
 ### **Tier 1 Providers** (Full Feature Support)
-- [**OpenAI**](./openai.md) - GPT-5.4, GPT-5.4 mini, GPT-4.1, Embeddings, GPT Image 1.5
+- [**OpenAI**](./openai.md) - GPT-5.5, GPT-5.5 Pro, GPT-5.4 mini, Embeddings, GPT Image 1.5
 - [**Anthropic**](./anthropic.md) - Claude Opus 4.7, Sonnet 4.6, Haiku 4.5
 - [**DeepSeek**](./deepseek.md) - DeepSeek V3.1 Chat & Reasoner
 - [**Google**](./google.md) - Gemini Pro, PaLM, Vertex AI
@@ -42,7 +42,7 @@ LiteLLM-RS supports 100+ AI providers through a unified interface. This section 
 ### OpenAI Compatible
 ```rust
 // Works with OpenAI, Azure OpenAI, OpenRouter, etc.
-let response = completion("gpt-5.4", messages, None).await?;
+let response = completion("gpt-5.5", messages, None).await?;
 ```
 
 ### Provider-Specific Models
@@ -61,7 +61,7 @@ let response = completion("gemini-3.1-pro-preview", messages, None).await?;
 ### Provider Prefixes
 ```rust
 // Explicit provider specification
-let openai_response = completion("openai/gpt-5.4", messages, None).await?;
+let openai_response = completion("openai/gpt-5.5", messages, None).await?;
 let anthropic_response = completion("anthropic/claude-opus-4-7", messages, None).await?;
 let deepseek_response = completion("deepseek/deepseek-chat", messages, None).await?;
 ```
@@ -116,7 +116,7 @@ let router = Router::new()
     .add_provider("deepseek", deepseek_provider)
     .with_strategy(RoutingStrategy::LeastLatency);
 
-let response = router.completion("gpt-5.4", messages).await?;
+let response = router.completion("gpt-5.5", messages).await?;
 ```
 
 ### Fallback Chains

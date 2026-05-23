@@ -162,7 +162,8 @@ impl SdkConfigBuilder {
             api_key: api_key.to_string(),
             base_url: None,
             models: vec![
-                "gpt-5.4".to_string(),
+                "gpt-5.5".to_string(),
+                "gpt-5.5-pro".to_string(),
                 "gpt-5.4-mini".to_string(),
                 "gpt-5.4-nano".to_string(),
             ],

@@ -195,7 +195,8 @@ pub fn validate_usage(usage: &UsageTokens) -> Result<(), CostError> {
 pub fn get_model_category(model: &str) -> &'static str {
     let model_lower = model.to_lowercase();
 
-    if model_lower.contains("gpt-5.4")
+    if model_lower.contains("gpt-5.5")
+        || model_lower.contains("gpt-5.4")
         || model_lower.contains("gpt-5.2")
         || model_lower.contains("gpt-5.1")
         || model_lower.contains("gpt-5-codex")

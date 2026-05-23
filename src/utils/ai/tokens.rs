@@ -20,6 +20,8 @@ pub struct TokenUtils;
 
 impl TokenUtils {
     const OPENAI_MODELS: &'static [&'static str] = &[
+        "gpt-5.5",
+        "gpt-5.5-pro",
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.4-nano",
@@ -252,6 +254,7 @@ impl TokenUtils {
 
     pub fn get_max_tokens_for_model(model: &str) -> Option<usize> {
         match model.to_lowercase().as_str() {
+            m if m.contains("gpt-5.5") => Some(1_048_576),
             m if m.contains("gpt-5.4")
                 && !m.contains("gpt-5.4-mini")
                 && !m.contains("gpt-5.4-nano") =>
@@ -287,6 +290,8 @@ impl TokenUtils {
         output_tokens: usize,
     ) -> Result<f64, ProviderError> {
         let (input_price, output_price) = match model.to_lowercase().as_str() {
+            m if m.contains("gpt-5.5-pro") => (0.015, 0.120),
+            m if m.contains("gpt-5.5") => (0.00125, 0.010),
             m if m.contains("gpt-5.4-pro") => (0.030, 0.180),
             m if m.contains("gpt-5.4-mini") => (0.00075, 0.0045),
             m if m.contains("gpt-5.4-nano") => (0.0002, 0.00125),
@@ -427,6 +432,10 @@ mod tests {
         assert_eq!(
             TokenUtils::get_max_tokens_for_model("gpt-4-32k"),
             Some(32768)
+        );
+        assert_eq!(
+            TokenUtils::get_max_tokens_for_model("gpt-5.5-pro"),
+            Some(1_048_576)
         );
         assert_eq!(
             TokenUtils::get_max_tokens_for_model("gpt-5.4-pro"),

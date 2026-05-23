@@ -337,7 +337,7 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             0.00125,
             0.010,
         ),
-        // ==================== GPT-5.2 Series (2025 - Latest) ====================
+        // ==================== GPT-5.2 Series (2025) ====================
         (
             "gpt-5.2-pro",
             "GPT-5.2 Pro",
@@ -428,6 +428,43 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             Some(16384),
             0.00125,
             0.010,
+        ),
+        // ==================== GPT-5.5 Series (2026 - Latest) ====================
+        (
+            "gpt-5.5",
+            "GPT-5.5",
+            OpenAIModelFamily::GPT55,
+            1048576,
+            Some(128000),
+            0.00125,
+            0.010,
+        ),
+        (
+            "gpt-5.5-2026-04-23",
+            "GPT-5.5 (Apr 2026)",
+            OpenAIModelFamily::GPT55,
+            1048576,
+            Some(128000),
+            0.00125,
+            0.010,
+        ),
+        (
+            "gpt-5.5-pro",
+            "GPT-5.5 Pro",
+            OpenAIModelFamily::GPT55Pro,
+            1048576,
+            Some(128000),
+            0.015,
+            0.120,
+        ),
+        (
+            "gpt-5.5-pro-2026-04-23",
+            "GPT-5.5 Pro (Apr 2026)",
+            OpenAIModelFamily::GPT55Pro,
+            1048576,
+            Some(128000),
+            0.015,
+            0.120,
         ),
         // ==================== GPT Audio Models (2025) ====================
         (

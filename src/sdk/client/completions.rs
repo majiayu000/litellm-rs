@@ -453,7 +453,7 @@ impl LLMClient {
         provider: &crate::sdk::config::SdkProviderConfig,
         request: SdkChatRequest,
     ) -> Result<ChatResponse> {
-        let model = self.resolve_chat_request_model(&request, provider, "gpt-5.4");
+        let model = self.resolve_chat_request_model(&request, provider, "gpt-5.5");
         let body = build_openai_request_body(&request, model);
         let url = self.provider_endpoint(provider, "https://api.openai.com", "v1/chat/completions");
 
@@ -704,10 +704,10 @@ mod tests {
 
     #[test]
     fn test_openai_request_body_preserves_explicit_model() {
-        let provider = provider(ProviderType::OpenAI, &["gpt-5.4", "gpt-5.4-mini"]);
+        let provider = provider(ProviderType::OpenAI, &["gpt-5.5", "gpt-5.4-mini"]);
         let client = client(provider.clone());
         let request = chat_request("gpt-5.4-mini");
-        let model = client.resolve_chat_request_model(&request, &provider, "gpt-5.4");
+        let model = client.resolve_chat_request_model(&request, &provider, "gpt-5.5");
         let body = build_openai_request_body(&request, model);
 
         assert_eq!(body["model"], "gpt-5.4-mini");
@@ -729,13 +729,13 @@ mod tests {
 
     #[test]
     fn test_chat_request_model_falls_back_to_provider_default() {
-        let provider = provider(ProviderType::OpenAI, &["gpt-5.4", "gpt-5.4-mini"]);
+        let provider = provider(ProviderType::OpenAI, &["gpt-5.5", "gpt-5.4-mini"]);
         let client = client(provider.clone());
         let request = chat_request("");
 
         assert_eq!(
-            client.resolve_chat_request_model(&request, &provider, "gpt-5.4"),
-            "gpt-5.4"
+            client.resolve_chat_request_model(&request, &provider, "gpt-5.5"),
+            "gpt-5.5"
         );
     }
 }

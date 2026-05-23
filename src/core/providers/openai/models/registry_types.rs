@@ -107,6 +107,8 @@ pub enum OpenAIModelFamily {
     GPT52,         // GPT-5.2 models (2025)
     GPT52Pro,      // GPT-5.2 Pro models (2025)
     GPT52Codex,    // GPT-5.2 Codex models (2025)
+    GPT55,         // GPT-5.5 models (2026)
+    GPT55Pro,      // GPT-5.5 Pro models (2026)
     O1,            // O1 reasoning models
     O1Pro,         // O1 Pro reasoning models
     O3,            // O3 reasoning models (2025)

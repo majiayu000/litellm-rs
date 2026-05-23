@@ -79,7 +79,10 @@ impl OpenAIModelRegistry {
         let model_id = &model_info.id;
 
         // Keep streaming feature aligned with create_config().
-        if !model_id.contains("embedding") && !model_id.starts_with("whisper") {
+        if !model_id.contains("embedding")
+            && !model_id.starts_with("whisper")
+            && !model_id.starts_with("gpt-5.5-pro")
+        {
             features.push(OpenAIModelFeature::StreamingSupport);
         }
 
@@ -178,6 +181,10 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT4
         } else if model_id.starts_with("gpt-3.5") {
             OpenAIModelFamily::GPT35
+        } else if model_id.starts_with("gpt-5.5-pro") {
+            OpenAIModelFamily::GPT55Pro
+        } else if model_id.starts_with("gpt-5.5") {
+            OpenAIModelFamily::GPT55
         } else if model_id.starts_with("gpt-5.4-nano") {
             OpenAIModelFamily::GPT54Nano
         } else if model_id.starts_with("gpt-5.4-pro") {
@@ -274,8 +281,9 @@ impl OpenAIModelRegistry {
                 | "text-embedding-3-large"
         );
 
-        config.supports_streaming =
-            !model_id.contains("embedding") && !model_id.contains("whisper");
+        config.supports_streaming = !model_id.contains("embedding")
+            && !model_id.contains("whisper")
+            && !model_id.starts_with("gpt-5.5-pro");
 
         config
     }
@@ -308,6 +316,8 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT52
                         | OpenAIModelFamily::GPT52Pro
                         | OpenAIModelFamily::GPT52Codex
+                        | OpenAIModelFamily::GPT55
+                        | OpenAIModelFamily::GPT55Pro
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -334,6 +344,8 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT52
                         | OpenAIModelFamily::GPT52Pro
                         | OpenAIModelFamily::GPT52Codex
+                        | OpenAIModelFamily::GPT55
+                        | OpenAIModelFamily::GPT55Pro
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -358,6 +370,11 @@ impl OpenAIModelRegistry {
             // Deep-research models don't support developer-defined tool/function calling
             if id.contains("deep-research") {
                 model_info.supports_tools = false;
+            }
+
+            // GPT-5.5 Pro does not support streaming in the official OpenAI model docs.
+            if id.starts_with("gpt-5.5-pro") {
+                model_info.supports_streaming = false;
             }
 
             // Mark known deprecated/removed models
@@ -446,10 +463,10 @@ impl OpenAIModelRegistry {
     /// Get the best model for a specific use case
     pub fn get_recommended_model(&self, use_case: OpenAIUseCase) -> Option<String> {
         match use_case {
-            OpenAIUseCase::GeneralChat => Some("gpt-5.4".to_string()),
-            OpenAIUseCase::CodeGeneration => Some("gpt-5.4".to_string()),
+            OpenAIUseCase::GeneralChat => Some("gpt-5.5".to_string()),
+            OpenAIUseCase::CodeGeneration => Some("gpt-5.5".to_string()),
             OpenAIUseCase::Reasoning => Some("o3-pro".to_string()),
-            OpenAIUseCase::Vision => Some("gpt-5.4".to_string()),
+            OpenAIUseCase::Vision => Some("gpt-5.5".to_string()),
             OpenAIUseCase::ImageGeneration => Some("gpt-image-1.5".to_string()),
             OpenAIUseCase::AudioTranscription => Some("whisper-1".to_string()),
             OpenAIUseCase::TextToSpeech => Some("tts-1-hd".to_string()),
@@ -507,12 +524,56 @@ mod tests {
     }
 
     #[test]
+    fn test_gpt55_catalog_entries() {
+        let registry = get_openai_registry();
+
+        let Some(gpt55) = registry.get_model_spec("gpt-5.5") else {
+            panic!("gpt-5.5 should be in the static OpenAI catalog");
+        };
+        assert_eq!(gpt55.family, OpenAIModelFamily::GPT55);
+        assert_eq!(gpt55.model_info.max_context_length, 1_048_576);
+        assert_eq!(gpt55.model_info.max_output_length, Some(128_000));
+        assert_eq!(gpt55.model_info.input_cost_per_1k_tokens, Some(0.00125));
+        assert_eq!(gpt55.model_info.output_cost_per_1k_tokens, Some(0.010));
+        assert!(gpt55.model_info.supports_tools);
+        assert!(gpt55.model_info.supports_streaming);
+        assert!(gpt55.model_info.supports_multimodal);
+
+        let Some(snapshot) = registry.get_model_spec("gpt-5.5-2026-04-23") else {
+            panic!("gpt-5.5 snapshot should be in the static OpenAI catalog");
+        };
+        assert_eq!(snapshot.family, OpenAIModelFamily::GPT55);
+    }
+
+    #[test]
+    fn test_gpt55_pro_catalog_entry() {
+        let registry = get_openai_registry();
+
+        let Some(gpt55_pro) = registry.get_model_spec("gpt-5.5-pro") else {
+            panic!("gpt-5.5-pro should be in the static OpenAI catalog");
+        };
+        assert_eq!(gpt55_pro.family, OpenAIModelFamily::GPT55Pro);
+        assert_eq!(gpt55_pro.model_info.max_context_length, 1_048_576);
+        assert_eq!(gpt55_pro.model_info.max_output_length, Some(128_000));
+        assert_eq!(gpt55_pro.model_info.input_cost_per_1k_tokens, Some(0.015));
+        assert_eq!(gpt55_pro.model_info.output_cost_per_1k_tokens, Some(0.120));
+        assert!(gpt55_pro.model_info.supports_tools);
+        assert!(!gpt55_pro.model_info.supports_streaming);
+        assert!(gpt55_pro.model_info.supports_multimodal);
+        assert!(
+            !gpt55_pro
+                .features
+                .contains(&OpenAIModelFeature::StreamingSupport)
+        );
+    }
+
+    #[test]
     fn test_model_recommendations() {
         let registry = get_openai_registry();
 
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::GeneralChat),
-            Some("gpt-5.4".to_string())
+            Some("gpt-5.5".to_string())
         );
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::Reasoning),

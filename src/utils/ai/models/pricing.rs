@@ -14,6 +14,8 @@ impl ModelUtils {
         }
 
         match model_lower.as_str() {
+            m if m.starts_with("gpt-5.5-pro") => Some((0.015, 0.120)),
+            m if m.starts_with("gpt-5.5") => Some((0.00125, 0.010)),
             m if m.starts_with("gpt-5.4-pro") => Some((0.030, 0.180)),
             m if m.starts_with("gpt-5.4-mini") => Some((0.00075, 0.0045)),
             m if m.starts_with("gpt-5.4-nano") => Some((0.0002, 0.00125)),
@@ -67,6 +69,13 @@ impl ModelUtils {
         let mut aliases = vec![];
 
         match model_lower.as_str() {
+            "gpt-5.5" => {
+                aliases.extend_from_slice(&[
+                    "openai/gpt-5.5".to_string(),
+                    "gpt-5.5-2026-04-23".to_string(),
+                    "gpt-5.5-pro".to_string(),
+                ]);
+            }
             "gpt-5.4" => {
                 aliases.extend_from_slice(&[
                     "openai/gpt-5.4".to_string(),
