@@ -446,6 +446,20 @@
     "supports_vision": true,
     "supports_streaming": true
   },
+  "gemini-3.5-flash": {
+    "max_tokens": 65536,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 65536,
+    "input_cost_per_token": 1.5e-06,
+    "output_cost_per_token": 9e-06,
+    "cache_read_input_token_cost": 1.5e-07,
+    "litellm_provider": "vertex_ai",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true
+  },
   "gemini-pro": {
     "max_tokens": 32760,
     "max_input_tokens": 32760,
@@ -505,6 +519,52 @@
     "mode": "chat",
     "supports_function_calling": true,
     "supports_streaming": true
+  },
+  "command-a-plus-05-2026": {
+    "max_tokens": 64000,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 64000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_05_24"
+  },
+  "command-a-03-2025": {
+    "max_tokens": 8000,
+    "max_input_tokens": 256000,
+    "max_output_tokens": 8000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": false,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_05_24"
+  },
+  "embed-v4.0": {
+    "max_tokens": 128000,
+    "max_input_tokens": 128000,
+    "litellm_provider": "cohere",
+    "mode": "embedding",
+    "supports_vision": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_05_24"
+  },
+  "rerank-v4.0-pro": {
+    "max_tokens": 32000,
+    "max_input_tokens": 32000,
+    "litellm_provider": "cohere",
+    "mode": "rerank",
+    "pricing_status": "search_unit_pricing_not_token_pricing"
+  },
+  "rerank-v4.0-fast": {
+    "max_tokens": 32000,
+    "max_input_tokens": 32000,
+    "litellm_provider": "cohere",
+    "mode": "rerank",
+    "pricing_status": "search_unit_pricing_not_token_pricing"
   },
   "command-r": {
     "max_tokens": 4096,

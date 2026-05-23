@@ -151,6 +151,8 @@ async fn test_provider_has_command_models() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
     let models = provider.models();
 
+    assert!(models.iter().any(|m| m.id == "command-a-plus-05-2026"));
+    assert!(models.iter().any(|m| m.id == "command-a-03-2025"));
     assert!(models.iter().any(|m| m.id == "command-r-plus"));
     assert!(models.iter().any(|m| m.id == "command-r"));
     assert!(models.iter().any(|m| m.id == "command"));
@@ -162,6 +164,7 @@ async fn test_provider_has_embed_models() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
     let models = provider.models();
 
+    assert!(models.iter().any(|m| m.id == "embed-v4.0"));
     assert!(models.iter().any(|m| m.id == "embed-english-v3.0"));
     assert!(models.iter().any(|m| m.id == "embed-multilingual-v3.0"));
     assert!(models.iter().any(|m| m.id == "embed-english-light-v3.0"));
@@ -172,6 +175,8 @@ async fn test_provider_has_rerank_models() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
     let models = provider.models();
 
+    assert!(models.iter().any(|m| m.id == "rerank-v4.0-pro"));
+    assert!(models.iter().any(|m| m.id == "rerank-v4.0-fast"));
     assert!(models.iter().any(|m| m.id == "rerank-english-v3.0"));
     assert!(models.iter().any(|m| m.id == "rerank-multilingual-v3.0"));
 }
@@ -182,10 +187,39 @@ async fn test_provider_models_have_pricing() {
     let models = provider.models();
 
     for model in models {
-        assert!(model.input_cost_per_1k_tokens.is_some());
-        assert!(model.output_cost_per_1k_tokens.is_some());
         assert_eq!(model.provider, "cohere");
+        assert_eq!(model.currency, "USD");
+        if model.input_cost_per_1k_tokens.is_none() || model.output_cost_per_1k_tokens.is_none() {
+            assert_eq!(model.metadata.get("status"), Some(&json!("live")));
+        }
     }
+}
+
+#[tokio::test]
+async fn test_current_cohere_model_metadata() {
+    let Ok(provider) = CohereProvider::with_api_key("key").await else {
+        panic!("cohere provider should initialize with an API key");
+    };
+    let models = provider.models();
+
+    let Some(command_a_plus) = models
+        .iter()
+        .find(|model| model.id == "command-a-plus-05-2026")
+    else {
+        panic!("command-a-plus-05-2026 should be registered");
+    };
+    assert_eq!(command_a_plus.max_context_length, 128000);
+    assert_eq!(command_a_plus.max_output_length, Some(64000));
+    assert!(command_a_plus.supports_tools);
+    assert!(command_a_plus.supports_multimodal);
+
+    let Some(command) = models.iter().find(|model| model.id == "command") else {
+        panic!("command should remain registered as a deprecated legacy alias");
+    };
+    assert_eq!(
+        command.metadata.get("status"),
+        Some(&json!("deprecated_2025_09_15"))
+    );
 }
 
 // ==================== Model Classification Tests ====================

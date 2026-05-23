@@ -208,6 +208,17 @@ fn test_get_vertex_ai_pricing_gemini_flash() {
 }
 
 #[test]
+fn test_get_vertex_ai_pricing_gemini_35_flash() {
+    let pricing = get_model_pricing("gemini-3.5-flash", "vertex_ai");
+    let Ok(pricing) = pricing else {
+        panic!("gemini-3.5-flash pricing should load from shared pricing data");
+    };
+    assert_eq!(pricing.input_cost_per_1k_tokens, 0.0015);
+    assert_cost_eq(pricing.output_cost_per_1k_tokens, 0.009);
+    assert_eq!(pricing.cache_read_input_token_cost, Some(0.00015));
+}
+
+#[test]
 fn test_get_deepseek_pricing() {
     let pricing = get_model_pricing("deepseek-chat", "deepseek");
     assert!(pricing.is_ok());

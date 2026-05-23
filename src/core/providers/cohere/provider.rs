@@ -79,6 +79,38 @@ pub struct CohereProvider {
     models: Vec<ModelInfo>,
 }
 
+fn cohere_metadata(status: &str) -> HashMap<String, Value> {
+    HashMap::from([("status".to_string(), Value::String(status.to_string()))])
+}
+
+fn cohere_model(
+    id: &str,
+    name: &str,
+    max_context_length: u32,
+    max_output_length: Option<u32>,
+    supports_tools: bool,
+    supports_multimodal: bool,
+    mode: &str,
+) -> ModelInfo {
+    ModelInfo {
+        id: id.to_string(),
+        name: name.to_string(),
+        provider: "cohere".to_string(),
+        max_context_length,
+        max_output_length,
+        supports_streaming: mode == "chat",
+        supports_tools,
+        supports_multimodal,
+        input_cost_per_1k_tokens: None,
+        output_cost_per_1k_tokens: None,
+        currency: "USD".to_string(),
+        capabilities: vec![],
+        created_at: None,
+        updated_at: None,
+        metadata: cohere_metadata("live"),
+    }
+}
+
 impl CohereProvider {
     /// Create a new Cohere provider instance
     pub async fn new(config: CohereConfig) -> Result<Self, ProviderError> {
@@ -116,7 +148,55 @@ impl CohereProvider {
     /// Create the model registry with all supported models
     fn create_model_registry() -> Vec<ModelInfo> {
         vec![
-            // Command models (Chat)
+            // Current Command models (Chat)
+            cohere_model(
+                "command-a-plus-05-2026",
+                "Command A+",
+                128000,
+                Some(64000),
+                true,
+                true,
+                "chat",
+            ),
+            cohere_model(
+                "command-a-03-2025",
+                "Command A",
+                256000,
+                Some(8000),
+                true,
+                false,
+                "chat",
+            ),
+            // Current embedding models
+            cohere_model(
+                "embed-v4.0",
+                "Embed v4.0",
+                128000,
+                None,
+                false,
+                true,
+                "embedding",
+            ),
+            // Current rerank models
+            cohere_model(
+                "rerank-v4.0-pro",
+                "Rerank v4.0 Pro",
+                32000,
+                None,
+                false,
+                false,
+                "rerank",
+            ),
+            cohere_model(
+                "rerank-v4.0-fast",
+                "Rerank v4.0 Fast",
+                32000,
+                None,
+                false,
+                false,
+                "rerank",
+            ),
+            // Legacy Command models (kept routable for compatibility)
             ModelInfo {
                 id: "command-r-plus".to_string(),
                 name: "Command R+".to_string(),
@@ -132,7 +212,7 @@ impl CohereProvider {
                 capabilities: vec![],
                 created_at: None,
                 updated_at: None,
-                metadata: HashMap::new(),
+                metadata: cohere_metadata("deprecated_2025_09_15"),
             },
             ModelInfo {
                 id: "command-r".to_string(),
@@ -149,7 +229,7 @@ impl CohereProvider {
                 capabilities: vec![],
                 created_at: None,
                 updated_at: None,
-                metadata: HashMap::new(),
+                metadata: cohere_metadata("deprecated_2025_09_15"),
             },
             ModelInfo {
                 id: "command".to_string(),
@@ -166,7 +246,7 @@ impl CohereProvider {
                 capabilities: vec![],
                 created_at: None,
                 updated_at: None,
-                metadata: HashMap::new(),
+                metadata: cohere_metadata("deprecated_2025_09_15"),
             },
             ModelInfo {
                 id: "command-light".to_string(),
@@ -183,7 +263,7 @@ impl CohereProvider {
                 capabilities: vec![],
                 created_at: None,
                 updated_at: None,
-                metadata: HashMap::new(),
+                metadata: cohere_metadata("deprecated_2025_09_15"),
             },
             // Embedding models
             ModelInfo {

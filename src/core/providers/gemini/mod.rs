@@ -3,7 +3,10 @@
 //! Support for Google AI Studio and Vertex AI Gemini model series
 //!
 //! # Supported Models
-//! - Gemini 2.0 Flash (latest)
+//! - Gemini 3.5 Flash (latest)
+//! - Gemini 3.1 Flash / Pro Preview
+//! - Gemini 2.5 Pro / Flash
+//! - Gemini 2.0 Flash
 //! - Gemini 1.5 Pro
 //! - Gemini 1.5 Flash
 //! - Gemini 1.0 Pro
