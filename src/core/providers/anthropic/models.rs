@@ -43,7 +43,7 @@ pub enum AnthropicModelFamily {
     ClaudeOpus47,
     /// Claude Opus 4.6 models
     ClaudeOpus46,
-    /// Claude Opus 4.5 models (latest flagship)
+    /// Claude Opus 4.5 models
     ClaudeOpus45,
     /// Claude Sonnet 4.6 models
     ClaudeSonnet46,
@@ -300,6 +300,24 @@ mod tests {
         // Test pricing
         assert_eq!(opus_spec.pricing.input_cost_per_1k_tokens, 0.005);
         assert_eq!(opus_spec.pricing.output_cost_per_1k_tokens, 0.025);
+    }
+
+    #[test]
+    fn test_opus47_alias_and_limits() {
+        let registry = get_anthropic_registry();
+
+        let Some(alias_spec) = registry.get_model_spec("claude-opus-4-7-latest") else {
+            panic!("claude-opus-4-7-latest should alias claude-opus-4-7");
+        };
+        assert_eq!(alias_spec.family, AnthropicModelFamily::ClaudeOpus47);
+        assert_eq!(alias_spec.model_info.max_context_length, 1_000_000);
+        assert_eq!(alias_spec.model_info.max_output_length, Some(128_000));
+
+        let Some(limits) = registry.get_model_limits("claude-opus-4-7-latest") else {
+            panic!("claude-opus-4-7-latest should expose Opus 4.7 limits");
+        };
+        assert_eq!(limits.max_context_length, 1_000_000);
+        assert_eq!(limits.max_output_tokens, 128_000);
     }
 
     #[test]

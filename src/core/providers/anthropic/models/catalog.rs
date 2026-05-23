@@ -103,7 +103,7 @@ impl AnthropicModelRegistry {
             },
         );
 
-        // Claude Opus 4.5 (Latest flagship model - November 2025)
+        // Claude Opus 4.5 (Previous flagship model - November 2025)
         self.register_model(
             "claude-opus-4-5-20251101",
             ModelSpec {
