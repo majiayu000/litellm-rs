@@ -7,28 +7,18 @@ use super::config::RouterConfig;
 use super::deployment::{Deployment, DeploymentConfig};
 use super::error::RouterError;
 use super::unified::Router;
+use crate::config::Validate;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
 use crate::core::providers::{Provider, create_provider};
-use tracing::warn;
 
 /// Build runtime router config from gateway YAML router config.
-///
-/// Note: `GatewayRouterConfig` fields `load_balancer.sticky_sessions` and
-/// `load_balancer.session_timeout` are currently not mapped because runtime
-/// `RouterConfig` has no corresponding fields yet.
-pub fn runtime_router_config_from_gateway(config: &GatewayRouterConfig) -> RouterConfig {
-    let has_unmapped_fields =
-        config.load_balancer.sticky_sessions || config.load_balancer.session_timeout != 3600;
-    if has_unmapped_fields {
-        warn!(
-            sticky_sessions = config.load_balancer.sticky_sessions,
-            session_timeout = config.load_balancer.session_timeout,
-            "Gateway router config contains load balancer fields not mapped to runtime RouterConfig yet; values are ignored"
-        );
-    }
+pub fn runtime_router_config_from_gateway(
+    config: &GatewayRouterConfig,
+) -> Result<RouterConfig, String> {
+    Validate::validate(config)?;
 
-    RouterConfig {
+    Ok(RouterConfig {
         routing_strategy: config.strategy,
         allowed_fails: config.circuit_breaker.failure_threshold,
         min_requests: config.circuit_breaker.min_requests,
@@ -36,7 +26,7 @@ pub fn runtime_router_config_from_gateway(config: &GatewayRouterConfig) -> Route
         success_threshold: config.circuit_breaker.success_threshold,
         enable_pre_call_checks: config.load_balancer.health_check_enabled,
         ..RouterConfig::default()
-    }
+    })
 }
 
 impl Router {
@@ -154,7 +144,7 @@ mod tests {
     #[test]
     fn test_runtime_router_config_from_gateway_round_robin() {
         let gateway = GatewayRouterConfig::default();
-        let runtime = runtime_router_config_from_gateway(&gateway);
+        let runtime = runtime_router_config_from_gateway(&gateway).unwrap();
         assert_eq!(
             runtime.routing_strategy,
             super::super::config::RoutingStrategy::RoundRobin
@@ -168,7 +158,7 @@ mod tests {
             circuit_breaker: CircuitBreakerConfig::default(),
             load_balancer: LoadBalancerConfig::default(),
         };
-        let runtime = runtime_router_config_from_gateway(&gateway);
+        let runtime = runtime_router_config_from_gateway(&gateway).unwrap();
         assert_eq!(
             runtime.routing_strategy,
             super::super::config::RoutingStrategy::LatencyBased
@@ -187,10 +177,40 @@ mod tests {
             },
             load_balancer: LoadBalancerConfig::default(),
         };
-        let runtime = runtime_router_config_from_gateway(&gateway);
+        let runtime = runtime_router_config_from_gateway(&gateway).unwrap();
         assert_eq!(runtime.allowed_fails, 8);
         assert_eq!(runtime.cooldown_time_secs, 45);
         assert_eq!(runtime.min_requests, 20);
         assert_eq!(runtime.success_threshold, 5);
+    }
+
+    #[test]
+    fn test_runtime_router_config_rejects_sticky_sessions() {
+        let gateway = GatewayRouterConfig {
+            strategy: RoutingStrategyConfig::RoundRobin,
+            circuit_breaker: CircuitBreakerConfig::default(),
+            load_balancer: LoadBalancerConfig {
+                sticky_sessions: true,
+                ..LoadBalancerConfig::default()
+            },
+        };
+
+        let err = runtime_router_config_from_gateway(&gateway).unwrap_err();
+        assert!(err.contains("sticky_sessions"));
+    }
+
+    #[test]
+    fn test_runtime_router_config_rejects_session_timeout() {
+        let gateway = GatewayRouterConfig {
+            strategy: RoutingStrategyConfig::RoundRobin,
+            circuit_breaker: CircuitBreakerConfig::default(),
+            load_balancer: LoadBalancerConfig {
+                session_timeout: 900,
+                ..LoadBalancerConfig::default()
+            },
+        };
+
+        let err = runtime_router_config_from_gateway(&gateway).unwrap_err();
+        assert!(err.contains("session_timeout"));
     }
 }
