@@ -43,7 +43,9 @@ mod tests {
         assert!(!config.auth().enable_jwt);
         assert!(!config.auth().enable_api_key);
         assert!(config.gateway.pricing.source.is_none());
+        assert_eq!(config.server().port, 8080);
         assert_eq!(config.providers()[0].provider_type, "vllm");
+        assert!(config.providers()[0].base_url.is_none());
     }
 
     /// Test that server port 0 fails validation

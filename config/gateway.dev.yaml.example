@@ -6,7 +6,9 @@ schema_version: "1.0"
 
 server:
   host: "127.0.0.1"
-  port: 8000
+  # Keep the gateway off port 8000 so the local vLLM provider can use its
+  # conventional OpenAI-compatible endpoint at http://127.0.0.1:8000/v1.
+  port: 8080
   dev_mode: true
   cors:
     enabled: true
