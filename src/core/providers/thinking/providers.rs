@@ -254,6 +254,12 @@ pub mod deepseek_thinking {
                     .map(|s| s.to_string())
                     .collect(),
                 can_return_thinking: true,
+                // Always-on thinking applies to the dedicated reasoning models
+                // (`deepseek-reasoner`, `deepseek-r1`, bare `r1`) — DeepSeek's
+                // docs state thinking cannot be disabled on these aliases.
+                // The canonical V4 IDs (`deepseek-v4-flash`, `deepseek-v4-pro`)
+                // default to thinking enabled but support an optional
+                // non-thinking mode, so they are not always-on.
                 thinking_always_on: !model_lower.contains("deepseek-v4"),
             }
         } else {
@@ -570,5 +576,25 @@ mod deepseek_v4_tests {
         assert!(caps.supports_thinking);
         assert!(caps.supports_streaming_thinking);
         assert!(!caps.thinking_always_on);
+    }
+
+    #[test]
+    fn always_on_thinking_matches_deepseek_docs() {
+        // `deepseek-reasoner` is the always-on reasoning alias per
+        // https://api-docs.deepseek.com/ — thinking cannot be disabled.
+        let reasoner = deepseek_thinking::capabilities("deepseek-reasoner");
+        assert!(reasoner.supports_thinking);
+        assert!(reasoner.thinking_always_on);
+
+        // `deepseek-v4-flash` and `deepseek-v4-pro` support optional
+        // thinking (enabled by default but can be turned off), so they
+        // must not be marked as always-on.
+        let flash = deepseek_thinking::capabilities("deepseek-v4-flash");
+        assert!(flash.supports_thinking);
+        assert!(!flash.thinking_always_on);
+
+        let pro = deepseek_thinking::capabilities("deepseek-v4-pro");
+        assert!(pro.supports_thinking);
+        assert!(!pro.thinking_always_on);
     }
 }

@@ -14,13 +14,19 @@ official DeepSeek API base is `https://api.deepseek.com`.
 
 ### Legacy Aliases
 
-DeepSeek's current docs keep these aliases for compatibility and state that
-they will be deprecated in the future:
+DeepSeek's current docs keep these aliases for compatibility and announce that
+they will be deprecated. Deprecation: 2026-07-24 (per https://api-docs.deepseek.com/).
 
 | Alias | Current mapping | Thinking behavior |
 |-------|-----------------|-------------------|
-| `deepseek-chat` | `deepseek-v4-flash` | Non-thinking mode |
-| `deepseek-reasoner` | `deepseek-v4-flash` | Thinking mode |
+| `deepseek-chat` | `deepseek-v4-flash` | Non-thinking mode (thinking disabled) |
+| `deepseek-reasoner` | `deepseek-v4-flash` | Always-on thinking (cannot be disabled) |
+
+Note on thinking semantics: `deepseek-reasoner` is the always-on reasoning
+alias — every request is dispatched in thinking mode. The canonical
+`deepseek-v4-flash` and `deepseek-v4-pro` IDs default to thinking enabled but
+support an optional non-thinking mode. The `deepseek-chat` alias pins the
+non-thinking path on top of `deepseek-v4-flash`.
 
 Use the canonical `deepseek-v4-flash` or `deepseek-v4-pro` IDs for new code.
 
