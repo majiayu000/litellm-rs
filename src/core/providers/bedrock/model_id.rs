@@ -209,7 +209,7 @@ fn arn_resource_metadata(model_id: &str) -> Option<ArnResourceMetadata> {
 fn is_geo_prefix(prefix: &str) -> bool {
     matches!(
         prefix,
-        "global" | "us" | "eu" | "ap" | "apac" | "sa" | "ca" | "me" | "af"
+        "global" | "us" | "eu" | "ap" | "apac" | "sa" | "ca" | "me" | "af" | "jp" | "au"
     )
 }
 
@@ -266,6 +266,24 @@ mod tests {
             ]
         );
         assert_eq!(parsed.family_hint.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn jp_and_au_geo_profiles_use_base_model_for_metadata() {
+        for model_id in [
+            "jp.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "au.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        ] {
+            let parsed = parse_bedrock_model_id(model_id);
+
+            assert_eq!(parsed.execution_model_id, model_id);
+            assert_eq!(
+                parsed.metadata_lookup_ids,
+                vec![model_id, "anthropic.claude-3-5-sonnet-20241022-v2:0"]
+            );
+            assert_eq!(parsed.kind, BedrockModelIdKind::InferenceProfile);
+            assert_eq!(parsed.family_hint.as_deref(), Some("anthropic"));
+        }
     }
 
     #[test]

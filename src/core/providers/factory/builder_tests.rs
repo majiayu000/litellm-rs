@@ -1,6 +1,48 @@
 //! Tests for provider-specific config builders
 
 use super::builder::*;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
+const BEDROCK_ENV_KEYS_WITH_DEFAULT_REGION: [&str; 5] = [
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_REGION",
+    AWS_DEFAULT_REGION,
+];
+
+struct EnvSnapshot {
+    values: Vec<(&'static str, Option<String>)>,
+}
+
+impl EnvSnapshot {
+    fn clear(keys: &[&'static str]) -> Self {
+        let values = keys
+            .iter()
+            .map(|key| {
+                let value = std::env::var(key).ok();
+                unsafe { std::env::remove_var(key) };
+                (*key, value)
+            })
+            .collect();
+
+        Self { values }
+    }
+}
+
+impl Drop for EnvSnapshot {
+    fn drop(&mut self) {
+        for (key, value) in &self.values {
+            if let Some(value) = value {
+                unsafe { std::env::set_var(key, value) };
+            } else {
+                unsafe { std::env::remove_var(key) };
+            }
+        }
+    }
+}
 
 #[test]
 fn test_build_openai_config_from_factory_maps_optional_fields() {
@@ -223,4 +265,78 @@ fn test_build_openai_like_config_from_factory_requires_api_base() {
         .err()
         .unwrap_or_else(|| panic!("missing base_url should return an error"));
     assert!(err.to_string().contains("base_url"));
+}
+
+#[test]
+fn test_env_str_any_skips_empty_values() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _snapshot = EnvSnapshot::clear(&["AWS_REGION", AWS_DEFAULT_REGION]);
+
+    unsafe {
+        std::env::set_var("AWS_REGION", "");
+        std::env::set_var(AWS_DEFAULT_REGION, "us-west-2");
+    }
+
+    assert_eq!(
+        env_str_any(&["AWS_REGION", AWS_DEFAULT_REGION]).as_deref(),
+        Some("us-west-2")
+    );
+}
+
+#[test]
+fn test_build_bedrock_config_defaults_region() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _snapshot = EnvSnapshot::clear(&BEDROCK_ENV_KEYS_WITH_DEFAULT_REGION);
+
+    let config = serde_json::json!({
+        "aws_access_key_id": "AKIATEST123456789012",
+        "aws_secret_access_key": "test-secret-key"
+    });
+
+    let bedrock_config = build_bedrock_config_from_factory(&config)
+        .unwrap_or_else(|err| panic!("bedrock config should parse: {err}"));
+
+    assert_eq!(bedrock_config.aws_region, "us-east-1");
+    assert_eq!(bedrock_config.aws_access_key_id, "AKIATEST123456789012");
+    assert_eq!(bedrock_config.aws_secret_access_key, "test-secret-key");
+}
+
+#[test]
+fn test_build_bedrock_config_rejects_missing_credentials() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _snapshot = EnvSnapshot::clear(&BEDROCK_ENV_KEYS_WITH_DEFAULT_REGION);
+
+    let err = build_bedrock_config_from_factory(&serde_json::json!({}))
+        .err()
+        .unwrap_or_else(|| panic!("missing credentials should return an error"));
+    assert!(err.to_string().contains("aws_access_key_id"));
+
+    let err = build_bedrock_config_from_factory(&serde_json::json!({
+        "aws_access_key_id": "AKIATEST123456789012"
+    }))
+    .err()
+    .unwrap_or_else(|| panic!("missing secret should return an error"));
+    assert!(err.to_string().contains("aws_secret_access_key"));
+}
+
+#[test]
+fn test_build_bedrock_config_skips_empty_env_values() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _snapshot = EnvSnapshot::clear(&BEDROCK_ENV_KEYS_WITH_DEFAULT_REGION);
+
+    unsafe {
+        std::env::set_var("AWS_ACCESS_KEY_ID", "AKIATEST123456789012");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "test-secret-key");
+        std::env::set_var("AWS_SESSION_TOKEN", "");
+        std::env::set_var("AWS_REGION", "");
+        std::env::set_var(AWS_DEFAULT_REGION, "us-west-2");
+    }
+
+    let bedrock_config = build_bedrock_config_from_factory(&serde_json::json!({}))
+        .unwrap_or_else(|err| panic!("bedrock config should parse from env: {err}"));
+
+    assert_eq!(bedrock_config.aws_access_key_id, "AKIATEST123456789012");
+    assert_eq!(bedrock_config.aws_secret_access_key, "test-secret-key");
+    assert_eq!(bedrock_config.aws_region, "us-west-2");
+    assert!(bedrock_config.aws_session_token.is_none());
 }
