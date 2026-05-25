@@ -8,6 +8,8 @@ impl AnthropicModelRegistry {
     /// Initialize model registry
     pub(super) fn initialize_models(&mut self) {
         // Claude Opus 4.7 (Latest generally available flagship - April 2026)
+        // Pricing source: https://docs.anthropic.com/en/docs/about-claude/models
+        // Re-verified 2026-05-25 — matches Opus 4.6 ($5/$25 per 1M tokens).
         self.register_model(
             "claude-opus-4-7",
             ModelSpec {
@@ -151,7 +153,7 @@ impl AnthropicModelRegistry {
             },
         );
 
-        // Claude Sonnet 4.5 (Latest balanced model - September 2025)
+        // Claude Sonnet 4.5 (Earlier balanced model - September 2025)
         self.register_model(
             "claude-sonnet-4-5-20250929",
             ModelSpec {
