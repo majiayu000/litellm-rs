@@ -54,6 +54,11 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 max_images: None,
                 max_video_seconds: None,
                 max_audio_seconds: None,
+                // rpm_limit / tpm_limit deliberately None: official limits at
+                // https://ai.google.dev/gemini-api/docs/rate-limits vary by billing tier
+                // (Free: 10 RPM, Tier 1: 2000 RPM as of 2026-05-25). Add explicit limits
+                // once the gateway routes by tier; until then, downstream rate-limiting
+                // should rely on response-driven backoff.
                 rpm_limit: None,
                 tpm_limit: None,
             },

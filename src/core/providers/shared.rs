@@ -26,7 +26,9 @@ pub const GEMINI_31_CONTEXT_WINDOW: u32 = 1_048_576;
 pub fn gemini_context_window(model_name: &str) -> Option<u32> {
     let model_lower = model_name.to_ascii_lowercase();
 
-    if model_lower.contains("gemini-3.1-flash-lite")
+    if model_lower.contains("gemini-3.5-flash") || model_lower.contains("gemini-3.5-pro") {
+        Some(GEMINI_31_CONTEXT_WINDOW)
+    } else if model_lower.contains("gemini-3.1-flash-lite")
         || model_lower.contains("gemini-3.1-flash")
         || model_lower.contains("gemini-3.1-pro")
     {

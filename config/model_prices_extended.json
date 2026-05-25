@@ -460,6 +460,20 @@
     "supports_streaming": true,
     "supports_system_message": true
   },
+  "gemini/gemini-3.5-flash": {
+    "max_tokens": 65536,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 65536,
+    "input_cost_per_token": 1.5e-06,
+    "output_cost_per_token": 9e-06,
+    "cache_read_input_token_cost": 1.5e-07,
+    "litellm_provider": "gemini",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true
+  },
   "gemini-pro": {
     "max_tokens": 32760,
     "max_input_tokens": 32760,

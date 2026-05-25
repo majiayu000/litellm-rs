@@ -147,7 +147,7 @@ pub struct GeminiModelRegistry {
 
 impl GeminiModelRegistry {
     /// Expected number of Gemini models for capacity hint
-    const EXPECTED_MODEL_COUNT: usize = 12;
+    const EXPECTED_MODEL_COUNT: usize = 17;
 
     /// Create
     pub fn new() -> Self {
@@ -158,7 +158,6 @@ impl GeminiModelRegistry {
         registry
     }
 
-    /// Initialize all Gemini models
     /// Initialize all Gemini models
     fn initialize_models(&mut self) {
         catalog::register_all(self);
