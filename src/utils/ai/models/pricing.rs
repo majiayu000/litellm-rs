@@ -73,7 +73,12 @@ impl ModelUtils {
                 aliases.extend_from_slice(&[
                     "openai/gpt-5.5".to_string(),
                     "gpt-5.5-2026-04-23".to_string(),
-                    "gpt-5.5-pro".to_string(),
+                ]);
+            }
+            "gpt-5.5-pro" => {
+                aliases.extend_from_slice(&[
+                    "openai/gpt-5.5-pro".to_string(),
+                    "gpt-5.5-pro-2026-04-23".to_string(),
                 ]);
             }
             "gpt-5.4" => {

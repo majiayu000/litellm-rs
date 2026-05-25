@@ -79,6 +79,8 @@ impl OpenAIModelRegistry {
         let model_id = &model_info.id;
 
         // Keep streaming feature aligned with create_config().
+        // Streaming support for gpt-5.5-pro not yet documented at
+        // https://platform.openai.com/docs/models; verify before enabling.
         if !model_id.contains("embedding")
             && !model_id.starts_with("whisper")
             && !model_id.starts_with("gpt-5.5-pro")
@@ -281,6 +283,8 @@ impl OpenAIModelRegistry {
                 | "text-embedding-3-large"
         );
 
+        // Streaming support for gpt-5.5-pro not yet documented at
+        // https://platform.openai.com/docs/models; verify before enabling.
         config.supports_streaming = !model_id.contains("embedding")
             && !model_id.contains("whisper")
             && !model_id.starts_with("gpt-5.5-pro");
@@ -372,7 +376,8 @@ impl OpenAIModelRegistry {
                 model_info.supports_tools = false;
             }
 
-            // GPT-5.5 Pro does not support streaming in the official OpenAI model docs.
+            // Streaming support for gpt-5.5-pro not yet documented at
+            // https://platform.openai.com/docs/models; verify before enabling.
             if id.starts_with("gpt-5.5-pro") {
                 model_info.supports_streaming = false;
             }

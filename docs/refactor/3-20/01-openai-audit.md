@@ -1,7 +1,7 @@
 # OpenAI Provider Audit Report
 
 **Date**: March 20, 2026
-**Scope**: `src/core/providers/openai/` vs OpenAI API (developers.openai.com)
+**Scope**: `src/core/providers/openai/` vs OpenAI API (platform.openai.com)
 
 ## CRITICAL (5)
 
@@ -132,13 +132,13 @@ O1 param list: `["messages", "model", "max_completion_tokens", "stream", "user"]
 
 ## Sources
 
-- [OpenAI Models](https://developers.openai.com/api/docs/models)
+- [OpenAI Models](https://platform.openai.com/docs/models)
 - [Introducing GPT-5.4](https://openai.com/index/introducing-gpt-5-4/)
 - [GPT-5.4 mini and nano](https://openai.com/index/introducing-gpt-5-4-mini-and-nano/)
 - [Migrate to Responses API](https://platform.openai.com/docs/guides/migrate-to-responses)
-- [Reasoning Models Guide](https://developers.openai.com/api/docs/guides/reasoning)
-- [OpenAI Pricing](https://developers.openai.com/api/docs/pricing)
-- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
-- [MCP and Connectors](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
+- [Reasoning Models Guide](https://platform.openai.com/docs/guides/reasoning)
+- [OpenAI Pricing](https://platform.openai.com/docs/pricing)
+- [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)
+- [MCP and Connectors](https://platform.openai.com/docs/guides/tools-connectors-mcp)
 - [GPT-4.1 Introduction](https://openai.com/index/gpt-4-1/)
-- [OpenAI Deprecations](https://developers.openai.com/api/docs/deprecations)
+- [OpenAI Deprecations](https://platform.openai.com/docs/deprecations)
