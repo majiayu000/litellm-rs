@@ -427,7 +427,7 @@ mod tests {
 
         assert_eq!(body["system"][0]["text"], "Use concise answers.");
         assert_eq!(body["messages"][0]["role"], "user");
-        assert_eq!(body["messages"][0]["content"][0]["text"]["text"], "hello");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
         assert_eq!(body["inferenceConfig"]["maxTokens"], 64);
         assert!(body.get("max_tokens").is_none());
     }

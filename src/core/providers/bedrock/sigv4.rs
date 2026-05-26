@@ -51,7 +51,7 @@ impl SigV4Signer {
 
         let host = parsed_url.host_str().ok_or("Missing host in URL")?;
 
-        let path = parsed_url.path();
+        let path = canonical_uri(parsed_url.path());
         let query = parsed_url.query().unwrap_or("");
 
         // Format timestamp
@@ -154,6 +154,24 @@ impl SigV4Signer {
     }
 }
 
+fn canonical_uri(path: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push('%');
+                encoded.push(HEX[(byte >> 4) as usize] as char);
+                encoded.push(HEX[(byte & 0x0F) as usize] as char);
+            }
+        }
+    }
+    encoded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +206,20 @@ mod tests {
         // Known HMAC-SHA256 result for key="key", message="message"
         let expected = "6e9ef29b75fffc5b7abae527d58fdadb2fe42e7219011976917343065f58ed4a";
         assert_eq!(hex::encode(result.unwrap()), expected);
+    }
+
+    #[test]
+    fn canonical_uri_double_encodes_escaped_model_id_chars() {
+        assert_eq!(
+            canonical_uri("/model/anthropic.claude-3-5-haiku-20241022-v1%3A0/converse"),
+            "/model/anthropic.claude-3-5-haiku-20241022-v1%253A0/converse"
+        );
+        assert_eq!(
+            canonical_uri(
+                "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Ainference-profile%2Fus.anthropic.claude-3-5-sonnet-20241022-v2%3A0/converse"
+            ),
+            "/model/arn%253Aaws%253Abedrock%253Aus-east-1%253A123456789012%253Ainference-profile%252Fus.anthropic.claude-3-5-sonnet-20241022-v2%253A0/converse"
+        );
     }
 
     #[test]
