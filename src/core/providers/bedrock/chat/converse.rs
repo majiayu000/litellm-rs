@@ -330,6 +330,7 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
 
     let inference_config = if prompt_management {
         if request.max_tokens.is_some()
+            || request.max_completion_tokens.is_some()
             || request.temperature.is_some()
             || request.top_p.is_some()
             || request.stop.is_some()
@@ -342,7 +343,7 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
         None
     } else {
         Some(InferenceConfig {
-            max_tokens: request.max_tokens,
+            max_tokens: request.max_completion_tokens.or(request.max_tokens),
             temperature: request.temperature.map(|t| t as f64),
             top_p: request.top_p.map(|t| t as f64),
             stop_sequences: request.stop.clone(),

@@ -312,6 +312,29 @@ fn test_transform_with_inference_config() {
 }
 
 #[test]
+fn test_transform_prefers_max_completion_tokens() {
+    let request = ChatRequest {
+        model: "anthropic.claude-3-sonnet".to_string(),
+        messages: vec![ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("Hello".to_string())),
+            ..Default::default()
+        }],
+        max_tokens: Some(500),
+        max_completion_tokens: Some(128),
+        ..Default::default()
+    };
+
+    let converse = transform_to_converse(&request)
+        .unwrap_or_else(|err| panic!("Converse request should transform: {err}"));
+    let config = converse
+        .inference_config
+        .unwrap_or_else(|| panic!("inferenceConfig should be emitted"));
+
+    assert_eq!(config.max_tokens, Some(128));
+}
+
+#[test]
 fn test_transform_with_forced_tool_choice() {
     let request = ChatRequest {
         model: "anthropic.claude-3-sonnet".to_string(),
