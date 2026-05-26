@@ -179,11 +179,19 @@ struct ArnResourceMetadata {
 }
 
 fn arn_resource_parts(model_id: &str) -> Option<(&str, &str)> {
-    if !model_id.starts_with("arn:") {
+    let mut parts = model_id.splitn(6, ':');
+    if parts.next()? != "arn" {
         return None;
     }
 
-    let resource = model_id.splitn(6, ':').nth(5)?;
+    let _partition = parts.next()?;
+    if parts.next()? != "bedrock" {
+        return None;
+    }
+
+    let _region = parts.next()?;
+    let _account_id = parts.next()?;
+    let resource = parts.next()?;
     resource.split_once('/')
 }
 
@@ -533,5 +541,17 @@ mod tests {
             config.api_type,
             crate::core::providers::bedrock::BedrockApiType::InvokeStream
         );
+    }
+
+    #[test]
+    fn non_bedrock_arn_is_not_runtime_resolved() {
+        let model_id = "arn:aws:iam::123456789012:role/Admin";
+        let parsed = parse_bedrock_model_id(model_id);
+
+        assert_eq!(parsed.kind, BedrockModelIdKind::Arn);
+        assert_eq!(parsed.metadata_lookup_ids, vec![model_id]);
+        assert_eq!(parsed.runtime_config_fallback, None);
+        assert!(!super::is_prompt_management_model_id(model_id));
+        assert!(super::get_model_config_for_model_id(model_id).is_err());
     }
 }
