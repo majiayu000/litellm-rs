@@ -312,6 +312,52 @@ fn test_transform_with_inference_config() {
 }
 
 #[test]
+fn test_transform_with_forced_tool_choice() {
+    let request = ChatRequest {
+        model: "anthropic.claude-3-sonnet".to_string(),
+        messages: vec![ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("Weather?".to_string())),
+            ..Default::default()
+        }],
+        tools: Some(vec![crate::core::types::tools::Tool {
+            tool_type: crate::core::types::tools::ToolType::Function,
+            function: crate::core::types::tools::FunctionDefinition {
+                name: "lookup_weather".to_string(),
+                description: Some("Look up weather".to_string()),
+                parameters: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "city": { "type": "string" }
+                    }
+                })),
+            },
+        }]),
+        tool_choice: Some(crate::core::types::tools::ToolChoice::Specific {
+            choice_type: "function".to_string(),
+            function: Some(crate::core::types::tools::FunctionChoice {
+                name: "lookup_weather".to_string(),
+            }),
+        }),
+        ..Default::default()
+    };
+
+    let converse = transform_to_converse(&request)
+        .unwrap_or_else(|err| panic!("Converse request should transform: {err}"));
+    let tool_config = converse
+        .tool_config
+        .unwrap_or_else(|| panic!("toolConfig should be emitted"));
+    let tool_choice = tool_config
+        .tool_choice
+        .unwrap_or_else(|| panic!("toolChoice should be preserved"));
+
+    assert!(matches!(
+        tool_choice,
+        ToolChoice::Tool { ref name } if name == "lookup_weather"
+    ));
+}
+
+#[test]
 fn test_transform_conversation() {
     let request = ChatRequest {
         model: "anthropic.claude-3-sonnet".to_string(),

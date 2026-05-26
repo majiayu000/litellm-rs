@@ -6,6 +6,7 @@ use crate::core::providers::bedrock::model_id::is_prompt_management_model_id;
 use crate::core::providers::bedrock::parse_bedrock_model_id;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
+use crate::core::types::tools as openai_tools;
 use crate::core::types::{message::MessageContent, message::MessageRole};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -375,8 +376,13 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
 
         Some(ToolConfig {
             tools: tool_specs,
-            tool_choice: None, // NOTE: tool_choice mapping not yet implemented
+            tool_choice: map_tool_choice(request.tool_choice.as_ref())?,
         })
+    } else if request.tool_choice.is_some() {
+        return Err(ProviderError::invalid_request(
+            "bedrock",
+            "Bedrock Converse tool_choice requires tools",
+        ));
     } else {
         None
     };
@@ -400,6 +406,40 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
         guardrail_config: None, // NOTE: guardrail support not yet implemented
         additional_model_request_fields: None,
     })
+}
+
+fn map_tool_choice(
+    tool_choice: Option<&openai_tools::ToolChoice>,
+) -> Result<Option<ToolChoice>, ProviderError> {
+    let Some(tool_choice) = tool_choice else {
+        return Ok(None);
+    };
+
+    match tool_choice {
+        openai_tools::ToolChoice::String(choice) => match choice.as_str() {
+            "auto" => Ok(Some(ToolChoice::Auto)),
+            "required" | "any" => Ok(Some(ToolChoice::Any)),
+            "none" => Err(ProviderError::invalid_request(
+                "bedrock",
+                "Bedrock Converse does not support tool_choice=none when tools are provided",
+            )),
+            other => Err(ProviderError::invalid_request(
+                "bedrock",
+                format!("Unsupported Bedrock Converse tool_choice: {other}"),
+            )),
+        },
+        openai_tools::ToolChoice::Specific { function, .. } => {
+            let Some(function) = function else {
+                return Err(ProviderError::invalid_request(
+                    "bedrock",
+                    "Specific Bedrock Converse tool_choice requires a function name",
+                ));
+            };
+            Ok(Some(ToolChoice::Tool {
+                name: function.name.clone(),
+            }))
+        }
+    }
 }
 
 fn prompt_variables_from_extra_params(
