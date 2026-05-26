@@ -2,6 +2,7 @@
 //!
 //! Modern unified API for chat completions in Bedrock
 
+use crate::core::providers::bedrock::model_id::is_prompt_management_model_id;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
 use crate::core::types::{message::MessageContent, message::MessageRole};
@@ -17,6 +18,8 @@ pub struct ConverseRequest {
     pub system: Option<Vec<SystemMessage>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_config: Option<InferenceConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_variables: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_config: Option<ToolConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,6 +227,7 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
 ) -> Result<ConverseRequest, ProviderError> {
     let mut messages = Vec::new();
     let mut system_messages = Vec::new();
+    let prompt_management = is_prompt_management_model_id(&request.model);
 
     for msg in &request.messages {
         match msg.role {
@@ -314,16 +318,42 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
         }
     }
 
-    // Build inference config
-    let inference_config = Some(InferenceConfig {
-        max_tokens: request.max_tokens,
-        temperature: request.temperature.map(|t| t as f64),
-        top_p: request.top_p.map(|t| t as f64),
-        stop_sequences: request.stop.clone(),
-    });
+    if prompt_management && !system_messages.is_empty() {
+        return Err(ProviderError::invalid_request(
+            "bedrock",
+            "Prompt-management ARNs do not support request-level system messages",
+        ));
+    }
+
+    let inference_config = if prompt_management {
+        if request.max_tokens.is_some()
+            || request.temperature.is_some()
+            || request.top_p.is_some()
+            || request.stop.is_some()
+        {
+            return Err(ProviderError::invalid_request(
+                "bedrock",
+                "Prompt-management ARNs do not support request-level inferenceConfig",
+            ));
+        }
+        None
+    } else {
+        Some(InferenceConfig {
+            max_tokens: request.max_tokens,
+            temperature: request.temperature.map(|t| t as f64),
+            top_p: request.top_p.map(|t| t as f64),
+            stop_sequences: request.stop.clone(),
+        })
+    };
 
     // Build tool config if tools are present
     let tool_config = if let Some(tools) = &request.tools {
+        if prompt_management {
+            return Err(ProviderError::invalid_request(
+                "bedrock",
+                "Prompt-management ARNs do not support request-level toolConfig",
+            ));
+        }
         let tool_specs: Vec<ToolSpec> = tools
             .iter()
             .map(|tool| ToolSpec {
@@ -349,6 +379,12 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
         None
     };
 
+    let prompt_variables = if prompt_management {
+        prompt_variables_from_extra_params(request)?
+    } else {
+        None
+    };
+
     Ok(ConverseRequest {
         messages,
         system: if system_messages.is_empty() {
@@ -357,10 +393,32 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
             Some(system_messages)
         },
         inference_config,
+        prompt_variables,
         tool_config,
         guardrail_config: None, // NOTE: guardrail support not yet implemented
         additional_model_request_fields: None,
     })
+}
+
+fn prompt_variables_from_extra_params(
+    request: &ChatRequest,
+) -> Result<Option<Value>, ProviderError> {
+    let prompt_variables = request
+        .extra_params
+        .get("promptVariables")
+        .or_else(|| request.extra_params.get("prompt_variables"))
+        .cloned();
+
+    if let Some(value) = &prompt_variables
+        && !value.is_object()
+    {
+        return Err(ProviderError::invalid_request(
+            "bedrock",
+            "promptVariables must be an object for Bedrock prompt-management ARNs",
+        ));
+    }
+
+    Ok(prompt_variables)
 }
 
 fn content_parts_to_blocks(

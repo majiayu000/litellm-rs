@@ -507,6 +507,7 @@ fn test_converse_request_serialization() {
             top_p: None,
             stop_sequences: None,
         }),
+        prompt_variables: None,
         tool_config: None,
         guardrail_config: None,
         additional_model_request_fields: None,
@@ -533,6 +534,46 @@ fn test_converse_request_deserialization() {
     let request: ConverseRequest = serde_json::from_value(json).unwrap();
     assert_eq!(request.messages.len(), 1);
     assert_eq!(request.messages[0].role, "user");
+}
+
+#[test]
+fn prompt_management_transform_uses_supported_request_shape() {
+    let mut request =
+        ChatRequest::new("bedrock/arn:aws:bedrock:us-east-1:123456789012:prompt/ABC123:1")
+            .add_user_message("hello");
+    request.extra_params.insert(
+        "promptVariables".to_string(),
+        serde_json::json!({
+            "topic": { "text": "Bedrock" }
+        }),
+    );
+
+    let Ok(converse) = transform_to_converse(&request) else {
+        panic!("prompt-management request should be supported");
+    };
+    let Ok(json) = serde_json::to_value(&converse) else {
+        panic!("prompt-management request should serialize");
+    };
+
+    assert_eq!(json["messages"][0]["content"][0]["text"], "hello");
+    assert_eq!(json["promptVariables"]["topic"]["text"], "Bedrock");
+    assert!(json.get("system").is_none());
+    assert!(json.get("inferenceConfig").is_none());
+    assert!(json.get("toolConfig").is_none());
+}
+
+#[test]
+fn prompt_management_transform_rejects_disallowed_system_message() {
+    let request = ChatRequest::new("arn:aws:bedrock:us-east-1:123456789012:prompt/ABC123:1")
+        .add_system_message("system")
+        .add_user_message("hello");
+
+    let err = match transform_to_converse(&request) {
+        Ok(_) => panic!("system messages must be rejected for prompt-management ARNs"),
+        Err(err) => err,
+    };
+
+    assert!(format!("{err}").contains("system messages"));
 }
 
 // ==================== Tool Result Content Tests ====================
