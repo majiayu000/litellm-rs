@@ -127,7 +127,7 @@ static RUNTIME_RESOLVED_CONVERSE_CONFIG: super::model_config::ModelConfig =
 
 static RUNTIME_RESOLVED_INVOKE_CONFIG: super::model_config::ModelConfig =
     super::model_config::ModelConfig {
-        family: super::model_config::BedrockModelFamily::Nova,
+        family: super::model_config::BedrockModelFamily::DeepSeek,
         api_type: super::model_config::BedrockApiType::InvokeStream,
         supports_streaming: true,
         supports_function_calling: false,
@@ -199,6 +199,12 @@ pub(in crate::core::providers::bedrock) fn is_prompt_management_model_id(model_i
     arn_resource_parts(execution_model_id)
         .map(|(resource_type, _resource_id)| is_prompt_management_resource(resource_type))
         .unwrap_or(false)
+}
+
+pub(in crate::core::providers::bedrock) fn is_runtime_resolved_invoke_model_id(
+    model_id: &str,
+) -> bool {
+    parse_bedrock_model_id(model_id).runtime_config_fallback == Some(RuntimeConfigFallback::Invoke)
 }
 
 fn arn_resource_metadata(model_id: &str) -> Option<ArnResourceMetadata> {
@@ -491,6 +497,10 @@ mod tests {
         assert_eq!(
             config.api_type,
             crate::core::providers::bedrock::BedrockApiType::InvokeStream
+        );
+        assert_eq!(
+            config.family,
+            crate::core::providers::bedrock::BedrockModelFamily::DeepSeek
         );
         assert!(config.supports_streaming);
         assert!(!config.supports_function_calling);

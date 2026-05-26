@@ -373,6 +373,29 @@ fn test_parse_generic_text() {
 }
 
 #[test]
+fn test_parse_generic_openai_compatible_delta() {
+    let stream = create_test_stream_generic();
+    let json = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "content": "OpenAI delta"
+            }
+        }]
+    });
+
+    let result = stream.parse_generic_chunk(&json);
+    assert!(result.is_ok());
+
+    let chunk = result.unwrap_or_else(|err| panic!("OpenAI-compatible chunk should parse: {err}"));
+    assert!(chunk.is_some());
+    let chunk = chunk.unwrap_or_else(|| panic!("OpenAI-compatible chunk should emit content"));
+    assert_eq!(
+        chunk.choices[0].delta.content,
+        Some("OpenAI delta".to_string())
+    );
+}
+
+#[test]
 fn test_parse_generic_no_content() {
     let stream = create_test_stream_generic();
     let json = serde_json::json!({

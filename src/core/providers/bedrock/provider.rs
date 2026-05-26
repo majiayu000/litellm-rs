@@ -12,6 +12,7 @@ use super::client::BedrockClient;
 use super::config::BedrockConfig;
 use super::error::BedrockErrorMapper;
 use super::model_config::BedrockApiType;
+use super::model_id::is_runtime_resolved_invoke_model_id;
 use super::transformation;
 use super::utils::{CostCalculator, validate_region};
 use super::{get_model_config_for_model_id, parse_bedrock_model_id};
@@ -249,6 +250,10 @@ impl LLMProvider for BedrockProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
+        if is_runtime_resolved_invoke_model_id(&request.model) {
+            return super::chat::transformations::transform_openai_compatible_request(&request);
+        }
+
         transformation::transform_chat_request(
             &request.model,
             &request.messages,

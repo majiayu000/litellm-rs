@@ -496,12 +496,26 @@ impl BedrockStream {
     fn parse_generic_chunk(&self, value: &Value) -> Result<Option<ChatChunk>, ProviderError> {
         use crate::core::types::responses::{ChatDelta, ChatStreamChoice};
 
+        let openai_content = value
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| {
+                choice
+                    .get("delta")
+                    .and_then(|delta| delta.get("content"))
+                    .and_then(Value::as_str)
+                    .or_else(|| choice.get("text").and_then(Value::as_str))
+            });
+
         // Try to find content in common locations
-        let content = value
-            .get("completion")
-            .or_else(|| value.get("generation"))
-            .or_else(|| value.get("text"))
-            .and_then(|t| t.as_str());
+        let content = openai_content.or_else(|| {
+            value
+                .get("completion")
+                .or_else(|| value.get("generation"))
+                .or_else(|| value.get("text"))
+                .and_then(|t| t.as_str())
+        });
 
         if let Some(text) = content {
             Ok(Some(ChatChunk {
