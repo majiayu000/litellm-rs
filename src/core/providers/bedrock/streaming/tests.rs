@@ -396,6 +396,72 @@ fn test_parse_generic_openai_compatible_delta() {
 }
 
 #[test]
+fn test_parse_generic_openai_compatible_tool_call_delta() {
+    let stream = create_test_stream_generic();
+    let json = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_weather",
+                        "arguments": "{\"city\":\"Paris\"}"
+                    }
+                }]
+            }
+        }]
+    });
+
+    let result = stream.parse_generic_chunk(&json);
+    assert!(result.is_ok());
+
+    let chunk = result.unwrap_or_else(|err| panic!("OpenAI-compatible chunk should parse: {err}"));
+    assert!(chunk.is_some());
+    let chunk = chunk.unwrap_or_else(|| panic!("tool-call delta should emit a chunk"));
+    let tool_calls = chunk.choices[0]
+        .delta
+        .tool_calls
+        .as_ref()
+        .unwrap_or_else(|| panic!("tool-call delta should be preserved"));
+
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].index, 0);
+    assert_eq!(tool_calls[0].id.as_deref(), Some("call_123"));
+    assert_eq!(tool_calls[0].tool_type.as_deref(), Some("function"));
+    let function = tool_calls[0]
+        .function
+        .as_ref()
+        .unwrap_or_else(|| panic!("function delta should be preserved"));
+    assert_eq!(function.name.as_deref(), Some("lookup_weather"));
+    assert_eq!(function.arguments.as_deref(), Some("{\"city\":\"Paris\"}"));
+}
+
+#[test]
+fn test_parse_generic_openai_compatible_finish_reason() {
+    let stream = create_test_stream_generic();
+    let json = serde_json::json!({
+        "choices": [{
+            "delta": {},
+            "finish_reason": "tool_calls"
+        }]
+    });
+
+    let result = stream.parse_generic_chunk(&json);
+    assert!(result.is_ok());
+
+    let chunk = result.unwrap_or_else(|err| panic!("OpenAI-compatible chunk should parse: {err}"));
+    assert!(chunk.is_some());
+    let chunk = chunk.unwrap_or_else(|| panic!("finish_reason should emit a terminal chunk"));
+    assert_eq!(
+        chunk.choices[0].finish_reason,
+        Some(crate::core::types::responses::FinishReason::ToolCalls)
+    );
+    assert!(chunk.choices[0].delta.content.is_none());
+}
+
+#[test]
 fn test_parse_generic_no_content() {
     let stream = create_test_stream_generic();
     let json = serde_json::json!({

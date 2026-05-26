@@ -190,6 +190,54 @@ impl BedrockStream {
         }
     }
 
+    fn parse_openai_finish_reason(reason: &str) -> crate::core::types::responses::FinishReason {
+        use crate::core::types::responses::FinishReason;
+
+        match reason {
+            "length" => FinishReason::Length,
+            "tool_calls" => FinishReason::ToolCalls,
+            "content_filter" => FinishReason::ContentFilter,
+            "stop_sequence" => FinishReason::StopSequence,
+            _ => FinishReason::Stop,
+        }
+    }
+
+    fn parse_openai_tool_call_deltas(
+        value: &Value,
+    ) -> Option<Vec<crate::core::types::responses::ToolCallDelta>> {
+        use crate::core::types::responses::{FunctionCallDelta, ToolCallDelta};
+
+        let calls = value.as_array()?;
+        let tool_calls = calls
+            .iter()
+            .map(|call| {
+                let function = call.get("function").map(|function| FunctionCallDelta {
+                    name: function
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    arguments: function
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                });
+
+                ToolCallDelta {
+                    index: call
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .and_then(|index| u32::try_from(index).ok())
+                        .unwrap_or(0),
+                    id: call.get("id").and_then(Value::as_str).map(str::to_string),
+                    tool_type: call.get("type").and_then(Value::as_str).map(str::to_string),
+                    function,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        (!tool_calls.is_empty()).then_some(tool_calls)
+    }
+
     fn converse_content_block_index(event: &Value) -> u32 {
         event
             .get("contentBlockIndex")
@@ -496,17 +544,26 @@ impl BedrockStream {
     fn parse_generic_chunk(&self, value: &Value) -> Result<Option<ChatChunk>, ProviderError> {
         use crate::core::types::responses::{ChatDelta, ChatStreamChoice};
 
-        let openai_content = value
+        let openai_choice = value
             .get("choices")
             .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| {
-                choice
-                    .get("delta")
-                    .and_then(|delta| delta.get("content"))
+            .and_then(|choices| choices.first());
+        let openai_delta = openai_choice.and_then(|choice| choice.get("delta"));
+        let openai_content = openai_delta
+            .and_then(|delta| delta.get("content"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                openai_choice
+                    .and_then(|choice| choice.get("text"))
                     .and_then(Value::as_str)
-                    .or_else(|| choice.get("text").and_then(Value::as_str))
             });
+        let openai_tool_calls = openai_delta
+            .and_then(|delta| delta.get("tool_calls"))
+            .and_then(Self::parse_openai_tool_call_deltas);
+        let openai_finish_reason = openai_choice
+            .and_then(|choice| choice.get("finish_reason"))
+            .and_then(Value::as_str)
+            .map(Self::parse_openai_finish_reason);
 
         // Try to find content in common locations
         let content = openai_content.or_else(|| {
@@ -533,7 +590,7 @@ impl BedrockStream {
                 })
         });
 
-        if let Some(text) = content {
+        if content.is_some() || openai_tool_calls.is_some() || openai_finish_reason.is_some() {
             Ok(Some(ChatChunk {
                 id: format!("bedrock-{}", uuid::Uuid::new_v4()),
                 object: "chat.completion.chunk".to_string(),
@@ -543,13 +600,13 @@ impl BedrockStream {
                     index: 0,
                     delta: ChatDelta {
                         role: None,
-                        content: Some(text.to_string()),
+                        content: content.map(str::to_string),
                         thinking: None,
-                        tool_calls: None,
+                        tool_calls: openai_tool_calls,
                         function_call: None,
                         audio: None,
                     },
-                    finish_reason: None,
+                    finish_reason: openai_finish_reason,
                     logprobs: None,
                 }],
                 usage: None,
