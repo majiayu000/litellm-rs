@@ -51,6 +51,9 @@ impl ParsedBedrockModelId {
             runtime_config_fallback = resource.runtime_config_fallback;
         } else if let Some(canonical) = canonical_metadata_id(&execution_model_id) {
             push_unique(&mut metadata_lookup_ids, canonical);
+            runtime_config_fallback = Some(RuntimeConfigFallback::Converse);
+        } else if is_plain_runtime_profile_id(&execution_model_id) {
+            runtime_config_fallback = Some(RuntimeConfigFallback::Converse);
         }
 
         let family_hint = metadata_lookup_ids
@@ -178,34 +181,42 @@ struct ArnResourceMetadata {
     runtime_config_fallback: Option<RuntimeConfigFallback>,
 }
 
-fn arn_resource_parts(model_id: &str) -> Option<(&str, &str)> {
+struct ArnResourceParts<'a> {
+    service: &'a str,
+    resource_type: &'a str,
+    resource_id: &'a str,
+}
+
+fn arn_resource_parts(model_id: &str) -> Option<ArnResourceParts<'_>> {
     let mut parts = model_id.splitn(6, ':');
     if parts.next()? != "arn" {
         return None;
     }
 
     let _partition = parts.next()?;
-    if parts.next()? != "bedrock" {
-        return None;
-    }
-
+    let service = parts.next()?;
     let _region = parts.next()?;
     let _account_id = parts.next()?;
     let resource = parts.next()?;
-    resource.split_once('/')
+    let (resource_type, resource_id) = resource.split_once('/')?;
+
+    Some(ArnResourceParts {
+        service,
+        resource_type,
+        resource_id,
+    })
 }
 
 fn is_prompt_management_resource(resource_type: &str) -> bool {
-    matches!(
-        resource_type,
-        "prompt" | "default-prompt-router" | "prompt-router"
-    )
+    resource_type == "prompt"
 }
 
 pub(in crate::core::providers::bedrock) fn is_prompt_management_model_id(model_id: &str) -> bool {
     let execution_model_id = model_id.strip_prefix("bedrock/").unwrap_or(model_id);
     arn_resource_parts(execution_model_id)
-        .map(|(resource_type, _resource_id)| is_prompt_management_resource(resource_type))
+        .map(|parts| {
+            parts.service == "bedrock" && is_prompt_management_resource(parts.resource_type)
+        })
         .unwrap_or(false)
 }
 
@@ -216,7 +227,21 @@ pub(in crate::core::providers::bedrock) fn is_runtime_resolved_invoke_model_id(
 }
 
 fn arn_resource_metadata(model_id: &str) -> Option<ArnResourceMetadata> {
-    let (resource_type, resource_id) = arn_resource_parts(model_id)?;
+    let parts = arn_resource_parts(model_id)?;
+
+    if parts.service == "sagemaker" && parts.resource_type == "endpoint" {
+        return Some(ArnResourceMetadata {
+            runtime_config_fallback: Some(RuntimeConfigFallback::Converse),
+            ..Default::default()
+        });
+    }
+
+    if parts.service != "bedrock" {
+        return None;
+    }
+
+    let resource_type = parts.resource_type;
+    let resource_id = parts.resource_id;
 
     if is_prompt_management_resource(resource_type) {
         return Some(ArnResourceMetadata {
@@ -254,6 +279,9 @@ fn arn_resource_metadata(model_id: &str) -> Option<ArnResourceMetadata> {
         "custom-model-deployment" | "provisioned-model" => {
             metadata.runtime_config_fallback = Some(RuntimeConfigFallback::Converse);
         }
+        "default-prompt-router" | "prompt-router" => {
+            metadata.runtime_config_fallback = Some(RuntimeConfigFallback::Converse);
+        }
         "imported-model" => {
             metadata.runtime_config_fallback = Some(RuntimeConfigFallback::Invoke);
         }
@@ -278,6 +306,16 @@ fn is_region_prefix(prefix: &str) -> bool {
         && prefix
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn is_plain_runtime_profile_id(model_id: &str) -> bool {
+    !model_id.is_empty()
+        && !model_id.starts_with("arn:")
+        && !model_id.contains('/')
+        && !model_id.contains('.')
+        && model_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':')
 }
 
 fn push_unique(values: &mut Vec<String>, value: String) {
@@ -477,8 +515,20 @@ mod tests {
 
     #[test]
     fn prompt_management_arns_use_prompt_converse_fallback() {
+        let model_id = "arn:aws:bedrock:us-east-1:123456789012:prompt/ABC123:1";
+        let parsed = parse_bedrock_model_id(model_id);
+
+        assert_eq!(parsed.metadata_lookup_ids, vec![model_id]);
+        assert_eq!(
+            parsed.runtime_config_fallback,
+            Some(RuntimeConfigFallback::PromptConverse)
+        );
+        assert!(super::is_prompt_management_model_id(model_id));
+    }
+
+    #[test]
+    fn prompt_router_arns_use_converse_fallback() {
         for model_id in [
-            "arn:aws:bedrock:us-east-1:123456789012:prompt/ABC123:1",
             "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/ABC123",
             "arn:aws:bedrock:us-east-1:123456789012:prompt-router/ABC123",
         ] {
@@ -487,8 +537,9 @@ mod tests {
             assert_eq!(parsed.metadata_lookup_ids, vec![model_id]);
             assert_eq!(
                 parsed.runtime_config_fallback,
-                Some(RuntimeConfigFallback::PromptConverse)
+                Some(RuntimeConfigFallback::Converse)
             );
+            assert!(!super::is_prompt_management_model_id(model_id));
         }
     }
 
@@ -515,6 +566,43 @@ mod tests {
             crate::core::providers::bedrock::BedrockApiType::ConverseStream
         );
         assert!(config.supports_streaming);
+    }
+
+    #[test]
+    fn application_profile_id_uses_streaming_converse_config() {
+        let parsed = parse_bedrock_model_id("my-team-profile");
+
+        assert_eq!(parsed.kind, BedrockModelIdKind::FoundationModel);
+        assert_eq!(parsed.metadata_lookup_ids, vec!["my-team-profile"]);
+        assert_eq!(
+            parsed.runtime_config_fallback,
+            Some(RuntimeConfigFallback::Converse)
+        );
+
+        let config = config_for("my-team-profile");
+        assert_eq!(
+            config.api_type,
+            crate::core::providers::bedrock::BedrockApiType::ConverseStream
+        );
+    }
+
+    #[test]
+    fn sagemaker_endpoint_arn_uses_streaming_converse_config() {
+        let model_id =
+            "arn:aws:sagemaker:us-east-1:123456789012:endpoint/bedrock-marketplace-endpoint";
+        let parsed = parse_bedrock_model_id(model_id);
+
+        assert_eq!(parsed.metadata_lookup_ids, vec![model_id]);
+        assert_eq!(
+            parsed.runtime_config_fallback,
+            Some(RuntimeConfigFallback::Converse)
+        );
+
+        let config = config_for(model_id);
+        assert_eq!(
+            config.api_type,
+            crate::core::providers::bedrock::BedrockApiType::ConverseStream
+        );
     }
 
     #[test]

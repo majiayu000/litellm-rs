@@ -483,8 +483,10 @@ fn parse_converse_finish_reason(reason: &str) -> FinishReason {
         "end_turn" => FinishReason::Stop,
         "tool_use" => FinishReason::ToolCalls,
         "max_tokens" => FinishReason::Length,
+        "model_context_window_exceeded" => FinishReason::Length,
         "stop_sequence" => FinishReason::StopSequence,
         "content_filtered" | "guardrail_intervened" => FinishReason::ContentFilter,
+        "malformed_model_output" | "malformed_tool_use" => FinishReason::Refusal,
         _ => FinishReason::Stop,
     }
 }
@@ -664,6 +666,32 @@ mod tests {
             serde_json::from_str(&tool_call.function.arguments).unwrap();
         assert_eq!(arguments["city"], "Paris");
         assert_eq!(arguments["unit"], "celsius");
+    }
+
+    #[test]
+    fn maps_converse_context_window_stop_reason_to_length() {
+        let raw_response = serde_json::json!({
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "text": "partial answer" }]
+                }
+            },
+            "stopReason": "model_context_window_exceeded"
+        });
+        let raw_response = serde_json::to_vec(&raw_response)
+            .unwrap_or_else(|err| panic!("Converse response should serialize: {err}"));
+
+        let response = transform_chat_response(
+            &raw_response,
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-team-profile",
+        )
+        .unwrap_or_else(|err| panic!("Converse response should parse: {err}"));
+
+        assert_eq!(
+            response.choices[0].finish_reason,
+            Some(FinishReason::Length)
+        );
     }
 
     #[test]

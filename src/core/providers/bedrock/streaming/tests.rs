@@ -319,8 +319,13 @@ fn create_test_stream_generic() -> BedrockStream {
 }
 
 fn event_stream_message(payload: &[u8]) -> Bytes {
-    let total_length = 16 + payload.len() as u32;
-    let headers_length: u32 = 0;
+    event_stream_message_with_headers(payload, &[])
+}
+
+fn event_stream_message_with_headers(payload: &[u8], headers: &[(&str, &str)]) -> Bytes {
+    let header_bytes = event_stream_headers(headers);
+    let total_length = 16 + header_bytes.len() as u32 + payload.len() as u32;
+    let headers_length = header_bytes.len() as u32;
     let prelude_crc: u32 = 0;
     let message_crc: u32 = 0;
 
@@ -328,9 +333,24 @@ fn event_stream_message(payload: &[u8]) -> Bytes {
     data.extend_from_slice(&total_length.to_be_bytes());
     data.extend_from_slice(&headers_length.to_be_bytes());
     data.extend_from_slice(&prelude_crc.to_be_bytes());
+    data.extend_from_slice(&header_bytes);
     data.extend_from_slice(payload);
     data.extend_from_slice(&message_crc.to_be_bytes());
     Bytes::from(data)
+}
+
+fn event_stream_headers(headers: &[(&str, &str)]) -> Vec<u8> {
+    let mut encoded = Vec::new();
+
+    for (name, value) in headers {
+        encoded.push(name.len() as u8);
+        encoded.extend_from_slice(name.as_bytes());
+        encoded.push(7);
+        encoded.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        encoded.extend_from_slice(value.as_bytes());
+    }
+
+    encoded
 }
 
 #[test]
@@ -446,6 +466,32 @@ async fn test_stream_drains_buffered_events_on_eof() {
     assert_eq!(first.choices[0].delta.content, Some("first".to_string()));
     assert_eq!(second.choices[0].delta.content, Some("second".to_string()));
     assert!(bedrock_stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn test_stream_surfaces_bedrock_exception_events() {
+    use futures::StreamExt as _;
+
+    let frame = event_stream_message_with_headers(
+        br#"{"message":"bad request"}"#,
+        &[
+            (":message-type", "exception"),
+            (":exception-type", "validationException"),
+        ],
+    );
+    let stream = futures::stream::iter(vec![Ok::<Bytes, reqwest::Error>(frame)]);
+    let mut bedrock_stream = BedrockStream::new(
+        stream,
+        BedrockModelFamily::Mistral,
+        BedrockApiType::InvokeStream,
+    );
+
+    let err = bedrock_stream
+        .next()
+        .await
+        .unwrap_or_else(|| panic!("exception frame should emit an error"))
+        .unwrap_err();
+    assert!(format!("{err}").contains("bad request"));
 }
 
 #[test]
@@ -644,6 +690,23 @@ fn test_parse_converse_message_stop_maps_stop_reason() {
     assert_eq!(
         chunk.choices[0].finish_reason.as_ref(),
         Some(&crate::core::types::responses::FinishReason::ToolCalls)
+    );
+}
+
+#[test]
+fn test_parse_converse_message_stop_maps_context_window_to_length() {
+    let stream = create_test_stream_converse_claude();
+    let payload = br#"{"messageStop": {"stopReason": "model_context_window_exceeded"}}"#;
+
+    let result = stream.parse_chunk(payload);
+    assert!(result.is_ok());
+
+    let chunk = result.unwrap_or_else(|err| panic!("messageStop should parse: {err}"));
+    assert!(chunk.is_some());
+    let chunk = chunk.unwrap_or_else(|| panic!("messageStop should emit a chunk"));
+    assert_eq!(
+        chunk.choices[0].finish_reason.as_ref(),
+        Some(&crate::core::types::responses::FinishReason::Length)
     );
 }
 
