@@ -8,6 +8,7 @@ use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
 use crate::core::types::tools as openai_tools;
 use crate::core::types::{message::MessageContent, message::MessageRole};
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -152,6 +153,7 @@ pub struct InferenceConfig {
 
 /// Tool configuration
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolConfig {
     pub tools: Vec<ToolSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -181,12 +183,31 @@ pub struct InputSchema {
 }
 
 /// Tool choice
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Deserialize)]
 pub enum ToolChoice {
     Auto,
     Any,
     Tool { name: String },
+}
+
+impl Serialize for ToolChoice {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct ToolChoiceTool<'a> {
+            name: &'a str,
+        }
+
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            ToolChoice::Auto => map.serialize_entry("auto", &serde_json::json!({}))?,
+            ToolChoice::Any => map.serialize_entry("any", &serde_json::json!({}))?,
+            ToolChoice::Tool { name } => map.serialize_entry("tool", &ToolChoiceTool { name })?,
+        }
+        map.end()
+    }
 }
 
 /// Guardrail configuration

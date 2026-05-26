@@ -209,7 +209,17 @@ impl LLMProvider for BedrockProvider {
     }
 
     fn supports_model(&self, model: &str) -> bool {
-        get_model_config_for_model_id(model).is_ok()
+        let parsed = parse_bedrock_model_id(model);
+        if parsed.user_selector.starts_with("bedrock/")
+            || parsed.execution_model_id.starts_with("arn:")
+        {
+            return get_model_config_for_model_id(model).is_ok();
+        }
+
+        parsed
+            .metadata_lookup_ids
+            .iter()
+            .any(|lookup_id| super::model_config::get_model_config(lookup_id).is_ok())
     }
 
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
@@ -435,5 +445,25 @@ mod tests {
         assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
         assert_eq!(body["inferenceConfig"]["maxTokens"], 64);
         assert!(body.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn supports_model_does_not_capture_plain_non_bedrock_ids() {
+        let config = BedrockConfig {
+            aws_access_key_id: "AKIATEST123456789012".to_string(),
+            aws_secret_access_key: "test-secret-key".to_string(),
+            aws_session_token: None,
+            aws_region: "us-east-1".to_string(),
+            timeout_seconds: 30,
+            max_retries: 3,
+        };
+        let client = BedrockClient::new(config)
+            .unwrap_or_else(|err| panic!("test Bedrock client should build: {err}"));
+        let provider = BedrockProvider::new_for_test(client, vec![]);
+
+        assert!(provider.supports_model("anthropic.claude-3-sonnet-20240229"));
+        assert!(provider.supports_model("bedrock/my-team-profile"));
+        assert!(!provider.supports_model("my-team-profile"));
+        assert!(!provider.supports_model("gpt-4o"));
     }
 }

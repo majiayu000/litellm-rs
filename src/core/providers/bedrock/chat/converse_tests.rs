@@ -175,14 +175,14 @@ fn test_tool_spec() {
 fn test_tool_choice_auto() {
     let choice = ToolChoice::Auto;
     let json = serde_json::to_value(&choice).unwrap();
-    assert_eq!(json, "auto");
+    assert_eq!(json["auto"], serde_json::json!({}));
 }
 
 #[test]
 fn test_tool_choice_any() {
     let choice = ToolChoice::Any;
     let json = serde_json::to_value(&choice).unwrap();
-    assert_eq!(json, "any");
+    assert_eq!(json["any"], serde_json::json!({}));
 }
 
 #[test]
@@ -372,12 +372,17 @@ fn test_transform_with_forced_tool_choice() {
         .unwrap_or_else(|| panic!("toolConfig should be emitted"));
     let tool_choice = tool_config
         .tool_choice
+        .as_ref()
         .unwrap_or_else(|| panic!("toolChoice should be preserved"));
 
     assert!(matches!(
         tool_choice,
-        ToolChoice::Tool { ref name } if name == "lookup_weather"
+        ToolChoice::Tool { name } if name == "lookup_weather"
     ));
+
+    let json = serde_json::to_value(&tool_config)
+        .unwrap_or_else(|err| panic!("toolConfig should serialize: {err}"));
+    assert_eq!(json["toolChoice"]["tool"]["name"], "lookup_weather");
 }
 
 #[test]
@@ -760,10 +765,13 @@ fn test_tool_config_with_tools() {
         tool_choice: Some(ToolChoice::Auto),
     };
 
-    let json = serde_json::to_value(&config).unwrap();
-    assert_eq!(json["tools"].as_array().unwrap().len(), 2);
-    // ToolConfig has no rename_all, so field stays as tool_choice
-    assert_eq!(json["tool_choice"], "auto");
+    let json = serde_json::to_value(&config)
+        .unwrap_or_else(|err| panic!("toolConfig should serialize: {err}"));
+    let tools = json["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools should serialize as an array"));
+    assert_eq!(tools.len(), 2);
+    assert_eq!(json["toolChoice"]["auto"], serde_json::json!({}));
 }
 
 #[test]
