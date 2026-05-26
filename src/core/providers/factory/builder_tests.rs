@@ -340,3 +340,26 @@ fn test_build_bedrock_config_skips_empty_env_values() {
     assert_eq!(bedrock_config.aws_region, "us-west-2");
     assert!(bedrock_config.aws_session_token.is_none());
 }
+
+#[test]
+fn test_build_bedrock_config_skips_empty_config_session_token() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _snapshot = EnvSnapshot::clear(&BEDROCK_ENV_KEYS_WITH_DEFAULT_REGION);
+
+    unsafe {
+        std::env::set_var("AWS_SESSION_TOKEN", "env-session-token");
+    }
+
+    let bedrock_config = build_bedrock_config_from_factory(&serde_json::json!({
+        "aws_access_key_id": "AKIATEST123456789012",
+        "aws_secret_access_key": "test-secret-key",
+        "aws_session_token": "",
+        "aws_region": "us-west-2"
+    }))
+    .unwrap_or_else(|err| panic!("bedrock config should parse: {err}"));
+
+    assert_eq!(
+        bedrock_config.aws_session_token.as_deref(),
+        Some("env-session-token")
+    );
+}
