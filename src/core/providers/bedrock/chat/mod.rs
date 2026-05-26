@@ -6,8 +6,8 @@ pub mod converse;
 pub mod invoke;
 pub mod transformations;
 
+use super::get_model_config_for_model_id;
 use super::model_config::BedrockApiType;
-use super::{get_model_config_for_model_id, parse_bedrock_model_id};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
 use serde_json::Value;
@@ -18,15 +18,13 @@ pub async fn route_chat_request(
     request: &ChatRequest,
 ) -> Result<Value, ProviderError> {
     let model_config = get_model_config_for_model_id(&request.model)?;
-    let mut execution_request = request.clone();
-    execution_request.model = execution_model_id(&request.model);
 
     match model_config.api_type {
         BedrockApiType::Converse | BedrockApiType::ConverseStream => {
-            converse::execute_converse(client, &execution_request).await
+            converse::execute_converse(client, request).await
         }
         BedrockApiType::Invoke | BedrockApiType::InvokeStream => {
-            invoke::execute_invoke(client, &execution_request).await
+            invoke::execute_invoke(client, request).await
         }
     }
 }
@@ -50,8 +48,4 @@ pub fn supports_streaming(model_id: &str) -> bool {
     } else {
         false
     }
-}
-
-pub fn execution_model_id(model_id: &str) -> String {
-    parse_bedrock_model_id(model_id).execution_model_id
 }

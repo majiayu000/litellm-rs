@@ -3,6 +3,7 @@
 //! Modern unified API for chat completions in Bedrock
 
 use crate::core::providers::bedrock::model_id::is_prompt_management_model_id;
+use crate::core::providers::bedrock::parse_bedrock_model_id;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
 use crate::core::types::{message::MessageContent, message::MessageRole};
@@ -204,11 +205,12 @@ pub async fn execute_converse(
 ) -> Result<Value, ProviderError> {
     // Transform ChatRequest to ConverseRequest
     let converse_request = transform_to_converse(request)?;
+    let execution_model_id = parse_bedrock_model_id(&request.model).execution_model_id;
 
     // Send request using the client
     let response = client
         .send_request(
-            &request.model,
+            &execution_model_id,
             "converse",
             &serde_json::to_value(converse_request)?,
         )
