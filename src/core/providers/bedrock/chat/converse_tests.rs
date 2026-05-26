@@ -632,6 +632,48 @@ fn prompt_management_transform_uses_supported_request_shape() {
 }
 
 #[test]
+fn prompt_management_transform_normalizes_string_prompt_variables() {
+    let mut request =
+        ChatRequest::new("bedrock/arn:aws:bedrock:us-east-1:123456789012:prompt/ABC123:1")
+            .add_user_message("hello");
+    request.extra_params.insert(
+        "promptVariables".to_string(),
+        serde_json::json!({
+            "topic": "Bedrock"
+        }),
+    );
+
+    let Ok(converse) = transform_to_converse(&request) else {
+        panic!("string promptVariables should be normalized");
+    };
+    let Ok(json) = serde_json::to_value(&converse) else {
+        panic!("prompt-management request should serialize");
+    };
+
+    assert_eq!(json["promptVariables"]["topic"]["text"], "Bedrock");
+}
+
+#[test]
+fn prompt_management_transform_rejects_invalid_prompt_variables() {
+    let mut request =
+        ChatRequest::new("bedrock/arn:aws:bedrock:us-east-1:123456789012:prompt/ABC123:1")
+            .add_user_message("hello");
+    request.extra_params.insert(
+        "promptVariables".to_string(),
+        serde_json::json!({
+            "topic": { "value": "Bedrock" }
+        }),
+    );
+
+    let err = match transform_to_converse(&request) {
+        Ok(_) => panic!("invalid promptVariables should be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(format!("{err}").contains("promptVariables values"));
+}
+
+#[test]
 fn prompt_management_transform_rejects_disallowed_system_message() {
     let request = ChatRequest::new("arn:aws:bedrock:us-east-1:123456789012:prompt/ABC123:1")
         .add_system_message("system")

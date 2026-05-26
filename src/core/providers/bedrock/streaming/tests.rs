@@ -318,6 +318,21 @@ fn create_test_stream_generic() -> BedrockStream {
     )
 }
 
+fn event_stream_message(payload: &[u8]) -> Bytes {
+    let total_length = 16 + payload.len() as u32;
+    let headers_length: u32 = 0;
+    let prelude_crc: u32 = 0;
+    let message_crc: u32 = 0;
+
+    let mut data = Vec::new();
+    data.extend_from_slice(&total_length.to_be_bytes());
+    data.extend_from_slice(&headers_length.to_be_bytes());
+    data.extend_from_slice(&prelude_crc.to_be_bytes());
+    data.extend_from_slice(payload);
+    data.extend_from_slice(&message_crc.to_be_bytes());
+    Bytes::from(data)
+}
+
 #[test]
 fn test_parse_generic_completion() {
     let stream = create_test_stream_generic();
@@ -370,6 +385,67 @@ fn test_parse_generic_text() {
         chunk.unwrap().choices[0].delta.content,
         Some("Simple text".to_string())
     );
+}
+
+#[test]
+fn test_parse_invoke_stream_chunk_bytes_envelope() {
+    let stream = create_test_stream_generic();
+    let inner = br#"{"completion":"wrapped completion"}"#;
+    let encoded = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(inner)
+    };
+    let payload = serde_json::json!({
+        "chunk": {
+            "bytes": encoded
+        }
+    });
+    let payload = serde_json::to_vec(&payload)
+        .unwrap_or_else(|err| panic!("test payload should serialize: {err}"));
+
+    let result = stream.parse_chunk(&payload);
+    assert!(result.is_ok());
+
+    let chunk = result.unwrap_or_else(|err| panic!("chunk envelope should parse: {err}"));
+    assert!(chunk.is_some());
+    let chunk = chunk.unwrap_or_else(|| panic!("chunk envelope should emit content"));
+    assert_eq!(
+        chunk.choices[0].delta.content,
+        Some("wrapped completion".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_stream_drains_buffered_events_on_eof() {
+    use futures::StreamExt as _;
+
+    let first = event_stream_message(br#"{"completion":"first"}"#);
+    let second = event_stream_message(br#"{"completion":"second"}"#);
+    let mut combined = Vec::new();
+    combined.extend_from_slice(&first);
+    combined.extend_from_slice(&second);
+
+    let stream = futures::stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from(combined))]);
+    let mut bedrock_stream = BedrockStream::new(
+        stream,
+        BedrockModelFamily::Mistral,
+        BedrockApiType::InvokeStream,
+    );
+
+    let first = bedrock_stream
+        .next()
+        .await
+        .unwrap_or_else(|| panic!("first frame should be emitted"))
+        .unwrap_or_else(|err| panic!("first frame should parse: {err}"));
+    let second = bedrock_stream
+        .next()
+        .await
+        .unwrap_or_else(|| panic!("second frame should be emitted"))
+        .unwrap_or_else(|err| panic!("second frame should parse: {err}"));
+
+    assert_eq!(first.choices[0].delta.content, Some("first".to_string()));
+    assert_eq!(second.choices[0].delta.content, Some("second".to_string()));
+    assert!(bedrock_stream.next().await.is_none());
 }
 
 #[test]

@@ -154,14 +154,16 @@ impl BedrockStream {
     /// Parse chunk based on model family
     fn parse_chunk(&self, payload: &[u8]) -> Result<Option<ChatChunk>, ProviderError> {
         let json_str = String::from_utf8_lossy(payload);
-        let value: Value = serde_json::from_str(&json_str)
+        let mut value: Value = serde_json::from_str(&json_str)
             .map_err(|e| ProviderError::response_parsing("bedrock", e.to_string()))?;
 
         match &self.api_type {
             BedrockApiType::Converse | BedrockApiType::ConverseStream => {
                 return self.parse_converse_chunk(&value);
             }
-            BedrockApiType::Invoke | BedrockApiType::InvokeStream => {}
+            BedrockApiType::Invoke | BedrockApiType::InvokeStream => {
+                value = Self::decode_invoke_stream_payload(value)?;
+            }
         }
 
         // Parse invoke-style streams based on model family.
@@ -174,6 +176,54 @@ impl BedrockStream {
                 self.parse_generic_chunk(&value)
             }
         }
+    }
+
+    fn decode_invoke_stream_payload(value: Value) -> Result<Value, ProviderError> {
+        let Some(encoded) = value
+            .get("chunk")
+            .and_then(|chunk| chunk.get("bytes"))
+            .and_then(Value::as_str)
+        else {
+            return Ok(value);
+        };
+
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|e| ProviderError::response_parsing("bedrock", e.to_string()))?;
+        serde_json::from_slice(&decoded)
+            .map_err(|e| ProviderError::response_parsing("bedrock", e.to_string()))
+    }
+
+    fn parse_buffered_chunk(&mut self) -> Option<Result<Option<ChatChunk>, ProviderError>> {
+        if self.buffer.len() < 16 {
+            return None;
+        }
+
+        let total_length = u32::from_be_bytes([
+            self.buffer[0],
+            self.buffer[1],
+            self.buffer[2],
+            self.buffer[3],
+        ]) as usize;
+        if total_length < 16 {
+            self.buffer.clear();
+            return Some(Err(ProviderError::response_parsing(
+                "bedrock",
+                "invalid Bedrock event stream frame length",
+            )));
+        }
+
+        if self.buffer.len() < total_length {
+            return None;
+        }
+
+        let message_data = self.buffer[..total_length].to_vec();
+        self.buffer.drain(..total_length);
+        Some(
+            Self::parse_event_message(&message_data)
+                .and_then(|message| self.parse_chunk(&message.payload)),
+        )
     }
 
     fn parse_converse_finish_reason(
@@ -622,57 +672,31 @@ impl Stream for BedrockStream {
     type Item = Result<ChatChunk, ProviderError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Poll the inner stream for more data
-        match self.inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(bytes))) => {
-                // Add bytes to buffer
-                self.buffer.extend_from_slice(&bytes);
-
-                // Try to parse an event message
-                if self.buffer.len() >= 16 {
-                    // Check if we have a complete message
-                    let total_length = u32::from_be_bytes([
-                        self.buffer[0],
-                        self.buffer[1],
-                        self.buffer[2],
-                        self.buffer[3],
-                    ]) as usize;
-
-                    if self.buffer.len() >= total_length {
-                        // Extract the message
-                        let message_data = self.buffer[..total_length].to_vec();
-                        self.buffer.drain(..total_length);
-
-                        // Parse the message
-                        match Self::parse_event_message(&message_data) {
-                            Ok(message) => {
-                                // Parse the payload as a chunk
-                                match self.parse_chunk(&message.payload) {
-                                    Ok(Some(chunk)) => Poll::Ready(Some(Ok(chunk))),
-                                    Ok(None) => {
-                                        // No chunk from this message, poll again
-                                        cx.waker().wake_by_ref();
-                                        Poll::Pending
-                                    }
-                                    Err(e) => Poll::Ready(Some(Err(e))),
-                                }
-                            }
-                            Err(e) => Poll::Ready(Some(Err(e))),
-                        }
-                    } else {
-                        // Need more data
-                        cx.waker().wake_by_ref();
-                        Poll::Pending
-                    }
-                } else {
-                    // Need more data
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+        loop {
+            if let Some(parsed) = self.parse_buffered_chunk() {
+                match parsed {
+                    Ok(Some(chunk)) => return Poll::Ready(Some(Ok(chunk))),
+                    Ok(None) => continue,
+                    Err(e) => return Poll::Ready(Some(Err(e))),
                 }
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    self.buffer.extend_from_slice(&bytes);
+                }
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => {
+                    if self.buffer.is_empty() {
+                        return Poll::Ready(None);
+                    }
+                    return Poll::Ready(Some(Err(ProviderError::response_parsing(
+                        "bedrock",
+                        "incomplete Bedrock event stream frame",
+                    ))));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
         }
     }
 }

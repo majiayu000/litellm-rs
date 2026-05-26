@@ -446,22 +446,39 @@ fn map_tool_choice(
 fn prompt_variables_from_extra_params(
     request: &ChatRequest,
 ) -> Result<Option<Value>, ProviderError> {
-    let prompt_variables = request
+    let Some(prompt_variables) = request
         .extra_params
         .get("promptVariables")
         .or_else(|| request.extra_params.get("prompt_variables"))
-        .cloned();
+    else {
+        return Ok(None);
+    };
 
-    if let Some(value) = &prompt_variables
-        && !value.is_object()
-    {
-        return Err(ProviderError::invalid_request(
+    let variables = prompt_variables.as_object().ok_or_else(|| {
+        ProviderError::invalid_request(
             "bedrock",
             "promptVariables must be an object for Bedrock prompt-management ARNs",
-        ));
+        )
+    })?;
+    let mut normalized = serde_json::Map::new();
+
+    for (name, value) in variables {
+        let prompt_value = if let Some(text) = value.as_str() {
+            serde_json::json!({ "text": text })
+        } else if value.as_object().is_some_and(|object| {
+            object.len() == 1 && object.get("text").and_then(Value::as_str).is_some()
+        }) {
+            value.clone()
+        } else {
+            return Err(ProviderError::invalid_request(
+                "bedrock",
+                "promptVariables values must be strings or objects with a string text field",
+            ));
+        };
+        normalized.insert(name.clone(), prompt_value);
     }
 
-    Ok(prompt_variables)
+    Ok(Some(Value::Object(normalized)))
 }
 
 fn content_parts_to_blocks(
