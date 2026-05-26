@@ -251,7 +251,7 @@ impl LLMProvider for BedrockProvider {
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
         if is_runtime_resolved_invoke_model_id(&request.model) {
-            return super::chat::transformations::transform_openai_compatible_request(&request);
+            return super::chat::transformations::transform_runtime_invoke_request(&request);
         }
 
         transformation::transform_chat_request(

@@ -515,6 +515,22 @@ impl BedrockStream {
                 .or_else(|| value.get("generation"))
                 .or_else(|| value.get("text"))
                 .and_then(|t| t.as_str())
+                .or_else(|| {
+                    value
+                        .get("outputs")
+                        .and_then(Value::as_array)
+                        .and_then(|outputs| outputs.first())
+                        .and_then(|output| output.get("text"))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    value
+                        .get("results")
+                        .and_then(Value::as_array)
+                        .and_then(|results| results.first())
+                        .and_then(|result| result.get("outputText"))
+                        .and_then(Value::as_str)
+                })
         });
 
         if let Some(text) = content {

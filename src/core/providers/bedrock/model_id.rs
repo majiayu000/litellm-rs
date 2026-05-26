@@ -243,7 +243,10 @@ fn arn_resource_metadata(model_id: &str) -> Option<ArnResourceMetadata> {
                 metadata.runtime_config_fallback = Some(RuntimeConfigFallback::Invoke);
             }
         }
-        "custom-model-deployment" | "imported-model" | "provisioned-model" => {
+        "custom-model-deployment" | "provisioned-model" => {
+            metadata.runtime_config_fallback = Some(RuntimeConfigFallback::Converse);
+        }
+        "imported-model" => {
             metadata.runtime_config_fallback = Some(RuntimeConfigFallback::Invoke);
         }
         _ => {
@@ -444,7 +447,23 @@ mod tests {
         );
         assert_eq!(
             parsed.runtime_config_fallback,
-            Some(RuntimeConfigFallback::Invoke)
+            Some(RuntimeConfigFallback::Converse)
+        );
+    }
+
+    #[test]
+    fn provisioned_model_arn_allows_converse_runtime_config_resolution() {
+        let parsed = parse_bedrock_model_id(
+            "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/ABC123",
+        );
+
+        assert_eq!(
+            parsed.metadata_lookup_ids,
+            vec!["arn:aws:bedrock:us-east-1:123456789012:provisioned-model/ABC123"]
+        );
+        assert_eq!(
+            parsed.runtime_config_fallback,
+            Some(RuntimeConfigFallback::Converse)
         );
     }
 
