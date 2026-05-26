@@ -3,6 +3,8 @@
 //! Contains the logic for transforming requests and responses between
 //! OpenAI-compatible format and Bedrock model-specific formats.
 
+mod openai_invoke_response;
+
 use serde_json::Value;
 
 use super::get_model_config_for_model_id;
@@ -365,37 +367,7 @@ fn parse_deepseek_response(response: &Value) -> Vec<ChatChoice> {
 }
 
 fn parse_openai_compatible_response(response: &Value) -> Vec<ChatChoice> {
-    let first_choice = response
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first());
-
-    let content = first_choice
-        .and_then(|choice| {
-            choice
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(Value::as_str)
-                .or_else(|| choice.get("text").and_then(Value::as_str))
-                .or_else(|| {
-                    choice
-                        .get("delta")
-                        .and_then(|delta| delta.get("content"))
-                        .and_then(Value::as_str)
-                })
-        })
-        .unwrap_or("")
-        .to_string();
-
-    let finish_reason = first_choice
-        .and_then(|choice| choice.get("finish_reason"))
-        .and_then(Value::as_str)
-        .map(parse_openai_finish_reason)
-        .unwrap_or(FinishReason::Stop);
-
-    let mut choice = create_chat_choice(content);
-    choice.finish_reason = Some(finish_reason);
-    vec![choice]
+    openai_invoke_response::parse_response(response)
 }
 
 fn parse_runtime_invoke_response(response: &Value) -> Vec<ChatChoice> {
@@ -513,16 +485,6 @@ fn parse_converse_finish_reason(reason: &str) -> FinishReason {
         "max_tokens" => FinishReason::Length,
         "stop_sequence" => FinishReason::StopSequence,
         "content_filtered" | "guardrail_intervened" => FinishReason::ContentFilter,
-        _ => FinishReason::Stop,
-    }
-}
-
-fn parse_openai_finish_reason(reason: &str) -> FinishReason {
-    match reason {
-        "length" => FinishReason::Length,
-        "tool_calls" => FinishReason::ToolCalls,
-        "content_filter" => FinishReason::ContentFilter,
-        "stop_sequence" => FinishReason::StopSequence,
         _ => FinishReason::Stop,
     }
 }
