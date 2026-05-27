@@ -538,8 +538,8 @@ mod tests {
         assert_eq!(gpt55.family, OpenAIModelFamily::GPT55);
         assert_eq!(gpt55.model_info.max_context_length, 1_048_576);
         assert_eq!(gpt55.model_info.max_output_length, Some(128_000));
-        assert_eq!(gpt55.model_info.input_cost_per_1k_tokens, Some(0.00125));
-        assert_eq!(gpt55.model_info.output_cost_per_1k_tokens, Some(0.010));
+        assert_eq!(gpt55.model_info.input_cost_per_1k_tokens, Some(0.005));
+        assert_eq!(gpt55.model_info.output_cost_per_1k_tokens, Some(0.030));
         assert!(gpt55.model_info.supports_tools);
         assert!(gpt55.model_info.supports_streaming);
         assert!(gpt55.model_info.supports_multimodal);
@@ -560,8 +560,8 @@ mod tests {
         assert_eq!(gpt55_pro.family, OpenAIModelFamily::GPT55Pro);
         assert_eq!(gpt55_pro.model_info.max_context_length, 1_048_576);
         assert_eq!(gpt55_pro.model_info.max_output_length, Some(128_000));
-        assert_eq!(gpt55_pro.model_info.input_cost_per_1k_tokens, Some(0.015));
-        assert_eq!(gpt55_pro.model_info.output_cost_per_1k_tokens, Some(0.120));
+        assert_eq!(gpt55_pro.model_info.input_cost_per_1k_tokens, Some(0.030));
+        assert_eq!(gpt55_pro.model_info.output_cost_per_1k_tokens, Some(0.180));
         assert!(gpt55_pro.model_info.supports_tools);
         assert!(!gpt55_pro.model_info.supports_streaming);
         assert!(gpt55_pro.model_info.supports_multimodal);

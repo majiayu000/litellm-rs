@@ -14,8 +14,8 @@ impl ModelUtils {
         }
 
         match model_lower.as_str() {
-            m if m.starts_with("gpt-5.5-pro") => Some((0.015, 0.120)),
-            m if m.starts_with("gpt-5.5") => Some((0.00125, 0.010)),
+            m if m.starts_with("gpt-5.5-pro") => Some((0.030, 0.180)),
+            m if m.starts_with("gpt-5.5") => Some((0.005, 0.030)),
             m if m.starts_with("gpt-5.4-pro") => Some((0.030, 0.180)),
             m if m.starts_with("gpt-5.4-mini") => Some((0.00075, 0.0045)),
             m if m.starts_with("gpt-5.4-nano") => Some((0.0002, 0.00125)),

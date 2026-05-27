@@ -6,16 +6,16 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
     let pricing = match model.to_lowercase().as_str() {
         m if m.contains("gpt-5.5-pro") => ModelPricing {
             model: model.to_string(),
-            input_cost_per_1k_tokens: 0.015,
-            output_cost_per_1k_tokens: 0.120,
+            input_cost_per_1k_tokens: 0.030,
+            output_cost_per_1k_tokens: 0.180,
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
         },
         m if m.contains("gpt-5.5") => ModelPricing {
             model: model.to_string(),
-            input_cost_per_1k_tokens: 0.00125,
-            output_cost_per_1k_tokens: 0.010,
+            input_cost_per_1k_tokens: 0.005,
+            output_cost_per_1k_tokens: 0.030,
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()

@@ -642,14 +642,14 @@ fn test_new_openai_models_have_cost_pricing() {
     let Ok(gpt55) = get_model_pricing("gpt-5.5", "openai") else {
         panic!("gpt-5.5 should have OpenAI pricing");
     };
-    assert_eq!(gpt55.input_cost_per_1k_tokens, 0.00125);
-    assert_eq!(gpt55.output_cost_per_1k_tokens, 0.010);
+    assert_eq!(gpt55.input_cost_per_1k_tokens, 0.005);
+    assert_eq!(gpt55.output_cost_per_1k_tokens, 0.030);
 
     let Ok(gpt55_pro) = get_model_pricing("gpt-5.5-pro", "openai") else {
         panic!("gpt-5.5-pro should have OpenAI pricing");
     };
-    assert_eq!(gpt55_pro.input_cost_per_1k_tokens, 0.015);
-    assert_eq!(gpt55_pro.output_cost_per_1k_tokens, 0.120);
+    assert_eq!(gpt55_pro.input_cost_per_1k_tokens, 0.030);
+    assert_eq!(gpt55_pro.output_cost_per_1k_tokens, 0.180);
 
     let gpt54_pro = get_model_pricing("gpt-5.4-pro", "openai").unwrap();
     assert_eq!(gpt54_pro.input_cost_per_1k_tokens, 0.030);

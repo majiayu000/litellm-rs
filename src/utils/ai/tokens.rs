@@ -290,8 +290,8 @@ impl TokenUtils {
         output_tokens: usize,
     ) -> Result<f64, ProviderError> {
         let (input_price, output_price) = match model.to_lowercase().as_str() {
-            m if m.contains("gpt-5.5-pro") => (0.015, 0.120),
-            m if m.contains("gpt-5.5") => (0.00125, 0.010),
+            m if m.contains("gpt-5.5-pro") => (0.030, 0.180),
+            m if m.contains("gpt-5.5") => (0.005, 0.030),
             m if m.contains("gpt-5.4-pro") => (0.030, 0.180),
             m if m.contains("gpt-5.4-mini") => (0.00075, 0.0045),
             m if m.contains("gpt-5.4-nano") => (0.0002, 0.00125),

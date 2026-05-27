@@ -436,8 +436,8 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             OpenAIModelFamily::GPT55,
             1048576,
             Some(128000),
-            0.00125,
-            0.010,
+            0.005,
+            0.030,
         ),
         (
             "gpt-5.5-2026-04-23",
@@ -445,8 +445,8 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             OpenAIModelFamily::GPT55,
             1048576,
             Some(128000),
-            0.00125,
-            0.010,
+            0.005,
+            0.030,
         ),
         (
             "gpt-5.5-pro",
@@ -454,8 +454,8 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             OpenAIModelFamily::GPT55Pro,
             1048576,
             Some(128000),
-            0.015,
-            0.120,
+            0.030,
+            0.180,
         ),
         (
             "gpt-5.5-pro-2026-04-23",
@@ -463,8 +463,8 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             OpenAIModelFamily::GPT55Pro,
             1048576,
             Some(128000),
-            0.015,
-            0.120,
+            0.030,
+            0.180,
         ),
         // ==================== GPT Audio Models (2025) ====================
         (
