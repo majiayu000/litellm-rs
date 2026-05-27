@@ -6,7 +6,9 @@
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry as provider_registry;
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::providers::{Provider, anthropic, cloudflare, mistral, openai, openai_like};
+use crate::core::providers::{
+    Provider, anthropic, bedrock, cloudflare, mistral, openai, openai_like,
+};
 
 use super::builder::{
     build_amazon_nova_config_from_factory, build_anthropic_config_from_factory,
@@ -108,11 +110,11 @@ impl Provider {
                 Ok(Provider::OpenAILike(provider))
             }
             ProviderType::Bedrock => {
-                let oai_config = build_bedrock_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
+                let bedrock_config = build_bedrock_config_from_factory(&config)?;
+                let provider = bedrock::BedrockProvider::new(bedrock_config)
                     .await
                     .map_err(|e| ProviderError::initialization("bedrock", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
+                Ok(Provider::Bedrock(provider))
             }
             ProviderType::VertexAI => {
                 let oai_config = build_vertex_ai_config_from_factory(&config)?;

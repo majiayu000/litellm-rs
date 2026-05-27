@@ -7,6 +7,7 @@ LiteLLM-RS supports 100+ AI providers through a unified interface. This section 
 ### **Tier 1 Providers** (Full Feature Support)
 - [**OpenAI**](./openai.md) - GPT-5.4, GPT-5.4 mini, GPT-4.1, Embeddings, GPT Image 1.5
 - [**Anthropic**](./anthropic.md) - Claude Opus 4.7, Sonnet 4.6, Haiku 4.5
+- [**AWS Bedrock**](./bedrock.md) - Native SigV4 Bedrock Runtime provider
 - [**DeepSeek**](./deepseek.md) - DeepSeek V4 Flash & Pro
 - [**Google**](./google.md) - Gemini Pro, PaLM, Vertex AI
 - [**Azure OpenAI**](./azure-openai.md) - Enterprise OpenAI deployment
@@ -20,7 +21,7 @@ LiteLLM-RS supports 100+ AI providers through a unified interface. This section 
 
 ### **Tier 3 Providers** (Basic Support)
 - **Hugging Face** - Transformers and hosted models
-- **AWS Bedrock** - Amazon's model marketplace
+- [**OpenAI-compatible Bedrock proxy**](./openai-compatible-bedrock-proxy.md) - Bedrock Access Gateway and similar proxy deployments
 - **Ollama** - Local model serving
 - **OpenRouter** - Model routing service
 - **Fireworks AI** - Fast inference platform
@@ -31,6 +32,7 @@ LiteLLM-RS supports 100+ AI providers through a unified interface. This section 
 |----------|------|-----------|-------|---------|------------|-------|
 | OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Anthropic | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| AWS Bedrock | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | DeepSeek | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Google | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Azure OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -85,6 +87,11 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
 # Azure OpenAI
 export AZURE_OPENAI_API_KEY=your_key_here
 export AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+
+# AWS Bedrock native runtime
+export AWS_ACCESS_KEY_ID=your_key_here
+export AWS_SECRET_ACCESS_KEY=your_secret_here
+export AWS_REGION=us-east-1
 ```
 
 ### YAML Configuration
@@ -104,6 +111,17 @@ providers:
   anthropic:
     api_key: "${ANTHROPIC_API_KEY}"
     api_version: "2023-06-01"
+
+  bedrock-native:
+    provider_type: "bedrock"
+    api_key: ""
+    settings:
+      aws_region: "${AWS_REGION}"
+
+  bedrock-access-gateway:
+    provider_type: "openai_compatible"
+    api_key: "${BEDROCK_ACCESS_GATEWAY_API_KEY}"
+    base_url: "https://bedrock-access-gateway.example.com/api/v1"
 ```
 
 ## 🔧 Advanced Features

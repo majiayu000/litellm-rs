@@ -71,7 +71,7 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::Bedrock,
         "bedrock",
         &["aws-bedrock"],
-        ProviderDispatchKind::ExplicitOpenAiLike,
+        ProviderDispatchKind::Native,
         false,
     ),
     entry(

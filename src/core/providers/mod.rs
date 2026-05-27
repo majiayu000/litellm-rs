@@ -22,7 +22,6 @@ pub mod azure_ai;
 // baichuan: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod baseten;
-#[cfg(feature = "providers-extra")]
 pub mod bedrock;
 // bytez: Tier 1 -> registry/catalog.rs
 // cerebras: Tier 1 -> registry/catalog.rs
@@ -264,6 +263,7 @@ macro_rules! dispatch_provider {
         match $self {
             Provider::OpenAI(p) => p.$method($($arg),*),
             Provider::Anthropic(p) => p.$method($($arg),*),
+            Provider::Bedrock(p) => p.$method($($arg),*),
             Provider::Mistral(p) => p.$method($($arg),*),
             Provider::Cloudflare(p) => p.$method($($arg),*),
             Provider::OpenAILike(p) => p.$method($($arg),*),
@@ -274,6 +274,7 @@ macro_rules! dispatch_provider {
         match $self {
             Provider::OpenAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Anthropic(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            Provider::Bedrock(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
@@ -284,6 +285,7 @@ macro_rules! dispatch_provider {
         match $self {
             Provider::OpenAI(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Anthropic(p) => LLMProvider::$method(p, $($arg),*),
+            Provider::Bedrock(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*),
@@ -294,6 +296,7 @@ macro_rules! dispatch_provider {
         match $self {
             Provider::OpenAI(p) => LLMProvider::$method(p).await,
             Provider::Anthropic(p) => LLMProvider::$method(p).await,
+            Provider::Bedrock(p) => LLMProvider::$method(p).await,
             Provider::Mistral(p) => LLMProvider::$method(p).await,
             Provider::Cloudflare(p) => LLMProvider::$method(p).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
@@ -328,6 +331,7 @@ macro_rules! dispatch_provider_selective {
 pub enum Provider {
     OpenAI(openai::OpenAIProvider),
     Anthropic(anthropic::AnthropicProvider),
+    Bedrock(bedrock::BedrockProvider),
     Mistral(mistral::MistralProvider),
     Cloudflare(cloudflare::CloudflareProvider),
     /// Tier 1: data-driven OpenAI-compatible providers (groq, together, fireworks, etc.)
@@ -340,6 +344,7 @@ impl Provider {
         match self {
             Provider::OpenAI(_) => "openai",
             Provider::Anthropic(_) => "anthropic",
+            Provider::Bedrock(_) => "bedrock",
             Provider::Mistral(_) => "mistral",
             Provider::Cloudflare(_) => "cloudflare",
             Provider::OpenAILike(p) => {
@@ -354,6 +359,7 @@ impl Provider {
         match self {
             Provider::OpenAI(_) => ProviderType::OpenAI,
             Provider::Anthropic(_) => ProviderType::Anthropic,
+            Provider::Bedrock(_) => ProviderType::Bedrock,
             Provider::Mistral(_) => ProviderType::Mistral,
             Provider::Cloudflare(_) => ProviderType::Cloudflare,
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,

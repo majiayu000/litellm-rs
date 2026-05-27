@@ -10,15 +10,20 @@ pub mod meta;
 pub mod mistral;
 
 use crate::core::providers::bedrock::model_config::{BedrockModelFamily, ModelConfig};
+use crate::core::providers::bedrock::model_id::is_runtime_resolved_invoke_model_id;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Transform request based on model family
 pub fn transform_for_model(
     request: &ChatRequest,
     model_config: &ModelConfig,
 ) -> Result<Value, ProviderError> {
+    if is_runtime_resolved_invoke_model_id(&request.model) {
+        return transform_runtime_invoke_request(request);
+    }
+
     match model_config.family {
         BedrockModelFamily::Claude => anthropic::transform_request(request, model_config),
         BedrockModelFamily::TitanText => amazon::transform_titan_request(request, model_config),
@@ -38,6 +43,72 @@ pub fn transform_for_model(
                 model_config.family
             ),
         )),
+    }
+}
+
+pub(in crate::core::providers::bedrock) fn transform_runtime_invoke_request(
+    request: &ChatRequest,
+) -> Result<Value, ProviderError> {
+    if request
+        .extra_params
+        .get("bedrock_invoke_schema")
+        .and_then(Value::as_str)
+        == Some("openai_chat")
+    {
+        return transform_openai_compatible_request(request);
+    }
+
+    transform_generic_invoke_request(request)
+}
+
+fn transform_openai_compatible_request(request: &ChatRequest) -> Result<Value, ProviderError> {
+    let messages = serde_json::to_value(&request.messages)
+        .map_err(|e| ProviderError::serialization("bedrock", e.to_string()))?;
+    let mut body = json!({ "messages": messages });
+
+    add_sampling_invoke_params(request, &mut body);
+
+    if let Some(tools) = &request.tools {
+        body["tools"] = serde_json::to_value(tools)
+            .map_err(|e| ProviderError::serialization("bedrock", e.to_string()))?;
+    }
+    if let Some(tool_choice) = &request.tool_choice {
+        body["tool_choice"] = serde_json::to_value(tool_choice)
+            .map_err(|e| ProviderError::serialization("bedrock", e.to_string()))?;
+    }
+
+    Ok(body)
+}
+
+fn transform_generic_invoke_request(request: &ChatRequest) -> Result<Value, ProviderError> {
+    let mut body = json!({
+        "prompt": messages_to_prompt(&request.messages),
+    });
+
+    add_sampling_invoke_params(request, &mut body);
+    if request
+        .max_completion_tokens
+        .or(request.max_tokens)
+        .is_none()
+    {
+        body["max_tokens"] = json!(4096);
+    }
+
+    Ok(body)
+}
+
+fn add_sampling_invoke_params(request: &ChatRequest, body: &mut Value) {
+    if let Some(max_tokens) = request.max_completion_tokens.or(request.max_tokens) {
+        body["max_tokens"] = json!(max_tokens);
+    }
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if let Some(stop) = &request.stop {
+        body["stop"] = json!(stop);
     }
 }
 
@@ -191,5 +262,55 @@ mod tests {
         let prompt = messages_to_prompt(&messages);
         // Empty content messages should be skipped
         assert_eq!(prompt, "Assistant:");
+    }
+
+    #[test]
+    fn runtime_resolved_invoke_uses_generic_request_shape_by_default() {
+        let mut request =
+            ChatRequest::new("arn:aws:bedrock:us-east-1:123456789012:imported-model/ABC123")
+                .add_user_message("Hello");
+        request.max_tokens = Some(64);
+        request.temperature = Some(0.2);
+
+        let config = crate::core::providers::bedrock::get_model_config_for_model_id(&request.model)
+            .unwrap_or_else(|err| panic!("runtime config should resolve: {err}"));
+        let body = transform_for_model(&request, config)
+            .unwrap_or_else(|err| panic!("request should transform: {err}"));
+
+        assert!(
+            body["prompt"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Hello")
+        );
+        assert_eq!(body["max_tokens"], 64);
+        let temperature = body["temperature"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("temperature should be numeric"));
+        assert!((temperature - 0.2).abs() < 0.000001);
+        assert!(body.get("messages").is_none());
+        assert!(body.get("inferenceConfig").is_none());
+    }
+
+    #[test]
+    fn runtime_resolved_invoke_uses_openai_request_shape_when_requested() {
+        let mut request =
+            ChatRequest::new("arn:aws:bedrock:us-east-1:123456789012:imported-model/ABC123")
+                .add_user_message("Hello");
+        request.max_tokens = Some(64);
+        request.extra_params.insert(
+            "bedrock_invoke_schema".to_string(),
+            serde_json::json!("openai_chat"),
+        );
+
+        let config = crate::core::providers::bedrock::get_model_config_for_model_id(&request.model)
+            .unwrap_or_else(|err| panic!("runtime config should resolve: {err}"));
+        let body = transform_for_model(&request, config)
+            .unwrap_or_else(|err| panic!("request should transform: {err}"));
+
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "Hello");
+        assert_eq!(body["max_tokens"], 64);
+        assert!(body.get("prompt").is_none());
     }
 }

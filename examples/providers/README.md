@@ -19,6 +19,8 @@ let response = completion("gpt-5.4", messages).await?;
 | **OpenAI** | `openai_completion.rs` | GPT-5.4, GPT-5.4 mini, GPT-4.1 | `OPENAI_API_KEY` |
 | **Anthropic** | `anthropic_completion.rs` | Claude Opus 4.7, Sonnet 4.6, Haiku 4.5 | `ANTHROPIC_API_KEY` |
 | **Azure OpenAI** | `azure_completion.rs` | GPT models via Azure | `AZURE_API_KEY`, `AZURE_API_BASE` |
+| **AWS Bedrock** | Native provider docs | Claude, Nova, Titan, Llama, Mistral via Bedrock Runtime | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` |
+| **Bedrock Access Gateway** | OpenAI-compatible proxy docs | Models exposed by your proxy | Proxy API key |
 | **Mistral** | `mistral_completion.rs` | Mistral Small/Medium/Large, Codestral | `MISTRAL_API_KEY` |
 | **DeepSeek** | `deepseek_completion.rs` | DeepSeek Chat, DeepSeek Coder | `DEEPSEEK_API_KEY` |
 | **Moonshot** | `moonshot_completion.rs` | Kimi K2.6, Kimi K2.5, Moonshot v1 | `MOONSHOT_API_KEY` |
@@ -73,6 +75,7 @@ completion("mistral-large-latest", messages)     // Mistral
 completion("moonshot/kimi-k2.6", messages)       // Moonshot/Kimi
 completion("minimax/MiniMax-M2.5", messages)     // MiniMax
 completion("glm/glm-5.1", messages)              // Zhipu GLM
+completion("bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0", messages)
 ```
 
 ### Via OpenRouter
@@ -121,6 +124,11 @@ completion("vertex_ai/gemini-pro", messages)     // Google Vertex AI
 - Single API for 100+ models
 - Automatic fallback and routing
 - Usage-based pricing across providers
+
+### AWS Bedrock
+- Native `bedrock` provider uses AWS credentials and SigV4 signing
+- Preserves geo, global, region-like, and ARN model IDs for AWS execution
+- Use `openai_compatible` instead for Bedrock Access Gateway proxies
 
 ### V0 (Vercel)
 - Specialized for UI/UX component generation
@@ -187,6 +195,14 @@ GCP_PROJECT_ID=your-project
 
 # V0 (Vercel)
 V0_API_KEY=xxx
+
+# AWS Bedrock native runtime
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=xxx
+AWS_REGION=us-east-1
+
+# Bedrock Access Gateway or similar OpenAI-compatible proxy
+BEDROCK_ACCESS_GATEWAY_API_KEY=xxx
 ```
 
 ## Tips

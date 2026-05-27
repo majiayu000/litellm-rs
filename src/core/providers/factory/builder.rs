@@ -4,7 +4,8 @@
 //! used by the factory when constructing provider instances.
 
 use super::super::unified_provider::ProviderError;
-use super::super::{anthropic, cloudflare, macros, mistral, openai, openai_like};
+use super::super::{anthropic, bedrock, cloudflare, macros, mistral, openai, openai_like};
+use std::env;
 
 // ==================== Config Extraction Helpers ====================
 
@@ -28,6 +29,16 @@ pub(super) fn config_u64(config: &serde_json::Value, key: &str) -> Option<u64> {
 
 pub(super) fn config_bool(config: &serde_json::Value, key: &str) -> Option<bool> {
     config.get(key).and_then(serde_json::Value::as_bool)
+}
+
+fn config_str_any<'a>(config: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| config_str(config, key))
+}
+
+pub(super) fn env_str_any(keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| env::var(key).ok())
+        .find(|value| !value.trim().is_empty())
 }
 
 pub(super) fn merge_string_headers(
@@ -455,25 +466,60 @@ pub(super) fn build_azure_config_from_factory(
 
 pub(super) fn build_bedrock_config_from_factory(
     config: &serde_json::Value,
-) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
-    let api_key = macros::require_config_str(config, "api_key", "bedrock")?;
-    let api_base = config_str(config, "base_url")
-        .or_else(|| config_str(config, "api_base"))
-        .unwrap_or("https://bedrock-runtime.us-east-1.amazonaws.com");
+) -> Result<bedrock::BedrockConfig, ProviderError> {
+    let aws_access_key_id = config_str_any(
+        config,
+        &["aws_access_key_id", "aws_access_key", "access_key"],
+    )
+    .map(str::to_string)
+    .or_else(|| env_str_any(&["AWS_ACCESS_KEY_ID"]))
+    .ok_or_else(|| {
+        ProviderError::configuration(
+            "bedrock",
+            "aws_access_key_id or AWS_ACCESS_KEY_ID is required",
+        )
+    })?;
 
-    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
-    oai_config.provider_name = "bedrock".to_string();
+    let aws_secret_access_key = config_str_any(
+        config,
+        &["aws_secret_access_key", "aws_secret_key", "secret_key"],
+    )
+    .map(str::to_string)
+    .or_else(|| env_str_any(&["AWS_SECRET_ACCESS_KEY"]))
+    .ok_or_else(|| {
+        ProviderError::configuration(
+            "bedrock",
+            "aws_secret_access_key or AWS_SECRET_ACCESS_KEY is required",
+        )
+    })?;
 
-    if let Some(timeout) = config_u64(config, "timeout") {
-        oai_config.base.timeout = timeout;
+    let aws_session_token = config_str_any(config, &["aws_session_token", "session_token"])
+        .map(str::to_string)
+        .or_else(|| env_str_any(&["AWS_SESSION_TOKEN"]));
+
+    let aws_region = config_str_any(config, &["aws_region", "aws_region_name", "region"])
+        .map(str::to_string)
+        .or_else(|| env_str_any(&["AWS_REGION", "AWS_DEFAULT_REGION"]))
+        .unwrap_or_else(|| "us-east-1".to_string());
+
+    let mut bedrock_config = bedrock::BedrockConfig {
+        aws_access_key_id,
+        aws_secret_access_key,
+        aws_session_token,
+        aws_region,
+        ..Default::default()
+    };
+
+    if let Some(timeout) =
+        config_u64(config, "timeout_seconds").or_else(|| config_u64(config, "timeout"))
+    {
+        bedrock_config.timeout_seconds = timeout;
     }
     if let Some(max_retries) = config_u32(config, "max_retries") {
-        oai_config.base.max_retries = max_retries;
+        bedrock_config.max_retries = max_retries;
     }
-    merge_string_headers(&mut oai_config.base.headers, config, "headers");
-    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
 
-    Ok(oai_config)
+    Ok(bedrock_config)
 }
 
 pub(super) fn build_vertex_ai_config_from_factory(

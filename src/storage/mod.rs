@@ -4,6 +4,8 @@
 
 /// Database storage module
 pub mod database;
+/// Per-dependency runtime status (Healthy / Degraded / Disabled / ...)
+pub mod dependency_status;
 /// File storage module
 pub mod files;
 /// Redis cache module
@@ -11,11 +13,13 @@ pub mod redis;
 /// Vector storage module
 pub mod vector;
 
+pub use dependency_status::DependencyStatus;
+
 use crate::config::models::storage::StorageConfig;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Returns the default base directory for local gateway state.
 ///
@@ -49,10 +53,24 @@ pub struct StorageLayer {
     /// Vector database client (optional)
     /// Note: Using concrete type instead of trait object for now
     pub vector: Option<Arc<vector::VectorStoreBackend>>,
+    /// Status of the Redis dependency after init.
+    pub redis_status: DependencyStatus,
+    /// Status of the vector DB dependency after init.
+    pub vector_status: DependencyStatus,
 }
 
 impl StorageLayer {
-    /// Create a new storage layer
+    /// Create a new storage layer.
+    ///
+    /// For each optional dependency:
+    /// * if `enabled` is `false` (or the section is absent), the dependency is
+    ///   treated as `Disabled` and a no-op fallback is used,
+    /// * if `enabled` is `true` and init succeeds, status is `Healthy`,
+    /// * if `enabled` is `true`, init fails, and `allow_degraded` is `false`,
+    ///   the call returns `Err` so startup fails loudly,
+    /// * if `enabled` is `true`, init fails, and `allow_degraded` is `true`,
+    ///   the error is logged at `error!` level and the dependency status is
+    ///   set to `Degraded` while the gateway keeps running.
     pub async fn new(config: &StorageConfig) -> Result<Self> {
         info!("Initializing storage layer");
 
@@ -60,24 +78,50 @@ impl StorageLayer {
         debug!("Connecting to database");
         let database = Arc::new(database::Database::new(&config.database).await?);
 
-        // Initialize Redis (optional with graceful degradation)
+        // Initialize Redis (fail-fast unless allow_degraded is set)
         debug!("Creating Redis connection pool");
-        let redis = match redis::RedisPool::new(&config.redis).await {
-            Ok(pool) => {
-                if pool.is_noop() {
-                    info!("Redis caching is disabled (no-op mode)");
-                } else {
-                    info!("Redis connection established");
+        let (redis, redis_status) = if !config.redis.enabled {
+            // Explicitly disabled — no fallback, no error.
+            info!("Redis disabled in config; using no-op pool");
+            (
+                Arc::new(redis::RedisPool::create_noop()),
+                DependencyStatus::Disabled,
+            )
+        } else {
+            match redis::RedisPool::new(&config.redis).await {
+                Ok(pool) => {
+                    if pool.is_noop() {
+                        // RedisPool::new returns a no-op pool when enabled=false,
+                        // but we already handled that branch above. Treat any
+                        // other no-op as healthy to be safe.
+                        info!("Redis pool initialized in no-op mode");
+                        (Arc::new(pool), DependencyStatus::Healthy)
+                    } else {
+                        info!("Redis connection established");
+                        (Arc::new(pool), DependencyStatus::Healthy)
+                    }
                 }
-                Arc::new(pool)
-            }
-            Err(e) => {
-                warn!(
-                    "Redis connection failed: {}. Gateway will operate without caching.",
-                    e
-                );
-                // Create a no-op Redis pool wrapper
-                Arc::new(redis::RedisPool::create_noop())
+                Err(e) => {
+                    if config.redis.allow_degraded {
+                        error!(
+                            "Redis init failed but allow_degraded=true; continuing without \
+                             cache. Error: {}",
+                            e
+                        );
+                        (
+                            Arc::new(redis::RedisPool::create_noop()),
+                            DependencyStatus::Degraded,
+                        )
+                    } else {
+                        error!(
+                            "Redis init failed and allow_degraded=false; failing startup. \
+                             Set storage.redis.allow_degraded=true to keep running in no-op \
+                             cache mode. Error: {}",
+                            e
+                        );
+                        return Err(e);
+                    }
+                }
             }
         };
 
@@ -85,22 +129,33 @@ impl StorageLayer {
         debug!("Initializing file storage");
         let files = Arc::new(files::FileStorage::new(&config.files).await?);
 
-        // Initialize vector database (optional)
-        let vector = if let Some(ref vector_config) = config.vector_db {
+        // Initialize vector database (fail-fast unless allow_degraded is set)
+        let (vector, vector_status) = if let Some(ref vector_config) = config.vector_db {
             debug!("Initializing vector database");
             match vector::VectorStoreBackend::new(vector_config).await {
-                Ok(v) => Some(Arc::new(v)),
+                Ok(v) => (Some(Arc::new(v)), DependencyStatus::Healthy),
                 Err(e) => {
-                    warn!(
-                        "Vector database initialization failed: {}, continuing without vector DB",
-                        e
-                    );
-                    None
+                    if vector_config.allow_degraded {
+                        error!(
+                            "Vector DB init failed but allow_degraded=true; continuing \
+                             without vector backend. Error: {}",
+                            e
+                        );
+                        (None, DependencyStatus::Degraded)
+                    } else {
+                        error!(
+                            "Vector DB init failed and allow_degraded=false; failing \
+                             startup. Set storage.vector_db.allow_degraded=true to keep \
+                             running without a vector backend. Error: {}",
+                            e
+                        );
+                        return Err(e);
+                    }
                 }
             }
         } else {
             debug!("Vector database not configured, skipping");
-            None
+            (None, DependencyStatus::Disabled)
         };
 
         info!("Storage layer initialized successfully");
@@ -110,6 +165,8 @@ impl StorageLayer {
             redis,
             files,
             vector,
+            redis_status,
+            vector_status,
         })
     }
 
@@ -400,6 +457,7 @@ mod tests {
                 ssl: false,
                 enabled: true,
                 fallback_to_sqlite: false,
+                allow_degraded: false,
             },
             redis: RedisConfig {
                 url: "redis://localhost:6379".to_string(),
@@ -407,6 +465,7 @@ mod tests {
                 max_connections: 10,
                 connection_timeout: 5,
                 cluster: false,
+                allow_degraded: false,
             },
             files: FileStorageConfig::default(),
             vector_db: None,
@@ -449,5 +508,146 @@ mod tests {
             "stored file should use configured path: {}",
             expected_path.display()
         );
+    }
+
+    fn unreachable_redis_config(allow_degraded: bool) -> RedisConfig {
+        RedisConfig {
+            // Port 1 reserved/unreachable; connection_timeout=1 keeps the
+            // test fast.
+            url: "redis://127.0.0.1:1".to_string(),
+            enabled: true,
+            max_connections: 1,
+            connection_timeout: 1,
+            cluster: false,
+            allow_degraded,
+        }
+    }
+
+    fn sqlite_db_config() -> DatabaseConfig {
+        DatabaseConfig {
+            url: "sqlite::memory:".to_string(),
+            max_connections: 1,
+            connection_timeout: 1,
+            ssl: false,
+            enabled: true,
+            fallback_to_sqlite: false,
+            allow_degraded: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn redis_enabled_failing_without_allow_degraded_fails_startup() {
+        let config = StorageConfig {
+            database: sqlite_db_config(),
+            redis: unreachable_redis_config(false),
+            files: FileStorageConfig::default(),
+            vector_db: None,
+        };
+
+        let result = StorageLayer::new(&config).await;
+        assert!(
+            result.is_err(),
+            "enabled redis that cannot connect must fail startup when allow_degraded=false"
+        );
+    }
+
+    #[tokio::test]
+    async fn redis_enabled_failing_with_allow_degraded_continues_with_noop() {
+        let config = StorageConfig {
+            database: sqlite_db_config(),
+            redis: unreachable_redis_config(true),
+            files: FileStorageConfig::default(),
+            vector_db: None,
+        };
+
+        let storage = StorageLayer::new(&config)
+            .await
+            .expect("allow_degraded=true should allow startup with no-op redis pool");
+        assert!(
+            storage.redis.is_noop(),
+            "degraded redis must fall back to a no-op pool"
+        );
+        assert_eq!(storage.redis_status, DependencyStatus::Degraded);
+    }
+
+    #[tokio::test]
+    async fn redis_disabled_uses_noop_without_error() {
+        let redis = RedisConfig {
+            enabled: false,
+            ..RedisConfig::default()
+        };
+        let config = StorageConfig {
+            database: sqlite_db_config(),
+            redis,
+            files: FileStorageConfig::default(),
+            vector_db: None,
+        };
+
+        let storage = StorageLayer::new(&config)
+            .await
+            .expect("disabled redis must always succeed");
+        assert!(storage.redis.is_noop());
+        assert_eq!(storage.redis_status, DependencyStatus::Disabled);
+    }
+
+    fn unreachable_vector_config(
+        allow_degraded: bool,
+    ) -> crate::config::models::file_storage::VectorDbConfig {
+        crate::config::models::file_storage::VectorDbConfig {
+            // Unsupported db_type forces VectorStoreBackend::new to return Err
+            // synchronously, which keeps the test fast and offline-friendly.
+            db_type: "weaviate".to_string(),
+            url: "http://127.0.0.1:1".to_string(),
+            api_key: "test".to_string(),
+            index_name: "test".to_string(),
+            allow_degraded,
+        }
+    }
+
+    #[tokio::test]
+    async fn vector_db_failing_without_allow_degraded_fails_startup() {
+        let config = StorageConfig {
+            database: sqlite_db_config(),
+            redis: RedisConfig::default(),
+            files: FileStorageConfig::default(),
+            vector_db: Some(unreachable_vector_config(false)),
+        };
+
+        let result = StorageLayer::new(&config).await;
+        assert!(
+            result.is_err(),
+            "configured vector DB that cannot init must fail startup when allow_degraded=false"
+        );
+    }
+
+    #[tokio::test]
+    async fn vector_db_failing_with_allow_degraded_continues_without_vector() {
+        let config = StorageConfig {
+            database: sqlite_db_config(),
+            redis: RedisConfig::default(),
+            files: FileStorageConfig::default(),
+            vector_db: Some(unreachable_vector_config(true)),
+        };
+
+        let storage = StorageLayer::new(&config)
+            .await
+            .expect("allow_degraded=true must allow startup without a vector backend");
+        assert!(storage.vector.is_none());
+        assert_eq!(storage.vector_status, DependencyStatus::Degraded);
+    }
+
+    #[tokio::test]
+    async fn vector_db_disabled_is_status_disabled() {
+        let config = StorageConfig {
+            database: sqlite_db_config(),
+            redis: RedisConfig::default(),
+            files: FileStorageConfig::default(),
+            vector_db: None,
+        };
+
+        let storage = StorageLayer::new(&config)
+            .await
+            .expect("storage layer must init without vector DB");
+        assert_eq!(storage.vector_status, DependencyStatus::Disabled);
     }
 }

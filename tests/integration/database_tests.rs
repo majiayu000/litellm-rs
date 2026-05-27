@@ -22,6 +22,7 @@ mod tests {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config).await;
@@ -51,6 +52,7 @@ mod tests {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config)
@@ -69,6 +71,7 @@ mod tests {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config)
@@ -102,6 +105,7 @@ mod tests {
             ssl: false,
             enabled: false,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config).await.expect(
@@ -125,6 +129,7 @@ mod tests {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config)
@@ -148,6 +153,7 @@ mod tests {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config)
@@ -171,6 +177,7 @@ mod tests {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config)
@@ -191,6 +198,7 @@ mod tests {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config)
@@ -339,6 +347,7 @@ mod tests {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config)

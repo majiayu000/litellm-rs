@@ -52,10 +52,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "baseten",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    wire(
-        "bedrock",
-        "ProviderType::Bedrock has an explicit OpenAI-compatible factory branch",
-    ),
+    wire("bedrock", "native Provider enum variant"),
     stub(
         "clarifai",
         "specialized provider module; not wired through the LLM factory yet",

@@ -51,6 +51,7 @@ async fn test_redis_pool_creation_returns_error_for_unreachable_endpoint() {
         max_connections: 10,
         connection_timeout: 1,
         cluster: false,
+        allow_degraded: false,
     };
 
     let result = RedisPool::new(&config).await;
@@ -65,6 +66,7 @@ async fn test_redis_pool_disabled_is_noop() {
         max_connections: 10,
         connection_timeout: 1,
         cluster: false,
+        allow_degraded: false,
     };
 
     let pool = RedisPool::new(&config)
@@ -81,6 +83,7 @@ async fn live_redis_pool() -> Option<RedisPool> {
         max_connections: 10,
         connection_timeout: 1,
         cluster: false,
+        allow_degraded: false,
     };
 
     match RedisPool::new(&config).await {

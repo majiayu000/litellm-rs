@@ -97,7 +97,9 @@ mod tests {
 
         let body: Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], true);
-        assert_eq!(body["data"]["status"], "healthy");
+        // /health is now liveness-only: returns "alive" unconditionally.
+        // Readiness (which considers provider + storage health) lives at /health/ready.
+        assert_eq!(body["data"]["status"], "alive");
         assert!(body["data"]["version"].is_string());
     }
 

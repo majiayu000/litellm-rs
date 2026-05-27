@@ -1,6 +1,38 @@
 //! Health check and status endpoints
 //!
-//! This module provides health check and system status endpoints.
+//! This module exposes three distinct health signals:
+//!
+//! * `GET /health` — basic **liveness**. Always returns 200 as long as the
+//!   process is serving HTTP. Suitable for load-balancer liveness probes.
+//! * `GET /health/ready` — **readiness**. Returns 200 only when the gateway
+//!   has a working storage backend AND at least one configured, enabled
+//!   provider has a successful probe. Returns 503 otherwise. Suitable for
+//!   Kubernetes readiness probes and traffic gating.
+//! * `GET /health/detailed` — diagnostic snapshot. Mirrors the readiness
+//!   verdict in its `status` field (`healthy` / `degraded`) and includes
+//!   per-component detail (storage, providers, host metrics).
+//!
+//! ## Aggregate rule (used by both `/health/ready` and `/health/detailed`)
+//!
+//! The gateway is considered **ready / healthy** only when ALL of:
+//!
+//! 1. Storage `overall` is true (when storage is configured).
+//! 2. At least one provider is configured and enabled.
+//! 3. Every enabled provider's status is `healthy`. Any enabled provider with
+//!    status `unhealthy` OR `unknown` blocks readiness — per VibeGuard U-29,
+//!    an unknown probe must not be reported as a healthy aggregate.
+//!
+//! Per-provider status values:
+//!
+//! | Value            | Meaning                                                 |
+//! |------------------|---------------------------------------------------------|
+//! | `healthy`        | Live probe succeeded.                                   |
+//! | `unhealthy`      | Live probe failed.                                      |
+//! | `unknown`        | Provider is enabled but no successful probe yet wired.  |
+//! | `disabled`       | `enabled = false` in config; excluded from readiness.   |
+//!
+//! When zero providers are configured the aggregate reports `not_configured`
+//! and readiness fails (a gateway with no upstreams cannot serve traffic).
 
 #![allow(dead_code)]
 
@@ -24,6 +56,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/health")
             .route("", web::get().to(health_check))
+            .route("/ready", web::get().to(readiness_check))
             .route("/detailed", web::get().to(detailed_health_check)),
     )
     .route("/status", web::get().to(system_status))
@@ -31,15 +64,15 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     .route("/metrics", web::get().to(metrics));
 }
 
-/// Basic health check endpoint
+/// Basic liveness endpoint.
 ///
-/// Returns a simple health status indicating if the service is running.
-/// This endpoint is typically used by load balancers and monitoring systems.
+/// Always returns 200 while the process is up. Does **not** probe storage or
+/// providers. Use `/health/ready` for traffic gating.
 pub async fn health_check(_state: web::Data<AppState>) -> ActixResult<HttpResponse> {
-    debug!("Health check requested");
+    debug!("Liveness check requested");
 
     let health_status = HealthStatus {
-        status: Cow::Borrowed("healthy"),
+        status: Cow::Borrowed("alive"),
         timestamp: chrono::Utc::now(),
         version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
     };
@@ -47,57 +80,52 @@ pub async fn health_check(_state: web::Data<AppState>) -> ActixResult<HttpRespon
     Ok(HttpResponse::Ok().json(ApiResponse::success(health_status)))
 }
 
-/// Detailed health check endpoint
+/// Readiness endpoint.
+///
+/// Returns 200 with `ready: true` only when the gateway can serve traffic
+/// per the aggregate rule documented at the module top. Returns 503 with
+/// `ready: false` and a short reason otherwise.
+async fn readiness_check(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
+    debug!("Readiness check requested");
+
+    let (storage_health, provider_health) = collect_component_health(&state).await;
+    let verdict = aggregate_readiness(&storage_health, &provider_health);
+
+    let body = ReadinessStatus {
+        ready: verdict.ready,
+        reason: verdict.reason,
+        timestamp: chrono::Utc::now(),
+        version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
+        storage: storage_health,
+        providers: provider_health,
+    };
+
+    let response = ApiResponse::success(body);
+    if verdict.ready {
+        Ok(HttpResponse::Ok().json(response))
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(response))
+    }
+}
+
+/// Detailed health check endpoint.
 ///
 /// Returns comprehensive health information including storage, authentication,
-/// and provider status. This endpoint provides more detailed diagnostics.
+/// and provider status. The top-level `status` field mirrors readiness:
+/// `healthy` when the aggregate rule passes, `degraded` otherwise.
 async fn detailed_health_check(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
     debug!("Detailed health check requested");
 
-    let cfg = state.config.load();
-
-    // Check storage health
-    let storage_health = if cfg.storage().database.url.is_empty() {
-        crate::storage::StorageHealthStatus {
-            overall: false,
-            database: false,
-            redis: false,
-            files: false,
-            vector: false,
-        }
-    } else {
-        // Get actual storage health
-        match state.storage.health_check().await {
-            Ok(status) => status,
-            Err(_) => crate::storage::StorageHealthStatus {
-                overall: false,
-                database: false,
-                redis: false,
-                files: false,
-                vector: false,
-            },
-        }
-    };
-
-    // Check provider health
-    let provider_health = match check_provider_health(&state).await {
-        Ok(status) => status,
-        Err(e) => {
-            error!("Provider health check failed: {}", e);
-            ProviderHealthStatus {
-                healthy_providers: 0,
-                total_providers: 0,
-                provider_details: vec![],
-            }
-        }
-    };
+    let (storage_health, provider_health) = collect_component_health(&state).await;
+    let verdict = aggregate_readiness(&storage_health, &provider_health);
 
     let detailed_status = DetailedHealthStatus {
-        status: if storage_health.overall && !has_unhealthy_provider(&provider_health) {
+        status: if verdict.ready {
             Cow::Borrowed("healthy")
         } else {
             Cow::Borrowed("degraded")
         },
+        reason: verdict.reason,
         timestamp: chrono::Utc::now(),
         version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
         uptime_seconds: get_uptime_seconds(),
@@ -107,7 +135,12 @@ async fn detailed_health_check(state: web::Data<AppState>) -> ActixResult<HttpRe
         cpu_usage: get_cpu_usage(),
     };
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(detailed_status)))
+    let response = ApiResponse::success(detailed_status);
+    if verdict.ready {
+        Ok(HttpResponse::Ok().json(response))
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(response))
+    }
 }
 
 /// System status endpoint
@@ -194,7 +227,7 @@ gateway_providers_total {}
         .body(metrics))
 }
 
-/// Basic health status
+/// Basic liveness response body.
 #[derive(Debug, Clone, serde::Serialize)]
 struct HealthStatus {
     status: Cow<'static, str>,
@@ -202,10 +235,22 @@ struct HealthStatus {
     version: Cow<'static, str>,
 }
 
+/// Readiness response body.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ReadinessStatus {
+    ready: bool,
+    reason: Cow<'static, str>,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    version: Cow<'static, str>,
+    storage: crate::storage::StorageHealthStatus,
+    providers: ProviderHealthStatus,
+}
+
 /// Detailed health status
 #[derive(Debug, Clone, serde::Serialize)]
 struct DetailedHealthStatus {
     status: Cow<'static, str>,
+    reason: Cow<'static, str>,
     timestamp: chrono::DateTime<chrono::Utc>,
     version: Cow<'static, str>,
     uptime_seconds: u64,
@@ -218,8 +263,12 @@ struct DetailedHealthStatus {
 /// Provider health status
 #[derive(Debug, Clone, serde::Serialize)]
 struct ProviderHealthStatus {
+    /// Aggregate label across all configured providers. One of `healthy`,
+    /// `degraded`, `unknown`, `not_configured`.
+    aggregate: Cow<'static, str>,
     healthy_providers: usize,
     total_providers: usize,
+    enabled_providers: usize,
     provider_details: Vec<ProviderHealth>,
 }
 
@@ -227,6 +276,7 @@ struct ProviderHealthStatus {
 #[derive(Debug, Clone, serde::Serialize)]
 struct ProviderHealth {
     name: String,
+    /// One of `healthy`, `unhealthy`, `unknown`, `disabled`.
     status: Cow<'static, str>,
     response_time_ms: Option<u64>,
     last_check: chrono::DateTime<chrono::Utc>,
@@ -268,18 +318,139 @@ struct VersionInfo {
     features: Vec<Cow<'static, str>>,
 }
 
-/// Check provider health
+/// Outcome of the readiness aggregate.
+struct ReadinessVerdict {
+    ready: bool,
+    reason: Cow<'static, str>,
+}
+
+/// Collect both storage and provider health snapshots used by readiness and
+/// detailed endpoints.
+async fn collect_component_health(
+    state: &AppState,
+) -> (crate::storage::StorageHealthStatus, ProviderHealthStatus) {
+    let cfg = state.config.load();
+
+    let storage_health = if cfg.storage().database.url.is_empty() {
+        crate::storage::StorageHealthStatus {
+            overall: false,
+            database: false,
+            redis: false,
+            files: false,
+            vector: false,
+        }
+    } else {
+        match state.storage.health_check().await {
+            Ok(status) => status,
+            Err(_) => crate::storage::StorageHealthStatus {
+                overall: false,
+                database: false,
+                redis: false,
+                files: false,
+                vector: false,
+            },
+        }
+    };
+
+    let provider_health = match check_provider_health(state).await {
+        Ok(status) => status,
+        Err(e) => {
+            error!("Provider health check failed: {}", e);
+            ProviderHealthStatus {
+                aggregate: Cow::Borrowed("not_configured"),
+                healthy_providers: 0,
+                total_providers: 0,
+                enabled_providers: 0,
+                provider_details: vec![],
+            }
+        }
+    };
+
+    (storage_health, provider_health)
+}
+
+/// Apply the aggregate rule defined at the module top.
+fn aggregate_readiness(
+    storage_health: &crate::storage::StorageHealthStatus,
+    provider_health: &ProviderHealthStatus,
+) -> ReadinessVerdict {
+    if !storage_health.overall {
+        return ReadinessVerdict {
+            ready: false,
+            reason: Cow::Borrowed("storage unhealthy"),
+        };
+    }
+
+    if provider_health.total_providers == 0 {
+        return ReadinessVerdict {
+            ready: false,
+            reason: Cow::Borrowed("no providers configured"),
+        };
+    }
+
+    if provider_health.enabled_providers == 0 {
+        return ReadinessVerdict {
+            ready: false,
+            reason: Cow::Borrowed("no providers enabled"),
+        };
+    }
+
+    // Among enabled providers, any non-healthy status (unhealthy OR unknown)
+    // blocks readiness. Disabled providers are filtered out upstream.
+    let mut has_unhealthy = false;
+    let mut has_unknown = false;
+    for p in &provider_health.provider_details {
+        match p.status.as_ref() {
+            "unhealthy" => has_unhealthy = true,
+            "unknown" => has_unknown = true,
+            _ => {}
+        }
+    }
+
+    if has_unhealthy {
+        return ReadinessVerdict {
+            ready: false,
+            reason: Cow::Borrowed("one or more providers unhealthy"),
+        };
+    }
+    if has_unknown {
+        return ReadinessVerdict {
+            ready: false,
+            reason: Cow::Borrowed("one or more providers have unknown status"),
+        };
+    }
+
+    ReadinessVerdict {
+        ready: true,
+        reason: Cow::Borrowed("ok"),
+    }
+}
+
+/// Check provider health.
+///
+/// Per-provider live probes are not yet wired (see issue #555). Enabled
+/// providers therefore report `unknown` until a real probe is implemented;
+/// `unknown` is treated as not-ready by [`aggregate_readiness`] so an
+/// unprobed deployment cannot present a green readiness signal.
 async fn check_provider_health(
     state: &AppState,
 ) -> Result<ProviderHealthStatus, crate::utils::error::gateway_error::GatewayError> {
     let cfg = state.config.load();
     let mut provider_details = Vec::new();
     let mut healthy_count = 0;
+    let mut enabled_count = 0;
 
     for provider_config in cfg.providers() {
-        // Provider-level live probes are not wired yet; expose explicit unknown
-        // state instead of reporting a fake healthy signal.
-        let status: Cow<'static, str> = Cow::Borrowed("unknown");
+        let (status, error_message): (Cow<'static, str>, Option<String>) =
+            if !provider_config.enabled {
+                (Cow::Borrowed("disabled"), None)
+            } else {
+                enabled_count += 1;
+                (
+                    Cow::Borrowed("unknown"),
+                    Some("Provider health check not implemented".to_string()),
+                )
+            };
 
         if status == "healthy" {
             healthy_count += 1;
@@ -290,22 +461,30 @@ async fn check_provider_health(
             status,
             response_time_ms: None,
             last_check: chrono::Utc::now(),
-            error_message: Some("Provider health check not implemented".to_string()),
+            error_message,
         });
     }
 
+    let total = cfg.providers().len();
+    let aggregate = if total == 0 {
+        Cow::Borrowed("not_configured")
+    } else if enabled_count == 0 {
+        Cow::Borrowed("disabled")
+    } else if provider_details.iter().any(|p| p.status == "unhealthy") {
+        Cow::Borrowed("degraded")
+    } else if provider_details.iter().any(|p| p.status == "unknown") {
+        Cow::Borrowed("unknown")
+    } else {
+        Cow::Borrowed("healthy")
+    };
+
     Ok(ProviderHealthStatus {
+        aggregate,
         healthy_providers: healthy_count,
-        total_providers: cfg.providers().len(),
+        total_providers: total,
+        enabled_providers: enabled_count,
         provider_details,
     })
-}
-
-fn has_unhealthy_provider(provider_health: &ProviderHealthStatus) -> bool {
-    provider_health
-        .provider_details
-        .iter()
-        .any(|provider| provider.status == "unhealthy")
 }
 
 /// Get system uptime in seconds
@@ -369,84 +548,147 @@ fn get_enabled_features() -> Vec<Cow<'static, str>> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_health_status_creation() {
-        let status = HealthStatus {
-            status: Cow::Borrowed("healthy"),
-            timestamp: chrono::Utc::now(),
-            version: Cow::Borrowed("1.0.0"),
-        };
+    fn storage_ok() -> crate::storage::StorageHealthStatus {
+        crate::storage::StorageHealthStatus {
+            overall: true,
+            database: true,
+            redis: true,
+            files: true,
+            vector: true,
+        }
+    }
 
-        assert_eq!(status.status, "healthy");
-        assert_eq!(status.version, "1.0.0");
+    fn storage_bad() -> crate::storage::StorageHealthStatus {
+        crate::storage::StorageHealthStatus {
+            overall: false,
+            database: false,
+            redis: false,
+            files: false,
+            vector: false,
+        }
+    }
+
+    fn provider(name: &str, status: &'static str) -> ProviderHealth {
+        ProviderHealth {
+            name: name.to_string(),
+            status: Cow::Borrowed(status),
+            response_time_ms: None,
+            last_check: chrono::Utc::now(),
+            error_message: None,
+        }
+    }
+
+    fn provider_status(details: Vec<ProviderHealth>) -> ProviderHealthStatus {
+        let total = details.len();
+        let enabled = details.iter().filter(|p| p.status != "disabled").count();
+        let healthy = details.iter().filter(|p| p.status == "healthy").count();
+        let aggregate = if total == 0 {
+            Cow::Borrowed("not_configured")
+        } else if enabled == 0 {
+            Cow::Borrowed("disabled")
+        } else if details.iter().any(|p| p.status == "unhealthy") {
+            Cow::Borrowed("degraded")
+        } else if details.iter().any(|p| p.status == "unknown") {
+            Cow::Borrowed("unknown")
+        } else {
+            Cow::Borrowed("healthy")
+        };
+        ProviderHealthStatus {
+            aggregate,
+            healthy_providers: healthy,
+            total_providers: total,
+            enabled_providers: enabled,
+            provider_details: details,
+        }
+    }
+
+    // Acceptance case 1: all-unknown providers must NOT be ready.
+    #[test]
+    fn readiness_fails_when_all_providers_unknown() {
+        let providers = provider_status(vec![
+            provider("openai", "unknown"),
+            provider("anthropic", "unknown"),
+        ]);
+        let verdict = aggregate_readiness(&storage_ok(), &providers);
+        assert!(!verdict.ready);
+        assert_eq!(verdict.reason, "one or more providers have unknown status");
+        assert_eq!(providers.aggregate, "unknown");
+    }
+
+    // Acceptance case 2: one unhealthy provider must NOT be ready and the
+    // reason must point at the unhealthy signal, not the unknown one.
+    #[test]
+    fn readiness_fails_when_one_provider_unhealthy() {
+        let providers = provider_status(vec![
+            provider("openai", "healthy"),
+            provider("anthropic", "unhealthy"),
+        ]);
+        let verdict = aggregate_readiness(&storage_ok(), &providers);
+        assert!(!verdict.ready);
+        assert_eq!(verdict.reason, "one or more providers unhealthy");
+        assert_eq!(providers.aggregate, "degraded");
+    }
+
+    // Acceptance case 3: no providers configured at all -> not ready.
+    #[test]
+    fn readiness_fails_when_no_providers_configured() {
+        let providers = provider_status(vec![]);
+        let verdict = aggregate_readiness(&storage_ok(), &providers);
+        assert!(!verdict.ready);
+        assert_eq!(verdict.reason, "no providers configured");
+        assert_eq!(providers.aggregate, "not_configured");
+    }
+
+    // Acceptance case 4: all enabled providers report healthy -> ready.
+    #[test]
+    fn readiness_passes_when_all_providers_healthy() {
+        let providers = provider_status(vec![
+            provider("openai", "healthy"),
+            provider("anthropic", "healthy"),
+        ]);
+        let verdict = aggregate_readiness(&storage_ok(), &providers);
+        assert!(verdict.ready);
+        assert_eq!(verdict.reason, "ok");
+        assert_eq!(providers.aggregate, "healthy");
+    }
+
+    // Storage down must always block readiness regardless of provider state.
+    #[test]
+    fn readiness_fails_when_storage_unhealthy() {
+        let providers = provider_status(vec![provider("openai", "healthy")]);
+        let verdict = aggregate_readiness(&storage_bad(), &providers);
+        assert!(!verdict.ready);
+        assert_eq!(verdict.reason, "storage unhealthy");
+    }
+
+    // Disabled providers must not block readiness on their own, but if every
+    // configured provider is disabled the gateway cannot serve traffic.
+    #[test]
+    fn readiness_fails_when_all_providers_disabled() {
+        let providers = provider_status(vec![
+            provider("openai", "disabled"),
+            provider("anthropic", "disabled"),
+        ]);
+        let verdict = aggregate_readiness(&storage_ok(), &providers);
+        assert!(!verdict.ready);
+        assert_eq!(verdict.reason, "no providers enabled");
+        assert_eq!(providers.aggregate, "disabled");
+    }
+
+    // A disabled provider next to a healthy one should still be ready.
+    #[test]
+    fn readiness_passes_when_disabled_provider_alongside_healthy() {
+        let providers = provider_status(vec![
+            provider("openai", "healthy"),
+            provider("legacy", "disabled"),
+        ]);
+        let verdict = aggregate_readiness(&storage_ok(), &providers);
+        assert!(verdict.ready);
+        assert_eq!(providers.enabled_providers, 1);
     }
 
     #[test]
-    fn test_provider_health_status() {
-        let provider_health = ProviderHealthStatus {
-            healthy_providers: 2,
-            total_providers: 3,
-            provider_details: vec![],
-        };
-
-        assert_eq!(provider_health.healthy_providers, 2);
-        assert_eq!(provider_health.total_providers, 3);
-    }
-
-    #[test]
-    fn test_has_unhealthy_provider_false_for_unknown_statuses() {
-        let provider_health = ProviderHealthStatus {
-            healthy_providers: 0,
-            total_providers: 2,
-            provider_details: vec![
-                ProviderHealth {
-                    name: "openai".to_string(),
-                    status: Cow::Borrowed("unknown"),
-                    response_time_ms: None,
-                    last_check: chrono::Utc::now(),
-                    error_message: Some("Provider health check not implemented".to_string()),
-                },
-                ProviderHealth {
-                    name: "anthropic".to_string(),
-                    status: Cow::Borrowed("unknown"),
-                    response_time_ms: None,
-                    last_check: chrono::Utc::now(),
-                    error_message: Some("Provider health check not implemented".to_string()),
-                },
-            ],
-        };
-
-        assert!(!has_unhealthy_provider(&provider_health));
-    }
-
-    #[test]
-    fn test_has_unhealthy_provider_true_when_contains_unhealthy() {
-        let provider_health = ProviderHealthStatus {
-            healthy_providers: 1,
-            total_providers: 2,
-            provider_details: vec![
-                ProviderHealth {
-                    name: "openai".to_string(),
-                    status: Cow::Borrowed("healthy"),
-                    response_time_ms: Some(10),
-                    last_check: chrono::Utc::now(),
-                    error_message: None,
-                },
-                ProviderHealth {
-                    name: "anthropic".to_string(),
-                    status: Cow::Borrowed("unhealthy"),
-                    response_time_ms: Some(2000),
-                    last_check: chrono::Utc::now(),
-                    error_message: Some("timeout".to_string()),
-                },
-            ],
-        };
-
-        assert!(has_unhealthy_provider(&provider_health));
-    }
-
-    #[test]
-    fn test_version_info() {
+    fn version_info_serializes() {
         let version_info = VersionInfo {
             version: Cow::Borrowed("1.0.0"),
             build_time: Cow::Borrowed("2024-01-01T00:00:00Z"),
@@ -460,11 +702,9 @@ mod tests {
     }
 
     #[test]
-    fn test_get_enabled_features() {
+    fn enabled_features_non_empty() {
         let features = get_enabled_features();
         assert!(!features.is_empty());
-        // With --all-features, we may have enterprise/analytics/vector-db instead of standard
-        // Just ensure we get some valid features
         let valid_features = ["standard", "enterprise", "analytics", "vector-db"];
         assert!(
             features
