@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(limits.max_context_length, 1_000_000);
         assert_eq!(limits.max_output_tokens, 128_000);
 
-        // Verify the alias resolves to a spec whose pricing matches the dated Opus 4.7 entry.
+        // Verify the alias resolves to a spec whose pricing matches the canonical Opus 4.7 entry.
         // The alias spec carries its own id (`claude-opus-4-7-latest`), but the underlying
         // pricing/cost numbers must match the canonical `claude-opus-4-7` entry so callers
         // who route by alias do not see a cheaper or pricier model than the canonical id.
