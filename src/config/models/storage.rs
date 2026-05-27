@@ -58,6 +58,15 @@ pub struct DatabaseConfig {
     /// local database when the configured PostgreSQL backend is unavailable.
     #[serde(default)]
     pub fallback_to_sqlite: bool,
+    /// When `enabled` is true and budget-persistence snapshot loading fails,
+    /// allow the gateway to keep running with in-memory budget tracking
+    /// instead of failing startup.
+    ///
+    /// Defaults to `false` so a configured-but-broken budget persistence path
+    /// is surfaced at startup. A `true` value documents that operating with
+    /// in-memory budgets only is intentional.
+    #[serde(default)]
+    pub allow_degraded: bool,
 }
 
 impl Default for DatabaseConfig {
@@ -69,6 +78,7 @@ impl Default for DatabaseConfig {
             ssl: false,
             enabled: false,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         }
     }
 }
@@ -95,6 +105,9 @@ impl DatabaseConfig {
         if other.fallback_to_sqlite {
             self.fallback_to_sqlite = true;
         }
+        if other.allow_degraded {
+            self.allow_degraded = true;
+        }
         self
     }
 }
@@ -117,6 +130,14 @@ pub struct RedisConfig {
     /// Enable cluster mode
     #[serde(default)]
     pub cluster: bool,
+    /// When `enabled` is true and Redis init fails, allow the gateway to keep
+    /// running with an in-process/no-op fallback instead of failing startup.
+    ///
+    /// Defaults to `false` so an explicitly enabled-but-unreachable Redis is
+    /// surfaced at startup. Set to `true` only when running in environments
+    /// where caching is best-effort and silent degradation is acceptable.
+    #[serde(default)]
+    pub allow_degraded: bool,
 }
 
 impl Default for RedisConfig {
@@ -127,6 +148,7 @@ impl Default for RedisConfig {
             max_connections: default_redis_max_connections(),
             connection_timeout: default_connection_timeout(),
             cluster: false,
+            allow_degraded: false,
         }
     }
 }
@@ -150,6 +172,9 @@ impl RedisConfig {
         // Redis defaults to enabled=false; propagate if other differs from default
         if other.enabled != default_redis_enabled() {
             self.enabled = other.enabled;
+        }
+        if other.allow_degraded {
+            self.allow_degraded = true;
         }
         self
     }
@@ -185,6 +210,7 @@ mod tests {
             ssl: true,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
         assert!(config.ssl);
         assert!(config.enabled);
@@ -200,6 +226,7 @@ mod tests {
             ssl: true,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["url"], "postgresql://test");
@@ -220,11 +247,8 @@ mod tests {
         let base = DatabaseConfig::default();
         let other = DatabaseConfig {
             url: "postgresql://new-host/new-db".to_string(),
-            max_connections: 10,
             connection_timeout: 30,
-            ssl: false,
-            enabled: false,
-            fallback_to_sqlite: false,
+            ..DatabaseConfig::default()
         };
         let merged = base.merge(other);
         assert_eq!(merged.url, "postgresql://new-host/new-db");
@@ -234,12 +258,9 @@ mod tests {
     fn test_database_config_merge_ssl() {
         let base = DatabaseConfig::default();
         let other = DatabaseConfig {
-            url: "postgresql://localhost/litellm".to_string(),
-            max_connections: 10,
             connection_timeout: 30,
             ssl: true,
-            enabled: false,
-            fallback_to_sqlite: false,
+            ..DatabaseConfig::default()
         };
         let merged = base.merge(other);
         assert!(merged.ssl);
@@ -249,12 +270,8 @@ mod tests {
     fn test_database_config_merge_enabled_true() {
         let base = DatabaseConfig::default();
         let other = DatabaseConfig {
-            url: "postgresql://localhost/litellm".to_string(),
-            max_connections: default_max_connections(),
-            connection_timeout: default_connection_timeout(),
-            ssl: false,
             enabled: true,
-            fallback_to_sqlite: false,
+            ..DatabaseConfig::default()
         };
         let merged = base.merge(other);
         assert!(merged.enabled);
@@ -349,6 +366,7 @@ mod tests {
             max_connections: 200,
             connection_timeout: 60,
             cluster: true,
+            allow_degraded: false,
         };
         assert!(config.cluster);
         assert_eq!(config.max_connections, 200);
@@ -362,6 +380,7 @@ mod tests {
             max_connections: 50,
             connection_timeout: 15,
             cluster: false,
+            allow_degraded: false,
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["url"], "redis://cache:6379");
@@ -385,6 +404,7 @@ mod tests {
             max_connections: 100,
             connection_timeout: 30,
             cluster: false,
+            allow_degraded: false,
         };
         let merged = base.merge(other);
         assert_eq!(merged.url, "redis://new-redis:6379");
@@ -399,6 +419,7 @@ mod tests {
             max_connections: 100,
             connection_timeout: 30,
             cluster: true,
+            allow_degraded: false,
         };
         let merged = base.merge(other);
         assert!(merged.cluster);
@@ -413,6 +434,7 @@ mod tests {
             max_connections: default_redis_max_connections(),
             connection_timeout: default_connection_timeout(),
             cluster: false,
+            allow_degraded: false,
         };
         let merged = base.merge(other);
         assert!(merged.enabled);
@@ -522,11 +544,8 @@ mod tests {
         let other = StorageConfig {
             database: DatabaseConfig {
                 url: "postgresql://new/db".to_string(),
-                max_connections: 10,
                 connection_timeout: 30,
-                ssl: false,
-                enabled: false,
-                fallback_to_sqlite: false,
+                ..DatabaseConfig::default()
             },
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
@@ -534,6 +553,46 @@ mod tests {
         };
         let merged = base.merge(other);
         assert_eq!(merged.database.url, "postgresql://new/db");
+    }
+
+    #[test]
+    fn test_redis_config_allow_degraded_default_false() {
+        let config = RedisConfig::default();
+        assert!(
+            !config.allow_degraded,
+            "allow_degraded must default to false so explicit failures are surfaced"
+        );
+    }
+
+    #[test]
+    fn test_redis_config_merge_allow_degraded() {
+        let base = RedisConfig::default();
+        let other = RedisConfig {
+            allow_degraded: true,
+            ..RedisConfig::default()
+        };
+        let merged = base.merge(other);
+        assert!(merged.allow_degraded);
+    }
+
+    #[test]
+    fn test_database_config_allow_degraded_default_false() {
+        let config = DatabaseConfig::default();
+        assert!(
+            !config.allow_degraded,
+            "allow_degraded must default to false so explicit failures are surfaced"
+        );
+    }
+
+    #[test]
+    fn test_database_config_merge_allow_degraded() {
+        let base = DatabaseConfig::default();
+        let other = DatabaseConfig {
+            allow_degraded: true,
+            ..DatabaseConfig::default()
+        };
+        let merged = base.merge(other);
+        assert!(merged.allow_degraded);
     }
 
     #[test]

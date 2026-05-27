@@ -9,6 +9,7 @@ mod client;
 mod config;
 mod error;
 mod model_config;
+mod model_id;
 mod provider;
 mod sigv4;
 mod transformation;
@@ -34,6 +35,9 @@ pub use error::BedrockErrorMapper;
 pub use model_config::{
     BedrockApiType, BedrockModelFamily, ModelConfig, get_all_model_ids, get_model_config,
     model_supports_capability,
+};
+pub use model_id::{
+    BedrockModelIdKind, ParsedBedrockModelId, get_model_config_for_model_id, parse_bedrock_model_id,
 };
 pub use provider::BedrockProvider;
 pub use sigv4::SigV4Signer;

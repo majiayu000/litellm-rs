@@ -193,6 +193,46 @@ mod tests {
         assert_eq!(provider.name(), "cloudflare");
     }
 
+    /// Test creating native Bedrock provider from AWS-specific config.
+    #[tokio::test]
+    async fn test_bedrock_provider_from_aws_config() {
+        let config = json!({
+            "aws_access_key_id": "AKIATEST123456789012",
+            "aws_secret_access_key": "test-secret-key",
+            "aws_region": "us-east-1"
+        });
+
+        let result = Provider::from_config_async(ProviderType::Bedrock, config).await;
+        assert!(
+            result.is_ok(),
+            "Failed to create Bedrock provider: {:?}",
+            result.err()
+        );
+
+        let provider = result.unwrap();
+        assert_eq!(provider.name(), "bedrock");
+        assert!(matches!(provider, Provider::Bedrock(_)));
+    }
+
+    /// Test Bedrock Access Gateway stays on the OpenAI-compatible path.
+    #[tokio::test]
+    async fn test_bedrock_access_gateway_uses_openai_compatible_provider() {
+        let config = json!({
+            "api_key": "bedrock-access-gateway-key",
+            "base_url": "https://bedrock-access-gateway.example.com/api/v1"
+        });
+
+        let result = Provider::from_config_async(ProviderType::OpenAICompatible, config).await;
+        assert!(
+            result.is_ok(),
+            "Failed to create OpenAI-compatible Bedrock proxy provider: {:?}",
+            result.err()
+        );
+
+        let provider = result.unwrap();
+        assert!(matches!(provider, Provider::OpenAILike(_)));
+    }
+
     /// Test provider creation fails with missing api_key
     #[tokio::test]
     async fn test_provider_creation_fails_without_api_key() {

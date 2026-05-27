@@ -26,6 +26,7 @@ impl TestDatabase {
             ssl: false,
             enabled: true,
             fallback_to_sqlite: false,
+            allow_degraded: false,
         };
 
         let db = Database::new(&config)
@@ -76,6 +77,7 @@ pub fn test_db_config() -> DatabaseConfig {
         ssl: false,
         enabled: true,
         fallback_to_sqlite: false,
+        allow_degraded: false,
     }
 }
 

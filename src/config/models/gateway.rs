@@ -216,12 +216,22 @@ pub struct GatewayPricingConfig {
     /// Optional pricing source path/URL used by PricingService::new
     #[serde(default = "default_pricing_source")]
     pub source: Option<String>,
+    /// When the pricing source is configured and the initial load fails, allow
+    /// the gateway to keep running without pricing data instead of failing
+    /// startup.
+    ///
+    /// Defaults to `false` so a configured-but-broken pricing source is
+    /// surfaced at startup. A `true` value documents that the gateway may
+    /// serve traffic without cost accounting until pricing data is refreshed.
+    #[serde(default)]
+    pub allow_degraded: bool,
 }
 
 impl Default for GatewayPricingConfig {
     fn default() -> Self {
         Self {
             source: default_pricing_source(),
+            allow_degraded: false,
         }
     }
 }

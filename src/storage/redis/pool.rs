@@ -90,6 +90,7 @@ impl RedisPool {
                 max_connections: 0,
                 connection_timeout: 0,
                 cluster: false,
+                allow_degraded: false,
             },
             noop_mode: true,
             semaphore: Arc::new(Semaphore::new(1)),

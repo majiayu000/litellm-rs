@@ -48,6 +48,13 @@ export DEEPSEEK_API_KEY="your-api-key"
 cargo run --example deepseek_completion
 ```
 
+### AWS Bedrock
+
+Bedrock has two setup paths — pick one before writing code:
+
+- Native AWS Bedrock runtime (SigV4 Converse) — see [`docs/providers/bedrock.md`](../docs/providers/bedrock.md).
+- OpenAI-compatible Bedrock proxy (Bedrock Access Gateway and similar) — see [`docs/providers/openai-compatible-bedrock-proxy.md`](../docs/providers/openai-compatible-bedrock-proxy.md).
+
 ## Quick Test All Providers
 
 ```bash

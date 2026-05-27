@@ -163,6 +163,7 @@ mod tests {
             url: "http://localhost:6333".to_string(),
             api_key: "test-key".to_string(),
             index_name: "vectors".to_string(),
+            allow_degraded: false,
         }
     }
 

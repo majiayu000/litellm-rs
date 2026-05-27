@@ -2,14 +2,8 @@
 
 use super::*;
 
-#[cfg(feature = "providers-extra")]
-fn normalize_bedrock_model_id(model: &str) -> String {
-    crate::core::providers::bedrock::normalize_bedrock_model_id(model)
-}
-
-#[cfg(not(feature = "providers-extra"))]
-fn normalize_bedrock_model_id(model: &str) -> String {
-    model.to_string()
+fn bedrock_execution_model_id(model: &str) -> String {
+    crate::core::providers::bedrock::parse_bedrock_model_id(model).execution_model_id
 }
 
 #[async_trait]
@@ -151,7 +145,7 @@ impl Router for DefaultRouter {
         .or_else(|| {
             Self::select_provider_by_name(&providers, "bedrock", model, "bedrock/", &chat_request)
                 .map(|(provider, mut request)| {
-                    request.model = normalize_bedrock_model_id(&request.model);
+                    request.model = bedrock_execution_model_id(&request.model);
                     (provider, request)
                 })
         })
@@ -251,7 +245,7 @@ impl Router for DefaultRouter {
         .or_else(|| {
             Self::select_provider_by_name(&providers, "bedrock", model, "bedrock/", &chat_request)
                 .map(|(provider, mut request)| {
-                    request.model = normalize_bedrock_model_id(&request.model);
+                    request.model = bedrock_execution_model_id(&request.model);
                     (provider, request)
                 })
         })

@@ -3,11 +3,16 @@
 //! Contains the logic for transforming requests and responses between
 //! OpenAI-compatible format and Bedrock model-specific formats.
 
+mod openai_invoke_response;
+
 use serde_json::Value;
 
-use super::model_config::{BedrockModelFamily, get_model_config};
+use super::get_model_config_for_model_id;
+use super::model_config::{BedrockApiType, BedrockModelFamily};
+use super::model_id::is_runtime_resolved_invoke_model_id;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::responses::{ChatChoice, ChatResponse, FinishReason, Usage};
+use crate::core::types::tools::{FunctionCall, ToolCall};
 use crate::core::types::{chat::ChatMessage, message::MessageContent, message::MessageRole};
 
 /// Safely convert an f32 to a serde_json::Number, defaulting to 0 for NaN/Inf values
@@ -30,7 +35,7 @@ pub fn transform_chat_request(
     messages_to_prompt: impl Fn(&[ChatMessage]) -> Result<String, ProviderError>,
 ) -> Result<Value, ProviderError> {
     // Get model configuration
-    let model_config = get_model_config(model)?;
+    let model_config = get_model_config_for_model_id(model)?;
 
     // Route based on model family
     match model_config.family {
@@ -178,38 +183,65 @@ pub fn transform_chat_response(
     let response: Value = serde_json::from_slice(raw_response)
         .map_err(|e| ProviderError::response_parsing("bedrock", e.to_string()))?;
 
+    if is_runtime_resolved_invoke_model_id(model) {
+        let mut usage = parse_runtime_invoke_usage(&response);
+        if let Some(ref mut usage) = usage
+            && usage.total_tokens == 0
+        {
+            usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+        }
+
+        return Ok(ChatResponse {
+            id: format!("bedrock-{}", uuid::Uuid::new_v4()),
+            object: "chat.completion".to_string(),
+            created: chrono::Utc::now().timestamp(),
+            model: model.to_string(),
+            choices: parse_runtime_invoke_response(&response),
+            usage,
+            system_fingerprint: None,
+        });
+    }
+
     // Get model configuration
-    let model_config = get_model_config(model)?;
+    let model_config = get_model_config_for_model_id(model)?;
 
-    let choices = match model_config.family {
-        BedrockModelFamily::Claude => parse_claude_response(&response),
-        BedrockModelFamily::TitanText => parse_titan_response(&response),
-        BedrockModelFamily::Nova | BedrockModelFamily::Llama => {
-            parse_nova_llama_response(&response)
-        }
-        BedrockModelFamily::Mistral => parse_mistral_response(&response),
-        BedrockModelFamily::AI21 => parse_ai21_response(&response),
-        BedrockModelFamily::Cohere => parse_cohere_response(&response),
-        BedrockModelFamily::DeepSeek => parse_deepseek_response(&response),
-        _ => {
-            // Unsupported model family
-            return Err(ProviderError::invalid_request(
-                "bedrock",
-                format!(
-                    "Model family {:?} is not supported for response parsing",
-                    model_config.family
-                ),
-            ));
-        }
-    };
+    let (choices, usage) = match model_config.api_type {
+        BedrockApiType::Converse | BedrockApiType::ConverseStream => (
+            parse_converse_response(&response),
+            parse_converse_usage(&response),
+        ),
+        BedrockApiType::Invoke | BedrockApiType::InvokeStream => {
+            let choices = match model_config.family {
+                BedrockModelFamily::Claude => parse_claude_response(&response),
+                BedrockModelFamily::TitanText => parse_titan_response(&response),
+                BedrockModelFamily::Nova | BedrockModelFamily::Llama => {
+                    parse_nova_llama_response(&response)
+                }
+                BedrockModelFamily::Mistral => parse_mistral_response(&response),
+                BedrockModelFamily::AI21 => parse_ai21_response(&response),
+                BedrockModelFamily::Cohere => parse_cohere_response(&response),
+                BedrockModelFamily::DeepSeek => parse_deepseek_response(&response),
+                _ => {
+                    return Err(ProviderError::invalid_request(
+                        "bedrock",
+                        format!(
+                            "Model family {:?} is not supported for response parsing",
+                            model_config.family
+                        ),
+                    ));
+                }
+            };
 
-    // Extract usage information based on model family
-    let usage = match model_config.family {
-        BedrockModelFamily::Claude | BedrockModelFamily::Nova | BedrockModelFamily::Llama => {
-            parse_claude_usage(&response)
+            let usage = match model_config.family {
+                BedrockModelFamily::Claude
+                | BedrockModelFamily::Nova
+                | BedrockModelFamily::Llama => parse_claude_usage(&response),
+                BedrockModelFamily::TitanText => parse_titan_usage(&response),
+                _ => None,
+            };
+
+            (choices, usage)
         }
-        BedrockModelFamily::TitanText => parse_titan_usage(&response),
-        _ => None,
     };
 
     let mut final_usage = usage;
@@ -334,13 +366,194 @@ fn parse_deepseek_response(response: &Value) -> Vec<ChatChoice> {
     vec![create_chat_choice(content)]
 }
 
+fn parse_openai_compatible_response(response: &Value) -> Vec<ChatChoice> {
+    openai_invoke_response::parse_response(response)
+}
+
+fn parse_runtime_invoke_response(response: &Value) -> Vec<ChatChoice> {
+    if response.get("choices").is_some() {
+        return parse_openai_compatible_response(response);
+    }
+
+    let content = response
+        .get("completion")
+        .or_else(|| response.get("generation"))
+        .or_else(|| response.get("text"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            response
+                .get("outputs")
+                .and_then(Value::as_array)
+                .and_then(|outputs| outputs.first())
+                .and_then(|output| output.get("text"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            response
+                .get("results")
+                .and_then(Value::as_array)
+                .and_then(|results| results.first())
+                .and_then(|result| result.get("outputText"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+
+    vec![create_chat_choice(content)]
+}
+
+fn parse_converse_response(response: &Value) -> Vec<ChatChoice> {
+    let (text_parts, tool_calls) = response
+        .get("output")
+        .and_then(|output| output.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            let text_parts = blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let tool_calls = blocks
+                .iter()
+                .filter_map(parse_converse_tool_call)
+                .collect::<Vec<_>>();
+            (text_parts, tool_calls)
+        })
+        .unwrap_or_default();
+
+    let content = if text_parts.is_empty() {
+        None
+    } else {
+        Some(MessageContent::Text(text_parts.join("")))
+    };
+    let tool_calls = if tool_calls.is_empty() {
+        None
+    } else {
+        Some(tool_calls)
+    };
+
+    vec![ChatChoice {
+        index: 0,
+        message: ChatMessage {
+            role: MessageRole::Assistant,
+            content,
+            thinking: None,
+            audio: None,
+            name: None,
+            function_call: None,
+            tool_calls,
+            tool_call_id: None,
+        },
+        finish_reason: Some(
+            response
+                .get("stopReason")
+                .and_then(Value::as_str)
+                .map(parse_converse_finish_reason)
+                .unwrap_or(FinishReason::Stop),
+        ),
+        logprobs: None,
+    }]
+}
+
+fn parse_converse_tool_call(block: &Value) -> Option<ToolCall> {
+    let tool_use = block.get("toolUse")?;
+    let tool_use = tool_use.get("tool_use").unwrap_or(tool_use);
+    let id = tool_use.get("toolUseId").and_then(Value::as_str)?;
+    let name = tool_use.get("name").and_then(Value::as_str)?;
+    let arguments = tool_use
+        .get("input")
+        .map(Value::to_string)
+        .unwrap_or_else(|| "{}".to_string());
+
+    Some(ToolCall {
+        id: id.to_string(),
+        tool_type: "function".to_string(),
+        function: FunctionCall {
+            name: name.to_string(),
+            arguments,
+        },
+    })
+}
+
+fn parse_converse_finish_reason(reason: &str) -> FinishReason {
+    match reason {
+        "end_turn" => FinishReason::Stop,
+        "tool_use" => FinishReason::ToolCalls,
+        "max_tokens" => FinishReason::Length,
+        "model_context_window_exceeded" => FinishReason::Length,
+        "stop_sequence" => FinishReason::StopSequence,
+        "content_filtered" | "guardrail_intervened" => FinishReason::ContentFilter,
+        "malformed_model_output" | "malformed_tool_use" => FinishReason::Refusal,
+        _ => FinishReason::Stop,
+    }
+}
+
 // ==================== Usage Parsing Helpers ====================
+
+fn parse_openai_compatible_usage(response: &Value) -> Option<Usage> {
+    response.get("usage").map(|u| Usage {
+        prompt_tokens: u.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
+        completion_tokens: u
+            .get("completion_tokens")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0) as u32,
+        total_tokens: u.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
+        prompt_tokens_details: None,
+        completion_tokens_details: None,
+        thinking_usage: None,
+    })
+}
+
+fn parse_runtime_invoke_usage(response: &Value) -> Option<Usage> {
+    if let Some(usage) = parse_openai_compatible_usage(response) {
+        return Some(usage);
+    }
+
+    let prompt_tokens = response
+        .get("inputTextTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    let completion_tokens = response
+        .get("results")
+        .and_then(Value::as_array)
+        .and_then(|results| results.first())
+        .and_then(|result| result.get("tokenCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+
+    if prompt_tokens == 0 && completion_tokens == 0 {
+        return None;
+    }
+
+    Some(Usage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+        prompt_tokens_details: None,
+        completion_tokens_details: None,
+        thinking_usage: None,
+    })
+}
 
 fn parse_claude_usage(response: &Value) -> Option<Usage> {
     response.get("usage").map(|u| Usage {
         prompt_tokens: u.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
         completion_tokens: u.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
         total_tokens: 0, // Will be calculated by caller
+        prompt_tokens_details: None,
+        completion_tokens_details: None,
+        thinking_usage: None,
+    })
+}
+
+fn parse_converse_usage(response: &Value) -> Option<Usage> {
+    response.get("usage").map(|u| Usage {
+        prompt_tokens: u.get("inputTokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
+        completion_tokens: u.get("outputTokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
+        total_tokens: 0,
         prompt_tokens_details: None,
         completion_tokens_details: None,
         thinking_usage: None,
@@ -364,4 +577,183 @@ fn parse_titan_usage(response: &Value) -> Option<Usage> {
             })
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transform_chat_response;
+    use crate::core::types::message::MessageContent;
+    use crate::core::types::responses::FinishReason;
+
+    #[test]
+    fn parses_converse_response_for_runtime_resolved_profile_arn() {
+        let raw_response = serde_json::json!({
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "text": "hello " },
+                        { "text": "world" }
+                    ]
+                }
+            },
+            "usage": {
+                "inputTokens": 7,
+                "outputTokens": 3,
+                "totalTokens": 10
+            },
+            "stopReason": "end_turn"
+        });
+        let raw_response = serde_json::to_vec(&raw_response).unwrap();
+
+        let response = transform_chat_response(
+            &raw_response,
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-team-profile",
+        )
+        .unwrap();
+
+        let content = response.choices[0].message.content.as_ref().unwrap();
+        assert!(matches!(content, MessageContent::Text(text) if text == "hello world"));
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 7);
+        assert_eq!(usage.completion_tokens, 3);
+        assert_eq!(usage.total_tokens, 10);
+    }
+
+    #[test]
+    fn preserves_converse_tool_use_response_blocks() {
+        let raw_response = serde_json::json!({
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "tool-123",
+                                "name": "get_weather",
+                                "input": { "city": "Paris", "unit": "celsius" }
+                            }
+                        }
+                    ]
+                }
+            },
+            "usage": {
+                "inputTokens": 11,
+                "outputTokens": 4
+            },
+            "stopReason": "tool_use"
+        });
+        let raw_response = serde_json::to_vec(&raw_response).unwrap();
+
+        let response = transform_chat_response(
+            &raw_response,
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-team-profile",
+        )
+        .unwrap();
+
+        let choice = &response.choices[0];
+        assert_eq!(choice.finish_reason, Some(FinishReason::ToolCalls));
+        assert!(choice.message.content.is_none());
+
+        let tool_calls = choice.message.tool_calls.as_ref().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        let tool_call = &tool_calls[0];
+        assert_eq!(tool_call.id, "tool-123");
+        assert_eq!(tool_call.tool_type, "function");
+        assert_eq!(tool_call.function.name, "get_weather");
+
+        let arguments: serde_json::Value =
+            serde_json::from_str(&tool_call.function.arguments).unwrap();
+        assert_eq!(arguments["city"], "Paris");
+        assert_eq!(arguments["unit"], "celsius");
+    }
+
+    #[test]
+    fn maps_converse_context_window_stop_reason_to_length() {
+        let raw_response = serde_json::json!({
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "text": "partial answer" }]
+                }
+            },
+            "stopReason": "model_context_window_exceeded"
+        });
+        let raw_response = serde_json::to_vec(&raw_response)
+            .unwrap_or_else(|err| panic!("Converse response should serialize: {err}"));
+
+        let response = transform_chat_response(
+            &raw_response,
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-team-profile",
+        )
+        .unwrap_or_else(|err| panic!("Converse response should parse: {err}"));
+
+        assert_eq!(
+            response.choices[0].finish_reason,
+            Some(FinishReason::Length)
+        );
+    }
+
+    #[test]
+    fn parses_openai_compatible_response_for_runtime_resolved_invoke_arn() {
+        let raw_response = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "hello from imported"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 3,
+                "total_tokens": 8
+            }
+        });
+        let raw_response = serde_json::to_vec(&raw_response)
+            .unwrap_or_else(|err| panic!("OpenAI-compatible response should serialize: {err}"));
+
+        let response = transform_chat_response(
+            &raw_response,
+            "arn:aws:bedrock:us-east-1:123456789012:imported-model/ABC123",
+        )
+        .unwrap_or_else(|err| panic!("OpenAI-compatible response should parse: {err}"));
+
+        let content = response.choices[0]
+            .message
+            .content
+            .as_ref()
+            .unwrap_or_else(|| panic!("response should include assistant content"));
+        assert!(matches!(content, MessageContent::Text(text) if text == "hello from imported"));
+        let usage = response
+            .usage
+            .unwrap_or_else(|| panic!("response should include usage"));
+        assert_eq!(usage.prompt_tokens, 5);
+        assert_eq!(usage.completion_tokens, 3);
+        assert_eq!(usage.total_tokens, 8);
+    }
+
+    #[test]
+    fn parses_native_response_for_runtime_resolved_invoke_arn() {
+        let raw_response = serde_json::json!({
+            "completion": "hello from native invoke"
+        });
+        let raw_response = serde_json::to_vec(&raw_response)
+            .unwrap_or_else(|err| panic!("native response should serialize: {err}"));
+
+        let response = transform_chat_response(
+            &raw_response,
+            "arn:aws:bedrock:us-east-1:123456789012:imported-model/ABC123",
+        )
+        .unwrap_or_else(|err| panic!("native response should parse: {err}"));
+
+        let content = response.choices[0]
+            .message
+            .content
+            .as_ref()
+            .unwrap_or_else(|| panic!("response should include assistant content"));
+        assert!(
+            matches!(content, MessageContent::Text(text) if text == "hello from native invoke")
+        );
+    }
 }
