@@ -316,7 +316,6 @@ fn response_to_chunks(response: ChatResponse) -> Vec<ChatChunk> {
             delta: ChatDelta {
                 role: Some(MessageRole::Assistant),
                 content: None,
-                audio: None,
                 thinking: None,
                 tool_calls: None,
                 function_call: None,
@@ -354,7 +353,6 @@ fn response_to_chunks(response: ChatResponse) -> Vec<ChatChunk> {
                         delta: ChatDelta {
                             role: None,
                             content: Some(chunk_text),
-                            audio: None,
                             thinking: None,
                             tool_calls: None,
                             function_call: None,
@@ -380,7 +378,6 @@ fn response_to_chunks(response: ChatResponse) -> Vec<ChatChunk> {
                 delta: ChatDelta {
                     role: None,
                     content: None,
-                    audio: None,
                     thinking: None,
                     tool_calls: None,
                     function_call: None,
