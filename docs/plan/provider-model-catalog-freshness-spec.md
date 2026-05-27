@@ -3,7 +3,7 @@
 ## 0. Metadata
 
 - Task: provider model catalog freshness audit and follow-up issues
-- Repository: `/Users/lifcc/Desktop/code/AI/tools/litellm-rs`
+- Repository: `/Users/lifcc/Desktop/code/AI/gateway/litellm-rs`
 - Date checked: 2026-05-24 Asia/Shanghai
 - Compatibility strategy: required
 - Submission strategy: per provider milestone
