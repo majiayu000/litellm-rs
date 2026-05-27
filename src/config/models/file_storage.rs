@@ -90,6 +90,14 @@ pub struct VectorDbConfig {
     pub api_key: String,
     /// Index name
     pub index_name: String,
+    /// When the vector DB section is configured and init fails, allow the gateway
+    /// to keep running without a vector backend instead of failing startup.
+    ///
+    /// Defaults to `false` so a configured-but-broken vector DB is surfaced at
+    /// startup. Set to `true` only when the vector DB is best-effort (e.g.
+    /// optional semantic cache) and silent degradation is acceptable.
+    #[serde(default)]
+    pub allow_degraded: bool,
 }
 
 impl std::fmt::Debug for VectorDbConfig {
@@ -99,6 +107,7 @@ impl std::fmt::Debug for VectorDbConfig {
             .field("url", &self.url)
             .field("api_key", &"***REDACTED***")
             .field("index_name", &self.index_name)
+            .field("allow_degraded", &self.allow_degraded)
             .finish()
     }
 }
@@ -110,6 +119,7 @@ impl Default for VectorDbConfig {
             url: String::new(),
             api_key: String::new(),
             index_name: "default".to_string(),
+            allow_degraded: false,
         }
     }
 }
@@ -330,6 +340,7 @@ mod tests {
             url: "http://weaviate:8080".to_string(),
             api_key: "weaviate-key".to_string(),
             index_name: "embeddings".to_string(),
+            allow_degraded: false,
         };
         assert_eq!(config.db_type, "weaviate");
         assert_eq!(config.index_name, "embeddings");
@@ -342,10 +353,20 @@ mod tests {
             url: "http://qdrant:6333".to_string(),
             api_key: "qdrant-key".to_string(),
             index_name: "vectors".to_string(),
+            allow_degraded: false,
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["db_type"], "qdrant");
         assert_eq!(json["url"], "http://qdrant:6333");
+    }
+
+    #[test]
+    fn test_vector_db_config_allow_degraded_default_false() {
+        let config = VectorDbConfig::default();
+        assert!(
+            !config.allow_degraded,
+            "allow_degraded must default to false so explicit failures are surfaced"
+        );
     }
 
     #[test]

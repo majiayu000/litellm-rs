@@ -85,31 +85,32 @@ impl BedrockClient {
     /// Build Bedrock API URL for a model and operation
     pub fn build_url(&self, model_id: &str, operation: &str) -> String {
         let region = &self.auth.credentials().region;
+        let encoded_model_id = encode_model_id_path_segment(model_id);
 
         // Different URL patterns for different operations
         match operation {
             "invoke" => {
                 format!(
                     "https://bedrock-runtime.{}.amazonaws.com/model/{}/invoke",
-                    region, model_id
+                    region, encoded_model_id
                 )
             }
             "invoke-with-response-stream" => {
                 format!(
                     "https://bedrock-runtime.{}.amazonaws.com/model/{}/invoke-with-response-stream",
-                    region, model_id
+                    region, encoded_model_id
                 )
             }
             "converse" => {
                 format!(
                     "https://bedrock-runtime.{}.amazonaws.com/model/{}/converse",
-                    region, model_id
+                    region, encoded_model_id
                 )
             }
             "converse-stream" => {
                 format!(
                     "https://bedrock-runtime.{}.amazonaws.com/model/{}/converse-stream",
-                    region, model_id
+                    region, encoded_model_id
                 )
             }
             "list-foundation-models" => {
@@ -118,7 +119,7 @@ impl BedrockClient {
             _ => {
                 format!(
                     "https://bedrock-runtime.{}.amazonaws.com/model/{}/{}",
-                    region, model_id, operation
+                    region, encoded_model_id, operation
                 )
             }
         }
@@ -131,8 +132,18 @@ impl BedrockClient {
         body: &str,
         method: &str,
     ) -> Result<reqwest::header::HeaderMap, ProviderError> {
+        self.create_signed_headers_with_extra(url, body, method, HashMap::new())
+            .await
+    }
+
+    async fn create_signed_headers_with_extra(
+        &self,
+        url: &str,
+        body: &str,
+        method: &str,
+        headers: HashMap<String, String>,
+    ) -> Result<reqwest::header::HeaderMap, ProviderError> {
         let timestamp = chrono::Utc::now();
-        let headers = HashMap::new(); // Start with empty headers
 
         let signed_headers = self
             .signer
@@ -174,7 +185,14 @@ impl BedrockClient {
         );
 
         // Create signed headers
-        let headers = self.create_signed_headers(&url, &body_str, "POST").await?;
+        let headers = self
+            .create_signed_headers_with_extra(
+                &url,
+                &body_str,
+                "POST",
+                request_headers_for_operation(operation),
+            )
+            .await?;
 
         // Send request
         let response = self
@@ -215,7 +233,14 @@ impl BedrockClient {
         debug!("Bedrock streaming request to {}", url);
 
         // Create signed headers
-        let headers = self.create_signed_headers(&url, &body_str, "POST").await?;
+        let headers = self
+            .create_signed_headers_with_extra(
+                &url,
+                &body_str,
+                "POST",
+                request_headers_for_operation(operation),
+            )
+            .await?;
 
         // Send streaming request
         let response = self
@@ -291,6 +316,30 @@ impl BedrockClient {
             Err(_) => Ok(false),
         }
     }
+}
+
+fn encode_model_id_path_segment(model_id: &str) -> String {
+    url::form_urlencoded::byte_serialize(model_id.as_bytes()).collect()
+}
+
+fn request_headers_for_operation(operation: &str) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+
+    if matches!(
+        operation,
+        "invoke" | "invoke-with-response-stream" | "converse" | "converse-stream"
+    ) {
+        headers.insert("content-type".to_string(), "application/json".to_string());
+    }
+
+    if operation == "invoke-with-response-stream" {
+        headers.insert(
+            "x-amzn-bedrock-accept".to_string(),
+            "application/json".to_string(),
+        );
+    }
+
+    headers
 }
 
 #[cfg(test)]
@@ -557,6 +606,46 @@ mod tests {
         assert!(headers.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_operation_headers_are_signed() {
+        let client = create_test_client();
+        let headers = client
+            .create_signed_headers_with_extra(
+                "https://bedrock-runtime.us-east-1.amazonaws.com/model/test/invoke",
+                r#"{"test":"body"}"#,
+                "POST",
+                request_headers_for_operation("invoke"),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("signed invoke headers should build: {err}"));
+
+        assert_eq!(
+            headers
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_else(|| panic!("authorization header should be present"));
+        assert!(authorization.contains("content-type"));
+    }
+
+    #[test]
+    fn test_invoke_stream_headers_include_bedrock_accept() {
+        let headers = request_headers_for_operation("invoke-with-response-stream");
+
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&"application/json".to_string())
+        );
+        assert_eq!(
+            headers.get("x-amzn-bedrock-accept"),
+            Some(&"application/json".to_string())
+        );
+    }
+
     // ==================== Clone/Debug Tests ====================
 
     #[test]
@@ -618,10 +707,24 @@ mod tests {
 
         // Model with version suffix
         let url = client.build_url("meta.llama3-70b-instruct-v1:0", "invoke");
-        assert!(url.contains("meta.llama3-70b-instruct-v1:0"));
+        assert!(url.contains("meta.llama3-70b-instruct-v1%3A0"));
 
         // Model with dots
         let url = client.build_url("ai21.jamba-1-5-large-v1:0", "invoke");
-        assert!(url.contains("ai21.jamba-1-5-large-v1:0"));
+        assert!(url.contains("ai21.jamba-1-5-large-v1%3A0"));
+    }
+
+    #[test]
+    fn test_url_building_encodes_arn_model_ids() {
+        let client = create_test_client();
+        let arn = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0";
+
+        let url = client.build_url(arn, "invoke");
+
+        assert_eq!(
+            url,
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Ainference-profile%2Fus.anthropic.claude-3-5-sonnet-20241022-v2%3A0/invoke"
+        );
+        assert!(!url.contains("/inference-profile/"));
     }
 }

@@ -6,7 +6,8 @@ pub mod converse;
 pub mod invoke;
 pub mod transformations;
 
-use super::model_config::{BedrockApiType, get_model_config};
+use super::get_model_config_for_model_id;
+use super::model_config::BedrockApiType;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
 use serde_json::Value;
@@ -16,7 +17,7 @@ pub async fn route_chat_request(
     client: &super::client::BedrockClient,
     request: &ChatRequest,
 ) -> Result<Value, ProviderError> {
-    let model_config = get_model_config(&request.model)?;
+    let model_config = get_model_config_for_model_id(&request.model)?;
 
     match model_config.api_type {
         BedrockApiType::Converse | BedrockApiType::ConverseStream => {
@@ -30,7 +31,7 @@ pub async fn route_chat_request(
 
 /// Check if a model supports the converse API
 pub fn supports_converse(model_id: &str) -> bool {
-    if let Ok(config) = get_model_config(model_id) {
+    if let Ok(config) = get_model_config_for_model_id(model_id) {
         matches!(
             config.api_type,
             BedrockApiType::Converse | BedrockApiType::ConverseStream
@@ -42,7 +43,7 @@ pub fn supports_converse(model_id: &str) -> bool {
 
 /// Check if a model supports streaming
 pub fn supports_streaming(model_id: &str) -> bool {
-    if let Ok(config) = get_model_config(model_id) {
+    if let Ok(config) = get_model_config_for_model_id(model_id) {
         config.supports_streaming
     } else {
         false

@@ -22,7 +22,7 @@ use actix_web::{
 };
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// HTTP server
 pub struct HttpServer {
@@ -44,6 +44,10 @@ impl HttpServer {
 
         let storage = crate::storage::StorageLayer::new(&config.gateway.storage).await?;
         let mut budget_persistence_task = None;
+        // Budget persistence is co-located with the database backend. We treat
+        // a missing/disabled database as "budget persistence disabled" (no
+        // error), and a failed snapshot load on a configured database as a
+        // hard startup failure unless storage.database.allow_degraded=true.
         let budget_limits = match storage.database.load_budget_limit_snapshots().await {
             Ok(snapshots) => {
                 let count = snapshots.len();
@@ -57,11 +61,27 @@ impl HttpServer {
                 ))
             }
             Err(e) => {
-                warn!(
-                    "Budget limit persistence is unavailable; using in-memory budgets only: {}",
-                    e
-                );
-                Arc::new(UnifiedBudgetLimits::new())
+                if config.gateway.storage.database.allow_degraded
+                    || !config.gateway.storage.database.enabled
+                {
+                    error!(
+                        "Budget limit persistence is unavailable; using in-memory budgets \
+                         only (allow_degraded={}, db_enabled={}). Error: {}",
+                        config.gateway.storage.database.allow_degraded,
+                        config.gateway.storage.database.enabled,
+                        e
+                    );
+                    Arc::new(UnifiedBudgetLimits::new())
+                } else {
+                    error!(
+                        "Budget limit persistence load failed and \
+                         storage.database.allow_degraded=false; failing startup. Set \
+                         storage.database.allow_degraded=true to keep running with \
+                         in-memory budgets only. Error: {}",
+                        e
+                    );
+                    return Err(e);
+                }
             }
         };
         let auth =
@@ -69,7 +89,26 @@ impl HttpServer {
 
         let pricing = Arc::new(PricingService::new(config.gateway.pricing.source.clone()));
         if let Err(e) = pricing.initialize().await {
-            warn!("Pricing service initial load failed: {}", e);
+            // A `None` pricing source is "pricing disabled" and is not
+            // expected to fail; any other failure is a configured-but-broken
+            // pricing source. Honor allow_degraded the same way as other
+            // dependencies.
+            let is_configured = config.gateway.pricing.source.is_some();
+            if !is_configured || config.gateway.pricing.allow_degraded {
+                error!(
+                    "Pricing service initial load failed; gateway will serve traffic \
+                     without pricing data (configured={}, allow_degraded={}). Error: {}",
+                    is_configured, config.gateway.pricing.allow_degraded, e
+                );
+            } else {
+                error!(
+                    "Pricing service initial load failed and pricing.allow_degraded=false; \
+                     failing startup. Set pricing.allow_degraded=true to keep running \
+                     without pricing data. Error: {}",
+                    e
+                );
+                return Err(e);
+            }
         } else {
             info!("Pricing service initial load completed");
         }
@@ -383,5 +422,62 @@ mod tests {
             }
             other => panic!("expected config error, got: {other:?}"),
         }
+    }
+
+    /// Build a config whose only optional dependency that is *configured* is
+    /// the pricing source, which points at a non-existent file so the initial
+    /// load fails deterministically.
+    fn config_with_broken_pricing(allow_degraded: bool) -> Config {
+        let mut config = Config::default();
+        // Disable enterprise/storage subsystems that would require real I/O.
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source =
+            Some("/nonexistent/path/that/cannot/be/loaded.json".to_string());
+        config.gateway.pricing.allow_degraded = allow_degraded;
+        config
+    }
+
+    #[tokio::test]
+    async fn new_fails_when_pricing_source_broken_and_not_allowed_to_degrade() {
+        let config = config_with_broken_pricing(false);
+        let result = HttpServer::new(&config).await;
+        assert!(
+            result.is_err(),
+            "pricing source load failure with allow_degraded=false must fail startup"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_succeeds_when_pricing_source_broken_but_allowed_to_degrade() {
+        let config = config_with_broken_pricing(true);
+        let result = HttpServer::new(&config).await;
+        assert!(
+            result.is_ok(),
+            "pricing source load failure with allow_degraded=true must keep startup running, \
+             got: {:?}",
+            result.err()
+        );
+    }
+
+    /// In-memory budget snapshots load succeeds (returns empty) on sqlite, so
+    /// we can't trigger a real "load failed" path from `Config::default()`
+    /// alone without a mock. The disabled-DB branch is covered here: when the
+    /// database is disabled we use the in-memory sqlite backend which always
+    /// returns an empty snapshot set, exercising the "Ok(snapshots)" arm.
+    #[tokio::test]
+    async fn new_succeeds_with_in_memory_budgets_when_db_disabled() {
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        // Disable pricing so we don't conflate with the broken-pricing tests.
+        config.gateway.pricing.source = None;
+
+        let result = HttpServer::new(&config).await;
+        assert!(
+            result.is_ok(),
+            "disabled DB must keep startup running with in-memory budgets, got: {:?}",
+            result.err()
+        );
     }
 }
