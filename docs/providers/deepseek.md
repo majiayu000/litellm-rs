@@ -15,7 +15,8 @@ official DeepSeek API base is `https://api.deepseek.com`.
 ### Legacy Aliases
 
 DeepSeek's current docs keep these aliases for compatibility and announce that
-they will be deprecated. Deprecation: 2026-07-24 (per https://api-docs.deepseek.com/).
+they will be deprecated in the future. The official pricing page does not
+publish a concrete deprecation date.
 
 | Alias | Current mapping | Thinking behavior |
 |-------|-----------------|-------------------|

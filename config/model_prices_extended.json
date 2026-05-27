@@ -591,8 +591,7 @@
     "supports_system_message": true,
     "alias_for": "deepseek-v4-flash",
     "thinking_mode": "disabled",
-    "deprecation_status": "future_deprecation_announced",
-    "deprecation_date": "2026-07-24"
+    "deprecation_status": "future_deprecation_announced"
   },
   "deepseek-reasoner": {
     "max_tokens": 1048576,
@@ -609,8 +608,7 @@
     "supports_reasoning": true,
     "alias_for": "deepseek-v4-flash",
     "thinking_mode": "enabled",
-    "deprecation_status": "future_deprecation_announced",
-    "deprecation_date": "2026-07-24"
+    "deprecation_status": "future_deprecation_announced"
   },
   "deepseek-coder": {
     "max_tokens": 4096,
