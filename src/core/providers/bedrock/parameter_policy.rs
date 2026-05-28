@@ -40,18 +40,19 @@ pub(in crate::core::providers::bedrock) struct BedrockChatParameterFields {
     pub stop_sequences: Option<Vec<String>>,
     pub top_k: Option<Value>,
     pub thinking: Option<Value>,
+    pub extra_additional_fields: Option<Map<String, Value>>,
 }
 
 impl BedrockChatParameterFields {
     pub fn additional_model_request_fields(&self) -> Option<Value> {
-        let mut fields = Map::new();
+        let mut fields = self.extra_additional_fields.clone().unwrap_or_default();
         if let Some(top_k) = &self.top_k {
             fields.insert("top_k".to_string(), top_k.clone());
         }
         if let Some(thinking) = &self.thinking {
             fields.insert("thinking".to_string(), thinking.clone());
         }
-        (!fields.is_empty()).then(|| Value::Object(fields))
+        (!fields.is_empty()).then_some(Value::Object(fields))
     }
 }
 
@@ -94,6 +95,7 @@ pub(in crate::core::providers::bedrock) fn serialize_bedrock_chat_parameters(
     let policy = bedrock_parameter_policy(&request.model);
     validate_sampling_policy(request, policy)?;
 
+    let extra_additional_fields = passthrough_additional_model_fields(request)?;
     let top_k = serialize_top_k(request, policy)?;
     let thinking = serialize_thinking(request, policy)?;
 
@@ -104,6 +106,7 @@ pub(in crate::core::providers::bedrock) fn serialize_bedrock_chat_parameters(
         stop_sequences: request.stop.clone(),
         top_k,
         thinking,
+        extra_additional_fields,
     })
 }
 
@@ -335,6 +338,27 @@ fn additional_model_field<'a>(
     request: &'a ChatRequest,
     field_name: &str,
 ) -> Result<Option<&'a Value>, ProviderError> {
+    Ok(additional_model_fields(request)?.and_then(|fields| fields.get(field_name)))
+}
+
+fn passthrough_additional_model_fields(
+    request: &ChatRequest,
+) -> Result<Option<Map<String, Value>>, ProviderError> {
+    let Some(fields) = additional_model_fields(request)? else {
+        return Ok(None);
+    };
+
+    let mut passthrough = fields.clone();
+    passthrough.remove("top_k");
+    passthrough.remove("topK");
+    passthrough.remove("thinking");
+
+    Ok((!passthrough.is_empty()).then_some(passthrough))
+}
+
+fn additional_model_fields(
+    request: &ChatRequest,
+) -> Result<Option<&Map<String, Value>>, ProviderError> {
     let Some(fields) = get_extra_param(
         request,
         "additionalModelRequestFields",
@@ -343,27 +367,9 @@ fn additional_model_field<'a>(
         return Ok(None);
     };
 
-    let object = fields.as_object().ok_or_else(|| {
+    fields.as_object().map(Some).ok_or_else(|| {
         ProviderError::invalid_request("bedrock", "additionalModelRequestFields must be an object")
-    })?;
-
-    validate_additional_model_fields(object)?;
-    Ok(object.get(field_name))
-}
-
-fn validate_additional_model_fields(fields: &Map<String, Value>) -> Result<(), ProviderError> {
-    for key in fields.keys() {
-        match key.as_str() {
-            "top_k" | "topK" | "thinking" => {}
-            other => {
-                return Err(ProviderError::invalid_request(
-                    "bedrock",
-                    format!("Unsupported Bedrock additionalModelRequestFields field: {other}"),
-                ));
-            }
-        }
-    }
-    Ok(())
+    })
 }
 
 fn get_extra_param<'a>(request: &'a ChatRequest, snake: &str, camel: &str) -> Option<&'a Value> {

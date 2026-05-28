@@ -47,6 +47,63 @@ fn bedrock_parameter_policy_serializes_top_k_as_additional_model_field() {
 }
 
 #[test]
+fn bedrock_parameter_policy_preserves_custom_additional_model_fields() {
+    let mut request = ChatRequest::new("anthropic.claude-3-sonnet").add_user_message("Hello");
+    request.extra_params.insert(
+        "additionalModelRequestFields".to_string(),
+        serde_json::json!({
+            "topK": 96,
+            "vendorField": {
+                "mode": "passthrough"
+            }
+        }),
+    );
+
+    let converse = transform_to_converse(&request).unwrap_or_else(|err| {
+        panic!("custom additionalModelRequestFields should transform: {err}")
+    });
+    let fields = converse
+        .additional_model_request_fields
+        .unwrap_or_else(|| panic!("additionalModelRequestFields should be emitted"));
+
+    assert_eq!(fields["top_k"], 96);
+    assert_eq!(
+        fields["vendorField"],
+        serde_json::json!({
+            "mode": "passthrough"
+        })
+    );
+    assert!(fields.get("topK").is_none());
+}
+
+#[test]
+fn bedrock_parameter_policy_allows_opus_47_custom_additional_model_fields() {
+    let mut request = ChatRequest::new("anthropic.claude-opus-4-7").add_user_message("Hello");
+    request.extra_params.insert(
+        "additionalModelRequestFields".to_string(),
+        serde_json::json!({
+            "vendorField": {
+                "mode": "passthrough"
+            }
+        }),
+    );
+
+    let converse = transform_to_converse(&request).unwrap_or_else(|err| {
+        panic!("custom additionalModelRequestFields should transform: {err}")
+    });
+    let fields = converse
+        .additional_model_request_fields
+        .unwrap_or_else(|| panic!("additionalModelRequestFields should be emitted"));
+
+    assert_eq!(
+        fields["vendorField"],
+        serde_json::json!({
+            "mode": "passthrough"
+        })
+    );
+}
+
+#[test]
 fn bedrock_parameter_policy_serializes_opus_47_adaptive_thinking() {
     let request = ChatRequest::new("anthropic.claude-opus-4-7")
         .add_user_message("Think carefully")
