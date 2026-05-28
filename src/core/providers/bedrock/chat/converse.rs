@@ -3,6 +3,9 @@
 //! Modern unified API for chat completions in Bedrock
 
 use crate::core::providers::bedrock::model_id::is_prompt_management_model_id;
+use crate::core::providers::bedrock::parameter_policy::{
+    has_bedrock_model_parameter_overrides, serialize_bedrock_chat_parameters,
+};
 use crate::core::providers::bedrock::parse_bedrock_model_id;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
@@ -252,6 +255,11 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
     let mut messages = Vec::new();
     let mut system_messages = Vec::new();
     let prompt_management = is_prompt_management_model_id(&request.model);
+    let parameter_fields = if prompt_management {
+        None
+    } else {
+        Some(serialize_bedrock_chat_parameters(request)?)
+    };
 
     for msg in &request.messages {
         match msg.role {
@@ -355,19 +363,26 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
             || request.temperature.is_some()
             || request.top_p.is_some()
             || request.stop.is_some()
+            || has_bedrock_model_parameter_overrides(request)
         {
             return Err(ProviderError::invalid_request(
                 "bedrock",
-                "Prompt-management ARNs do not support request-level inferenceConfig",
+                "Prompt-management ARNs do not support request-level inferenceConfig or additionalModelRequestFields",
             ));
         }
         None
     } else {
+        let Some(parameter_fields) = parameter_fields.as_ref() else {
+            return Err(ProviderError::configuration(
+                "bedrock",
+                "Bedrock parameter fields were not serialized for a Converse request",
+            ));
+        };
         Some(InferenceConfig {
-            max_tokens: request.max_completion_tokens.or(request.max_tokens),
-            temperature: request.temperature.map(|t| t as f64),
-            top_p: request.top_p.map(|t| t as f64),
-            stop_sequences: request.stop.clone(),
+            max_tokens: parameter_fields.max_tokens,
+            temperature: parameter_fields.temperature,
+            top_p: parameter_fields.top_p,
+            stop_sequences: parameter_fields.stop_sequences.clone(),
         })
     };
 
@@ -426,7 +441,9 @@ pub(in crate::core::providers::bedrock) fn transform_to_converse(
         prompt_variables,
         tool_config,
         guardrail_config: None, // NOTE: guardrail support not yet implemented
-        additional_model_request_fields: None,
+        additional_model_request_fields: parameter_fields
+            .as_ref()
+            .and_then(|fields| fields.additional_model_request_fields()),
     })
 }
 
@@ -654,3 +671,7 @@ fn tool_result_contents_from_value(value: &Value) -> Result<Vec<ToolResultConten
 #[cfg(test)]
 #[path = "converse_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "converse_parameter_policy_tests.rs"]
+mod parameter_policy_tests;

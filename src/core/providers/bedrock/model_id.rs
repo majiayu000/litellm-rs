@@ -101,6 +101,10 @@ pub fn get_model_config_for_model_id(
         }
     }
 
+    if is_claude_opus_47_model_id(&parsed) {
+        return Ok(claude_opus_47_config());
+    }
+
     if let Some(fallback) = parsed.runtime_config_fallback {
         return Ok(match fallback {
             RuntimeConfigFallback::Converse => runtime_resolved_converse_config(),
@@ -154,6 +158,18 @@ static RUNTIME_RESOLVED_PROMPT_CONFIG: super::model_config::ModelConfig =
         output_cost_per_1k: 0.0,
     };
 
+static CLAUDE_OPUS_47_CONFIG: super::model_config::ModelConfig = super::model_config::ModelConfig {
+    family: super::model_config::BedrockModelFamily::Claude,
+    api_type: super::model_config::BedrockApiType::Converse,
+    supports_streaming: true,
+    supports_function_calling: true,
+    supports_multimodal: true,
+    max_context_length: 1_000_000,
+    max_output_length: Some(128_000),
+    input_cost_per_1k: 0.005,
+    output_cost_per_1k: 0.025,
+};
+
 fn runtime_resolved_converse_config() -> &'static super::model_config::ModelConfig {
     &RUNTIME_RESOLVED_CONVERSE_CONFIG
 }
@@ -164,6 +180,17 @@ fn runtime_resolved_invoke_config() -> &'static super::model_config::ModelConfig
 
 fn runtime_resolved_prompt_config() -> &'static super::model_config::ModelConfig {
     &RUNTIME_RESOLVED_PROMPT_CONFIG
+}
+
+fn claude_opus_47_config() -> &'static super::model_config::ModelConfig {
+    &CLAUDE_OPUS_47_CONFIG
+}
+
+fn is_claude_opus_47_model_id(parsed: &ParsedBedrockModelId) -> bool {
+    parsed
+        .metadata_lookup_ids
+        .iter()
+        .any(|id| id == "anthropic.claude-opus-4-7")
 }
 
 fn canonical_metadata_id(model_id: &str) -> Option<String> {
@@ -628,6 +655,16 @@ mod tests {
         assert_eq!(
             config.api_type,
             crate::core::providers::bedrock::BedrockApiType::InvokeStream
+        );
+    }
+
+    #[test]
+    fn claude_opus_47_has_converse_runtime_config() {
+        let config = config_for("anthropic.claude-opus-4-7");
+
+        assert_eq!(
+            config.api_type,
+            crate::core::providers::bedrock::BedrockApiType::Converse
         );
     }
 

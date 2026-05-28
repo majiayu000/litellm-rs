@@ -1,6 +1,7 @@
 //! Anthropic Claude Model Transformations
 
 use crate::core::providers::bedrock::model_config::ModelConfig;
+use crate::core::providers::bedrock::parameter_policy::serialize_bedrock_chat_parameters;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
 use serde_json::{Value, json};
@@ -10,23 +11,33 @@ pub fn transform_request(
     request: &ChatRequest,
     _model_config: &ModelConfig,
 ) -> Result<Value, ProviderError> {
+    let parameter_fields = serialize_bedrock_chat_parameters(request)?;
+
     // Claude models on Bedrock use anthropic messages format
     let mut body = json!({
         "messages": request.messages,
-        "max_tokens": request.max_tokens.unwrap_or(4096),
-        "anthropic_version": "bedrock-2023-05-20"
+        "max_tokens": parameter_fields.max_tokens.unwrap_or(4096),
+        "anthropic_version": "bedrock-2023-05-31"
     });
 
-    if let Some(temp) = request.temperature {
+    if let Some(temp) = parameter_fields.temperature {
         body["temperature"] = json!(temp);
     }
 
-    if let Some(top_p) = request.top_p {
+    if let Some(top_p) = parameter_fields.top_p {
         body["top_p"] = json!(top_p);
     }
 
-    if let Some(stop) = &request.stop {
+    if let Some(stop) = parameter_fields.stop_sequences {
         body["stop_sequences"] = json!(stop);
+    }
+
+    if let Some(top_k) = parameter_fields.top_k {
+        body["top_k"] = top_k;
+    }
+
+    if let Some(thinking) = parameter_fields.thinking {
+        body["thinking"] = thinking;
     }
 
     if let Some(system) = extract_system_message(request) {
@@ -65,7 +76,12 @@ fn extract_system_message(request: &ChatRequest) -> Option<String> {
 mod tests {
     use super::*;
     use crate::core::providers::bedrock::model_config::{BedrockApiType, BedrockModelFamily};
-    use crate::core::types::{chat::ChatMessage, message::MessageContent, message::MessageRole};
+    use crate::core::types::{
+        chat::ChatMessage,
+        message::MessageContent,
+        message::MessageRole,
+        thinking::{ThinkingConfig, ThinkingEffort},
+    };
 
     fn create_test_request() -> ChatRequest {
         ChatRequest {
@@ -108,7 +124,7 @@ mod tests {
         let value = result.unwrap();
         assert!(value["messages"].is_array());
         assert_eq!(value["max_tokens"], 4096);
-        assert_eq!(value["anthropic_version"], "bedrock-2023-05-20");
+        assert_eq!(value["anthropic_version"], "bedrock-2023-05-31");
     }
 
     #[test]
@@ -133,6 +149,57 @@ mod tests {
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["top_p"], 0.5);
+    }
+
+    #[test]
+    fn bedrock_parameter_policy_serializes_top_k() {
+        let mut request = create_test_request();
+        request
+            .extra_params
+            .insert("top_k".to_string(), serde_json::json!(64));
+        let model_config = create_test_model_config();
+
+        let result = transform_request(&request, &model_config);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(value["top_k"], 64);
+    }
+
+    #[test]
+    fn bedrock_parameter_policy_rejects_opus_47_top_p() {
+        let mut request = create_test_request();
+        request.model = "anthropic.claude-opus-4-7".to_string();
+        request.top_p = Some(0.5);
+        let model_config = create_test_model_config();
+
+        let error = transform_request(&request, &model_config)
+            .expect_err("Claude Opus 4.7 should reject non-default top_p locally");
+        let message = error.to_string();
+        assert!(message.contains("claude-opus-4-7"));
+        assert!(message.contains("top_p"));
+    }
+
+    #[test]
+    fn bedrock_parameter_policy_serializes_opus_47_adaptive_thinking() {
+        let mut request = create_test_request();
+        request.model = "anthropic.claude-opus-4-7".to_string();
+        request.thinking = Some(
+            ThinkingConfig::new()
+                .enabled()
+                .with_effort(ThinkingEffort::High),
+        );
+        let model_config = create_test_model_config();
+
+        let result = transform_request(&request, &model_config);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(
+            value["thinking"],
+            serde_json::json!({
+                "type": "adaptive",
+                "effort": "high"
+            })
+        );
     }
 
     #[test]

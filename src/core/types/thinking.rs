@@ -99,7 +99,7 @@ fn default_include_thinking() -> bool {
 /// - Anthropic: maps to `thinking.enabled` and `thinking.budget_tokens`
 /// - DeepSeek: maps to `reasoning_effort`
 /// - Gemini: maps to thinking parameters
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingConfig {
     /// Enable thinking mode
     #[serde(default)]
@@ -133,6 +133,18 @@ pub struct ThinkingConfig {
     /// Provider-specific extra parameters
     #[serde(flatten, skip_serializing_if = "HashMap::is_empty")]
     pub extra_params: HashMap<String, serde_json::Value>,
+}
+
+impl Default for ThinkingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            budget_tokens: None,
+            effort: None,
+            include_thinking: default_include_thinking(),
+            extra_params: HashMap::new(),
+        }
+    }
 }
 
 impl ThinkingConfig {
