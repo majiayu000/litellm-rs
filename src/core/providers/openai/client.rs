@@ -496,7 +496,15 @@ impl LLMProvider for OpenAIProvider {
         // Return parameters based on model capabilities
         if let Some(model_spec) = self.model_registry.get_model_spec(model) {
             match model_spec.family {
-                super::models::OpenAIModelFamily::GPT54
+                super::models::OpenAIModelFamily::GPT5
+                | super::models::OpenAIModelFamily::GPT5Mini
+                | super::models::OpenAIModelFamily::GPT5Nano
+                | super::models::OpenAIModelFamily::GPT51
+                | super::models::OpenAIModelFamily::GPT51Thinking
+                | super::models::OpenAIModelFamily::GPT52
+                | super::models::OpenAIModelFamily::GPT52Pro
+                | super::models::OpenAIModelFamily::GPT52Codex
+                | super::models::OpenAIModelFamily::GPT54
                 | super::models::OpenAIModelFamily::GPT54Mini
                 | super::models::OpenAIModelFamily::GPT54Pro
                 | super::models::OpenAIModelFamily::GPT54Nano
@@ -554,6 +562,9 @@ impl LLMProvider for OpenAIProvider {
                 super::models::OpenAIModelFamily::GPT4
                 | super::models::OpenAIModelFamily::GPT4Turbo
                 | super::models::OpenAIModelFamily::GPT4O
+                | super::models::OpenAIModelFamily::GPT41
+                | super::models::OpenAIModelFamily::GPT41Mini
+                | super::models::OpenAIModelFamily::GPT41Nano
                 | super::models::OpenAIModelFamily::GPT4OMini => &[
                     "messages",
                     "model",
