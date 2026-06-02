@@ -332,6 +332,7 @@ impl GatewayConfig {
         }
         if let Some(auto_migrate) = parse_env_bool(ENV_DATABASE_AUTO_MIGRATE)? {
             config.storage.database.auto_migrate = auto_migrate;
+            config.storage.database.auto_migrate_configured = true;
         }
 
         if let Some(redis_url) = env_var(ENV_REDIS_URL) {

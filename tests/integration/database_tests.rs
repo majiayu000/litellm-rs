@@ -54,6 +54,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         }
@@ -78,6 +79,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -109,6 +111,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -129,6 +132,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -316,6 +320,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: true,
             allow_degraded: false,
         });
@@ -353,6 +358,7 @@ mod tests {
             ssl: false,
             enabled: false,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -378,6 +384,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -403,6 +410,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -428,6 +436,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -450,6 +459,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -600,6 +610,7 @@ mod tests {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };

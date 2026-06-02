@@ -113,6 +113,7 @@ fn test_gateway_config_from_env() {
     );
     assert!(config.storage.database.enabled);
     assert!(config.storage.database.auto_migrate);
+    assert!(config.storage.database.auto_migrate_configured);
     assert_eq!(config.providers.len(), 1);
     assert_eq!(config.providers[0].name, "openai");
     assert_eq!(config.providers[0].provider_type, "openai");

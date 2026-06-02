@@ -241,6 +241,7 @@ fn test_database_validation_skips_when_disabled() {
         connection_timeout: 0,
         ssl: false,
         auto_migrate: false,
+        auto_migrate_configured: false,
         fallback_to_sqlite: false,
         allow_degraded: false,
     };

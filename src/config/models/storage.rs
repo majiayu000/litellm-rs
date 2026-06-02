@@ -35,8 +35,7 @@ impl StorageConfig {
 }
 
 /// Database configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DatabaseConfig {
     /// Database URL
     pub url: String,
@@ -59,6 +58,13 @@ pub struct DatabaseConfig {
     /// non-persistent in-memory SQLite fallback used when `enabled=false`.
     #[serde(default)]
     pub auto_migrate: bool,
+    /// Tracks whether `auto_migrate` was present in deserialized config.
+    ///
+    /// This preserves merge semantics for layered config: an omitted field
+    /// should not be treated as an explicit `false` override.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub auto_migrate_configured: bool,
     /// Allow PostgreSQL connection failures to fall back to local SQLite.
     ///
     /// Disabled by default to avoid silently writing production data to a
@@ -76,6 +82,48 @@ pub struct DatabaseConfig {
     pub allow_degraded: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DatabaseConfigFields {
+    pub url: String,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+    #[serde(default = "default_connection_timeout")]
+    pub connection_timeout: u64,
+    #[serde(default)]
+    pub ssl: bool,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub auto_migrate: Option<bool>,
+    #[serde(default)]
+    pub fallback_to_sqlite: bool,
+    #[serde(default)]
+    pub allow_degraded: bool,
+}
+
+impl<'de> Deserialize<'de> for DatabaseConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fields = DatabaseConfigFields::deserialize(deserializer)?;
+        let auto_migrate_configured = fields.auto_migrate.is_some();
+
+        Ok(Self {
+            url: fields.url,
+            max_connections: fields.max_connections,
+            connection_timeout: fields.connection_timeout,
+            ssl: fields.ssl,
+            enabled: fields.enabled,
+            auto_migrate: fields.auto_migrate.unwrap_or(false),
+            auto_migrate_configured,
+            fallback_to_sqlite: fields.fallback_to_sqlite,
+            allow_degraded: fields.allow_degraded,
+        })
+    }
+}
+
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
@@ -85,6 +133,7 @@ impl Default for DatabaseConfig {
             ssl: false,
             enabled: false,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         }
@@ -110,7 +159,10 @@ impl DatabaseConfig {
         if other.enabled {
             self.enabled = true;
         }
-        self.auto_migrate = other.auto_migrate;
+        if other.auto_migrate_configured || other.auto_migrate {
+            self.auto_migrate = other.auto_migrate;
+            self.auto_migrate_configured = other.auto_migrate_configured;
+        }
         if other.fallback_to_sqlite {
             self.fallback_to_sqlite = true;
         }
@@ -220,6 +272,7 @@ mod tests {
             ssl: true,
             enabled: true,
             auto_migrate: true,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -238,6 +291,7 @@ mod tests {
             ssl: true,
             enabled: true,
             auto_migrate: true,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -255,6 +309,7 @@ mod tests {
         assert_eq!(config.url, "postgresql://prod/app");
         assert!(config.ssl);
         assert!(!config.auto_migrate);
+        assert!(!config.auto_migrate_configured);
     }
 
     #[test]
@@ -297,6 +352,7 @@ mod tests {
         let base = DatabaseConfig::default();
         let other = DatabaseConfig {
             auto_migrate: true,
+            auto_migrate_configured: false,
             ..DatabaseConfig::default()
         };
         let merged = base.merge(other);
@@ -307,10 +363,39 @@ mod tests {
     fn test_database_config_merge_auto_migrate_false_overrides_base() {
         let base = DatabaseConfig {
             auto_migrate: true,
+            auto_migrate_configured: false,
             ..DatabaseConfig::default()
         };
-        let merged = base.merge(DatabaseConfig::default());
+        let other: DatabaseConfig = match serde_yml::from_str(
+            r#"url: "postgresql://localhost/litellm"
+auto_migrate: false
+"#,
+        ) {
+            Ok(config) => config,
+            Err(error) => panic!("explicit auto_migrate=false config should parse: {}", error),
+        };
+        assert!(other.auto_migrate_configured);
+
+        let merged = base.merge(other);
         assert!(!merged.auto_migrate);
+    }
+
+    #[test]
+    fn test_database_config_merge_preserves_auto_migrate_when_overlay_omits_field() {
+        let base = DatabaseConfig {
+            auto_migrate: true,
+            auto_migrate_configured: false,
+            ..DatabaseConfig::default()
+        };
+        let other: DatabaseConfig =
+            match serde_yml::from_str(r#"url: "postgresql://localhost/litellm""#) {
+                Ok(config) => config,
+                Err(error) => panic!("omitted auto_migrate config should parse: {}", error),
+            };
+        assert!(!other.auto_migrate_configured);
+
+        let merged = base.merge(other);
+        assert!(merged.auto_migrate);
     }
 
     #[test]

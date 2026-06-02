@@ -26,6 +26,7 @@ impl TestDatabase {
             ssl: false,
             enabled: true,
             auto_migrate: false,
+            auto_migrate_configured: false,
             fallback_to_sqlite: false,
             allow_degraded: false,
         };
@@ -78,6 +79,7 @@ pub fn test_db_config() -> DatabaseConfig {
         ssl: false,
         enabled: true,
         auto_migrate: false,
+        auto_migrate_configured: false,
         fallback_to_sqlite: false,
         allow_degraded: false,
     }
