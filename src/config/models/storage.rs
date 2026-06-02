@@ -85,6 +85,7 @@ pub struct DatabaseConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DatabaseConfigFields {
+    #[serde(default = "default_database_url")]
     pub url: String,
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
@@ -94,7 +95,7 @@ struct DatabaseConfigFields {
     pub ssl: bool,
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_auto_migrate")]
     pub auto_migrate: Option<bool>,
     #[serde(default)]
     pub fallback_to_sqlite: bool,
@@ -124,10 +125,21 @@ impl<'de> Deserialize<'de> for DatabaseConfig {
     }
 }
 
+fn default_database_url() -> String {
+    "postgresql://localhost/litellm".to_string()
+}
+
+fn deserialize_auto_migrate<'de, D>(deserializer: D) -> std::result::Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(Some)
+}
+
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: "postgresql://localhost/litellm".to_string(),
+            url: default_database_url(),
             max_connections: default_max_connections(),
             connection_timeout: default_connection_timeout(),
             ssl: false,
@@ -313,6 +325,22 @@ mod tests {
     }
 
     #[test]
+    fn test_database_config_deserialization_defaults_omitted_url() {
+        let config: DatabaseConfig = match serde_yml::from_str("enabled: true\n") {
+            Ok(config) => config,
+            Err(error) => panic!("omitted database URL config should parse: {}", error),
+        };
+        assert_eq!(config.url, "postgresql://localhost/litellm");
+        assert!(config.enabled);
+    }
+
+    #[test]
+    fn test_database_config_deserialization_rejects_null_auto_migrate() {
+        let result = serde_yml::from_str::<DatabaseConfig>("auto_migrate:\n");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_database_config_merge_url() {
         let base = DatabaseConfig::default();
         let other = DatabaseConfig {
@@ -362,13 +390,13 @@ mod tests {
     #[test]
     fn test_database_config_merge_auto_migrate_false_overrides_base() {
         let base = DatabaseConfig {
+            url: "postgresql://custom-host/mydb".to_string(),
             auto_migrate: true,
             auto_migrate_configured: false,
             ..DatabaseConfig::default()
         };
         let other: DatabaseConfig = match serde_yml::from_str(
-            r#"url: "postgresql://localhost/litellm"
-auto_migrate: false
+            r#"auto_migrate: false
 "#,
         ) {
             Ok(config) => config,
@@ -377,24 +405,26 @@ auto_migrate: false
         assert!(other.auto_migrate_configured);
 
         let merged = base.merge(other);
+        assert_eq!(merged.url, "postgresql://custom-host/mydb");
         assert!(!merged.auto_migrate);
     }
 
     #[test]
     fn test_database_config_merge_preserves_auto_migrate_when_overlay_omits_field() {
         let base = DatabaseConfig {
+            url: "postgresql://custom-host/mydb".to_string(),
             auto_migrate: true,
             auto_migrate_configured: false,
             ..DatabaseConfig::default()
         };
-        let other: DatabaseConfig =
-            match serde_yml::from_str(r#"url: "postgresql://localhost/litellm""#) {
-                Ok(config) => config,
-                Err(error) => panic!("omitted auto_migrate config should parse: {}", error),
-            };
+        let other: DatabaseConfig = match serde_yml::from_str("enabled: true\n") {
+            Ok(config) => config,
+            Err(error) => panic!("omitted auto_migrate config should parse: {}", error),
+        };
         assert!(!other.auto_migrate_configured);
 
         let merged = base.merge(other);
+        assert_eq!(merged.url, "postgresql://custom-host/mydb");
         assert!(merged.auto_migrate);
     }
 
