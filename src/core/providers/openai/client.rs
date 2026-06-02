@@ -502,11 +502,9 @@ impl LLMProvider for OpenAIProvider {
                 | super::models::OpenAIModelFamily::GPT51
                 | super::models::OpenAIModelFamily::GPT51Thinking
                 | super::models::OpenAIModelFamily::GPT52
-                | super::models::OpenAIModelFamily::GPT52Pro
                 | super::models::OpenAIModelFamily::GPT52Codex
                 | super::models::OpenAIModelFamily::GPT54
                 | super::models::OpenAIModelFamily::GPT54Mini
-                | super::models::OpenAIModelFamily::GPT54Pro
                 | super::models::OpenAIModelFamily::GPT54Nano
                 | super::models::OpenAIModelFamily::GPT55 => &[
                     "messages",
@@ -534,7 +532,9 @@ impl LLMProvider for OpenAIProvider {
                     "metadata",
                     "service_tier",
                 ],
-                super::models::OpenAIModelFamily::GPT55Pro => &[
+                super::models::OpenAIModelFamily::GPT52Pro
+                | super::models::OpenAIModelFamily::GPT54Pro
+                | super::models::OpenAIModelFamily::GPT55Pro => &[
                     "messages",
                     "model",
                     "temperature",
@@ -562,12 +562,12 @@ impl LLMProvider for OpenAIProvider {
                 super::models::OpenAIModelFamily::GPT4
                 | super::models::OpenAIModelFamily::GPT4Turbo
                 | super::models::OpenAIModelFamily::GPT4O
+                | super::models::OpenAIModelFamily::GPT4OMini
                 | super::models::OpenAIModelFamily::GPT41
                 | super::models::OpenAIModelFamily::GPT41Mini
                 | super::models::OpenAIModelFamily::GPT41Nano
                 | super::models::OpenAIModelFamily::GPT4OAudio
-                | super::models::OpenAIModelFamily::GPTAudio
-                | super::models::OpenAIModelFamily::GPT4OMini => &[
+                | super::models::OpenAIModelFamily::GPTAudio => &[
                     "messages",
                     "model",
                     "temperature",
