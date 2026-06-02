@@ -470,6 +470,8 @@ impl LLMProvider for OpenAIProvider {
     // ==================== Python LiteLLM Compatible Interface ====================
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        let model = model.strip_prefix("openai/").unwrap_or(model);
+
         // Return parameters based on model capabilities
         if let Some(model_spec) = self.model_registry.get_model_spec(model) {
             match model_spec.family {

@@ -144,15 +144,21 @@ impl PricingDatabase {
 
     /// Calculate cost for a model and token usage.
     pub fn calculate(&self, model: &str, usage: &Usage) -> f64 {
-        let model = normalize_model_key(model);
         if let Some(pricing) = self.models.get(model) {
+            return self.calculate_with_pricing(pricing, usage);
+        }
+
+        let normalized_model = normalize_model_key(model);
+        if normalized_model != model
+            && let Some(pricing) = self.models.get(normalized_model)
+        {
             return self.calculate_with_pricing(pricing, usage);
         }
 
         if let Some((_, pricing)) = self
             .models
             .iter()
-            .filter(|(key, _)| model_matches_key(model, key))
+            .filter(|(key, _)| model_matches_key(normalized_model, key))
             .max_by_key(|(key, _)| key.len())
         {
             return self.calculate_with_pricing(pricing, usage);
@@ -166,9 +172,16 @@ impl PricingDatabase {
     /// Provider dispatch should use this method instead of `calculate` so a
     /// same-named model on another provider does not accidentally supply prices.
     pub fn calculate_for_provider(&self, provider: &str, model: &str, usage: &Usage) -> f64 {
-        let model = normalize_model_key(model);
         if let Some(pricing) = self.models.get(model)
             && pricing_matches_provider(model, pricing, provider)
+        {
+            return self.calculate_with_pricing(pricing, usage);
+        }
+
+        let normalized_model = normalize_model_key(model);
+        if normalized_model != model
+            && let Some(pricing) = self.models.get(normalized_model)
+            && pricing_matches_provider(normalized_model, pricing, provider)
         {
             return self.calculate_with_pricing(pricing, usage);
         }
@@ -177,7 +190,8 @@ impl PricingDatabase {
             .models
             .iter()
             .filter(|(key, pricing)| {
-                pricing_matches_provider(key, pricing, provider) && model_matches_key(model, key)
+                pricing_matches_provider(key, pricing, provider)
+                    && model_matches_key(normalized_model, key)
             })
             .max_by_key(|(key, _)| key.len())
         {
@@ -410,6 +424,7 @@ fn builtin_gpt55_model(snapshot: bool) -> ModelPricing {
 
 fn builtin_gpt55_pro_model(snapshot: bool) -> ModelPricing {
     let mut model = builtin_model("openai", 0.00003, 0.00018, 1_048_576, 128_000, true, true);
+    model.supports_streaming = Some(false);
     model.extra.insert(
         "cache_read_input_token_cost".to_string(),
         serde_json::Value::from(0.00003),
@@ -652,6 +667,32 @@ mod tests {
                 .abs()
                 < 1e-12
         );
+    }
+
+    #[test]
+    fn provider_prefixed_exact_prices_are_preserved_before_normalization() {
+        let usage = Usage::new(1_000, 1_000);
+        let mut db = PricingDatabase::default();
+        let azure_override = builtin_model("azure", 0.000001, 0.000002, 8_192, 4_096, true, false);
+        db.models.insert("azure/gpt-4".to_string(), azure_override);
+
+        let expected_azure_cost = 1_000.0 * 0.000001 + 1_000.0 * 0.000002;
+
+        assert!((db.calculate("azure/gpt-4", &usage) - expected_azure_cost).abs() < 1e-12);
+        assert!(
+            (db.calculate_for_provider("azure", "azure/gpt-4", &usage) - expected_azure_cost).abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn gpt55_builtin_pro_model_info_is_non_streaming() {
+        let db = PricingDatabase::default();
+        let Some(info) = db.to_model_info("gpt-5.5-pro", "openai") else {
+            panic!("built-in GPT-5.5 Pro pricing should be present");
+        };
+
+        assert!(!info.supports_streaming);
     }
 
     #[test]
