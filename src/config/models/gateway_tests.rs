@@ -534,6 +534,35 @@ fn test_gateway_config_merge_provider_override() {
     assert_eq!(merged.providers[0].api_key, "new-api-key");
 }
 
+#[test]
+fn test_gateway_config_merge_pricing_preserves_base_source_for_default_overlay() {
+    let mut base = create_valid_config();
+    base.pricing.source = Some("config/custom-prices.json".to_string());
+
+    let merged = base.merge(GatewayConfig::default());
+
+    assert_eq!(
+        merged.pricing.source.as_deref(),
+        Some("config/custom-prices.json")
+    );
+}
+
+#[test]
+fn test_gateway_config_merge_pricing_uses_explicit_overlay_source() {
+    let mut base = create_valid_config();
+    base.pricing.source = Some("config/base-prices.json".to_string());
+
+    let mut other = GatewayConfig::default();
+    other.pricing.source = Some("config/overlay-prices.json".to_string());
+
+    let merged = base.merge(other);
+
+    assert_eq!(
+        merged.pricing.source.as_deref(),
+        Some("config/overlay-prices.json")
+    );
+}
+
 // ==================== GatewayConfig Serialization Tests ====================
 
 #[test]

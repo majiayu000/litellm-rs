@@ -237,6 +237,19 @@ impl Default for GatewayPricingConfig {
     }
 }
 
+impl GatewayPricingConfig {
+    /// Merge pricing configurations, with non-default overlay values taking precedence.
+    pub fn merge(mut self, other: Self) -> Self {
+        if other.source != default_pricing_source() {
+            self.source = other.source;
+        }
+        if other.allow_degraded {
+            self.allow_degraded = true;
+        }
+        self
+    }
+}
+
 fn default_pricing_source() -> Option<String> {
     // Keep the runtime default aligned with config/gateway.yaml.example.
     // Relative paths are resolved by the process working directory.
@@ -417,7 +430,7 @@ impl GatewayConfig {
         self.cache = self.cache.merge(other.cache);
         self.rate_limit = self.rate_limit.merge(other.rate_limit);
         self.enterprise = self.enterprise.merge(other.enterprise);
-        self.pricing = other.pricing;
+        self.pricing = self.pricing.merge(other.pricing);
 
         self
     }
