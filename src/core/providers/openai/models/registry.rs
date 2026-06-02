@@ -367,8 +367,8 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT54Nano
                         | OpenAIModelFamily::ComputerUse
                 ) || id.contains("vision"),
-                input_cost_per_1k_tokens: Some(input_cost),
-                output_cost_per_1k_tokens: Some(output_cost),
+                input_cost_per_1k_tokens: Some(normalize_price_per_1k(input_cost)),
+                output_cost_per_1k_tokens: Some(normalize_price_per_1k(output_cost)),
                 currency: "USD".to_string(),
                 capabilities: vec![],
                 created_at: None,
@@ -492,6 +492,10 @@ static OPENAI_REGISTRY: OnceLock<OpenAIModelRegistry> = OnceLock::new();
 /// Get global OpenAI model registry
 pub fn get_openai_registry() -> &'static OpenAIModelRegistry {
     OPENAI_REGISTRY.get_or_init(OpenAIModelRegistry::new)
+}
+
+fn normalize_price_per_1k(cost: f64) -> f64 {
+    (cost * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
 }
 
 #[cfg(test)]

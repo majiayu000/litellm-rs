@@ -180,8 +180,21 @@ impl PricingDatabase {
     fn calculate_with_pricing(&self, pricing: &ModelPricing, usage: &Usage) -> f64 {
         let mut cost = 0.0;
 
-        cost += usage.prompt_tokens as f64 * pricing.input_cost_per_token.unwrap_or(0.0);
-        cost += usage.completion_tokens as f64 * pricing.output_cost_per_token.unwrap_or(0.0);
+        let input_cost_per_token = tiered_cost_per_token(
+            pricing,
+            pricing.input_cost_per_token.unwrap_or(0.0),
+            "input_cost_per_token_above_",
+            usage.prompt_tokens,
+        );
+        let output_cost_per_token = tiered_cost_per_token(
+            pricing,
+            pricing.output_cost_per_token.unwrap_or(0.0),
+            "output_cost_per_token_above_",
+            usage.prompt_tokens,
+        );
+
+        cost += usage.prompt_tokens as f64 * input_cost_per_token;
+        cost += usage.completion_tokens as f64 * output_cost_per_token;
 
         if let Some(reasoning_tokens) = usage.reasoning_tokens {
             cost += reasoning_tokens as f64 * extra_f64(pricing, "output_cost_per_reasoning_token");
@@ -238,11 +251,11 @@ impl PricingDatabase {
                 .max_input_tokens
                 .unwrap_or_else(|| pricing.max_tokens.unwrap_or(4096)),
             max_output_length: pricing.max_output_tokens,
-            supports_streaming: true,
+            supports_streaming: pricing.supports_streaming.unwrap_or(true),
             supports_tools: pricing.supports_function_calling.unwrap_or(false),
             supports_multimodal: pricing.supports_vision.unwrap_or(false),
-            input_cost_per_1k_tokens: pricing.input_cost_per_token.map(|cost| cost * 1000.0),
-            output_cost_per_1k_tokens: pricing.output_cost_per_token.map(|cost| cost * 1000.0),
+            input_cost_per_1k_tokens: pricing.input_cost_per_token.map(price_per_token_to_per_1k),
+            output_cost_per_1k_tokens: pricing.output_cost_per_token.map(price_per_token_to_per_1k),
             currency: "USD".to_string(),
             capabilities: vec![],
             created_at: None,
@@ -283,6 +296,46 @@ fn extra_f64(pricing: &ModelPricing, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+fn tiered_cost_per_token(
+    pricing: &ModelPricing,
+    base_cost: f64,
+    key_prefix: &str,
+    prompt_tokens: u32,
+) -> f64 {
+    pricing
+        .extra
+        .iter()
+        .filter_map(|(key, value)| {
+            if !key.starts_with(key_prefix) {
+                return None;
+            }
+
+            let threshold = extract_tier_threshold(key)?;
+            if prompt_tokens > threshold {
+                value.as_f64().map(|cost| (threshold, cost))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|(threshold, _)| *threshold)
+        .map(|(_, cost)| cost)
+        .unwrap_or(base_cost)
+}
+
+fn extract_tier_threshold(key: &str) -> Option<u32> {
+    let threshold = key.split("_above_").nth(1)?.split("_tokens").next()?;
+    if let Some(number) = threshold.strip_suffix('k') {
+        number.parse::<u32>().ok().map(|value| value * 1000)
+    } else {
+        threshold.parse::<u32>().ok()
+    }
+}
+
+fn price_per_token_to_per_1k(cost_per_token: f64) -> f64 {
+    let cost_per_1k = cost_per_token * 1000.0;
+    (cost_per_1k * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
+}
+
 fn builtin_model(
     provider: &str,
     input_cost_per_token: f64,
@@ -312,9 +365,60 @@ fn builtin_model(
     }
 }
 
+fn builtin_gpt55_model(snapshot: bool) -> ModelPricing {
+    let mut model = builtin_model("openai", 0.000005, 0.00003, 1_048_576, 128_000, true, true);
+    model.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::Value::from(0.0000005),
+    );
+    model.extra.insert(
+        "input_cost_per_token_above_272k_tokens".to_string(),
+        serde_json::Value::from(0.00001),
+    );
+    model.extra.insert(
+        "output_cost_per_token_above_272k_tokens".to_string(),
+        serde_json::Value::from(0.000045),
+    );
+    model.extra.insert(
+        "cache_read_input_token_cost_above_272k_tokens".to_string(),
+        serde_json::Value::from(0.000001),
+    );
+    if snapshot {
+        model
+            .extra
+            .insert("snapshot".to_string(), serde_json::Value::from(true));
+    }
+    model
+}
+
+fn builtin_gpt55_pro_model(snapshot: bool) -> ModelPricing {
+    let mut model = builtin_model("openai", 0.00003, 0.00018, 1_048_576, 128_000, true, true);
+    model.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::Value::from(0.00003),
+    );
+    if snapshot {
+        model
+            .extra
+            .insert("snapshot".to_string(), serde_json::Value::from(true));
+    }
+    model
+}
+
 impl Default for PricingDatabase {
     fn default() -> Self {
         let mut models = HashMap::new();
+
+        models.insert("gpt-5.5".to_string(), builtin_gpt55_model(false));
+
+        models.insert("gpt-5.5-2026-04-23".to_string(), builtin_gpt55_model(true));
+
+        models.insert("gpt-5.5-pro".to_string(), builtin_gpt55_pro_model(false));
+
+        models.insert(
+            "gpt-5.5-pro-2026-04-23".to_string(),
+            builtin_gpt55_pro_model(true),
+        );
 
         models.insert(
             "gpt-4".to_string(),
@@ -489,6 +593,21 @@ mod tests {
     fn test_quick_calculate() {
         let cost = calculate_cost("gpt-3.5-turbo", 1000, 500);
         assert!(cost > 0.0);
+    }
+
+    #[test]
+    fn gpt55_shared_pricing_charges_long_context_tiers() {
+        let db = PricingDatabase::default();
+        let usage = Usage::new(300_000, 2_000);
+
+        assert!((db.calculate("gpt-5.5", &usage) - 3.09).abs() < 1e-12);
+        assert!((db.calculate_for_provider("openai", "gpt-5.5", &usage) - 3.09).abs() < 1e-12);
+
+        let Ok(shared_db) = PricingDatabase::from_default_source() else {
+            panic!("shared pricing source should load");
+        };
+        assert!((shared_db.calculate("gpt-5.5", &usage) - 3.09).abs() < 1e-12);
+        assert!((calculate_cost("gpt-5.5", 300_000, 2_000) - 3.09).abs() < 1e-12);
     }
 
     #[test]

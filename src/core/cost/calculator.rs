@@ -188,8 +188,12 @@ fn litellm_to_cost_pricing(
 
     ModelPricing {
         model: model.to_string(),
-        input_cost_per_1k_tokens: info.input_cost_per_token.unwrap_or(0.0) * 1000.0,
-        output_cost_per_1k_tokens: info.output_cost_per_token.unwrap_or(0.0) * 1000.0,
+        input_cost_per_1k_tokens: price_per_token_to_per_1k(
+            info.input_cost_per_token.unwrap_or(0.0),
+        ),
+        output_cost_per_1k_tokens: price_per_token_to_per_1k(
+            info.output_cost_per_token.unwrap_or(0.0),
+        ),
         cache_read_input_token_cost: extra_token_cost_per_1k(info, "cache_read_input_token_cost"),
         cache_creation_input_token_cost: extra_token_cost_per_1k(
             info,
@@ -203,7 +207,7 @@ fn litellm_to_cost_pricing(
         video_cost_per_second: extra_f64(info, "video_cost_per_second"),
         audio_cost_per_second: extra_f64(info, "audio_cost_per_second"),
         cost_per_image: None,
-        tiered_pricing: None,
+        tiered_pricing: extra_tiered_pricing_per_1k(info),
         batch_discount: extra_f64(info, "batch_discount"),
         currency: "USD".to_string(),
         updated_at: Utc::now(),
@@ -218,7 +222,41 @@ fn extra_token_cost_per_1k(
     info: &crate::core::pricing::LiteLLMModelInfo,
     key: &str,
 ) -> Option<f64> {
-    extra_f64(info, key).map(|cost_per_token| cost_per_token * 1000.0)
+    extra_f64(info, key).map(price_per_token_to_per_1k)
+}
+
+fn extra_tiered_pricing_per_1k(
+    info: &crate::core::pricing::LiteLLMModelInfo,
+) -> Option<std::collections::HashMap<String, f64>> {
+    let tiered = info
+        .extra
+        .iter()
+        .filter_map(|(key, value)| {
+            let is_token_tier = key.starts_with("input_cost_per_token_above_")
+                || key.starts_with("output_cost_per_token_above_")
+                || key.starts_with("cache_creation_input_token_cost_above_")
+                || key.starts_with("cache_read_input_token_cost_above_");
+
+            if is_token_tier {
+                value
+                    .as_f64()
+                    .map(|cost_per_token| (key.clone(), price_per_token_to_per_1k(cost_per_token)))
+            } else {
+                None
+            }
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    if tiered.is_empty() {
+        None
+    } else {
+        Some(tiered)
+    }
+}
+
+fn price_per_token_to_per_1k(cost_per_token: f64) -> f64 {
+    let cost_per_1k = cost_per_token * 1000.0;
+    (cost_per_1k * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
 }
 
 /// Calculate input cost
