@@ -266,13 +266,16 @@ fn test_get_supported_openai_params_gpt55_pro() {
 #[test]
 fn test_get_supported_openai_params_advertises_forwarded_chat_fields() {
     let provider = create_test_provider();
-    let params = provider.get_supported_openai_params("gpt-4o");
 
-    for forwarded_param in ["store", "metadata", "service_tier"] {
-        assert!(
-            params.contains(&forwarded_param),
-            "supported params should advertise forwarded field {forwarded_param}"
-        );
+    for model in ["gpt-4o", "gpt-4o-mini"] {
+        let params = provider.get_supported_openai_params(model);
+
+        for forwarded_param in ["store", "metadata", "service_tier"] {
+            assert!(
+                params.contains(&forwarded_param),
+                "{model} supported params should advertise forwarded field {forwarded_param}"
+            );
+        }
     }
 }
 

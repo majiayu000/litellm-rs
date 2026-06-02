@@ -549,7 +549,8 @@ impl LLMProvider for OpenAIProvider {
                 ],
                 super::models::OpenAIModelFamily::GPT4
                 | super::models::OpenAIModelFamily::GPT4Turbo
-                | super::models::OpenAIModelFamily::GPT4O => &[
+                | super::models::OpenAIModelFamily::GPT4O
+                | super::models::OpenAIModelFamily::GPT4OMini => &[
                     "messages",
                     "model",
                     "temperature",
