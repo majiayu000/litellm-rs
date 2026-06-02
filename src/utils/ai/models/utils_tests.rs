@@ -47,6 +47,16 @@ fn test_get_model_capabilities_gpt55_matches_catalog_shape() {
     assert_eq!(pro_caps.context_window, Some(1_048_576));
     assert_eq!(pro_caps.max_tokens, Some(128000));
     assert!(!pro_caps.supports_streaming);
+
+    let prefixed_base_caps = ModelUtils::get_model_capabilities("openai/gpt-5.5");
+    assert_eq!(prefixed_base_caps.context_window, Some(1_048_576));
+    assert_eq!(prefixed_base_caps.max_tokens, Some(128000));
+    assert!(prefixed_base_caps.supports_streaming);
+
+    let prefixed_pro_caps = ModelUtils::get_model_capabilities("openai/gpt-5.5-pro");
+    assert_eq!(prefixed_pro_caps.context_window, Some(1_048_576));
+    assert_eq!(prefixed_pro_caps.max_tokens, Some(128000));
+    assert!(!prefixed_pro_caps.supports_streaming);
 }
 
 #[test]

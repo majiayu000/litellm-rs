@@ -7,7 +7,11 @@ pub struct ModelUtils;
 
 impl ModelUtils {
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
-        let model_lower = model.to_lowercase();
+        let model_lower = model
+            .to_lowercase()
+            .rsplit_once('/')
+            .map(|(_, model)| model.to_string())
+            .unwrap_or_else(|| model.to_lowercase());
 
         if model_lower.starts_with("gpt-5") {
             ModelCapabilities {
