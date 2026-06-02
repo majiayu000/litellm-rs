@@ -10,14 +10,15 @@ env:
   RELEASE_FEATURES: postgres,sqlite,redis,s3,metrics,tracing,websockets,analytics,providers-extra,providers-extended,mcp-validation
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   # Create GitHub release
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
@@ -54,6 +55,8 @@ jobs:
     name: Build Release
     needs: create-release
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     continue-on-error: ${{ matrix.allow_failure }}
     strategy:
       fail-fast: false
@@ -149,6 +152,9 @@ jobs:
     name: Docker Release
     needs: create-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
     - name: Check Docker credentials
       id: docker_credentials
