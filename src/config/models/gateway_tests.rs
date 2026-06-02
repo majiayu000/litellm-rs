@@ -576,8 +576,10 @@ fn test_gateway_config_merge_pricing_uses_explicit_default_overlay_source() {
     let mut base = create_valid_config();
     base.pricing.source = None;
 
-    let mut other = GatewayConfig::default();
-    other.pricing = pricing_from_yaml(&format!("source: \"{}\"", DEFAULT_PRICING_SOURCE));
+    let other = GatewayConfig {
+        pricing: pricing_from_yaml(&format!("source: \"{}\"", DEFAULT_PRICING_SOURCE)),
+        ..Default::default()
+    };
 
     let merged = base.merge(other);
 
@@ -629,8 +631,10 @@ fn test_gateway_config_merge_pricing_uses_explicit_allow_degraded_false() {
     let mut base = create_valid_config();
     base.pricing.allow_degraded = true;
 
-    let mut other = GatewayConfig::default();
-    other.pricing = pricing_from_yaml("allow_degraded: false");
+    let other = GatewayConfig {
+        pricing: pricing_from_yaml("allow_degraded: false"),
+        ..Default::default()
+    };
 
     let merged = base.merge(other);
 

@@ -233,15 +233,11 @@ struct GatewayPricingMergeFields {
     allow_degraded: bool,
 }
 
+#[derive(Default)]
 enum ConfigField<T> {
+    #[default]
     Missing,
     Present(T),
-}
-
-impl<T> Default for ConfigField<T> {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 impl<'de, T> Deserialize<'de> for ConfigField<T>
