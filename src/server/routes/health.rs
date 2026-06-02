@@ -264,7 +264,7 @@ struct DetailedHealthStatus {
 #[derive(Debug, Clone, serde::Serialize)]
 struct ProviderHealthStatus {
     /// Aggregate label across all configured providers. One of `healthy`,
-    /// `degraded`, `unknown`, `not_configured`.
+    /// `degraded`, `unknown`, `disabled`, `not_configured`.
     aggregate: Cow<'static, str>,
     healthy_providers: usize,
     total_providers: usize,
@@ -281,6 +281,46 @@ struct ProviderHealth {
     response_time_ms: Option<u64>,
     last_check: chrono::DateTime<chrono::Utc>,
     error_message: Option<String>,
+}
+
+impl ProviderHealthStatus {
+    fn from_details(provider_details: Vec<ProviderHealth>) -> Self {
+        let total = provider_details.len();
+        let enabled_count = provider_details
+            .iter()
+            .filter(|provider| provider.status != "disabled")
+            .count();
+        let healthy_count = provider_details
+            .iter()
+            .filter(|provider| provider.status == "healthy")
+            .count();
+        let aggregate = Self::aggregate_for_details(&provider_details, enabled_count);
+
+        Self {
+            aggregate,
+            healthy_providers: healthy_count,
+            total_providers: total,
+            enabled_providers: enabled_count,
+            provider_details,
+        }
+    }
+
+    fn aggregate_for_details(
+        provider_details: &[ProviderHealth],
+        enabled_count: usize,
+    ) -> Cow<'static, str> {
+        if provider_details.is_empty() {
+            Cow::Borrowed("not_configured")
+        } else if enabled_count == 0 {
+            Cow::Borrowed("disabled")
+        } else if provider_details.iter().any(|p| p.status == "unhealthy") {
+            Cow::Borrowed("degraded")
+        } else if provider_details.iter().any(|p| p.status == "unknown") {
+            Cow::Borrowed("unknown")
+        } else {
+            Cow::Borrowed("healthy")
+        }
+    }
 }
 
 /// System status information
@@ -329,26 +369,17 @@ struct ReadinessVerdict {
 async fn collect_component_health(
     state: &AppState,
 ) -> (crate::storage::StorageHealthStatus, ProviderHealthStatus) {
-    let cfg = state.config.load();
-
-    let storage_health = if cfg.storage().database.url.is_empty() {
-        crate::storage::StorageHealthStatus {
-            overall: false,
-            database: false,
-            redis: false,
-            files: false,
-            vector: false,
-        }
-    } else {
-        match state.storage.health_check().await {
-            Ok(status) => status,
-            Err(_) => crate::storage::StorageHealthStatus {
+    let storage_health = match state.storage.health_check().await {
+        Ok(status) => status,
+        Err(e) => {
+            error!("Storage health check failed: {}", e);
+            crate::storage::StorageHealthStatus {
                 overall: false,
                 database: false,
                 redis: false,
                 files: false,
                 vector: false,
-            },
+            }
         }
     };
 
@@ -395,34 +426,23 @@ fn aggregate_readiness(
         };
     }
 
-    // Among enabled providers, any non-healthy status (unhealthy OR unknown)
-    // blocks readiness. Disabled providers are filtered out upstream.
-    let mut has_unhealthy = false;
-    let mut has_unknown = false;
-    for p in &provider_health.provider_details {
-        match p.status.as_ref() {
-            "unhealthy" => has_unhealthy = true,
-            "unknown" => has_unknown = true,
-            _ => {}
-        }
-    }
-
-    if has_unhealthy {
-        return ReadinessVerdict {
+    match provider_health.aggregate.as_ref() {
+        "healthy" => ReadinessVerdict {
+            ready: true,
+            reason: Cow::Borrowed("ok"),
+        },
+        "degraded" => ReadinessVerdict {
             ready: false,
             reason: Cow::Borrowed("one or more providers unhealthy"),
-        };
-    }
-    if has_unknown {
-        return ReadinessVerdict {
+        },
+        "unknown" => ReadinessVerdict {
             ready: false,
             reason: Cow::Borrowed("one or more providers have unknown status"),
-        };
-    }
-
-    ReadinessVerdict {
-        ready: true,
-        reason: Cow::Borrowed("ok"),
+        },
+        _ => ReadinessVerdict {
+            ready: false,
+            reason: Cow::Borrowed("provider health unavailable"),
+        },
     }
 }
 
@@ -437,24 +457,17 @@ async fn check_provider_health(
 ) -> Result<ProviderHealthStatus, crate::utils::error::gateway_error::GatewayError> {
     let cfg = state.config.load();
     let mut provider_details = Vec::new();
-    let mut healthy_count = 0;
-    let mut enabled_count = 0;
 
     for provider_config in cfg.providers() {
         let (status, error_message): (Cow<'static, str>, Option<String>) =
             if !provider_config.enabled {
                 (Cow::Borrowed("disabled"), None)
             } else {
-                enabled_count += 1;
                 (
                     Cow::Borrowed("unknown"),
                     Some("Provider health check not implemented".to_string()),
                 )
             };
-
-        if status == "healthy" {
-            healthy_count += 1;
-        }
 
         provider_details.push(ProviderHealth {
             name: provider_config.name.clone(),
@@ -465,26 +478,7 @@ async fn check_provider_health(
         });
     }
 
-    let total = cfg.providers().len();
-    let aggregate = if total == 0 {
-        Cow::Borrowed("not_configured")
-    } else if enabled_count == 0 {
-        Cow::Borrowed("disabled")
-    } else if provider_details.iter().any(|p| p.status == "unhealthy") {
-        Cow::Borrowed("degraded")
-    } else if provider_details.iter().any(|p| p.status == "unknown") {
-        Cow::Borrowed("unknown")
-    } else {
-        Cow::Borrowed("healthy")
-    };
-
-    Ok(ProviderHealthStatus {
-        aggregate,
-        healthy_providers: healthy_count,
-        total_providers: total,
-        enabled_providers: enabled_count,
-        provider_details,
-    })
+    Ok(ProviderHealthStatus::from_details(provider_details))
 }
 
 /// Get system uptime in seconds

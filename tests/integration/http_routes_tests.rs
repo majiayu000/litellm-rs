@@ -8,12 +8,25 @@ mod tests {
     use actix_web::http::StatusCode;
     use actix_web::{App, test, web};
     use litellm_rs::Config;
+    use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use litellm_rs::server::middleware::AuthMiddleware;
     use litellm_rs::server::routes;
     use litellm_rs::server::state::AppState;
     use serde_json::Value;
     use std::sync::Arc;
+
+    async fn build_state_with_config(config: Config) -> AppState {
+        let server = match GatewayHttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(err) => panic!("failed to build HTTP server for integration test: {err}"),
+        };
+        let state = server.state().clone();
+        if let Err(err) = state.storage.migrate().await {
+            panic!("failed to run in-memory DB migrations: {err}");
+        }
+        state
+    }
 
     /// Build an AppState with auth enabled (both JWT and API key).
     async fn build_auth_enabled_state() -> AppState {
@@ -25,16 +38,7 @@ mod tests {
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
 
-        let server = GatewayHttpServer::new(&config)
-            .await
-            .expect("failed to build HTTP server for integration test");
-        let state = server.state().clone();
-        state
-            .storage
-            .migrate()
-            .await
-            .expect("failed to run in-memory DB migrations");
-        state
+        build_state_with_config(config).await
     }
 
     /// Build an AppState with auth disabled.
@@ -46,16 +50,7 @@ mod tests {
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
 
-        let server = GatewayHttpServer::new(&config)
-            .await
-            .expect("failed to build HTTP server for integration test");
-        let state = server.state().clone();
-        state
-            .storage
-            .migrate()
-            .await
-            .expect("failed to run in-memory DB migrations");
-        state
+        build_state_with_config(config).await
     }
 
     /// Construct an actix-web test app with AuthMiddleware and route
@@ -116,6 +111,78 @@ mod tests {
 
         let body: Value = test::read_body_json(resp).await;
         assert!(body["data"]["timestamp"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_readiness_reports_storage_failure_from_storage_layer() {
+        let tempdir = match tempfile::tempdir() {
+            Ok(tempdir) => tempdir,
+            Err(err) => panic!("failed to create temp dir: {err}"),
+        };
+        let storage_path = tempdir.path().join("files");
+
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.storage.files.local_path = Some(storage_path.to_string_lossy().into_owned());
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+
+        let state = build_state_with_config(config).await;
+        if let Err(err) = std::fs::remove_dir_all(&storage_path) {
+            panic!("failed to remove storage dir: {err}");
+        }
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::get().uri("/health/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["data"]["ready"], false);
+        assert_eq!(body["data"]["reason"], "storage unhealthy");
+        assert_eq!(body["data"]["storage"]["overall"], false);
+        assert_eq!(body["data"]["storage"]["files"], false);
+    }
+
+    #[tokio::test]
+    async fn test_readiness_reports_unknown_enabled_provider() {
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.database.url.clear();
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.providers.push(ProviderConfig {
+            name: "openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["gpt-4".to_string()],
+            ..ProviderConfig::default()
+        });
+
+        let state = build_state_with_config(config).await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::get().uri("/health/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["data"]["ready"], false);
+        assert_eq!(
+            body["data"]["reason"],
+            "one or more providers have unknown status"
+        );
+        assert_eq!(body["data"]["storage"]["overall"], true);
+        assert_eq!(body["data"]["providers"]["aggregate"], "unknown");
+        assert_eq!(body["data"]["providers"]["enabled_providers"], 1);
     }
 
     // ---------------------------------------------------------------
