@@ -211,11 +211,9 @@ fn load_providers_from_env() -> crate::utils::error::gateway_error::Result<Vec<P
 }
 
 /// Pricing source configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GatewayPricingConfig {
     /// Optional pricing source path/URL used by PricingService::new
-    #[serde(default = "default_pricing_source")]
     pub source: Option<String>,
     /// When the pricing source is configured and the initial load fails, allow
     /// the gateway to keep running without pricing data instead of failing
@@ -224,8 +222,85 @@ pub struct GatewayPricingConfig {
     /// Defaults to `false` so a configured-but-broken pricing source is
     /// surfaced at startup. A `true` value documents that the gateway may
     /// serve traffic without cost accounting until pricing data is refreshed.
-    #[serde(default)]
     pub allow_degraded: bool,
+    #[serde(skip)]
+    merge_fields: GatewayPricingMergeFields,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct GatewayPricingMergeFields {
+    source: bool,
+    allow_degraded: bool,
+}
+
+enum ConfigField<T> {
+    Missing,
+    Present(T),
+}
+
+impl<T> Default for ConfigField<T> {
+    fn default() -> Self {
+        Self::Missing
+    }
+}
+
+impl<'de, T> Deserialize<'de> for ConfigField<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        T::deserialize(deserializer).map(Self::Present)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GatewayPricingConfigWire {
+    #[serde(default)]
+    source: ConfigField<Option<String>>,
+    #[serde(default)]
+    allow_degraded: ConfigField<bool>,
+}
+
+impl<'de> Deserialize<'de> for GatewayPricingConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = GatewayPricingConfigWire::deserialize(deserializer)?;
+        let mut merge_fields = GatewayPricingMergeFields::default();
+
+        let source = match wire.source {
+            ConfigField::Present(source) => {
+                merge_fields.source = true;
+                source
+            }
+            ConfigField::Missing => default_pricing_source(),
+        };
+
+        let allow_degraded = match wire.allow_degraded {
+            ConfigField::Present(allow_degraded) => {
+                merge_fields.allow_degraded = true;
+                allow_degraded
+            }
+            ConfigField::Missing => false,
+        };
+
+        Ok(Self {
+            source,
+            allow_degraded,
+            merge_fields,
+        })
+    }
+}
+
+impl PartialEq for GatewayPricingConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source && self.allow_degraded == other.allow_degraded
+    }
 }
 
 impl Default for GatewayPricingConfig {
@@ -233,20 +308,32 @@ impl Default for GatewayPricingConfig {
         Self {
             source: default_pricing_source(),
             allow_degraded: false,
+            merge_fields: GatewayPricingMergeFields::default(),
         }
     }
 }
 
 impl GatewayPricingConfig {
-    /// Merge pricing configurations, with non-default overlay values taking precedence.
+    /// Merge pricing configurations, with explicit overlay values taking precedence.
     pub fn merge(mut self, other: Self) -> Self {
-        if other.source != default_pricing_source() {
+        let source_overridden =
+            other.merge_fields.source || other.source != default_pricing_source();
+        if source_overridden {
             self.source = other.source;
         }
-        if other.allow_degraded {
-            self.allow_degraded = true;
+
+        let allow_degraded_overridden = other.merge_fields.allow_degraded || other.allow_degraded;
+        if allow_degraded_overridden {
+            self.allow_degraded = other.allow_degraded;
         }
+
+        self.merge_fields.source |= source_overridden;
+        self.merge_fields.allow_degraded |= allow_degraded_overridden;
         self
+    }
+
+    fn mark_source_explicit_for_merge(&mut self) {
+        self.merge_fields.source = true;
     }
 }
 
@@ -390,6 +477,7 @@ impl GatewayConfig {
 
         if let Some(pricing_source) = env_var(ENV_PRICING_SOURCE) {
             config.pricing.source = Some(pricing_source);
+            config.pricing.mark_source_explicit_for_merge();
         }
 
         if let Some(enabled) = parse_env_bool(ENV_CACHE_ENABLED)? {

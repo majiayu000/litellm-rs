@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-const TEST_ENV_KEYS: [&str; 23] = [
+const TEST_ENV_KEYS: [&str; 24] = [
     ENV_HOST,
     ENV_PORT,
     ENV_WORKERS,
@@ -28,6 +28,7 @@ const TEST_ENV_KEYS: [&str; 23] = [
     "LITELLM_PROVIDER_OPENAI_MODELS",
     "LITELLM_PROVIDER_OPENAI_TAGS",
     "LITELLM_PROVIDER_OPENAI_MAX_RETRIES",
+    "LITELLM_PROVIDER_VLLM_TYPE",
 ];
 
 fn clear_test_env() {
@@ -54,6 +55,13 @@ fn create_valid_config() -> GatewayConfig {
     config.storage.database.url = "postgres://localhost/test".to_string();
     config.auth.jwt_secret = "StrongJwtSecretWithMixedCaseAndNumbers1234!".to_string();
     config
+}
+
+fn pricing_from_yaml(yaml: &str) -> GatewayPricingConfig {
+    match serde_yml::from_str(yaml) {
+        Ok(pricing) => pricing,
+        Err(error) => panic!("expected pricing yaml to parse: {}", error),
+    }
 }
 
 // ==================== GatewayConfig Default Tests ====================
@@ -564,6 +572,49 @@ fn test_gateway_config_merge_pricing_uses_explicit_overlay_source() {
 }
 
 #[test]
+fn test_gateway_config_merge_pricing_uses_explicit_default_overlay_source() {
+    let mut base = create_valid_config();
+    base.pricing.source = None;
+
+    let mut other = GatewayConfig::default();
+    other.pricing = pricing_from_yaml(&format!("source: \"{}\"", DEFAULT_PRICING_SOURCE));
+
+    let merged = base.merge(other);
+
+    assert_eq!(
+        merged.pricing.source.as_deref(),
+        Some(DEFAULT_PRICING_SOURCE)
+    );
+}
+
+#[test]
+fn test_gateway_config_merge_pricing_uses_env_default_overlay_source() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    clear_test_env();
+    unsafe {
+        env::set_var(ENV_ENABLE_JWT, "false");
+        env::set_var(ENV_PROVIDERS, "vllm");
+        env::set_var("LITELLM_PROVIDER_VLLM_TYPE", "vllm");
+        env::set_var(ENV_PRICING_SOURCE, DEFAULT_PRICING_SOURCE);
+    }
+
+    let mut base = create_valid_config();
+    base.pricing.source = None;
+    let other = match GatewayConfig::from_env() {
+        Ok(config) => config,
+        Err(error) => panic!("expected GatewayConfig::from_env() to succeed: {}", error),
+    };
+
+    let merged = base.merge(other);
+
+    assert_eq!(
+        merged.pricing.source.as_deref(),
+        Some(DEFAULT_PRICING_SOURCE)
+    );
+    clear_test_env();
+}
+
+#[test]
 fn test_gateway_config_merge_pricing_preserves_allow_degraded_for_default_overlay() {
     let mut base = create_valid_config();
     base.pricing.allow_degraded = true;
@@ -571,6 +622,19 @@ fn test_gateway_config_merge_pricing_preserves_allow_degraded_for_default_overla
     let merged = base.merge(GatewayConfig::default());
 
     assert!(merged.pricing.allow_degraded);
+}
+
+#[test]
+fn test_gateway_config_merge_pricing_uses_explicit_allow_degraded_false() {
+    let mut base = create_valid_config();
+    base.pricing.allow_degraded = true;
+
+    let mut other = GatewayConfig::default();
+    other.pricing = pricing_from_yaml("allow_degraded: false");
+
+    let merged = base.merge(other);
+
+    assert!(!merged.pricing.allow_degraded);
 }
 
 // ==================== GatewayConfig Serialization Tests ====================
