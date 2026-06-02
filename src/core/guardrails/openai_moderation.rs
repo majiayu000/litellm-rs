@@ -62,8 +62,9 @@ impl OpenAIModerationGuardrail {
         if !response.status().is_success() {
             let status = response.status();
             let response_body_bytes = response
-                .content_length()
-                .map_or_else(|| "unknown".to_string(), |bytes| bytes.to_string());
+                .bytes()
+                .await
+                .map_or_else(|_| "unknown".to_string(), |bytes| bytes.len().to_string());
             return Err(GuardrailError::Api(format!(
                 "OpenAI API error: status={} response_body_bytes={}",
                 status, response_body_bytes
@@ -232,6 +233,7 @@ mod tests {
     async fn start_moderation_error_server(
         status_line: &str,
         body: &str,
+        include_content_length: bool,
     ) -> std::io::Result<String> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -250,11 +252,14 @@ mod tests {
                     error
                 );
             }
+            let content_length_header = if include_content_length {
+                format!("Content-Length: {}\r\n", body.len())
+            } else {
+                String::new()
+            };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                status_line,
-                body.len(),
-                body
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Connection: close\r\n\r\n{}",
+                status_line, content_length_header, body
             );
             if let Err(error) = stream.write_all(response.as_bytes()).await {
                 panic!(
@@ -387,7 +392,7 @@ mod tests {
     async fn test_non_success_api_error_redacts_response_body()
     -> Result<(), Box<dyn std::error::Error>> {
         let body = r#"{"error":{"message":"sensitive-upstream-token should not be logged"}}"#;
-        let base_url = start_moderation_error_server("429 Too Many Requests", body).await?;
+        let base_url = start_moderation_error_server("429 Too Many Requests", body, false).await?;
         let config = OpenAIModerationConfig {
             enabled: true,
             api_key: Some("test-key".to_string()),
