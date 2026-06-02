@@ -719,10 +719,19 @@ fn test_model_pricing() {
 #[test]
 fn test_model_pricing_prefers_shared_cost_source() {
     let provider = create_test_provider();
+    let tolerance = 1e-12;
 
-    assert_eq!(
-        provider.get_model_pricing("gpt-4o-mini"),
-        Some((0.00015, 0.0006))
+    let Some((input_cost, output_cost)) = provider.get_model_pricing("gpt-4o-mini") else {
+        panic!("gpt-4o-mini pricing should resolve from shared cost source");
+    };
+
+    assert!(
+        (input_cost - 0.00015).abs() <= tolerance,
+        "expected input cost near 0.00015, got {input_cost}"
+    );
+    assert!(
+        (output_cost - 0.0006).abs() <= tolerance,
+        "expected output cost near 0.0006, got {output_cost}"
     );
 }
 
