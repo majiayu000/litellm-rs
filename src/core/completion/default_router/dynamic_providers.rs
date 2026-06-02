@@ -191,6 +191,10 @@ fn is_openai_compatible_api_key_fallback(route: &DynamicProviderRoute<'_>) -> bo
     )
 }
 
+fn uses_dynamic_openai_like_provider(route: &DynamicProviderRoute<'_>) -> bool {
+    matches!(route.provider_type, "xai" | "groq")
+}
+
 fn custom_api_base_api_key_fallback(
     options: &CompletionOptions,
     route: &DynamicProviderRoute<'_>,
@@ -252,7 +256,7 @@ impl DefaultRouter {
                 )
                 .await?
             }
-            "xai" => {
+            _ if uses_dynamic_openai_like_provider(&route) => {
                 self.create_dynamic_openai_like(&route, &api_key, chat_request, context, options)
                     .await?
             }
@@ -312,7 +316,7 @@ impl DefaultRouter {
                 )
                 .await?
             }
-            "xai" => {
+            _ if uses_dynamic_openai_like_provider(&route) => {
                 self.create_dynamic_openai_like_stream(
                     &route,
                     &api_key,

@@ -289,6 +289,44 @@ fn test_dynamic_xai_uses_openai_like_config() {
 }
 
 #[test]
+fn test_dynamic_groq_uses_openai_like_config() {
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("x-proxy-route".to_string(), "tenant-a".to_string());
+    headers.insert("x-request-source".to_string(), "stream-test".to_string());
+    let options = CompletionOptions {
+        headers: Some(headers),
+        organization: Some("org-groq-test".to_string()),
+        timeout: Some(29),
+        ..CompletionOptions::default()
+    };
+    let Some(route) = resolve_dynamic_provider_route("groq/llama-3.3-70b-versatile", &options)
+    else {
+        panic!("Groq route should resolve");
+    };
+
+    assert!(uses_dynamic_openai_like_provider(&route));
+
+    let config = dynamic_openai_like_config("sk-test", &route.api_base, &route, &options);
+
+    assert_eq!(config.provider_name, "groq");
+    assert_eq!(config.base.api_key.as_deref(), Some("sk-test"));
+    assert_eq!(config.base.timeout, 29);
+    assert_eq!(
+        config.base.headers.get("x-proxy-route").map(String::as_str),
+        Some("tenant-a")
+    );
+    assert_eq!(
+        config
+            .base
+            .headers
+            .get("x-request-source")
+            .map(String::as_str),
+        Some("stream-test")
+    );
+    assert_eq!(config.base.organization.as_deref(), Some("org-groq-test"));
+}
+
+#[test]
 fn test_xai_api_base_override_stays_named_dynamic_route() {
     let options = CompletionOptions {
         api_base: Some("http://localhost:5567/v1".to_string()),
