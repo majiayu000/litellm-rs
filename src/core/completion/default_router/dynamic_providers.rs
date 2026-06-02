@@ -144,12 +144,15 @@ fn resolve_dynamic_provider_api_key(
     route: &DynamicProviderRoute<'_>,
 ) -> Option<String> {
     options.api_key.clone().or_else(|| {
-        custom_api_base_api_key_fallback(
-            options,
-            route,
-            std::env::var("OPENAI_API_KEY").ok(),
-            dynamic_provider_api_key(route),
-        )
+        let provider_api_key = dynamic_provider_api_key(route);
+        provider_api_key.clone().or_else(|| {
+            custom_api_base_api_key_fallback(
+                options,
+                route,
+                std::env::var("OPENAI_API_KEY").ok(),
+                provider_api_key,
+            )
+        })
     })
 }
 
