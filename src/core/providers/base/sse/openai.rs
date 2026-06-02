@@ -73,9 +73,19 @@ impl SSETransformer for OpenAICompatibleTransformer {
                     format!("Failed to parse delta: {}", e),
                 )
             })?;
-            if let Some(Value::String(reasoning_content)) = delta.get("reasoning_content") {
+            let reasoning = delta
+                .get("reasoning_content")
+                .and_then(Value::as_str)
+                .filter(|reasoning| !reasoning.is_empty())
+                .or_else(|| {
+                    delta
+                        .get("reasoning")
+                        .and_then(Value::as_str)
+                        .filter(|reasoning| !reasoning.is_empty())
+                });
+            if let Some(reasoning) = reasoning {
                 delta_obj.thinking = Some(ThinkingDelta {
-                    content: Some(reasoning_content.clone()),
+                    content: Some(reasoning.to_string()),
                     ..Default::default()
                 });
             }

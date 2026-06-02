@@ -424,6 +424,77 @@ mod tests {
     }
 
     #[test]
+    fn test_openai_transformer_reasoning_to_thinking() {
+        let transformer = OpenAICompatibleTransformer::new("test");
+
+        let json_data = r#"{
+            "id": "test-id-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "openai-reasoning",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "Answer",
+                    "reasoning": "openai chain-of-thought"
+                },
+                "finish_reason": null
+            }]
+        }"#;
+
+        let result = match transformer.transform_chunk(json_data) {
+            Ok(Some(result)) => result,
+            Ok(None) => panic!("SSE chunk should produce a result"),
+            Err(error) => panic!("SSE chunk transformation should succeed: {error}"),
+        };
+        assert_eq!(
+            result.choices[0]
+                .delta
+                .thinking
+                .as_ref()
+                .and_then(|t| t.content.as_ref())
+                .map(String::as_str),
+            Some("openai chain-of-thought")
+        );
+    }
+
+    #[test]
+    fn test_openai_transformer_empty_reasoning_content_falls_back_to_reasoning() {
+        let transformer = OpenAICompatibleTransformer::new("test");
+
+        let json_data = r#"{
+            "id": "test-id-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "openai-reasoning",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "Answer",
+                    "reasoning_content": "",
+                    "reasoning": "fallback chain-of-thought"
+                },
+                "finish_reason": null
+            }]
+        }"#;
+
+        let result = match transformer.transform_chunk(json_data) {
+            Ok(Some(result)) => result,
+            Ok(None) => panic!("SSE chunk should produce a result"),
+            Err(error) => panic!("SSE chunk transformation should succeed: {error}"),
+        };
+        assert_eq!(
+            result.choices[0]
+                .delta
+                .thinking
+                .as_ref()
+                .and_then(|t| t.content.as_ref())
+                .map(String::as_str),
+            Some("fallback chain-of-thought")
+        );
+    }
+
+    #[test]
     fn test_anthropic_stream_tool_use_deltas() {
         let transformer = AnthropicTransformer::new("claude-test");
 
