@@ -48,7 +48,7 @@ because provider model catalogs change frequently.
 | Provider | Repository evidence | Current-source delta | Priority |
 | --- | --- | --- | --- |
 | OpenAI | `src/core/providers/openai/models/static_models.rs` includes GPT-5.4 family, GPT image/audio/realtime 1.5, and many dated GPT-5 variants. | Official OpenAI sources now list GPT-5.5 as current flagship and include API model IDs such as `gpt-5.5` and `gpt-5.5-pro`; the repo has no GPT-5.5 entries. Treat the separate Instant API alias as `chat-latest`, not as a GPT-5.5-prefixed model ID. | P1 |
-| Anthropic | `src/core/providers/anthropic/models.rs` and `src/core/providers/anthropic/models/catalog.rs` already include Claude Opus 4.7, its latest alias, pricing, and focused tests. | No static catalog gap was confirmed for Claude Opus 4.7. Follow-up work should verify account and region availability before enabling or documenting live runtime support claims. | P2 |
+| Anthropic | `src/core/providers/anthropic/models.rs` and `src/core/providers/anthropic/models/catalog.rs` include Claude Opus 4.7, its latest alias, pricing, and focused tests. | Official Anthropic docs now recommend Claude Opus 4.8 (`claude-opus-4-8`) as the highest-capability model; the repo has no Opus 4.8 catalog/docs coverage yet. | P1 |
 | Gemini | `src/core/providers/gemini/models.rs` includes Gemini 3.1 and older Gemini 3.0 / 2.5 entries; no `gemini-3.5-flash` was found. | Official Gemini API docs expose a current Gemini 3.5 family path, including Gemini 3.5 Flash. | P1 |
 | Cohere | `src/core/providers/cohere/provider.rs` lists Command R/R+, legacy `command`, Embed v3, and Rerank v3. | Official Cohere docs list Command A generation, Embed v4, and Rerank v4 families; old `command` models are deprecated in Cohere docs. | P1 |
 | DeepSeek | `docs/providers/deepseek.md` and pricing fallbacks describe DeepSeek V3.1 aliases, `deepseek-chat`, and `deepseek-reasoner`. | Official DeepSeek docs list `deepseek-v4-flash` and `deepseek-v4-pro`, with legacy `deepseek-chat` / `deepseek-reasoner` scheduled for deprecation on 2026-07-24. | P1 |
@@ -85,13 +85,16 @@ because provider model catalogs change frequently.
   - `src/core/providers/openai/models/static_models.rs`
   - `src/core/providers/openai/models/registry.rs`
   - `src/core/providers/openai/models/registry_types.rs`
+  - `src/core/cost/calculator/pricing.rs`
+  - `src/core/cost/utils.rs`
+  - `src/config/builder/presets.rs`
   - `src/core/providers/anthropic/models.rs`
   - related provider tests and docs
 - Changes:
   - Add GPT-5.5 canonical and alias entries from official OpenAI sources, without inventing undocumented aliases such as `gpt-5.5-chat-latest`.
   - Update OpenAI registry family detection, capability matching, and defaults so helper behavior matches the new static catalog entries.
-  - Verify Claude Opus 4.7 account and region availability before enabling live
-    runtime support claims, and keep docs aligned with the existing catalog entry.
+  - Update OpenAI pricing fallbacks, model-category helpers, and config presets so runtime cost estimation and generated configs do not keep stale GPT-5.4-only defaults.
+  - Add Claude Opus 4.8 catalog/docs coverage from official Anthropic docs, then verify account and region availability before enabling live runtime support claims.
   - Keep GPT-5.4 and Claude 4.6 entries routable unless upstream deprecates them.
 - Tests:
   - `cargo check`
@@ -103,10 +106,12 @@ because provider model catalogs change frequently.
 - Target files:
   - `src/core/providers/gemini/models.rs`
   - `src/core/providers/cohere/provider.rs`
+  - `src/core/providers/cohere/config.rs`
   - related provider tests and docs
 - Changes:
   - Add Gemini 3.5 Flash/current Gemini 3.5 entries confirmed by Google docs.
-  - Add Cohere Command A, Embed v4, and Rerank v4 entries.
+  - Add Cohere Command A, Command A+ (`command-a-plus-05-2026`), Embed v4, and Rerank v4 entries.
+  - Route Cohere Rerank v4 requests through the documented v2 rerank endpoint instead of only updating the static model list.
   - Mark or document deprecated Cohere legacy `command` models.
 - Tests:
   - `cargo check`
@@ -118,9 +123,11 @@ because provider model catalogs change frequently.
 - Target files:
   - `docs/providers/deepseek.md`
   - `src/core/cost/calculator/pricing.rs`
+  - `src/core/providers/openai_like/models.rs`
   - DeepSeek provider tests or registry tests
 - Changes:
   - Add `deepseek-v4-flash` and `deepseek-v4-pro` docs/pricing metadata where official pricing is available.
+  - Add DeepSeek V4 runtime model info for the OpenAI-like provider path so provider-level `calculate_cost` does not return zero for known DeepSeek V4 IDs.
   - Document `deepseek-chat` and `deepseek-reasoner` as legacy aliases with the official 2026-07-24 deprecation date.
 - Tests:
   - `cargo check`
@@ -131,6 +138,7 @@ because provider model catalogs change frequently.
 - Status: pending
 - Target files:
   - `src/core/providers/mistral/mod.rs`
+  - `config/model_prices_extended.json`
   - `src/core/providers/amazon_nova/models.rs`
   - `src/core/providers/bedrock/model_config.rs`
   - `src/core/providers/bedrock/utils/cost.rs`
