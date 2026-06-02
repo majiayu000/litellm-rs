@@ -111,10 +111,10 @@ litellm-rs = { version = "0.5", default-features = false, features = ["gateway"]
 
 Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLAUDE.md#provider-tiers) for the engineering definition).
 
-- **Tier 1 — catalog-only**: OpenAI-compatible endpoints declared as data in [`src/core/providers/registry/catalog.rs`](./src/core/providers/registry/catalog.rs). Routed through `OpenAILikeProvider`. Always available (no cargo feature required). Today this crate exposes chat completions and chat streaming for these providers; non-chat OpenAI-compatible endpoints need explicit provider methods before they are advertised.
+- **Tier 1 — catalog-only**: OpenAI-compatible endpoints declared as data in [`src/core/providers/registry/catalog.rs`](./src/core/providers/registry/catalog.rs). Routed through `OpenAILikeProvider`. Always available (no cargo feature required). The current crate runtime exposes chat completions and chat streaming for these providers; embeddings, images, audio, and other non-chat endpoints are not forwarded yet.
 - **Tier 2 — code-based**: providers with custom request/response handling, auth signing, or streaming. Wired into the `Provider` enum and the factory. Some Tier 2 builders are feature-gated.
 
-> The matrix below is **hand-maintained** and reflects the runtime surface today. The source of truth for Tier 1 entries is [`catalog.rs`](./src/core/providers/registry/catalog.rs); Tier 2 wiring lives in [`src/core/providers/factory/registry.rs`](./src/core/providers/factory/registry.rs). Capability columns describe which endpoints this crate exposes for the provider — `passthrough` means the call is forwarded to the upstream OpenAI-compatible endpoint without per-provider transformation. A dynamically-generated matrix is tracked as a follow-up.
+> The matrix below is **hand-maintained** and reflects the runtime surface today. The source of truth for Tier 1 entries is [`catalog.rs`](./src/core/providers/registry/catalog.rs); Tier 2 wiring lives in [`src/core/providers/factory/registry.rs`](./src/core/providers/factory/registry.rs). Capability columns describe which endpoints this crate exposes for the provider — `passthrough` means an implemented crate endpoint forwards the call to the upstream OpenAI-compatible endpoint without per-provider transformation. A dynamically-generated matrix is tracked as a follow-up.
 
 ### Tier 2 — code-based providers
 
@@ -124,22 +124,22 @@ Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLA
 | Anthropic (`anthropic`) | always | ✅ | ✅ | – | – | – | Native Anthropic messages API. |
 | Mistral (`mistral`) | always | ✅ | ✅ | passthrough | – | – | Native client. |
 | Cloudflare Workers AI (`cloudflare`) | always | ✅ | – | – | – | – | Native client with account-id auth; streaming and embeddings currently return `NotSupported`. |
-| Azure OpenAI (`azure`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Dedicated module gated on `providers-extra`. |
-| Azure AI Inference (`azure_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Dedicated module gated on `providers-extra`. |
+| Azure OpenAI (`azure`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
+| Azure AI Inference (`azure_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
 | AWS Bedrock (`bedrock`) | always | ✅ | ✅ | ✅ | helper API | – | Native AWS Bedrock runtime path with SigV4 signing. Use `openai_compatible` for Bedrock Access Gateway or other OpenAI-compatible proxies. |
-| Google Vertex AI (`vertex_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Dedicated module gated on `providers-extra`. |
-| Meta Llama API (`meta_llama`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Dedicated module gated on `providers-extra`. |
-| Vercel v0 (`v0`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Dedicated module gated on `providers-extra`. |
-| Amazon Nova (`amazon_nova`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Dedicated module gated on `providers-extended`. |
-| fal.ai (`fal_ai`) | wired via factory (`OpenAILike`) | passthrough | passthrough | – | passthrough | – | Dedicated module gated on `providers-extended`. |
-| Replicate (`replicate`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | passthrough | – | Dedicated module gated on `providers-extended`. |
-| GitHub Models (`github`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Dedicated module gated on `providers-extended`. |
-| GitHub Copilot (`github_copilot`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Dedicated module gated on `providers-extended`. |
-| Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | – | – | – | For self-hosted / unlisted chat endpoints. |
+| Google Vertex AI (`vertex_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
+| Meta Llama API (`meta_llama`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
+| Vercel v0 (`v0`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
+| Amazon Nova (`amazon_nova`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
+| fal.ai (`fal_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
+| Replicate (`replicate`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
+| GitHub Models (`github`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
+| GitHub Copilot (`github_copilot`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
+| Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | – | – | – | For self-hosted / unlisted chat-completions endpoints. |
 
 ### Tier 1 — catalog providers (OpenAI-compatible, always available)
 
-All entries below route through `OpenAILikeProvider`. Chat and streaming work for any endpoint that follows OpenAI's `/chat/completions` SSE protocol. Embeddings, images, audio, and other non-chat endpoints are not exposed for catalog providers until explicit methods are implemented.
+All entries below route through `OpenAILikeProvider`. Chat and streaming work for any endpoint that follows OpenAI's `/chat/completions` SSE protocol. Embeddings, images, audio, and other non-chat endpoints are not exposed through this path today, even when the upstream provider offers them.
 
 **Cloud (`Bearer` auth via env var):**
 
