@@ -101,7 +101,11 @@ impl OpenAIModelRegistry {
             features.push(OpenAIModelFeature::VisionSupport);
         }
 
-        if model_id.starts_with("o1") || model_id.starts_with("o3") || model_id.starts_with("o4") {
+        if model_id.starts_with("o1")
+            || model_id.starts_with("o3")
+            || model_id.starts_with("o4")
+            || model_id.starts_with("gpt-5.5")
+        {
             features.push(OpenAIModelFeature::ReasoningMode);
         }
 
@@ -273,15 +277,16 @@ impl OpenAIModelRegistry {
             }
         }
 
-        config.supports_batch = matches!(
-            model_id.as_str(),
-            "gpt-4"
-                | "gpt-4-turbo"
-                | "gpt-3.5-turbo"
-                | "text-embedding-ada-002"
-                | "text-embedding-3-small"
-                | "text-embedding-3-large"
-        );
+        config.supports_batch = model_id.starts_with("gpt-5.5")
+            || matches!(
+                model_id.as_str(),
+                "gpt-4"
+                    | "gpt-4-turbo"
+                    | "gpt-3.5-turbo"
+                    | "text-embedding-ada-002"
+                    | "text-embedding-3-small"
+                    | "text-embedding-3-large"
+            );
 
         // Streaming support for gpt-5.5-pro not yet documented at
         // https://platform.openai.com/docs/models; verify before enabling.
@@ -543,11 +548,20 @@ mod tests {
         assert!(gpt55.model_info.supports_tools);
         assert!(gpt55.model_info.supports_streaming);
         assert!(gpt55.model_info.supports_multimodal);
+        assert!(gpt55.features.contains(&OpenAIModelFeature::ReasoningMode));
+        assert!(gpt55.config.supports_batch);
+        assert!(registry.supports_feature("gpt-5.5", &OpenAIModelFeature::ReasoningMode));
 
         let Some(snapshot) = registry.get_model_spec("gpt-5.5-2026-04-23") else {
             panic!("gpt-5.5 snapshot should be in the static OpenAI catalog");
         };
         assert_eq!(snapshot.family, OpenAIModelFamily::GPT55);
+        assert!(
+            snapshot
+                .features
+                .contains(&OpenAIModelFeature::ReasoningMode)
+        );
+        assert!(snapshot.config.supports_batch);
     }
 
     #[test]
@@ -566,10 +580,17 @@ mod tests {
         assert!(!gpt55_pro.model_info.supports_streaming);
         assert!(gpt55_pro.model_info.supports_multimodal);
         assert!(
+            gpt55_pro
+                .features
+                .contains(&OpenAIModelFeature::ReasoningMode)
+        );
+        assert!(gpt55_pro.config.supports_batch);
+        assert!(
             !gpt55_pro
                 .features
                 .contains(&OpenAIModelFeature::StreamingSupport)
         );
+        assert!(registry.supports_feature("gpt-5.5-pro", &OpenAIModelFeature::ReasoningMode));
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.030,
             output_cost_per_1k_tokens: 0.180,
+            cache_read_input_token_cost: Some(0.030),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
@@ -16,6 +17,15 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.005,
             output_cost_per_1k_tokens: 0.030,
+            cache_read_input_token_cost: Some(0.0005),
+            tiered_pricing: Some(std::collections::HashMap::from([
+                ("input_cost_per_token_above_272k_tokens".to_string(), 0.010),
+                ("output_cost_per_token_above_272k_tokens".to_string(), 0.045),
+                (
+                    "cache_read_input_token_cost_above_272k_tokens".to_string(),
+                    0.001,
+                ),
+            ])),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()

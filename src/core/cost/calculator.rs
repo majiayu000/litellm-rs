@@ -338,4 +338,6 @@ pub fn compare_model_costs(
 }
 
 #[cfg(test)]
+mod gpt55_tests;
+#[cfg(test)]
 mod tests;

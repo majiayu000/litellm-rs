@@ -52,29 +52,27 @@ pub fn select_tiered_pricing(pricing: &ModelPricing, usage: &UsageTokens) -> (f6
 
     // Check for tiered pricing (e.g., above 128k tokens)
     if let Some(ref tiered_pricing) = pricing.tiered_pricing {
-        // Sort thresholds in descending order to apply highest applicable tier
-        let mut thresholds: Vec<_> = tiered_pricing.iter().collect();
-        thresholds.sort_by(|a, b| {
-            extract_threshold(a.0)
-                .partial_cmp(&extract_threshold(b.0))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .reverse()
-        });
+        let active_threshold = tiered_pricing
+            .keys()
+            .filter_map(|key| extract_threshold(key))
+            .filter(|threshold| usage.prompt_tokens as f64 > *threshold)
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        for (key, &cost) in thresholds {
-            if let Some(threshold) = extract_threshold(key)
-                && usage.prompt_tokens as f64 > threshold
-            {
-                if key.starts_with("input_cost_per_token_above_") {
-                    input_cost = cost;
-                } else if key.starts_with("output_cost_per_token_above_") {
-                    output_cost = cost;
-                } else if key.starts_with("cache_creation_input_token_cost_above_") {
-                    cache_creation_cost = cost;
-                } else if key.starts_with("cache_read_input_token_cost_above_") {
-                    cache_read_cost = cost;
+        if let Some(active_threshold) = active_threshold {
+            for (key, &cost) in tiered_pricing {
+                if let Some(threshold) = extract_threshold(key)
+                    && (threshold - active_threshold).abs() < f64::EPSILON
+                {
+                    if key.starts_with("input_cost_per_token_above_") {
+                        input_cost = cost;
+                    } else if key.starts_with("output_cost_per_token_above_") {
+                        output_cost = cost;
+                    } else if key.starts_with("cache_creation_input_token_cost_above_") {
+                        cache_creation_cost = cost;
+                    } else if key.starts_with("cache_read_input_token_cost_above_") {
+                        cache_read_cost = cost;
+                    }
                 }
-                break; // Apply only the first (highest) applicable tier
             }
         }
     }
@@ -284,6 +282,38 @@ mod tests {
             Some(100.0)
         );
         assert_eq!(extract_threshold("invalid_key"), None);
+    }
+
+    #[test]
+    fn test_select_tiered_pricing_applies_all_fields_for_highest_threshold() {
+        let pricing = ModelPricing {
+            input_cost_per_1k_tokens: 1.0,
+            output_cost_per_1k_tokens: 2.0,
+            cache_creation_input_token_cost: Some(3.0),
+            cache_read_input_token_cost: Some(4.0),
+            tiered_pricing: Some(std::collections::HashMap::from([
+                ("input_cost_per_token_above_128k_tokens".to_string(), 10.0),
+                ("input_cost_per_token_above_272k_tokens".to_string(), 20.0),
+                ("output_cost_per_token_above_272k_tokens".to_string(), 30.0),
+                (
+                    "cache_creation_input_token_cost_above_272k_tokens".to_string(),
+                    40.0,
+                ),
+                (
+                    "cache_read_input_token_cost_above_272k_tokens".to_string(),
+                    50.0,
+                ),
+            ])),
+            ..Default::default()
+        };
+        let usage = UsageTokens::new(300_000, 1_000);
+
+        let (input, output, cache_creation, cache_read) = select_tiered_pricing(&pricing, &usage);
+
+        assert_eq!(input, 20.0);
+        assert_eq!(output, 30.0);
+        assert_eq!(cache_creation, 40.0);
+        assert_eq!(cache_read, 50.0);
     }
 
     #[test]
