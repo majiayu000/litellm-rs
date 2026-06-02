@@ -28,6 +28,7 @@ Official sources used for this audit:
 
 - OpenAI models docs: https://platform.openai.com/docs/models
 - OpenAI GPT-5.5 announcement: https://openai.com/index/introducing-gpt-5-5/
+- OpenAI GPT-5.5 Instant announcement: https://openai.com/index/gpt-5-5-instant/
 - Anthropic Claude models docs: https://docs.anthropic.com/en/docs/about-claude/models
 - Google Gemini API models docs: https://ai.google.dev/gemini-api/docs/models
 - Mistral models docs: https://docs.mistral.ai/getting-started/models/
@@ -46,7 +47,7 @@ because provider model catalogs change frequently.
 
 | Provider | Repository evidence | Current-source delta | Priority |
 | --- | --- | --- | --- |
-| OpenAI | `src/core/providers/openai/models/static_models.rs` includes GPT-5.4 family, GPT image/audio/realtime 1.5, and many dated GPT-5 variants. | Official OpenAI sources now list GPT-5.5 as current flagship and include `gpt-5.5` / `gpt-5.5-chat-latest`; the repo has no GPT-5.5 entries. | P1 |
+| OpenAI | `src/core/providers/openai/models/static_models.rs` includes GPT-5.4 family, GPT image/audio/realtime 1.5, and many dated GPT-5 variants. | Official OpenAI sources now list GPT-5.5 as current flagship and include API model IDs such as `gpt-5.5` and `gpt-5.5-pro`; the repo has no GPT-5.5 entries. Treat the separate Instant API alias as `chat-latest`, not as a GPT-5.5-prefixed model ID. | P1 |
 | Anthropic | `src/core/providers/anthropic/models.rs` and `src/core/providers/anthropic/models/catalog.rs` already include Claude Opus 4.7, its latest alias, pricing, and focused tests. | No static catalog gap was confirmed for Claude Opus 4.7. Follow-up work should verify account and region availability before enabling or documenting live runtime support claims. | P2 |
 | Gemini | `src/core/providers/gemini/models.rs` includes Gemini 3.1 and older Gemini 3.0 / 2.5 entries; no `gemini-3.5-flash` was found. | Official Gemini API docs expose a current Gemini 3.5 family path, including Gemini 3.5 Flash. | P1 |
 | Cohere | `src/core/providers/cohere/provider.rs` lists Command R/R+, legacy `command`, Embed v3, and Rerank v3. | Official Cohere docs list Command A generation, Embed v4, and Rerank v4 families; old `command` models are deprecated in Cohere docs. | P1 |
@@ -82,11 +83,13 @@ because provider model catalogs change frequently.
 - Status: pending
 - Target files:
   - `src/core/providers/openai/models/static_models.rs`
+  - `src/core/providers/openai/models/registry.rs`
   - `src/core/providers/openai/models/registry_types.rs`
   - `src/core/providers/anthropic/models.rs`
   - related provider tests and docs
 - Changes:
-  - Add GPT-5.5 canonical and alias entries from official OpenAI sources.
+  - Add GPT-5.5 canonical and alias entries from official OpenAI sources, without inventing undocumented aliases such as `gpt-5.5-chat-latest`.
+  - Update OpenAI registry family detection, capability matching, and defaults so helper behavior matches the new static catalog entries.
   - Verify Claude Opus 4.7 account and region availability before enabling live
     runtime support claims, and keep docs aligned with the existing catalog entry.
   - Keep GPT-5.4 and Claude 4.6 entries routable unless upstream deprecates them.
@@ -114,7 +117,7 @@ because provider model catalogs change frequently.
 - Status: pending
 - Target files:
   - `docs/providers/deepseek.md`
-  - `src/core/providers/base/pricing.rs`
+  - `src/core/cost/calculator/pricing.rs`
   - DeepSeek provider tests or registry tests
 - Changes:
   - Add `deepseek-v4-flash` and `deepseek-v4-pro` docs/pricing metadata where official pricing is available.
@@ -129,10 +132,12 @@ because provider model catalogs change frequently.
 - Target files:
   - `src/core/providers/mistral/mod.rs`
   - `src/core/providers/amazon_nova/models.rs`
+  - `src/core/providers/bedrock/model_config.rs`
+  - `src/core/providers/bedrock/utils/cost.rs`
   - related provider tests and docs
 - Changes:
   - Reconcile Mistral aliases and dated IDs with the current official Mistral model docs.
-  - Reconcile Amazon Nova entries with current Bedrock model cards and only add model families supported by this repository's provider surface.
+  - Reconcile both the standalone Amazon Nova registry and native Bedrock Nova catalog/cost tables with current Bedrock model cards, adding only model families supported by this repository's provider surface.
 - Tests:
   - `cargo check`
   - provider-specific registry tests
