@@ -3,7 +3,7 @@
 ## 0. Metadata
 
 - Task: provider model catalog freshness audit and follow-up issues
-- Repository: `/Users/lifcc/Desktop/code/AI/gateway/litellm-rs`
+- Repository: litellm-rs
 - Date checked: 2026-05-24 Asia/Shanghai
 - Compatibility strategy: required
 - Submission strategy: per provider milestone
@@ -47,7 +47,7 @@ because provider model catalogs change frequently.
 | Provider | Repository evidence | Current-source delta | Priority |
 | --- | --- | --- | --- |
 | OpenAI | `src/core/providers/openai/models/static_models.rs` includes GPT-5.4 family, GPT image/audio/realtime 1.5, and many dated GPT-5 variants. | Official OpenAI sources now list GPT-5.5 as current flagship and include `gpt-5.5` / `gpt-5.5-chat-latest`; the repo has no GPT-5.5 entries. | P1 |
-| Anthropic | `src/core/providers/anthropic/models.rs` tops out at Claude Opus 4.6 and Sonnet 4.6 and comments Opus 4.6 as latest flagship. | Official Claude docs list Claude Opus 4.7 as the newest flagship while Sonnet 4.6 and Haiku 4.5 remain present. | P1 |
+| Anthropic | `src/core/providers/anthropic/models.rs` and `src/core/providers/anthropic/models/catalog.rs` already include Claude Opus 4.7, its latest alias, pricing, and focused tests. | No static catalog gap was confirmed for Claude Opus 4.7. Follow-up work should verify account and region availability before enabling or documenting live runtime support claims. | P2 |
 | Gemini | `src/core/providers/gemini/models.rs` includes Gemini 3.1 and older Gemini 3.0 / 2.5 entries; no `gemini-3.5-flash` was found. | Official Gemini API docs expose a current Gemini 3.5 family path, including Gemini 3.5 Flash. | P1 |
 | Cohere | `src/core/providers/cohere/provider.rs` lists Command R/R+, legacy `command`, Embed v3, and Rerank v3. | Official Cohere docs list Command A generation, Embed v4, and Rerank v4 families; old `command` models are deprecated in Cohere docs. | P1 |
 | DeepSeek | `docs/providers/deepseek.md` and pricing fallbacks describe DeepSeek V3.1 aliases, `deepseek-chat`, and `deepseek-reasoner`. | Official DeepSeek docs list `deepseek-v4-flash` and `deepseek-v4-pro`, with legacy `deepseek-chat` / `deepseek-reasoner` scheduled for deprecation on 2026-07-24. | P1 |
@@ -69,6 +69,9 @@ because provider model catalogs change frequently.
 - For OpenAI-compatible pass-through providers, document pass-through behavior
   and add representative smoke coverage instead of pretending to own exhaustive
   static catalogs.
+- For provider models whose runtime availability can vary by account, region, or
+  cloud marketplace entitlement, verify availability before enabling live
+  runtime support or documenting live smoke-test readiness.
 - Every provider refresh issue must include focused tests for lookup,
   capabilities, aliases, pricing, and docs examples touched by that issue.
 
@@ -84,7 +87,8 @@ because provider model catalogs change frequently.
   - related provider tests and docs
 - Changes:
   - Add GPT-5.5 canonical and alias entries from official OpenAI sources.
-  - Add Claude Opus 4.7 entries and update "latest flagship" comments.
+  - Verify Claude Opus 4.7 account and region availability before enabling live
+    runtime support claims, and keep docs aligned with the existing catalog entry.
   - Keep GPT-5.4 and Claude 4.6 entries routable unless upstream deprecates them.
 - Tests:
   - `cargo check`
@@ -162,7 +166,8 @@ because provider model catalogs change frequently.
 ## 7. Issue Map
 
 - P1 OpenAI: add GPT-5.5 and update media/realtime aliases.
-- P1 Anthropic: add Claude Opus 4.7 and latest-flagship aliases.
+- P2 Anthropic: verify Claude Opus 4.7 account/region availability and keep
+  docs aligned with the existing catalog support.
 - P1 Gemini + Cohere: update Gemini 3.5 and Cohere Command A / Embed v4 / Rerank v4.
 - P1 DeepSeek: add V4 models and document legacy alias deprecation.
 - P2 Mistral + Amazon Nova + pass-through providers: reconcile remaining large-provider gaps and docs.
