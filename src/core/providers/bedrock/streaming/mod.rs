@@ -426,8 +426,12 @@ impl BedrockStream {
                 choices: vec![ChatStreamChoice {
                     index: 0,
                     delta: ChatDelta {
+                        role: None,
+                        content: None,
+                        thinking: None,
                         tool_calls: Some(vec![tool_call]),
-                        ..Default::default()
+                        function_call: None,
+                        audio: None,
                     },
                     finish_reason: None,
                     logprobs: None,
@@ -446,8 +450,12 @@ impl BedrockStream {
                 choices: vec![ChatStreamChoice {
                     index: 0,
                     delta: ChatDelta {
+                        role: None,
+                        content: None,
+                        thinking: None,
                         tool_calls: Some(vec![tool_call]),
-                        ..Default::default()
+                        function_call: None,
+                        audio: None,
                     },
                     finish_reason: None,
                     logprobs: None,
@@ -471,8 +479,12 @@ impl BedrockStream {
                 choices: vec![ChatStreamChoice {
                     index: 0,
                     delta: ChatDelta {
+                        role: None,
                         content: Some(content.to_string()),
-                        ..Default::default()
+                        thinking: None,
+                        tool_calls: None,
+                        function_call: None,
+                        audio: None,
                     },
                     finish_reason: None,
                     logprobs: None,
@@ -496,7 +508,14 @@ impl BedrockStream {
                 model: String::new(),
                 choices: vec![ChatStreamChoice {
                     index: 0,
-                    delta: ChatDelta::default(),
+                    delta: ChatDelta {
+                        role: None,
+                        content: None,
+                        thinking: None,
+                        tool_calls: None,
+                        function_call: None,
+                        audio: None,
+                    },
                     finish_reason: Some(finish_reason),
                     logprobs: None,
                 }],
@@ -531,8 +550,12 @@ impl BedrockStream {
                     choices: vec![ChatStreamChoice {
                         index: 0,
                         delta: ChatDelta {
+                            role: None,
                             content: Some(delta.to_string()),
-                            ..Default::default()
+                            thinking: None,
+                            tool_calls: None,
+                            function_call: None,
+                            audio: None,
                         },
                         finish_reason: None,
                         logprobs: None,
@@ -548,7 +571,14 @@ impl BedrockStream {
                 model: String::new(),
                 choices: vec![ChatStreamChoice {
                     index: 0,
-                    delta: ChatDelta::default(),
+                    delta: ChatDelta {
+                        role: None,
+                        content: None,
+                        thinking: None,
+                        tool_calls: None,
+                        function_call: None,
+                        audio: None,
+                    },
                     finish_reason: Some(crate::core::types::responses::FinishReason::Stop),
                     logprobs: None,
                 }],
@@ -577,8 +607,12 @@ impl BedrockStream {
                 choices: vec![ChatStreamChoice {
                     index: 0,
                     delta: ChatDelta {
+                        role: None,
                         content: Some(content.to_string()),
-                        ..Default::default()
+                        thinking: None,
+                        tool_calls: None,
+                        function_call: None,
+                        audio: None,
                     },
                     finish_reason: None,
                     logprobs: None,
@@ -604,8 +638,12 @@ impl BedrockStream {
                 choices: vec![ChatStreamChoice {
                     index: 0,
                     delta: ChatDelta {
+                        role: None,
                         content: Some(content.to_string()),
-                        ..Default::default()
+                        thinking: None,
+                        tool_calls: None,
+                        function_call: None,
+                        audio: None,
                     },
                     finish_reason: if value.get("completionReason").is_some() {
                         Some(crate::core::types::responses::FinishReason::Stop)
@@ -681,9 +719,12 @@ impl BedrockStream {
                 choices: vec![ChatStreamChoice {
                     index: 0,
                     delta: ChatDelta {
+                        role: None,
                         content: content.map(str::to_string),
+                        thinking: None,
                         tool_calls: openai_tool_calls,
-                        ..Default::default()
+                        function_call: None,
+                        audio: None,
                     },
                     finish_reason: openai_finish_reason,
                     logprobs: None,

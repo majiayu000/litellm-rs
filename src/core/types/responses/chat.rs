@@ -398,7 +398,10 @@ mod tests {
                 delta: ChatDelta {
                     role: Some(MessageRole::Assistant),
                     content: Some("Hello".to_string()),
-                    ..Default::default()
+                    thinking: None,
+                    tool_calls: None,
+                    function_call: None,
+                    audio: None,
                 },
                 finish_reason: None,
                 logprobs: None,
@@ -417,8 +420,12 @@ mod tests {
         let choice = ChatStreamChoice {
             index: 0,
             delta: ChatDelta {
+                role: None,
                 content: Some("world".to_string()),
-                ..Default::default()
+                thinking: None,
+                tool_calls: None,
+                function_call: None,
+                audio: None,
             },
             finish_reason: Some(FinishReason::Stop),
             logprobs: None,
