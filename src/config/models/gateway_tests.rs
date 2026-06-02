@@ -563,6 +563,16 @@ fn test_gateway_config_merge_pricing_uses_explicit_overlay_source() {
     );
 }
 
+#[test]
+fn test_gateway_config_merge_pricing_preserves_allow_degraded_for_default_overlay() {
+    let mut base = create_valid_config();
+    base.pricing.allow_degraded = true;
+
+    let merged = base.merge(GatewayConfig::default());
+
+    assert!(merged.pricing.allow_degraded);
+}
+
 // ==================== GatewayConfig Serialization Tests ====================
 
 #[test]
