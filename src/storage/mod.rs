@@ -94,15 +94,11 @@ impl StorageLayer {
             match redis::RedisPool::new(&config.redis).await {
                 Ok(pool) => {
                     if pool.is_noop() {
-                        // RedisPool::new returns a no-op pool when enabled=false,
-                        // but we already handled that branch above. Treat any
-                        // other no-op as healthy to be safe.
                         info!("Redis pool initialized in no-op mode");
-                        (Arc::new(pool), DependencyStatus::Healthy)
                     } else {
                         info!("Redis connection established");
-                        (Arc::new(pool), DependencyStatus::Healthy)
                     }
+                    (Arc::new(pool), DependencyStatus::Healthy)
                 }
                 Err(e) => {
                     if config.redis.allow_degraded {
