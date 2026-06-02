@@ -159,6 +159,8 @@ fn test_convert_core_chunk_preserves_audio_delta() {
                 tool_calls: None,
                 function_call: None,
                 audio: Some(types::responses::AudioDelta {
+                    id: Some("audio-123".to_string()),
+                    expires_at: Some(1_717_171_717),
                     data: Some("base64-audio-delta".to_string()),
                     transcript: Some("hello from audio".to_string()),
                     format: Some("wav".to_string()),
@@ -175,6 +177,8 @@ fn test_convert_core_chunk_preserves_audio_delta() {
     let Some(audio) = converted.choices[0].delta.audio.as_ref() else {
         panic!("audio delta should be preserved");
     };
+    assert_eq!(audio.id.as_deref(), Some("audio-123"));
+    assert_eq!(audio.expires_at, Some(1_717_171_717));
     assert_eq!(audio.data.as_deref(), Some("base64-audio-delta"));
     assert_eq!(audio.transcript.as_deref(), Some("hello from audio"));
     assert_eq!(audio.format.as_deref(), Some("wav"));
