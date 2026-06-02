@@ -30,9 +30,9 @@ pub fn openai_provider(name: &str, api_key: &str) -> Result<ProviderConfigBuilde
         .name(name)?
         .provider_type("openai")?
         .api_key(api_key)
+        .add_model("gpt-5.4")
         .add_model("gpt-5.5")
         .add_model("gpt-5.5-pro")
-        .add_model("gpt-5.4")
         .add_model("gpt-5.4-mini")
         .rate_limit(3000))
 }
@@ -174,6 +174,7 @@ mod tests {
     fn test_openai_provider_models() {
         let builder = openai_provider("test", "key").unwrap();
         assert_eq!(builder.models.len(), 4);
+        assert_eq!(builder.models.first(), Some(&"gpt-5.4".to_string()));
         assert!(builder.models.contains(&"gpt-5.5".to_string()));
         assert!(builder.models.contains(&"gpt-5.5-pro".to_string()));
         assert!(builder.models.contains(&"gpt-5.4".to_string()));
