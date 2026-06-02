@@ -494,6 +494,7 @@ impl LLMProvider for OpenAIProvider {
                     "logit_bias",
                     "logprobs",
                     "top_logprobs",
+                    "reasoning_effort",
                 ],
                 super::models::OpenAIModelFamily::GPT55Pro => &[
                     "messages",
@@ -515,6 +516,7 @@ impl LLMProvider for OpenAIProvider {
                     "logit_bias",
                     "logprobs",
                     "top_logprobs",
+                    "reasoning_effort",
                 ],
                 super::models::OpenAIModelFamily::GPT4
                 | super::models::OpenAIModelFamily::GPT4Turbo

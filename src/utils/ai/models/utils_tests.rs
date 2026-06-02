@@ -454,6 +454,8 @@ fn test_get_model_family_unknown() {
 fn test_validate_model_with_provider_valid() {
     assert!(ModelUtils::validate_model_with_provider("gpt-5.5", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gpt-5.5-pro", "openai").is_ok());
+    assert!(ModelUtils::validate_model_with_provider("openai/gpt-5.5", "openai").is_ok());
+    assert!(ModelUtils::validate_model_with_provider("openai/gpt-5.5-pro", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gpt-4", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "anthropic").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gemini-3.1-pro-preview", "google").is_ok());

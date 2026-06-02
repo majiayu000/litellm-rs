@@ -278,12 +278,12 @@ pub fn estimate_cost(
     max_output_tokens: Option<u32>,
 ) -> Result<CostEstimate, CostError> {
     let pricing = get_model_pricing(model, provider)?;
-
-    let input_cost = (input_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
-
     let estimated_output_tokens = max_output_tokens.unwrap_or(100); // Default estimate
-    let max_output_cost =
-        (estimated_output_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
+    let usage = UsageTokens::new(input_tokens, estimated_output_tokens);
+    let (input_cost_per_1k, output_cost_per_1k, _, _) = select_tiered_pricing(&pricing, &usage);
+
+    let input_cost = (input_tokens as f64 / 1000.0) * input_cost_per_1k;
+    let max_output_cost = (estimated_output_tokens as f64 / 1000.0) * output_cost_per_1k;
 
     Ok(CostEstimate {
         min_cost: input_cost,

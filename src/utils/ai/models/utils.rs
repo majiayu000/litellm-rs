@@ -466,11 +466,15 @@ impl ModelUtils {
             return Ok(());
         }
 
-        let model_matches = compatible_models.iter().any(|compatible_model| {
-            model
-                .to_lowercase()
-                .starts_with(&compatible_model.to_lowercase())
-        });
+        let model_lower = model.to_lowercase();
+        let provider_prefix = format!("{}/", provider.to_lowercase());
+        let model_for_match = model_lower
+            .strip_prefix(&provider_prefix)
+            .unwrap_or(&model_lower);
+
+        let model_matches = compatible_models
+            .iter()
+            .any(|compatible_model| model_for_match.starts_with(&compatible_model.to_lowercase()));
 
         if !model_matches {
             return Err(ProviderError::ModelNotFound {

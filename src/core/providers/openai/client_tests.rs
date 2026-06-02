@@ -189,6 +189,7 @@ fn test_get_supported_openai_params_gpt55() {
     assert!(params.contains(&"tool_choice"));
     assert!(params.contains(&"response_format"));
     assert!(params.contains(&"stream"));
+    assert!(params.contains(&"reasoning_effort"));
 }
 
 #[test]
@@ -199,6 +200,7 @@ fn test_get_supported_openai_params_gpt55_pro() {
     assert!(params.contains(&"tools"));
     assert!(params.contains(&"tool_choice"));
     assert!(params.contains(&"response_format"));
+    assert!(params.contains(&"reasoning_effort"));
     assert!(!params.contains(&"stream"));
 }
 

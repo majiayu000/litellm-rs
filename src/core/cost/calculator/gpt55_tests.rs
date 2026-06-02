@@ -1,4 +1,4 @@
-use super::{generic_cost_per_token, get_model_pricing};
+use super::{estimate_cost, generic_cost_per_token, get_model_pricing};
 use crate::core::cost::types::UsageTokens;
 
 #[test]
@@ -48,6 +48,17 @@ fn gpt55_cached_and_long_context_costs_are_charged() {
     assert!((long_context_breakdown.cache_cost - 0.05).abs() < 1e-12);
     assert!((long_context_breakdown.output_cost - 0.09).abs() < 1e-12);
     assert!((long_context_breakdown.total_cost - 2.64).abs() < 1e-12);
+}
+
+#[test]
+fn gpt55_long_context_estimates_use_tiered_rates() {
+    let Ok(estimate) = estimate_cost("gpt-5.5", "openai", 300_000, Some(2_000)) else {
+        panic!("gpt-5.5 long-context estimate should succeed");
+    };
+
+    assert!((estimate.input_cost - 3.0).abs() < 1e-12);
+    assert!((estimate.estimated_output_cost - 0.09).abs() < 1e-12);
+    assert!((estimate.max_cost - 3.09).abs() < 1e-12);
 }
 
 #[test]
