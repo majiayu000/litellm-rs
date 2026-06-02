@@ -94,6 +94,7 @@ impl OpenAIResponseTransformer {
         });
         let thinking = delta
             .reasoning_content
+            .or(delta.reasoning)
             .filter(|reasoning| !reasoning.is_empty())
             .map(ThinkingDelta::new);
         let audio = delta.audio.map(|a| AudioDelta {

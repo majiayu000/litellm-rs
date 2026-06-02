@@ -518,6 +518,7 @@ fn test_transform_stream_chunk() {
             delta: OpenAIDelta {
                 role: Some("assistant".to_string()),
                 content: Some("Hello".to_string()),
+                reasoning: None,
                 reasoning_content: None,
                 audio: None,
                 tool_calls: None,
@@ -551,6 +552,7 @@ fn test_transform_stream_chunk_with_finish() {
             delta: OpenAIDelta {
                 role: None,
                 content: None,
+                reasoning: None,
                 reasoning_content: None,
                 audio: None,
                 tool_calls: None,
@@ -585,6 +587,7 @@ fn test_transform_delta_roles() {
         let delta = OpenAIDelta {
             role: Some(role.to_string()),
             content: None,
+            reasoning: None,
             reasoning_content: None,
             audio: None,
             tool_calls: None,
@@ -601,6 +604,7 @@ fn test_transform_delta_propagates_tool_and_function_calls() {
     let delta = OpenAIDelta {
         role: None,
         content: None,
+        reasoning: None,
         reasoning_content: None,
         audio: None,
         tool_calls: Some(vec![OpenAIToolCallDelta {
@@ -636,6 +640,7 @@ fn test_transform_delta_preserves_audio_metadata_and_reasoning_content() {
     let delta = OpenAIDelta {
         role: None,
         content: None,
+        reasoning: None,
         reasoning_content: Some("reasoning delta".to_string()),
         audio: Some(OpenAIMessageAudio {
             id: Some("audio-123".to_string()),
@@ -661,4 +666,23 @@ fn test_transform_delta_preserves_audio_metadata_and_reasoning_content() {
     assert_eq!(audio.data.as_deref(), Some("base64-audio"));
     assert_eq!(audio.transcript.as_deref(), Some("hello"));
     assert_eq!(audio.format.as_deref(), Some("wav"));
+}
+
+#[test]
+fn test_transform_delta_preserves_openai_reasoning() {
+    let delta = OpenAIDelta {
+        role: None,
+        content: None,
+        reasoning: Some("openai reasoning delta".to_string()),
+        reasoning_content: None,
+        audio: None,
+        tool_calls: None,
+        function_call: None,
+    };
+
+    let out = match OpenAIResponseTransformer::transform_delta(delta) {
+        Ok(out) => out,
+        Err(error) => panic!("delta transformation should succeed: {error}"),
+    };
+    assert_eq!(out.thinking_content(), Some("openai reasoning delta"));
 }
