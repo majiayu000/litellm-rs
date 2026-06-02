@@ -6,7 +6,7 @@ use super::super::message::MessageRole;
 use super::super::thinking::ThinkingDelta;
 
 /// Streaming audio delta content.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AudioDelta {
     /// Provider audio object identifier, when provided by the upstream stream.
     #[serde(skip_serializing_if = "Option::is_none")]
