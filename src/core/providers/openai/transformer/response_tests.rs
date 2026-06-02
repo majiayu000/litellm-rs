@@ -686,3 +686,41 @@ fn test_transform_delta_preserves_openai_reasoning() {
     };
     assert_eq!(out.thinking_content(), Some("openai reasoning delta"));
 }
+
+#[test]
+fn test_transform_delta_skips_empty_reasoning_content() {
+    let delta = OpenAIDelta {
+        role: None,
+        content: None,
+        reasoning: None,
+        reasoning_content: Some(String::new()),
+        audio: None,
+        tool_calls: None,
+        function_call: None,
+    };
+
+    let out = match OpenAIResponseTransformer::transform_delta(delta) {
+        Ok(out) => out,
+        Err(error) => panic!("delta transformation should succeed: {error}"),
+    };
+    assert!(out.thinking.is_none());
+}
+
+#[test]
+fn test_transform_delta_falls_back_to_openai_reasoning_when_reasoning_content_empty() {
+    let delta = OpenAIDelta {
+        role: None,
+        content: None,
+        reasoning: Some("openai fallback reasoning".to_string()),
+        reasoning_content: Some(String::new()),
+        audio: None,
+        tool_calls: None,
+        function_call: None,
+    };
+
+    let out = match OpenAIResponseTransformer::transform_delta(delta) {
+        Ok(out) => out,
+        Err(error) => panic!("delta transformation should succeed: {error}"),
+    };
+    assert_eq!(out.thinking_content(), Some("openai fallback reasoning"));
+}
