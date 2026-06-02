@@ -19,7 +19,7 @@ async fn test_provider_creation_with_api_key() {
 async fn test_provider_supports_any_model() {
     let provider = OpenAILikeProvider::with_api_base("http://localhost:8000/v1")
         .await
-        .unwrap();
+        .unwrap_or_else(|err| panic!("OpenAI-like test provider should initialize: {err}"));
 
     assert!(provider.supports_model("gpt-4"));
     assert!(provider.supports_model("llama-2-70b"));
@@ -31,7 +31,7 @@ async fn test_provider_supports_any_model() {
 async fn test_model_info_for_any_model() {
     let provider = OpenAILikeProvider::with_api_base("http://localhost:8000/v1")
         .await
-        .unwrap();
+        .unwrap_or_else(|err| panic!("OpenAI-like test provider should initialize: {err}"));
 
     let info = provider.get_model_info("my-custom-model");
     assert_eq!(info.id, "my-custom-model");
@@ -62,6 +62,23 @@ async fn test_request_transformation() {
     assert!((json["temperature"].as_f64().unwrap() - 0.7).abs() < 0.001);
     assert_eq!(json["max_tokens"], 100);
     assert_eq!(json["reasoning_effort"], "high");
+}
+
+#[tokio::test]
+async fn test_supported_params_advertise_forwarded_chat_fields() {
+    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+
+    let provider = OpenAILikeProvider::with_api_base("http://localhost:8000/v1")
+        .await
+        .unwrap_or_else(|err| panic!("OpenAI-like test provider should initialize: {err}"));
+    let params = LLMProvider::get_supported_openai_params(&provider, "test-model");
+
+    for forwarded_param in ["store", "metadata", "service_tier"] {
+        assert!(
+            params.contains(&forwarded_param),
+            "supported params should advertise forwarded field {forwarded_param}"
+        );
+    }
 }
 
 #[tokio::test]

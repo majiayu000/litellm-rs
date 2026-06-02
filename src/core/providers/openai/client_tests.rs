@@ -240,6 +240,9 @@ fn test_get_supported_openai_params_gpt55() {
     assert!(params.contains(&"response_format"));
     assert!(params.contains(&"stream"));
     assert!(params.contains(&"reasoning_effort"));
+    assert!(params.contains(&"store"));
+    assert!(params.contains(&"metadata"));
+    assert!(params.contains(&"service_tier"));
     assert_eq!(params, prefixed_params);
 }
 
@@ -253,8 +256,24 @@ fn test_get_supported_openai_params_gpt55_pro() {
     assert!(params.contains(&"tool_choice"));
     assert!(params.contains(&"response_format"));
     assert!(params.contains(&"reasoning_effort"));
+    assert!(params.contains(&"store"));
+    assert!(params.contains(&"metadata"));
+    assert!(params.contains(&"service_tier"));
     assert!(!params.contains(&"stream"));
     assert_eq!(params, prefixed_params);
+}
+
+#[test]
+fn test_get_supported_openai_params_advertises_forwarded_chat_fields() {
+    let provider = create_test_provider();
+    let params = provider.get_supported_openai_params("gpt-4o");
+
+    for forwarded_param in ["store", "metadata", "service_tier"] {
+        assert!(
+            params.contains(&forwarded_param),
+            "supported params should advertise forwarded field {forwarded_param}"
+        );
+    }
 }
 
 #[test]

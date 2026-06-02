@@ -586,6 +586,9 @@ impl LLMProvider for OpenAILikeProvider {
             "logprobs",
             "top_logprobs",
             "reasoning_effort",
+            "store",
+            "metadata",
+            "service_tier",
         ]
     }
 

@@ -518,6 +518,9 @@ impl LLMProvider for OpenAIProvider {
                     "logprobs",
                     "top_logprobs",
                     "reasoning_effort",
+                    "store",
+                    "metadata",
+                    "service_tier",
                 ],
                 super::models::OpenAIModelFamily::GPT55Pro => &[
                     "messages",
@@ -540,6 +543,9 @@ impl LLMProvider for OpenAIProvider {
                     "logprobs",
                     "top_logprobs",
                     "reasoning_effort",
+                    "store",
+                    "metadata",
+                    "service_tier",
                 ],
                 super::models::OpenAIModelFamily::GPT4
                 | super::models::OpenAIModelFamily::GPT4Turbo
@@ -564,6 +570,9 @@ impl LLMProvider for OpenAIProvider {
                     "logit_bias",
                     "logprobs",
                     "top_logprobs",
+                    "store",
+                    "metadata",
+                    "service_tier",
                 ],
                 super::models::OpenAIModelFamily::GPT35 => &[
                     "messages",
