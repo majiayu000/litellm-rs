@@ -192,7 +192,7 @@ fn is_openai_compatible_api_key_fallback(route: &DynamicProviderRoute<'_>) -> bo
 }
 
 fn uses_dynamic_openai_like_provider(route: &DynamicProviderRoute<'_>) -> bool {
-    matches!(route.provider_type, "xai" | "groq")
+    matches!(route.provider_type, "openrouter" | "xai" | "groq")
 }
 
 fn custom_api_base_api_key_fallback(
