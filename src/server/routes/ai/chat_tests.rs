@@ -114,12 +114,14 @@ fn test_convert_core_chunk_preserves_thinking_and_function_call() {
             index: 0,
             delta: ChatDelta {
                 role: Some(types::message::MessageRole::Assistant),
+                content: None,
                 thinking: Some(ThinkingDelta::new("reasoning")),
+                tool_calls: None,
                 function_call: Some(types::responses::FunctionCallDelta {
                     name: Some("legacy_tool".to_string()),
                     arguments: Some("{}".to_string()),
                 }),
-                ..Default::default()
+                audio: None,
             },
             finish_reason: None,
             logprobs: None,
@@ -151,12 +153,16 @@ fn test_convert_core_chunk_preserves_audio_delta() {
         choices: vec![ChatStreamChoice {
             index: 0,
             delta: ChatDelta {
+                role: None,
+                content: None,
+                thinking: None,
+                tool_calls: None,
+                function_call: None,
                 audio: Some(types::responses::AudioDelta {
                     data: Some("base64-audio-delta".to_string()),
                     transcript: Some("hello from audio".to_string()),
                     format: Some("wav".to_string()),
                 }),
-                ..Default::default()
             },
             finish_reason: None,
             logprobs: None,
@@ -183,7 +189,14 @@ fn test_convert_core_chunk_preserves_stream_logprobs() {
         model: "logprob-model".to_string(),
         choices: vec![ChatStreamChoice {
             index: 0,
-            delta: ChatDelta::default(),
+            delta: ChatDelta {
+                role: None,
+                content: None,
+                thinking: None,
+                tool_calls: None,
+                function_call: None,
+                audio: None,
+            },
             finish_reason: None,
             logprobs: Some(LogProbs {
                 content: vec![TokenLogProb {

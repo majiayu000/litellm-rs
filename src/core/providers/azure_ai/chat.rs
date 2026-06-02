@@ -508,8 +508,12 @@ impl AzureAIChatUtils {
                     crate::core::types::responses::ChatStreamChoice {
                         index: index as u32,
                         delta: crate::core::types::responses::ChatDelta {
+                            role: None,
                             content: choice["delta"]["content"].as_str().map(|s| s.to_string()),
-                            ..Default::default()
+                            thinking: None,
+                            function_call: None,
+                            tool_calls: None,
+                            audio: None,
                         },
                         finish_reason: match choice["finish_reason"].as_str() {
                             Some("stop") => Some(FinishReason::Stop),

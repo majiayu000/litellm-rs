@@ -391,7 +391,10 @@ impl LLMProvider for ReplicateProvider {
                     delta: crate::core::types::responses::ChatDelta {
                         role: Some(crate::core::types::message::MessageRole::Assistant),
                         content,
-                        ..Default::default()
+                        thinking: None,
+                        tool_calls: None,
+                        function_call: None,
+                        audio: None,
                     },
                     logprobs: None,
                     finish_reason: Some(crate::core::types::responses::FinishReason::Stop),

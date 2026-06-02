@@ -667,7 +667,10 @@ fn parse_langgraph_sse_event(event: &str, model: &str) -> Option<ChatChunk> {
                             delta: ChatDelta {
                                 role: Some(MessageRole::Assistant),
                                 content: Some(content),
-                                ..Default::default()
+                                thinking: None,
+                                tool_calls: None,
+                                function_call: None,
+                                audio: None,
                             },
                             finish_reason: None,
                             logprobs: None,
@@ -687,7 +690,14 @@ fn parse_langgraph_sse_event(event: &str, model: &str) -> Option<ChatChunk> {
                 model: model.to_string(),
                 choices: vec![ChatStreamChoice {
                     index: 0,
-                    delta: ChatDelta::default(),
+                    delta: ChatDelta {
+                        role: None,
+                        content: None,
+                        thinking: None,
+                        tool_calls: None,
+                        function_call: None,
+                        audio: None,
+                    },
                     finish_reason: Some(crate::core::types::responses::FinishReason::Stop),
                     logprobs: None,
                 }],

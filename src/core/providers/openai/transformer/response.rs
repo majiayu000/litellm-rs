@@ -108,10 +108,10 @@ impl OpenAIResponseTransformer {
                 _ => MessageRole::Assistant,
             }),
             content: delta.content,
+            thinking: None,
             tool_calls,
             function_call,
             audio,
-            ..Default::default()
         })
     }
 
