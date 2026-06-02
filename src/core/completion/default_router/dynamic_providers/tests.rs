@@ -58,6 +58,20 @@ fn test_resolve_dynamic_route_for_xai() {
 }
 
 #[test]
+fn test_resolve_dynamic_route_for_groq() {
+    let options = CompletionOptions::default();
+    let Some(route) = resolve_dynamic_provider_route("groq/llama-3.3-70b-versatile", &options)
+    else {
+        panic!("Groq route should resolve");
+    };
+
+    assert_eq!(route.provider_type, "groq");
+    assert_eq!(route.provider_label, "Groq");
+    assert_eq!(route.actual_model, "llama-3.3-70b-versatile");
+    assert_eq!(route.api_base, "https://api.groq.com/openai/v1");
+}
+
+#[test]
 fn test_resolve_dynamic_route_with_custom_api_base() {
     let options = CompletionOptions {
         api_base: Some("http://localhost:5567/v1".to_string()),
@@ -100,6 +114,121 @@ fn test_custom_api_base_api_key_fallback_uses_dummy_without_env_key() {
     let api_key = custom_api_base_api_key_fallback(&options, &route, None, None);
 
     assert_eq!(api_key.as_deref(), Some("dummy-key-for-local"));
+}
+
+#[test]
+fn test_dynamic_provider_api_key_env_var_maps_named_routes() {
+    let options = CompletionOptions {
+        api_base: Some("http://localhost:5567/v1".to_string()),
+        ..CompletionOptions::default()
+    };
+    let cases = [
+        ("openai/gpt-4.1", "openai", "OPENAI_API_KEY"),
+        (
+            "openrouter/anthropic/claude-sonnet-4",
+            "openrouter",
+            "OPENROUTER_API_KEY",
+        ),
+        (
+            "anthropic/claude-sonnet-4",
+            "anthropic",
+            "ANTHROPIC_API_KEY",
+        ),
+        ("deepseek/deepseek-chat", "deepseek", "DEEPSEEK_API_KEY"),
+        ("moonshot/kimi-k2.5", "moonshot", "MOONSHOT_API_KEY"),
+        (
+            "minimax/MiniMax-M2.5-lightning",
+            "minimax",
+            "MINIMAX_API_KEY",
+        ),
+        ("zhipu/glm-5", "zhipu", "ZHIPU_API_KEY"),
+        ("xai/grok-4.3", "xai", "XAI_API_KEY"),
+        ("groq/llama-3.3-70b-versatile", "groq", "GROQ_API_KEY"),
+        ("azure_ai/gpt-4.1", "azure_ai", "AZURE_AI_API_KEY"),
+    ];
+
+    for (model, provider_type, env_var) in cases {
+        let Some(route) = resolve_dynamic_provider_route(model, &options) else {
+            panic!("{model} route should resolve");
+        };
+
+        assert_eq!(route.provider_type, provider_type);
+        assert_eq!(dynamic_provider_api_key_env_var(&route), Some(env_var));
+    }
+}
+
+#[test]
+fn test_custom_api_base_fallback_supports_openai_compatible_named_routes() {
+    let options = CompletionOptions {
+        api_base: Some("http://localhost:5567/v1".to_string()),
+        ..CompletionOptions::default()
+    };
+    let models = [
+        "openai/gpt-4.1",
+        "openrouter/anthropic/claude-sonnet-4",
+        "deepseek/deepseek-chat",
+        "moonshot/kimi-k2.5",
+        "minimax/MiniMax-M2.5-lightning",
+        "zhipu/glm-5",
+        "xai/grok-4.3",
+        "groq/llama-3.3-70b-versatile",
+    ];
+
+    for model in models {
+        let Some(route) = resolve_dynamic_provider_route(model, &options) else {
+            panic!("{model} route should resolve");
+        };
+
+        let provider_key = custom_api_base_api_key_fallback(
+            &options,
+            &route,
+            Some("sk-openai-env".to_string()),
+            Some("sk-provider-env".to_string()),
+        );
+        assert_eq!(provider_key.as_deref(), Some("sk-provider-env"));
+
+        let openai_key = custom_api_base_api_key_fallback(
+            &options,
+            &route,
+            Some("sk-openai-env".to_string()),
+            None,
+        );
+        assert_eq!(openai_key.as_deref(), Some("sk-openai-env"));
+
+        let dummy_key = custom_api_base_api_key_fallback(&options, &route, None, None);
+        assert_eq!(dummy_key.as_deref(), Some("dummy-key-for-local"));
+    }
+}
+
+#[test]
+fn test_custom_api_base_fallback_requires_provider_key_for_non_openai_compatible_routes() {
+    let options = CompletionOptions {
+        api_base: Some("http://localhost:5567/v1".to_string()),
+        ..CompletionOptions::default()
+    };
+    let models = ["anthropic/claude-sonnet-4", "azure_ai/gpt-4.1"];
+
+    for model in models {
+        let Some(route) = resolve_dynamic_provider_route(model, &options) else {
+            panic!("{model} route should resolve");
+        };
+
+        let openai_key = custom_api_base_api_key_fallback(
+            &options,
+            &route,
+            Some("sk-openai-env".to_string()),
+            None,
+        );
+        assert!(openai_key.is_none());
+
+        let provider_key = custom_api_base_api_key_fallback(
+            &options,
+            &route,
+            Some("sk-openai-env".to_string()),
+            Some("sk-provider-env".to_string()),
+        );
+        assert_eq!(provider_key.as_deref(), Some("sk-provider-env"));
+    }
 }
 
 #[test]
