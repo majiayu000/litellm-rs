@@ -3,9 +3,11 @@ use super::utils::ModelUtils;
 impl ModelUtils {
     pub fn get_model_pricing(model: &str) -> Option<(f64, f64)> {
         let model_lower = model.to_lowercase();
+        let pricing_model = normalize_pricing_model(&model_lower);
 
-        if let Some(provider) = infer_pricing_provider(&model_lower)
-            && let Ok(pricing) = crate::core::cost::calculator::get_model_pricing(model, provider)
+        if let Some(provider) = infer_pricing_provider(pricing_model)
+            && let Ok(pricing) =
+                crate::core::cost::calculator::get_model_pricing(pricing_model, provider)
         {
             return Some((
                 pricing.input_cost_per_1k_tokens,
@@ -13,7 +15,7 @@ impl ModelUtils {
             ));
         }
 
-        match model_lower.as_str() {
+        match pricing_model {
             m if m.starts_with("gpt-5.5-pro") => Some((0.030, 0.180)),
             m if m.starts_with("gpt-5.5") => Some((0.005, 0.030)),
             m if m.starts_with("gpt-5.4-pro") => Some((0.030, 0.180)),
@@ -190,6 +192,10 @@ impl ModelUtils {
     }
 }
 
+fn normalize_pricing_model(model_lower: &str) -> &str {
+    model_lower.strip_prefix("openai/").unwrap_or(model_lower)
+}
+
 fn infer_pricing_provider(model_lower: &str) -> Option<&'static str> {
     if model_lower.starts_with("gpt-")
         || model_lower.starts_with("o3")
@@ -236,6 +242,26 @@ mod tests {
         let (input, output) = pricing.unwrap();
         assert!((input - 0.0025).abs() < f64::EPSILON);
         assert!((output - 0.015).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_model_pricing_gpt55_openai_aliases() {
+        assert_eq!(
+            ModelUtils::get_model_pricing("openai/gpt-5.5"),
+            ModelUtils::get_model_pricing("gpt-5.5")
+        );
+        assert_eq!(
+            ModelUtils::get_model_pricing("openai/gpt-5.5-pro"),
+            ModelUtils::get_model_pricing("gpt-5.5-pro")
+        );
+        assert_eq!(
+            ModelUtils::get_model_pricing("openai/gpt-5.5"),
+            Some((0.005, 0.030))
+        );
+        assert_eq!(
+            ModelUtils::get_model_pricing("openai/gpt-5.5-pro"),
+            Some((0.030, 0.180))
+        );
     }
 
     #[test]
