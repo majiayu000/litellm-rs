@@ -270,6 +270,8 @@ fn test_get_supported_openai_params_advertises_forwarded_chat_fields() {
     for model in [
         "gpt-4o",
         "gpt-4o-mini",
+        "gpt-4o-audio-preview",
+        "gpt-audio",
         "gpt-4.1",
         "gpt-4.1-mini",
         "gpt-4.1-nano",

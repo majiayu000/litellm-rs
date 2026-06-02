@@ -565,6 +565,8 @@ impl LLMProvider for OpenAIProvider {
                 | super::models::OpenAIModelFamily::GPT41
                 | super::models::OpenAIModelFamily::GPT41Mini
                 | super::models::OpenAIModelFamily::GPT41Nano
+                | super::models::OpenAIModelFamily::GPT4OAudio
+                | super::models::OpenAIModelFamily::GPTAudio
                 | super::models::OpenAIModelFamily::GPT4OMini => &[
                     "messages",
                     "model",
