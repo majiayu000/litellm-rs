@@ -391,6 +391,19 @@ mod tests {
     }
 
     #[test]
+    fn test_get_model_aliases_gpt55_tiers_are_separate() {
+        let base_aliases = ModelUtils::get_model_aliases("gpt-5.5");
+        assert!(base_aliases.contains(&"openai/gpt-5.5".to_string()));
+        assert!(base_aliases.contains(&"gpt-5.5-2026-04-23".to_string()));
+        assert!(!base_aliases.iter().any(|alias| alias.contains("pro")));
+
+        let pro_aliases = ModelUtils::get_model_aliases("gpt-5.5-pro");
+        assert!(pro_aliases.contains(&"openai/gpt-5.5-pro".to_string()));
+        assert!(pro_aliases.contains(&"gpt-5.5-pro-2026-04-23".to_string()));
+        assert!(!pro_aliases.contains(&"gpt-5.5-2026-04-23".to_string()));
+    }
+
+    #[test]
     fn test_get_model_aliases_claude() {
         let aliases = ModelUtils::get_model_aliases("claude-3-opus");
         assert!(!aliases.is_empty());
