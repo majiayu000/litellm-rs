@@ -39,14 +39,7 @@ impl AnthropicTransformer {
     }
 
     fn empty_delta() -> ChatDelta {
-        ChatDelta {
-            role: None,
-            content: None,
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
-        }
+        ChatDelta::default()
     }
 
     fn chunk_with_choice(
@@ -108,11 +101,7 @@ impl SSETransformer for AnthropicTransformer {
                         index: 0,
                         delta: ChatDelta {
                             role: Some(MessageRole::Assistant),
-                            content: None,
-                            thinking: None,
-                            tool_calls: None,
-                            function_call: None,
-                            audio: None,
+                            ..Default::default()
                         },
                         finish_reason: None,
                         logprobs: None,

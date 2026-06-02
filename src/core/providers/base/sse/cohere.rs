@@ -79,12 +79,8 @@ impl SSETransformer for CohereTransformer {
                         choices: vec![ChatStreamChoice {
                             index: 0,
                             delta: ChatDelta {
-                                role: None,
                                 content: Some(text.to_string()),
-                                thinking: None,
-                                tool_calls: None,
-                                function_call: None,
-                                audio: None,
+                                ..Default::default()
                             },
                             finish_reason: None,
                             logprobs: None,
@@ -131,14 +127,7 @@ impl SSETransformer for CohereTransformer {
                         model: self.model.clone(),
                         choices: vec![ChatStreamChoice {
                             index: 0,
-                            delta: ChatDelta {
-                                role: None,
-                                content: None,
-                                thinking: None,
-                                tool_calls: None,
-                                function_call: None,
-                                audio: None,
-                            },
+                            delta: ChatDelta::default(),
                             finish_reason: Some(Self::parse_cohere_finish_reason(finish_reason)),
                             logprobs: None,
                         }],
@@ -162,12 +151,8 @@ impl SSETransformer for CohereTransformer {
                         choices: vec![ChatStreamChoice {
                             index: 0,
                             delta: ChatDelta {
-                                role: None,
                                 content: Some(text.to_string()),
-                                thinking: None,
-                                tool_calls: None,
-                                function_call: None,
-                                audio: None,
+                                ..Default::default()
                             },
                             finish_reason: None,
                             logprobs: None,
@@ -188,14 +173,7 @@ impl SSETransformer for CohereTransformer {
                         model: self.model.clone(),
                         choices: vec![ChatStreamChoice {
                             index: 0,
-                            delta: ChatDelta {
-                                role: None,
-                                content: None,
-                                thinking: None,
-                                tool_calls: None,
-                                function_call: None,
-                                audio: None,
-                            },
+                            delta: ChatDelta::default(),
                             finish_reason: Some(Self::parse_cohere_finish_reason(finish_reason)),
                             logprobs: None,
                         }],

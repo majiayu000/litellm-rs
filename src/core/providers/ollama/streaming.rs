@@ -125,14 +125,7 @@ where
 
     /// Convert Ollama chunk to standard ChatChunk
     fn convert_chunk(&self, chunk: OllamaStreamChunk) -> Result<ChatChunk, ProviderError> {
-        let mut delta = ChatDelta {
-            role: None,
-            content: None,
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
-        };
+        let mut delta = ChatDelta::default();
 
         // Extract message content
         if let Some(message) = &chunk.message {
@@ -315,11 +308,7 @@ fn response_to_chunks(response: ChatResponse) -> Vec<ChatChunk> {
             index: 0,
             delta: ChatDelta {
                 role: Some(MessageRole::Assistant),
-                content: None,
-                thinking: None,
-                tool_calls: None,
-                function_call: None,
-                audio: None,
+                ..Default::default()
             },
             finish_reason: None,
             logprobs: None,
@@ -351,12 +340,8 @@ fn response_to_chunks(response: ChatResponse) -> Vec<ChatChunk> {
                     choices: vec![ChatStreamChoice {
                         index: 0,
                         delta: ChatDelta {
-                            role: None,
                             content: Some(chunk_text),
-                            thinking: None,
-                            tool_calls: None,
-                            function_call: None,
-                            audio: None,
+                            ..Default::default()
                         },
                         finish_reason: None,
                         logprobs: None,
@@ -375,14 +360,7 @@ fn response_to_chunks(response: ChatResponse) -> Vec<ChatChunk> {
             system_fingerprint: response.system_fingerprint.clone(),
             choices: vec![ChatStreamChoice {
                 index: 0,
-                delta: ChatDelta {
-                    role: None,
-                    content: None,
-                    thinking: None,
-                    tool_calls: None,
-                    function_call: None,
-                    audio: None,
-                },
+                delta: ChatDelta::default(),
                 finish_reason: choice.finish_reason.clone(),
                 logprobs: None,
             }],

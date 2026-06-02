@@ -22,7 +22,7 @@ pub struct AudioDelta {
 }
 
 /// Streaming delta content
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChatDelta {
     /// Role (usually only appears in first chunk)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,10 +107,7 @@ mod tests {
         let delta = ChatDelta {
             role: Some(MessageRole::Assistant),
             content: Some("Hello".to_string()),
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         assert!(delta.role.is_some());
         assert_eq!(delta.content, Some("Hello".to_string()));
@@ -118,14 +115,7 @@ mod tests {
 
     #[test]
     fn test_chat_delta_empty() {
-        let delta = ChatDelta {
-            role: None,
-            content: None,
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
-        };
+        let delta = ChatDelta::default();
         assert!(delta.role.is_none());
         assert!(delta.content.is_none());
     }
@@ -133,12 +123,8 @@ mod tests {
     #[test]
     fn test_chat_delta_has_thinking_false() {
         let delta = ChatDelta {
-            role: None,
             content: Some("response".to_string()),
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         assert!(!delta.has_thinking());
     }
@@ -146,17 +132,13 @@ mod tests {
     #[test]
     fn test_chat_delta_has_thinking_true() {
         let delta = ChatDelta {
-            role: None,
-            content: None,
             thinking: Some(ThinkingDelta {
                 content: Some("thinking...".to_string()),
                 signature: None,
                 is_start: None,
                 is_complete: None,
             }),
-            tool_calls: None,
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         assert!(delta.has_thinking());
     }
@@ -164,31 +146,20 @@ mod tests {
     #[test]
     fn test_chat_delta_thinking_content() {
         let delta = ChatDelta {
-            role: None,
-            content: None,
             thinking: Some(ThinkingDelta {
                 content: Some("Let me think...".to_string()),
                 signature: None,
                 is_start: None,
                 is_complete: None,
             }),
-            tool_calls: None,
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         assert_eq!(delta.thinking_content(), Some("Let me think..."));
     }
 
     #[test]
     fn test_chat_delta_thinking_content_none() {
-        let delta = ChatDelta {
-            role: None,
-            content: None,
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
-        };
+        let delta = ChatDelta::default();
         assert_eq!(delta.thinking_content(), None);
     }
 
@@ -197,10 +168,7 @@ mod tests {
         let delta = ChatDelta {
             role: Some(MessageRole::Assistant),
             content: Some("Hi".to_string()),
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&delta).unwrap();
         assert!(json.contains("assistant"));
@@ -209,14 +177,7 @@ mod tests {
 
     #[test]
     fn test_chat_delta_serialization_minimal() {
-        let delta = ChatDelta {
-            role: None,
-            content: None,
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
-        };
+        let delta = ChatDelta::default();
         let json = serde_json::to_string(&delta).unwrap();
         assert_eq!(json, "{}");
     }
@@ -357,10 +318,7 @@ mod tests {
         let delta = ChatDelta {
             role: Some(MessageRole::User),
             content: Some("test".to_string()),
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         let cloned = delta.clone();
         assert_eq!(cloned.content, Some("test".to_string()));
@@ -391,12 +349,8 @@ mod tests {
     #[test]
     fn test_chat_delta_debug() {
         let delta = ChatDelta {
-            role: None,
             content: Some("debug".to_string()),
-            thinking: None,
-            tool_calls: None,
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         let debug = format!("{:?}", delta);
         assert!(debug.contains("ChatDelta"));
@@ -419,9 +373,6 @@ mod tests {
     #[test]
     fn test_chat_delta_with_tool_calls() {
         let delta = ChatDelta {
-            role: None,
-            content: None,
-            thinking: None,
             tool_calls: Some(vec![
                 ToolCallDelta {
                     index: 0,
@@ -442,8 +393,7 @@ mod tests {
                     }),
                 },
             ]),
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         assert_eq!(delta.tool_calls.as_ref().unwrap().len(), 2);
     }
@@ -452,14 +402,11 @@ mod tests {
     fn test_chat_delta_with_function_call_backward_compat() {
         let delta = ChatDelta {
             role: Some(MessageRole::Assistant),
-            content: None,
-            thinking: None,
-            tool_calls: None,
             function_call: Some(FunctionCallDelta {
                 name: Some("old_function".to_string()),
                 arguments: Some("{}".to_string()),
             }),
-            audio: None,
+            ..Default::default()
         };
         assert!(delta.function_call.is_some());
     }
@@ -488,17 +435,13 @@ mod tests {
     #[test]
     fn test_chat_delta_thinking_with_empty_content() {
         let delta = ChatDelta {
-            role: None,
-            content: None,
             thinking: Some(ThinkingDelta {
                 content: None,
                 signature: None,
                 is_start: None,
                 is_complete: None,
             }),
-            tool_calls: None,
-            function_call: None,
-            audio: None,
+            ..Default::default()
         };
         assert!(delta.has_thinking());
         assert_eq!(delta.thinking_content(), None);

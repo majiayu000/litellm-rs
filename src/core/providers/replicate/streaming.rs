@@ -115,10 +115,7 @@ fn create_chat_chunk(text: &str) -> ChatChunk {
             delta: ChatDelta {
                 role: Some(crate::core::types::message::MessageRole::Assistant),
                 content: Some(text.to_string()),
-                thinking: None,
-                tool_calls: None,
-                function_call: None,
-                audio: None,
+                ..Default::default()
             },
             logprobs: None,
             finish_reason: None,

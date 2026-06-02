@@ -134,10 +134,7 @@ impl SSETransformer for GeminiTransformer {
                     } else {
                         Some(delta_content)
                     },
-                    thinking: None,
-                    function_call: None,
-                    tool_calls: None,
-                    audio: None,
+                    ..Default::default()
                 },
                 finish_reason,
                 logprobs: None,

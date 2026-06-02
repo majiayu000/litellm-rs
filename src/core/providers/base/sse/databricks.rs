@@ -75,20 +75,10 @@ impl SSETransformer for DatabricksTransformer {
                     ChatDelta {
                         role,
                         content,
-                        thinking: None,
-                        tool_calls: None,
-                        function_call: None,
-                        audio: None,
+                        ..Default::default()
                     }
                 } else {
-                    ChatDelta {
-                        role: None,
-                        content: None,
-                        thinking: None,
-                        tool_calls: None,
-                        function_call: None,
-                        audio: None,
-                    }
+                    ChatDelta::default()
                 };
 
                 let finish_reason = choice
