@@ -112,7 +112,7 @@ pub trait SSETransformer: Send + Sync {
     /// states used by Anthropic and Gemini. Providers that emit unique
     /// reasons may still override this method.
     fn parse_finish_reason(&self, reason: &str) -> Option<FinishReason> {
-        match reason {
+        match reason.to_ascii_lowercase().as_str() {
             "stop" | "end_turn" => Some(FinishReason::Stop),
             "length" | "max_tokens" => Some(FinishReason::Length),
             "tool_calls" | "function_call" | "tool_use" => Some(FinishReason::ToolCalls),
@@ -634,10 +634,15 @@ mod tests {
     fn test_default_parse_finish_reason_covers_anthropic_and_gemini() {
         let t = OpenAICompatibleTransformer::new("test");
         assert_eq!(t.parse_finish_reason("stop"), Some(FinishReason::Stop));
+        assert_eq!(t.parse_finish_reason("STOP"), Some(FinishReason::Stop));
         assert_eq!(t.parse_finish_reason("end_turn"), Some(FinishReason::Stop));
         assert_eq!(t.parse_finish_reason("length"), Some(FinishReason::Length));
         assert_eq!(
             t.parse_finish_reason("max_tokens"),
+            Some(FinishReason::Length)
+        );
+        assert_eq!(
+            t.parse_finish_reason("MAX_TOKENS"),
             Some(FinishReason::Length)
         );
         assert_eq!(
@@ -657,7 +662,15 @@ mod tests {
             Some(FinishReason::ContentFilter)
         );
         assert_eq!(
+            t.parse_finish_reason("SAFETY"),
+            Some(FinishReason::ContentFilter)
+        );
+        assert_eq!(
             t.parse_finish_reason("recitation"),
+            Some(FinishReason::ContentFilter)
+        );
+        assert_eq!(
+            t.parse_finish_reason("RECITATION"),
             Some(FinishReason::ContentFilter)
         );
         assert_eq!(
