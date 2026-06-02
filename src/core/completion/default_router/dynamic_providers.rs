@@ -138,19 +138,36 @@ fn resolve_dynamic_provider_api_key(
     route: &DynamicProviderRoute<'_>,
 ) -> Option<String> {
     options.api_key.clone().or_else(|| {
-        custom_api_base_api_key_fallback(options, route, std::env::var("OPENAI_API_KEY").ok())
+        custom_api_base_api_key_fallback(
+            options,
+            route,
+            std::env::var("OPENAI_API_KEY").ok(),
+            dynamic_provider_api_key(route),
+        )
     })
+}
+
+fn dynamic_provider_api_key(route: &DynamicProviderRoute<'_>) -> Option<String> {
+    match route.provider_type {
+        "xai" => std::env::var("XAI_API_KEY").ok(),
+        _ => None,
+    }
 }
 
 fn custom_api_base_api_key_fallback(
     options: &CompletionOptions,
     route: &DynamicProviderRoute<'_>,
     openai_api_key: Option<String>,
+    provider_api_key: Option<String>,
 ) -> Option<String> {
     if options.api_base.is_some()
         && (route.provider_type == "openai-compatible" || route.provider_type == "xai")
     {
-        Some(openai_api_key.unwrap_or_else(|| "dummy-key-for-local".to_string()))
+        Some(
+            provider_api_key
+                .or(openai_api_key)
+                .unwrap_or_else(|| "dummy-key-for-local".to_string()),
+        )
     } else {
         None
     }

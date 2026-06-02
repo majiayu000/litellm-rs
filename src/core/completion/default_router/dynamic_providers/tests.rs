@@ -82,7 +82,7 @@ fn test_custom_api_base_api_key_fallback_uses_env_key() {
     };
 
     let api_key =
-        custom_api_base_api_key_fallback(&options, &route, Some("sk-from-env".to_string()));
+        custom_api_base_api_key_fallback(&options, &route, Some("sk-from-env".to_string()), None);
 
     assert_eq!(api_key.as_deref(), Some("sk-from-env"));
 }
@@ -97,7 +97,7 @@ fn test_custom_api_base_api_key_fallback_uses_dummy_without_env_key() {
         panic!("custom api_base route should resolve");
     };
 
-    let api_key = custom_api_base_api_key_fallback(&options, &route, None);
+    let api_key = custom_api_base_api_key_fallback(&options, &route, None, None);
 
     assert_eq!(api_key.as_deref(), Some("dummy-key-for-local"));
 }
@@ -176,8 +176,28 @@ fn test_xai_api_base_override_stays_named_dynamic_route() {
     assert_eq!(route.actual_model, "grok-4.3");
     assert_eq!(route.api_base, "http://localhost:5567/v1");
 
-    let api_key = custom_api_base_api_key_fallback(&options, &route, None);
+    let api_key = custom_api_base_api_key_fallback(&options, &route, None, None);
     assert_eq!(api_key.as_deref(), Some("dummy-key-for-local"));
+}
+
+#[test]
+fn test_xai_api_base_override_prefers_xai_env_key() {
+    let options = CompletionOptions {
+        api_base: Some("http://localhost:5567/v1".to_string()),
+        ..CompletionOptions::default()
+    };
+    let Some(route) = resolve_dynamic_provider_route("xai/grok-4.3", &options) else {
+        panic!("xAI route should resolve before generic custom api_base");
+    };
+
+    let api_key = custom_api_base_api_key_fallback(
+        &options,
+        &route,
+        Some("sk-openai-env".to_string()),
+        Some("sk-xai-env".to_string()),
+    );
+
+    assert_eq!(api_key.as_deref(), Some("sk-xai-env"));
 }
 
 #[test]
@@ -188,7 +208,7 @@ fn test_api_key_fallback_does_not_apply_to_prefixed_routes() {
     };
 
     let api_key =
-        custom_api_base_api_key_fallback(&options, &route, Some("sk-from-env".to_string()));
+        custom_api_base_api_key_fallback(&options, &route, Some("sk-from-env".to_string()), None);
 
     assert!(api_key.is_none());
 }
