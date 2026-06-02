@@ -9,7 +9,7 @@ use crate::core::types::responses::{
     AudioDelta, ChatChoice, ChatChunk, ChatDelta, ChatResponse, ChatStreamChoice, FinishReason,
     FunctionCallDelta, LogProbs, TokenLogProb, ToolCallDelta, TopLogProb, Usage,
 };
-use crate::core::types::thinking::ThinkingContent;
+use crate::core::types::thinking::{ThinkingContent, ThinkingDelta};
 
 use super::super::error::OpenAIError;
 use super::super::models::*;
@@ -92,7 +92,15 @@ impl OpenAIResponseTransformer {
             name: f.name,
             arguments: f.arguments,
         });
+        let thinking = delta
+            .reasoning_content
+            .filter(|reasoning| !reasoning.is_empty())
+            .or(delta.reasoning)
+            .filter(|reasoning| !reasoning.is_empty())
+            .map(ThinkingDelta::new);
         let audio = delta.audio.map(|a| AudioDelta {
+            id: a.id,
+            expires_at: a.expires_at,
             data: a.data,
             transcript: a.transcript,
             format: a.format,
@@ -108,7 +116,7 @@ impl OpenAIResponseTransformer {
                 _ => MessageRole::Assistant,
             }),
             content: delta.content,
-            thinking: None,
+            thinking,
             tool_calls,
             function_call,
             audio,
