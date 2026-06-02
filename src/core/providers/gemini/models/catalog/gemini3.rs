@@ -1,6 +1,9 @@
-use super::super::{
-    GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec,
-    pricing_per_million,
+use super::{
+    super::{
+        GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec,
+        pricing_per_million,
+    },
+    advanced_text_capabilities,
 };
 use crate::core::types::model::ModelInfo;
 
@@ -23,11 +26,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.002),
                 output_cost_per_1k_tokens: Some(0.012),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
@@ -83,11 +82,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.004),
                 output_cost_per_1k_tokens: Some(0.024),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
@@ -100,6 +95,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 ModelFeature::StreamingSupport,
                 ModelFeature::ContextCaching,
                 ModelFeature::SystemInstructions,
+                ModelFeature::BatchProcessing,
                 ModelFeature::JsonMode,
                 ModelFeature::CodeExecution,
                 ModelFeature::SearchGrounding,
@@ -135,11 +131,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.0005),
                 output_cost_per_1k_tokens: Some(0.003),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),

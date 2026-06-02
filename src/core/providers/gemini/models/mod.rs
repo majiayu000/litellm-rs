@@ -382,6 +382,7 @@ impl CostCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::model::ProviderCapability;
 
     #[test]
     fn test_model_registry() {
@@ -532,12 +533,78 @@ mod tests {
         assert_eq!(spec.family, GeminiModelFamily::Gemini35Flash);
         assert_eq!(spec.limits.max_context_length, 1_048_576);
         assert_eq!(spec.limits.max_output_tokens, 65_536);
+        assert_eq!(spec.limits.max_images, Some(3000));
+        assert_eq!(spec.limits.max_video_seconds, Some(3600));
+        assert_eq!(spec.limits.max_audio_seconds, Some(9600));
+        assert_eq!(spec.limits.rpm_limit, None);
+        assert_eq!(spec.limits.tpm_limit, None);
         assert!(spec.features.contains(&ModelFeature::ToolCalling));
         assert!(spec.features.contains(&ModelFeature::ContextCaching));
         assert!(spec.features.contains(&ModelFeature::SearchGrounding));
         assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.0015);
         assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.009);
         assert_eq!(spec.pricing.cache_read_input_token_cost, Some(0.00015));
+        assert_eq!(spec.pricing.cost_per_image, None);
+        assert_eq!(spec.pricing.video_cost_per_second, None);
+        assert_eq!(spec.pricing.audio_cost_per_second, None);
+    }
+
+    #[test]
+    fn test_gemini_family_capabilities_include_declared_advanced_features() {
+        let registry = get_gemini_registry();
+        let full_capability_models = [
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-3-pro",
+            "gemini-3-pro-deep-think",
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash",
+            "gemini-3.1-flash-lite-preview",
+            "gemini-2.0-flash-exp",
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+        ];
+
+        for model_id in full_capability_models {
+            let Some(spec) = registry.get_model_spec(model_id) else {
+                panic!("{model_id} should be registered");
+            };
+            for capability in [
+                ProviderCapability::FunctionCalling,
+                ProviderCapability::CodeExecution,
+                ProviderCapability::BatchProcessing,
+            ] {
+                assert!(
+                    spec.model_info.capabilities.contains(&capability),
+                    "{model_id} should expose {capability:?}"
+                );
+            }
+        }
+
+        let Some(gemini_10) = registry.get_model_spec("gemini-1.0-pro") else {
+            panic!("gemini-1.0-pro should be registered");
+        };
+        assert!(
+            gemini_10
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::FunctionCalling)
+        );
+        assert!(
+            gemini_10
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::BatchProcessing)
+        );
+        assert!(
+            !gemini_10
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::CodeExecution)
+        );
     }
 
     #[test]

@@ -473,6 +473,34 @@ mod tests {
     }
 
     #[test]
+    fn extended_pricing_has_explicit_cohere_command_a_rates() {
+        let Ok(db) = PricingDatabase::from_default_source() else {
+            panic!("extended pricing source should load");
+        };
+        let usage = Usage::new(1000, 500);
+
+        let Some(command_a_plus) = db.get_model_info("command-a-plus-05-2026") else {
+            panic!("command-a-plus-05-2026 pricing entry should exist");
+        };
+        assert_eq!(command_a_plus.input_cost_per_token, Some(0.0));
+        assert_eq!(command_a_plus.output_cost_per_token, Some(0.0));
+        assert_eq!(
+            db.calculate_for_provider("cohere", "command-a-plus-05-2026", &usage),
+            0.0
+        );
+
+        let Some(command_a) = db.get_model_info("command-a-03-2025") else {
+            panic!("command-a-03-2025 pricing entry should exist");
+        };
+        assert_eq!(command_a.input_cost_per_token, Some(2.5e-06));
+        assert_eq!(command_a.output_cost_per_token, Some(1e-05));
+        assert!(
+            (db.calculate_for_provider("cohere", "command-a-03-2025", &usage) - 0.0075).abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
     fn test_model_info() {
         let db = PricingDatabase::default();
 

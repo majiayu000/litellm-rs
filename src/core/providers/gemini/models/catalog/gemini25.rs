@@ -1,6 +1,9 @@
-use super::super::{
-    GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec,
-    pricing_per_million,
+use super::{
+    super::{
+        GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec,
+        pricing_per_million,
+    },
+    advanced_text_capabilities,
 };
 use crate::core::types::model::ModelInfo;
 
@@ -23,11 +26,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.00125),
                 output_cost_per_1k_tokens: Some(0.010),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
@@ -83,11 +82,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.0003),
                 output_cost_per_1k_tokens: Some(0.0025),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
@@ -143,11 +138,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.0001),
                 output_cost_per_1k_tokens: Some(0.0004),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),

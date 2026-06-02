@@ -47,13 +47,15 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 ModelFeature::VideoUnderstanding,
                 ModelFeature::AudioUnderstanding,
             ],
+            // Official Gemini 3.5 Flash standard pricing is token-based and
+            // does not publish separate image/video/audio unit rates.
             pricing: pricing_per_million(1.5, 9.0, Some(0.15), None, None, None),
             limits: ModelLimits {
                 max_context_length: 1_048_576,
                 max_output_tokens: 65_536,
-                max_images: None,
-                max_video_seconds: None,
-                max_audio_seconds: None,
+                max_images: Some(3000),
+                max_video_seconds: Some(3600),
+                max_audio_seconds: Some(9600),
                 // rpm_limit / tpm_limit deliberately None: official limits at
                 // https://ai.google.dev/gemini-api/docs/rate-limits vary by billing tier
                 // (Free: 10 RPM, Tier 1: 2000 RPM as of 2026-05-25). Add explicit limits

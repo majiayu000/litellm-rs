@@ -1,6 +1,9 @@
-use super::super::{
-    GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec,
-    pricing_per_million,
+use super::{
+    super::{
+        GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec,
+        pricing_per_million,
+    },
+    advanced_text_capabilities, function_batch_capabilities,
 };
 use crate::core::providers::shared::{
     GEMINI_15_PRO_CONTEXT_WINDOW, GEMINI_20_FLASH_CONTEXT_WINDOW,
@@ -27,11 +30,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.00001),
                 output_cost_per_1k_tokens: Some(0.00004),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
@@ -130,11 +129,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.00125),
                 output_cost_per_1k_tokens: Some(0.005),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
@@ -190,11 +185,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.000075),
                 output_cost_per_1k_tokens: Some(0.0003),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
@@ -250,11 +241,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.0000375),
                 output_cost_per_1k_tokens: Some(0.00015),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: advanced_text_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
@@ -308,11 +295,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 input_cost_per_1k_tokens: Some(0.0005),
                 output_cost_per_1k_tokens: Some(0.0015),
                 currency: "USD".to_string(),
-                capabilities: vec![
-                    crate::core::types::model::ProviderCapability::ChatCompletion,
-                    crate::core::types::model::ProviderCapability::ChatCompletionStream,
-                    crate::core::types::model::ProviderCapability::ToolCalling,
-                ],
+                capabilities: function_batch_capabilities(),
                 created_at: None,
                 updated_at: None,
                 metadata: std::collections::HashMap::new(),
