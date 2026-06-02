@@ -7,7 +7,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::warn;
 
 use super::config::OpenAIModerationConfig;
 use super::traits::Guardrail;
@@ -62,16 +61,12 @@ impl OpenAIModerationGuardrail {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_else(|e| {
-                warn!(
-                    "Failed to read OpenAI moderation error response payload: {}",
-                    e
-                );
-                String::new()
-            });
+            let response_body_bytes = response
+                .content_length()
+                .map_or_else(|| "unknown".to_string(), |bytes| bytes.to_string());
             return Err(GuardrailError::Api(format!(
-                "OpenAI API error: {} - {}",
-                status, body
+                "OpenAI API error: status={} response_body_bytes={}",
+                status, response_body_bytes
             )));
         }
 
@@ -222,6 +217,7 @@ struct ModerationApiResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn create_test_guardrail() -> OpenAIModerationGuardrail {
         let config = OpenAIModerationConfig {
@@ -231,6 +227,44 @@ mod tests {
             ..Default::default()
         };
         OpenAIModerationGuardrail::new(config).unwrap()
+    }
+
+    async fn start_moderation_error_server(
+        status_line: &str,
+        body: &str,
+    ) -> std::io::Result<String> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let status_line = status_line.to_string();
+        let body = body.to_string();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(connection) => connection,
+                Err(error) => panic!("mock moderation server should accept request: {}", error),
+            };
+            let mut request_buffer = [0_u8; 1024];
+            if let Err(error) = stream.read(&mut request_buffer).await {
+                panic!(
+                    "mock moderation server should read request bytes: {}",
+                    error
+                );
+            }
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_line,
+                body.len(),
+                body
+            );
+            if let Err(error) = stream.write_all(response.as_bytes()).await {
+                panic!(
+                    "mock moderation server should write response bytes: {}",
+                    error
+                );
+            }
+        });
+
+        Ok(format!("http://{}", address))
     }
 
     #[test]
@@ -347,6 +381,32 @@ mod tests {
         let guardrail = create_test_guardrail();
         let result = guardrail.check_input("   \n\t  ").await.unwrap();
         assert!(result.passed);
+    }
+
+    #[tokio::test]
+    async fn test_non_success_api_error_redacts_response_body()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let body = r#"{"error":{"message":"sensitive-upstream-token should not be logged"}}"#;
+        let base_url = start_moderation_error_server("429 Too Many Requests", body).await?;
+        let config = OpenAIModerationConfig {
+            enabled: true,
+            api_key: Some("test-key".to_string()),
+            base_url,
+            threshold: 0.5,
+            ..Default::default()
+        };
+        let guardrail = OpenAIModerationGuardrail::new(config)?;
+
+        let error = match guardrail.check_input("content to moderate").await {
+            Ok(_) => panic!("non-2xx moderation response should fail"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("status=429 Too Many Requests"));
+        assert!(error.contains(&format!("response_body_bytes={}", body.len())));
+        assert!(!error.contains("sensitive-upstream-token"));
+        assert!(!error.contains("should not be logged"));
+        Ok(())
     }
 
     #[test]
