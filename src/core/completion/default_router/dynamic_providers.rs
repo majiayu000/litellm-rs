@@ -194,9 +194,7 @@ fn custom_api_base_api_key_fallback(
     openai_api_key: Option<String>,
     provider_api_key: Option<String>,
 ) -> Option<String> {
-    if options.api_base.is_none() {
-        return None;
-    }
+    options.api_base.as_ref()?;
 
     provider_api_key.or_else(|| {
         is_openai_compatible_api_key_fallback(route)
