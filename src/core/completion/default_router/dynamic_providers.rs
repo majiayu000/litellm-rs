@@ -143,17 +143,17 @@ fn resolve_dynamic_provider_api_key(
     options: &CompletionOptions,
     route: &DynamicProviderRoute<'_>,
 ) -> Option<String> {
-    options.api_key.clone().or_else(|| {
-        let provider_api_key = dynamic_provider_api_key(route);
-        provider_api_key.clone().or_else(|| {
-            custom_api_base_api_key_fallback(
-                options,
-                route,
-                std::env::var("OPENAI_API_KEY").ok(),
-                provider_api_key,
-            )
-        })
-    })
+    if let Some(api_key) = &options.api_key {
+        return Some(api_key.clone());
+    }
+
+    options.api_base.as_ref()?;
+    custom_api_base_api_key_fallback(
+        options,
+        route,
+        std::env::var("OPENAI_API_KEY").ok(),
+        dynamic_provider_api_key(route),
+    )
 }
 
 fn dynamic_provider_api_key(route: &DynamicProviderRoute<'_>) -> Option<String> {

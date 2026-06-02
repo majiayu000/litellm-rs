@@ -414,6 +414,24 @@ fn test_api_key_fallback_does_not_apply_to_prefixed_routes() {
 }
 
 #[test]
+fn test_provider_env_key_without_api_base_does_not_enable_dynamic_route() {
+    let options = CompletionOptions::default();
+    let Some(route) = resolve_dynamic_provider_route("xai/grok-4.3", &options) else {
+        panic!("prefixed route should resolve");
+    };
+    let original = std::env::var("XAI_API_KEY").ok();
+
+    unsafe { std::env::set_var("XAI_API_KEY", "sk-xai-env") };
+    let api_key = resolve_dynamic_provider_api_key(&options, &route);
+    match original {
+        Some(value) => unsafe { std::env::set_var("XAI_API_KEY", value) },
+        None => unsafe { std::env::remove_var("XAI_API_KEY") },
+    }
+
+    assert!(api_key.is_none());
+}
+
+#[test]
 fn test_resolve_dynamic_route_without_prefix_or_api_base() {
     let options = CompletionOptions::default();
     let route = resolve_dynamic_provider_route("my-custom-model", &options);
