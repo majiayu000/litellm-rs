@@ -143,17 +143,26 @@ fn resolve_dynamic_provider_api_key(
     options: &CompletionOptions,
     route: &DynamicProviderRoute<'_>,
 ) -> Option<String> {
-    if let Some(api_key) = &options.api_key {
-        return Some(api_key.clone());
+    resolve_dynamic_provider_api_key_from_sources(
+        options,
+        route,
+        dynamic_provider_api_key(route),
+        std::env::var("OPENAI_API_KEY").ok(),
+    )
+}
+
+fn resolve_dynamic_provider_api_key_from_sources(
+    options: &CompletionOptions,
+    route: &DynamicProviderRoute<'_>,
+    provider_api_key: Option<String>,
+    openai_api_key: Option<String>,
+) -> Option<String> {
+    if let Some(api_key) = options.api_key.clone() {
+        return Some(api_key);
     }
 
     options.api_base.as_ref()?;
-    custom_api_base_api_key_fallback(
-        options,
-        route,
-        std::env::var("OPENAI_API_KEY").ok(),
-        dynamic_provider_api_key(route),
-    )
+    custom_api_base_api_key_fallback(options, route, openai_api_key, provider_api_key)
 }
 
 fn dynamic_provider_api_key(route: &DynamicProviderRoute<'_>) -> Option<String> {
