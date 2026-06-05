@@ -17,6 +17,7 @@ pub use connection_pool::{
     STREAMING_HEADER_TIMEOUT_SECS, StreamingRequestError, apply_headers, global_client, header,
     header_owned, header_static, read_streaming_error_body, read_streaming_error_body_with_limits,
     send_streaming_request, send_streaming_request_with_timeout, streaming_client,
+    streaming_unbounded_client,
 };
 pub use http::{
     BaseHttpClient, HttpErrorMapper, OpenAIRequestTransformer, UrlBuilder, create_http_client,

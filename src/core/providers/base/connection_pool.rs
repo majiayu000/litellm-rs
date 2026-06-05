@@ -130,10 +130,10 @@ static GLOBAL_CLIENT: LazyLock<Arc<Client>> = LazyLock::new(|| {
 });
 
 static STREAMING_CLIENT: LazyLock<Arc<Client>> = LazyLock::new(|| {
-    let client = match create_streaming_client() {
-        Ok(client) => client,
-        Err(err) => panic!("streaming HTTP client must build: {err}"),
-    };
+    let client = create_streaming_client().unwrap_or_else(|err| {
+        tracing::error!("Failed to create streaming HTTP client: {err}");
+        crate::core::http::outbound::default_outbound_client().clone()
+    });
     Arc::new(client)
 });
 
@@ -148,21 +148,47 @@ pub fn global_client() -> Arc<Client> {
 
 /// Get a streaming-ready HTTP client
 ///
-/// Returns a shared HTTP client for streaming requests.
+/// Returns the legacy bounded HTTP client for streaming requests.
 /// This should be used instead of ad hoc client construction for streaming
-/// to benefit from the streaming connection pool without a total request
-/// lifetime timeout.
+/// to benefit from the streaming connection pool.
+///
+/// Existing callers still use this client directly with `.send().await`, so it
+/// must keep the global total timeout until callers migrate to
+/// `streaming_unbounded_client()` plus `send_streaming_request()`.
+///
+/// # Example
+///
+/// ```ignore
+/// use crate::core::providers::base::connection_pool::streaming_client;
+///
+/// // Use the shared legacy streaming client.
+/// let response = streaming_client()
+///     .post(&url)
+///     .headers(headers)
+///     .json(&body)
+///     .send()
+///     .await?;
+/// let stream = response.bytes_stream();
+/// ```
+#[inline]
+pub fn streaming_client() -> Arc<Client> {
+    global_client()
+}
+
+/// Get an HTTP client for streaming bodies without a total request timeout.
+///
+/// Pair this with `send_streaming_request()` so only the pre-header request
+/// phase is bounded and the response body can stream indefinitely.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use crate::core::providers::base::connection_pool::{
-///     send_streaming_request, streaming_client,
+///     send_streaming_request, streaming_unbounded_client,
 /// };
 ///
-/// // Use the shared streaming client.
 /// let response = send_streaming_request(
-///     streaming_client()
+///     streaming_unbounded_client()
 ///         .post(&url)
 ///         .headers(headers)
 ///         .json(&body),
@@ -172,7 +198,7 @@ pub fn global_client() -> Arc<Client> {
 /// let stream = response.bytes_stream();
 /// ```
 #[inline]
-pub fn streaming_client() -> Arc<Client> {
+pub fn streaming_unbounded_client() -> Arc<Client> {
     Arc::clone(&STREAMING_CLIENT)
 }
 
@@ -225,6 +251,10 @@ pub async fn read_streaming_error_body_with_limits(
     timeout: Duration,
     max_bytes: usize,
 ) -> Result<String, StreamingRequestError> {
+    if max_bytes == 0 {
+        return Ok(String::new());
+    }
+
     let bytes = tokio::time::timeout(timeout, async move {
         let mut stream = response.bytes_stream();
         let mut body = Vec::new();
@@ -242,6 +272,9 @@ pub async fn read_streaming_error_body_with_limits(
             }
 
             body.extend_from_slice(&chunk);
+            if body.len() >= max_bytes {
+                break;
+            }
         }
 
         Ok::<_, reqwest::Error>(body)
@@ -249,7 +282,9 @@ pub async fn read_streaming_error_body_with_limits(
     .await
     .map_err(|_| StreamingRequestError::ErrorBodyTimeout { timeout })??;
 
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let body = String::from_utf8(bytes)
+        .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned());
+    Ok(body)
 }
 
 /// Simplified connection pool without generic complexity
@@ -471,6 +506,35 @@ mod tests {
         Ok(format!("http://{addr}"))
     }
 
+    async fn error_body_then_stall_url(body: &'static [u8]) -> std::io::Result<String> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let addr = listener.local_addr()?;
+
+        tokio::spawn(async move {
+            let (mut socket, _) = match listener.accept().await {
+                Ok(connection) => connection,
+                Err(err) => panic!("test server accept failed: {err}"),
+            };
+            let mut buffer = [0_u8; 1024];
+            if let Err(err) = socket.read(&mut buffer).await {
+                panic!("test server failed to read request: {err}");
+            }
+
+            if let Err(err) = socket
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n")
+                .await
+            {
+                panic!("test server failed to write headers: {err}");
+            }
+            if let Err(err) = socket.write_all(body).await {
+                panic!("test server failed to write body: {err}");
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        Ok(format!("http://{addr}"))
+    }
+
     #[tokio::test]
     async fn test_pool_creation() {
         let pool = ConnectionPool::new();
@@ -494,11 +558,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_streaming_client_is_dedicated_singleton() {
-        let stream1 = streaming_client();
-        let stream2 = streaming_client();
+    async fn test_streaming_clients_keep_legacy_and_unbounded_semantics() {
+        let legacy = streaming_client();
+        let stream1 = streaming_unbounded_client();
+        let stream2 = streaming_unbounded_client();
         let global = global_client();
 
+        assert!(Arc::ptr_eq(&legacy, &global));
         assert!(Arc::ptr_eq(&stream1, &stream2));
         assert!(!Arc::ptr_eq(&stream1, &global));
     }
@@ -510,7 +576,7 @@ mod tests {
             delayed_response_url(Duration::from_millis(150), Duration::from_millis(0)).await?;
 
         let err = send_streaming_request_with_timeout(
-            streaming_client().get(url),
+            streaming_unbounded_client().get(url),
             Duration::from_millis(25),
         )
         .await
@@ -527,7 +593,7 @@ mod tests {
             delayed_response_url(Duration::from_millis(0), Duration::from_millis(150)).await?;
 
         let response = send_streaming_request_with_timeout(
-            streaming_client().get(url),
+            streaming_unbounded_client().get(url),
             Duration::from_millis(25),
         )
         .await?;
@@ -542,7 +608,7 @@ mod tests {
         let url = delayed_error_body_url(Duration::from_millis(150)).await?;
 
         let response = send_streaming_request_with_timeout(
-            streaming_client().get(url),
+            streaming_unbounded_client().get(url),
             Duration::from_secs(1),
         )
         .await?;
@@ -563,6 +629,24 @@ mod tests {
             err,
             StreamingRequestError::ErrorBodyTimeout { .. }
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_streaming_error_body_returns_at_exact_byte_cap()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = error_body_then_stall_url(b"error").await?;
+
+        let response = send_streaming_request_with_timeout(
+            streaming_unbounded_client().get(url),
+            Duration::from_secs(1),
+        )
+        .await?;
+
+        let body =
+            read_streaming_error_body_with_limits(response, Duration::from_millis(25), 5).await?;
+
+        assert_eq!(body, "error");
         Ok(())
     }
 
