@@ -134,6 +134,25 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.friendli.ai/v1",
             "FRIENDLIAI_API_KEY",
         ),
+        def(
+            "meta_llama",
+            "Meta Llama API",
+            "https://api.llama.com/compat/v1",
+            "META_LLAMA_API_KEY",
+        ),
+        def("v0", "Vercel v0", "https://api.v0.dev/v1", "V0_API_KEY"),
+        def(
+            "amazon_nova",
+            "Amazon Nova",
+            "https://api.nova.amazon.com/v1",
+            "AMAZON_NOVA_API_KEY",
+        ),
+        def(
+            "github",
+            "GitHub Models",
+            "https://models.inference.ai.azure.com",
+            "GITHUB_TOKEN",
+        ),
         // xAI publishes OpenAI-compatible chat endpoints; model IDs are
         // passed through instead of enumerated in this static provider catalog.
         ProviderDefinition {
@@ -354,5 +373,37 @@ mod tests {
 
         let config = definition.to_openai_like_config(Some("sk-test"), None);
         assert_eq!(config.model_prefix.as_deref(), Some("xai/"));
+    }
+
+    #[test]
+    fn issue_606_openai_like_candidates_are_catalog_entries() {
+        let expected = [
+            (
+                "meta_llama",
+                "https://api.llama.com/compat/v1",
+                "META_LLAMA_API_KEY",
+            ),
+            ("v0", "https://api.v0.dev/v1", "V0_API_KEY"),
+            (
+                "amazon_nova",
+                "https://api.nova.amazon.com/v1",
+                "AMAZON_NOVA_API_KEY",
+            ),
+            (
+                "github",
+                "https://models.inference.ai.azure.com",
+                "GITHUB_TOKEN",
+            ),
+        ];
+
+        for (name, base_url, auth_env_var) in expected {
+            let Some(definition) = get_definition(name) else {
+                panic!("{name} provider definition should be registered");
+            };
+            assert_eq!(definition.base_url, base_url);
+            assert_eq!(definition.auth_env_var, auth_env_var);
+            assert_eq!(definition.auth_type, AuthType::Bearer);
+            assert!(!definition.skip_api_key);
+        }
     }
 }

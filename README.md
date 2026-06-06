@@ -128,12 +128,12 @@ Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLA
 | Azure AI Inference (`azure_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
 | AWS Bedrock (`bedrock`) | always | ✅ | ✅ | ✅ | helper API | – | Native AWS Bedrock runtime path with SigV4 signing. Use `openai_compatible` for Bedrock Access Gateway or other OpenAI-compatible proxies. |
 | Google Vertex AI (`vertex_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
-| Meta Llama API (`meta_llama`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
-| Vercel v0 (`v0`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
-| Amazon Nova (`amazon_nova`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
+| Meta Llama API (`meta_llama`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |
+| Vercel v0 (`v0`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |
+| Amazon Nova (`amazon_nova`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
 | fal.ai (`fal_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
 | Replicate (`replicate`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
-| GitHub Models (`github`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
+| GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
 | GitHub Copilot (`github_copilot`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
 | Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | – | – | – | For self-hosted / unlisted chat-completions endpoints. |
 

@@ -120,15 +120,15 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::V0,
         "v0",
         &[],
-        ProviderDispatchKind::ExplicitOpenAiLike,
-        false,
+        ProviderDispatchKind::CatalogOpenAiLike,
+        true,
     ),
     entry(
         ProviderType::MetaLlama,
         "meta_llama",
         &["llama", "meta-llama"],
-        ProviderDispatchKind::ExplicitOpenAiLike,
-        false,
+        ProviderDispatchKind::CatalogOpenAiLike,
+        true,
     ),
     entry(
         ProviderType::Mistral,
@@ -204,15 +204,15 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::AmazonNova,
         "amazon_nova",
         &["amazon-nova", "nova"],
-        ProviderDispatchKind::ExplicitOpenAiLike,
-        false,
+        ProviderDispatchKind::CatalogOpenAiLike,
+        true,
     ),
     entry(
         ProviderType::GitHub,
         "github",
         &["github-models"],
-        ProviderDispatchKind::ExplicitOpenAiLike,
-        false,
+        ProviderDispatchKind::CatalogOpenAiLike,
+        true,
     ),
     entry(
         ProviderType::GitHubCopilot,
@@ -439,6 +439,18 @@ mod tests {
             dispatch_kind_for(&ProviderType::OpenAICompatible),
             ProviderDispatchKind::ExplicitOpenAiLike
         );
+        for provider_type in [
+            ProviderType::MetaLlama,
+            ProviderType::V0,
+            ProviderType::AmazonNova,
+            ProviderType::GitHub,
+        ] {
+            assert_eq!(
+                dispatch_kind_for(&provider_type),
+                ProviderDispatchKind::CatalogOpenAiLike,
+                "{provider_type:?} should be catalog-only metadata"
+            );
+        }
         assert_eq!(
             dispatch_kind_for(&ProviderType::PydanticAI),
             ProviderDispatchKind::UnsupportedEnum

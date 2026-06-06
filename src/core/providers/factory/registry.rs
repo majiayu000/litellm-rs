@@ -13,14 +13,12 @@ use crate::core::providers::{
 use crate::core::providers::{azure, azure_ai};
 
 use super::builder::{
-    build_amazon_nova_config_from_factory, build_anthropic_config_from_factory,
+    apply_tier1_openai_like_overrides, build_anthropic_config_from_factory,
     build_bedrock_config_from_factory, build_cloudflare_config_from_factory,
-    build_fal_ai_config_from_factory, build_github_config_from_factory,
-    build_github_copilot_config_from_factory, build_meta_llama_config_from_factory,
+    build_fal_ai_config_from_factory, build_github_copilot_config_from_factory,
     build_mistral_config_from_factory, build_openai_config_from_factory,
     build_openai_like_config_from_factory, build_replicate_config_from_factory,
-    build_v0_config_from_factory, build_vertex_ai_config_from_factory, config_str, config_u32,
-    config_u64,
+    build_vertex_ai_config_from_factory, config_str,
 };
 #[cfg(feature = "providers-extra")]
 use super::builder::{build_azure_ai_config_from_factory, build_azure_config_from_factory};
@@ -74,20 +72,6 @@ impl Provider {
                     })?;
                 Ok(Provider::OpenAILike(provider))
             }
-            ProviderType::MetaLlama => {
-                let oai_config = build_meta_llama_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization("meta_llama", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
-            }
-            ProviderType::V0 => {
-                let oai_config = build_v0_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization("v0", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
-            }
             ProviderType::AzureAI => {
                 #[cfg(feature = "providers-extra")]
                 {
@@ -104,13 +88,6 @@ impl Provider {
                         .map_err(|e| ProviderError::initialization("azure_ai", e.to_string()))?;
                     Ok(Provider::OpenAILike(provider))
                 }
-            }
-            ProviderType::AmazonNova => {
-                let oai_config = build_amazon_nova_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization("amazon_nova", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
             }
             ProviderType::FalAI => {
                 let oai_config = build_fal_ai_config_from_factory(&config)?;
@@ -157,13 +134,6 @@ impl Provider {
                     .map_err(|e| ProviderError::initialization("replicate", e.to_string()))?;
                 Ok(Provider::OpenAILike(provider))
             }
-            ProviderType::GitHub => {
-                let oai_config = build_github_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization("github", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
-            }
             ProviderType::GitHubCopilot => {
                 let oai_config = build_github_copilot_config_from_factory(&config)?;
                 let provider = openai_like::OpenAILikeProvider::new(oai_config)
@@ -192,11 +162,13 @@ impl Provider {
                     config_str(&config, "base_url").or_else(|| config_str(&config, "api_base"));
                 let mut oai_config =
                     def.to_openai_like_config(api_key.as_deref(), base_url_override);
-                if let Some(timeout) = config_u64(&config, "timeout") {
-                    oai_config.base.timeout = timeout;
-                }
-                if let Some(max_retries) = config_u32(&config, "max_retries") {
-                    oai_config.base.max_retries = max_retries;
+                if let Some(settings) = config.as_object() {
+                    let settings = settings
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect();
+                    let _ignored_settings =
+                        apply_tier1_openai_like_overrides(&mut oai_config, &settings);
                 }
                 let provider = openai_like::OpenAILikeProvider::new(oai_config)
                     .await
@@ -356,5 +328,31 @@ mod tests {
             .await
             .unwrap_or_else(|err| panic!("openai_compatible should be creatable: {err}"));
         assert!(matches!(provider, Provider::OpenAILike(_)));
+    }
+
+    #[tokio::test]
+    async fn issue_606_catalogified_candidates_use_catalog_runtime_path() {
+        for provider_type in [
+            ProviderType::MetaLlama,
+            ProviderType::V0,
+            ProviderType::AmazonNova,
+            ProviderType::GitHub,
+        ] {
+            let provider = Provider::from_config_async(
+                provider_type.clone(),
+                serde_json::json!({
+                    "api_key": "sk-test-key",
+                    "headers": {"x-test-header": "test-value"},
+                    "custom_headers": {"x-custom-header": "custom-value"},
+                    "timeout": 42,
+                    "max_retries": 4
+                }),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("{provider_type:?} should be creatable: {err}"));
+
+            assert!(matches!(provider, Provider::OpenAILike(_)));
+            assert_eq!(provider.name(), provider_type.to_string());
+        }
     }
 }
