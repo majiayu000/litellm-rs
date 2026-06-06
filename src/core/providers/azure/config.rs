@@ -25,9 +25,19 @@ pub struct AzureConfig {
     /// Custom headers
     pub custom_headers: HashMap<String, String>,
     /// Request timeout in seconds
+    #[serde(default = "default_timeout_seconds")]
     pub timeout: u64,
     /// Maximum retry attempts
+    #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+}
+
+fn default_timeout_seconds() -> u64 {
+    60
+}
+
+fn default_max_retries() -> u32 {
+    3
 }
 
 impl Default for AzureConfig {
@@ -247,6 +257,22 @@ mod tests {
         custom_config.max_retries = 5;
         assert_eq!(custom_config.timeout(), std::time::Duration::from_secs(12));
         assert_eq!(custom_config.max_retries(), 5);
+    }
+
+    #[test]
+    fn test_azure_config_deserializes_defaults_for_timeout_and_retries() {
+        let config: AzureConfig = serde_json::from_str(
+            r#"{
+                "api_key": "test-key",
+                "azure_endpoint": "https://test.openai.azure.com",
+                "api_version": "2024-02-01",
+                "custom_headers": {}
+            }"#,
+        )
+        .unwrap_or_else(|error| panic!("AzureConfig should deserialize with defaults: {error}"));
+
+        assert_eq!(config.timeout, 60);
+        assert_eq!(config.max_retries, 3);
     }
 
     #[test]

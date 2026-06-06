@@ -48,6 +48,9 @@ impl AzureAIConfig {
         // Ensure base URL ends with '/' and path doesn't start with '/'
         let base = base_url.trim_end_matches('/');
         let endpoint_path = path.trim_start_matches('/');
+        if endpoint_path == "models" && Self::has_models_path_segment(base) {
+            return Ok(base.to_string());
+        }
         let base = if Self::needs_models_prefix(base, endpoint_path) {
             format!("{}/models", base)
         } else {
@@ -57,19 +60,28 @@ impl AzureAIConfig {
         Ok(format!("{}/{}", base, endpoint_path))
     }
 
+    fn has_models_path_segment(base: &str) -> bool {
+        let host_and_path = base.split_once("://").map(|(_, rest)| rest).unwrap_or(base);
+        let path = host_and_path
+            .split_once('/')
+            .map(|(_, path)| path)
+            .unwrap_or("");
+
+        path.split('/').any(|segment| segment == "models")
+    }
+
     fn needs_models_prefix(base: &str, endpoint_path: &str) -> bool {
         if endpoint_path == "models" || endpoint_path.starts_with("models/") {
             return false;
         }
 
         let host_and_path = base.split_once("://").map(|(_, rest)| rest).unwrap_or(base);
-        let (host, path) = host_and_path
+        let (host, _) = host_and_path
             .split_once('/')
             .map(|(host, path)| (host, path))
             .unwrap_or((host_and_path, ""));
 
-        host.ends_with(".services.ai.azure.com")
-            && !path.split('/').any(|segment| segment == "models")
+        host.ends_with(".services.ai.azure.com") && !Self::has_models_path_segment(base)
     }
 
     /// Default
@@ -226,6 +238,18 @@ mod tests {
             url,
             "https://resource.services.ai.azure.com/models/chat/completions"
         );
+    }
+
+    #[test]
+    fn test_build_endpoint_url_does_not_duplicate_models_for_health_path() {
+        let mut config = AzureAIConfig::new("azure_ai");
+        config.base.api_base = Some("https://resource.services.ai.azure.com/models".to_string());
+
+        let url = match config.build_endpoint_url("models") {
+            Ok(url) => url,
+            Err(error) => panic!("models endpoint should build: {error}"),
+        };
+        assert_eq!(url, "https://resource.services.ai.azure.com/models");
     }
 
     #[test]
