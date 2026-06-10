@@ -10,7 +10,34 @@ use crate::core::budget::UnifiedBudgetLimits;
 use crate::core::cost::calculator::generic_cost_per_token;
 use crate::core::cost::types::UsageTokens;
 use crate::core::keys::KeyManager;
+use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::responses::Usage;
+
+/// Reject a request before it reaches the upstream provider when the served
+/// provider or model budget is already exhausted.
+///
+/// No-ops when budgets are disabled or unconfigured (the availability checks
+/// return true). Returns a non-retryable `QuotaExceeded` error (HTTP 402) so
+/// the router does not pointlessly retry an over-budget request.
+pub(super) fn ensure_budget_available(
+    budget_limits: &UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+) -> Result<(), ProviderError> {
+    if !budget_limits.is_provider_available(provider) {
+        return Err(ProviderError::quota_exceeded(
+            "budget",
+            format!("provider '{provider}' budget exceeded"),
+        ));
+    }
+    if !budget_limits.is_model_available(model) {
+        return Err(ProviderError::quota_exceeded(
+            "budget",
+            format!("model '{model}' budget exceeded"),
+        ));
+    }
+    Ok(())
+}
 
 /// Record provider/model budget spend and per-key usage for a completed request.
 ///
@@ -136,5 +163,26 @@ mod tests {
             .map(|u| u.current_spend)
             .unwrap_or(0.0);
         assert_eq!(spent, 0.0);
+    }
+    #[test]
+    fn budget_available_when_unconfigured() {
+        // No limits set: precheck must allow the request through.
+        let budget = UnifiedBudgetLimits::new();
+        assert!(ensure_budget_available(&budget, "openai", "gpt-4o").is_ok());
+    }
+
+    #[test]
+    fn budget_rejects_when_provider_exhausted() {
+        let budget = UnifiedBudgetLimits::new();
+        budget.providers.set_provider_limit(
+            "openai",
+            ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+        );
+        // Drive the provider over its limit.
+        budget.providers.record_provider_spend("openai", 2.0);
+
+        let err = ensure_budget_available(&budget, "openai", "gpt-4o")
+            .expect_err("exhausted provider budget must be rejected");
+        assert!(matches!(err, ProviderError::QuotaExceeded { .. }));
     }
 }

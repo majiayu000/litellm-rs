@@ -299,6 +299,13 @@ async fn handle_chat_completion_internal(
             let budget_limits = budget_limits.clone();
             let key_manager = key_manager.clone();
             async move {
+                // Reject before spending upstream tokens when the selected
+                // provider/model budget is already exhausted.
+                super::spend::ensure_budget_available(
+                    &budget_limits,
+                    provider.name(),
+                    &selected_model,
+                )?;
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model.clone();
                 let response = provider
