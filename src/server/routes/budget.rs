@@ -15,12 +15,19 @@
 //! - `GET    /v1/budget/models`            - List all model budgets
 //! - `GET    /v1/budget/models/{name}`     - Get model budget status
 //! - `DELETE /v1/budget/models/{name}`     - Remove model budget
+//!
+//! All mutation endpoints (POST/DELETE/reset) require the Admin role;
+//! read-only endpoints only require authentication.
 
 use crate::core::budget::{
     BudgetStatus, Currency, ModelLimitConfig, ProviderLimitConfig, ResetPeriod, UnifiedBudgetLimits,
 };
+use crate::core::models::{
+    ApiKey,
+    user::types::{User, UserRole},
+};
 use crate::server::routes::ApiResponse;
-use actix_web::{HttpResponse, Result as ActixResult, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result as ActixResult, web};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -181,13 +188,57 @@ pub struct BudgetSummaryResponse {
     pub total_model_spent: f64,
 }
 
+// ========== Authorization ==========
+
+/// Require the Admin role for budget mutation endpoints.
+///
+/// The global `AuthMiddleware` authenticates every non-public request and
+/// inserts the resolved `User` (and/or `ApiKey`) into the request extensions.
+/// Budget mutations affect global provider/model limits, so only admins
+/// (SuperAdmin passes via the `has_role` hierarchy) may perform them.
+///
+/// When authentication is disabled the middleware bypasses all credential
+/// checks and inserts no identity, so the role check is skipped to preserve
+/// no-auth mode (same behaviour as the keys routes).
+///
+/// Returns `Some(403 response)` when the caller must be rejected.
+fn require_admin(req: &HttpRequest, action: &str) -> Option<HttpResponse> {
+    let extensions = req.extensions();
+
+    if let Some(user) = extensions.get::<User>() {
+        if user.has_role(&UserRole::Admin) {
+            return None;
+        }
+        warn!(
+            "User '{}' attempted to {} without admin role",
+            user.username, action
+        );
+    } else if extensions.get::<ApiKey>().is_some() {
+        // Team-only API key: authenticated but carries no admin user.
+        warn!("Team-scoped API key attempted to {}", action);
+    } else {
+        // No identity in the extensions: the auth middleware ran in no-auth
+        // mode, where all credential checks are intentionally bypassed.
+        return None;
+    }
+
+    Some(HttpResponse::Forbidden().json(ApiResponse::<()>::error(
+        "Admin role required for budget mutations".to_string(),
+    )))
+}
+
 // ========== Provider Budget Handlers ==========
 
 /// POST /v1/budget/providers - Set a provider budget
 pub async fn set_provider_budget(
+    req: HttpRequest,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     request: web::Json<SetProviderBudgetRequest>,
 ) -> ActixResult<HttpResponse> {
+    if let Some(forbidden) = require_admin(&req, "set provider budget") {
+        return Ok(forbidden);
+    }
+
     // Validate request
     if request.provider.trim().is_empty() {
         return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
@@ -336,9 +387,14 @@ pub async fn get_provider_budget(
 
 /// DELETE /v1/budget/providers/{name} - Remove provider budget
 pub async fn delete_provider_budget(
+    req: HttpRequest,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     path: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
+    if let Some(forbidden) = require_admin(&req, "delete provider budget") {
+        return Ok(forbidden);
+    }
+
     let provider_name = path.into_inner();
 
     if budget_limits
@@ -364,9 +420,14 @@ pub async fn delete_provider_budget(
 
 /// POST /v1/budget/providers/{name}/reset - Reset provider budget
 pub async fn reset_provider_budget(
+    req: HttpRequest,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     path: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
+    if let Some(forbidden) = require_admin(&req, "reset provider budget") {
+        return Ok(forbidden);
+    }
+
     let provider_name = path.into_inner();
 
     if budget_limits
@@ -416,9 +477,14 @@ pub async fn reset_provider_budget(
 
 /// POST /v1/budget/models - Set a model budget
 pub async fn set_model_budget(
+    req: HttpRequest,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     request: web::Json<SetModelBudgetRequest>,
 ) -> ActixResult<HttpResponse> {
+    if let Some(forbidden) = require_admin(&req, "set model budget") {
+        return Ok(forbidden);
+    }
+
     // Validate request
     if request.model.trim().is_empty() {
         return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
@@ -559,9 +625,14 @@ pub async fn get_model_budget(
 
 /// DELETE /v1/budget/models/{name} - Remove model budget
 pub async fn delete_model_budget(
+    req: HttpRequest,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     path: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
+    if let Some(forbidden) = require_admin(&req, "delete model budget") {
+        return Ok(forbidden);
+    }
+
     let model_name = path.into_inner();
 
     if budget_limits.models.remove_model_limit(&model_name) {
@@ -584,9 +655,14 @@ pub async fn delete_model_budget(
 
 /// POST /v1/budget/models/{name}/reset - Reset model budget
 pub async fn reset_model_budget(
+    req: HttpRequest,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     path: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
+    if let Some(forbidden) = require_admin(&req, "reset model budget") {
+        return Ok(forbidden);
+    }
+
     let model_name = path.into_inner();
 
     if budget_limits.models.reset_model_budget(&model_name) {
@@ -699,6 +775,7 @@ pub fn configure_budget_routes(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actix_web::dev::Service;
     use actix_web::{App, test};
 
     #[actix_web::test]
@@ -941,5 +1018,242 @@ mod tests {
 
         let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
+    }
+
+    // ========== RBAC tests ==========
+
+    fn make_test_user(role: UserRole) -> User {
+        use crate::core::models::Metadata;
+        use crate::core::models::UsageStats;
+        use crate::core::models::user::preferences::UserPreferences;
+        use crate::core::models::user::types::{UserProfile, UserStatus};
+        User {
+            metadata: Metadata::new(),
+            username: "testuser".to_string(),
+            email: "test@example.com".to_string(),
+            display_name: None,
+            password_hash: "hash".to_string(),
+            role,
+            status: UserStatus::Active,
+            team_ids: vec![],
+            preferences: UserPreferences::default(),
+            usage_stats: UsageStats::default(),
+            rate_limits: None,
+            last_login_at: None,
+            email_verified: true,
+            two_factor_enabled: false,
+            profile: UserProfile::default(),
+        }
+    }
+
+    fn make_team_api_key() -> ApiKey {
+        use crate::core::models::{Metadata, UsageStats};
+        ApiKey {
+            metadata: Metadata::new(),
+            name: "team-key".to_string(),
+            key_hash: "hash".to_string(),
+            key_prefix: "gw-test".to_string(),
+            user_id: None,
+            team_id: Some(uuid::Uuid::new_v4()),
+            permissions: vec![],
+            rate_limits: None,
+            expires_at: None,
+            is_active: true,
+            last_used_at: None,
+            usage_stats: UsageStats::default(),
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_budget_mutations_forbidden_for_non_admin() {
+        let budget_limits = Arc::new(UnifiedBudgetLimits::new());
+        budget_limits.providers.set_provider_limit(
+            "openai",
+            ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
+        );
+        budget_limits
+            .models
+            .set_model_limit("gpt-4", ModelLimitConfig::new(500.0, ResetPeriod::Monthly));
+
+        let user = make_test_user(UserRole::User);
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<User>(user.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(Arc::clone(&budget_limits)))
+                .configure(configure_budget_routes),
+        )
+        .await;
+
+        let provider_body = SetProviderBudgetRequest {
+            provider: "openai".to_string(),
+            max_budget: 1.0,
+            reset_period: ResetPeriod::Monthly,
+            soft_limit_percentage: 0.8,
+            currency: Currency::USD,
+            enabled: true,
+        };
+        let model_body = SetModelBudgetRequest {
+            model: "gpt-4".to_string(),
+            max_budget: 1.0,
+            reset_period: ResetPeriod::Monthly,
+            soft_limit_percentage: 0.8,
+            currency: Currency::USD,
+            enabled: true,
+        };
+
+        let requests = vec![
+            test::TestRequest::post()
+                .uri("/v1/budget/providers")
+                .set_json(&provider_body)
+                .to_request(),
+            test::TestRequest::delete()
+                .uri("/v1/budget/providers/openai")
+                .to_request(),
+            test::TestRequest::post()
+                .uri("/v1/budget/providers/openai/reset")
+                .to_request(),
+            test::TestRequest::post()
+                .uri("/v1/budget/models")
+                .set_json(&model_body)
+                .to_request(),
+            test::TestRequest::delete()
+                .uri("/v1/budget/models/gpt-4")
+                .to_request(),
+            test::TestRequest::post()
+                .uri("/v1/budget/models/gpt-4/reset")
+                .to_request(),
+        ];
+
+        for req in requests {
+            let path = req.path().to_string();
+            let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), 403, "expected 403 for {}", path);
+        }
+
+        // The original budgets must be untouched.
+        assert!(
+            budget_limits
+                .providers
+                .get_provider_usage("openai")
+                .is_some()
+        );
+        assert!(budget_limits.models.get_model_usage("gpt-4").is_some());
+    }
+
+    #[actix_web::test]
+    async fn test_budget_mutations_allowed_for_admin() {
+        let budget_limits = Arc::new(UnifiedBudgetLimits::new());
+        let user = make_test_user(UserRole::Admin);
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<User>(user.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(Arc::clone(&budget_limits)))
+                .configure(configure_budget_routes),
+        )
+        .await;
+
+        // Set provider budget
+        let request = SetProviderBudgetRequest {
+            provider: "openai".to_string(),
+            max_budget: 1000.0,
+            reset_period: ResetPeriod::Monthly,
+            soft_limit_percentage: 0.8,
+            currency: Currency::USD,
+            enabled: true,
+        };
+        let req = test::TestRequest::post()
+            .uri("/v1/budget/providers")
+            .set_json(&request)
+            .to_request();
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        // Reset provider budget
+        let req = test::TestRequest::post()
+            .uri("/v1/budget/providers/openai/reset")
+            .to_request();
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        // Delete provider budget
+        let req = test::TestRequest::delete()
+            .uri("/v1/budget/providers/openai")
+            .to_request();
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_budget_mutations_forbidden_for_team_api_key() {
+        let budget_limits = Arc::new(UnifiedBudgetLimits::new());
+        let api_key = make_team_api_key();
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<ApiKey>(api_key.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(Arc::clone(&budget_limits)))
+                .configure(configure_budget_routes),
+        )
+        .await;
+
+        let request = SetProviderBudgetRequest {
+            provider: "openai".to_string(),
+            max_budget: 1000.0,
+            reset_period: ResetPeriod::Monthly,
+            soft_limit_percentage: 0.8,
+            currency: Currency::USD,
+            enabled: true,
+        };
+        let req = test::TestRequest::post()
+            .uri("/v1/budget/providers")
+            .set_json(&request)
+            .to_request();
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 403);
+        assert!(
+            budget_limits
+                .providers
+                .get_provider_usage("openai")
+                .is_none()
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_read_endpoints_allowed_for_non_admin() {
+        let budget_limits = Arc::new(UnifiedBudgetLimits::new());
+        budget_limits.providers.set_provider_limit(
+            "openai",
+            ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
+        );
+
+        let user = make_test_user(UserRole::User);
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<User>(user.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(Arc::clone(&budget_limits)))
+                .configure(configure_budget_routes),
+        )
+        .await;
+
+        for uri in [
+            "/v1/budget/providers",
+            "/v1/budget/providers/openai",
+            "/v1/budget/summary",
+        ] {
+            let req = test::TestRequest::get().uri(uri).to_request();
+            let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+            assert!(resp.status().is_success(), "expected success for {}", uri);
+        }
     }
 }
