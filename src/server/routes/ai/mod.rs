@@ -15,6 +15,7 @@ mod openai_errors;
 mod provider_selection;
 mod responses;
 mod responses_stream;
+mod spend;
 
 // Public re-exports for backward compatibility
 pub use audio::{audio_speech, audio_transcriptions, audio_translations};

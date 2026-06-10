@@ -269,19 +269,25 @@ pub async fn handle_chat_completion_with_state(
     request: ChatCompletionRequest,
     context: RequestContext,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    let unified_router = &state.unified_router;
-    handle_chat_completion_internal(unified_router, request, context).await
+    handle_chat_completion_internal(state, request, context).await
 }
 
 async fn handle_chat_completion_internal(
-    unified_router: &crate::core::router::UnifiedRouter,
+    state: &AppState,
     request: ChatCompletionRequest,
     context: RequestContext,
 ) -> Result<ChatCompletionResponse, GatewayError> {
+    let unified_router = &state.unified_router;
     let requested_model = request.model.clone();
     let core_request = build_core_chat_request(request, requested_model, false)?;
     let requested_model = core_request.model.clone();
     let context_for_execution = context.clone();
+
+    // Owned handles captured into the (retryable) execution closure so that the
+    // successful attempt records budget spend and per-key usage.
+    let budget_limits = state.budget_limits.clone();
+    let key_manager = state.key_manager.clone();
+    let api_key_id = context.api_key_id();
 
     let core_response = execute_with_selected_deployment(
         unified_router,
@@ -290,9 +296,11 @@ async fn handle_chat_completion_internal(
         move |provider, selected_model| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
+            let budget_limits = budget_limits.clone();
+            let key_manager = key_manager.clone();
             async move {
                 let mut request_for_provider = core_request.clone();
-                request_for_provider.model = selected_model;
+                request_for_provider.model = selected_model.clone();
                 let response = provider
                     .chat_completion(request_for_provider, context)
                     .await?;
@@ -301,6 +309,15 @@ async fn handle_chat_completion_internal(
                     .as_ref()
                     .map(|usage| u64::from(usage.total_tokens))
                     .unwrap_or_default();
+                super::spend::record_completion_spend(
+                    &budget_limits,
+                    &key_manager,
+                    api_key_id,
+                    provider.name(),
+                    &selected_model,
+                    response.usage.as_ref(),
+                )
+                .await;
                 Ok((response, tokens))
             }
         },
