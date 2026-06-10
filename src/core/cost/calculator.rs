@@ -199,8 +199,17 @@ fn litellm_to_cost_pricing(
             model: model.to_string(),
         });
     }
-    // A single missing side is treated as 0 for that side, but flagged so the
-    // gap is visible rather than silently assumed free.
+    // Chat/completion requests consume both prompt and completion tokens; a
+    // single missing side would under-bill real completions, so fail closed.
+    if requires_bidirectional_token_pricing(info)
+        && (info.input_cost_per_token.is_none() || info.output_cost_per_token.is_none())
+    {
+        return Err(CostError::MissingPricing {
+            model: model.to_string(),
+        });
+    }
+    // Non-chat modes such as embeddings may only price one token direction.
+    // Keep allowing that shape, but flag the gap so catalog data can be fixed.
     if info.input_cost_per_token.is_none() || info.output_cost_per_token.is_none() {
         tracing::warn!(
             "model '{}' is missing {} token cost; billing that side at $0",
@@ -239,6 +248,10 @@ fn litellm_to_cost_pricing(
         currency: "USD".to_string(),
         updated_at: Utc::now(),
     })
+}
+
+fn requires_bidirectional_token_pricing(info: &crate::core::pricing::LiteLLMModelInfo) -> bool {
+    matches!(info.mode.as_str(), "chat" | "completion")
 }
 
 fn extra_f64(info: &crate::core::pricing::LiteLLMModelInfo, key: &str) -> Option<f64> {
@@ -404,5 +417,7 @@ pub fn compare_model_costs(
 
 #[cfg(test)]
 mod gpt55_tests;
+#[cfg(test)]
+mod pricing_regression_tests;
 #[cfg(test)]
 mod tests;
