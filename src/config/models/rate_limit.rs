@@ -58,6 +58,28 @@ impl Default for RateLimitConfig {
 }
 
 impl RateLimitConfig {
+    /// Fields parsed from config but not enforced by the current limiter.
+    ///
+    /// Keep this list shared with validation and runtime construction so a
+    /// configured-but-ignored limit cannot pass validation silently.
+    pub fn unimplemented_runtime_field_names(&self) -> Vec<&'static str> {
+        let defaults = RateLimitConfig::default();
+        let mut fields = Vec::new();
+        if self.default_tpm != defaults.default_tpm {
+            fields.push("default_tpm");
+        }
+        if self.requests_per_second.is_some() {
+            fields.push("requests_per_second");
+        }
+        if self.tokens_per_minute.is_some() {
+            fields.push("tokens_per_minute");
+        }
+        if self.burst_size.is_some() {
+            fields.push("burst_size");
+        }
+        fields
+    }
+
     /// Merge rate limit configurations
     pub fn merge(mut self, other: Self) -> Self {
         if other.enabled {
@@ -247,5 +269,32 @@ mod tests {
         assert!(!obj.contains_key("tokens_per_minute"));
         assert!(!obj.contains_key("burst_size"));
         assert!(obj.contains_key("requests_per_minute"));
+    }
+
+    #[test]
+    fn test_unimplemented_runtime_field_names_default_empty() {
+        let config = RateLimitConfig::default();
+        assert!(config.unimplemented_runtime_field_names().is_empty());
+    }
+
+    #[test]
+    fn test_unimplemented_runtime_field_names_lists_set_fields() {
+        let config = RateLimitConfig {
+            default_tpm: 50_000,
+            requests_per_second: Some(10),
+            tokens_per_minute: Some(60_000),
+            burst_size: Some(20),
+            ..RateLimitConfig::default()
+        };
+
+        assert_eq!(
+            config.unimplemented_runtime_field_names(),
+            vec![
+                "default_tpm",
+                "requests_per_second",
+                "tokens_per_minute",
+                "burst_size"
+            ]
+        );
     }
 }

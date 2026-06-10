@@ -114,21 +114,7 @@ impl RateLimiter {
     /// Names of config fields that are parsed but not enforced by any
     /// strategy yet; only enabled/strategy/default_rpm take effect.
     fn unimplemented_field_names(config: &RateLimitConfig) -> Vec<&'static str> {
-        let defaults = RateLimitConfig::default();
-        let mut fields = Vec::new();
-        if config.default_tpm != defaults.default_tpm {
-            fields.push("default_tpm");
-        }
-        if config.requests_per_second.is_some() {
-            fields.push("requests_per_second");
-        }
-        if config.tokens_per_minute.is_some() {
-            fields.push("tokens_per_minute");
-        }
-        if config.burst_size.is_some() {
-            fields.push("burst_size");
-        }
-        fields
+        config.unimplemented_runtime_field_names()
     }
 
     /// Surface dead configuration at error level without blocking startup
