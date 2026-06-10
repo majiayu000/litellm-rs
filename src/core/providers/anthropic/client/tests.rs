@@ -702,7 +702,7 @@ fn test_transform_chat_request_allows_n_equal_one_and_ignores_unsupported_params
 }
 
 #[test]
-fn test_transform_chat_response_bills_cache_tokens_in_totals() {
+fn test_transform_chat_response_preserves_cache_details_without_double_counting() {
     let config = AnthropicConfig::new_test("test-key");
     let client = AnthropicClient::new(config).unwrap();
 
@@ -723,8 +723,8 @@ fn test_transform_chat_response_bills_cache_tokens_in_totals() {
         .unwrap()
         .usage
         .unwrap();
-    // Anthropic bills cache tokens as input: prompt = 100 + 30 + 20
-    assert_eq!(usage.prompt_tokens, 150);
+    // Anthropic input_tokens already includes cache_creation and cache_read tokens.
+    assert_eq!(usage.prompt_tokens, 100);
     assert_eq!(usage.completion_tokens, 50);
-    assert_eq!(usage.total_tokens, 200);
+    assert_eq!(usage.total_tokens, 150);
 }

@@ -18,7 +18,7 @@ use crate::core::types::{
     chat::ChatRequest,
     content::ContentPart,
     message::MessageRole,
-    responses::{ChatChoice, ChatResponse, FinishReason, PromptTokensDetails, Usage},
+    responses::{ChatChoice, ChatResponse, FinishReason},
     thinking::ThinkingContent,
 };
 
@@ -759,35 +759,7 @@ impl AnthropicClient {
             logprobs: None,
         };
 
-        // Build usage — Anthropic bills cache creation/read tokens as input
-        // tokens, so they must count toward prompt_tokens and total_tokens.
-        let usage = response.get("usage").map(|usage_data| {
-            let read = |key: &str| usage_data.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-            // Saturate instead of `as u32`, which silently wraps on overflow.
-            let to_u32 = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
-            let cache_creation = read("cache_creation_input_tokens");
-            let cache_read = read("cache_read_input_tokens");
-            let prompt_tokens = read("input_tokens") + cache_creation + cache_read;
-            let completion_tokens = read("output_tokens");
-
-            Usage {
-                prompt_tokens: to_u32(prompt_tokens),
-                completion_tokens: to_u32(completion_tokens),
-                total_tokens: to_u32(prompt_tokens + completion_tokens),
-                completion_tokens_details: None,
-                prompt_tokens_details: if cache_creation > 0 || cache_read > 0 {
-                    Some(PromptTokensDetails {
-                        cached_tokens: Some(to_u32(cache_read)),
-                        cache_creation_tokens: Some(to_u32(cache_creation)),
-                        cache_read_tokens: Some(to_u32(cache_read)),
-                        audio_tokens: None,
-                    })
-                } else {
-                    None
-                },
-                thinking_usage: None,
-            }
-        });
+        let usage = response.get("usage").map(usage::build_usage);
 
         Ok(ChatResponse {
             id,
@@ -800,6 +772,8 @@ impl AnthropicClient {
         })
     }
 }
+
+mod usage;
 
 #[cfg(test)]
 mod tests;
