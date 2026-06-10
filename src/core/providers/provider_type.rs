@@ -8,6 +8,7 @@ pub enum ProviderType {
     Bedrock,
     OpenRouter,
     VertexAI,
+    Gemini,
     Azure,
     AzureAI,
     DeepSeek,
@@ -95,6 +96,7 @@ pub fn all_non_custom_provider_types() -> Vec<ProviderType> {
         ProviderType::Bedrock,
         ProviderType::OpenRouter,
         ProviderType::VertexAI,
+        ProviderType::Gemini,
         ProviderType::Azure,
         ProviderType::AzureAI,
         ProviderType::DeepSeek,
@@ -153,6 +155,14 @@ mod tests {
         assert_eq!(ProviderType::from("vertex_ai"), ProviderType::VertexAI);
         assert_eq!(ProviderType::from("vertexai"), ProviderType::VertexAI);
         assert_eq!(ProviderType::from("vertex-ai"), ProviderType::VertexAI);
+    }
+
+    #[test]
+    fn test_provider_type_from_str_gemini() {
+        assert_eq!(ProviderType::from("gemini"), ProviderType::Gemini);
+        assert_eq!(ProviderType::from("google-gemini"), ProviderType::Gemini);
+        assert_eq!(ProviderType::from("google_ai"), ProviderType::Gemini);
+        assert_eq!(ProviderType::from("google-ai"), ProviderType::Gemini);
     }
 
     #[test]
@@ -233,6 +243,7 @@ mod tests {
         assert_eq!(format!("{}", ProviderType::Bedrock), "bedrock");
         assert_eq!(format!("{}", ProviderType::OpenRouter), "openrouter");
         assert_eq!(format!("{}", ProviderType::VertexAI), "vertex_ai");
+        assert_eq!(format!("{}", ProviderType::Gemini), "gemini");
         assert_eq!(format!("{}", ProviderType::Azure), "azure");
         assert_eq!(format!("{}", ProviderType::AzureAI), "azure_ai");
         assert_eq!(format!("{}", ProviderType::DeepSeek), "deepseek");

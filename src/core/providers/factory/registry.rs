@@ -3,8 +3,6 @@
 //! Implements `Provider::from_config_async`, which maps each `ProviderType`
 //! to its concrete provider instantiation logic.
 
-#[cfg(feature = "providers-extended")]
-use crate::core::providers::github_copilot;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry as provider_registry;
 use crate::core::providers::unified_provider::ProviderError;
@@ -13,6 +11,8 @@ use crate::core::providers::{
 };
 #[cfg(feature = "providers-extra")]
 use crate::core::providers::{azure, azure_ai, vertex_ai};
+#[cfg(feature = "providers-extended")]
+use crate::core::providers::{gemini, github_copilot};
 
 #[cfg(feature = "providers-extended")]
 use super::builder::build_github_copilot_config_from_factory;
@@ -32,6 +32,8 @@ use super::builder::{
 use super::builder::{
     build_azure_ai_openai_like_config_from_factory, build_azure_openai_like_config_from_factory,
 };
+#[cfg(feature = "providers-extended")]
+use super::gemini_builder::build_gemini_config_from_factory;
 
 impl Provider {
     /// Create provider from configuration asynchronously
@@ -143,6 +145,22 @@ impl Provider {
                     ))
                 }
             }
+            ProviderType::Gemini => {
+                #[cfg(feature = "providers-extended")]
+                {
+                    let gemini_config = build_gemini_config_from_factory(&config)?;
+                    let provider = gemini::GeminiProvider::new(gemini_config)
+                        .map_err(|e| ProviderError::initialization("gemini", e.to_string()))?;
+                    Ok(Provider::Gemini(std::sync::Arc::new(provider)))
+                }
+                #[cfg(not(feature = "providers-extended"))]
+                {
+                    Err(ProviderError::not_implemented(
+                        "gemini",
+                        "Gemini native dispatch requires the providers-extended feature",
+                    ))
+                }
+            }
             ProviderType::Replicate => {
                 let oai_config = build_replicate_config_from_factory(&config)?;
                 let provider = openai_like::OpenAILikeProvider::new(oai_config)
@@ -247,6 +265,15 @@ mod tests {
                 "max_retries": 2,
                 "enable_experimental": true
             }),
+            ProviderType::Gemini => serde_json::json!({
+                "api_key": "test-gemini-api-key-1234567890",
+                "api_version": "v1beta",
+                "timeout": 30,
+                "connect_timeout": 5,
+                "max_retries": 2,
+                "enable_caching": false,
+                "debug": true
+            }),
             ProviderType::GitHubCopilot => serde_json::json!({
                 "token_dir": "/tmp/litellm-rs-github-copilot-test",
                 "access_token_file": "access-token",
@@ -291,6 +318,8 @@ mod tests {
                     (ProviderType::Azure, Provider::Azure(_))
                     | (ProviderType::AzureAI, Provider::AzureAI(_))
                     | (ProviderType::VertexAI, Provider::VertexAI(_)) => {}
+                    #[cfg(feature = "providers-extended")]
+                    (ProviderType::Gemini, Provider::Gemini(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::GitHubCopilot, Provider::GitHubCopilot(_)) => {}
                     _ => panic!(
@@ -386,6 +415,45 @@ mod tests {
             .await
             .unwrap_or_else(|err| panic!("openai_compatible should be creatable: {err}"));
         assert!(matches!(provider, Provider::OpenAILike(_)));
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_gemini_creates_native_google_ai_provider() {
+        let provider = Provider::from_config_async(
+            ProviderType::Gemini,
+            minimal_dispatch_config_for(&ProviderType::Gemini),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("gemini should create native provider: {err}"));
+
+        assert!(matches!(provider, Provider::Gemini(_)));
+        assert_eq!(provider.name(), "gemini");
+        assert_eq!(provider.provider_type(), ProviderType::Gemini);
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_gemini_rejects_vertex_ai_fields() {
+        let err = Provider::from_config_async(
+            ProviderType::Gemini,
+            serde_json::json!({
+                "api_key": "test-gemini-api-key-1234567890",
+                "project_id": "test-project",
+                "location": "us-central1"
+            }),
+        )
+        .await
+        .expect_err("gemini selector should reject Vertex AI project/location credentials");
+
+        assert!(
+            matches!(err, ProviderError::InvalidRequest { .. }),
+            "expected InvalidRequest, got {err}"
+        );
+        assert!(
+            err.to_string().contains("use vertex_ai"),
+            "error should point callers to vertex_ai selector: {err}"
+        );
     }
 
     #[cfg(feature = "providers-extended")]

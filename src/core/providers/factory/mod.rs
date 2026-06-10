@@ -8,6 +8,8 @@
 mod builder;
 #[cfg(test)]
 mod builder_tests;
+#[cfg(feature = "providers-extended")]
+mod gemini_builder;
 mod registry;
 mod resolver;
 

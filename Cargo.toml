@@ -167,7 +167,7 @@ lite = ["metrics", "tracing"]
 
 # Provider compilation tiers (for reducing build size when using --no-default-features)
 # - providers-extra: additional built-in provider implementations used by enum variants
-# - providers-extended: direct provider modules not wired into the unified enum/factory path
+# - providers-extended: optional direct provider modules and explicitly wired native selectors
 providers-extra = []
 providers-extended = []
 

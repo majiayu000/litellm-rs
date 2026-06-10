@@ -89,6 +89,13 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         false,
     ),
     entry(
+        ProviderType::Gemini,
+        "gemini",
+        &["google-gemini", "google_ai", "google-ai"],
+        providers_extended_native_dispatch_kind(),
+        false,
+    ),
+    entry(
         ProviderType::Azure,
         "azure",
         &["azure-openai"],
@@ -430,6 +437,8 @@ mod tests {
             #[cfg(feature = "providers-extra")]
             ProviderType::VertexAI,
             #[cfg(feature = "providers-extended")]
+            ProviderType::Gemini,
+            #[cfg(feature = "providers-extended")]
             ProviderType::GitHubCopilot,
         ])
         .collect::<HashSet<_>>();
@@ -446,6 +455,10 @@ mod tests {
         assert_eq!(
             dispatch_kind_for(&ProviderType::VertexAI),
             provider_extra_only_native_dispatch_kind()
+        );
+        assert_eq!(
+            dispatch_kind_for(&ProviderType::Gemini),
+            providers_extended_native_dispatch_kind()
         );
         assert_eq!(
             dispatch_kind_for(&ProviderType::Azure),

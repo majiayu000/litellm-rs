@@ -107,9 +107,9 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "firecrawl",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    stub(
+    providers_extended_wire(
         "gemini",
-        "specialized provider module used for model metadata but not wired through the LLM factory",
+        "ProviderType::Gemini dispatches to native Google AI Studio Gemini auth when providers-extended is enabled",
     ),
     stub(
         "github",
@@ -373,7 +373,14 @@ mod tests {
             }
         );
         assert_eq!(lifecycle_for("cohere"), ProviderModuleLifecycle::Stub);
-        assert_eq!(lifecycle_for("gemini"), ProviderModuleLifecycle::Stub);
+        assert_eq!(
+            lifecycle_for("gemini"),
+            if cfg!(feature = "providers-extended") {
+                ProviderModuleLifecycle::Wire
+            } else {
+                ProviderModuleLifecycle::Stub
+            }
+        );
     }
 
     #[test]
@@ -391,6 +398,8 @@ mod tests {
             "azure_ai",
             "bedrock",
             "cloudflare",
+            #[cfg(feature = "providers-extended")]
+            "gemini",
             #[cfg(feature = "providers-extended")]
             "github_copilot",
             "mistral",

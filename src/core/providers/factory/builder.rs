@@ -39,7 +39,7 @@ pub(super) fn config_bool(config: &serde_json::Value, key: &str) -> Option<bool>
     config.get(key).and_then(serde_json::Value::as_bool)
 }
 
-fn config_str_any<'a>(config: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+pub(super) fn config_str_any<'a>(config: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter().find_map(|key| config_str(config, key))
 }
 
