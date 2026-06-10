@@ -110,6 +110,13 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         false,
     ),
     entry(
+        ProviderType::Cohere,
+        "cohere",
+        &["cohere-ai"],
+        providers_extended_native_dispatch_kind(),
+        false,
+    ),
+    entry(
         ProviderType::DeepSeek,
         "deepseek",
         &["deep-seek"],
@@ -437,6 +444,8 @@ mod tests {
             #[cfg(feature = "providers-extra")]
             ProviderType::VertexAI,
             #[cfg(feature = "providers-extended")]
+            ProviderType::Cohere,
+            #[cfg(feature = "providers-extended")]
             ProviderType::Gemini,
             #[cfg(feature = "providers-extended")]
             ProviderType::GitHubCopilot,
@@ -470,6 +479,10 @@ mod tests {
         );
         assert_eq!(
             dispatch_kind_for(&ProviderType::GitHubCopilot),
+            providers_extended_native_dispatch_kind()
+        );
+        assert_eq!(
+            dispatch_kind_for(&ProviderType::Cohere),
             providers_extended_native_dispatch_kind()
         );
         assert_eq!(

@@ -12,7 +12,7 @@ use crate::core::providers::{
 #[cfg(feature = "providers-extra")]
 use crate::core::providers::{azure, azure_ai, vertex_ai};
 #[cfg(feature = "providers-extended")]
-use crate::core::providers::{gemini, github_copilot};
+use crate::core::providers::{cohere, gemini, github_copilot};
 
 #[cfg(feature = "providers-extended")]
 use super::builder::build_github_copilot_config_from_factory;
@@ -32,6 +32,8 @@ use super::builder::{
 use super::builder::{
     build_azure_ai_openai_like_config_from_factory, build_azure_openai_like_config_from_factory,
 };
+#[cfg(feature = "providers-extended")]
+use super::cohere_builder::build_cohere_config_from_factory;
 #[cfg(feature = "providers-extended")]
 use super::gemini_builder::build_gemini_config_from_factory;
 
@@ -70,6 +72,23 @@ impl Provider {
                     .await
                     .map_err(|e| ProviderError::initialization("cloudflare", e.to_string()))?;
                 Ok(Provider::Cloudflare(provider))
+            }
+            ProviderType::Cohere => {
+                #[cfg(feature = "providers-extended")]
+                {
+                    let cohere_config = build_cohere_config_from_factory(&config)?;
+                    let provider = cohere::CohereProvider::new(cohere_config)
+                        .await
+                        .map_err(|e| ProviderError::initialization("cohere", e.to_string()))?;
+                    Ok(Provider::Cohere(provider))
+                }
+                #[cfg(not(feature = "providers-extended"))]
+                {
+                    Err(ProviderError::not_implemented(
+                        "cohere",
+                        "Cohere native dispatch requires the providers-extended feature",
+                    ))
+                }
             }
             ProviderType::OpenAICompatible => {
                 let oai_like = build_openai_like_config_from_factory(&config)?;
@@ -284,6 +303,14 @@ mod tests {
                 "disable_system_to_assistant": true,
                 "debug": true
             }),
+            ProviderType::Cohere => serde_json::json!({
+                "api_key": "test-cohere-key",
+                "api_base": "https://api.cohere.ai",
+                "api_version": "v2",
+                "timeout": 30,
+                "max_retries": 2,
+                "default_embedding_input_type": "search_query"
+            }),
             _ => minimal_dispatch_config(),
         }
     }
@@ -318,6 +345,8 @@ mod tests {
                     (ProviderType::Azure, Provider::Azure(_))
                     | (ProviderType::AzureAI, Provider::AzureAI(_))
                     | (ProviderType::VertexAI, Provider::VertexAI(_)) => {}
+                    #[cfg(feature = "providers-extended")]
+                    (ProviderType::Cohere, Provider::Cohere(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::Gemini, Provider::Gemini(_)) => {}
                     #[cfg(feature = "providers-extended")]
@@ -386,6 +415,51 @@ mod tests {
                 "NotImplemented provider name should identify the requested provider"
             );
         }
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_cohere_creates_native_provider() {
+        let provider = Provider::from_config_async(
+            ProviderType::Cohere,
+            serde_json::json!({
+                "api_key": "test-cohere-key",
+                "api_base": "https://api.cohere.ai",
+                "api_version": "v2",
+                "timeout": 30,
+                "max_retries": 2,
+                "default_embedding_input_type": "search_query"
+            }),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("cohere should create native provider: {err}"));
+
+        assert!(matches!(provider, Provider::Cohere(_)));
+        assert_eq!(provider.name(), "cohere");
+        assert_eq!(provider.provider_type(), ProviderType::Cohere);
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_cohere_rejects_invalid_api_version() {
+        let err = Provider::from_config_async(
+            ProviderType::Cohere,
+            serde_json::json!({
+                "api_key": "test-cohere-key",
+                "api_version": "v3"
+            }),
+        )
+        .await
+        .expect_err("cohere should reject invalid API versions");
+
+        assert!(
+            matches!(err, ProviderError::Configuration { .. }),
+            "expected Configuration, got {err}"
+        );
+        assert!(
+            err.to_string().contains("api_version must be v1 or v2"),
+            "error should identify valid Cohere API versions: {err}"
+        );
     }
 
     #[tokio::test]

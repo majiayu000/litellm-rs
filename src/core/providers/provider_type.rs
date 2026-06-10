@@ -22,6 +22,7 @@ pub enum ProviderType {
     Groq,
     XAI,
     Cloudflare,
+    Cohere,
     Perplexity,
     Replicate,
     FalAI,
@@ -110,6 +111,7 @@ pub fn all_non_custom_provider_types() -> Vec<ProviderType> {
         ProviderType::Groq,
         ProviderType::XAI,
         ProviderType::Cloudflare,
+        ProviderType::Cohere,
         ProviderType::Perplexity,
         ProviderType::Replicate,
         ProviderType::FalAI,
@@ -217,6 +219,12 @@ mod tests {
     }
 
     #[test]
+    fn test_provider_type_from_str_cohere() {
+        assert_eq!(ProviderType::from("cohere"), ProviderType::Cohere);
+        assert_eq!(ProviderType::from("cohere-ai"), ProviderType::Cohere);
+    }
+
+    #[test]
     fn test_provider_type_from_str_other_providers() {
         assert_eq!(ProviderType::from("openrouter"), ProviderType::OpenRouter);
         assert_eq!(ProviderType::from("groq"), ProviderType::Groq);
@@ -255,6 +263,7 @@ mod tests {
         assert_eq!(format!("{}", ProviderType::Groq), "groq");
         assert_eq!(format!("{}", ProviderType::XAI), "xai");
         assert_eq!(format!("{}", ProviderType::Cloudflare), "cloudflare");
+        assert_eq!(format!("{}", ProviderType::Cohere), "cohere");
     }
 
     #[test]

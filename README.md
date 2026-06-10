@@ -124,6 +124,7 @@ Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLA
 | Anthropic (`anthropic`) | always | ✅ | ✅ | – | – | – | Native Anthropic messages API. |
 | Mistral (`mistral`) | always | ✅ | ✅ | passthrough | – | – | Native client. |
 | Cloudflare Workers AI (`cloudflare`) | always | ✅ | – | – | – | – | Native client with account-id auth; streaming and embeddings currently return `NotSupported`. |
+| Cohere (`cohere`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native Cohere `/v2/chat`, `/v2/embed`, and `/v1/rerank`; explicitly unsupported without `providers-extended`. |
 | Azure OpenAI (`azure`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
 | Azure AI Inference (`azure_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
 | AWS Bedrock (`bedrock`) | always | ✅ | ✅ | ✅ | helper API | – | Native AWS Bedrock runtime path with SigV4 signing. Use `openai_compatible` for Bedrock Access Gateway or other OpenAI-compatible proxies. |
@@ -154,7 +155,7 @@ All entries below route through `OpenAILikeProvider`. Chat and streaming work fo
 
 The following modules exist under `src/core/providers/` (gated on `providers-extra` or `providers-extended`) but are **not wired into the unified `Provider` enum or the factory** today. They compile but cannot be selected through `create_provider`/`from_config_async`. Treat them as experimental scaffolding subject to change:
 
-`ai21`, `baseten`, `clarifai`, `codestral`, `cohere`, `custom_api`, `databricks`, `datarobot`, `deepgram`, `deepl`, `elevenlabs`, `empower`, `exa_ai`, `firecrawl`, `gigachat`, `google_pse`, `gradient_ai`, `huggingface`, `jina`, `langgraph`, `manus`, `milvus`, `morph`, `nlp_cloud`, `oci`, `ollama`, `petals`, `pg_vector`, `predibase`, `ragflow`, `recraft`, `runwayml`, `sagemaker`, `sap_ai`, `searxng`, `snowflake`, `spark`, `stability`, `tavily`, `topaz`, `triton`, `vercel_ai`, `voyage`, `watsonx`
+`ai21`, `baseten`, `clarifai`, `codestral`, `custom_api`, `databricks`, `datarobot`, `deepgram`, `deepl`, `elevenlabs`, `empower`, `exa_ai`, `firecrawl`, `gigachat`, `google_pse`, `gradient_ai`, `huggingface`, `jina`, `langgraph`, `manus`, `milvus`, `morph`, `nlp_cloud`, `oci`, `ollama`, `petals`, `pg_vector`, `predibase`, `ragflow`, `recraft`, `runwayml`, `sagemaker`, `sap_ai`, `searxng`, `snowflake`, `spark`, `stability`, `tavily`, `topaz`, `triton`, `vercel_ai`, `voyage`, `watsonx`
 
 For self-hosted or unlisted OpenAI-compatible endpoints, prefer the generic `openai_compatible` provider type instead.
 

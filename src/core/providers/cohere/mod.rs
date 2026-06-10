@@ -18,7 +18,7 @@ mod streaming;
 mod tests;
 
 // Re-export main types
-pub use config::CohereConfig;
+pub use config::{CohereApiVersion, CohereConfig};
 pub use error::CohereError;
 pub use provider::CohereProvider;
 pub use rerank::{RerankRequest, RerankResponse, RerankResult};

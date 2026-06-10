@@ -62,9 +62,9 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "codestral",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    stub(
+    providers_extended_wire(
         "cohere",
-        "specialized provider module; not wired through the LLM factory yet",
+        "ProviderType::Cohere dispatches to native Cohere API paths when providers-extended is enabled",
     ),
     stub(
         "custom_api",
@@ -372,7 +372,14 @@ mod tests {
                 ProviderModuleLifecycle::Stub
             }
         );
-        assert_eq!(lifecycle_for("cohere"), ProviderModuleLifecycle::Stub);
+        assert_eq!(
+            lifecycle_for("cohere"),
+            if cfg!(feature = "providers-extended") {
+                ProviderModuleLifecycle::Wire
+            } else {
+                ProviderModuleLifecycle::Stub
+            }
+        );
         assert_eq!(
             lifecycle_for("gemini"),
             if cfg!(feature = "providers-extended") {
@@ -398,6 +405,8 @@ mod tests {
             "azure_ai",
             "bedrock",
             "cloudflare",
+            #[cfg(feature = "providers-extended")]
+            "cohere",
             #[cfg(feature = "providers-extended")]
             "gemini",
             #[cfg(feature = "providers-extended")]

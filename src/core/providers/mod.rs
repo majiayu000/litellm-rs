@@ -276,6 +276,8 @@ macro_rules! dispatch_provider {
             Provider::GitHubCopilot(p) => p.$method($($arg),*),
             Provider::Mistral(p) => p.$method($($arg),*),
             Provider::Cloudflare(p) => p.$method($($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::Cohere(p) => p.$method($($arg),*),
             Provider::OpenAILike(p) => p.$method($($arg),*),
         }
     };
@@ -297,6 +299,8 @@ macro_rules! dispatch_provider {
             Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            #[cfg(feature = "providers-extended")]
+            Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
         }
     };
@@ -318,6 +322,8 @@ macro_rules! dispatch_provider {
             Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*),
         }
     };
@@ -339,6 +345,8 @@ macro_rules! dispatch_provider {
             Provider::GitHubCopilot(p) => LLMProvider::$method(p).await,
             Provider::Mistral(p) => LLMProvider::$method(p).await,
             Provider::Cloudflare(p) => LLMProvider::$method(p).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::Cohere(p) => LLMProvider::$method(p).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
         }
     };
@@ -384,6 +392,8 @@ pub enum Provider {
     GitHubCopilot(github_copilot::GitHubCopilotProvider),
     Mistral(mistral::MistralProvider),
     Cloudflare(cloudflare::CloudflareProvider),
+    #[cfg(feature = "providers-extended")]
+    Cohere(cohere::CohereProvider),
     /// Tier 1: data-driven OpenAI-compatible providers (groq, together, fireworks, etc.)
     OpenAILike(openai_like::OpenAILikeProvider),
 }
@@ -407,6 +417,8 @@ impl Provider {
             Provider::GitHubCopilot(_) => "github_copilot",
             Provider::Mistral(_) => "mistral",
             Provider::Cloudflare(_) => "cloudflare",
+            #[cfg(feature = "providers-extended")]
+            Provider::Cohere(_) => "cohere",
             Provider::OpenAILike(p) => {
                 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
                 p.name()
@@ -432,6 +444,8 @@ impl Provider {
             Provider::GitHubCopilot(_) => ProviderType::GitHubCopilot,
             Provider::Mistral(_) => ProviderType::Mistral,
             Provider::Cloudflare(_) => ProviderType::Cloudflare,
+            #[cfg(feature = "providers-extended")]
+            Provider::Cohere(_) => ProviderType::Cohere,
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,
         }
     }
