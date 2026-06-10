@@ -724,3 +724,24 @@ fn test_transform_delta_falls_back_to_openai_reasoning_when_reasoning_content_em
     };
     assert_eq!(out.thinking_content(), Some("openai fallback reasoning"));
 }
+
+#[test]
+fn test_transform_logprobs_passes_refusal_through() {
+    // A string refusal must arrive verbatim, not as a "filtered" constant.
+    let logprobs = OpenAILogprobs {
+        content: None,
+        refusal: Some(serde_json::json!("I cannot help with that")),
+    };
+    let result = OpenAIResponseTransformer::transform_logprobs(logprobs);
+    assert_eq!(result.refusal, Some("I cannot help with that".to_string()));
+
+    // Non-string refusal payloads are preserved as serialized JSON.
+    let logprobs = OpenAILogprobs {
+        content: None,
+        refusal: Some(serde_json::json!([{"token": "I", "logprob": -0.1}])),
+    };
+    let result = OpenAIResponseTransformer::transform_logprobs(logprobs);
+    let parsed: serde_json::Value =
+        serde_json::from_str(result.refusal.as_deref().unwrap()).unwrap();
+    assert_eq!(parsed[0]["token"], "I");
+}

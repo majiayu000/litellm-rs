@@ -95,22 +95,55 @@ impl SSETransformer for OpenAICompatibleTransformer {
                 .and_then(|v| v.as_str())
                 .and_then(|s| self.parse_finish_reason(s));
 
-            let logprobs = choice
-                .get("logprobs")
-                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            // Prefer the upstream choice index: with n>1 each chunk carries a
+            // single choice with its real index, so the array position is wrong.
+            let index = choice
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(index as u32);
+
+            let logprobs = match choice.get("logprobs") {
+                None | Some(Value::Null) => None,
+                Some(v) => match serde_json::from_value(v.clone()) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        tracing::error!(
+                            "{}: failed to parse 'logprobs' in SSE chunk: {} (raw: {})",
+                            self.provider,
+                            e,
+                            crate::utils::truncate_string(&v.to_string(), 200)
+                        );
+                        None
+                    }
+                },
+            };
 
             stream_choices.push(ChatStreamChoice {
-                index: index as u32,
+                index,
                 delta: delta_obj,
                 finish_reason,
                 logprobs,
             });
         }
 
-        // Parse usage (optional)
-        let usage = json_value
-            .get("usage")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        // Parse usage (optional). A parse failure must not drop the chunk, but
+        // usage feeds billing, so it must not be silently discarded either.
+        let usage = match json_value.get("usage") {
+            None | Some(Value::Null) => None,
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(parsed) => Some(parsed),
+                Err(e) => {
+                    tracing::error!(
+                        "{}: failed to parse 'usage' in SSE chunk: {} (raw: {})",
+                        self.provider,
+                        e,
+                        crate::utils::truncate_string(&v.to_string(), 200)
+                    );
+                    None
+                }
+            },
+        };
 
         Ok(Some(ChatChunk {
             id,
@@ -124,5 +157,59 @@ impl SSETransformer for OpenAICompatibleTransformer {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preserves_upstream_choice_index() {
+        let transformer = OpenAICompatibleTransformer::new("test");
+        // n>1: upstream sends one choice per chunk carrying its real index.
+        let chunk = r#"{
+            "id": "id",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4",
+            "choices": [{"index": 2, "delta": {"content": "x"}, "finish_reason": null}]
+        }"#;
+        let result = transformer.transform_chunk(chunk).unwrap().unwrap();
+        assert_eq!(result.choices[0].index, 2);
+    }
+
+    #[test]
+    fn test_missing_index_falls_back_to_position() {
+        let transformer = OpenAICompatibleTransformer::new("test");
+        let chunk = r#"{
+            "id": "id",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4",
+            "choices": [{"delta": {"content": "x"}, "finish_reason": null}]
+        }"#;
+        let result = transformer.transform_chunk(chunk).unwrap().unwrap();
+        assert_eq!(result.choices[0].index, 0);
+    }
+
+    #[test]
+    fn test_malformed_logprobs_does_not_drop_usage() {
+        let transformer = OpenAICompatibleTransformer::new("test");
+        // logprobs is the wrong shape; it must not fail the chunk or drop usage.
+        let chunk = r#"{
+            "id": "id",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4",
+            "choices": [{"index": 0, "delta": {"content": "x"}, "logprobs": 42}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
+        }"#;
+        let result = transformer.transform_chunk(chunk).unwrap().unwrap();
+        assert!(result.choices[0].logprobs.is_none());
+        let usage = result
+            .usage
+            .expect("usage must survive a logprobs parse error");
+        assert_eq!(usage.total_tokens, 12);
     }
 }

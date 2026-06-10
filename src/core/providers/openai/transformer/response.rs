@@ -218,7 +218,11 @@ impl OpenAIResponseTransformer {
                         .collect()
                 })
                 .unwrap_or_default(),
-            refusal: logprobs.refusal.map(|_| "filtered".to_string()),
+            // Pass the real refusal through instead of masking it with a constant.
+            refusal: logprobs.refusal.map(|r| match r {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            }),
         }
     }
 

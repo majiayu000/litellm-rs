@@ -95,7 +95,15 @@ impl SSETransformer for GeminiTransformer {
         }
 
         let mut choices = Vec::new();
-        for (index, candidate) in candidates.iter().enumerate() {
+        for (position, candidate) in candidates.iter().enumerate() {
+            // Prefer the upstream candidate index (n>1 sends real indices);
+            // fall back to the array position only when absent.
+            let index = candidate
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(position as u32);
+
             let empty_parts = vec![];
             let parts = candidate
                 .get("content")
@@ -122,7 +130,7 @@ impl SSETransformer for GeminiTransformer {
                 });
 
             choices.push(ChatStreamChoice {
-                index: index as u32,
+                index,
                 delta: ChatDelta {
                     role: if !delta_content.is_empty() || finish_reason.is_some() {
                         Some(MessageRole::Assistant)
