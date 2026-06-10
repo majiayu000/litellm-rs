@@ -46,6 +46,7 @@ mod tests {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
@@ -124,6 +125,7 @@ mod tests {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.storage.files.local_path = Some(storage_path.to_string_lossy().into_owned());
@@ -153,6 +155,7 @@ mod tests {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.database.url.clear();
         config.gateway.storage.redis.enabled = false;
