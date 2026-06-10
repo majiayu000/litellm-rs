@@ -288,8 +288,10 @@ fn redact_string(value: &mut String) {
 }
 
 fn redact_optional_string(value: &mut Option<String>) {
-    if value.is_some() {
-        *value = Some(REDACTED_SECRET.to_string());
+    if let Some(secret) = value
+        && !secret.is_empty()
+    {
+        *secret = REDACTED_SECRET.to_string();
     }
 }
 
@@ -630,5 +632,15 @@ typo_field: true
             None => panic!("SSO config missing after export"),
         };
         assert_eq!(sso.client_secret, sso_client_secret);
+    }
+
+    #[test]
+    fn test_config_serialization_preserves_empty_optional_secret() {
+        let mut config = Config::default();
+        config.gateway.auth.api_key_hmac_secret = Some(String::new());
+
+        let exported = config.sanitized_gateway_for_export();
+
+        assert_eq!(exported.auth.api_key_hmac_secret.as_deref(), Some(""));
     }
 }
