@@ -338,13 +338,14 @@ impl LLMProvider for ReplicateProvider {
                 })?;
 
             let client = crate::core::http::outbound::streaming_outbound_client().clone();
-            let response = client
-                .get(stream_url)
-                .header("Authorization", format!("Token {}", api_key))
-                .header("Accept", "text/event-stream")
-                .send()
-                .await
-                .map_err(|e| ProviderError::network("replicate", e.to_string()))?;
+            let response = crate::core::providers::base::connection_pool::send_streaming_request(
+                client
+                    .get(stream_url)
+                    .header("Authorization", format!("Token {}", api_key))
+                    .header("Accept", "text/event-stream"),
+                "replicate",
+            )
+            .await?;
 
             if !response.status().is_success() {
                 let status_code = response.status().as_u16();

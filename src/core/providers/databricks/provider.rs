@@ -438,15 +438,16 @@ impl LLMProvider for DatabricksProvider {
             })?;
 
         let client = crate::core::http::outbound::streaming_outbound_client().clone();
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .header("User-Agent", DatabricksConfig::build_user_agent(None))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ProviderError::network("databricks", e.to_string()))?;
+        let response = crate::core::providers::base::connection_pool::send_streaming_request(
+            client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .header("User-Agent", DatabricksConfig::build_user_agent(None))
+                .json(&body),
+            "databricks",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {

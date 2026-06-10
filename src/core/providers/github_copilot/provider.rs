@@ -404,7 +404,7 @@ impl LLMProvider for GitHubCopilotProvider {
         let url = format!("{}/chat/completions", api_base.trim_end_matches('/'));
 
         // Execute request
-        let client = crate::core::http::outbound::streaming_outbound_client().clone();
+        let client = crate::core::http::outbound::default_outbound_client().clone();
         let response = client
             .post(&url)
             .headers(headers)
@@ -472,13 +472,11 @@ impl LLMProvider for GitHubCopilotProvider {
 
         // Execute request
         let client = crate::core::http::outbound::streaming_outbound_client().clone();
-        let response = client
-            .post(&url)
-            .headers(headers)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| ProviderError::network("github_copilot", e.to_string()))?;
+        let response = crate::core::providers::base::connection_pool::send_streaming_request(
+            client.post(&url).headers(headers).json(&request),
+            "github_copilot",
+        )
+        .await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();

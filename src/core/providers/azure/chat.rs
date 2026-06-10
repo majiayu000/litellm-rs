@@ -162,11 +162,13 @@ impl AzureChatHandler {
         let headers = self.get_request_headers().await?;
 
         // Execute streaming request
-        let response = apply_headers(
-            self.streaming_client.post(&url).json(&azure_request),
-            headers,
+        let response = crate::core::providers::base::connection_pool::send_streaming_request(
+            apply_headers(
+                self.streaming_client.post(&url).json(&azure_request),
+                headers,
+            ),
+            "azure",
         )
-        .send()
         .await?;
 
         // Check status

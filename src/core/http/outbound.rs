@@ -98,9 +98,52 @@ mod tests {
     }
 
     #[test]
-    fn build_streaming_outbound_client_accepts_default_profile_without_total_timeout() {
+    fn build_streaming_outbound_client_accepts_default_profile() {
         let client = build_streaming_outbound_client(OutboundProfile::default());
         assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn streaming_client_ignores_request_timeout_as_total_deadline()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let (mut stream, _) = listener.accept().await?;
+            let mut buffer = [0_u8; 1024];
+            let mut request = Vec::with_capacity(1024);
+            loop {
+                let bytes_read = stream.read(&mut buffer).await?;
+                if bytes_read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..bytes_read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await?;
+            Ok::<(), std::io::Error>(())
+        });
+
+        let profile = OutboundProfile {
+            request_timeout: Duration::from_millis(1),
+            connect_timeout: Duration::from_secs(1),
+            ..OutboundProfile::default()
+        };
+        let client = build_streaming_outbound_client(profile)?;
+        let response = client.get(format!("http://{address}/")).send().await?;
+
+        assert!(response.status().is_success());
+        assert_eq!(response.text().await?, "ok");
+        server.await??;
+        Ok(())
     }
 
     #[test]

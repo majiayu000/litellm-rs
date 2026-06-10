@@ -147,10 +147,11 @@ impl AzureAIChatHandler {
         for (key, value) in headers {
             request_builder = request_builder.header(key, value);
         }
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|e| ProviderError::network("azure_ai", format!("Request failed: {}", e)))?;
+        let response = crate::core::providers::base::connection_pool::send_streaming_request(
+            request_builder,
+            "azure_ai",
+        )
+        .await?;
 
         // Handle error responses
         if !response.status().is_success() {

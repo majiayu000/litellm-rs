@@ -265,14 +265,15 @@ impl LLMProvider for GitHubProvider {
         // Execute streaming request using reqwest directly for SSE
         let url = format!("{}/chat/completions", self.config.get_api_base());
         let client = crate::core::http::outbound::streaming_outbound_client().clone();
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&stream_request)
-            .send()
-            .await
-            .map_err(|e| ProviderError::network("github", e.to_string()))?;
+        let response = crate::core::providers::base::connection_pool::send_streaming_request(
+            client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .json(&stream_request),
+            "github",
+        )
+        .await?;
 
         // Check status
         if !response.status().is_success() {

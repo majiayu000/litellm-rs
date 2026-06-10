@@ -176,7 +176,7 @@ impl WatsonxProvider {
         let iam_url = self.config.get_iam_url();
         debug!("Generating IAM token from {}", iam_url);
 
-        let client = crate::core::http::outbound::streaming_outbound_client().clone();
+        let client = crate::core::http::outbound::default_outbound_client().clone();
         let response = client
             .post(&iam_url)
             .header("Content-Type", "application/x-www-form-urlencoded")
@@ -551,11 +551,11 @@ impl LLMProvider for WatsonxProvider {
             req_builder = req_builder.header(key, value);
         }
 
-        let response = req_builder
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| ProviderError::network("watsonx", e.to_string()))?;
+        let response = crate::core::providers::base::connection_pool::send_streaming_request(
+            req_builder.json(&payload),
+            "watsonx",
+        )
+        .await?;
 
         // Check status
         if !response.status().is_success() {

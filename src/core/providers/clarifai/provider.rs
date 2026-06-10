@@ -270,14 +270,15 @@ impl LLMProvider for ClarifaiProvider {
         let url = format!("{}/chat/completions", self.config.get_api_base());
 
         let client = crate::core::http::outbound::streaming_outbound_client().clone();
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| ClarifaiError::network("clarifai", e.to_string()))?;
+        let response = crate::core::providers::base::connection_pool::send_streaming_request(
+            client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .json(&request),
+            "clarifai",
+        )
+        .await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
