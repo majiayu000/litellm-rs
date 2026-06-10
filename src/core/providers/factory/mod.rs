@@ -15,6 +15,8 @@ mod fal_ai_builder;
 #[cfg(feature = "providers-extended")]
 mod gemini_builder;
 mod registry;
+#[cfg(feature = "providers-extended")]
+mod replicate_builder;
 mod resolver;
 
 pub use resolver::is_provider_selector_supported;
@@ -316,6 +318,54 @@ mod tests {
                 "Expected NotImplemented error, got {err}"
             );
             assert_eq!(err.provider(), "fal_ai");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_provider_replicate_feature_split() {
+        let mut config = crate::config::models::provider::ProviderConfig {
+            name: "replicate".to_string(),
+            provider_type: "replicate".to_string(),
+            api_key: "test-replicate-token".to_string(),
+            base_url: Some("https://api.replicate.com/v1".to_string()),
+            timeout: 30,
+            max_retries: 2,
+            ..Default::default()
+        };
+        config
+            .settings
+            .insert("polling_delay_seconds".to_string(), serde_json::json!(1));
+        config
+            .settings
+            .insert("polling_retries".to_string(), serde_json::json!(3));
+        config
+            .settings
+            .insert("use_streaming".to_string(), serde_json::json!(true));
+
+        let result = create_provider(config).await;
+
+        #[cfg(feature = "providers-extended")]
+        {
+            let provider = result
+                .unwrap_or_else(|err| panic!("replicate should create native provider: {err}"));
+            assert!(matches!(provider, Provider::Replicate(_)));
+            assert_eq!(provider.name(), "replicate");
+            assert!(
+                provider
+                    .capabilities()
+                    .contains(&crate::core::types::model::ProviderCapability::ImageGeneration)
+            );
+        }
+
+        #[cfg(not(feature = "providers-extended"))]
+        {
+            let err =
+                result.expect_err("replicate should be unsupported without providers-extended");
+            assert!(
+                matches!(err, ProviderError::NotImplemented { .. }),
+                "Expected NotImplemented error, got {err}"
+            );
+            assert_eq!(err.provider(), "replicate");
         }
     }
 

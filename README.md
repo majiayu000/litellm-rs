@@ -134,7 +134,7 @@ Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLA
 | Vercel v0 (`v0`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |
 | Amazon Nova (`amazon_nova`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
 | fal.ai (`fal_ai`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native Fal AI image-generation endpoints; chat and streaming are explicitly unsupported. |
-| Replicate (`replicate`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
+| Replicate (`replicate`) | native factory (`providers-extended`) | ✅ | ✅ | – | ✅ | – | Uses native Replicate prediction lifecycle handling for chat, streaming, and image generation; explicitly unsupported without `providers-extended`. |
 | GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
 | GitHub Copilot (`github_copilot`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but the factory path uses OpenAILike chat/stream only. |
 | Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | – | – | – | For self-hosted / unlisted chat-completions endpoints. |

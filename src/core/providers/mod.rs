@@ -280,6 +280,8 @@ macro_rules! dispatch_provider {
             Provider::Cloudflare(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Cohere(p) => p.$method($($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::Replicate(p) => p.$method($($arg),*),
             Provider::OpenAILike(p) => p.$method($($arg),*),
         }
     };
@@ -305,6 +307,8 @@ macro_rules! dispatch_provider {
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            #[cfg(feature = "providers-extended")]
+            Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
         }
     };
@@ -330,6 +334,8 @@ macro_rules! dispatch_provider {
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*),
         }
     };
@@ -355,6 +361,8 @@ macro_rules! dispatch_provider {
             Provider::Cloudflare(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
             Provider::Cohere(p) => LLMProvider::$method(p).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::Replicate(p) => LLMProvider::$method(p).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
         }
     };
@@ -404,6 +412,8 @@ pub enum Provider {
     Cloudflare(cloudflare::CloudflareProvider),
     #[cfg(feature = "providers-extended")]
     Cohere(cohere::CohereProvider),
+    #[cfg(feature = "providers-extended")]
+    Replicate(replicate::ReplicateProvider),
     /// Tier 1: data-driven OpenAI-compatible providers (groq, together, fireworks, etc.)
     OpenAILike(openai_like::OpenAILikeProvider),
 }
@@ -431,6 +441,8 @@ impl Provider {
             Provider::Cloudflare(_) => "cloudflare",
             #[cfg(feature = "providers-extended")]
             Provider::Cohere(_) => "cohere",
+            #[cfg(feature = "providers-extended")]
+            Provider::Replicate(_) => "replicate",
             Provider::OpenAILike(p) => {
                 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
                 p.name()
@@ -460,6 +472,8 @@ impl Provider {
             Provider::Cloudflare(_) => ProviderType::Cloudflare,
             #[cfg(feature = "providers-extended")]
             Provider::Cohere(_) => ProviderType::Cohere,
+            #[cfg(feature = "providers-extended")]
+            Provider::Replicate(_) => ProviderType::Replicate,
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,
         }
     }

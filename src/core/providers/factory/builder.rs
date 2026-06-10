@@ -648,29 +648,6 @@ fn build_vertex_credentials_from_factory(
     Ok(vertex_ai::VertexCredentials::ApplicationDefault)
 }
 
-pub(super) fn build_replicate_config_from_factory(
-    config: &serde_json::Value,
-) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
-    let api_key = macros::require_config_str(config, "api_key", "replicate")?;
-    let api_base = config_str(config, "base_url")
-        .or_else(|| config_str(config, "api_base"))
-        .unwrap_or("https://api.replicate.com/v1");
-
-    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
-    oai_config.provider_name = "replicate".to_string();
-
-    if let Some(timeout) = config_u64(config, "timeout") {
-        oai_config.base.timeout = timeout;
-    }
-    if let Some(max_retries) = config_u32(config, "max_retries") {
-        oai_config.base.max_retries = max_retries;
-    }
-    merge_string_headers(&mut oai_config.base.headers, config, "headers");
-    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
-
-    Ok(oai_config)
-}
-
 #[cfg(feature = "providers-extended")]
 pub(super) fn build_github_copilot_config_from_factory(
     config: &serde_json::Value,

@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::core::providers::base::{GlobalPoolManager, HeaderPair, HttpMethod, header};
+use crate::core::providers::base::{
+    GlobalPoolManager, HeaderPair, HttpMethod, apply_headers, header, header_owned,
+};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
     provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider,
@@ -73,7 +75,15 @@ impl ReplicateProvider {
 
     /// Generate headers for Replicate API requests
     fn get_request_headers(&self) -> Vec<HeaderPair> {
-        let mut headers = Vec::with_capacity(2);
+        let mut headers = Vec::with_capacity(self.config.base.headers.len() + 2);
+
+        for (key, value) in &self.config.base.headers {
+            if key.eq_ignore_ascii_case("authorization") || key.eq_ignore_ascii_case("content-type")
+            {
+                continue;
+            }
+            headers.push(header_owned(key.clone(), value.clone()));
+        }
 
         if let Some(api_key) = &self.config.base.api_key {
             headers.push(header("Authorization", format!("Token {}", api_key)));
@@ -114,6 +124,70 @@ impl ReplicateProvider {
         self.poll_prediction(&polling_url).await
     }
 
+    fn transport_attempts(&self) -> u32 {
+        self.config.base.max_retries.saturating_add(1)
+    }
+
+    fn build_request(
+        &self,
+        url: &str,
+        method: &HttpMethod,
+        headers: Vec<HeaderPair>,
+        body: Option<&Value>,
+    ) -> reqwest::RequestBuilder {
+        let request_builder = match method {
+            HttpMethod::GET => self.pool_manager.client().get(url),
+            HttpMethod::POST => self.pool_manager.client().post(url),
+            HttpMethod::PUT => self.pool_manager.client().put(url),
+            HttpMethod::DELETE => self.pool_manager.client().delete(url),
+        }
+        .timeout(self.config.timeout());
+
+        let mut request_builder = apply_headers(request_builder, headers);
+
+        if let Some(body_data) = body {
+            request_builder = request_builder
+                .header("Content-Type", "application/json")
+                .json(body_data);
+        }
+
+        request_builder
+    }
+
+    async fn execute_request_with_config(
+        &self,
+        url: &str,
+        method: HttpMethod,
+        headers: Vec<HeaderPair>,
+        body: Option<Value>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let attempts = self.transport_attempts();
+        let mut last_error = None;
+
+        for attempt in 0..attempts {
+            let request_builder = self.build_request(url, &method, headers.clone(), body.as_ref());
+
+            match request_builder.send().await {
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    let provider_err = if err.is_timeout() {
+                        ProviderError::timeout("replicate", err.to_string())
+                    } else {
+                        ProviderError::network("replicate", err.to_string())
+                    };
+                    if attempt + 1 == attempts {
+                        return Err(provider_err);
+                    }
+                    last_error = Some(provider_err);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            ProviderError::network("replicate", "request failed before execution")
+        }))
+    }
+
     /// Submit a prediction request
     async fn submit_prediction(
         &self,
@@ -125,8 +199,7 @@ impl ReplicateProvider {
             .map_err(|e| ProviderError::serialization("replicate", e.to_string()))?;
 
         let response = self
-            .pool_manager
-            .execute_request(url, HttpMethod::POST, headers, Some(body))
+            .execute_request_with_config(url, HttpMethod::POST, headers, Some(body))
             .await?;
 
         let status = response.status();
@@ -156,8 +229,7 @@ impl ReplicateProvider {
             tokio::time::sleep(polling_delay).await;
 
             let response = self
-                .pool_manager
-                .execute_request(url, HttpMethod::GET, headers.clone(), None)
+                .execute_request_with_config(url, HttpMethod::GET, headers.clone(), None)
                 .await?;
 
             let status = response.status();
@@ -167,8 +239,11 @@ impl ReplicateProvider {
                 .map_err(|e| ProviderError::network("replicate", e.to_string()))?;
 
             if !status.is_success() {
-                // Temporary failure, continue polling
-                continue;
+                let error_text = String::from_utf8_lossy(&response_bytes);
+                return Err(ProviderError::replicate_api_error(
+                    status.as_u16(),
+                    error_text.to_string(),
+                ));
             }
 
             let prediction: PredictionResponse = serde_json::from_slice(&response_bytes)
@@ -320,8 +395,11 @@ impl LLMProvider for ReplicateProvider {
 
         let input = ReplicateClient::transform_chat_request(&request);
         let version_hash = ReplicateConfig::extract_version_hash(model);
-        let prediction_request =
-            ReplicateClient::create_prediction_request(input, version_hash, true);
+        let prediction_request = ReplicateClient::create_prediction_request(
+            input,
+            version_hash,
+            self.config.use_streaming,
+        );
 
         // Submit prediction
         let prediction_url = self.config.get_prediction_url(model);
@@ -330,22 +408,20 @@ impl LLMProvider for ReplicateProvider {
             .await?;
 
         // Get stream URL if available
-        if let Some(stream_url) = prediction.get_stream_url() {
+        if self.config.use_streaming
+            && let Some(stream_url) = prediction.get_stream_url()
+        {
             // Use SSE streaming
-            let api_key =
-                self.config.base.api_key.as_ref().ok_or_else(|| {
-                    ProviderError::authentication("replicate", "API token required")
-                })?;
-
             let client = crate::core::http::outbound::streaming_outbound_client().clone();
-            let response = crate::core::providers::base::connection_pool::send_streaming_request(
-                client
-                    .get(stream_url)
-                    .header("Authorization", format!("Token {}", api_key))
-                    .header("Accept", "text/event-stream"),
-                "replicate",
-            )
-            .await?;
+            let request_builder = apply_headers(client.get(stream_url), self.get_request_headers())
+                .header("Accept", "text/event-stream");
+            let response =
+                crate::core::providers::base::connection_pool::send_streaming_request_with_timeout(
+                    request_builder,
+                    self.config.timeout(),
+                )
+                .await
+                .map_err(|err| err.into_provider_error("replicate"))?;
 
             if !response.status().is_success() {
                 let status_code = response.status().as_u16();
@@ -423,8 +499,7 @@ impl LLMProvider for ReplicateProvider {
         let headers = self.get_request_headers();
 
         match self
-            .pool_manager
-            .execute_request(&url, HttpMethod::GET, headers, None)
+            .execute_request_with_config(&url, HttpMethod::GET, headers, None)
             .await
         {
             Ok(response) if response.status().is_success() => HealthStatus::Healthy,
@@ -534,6 +609,70 @@ mod tests {
 
         assert!(headers.iter().any(|h| h.0 == "Authorization"));
         assert!(headers.iter().any(|h| h.0 == "Content-Type"));
+    }
+
+    #[test]
+    fn test_get_request_headers_includes_custom_headers() {
+        let mut config = ReplicateConfig::new("test-token");
+        config
+            .base
+            .headers
+            .insert("x-replicate-test".to_string(), "ok".to_string());
+        let provider = match ReplicateProvider::new(config) {
+            Ok(provider) => provider,
+            Err(err) => panic!("replicate provider should accept test config: {err}"),
+        };
+        let headers = provider.get_request_headers();
+
+        assert!(
+            headers
+                .iter()
+                .any(|h| h.0.as_ref() == "x-replicate-test" && h.1.as_ref() == "ok")
+        );
+    }
+
+    #[test]
+    fn test_transport_attempts_include_initial_request() {
+        let mut config = ReplicateConfig::new("test-token");
+        config.base.max_retries = 4;
+        let provider = match ReplicateProvider::new(config) {
+            Ok(provider) => provider,
+            Err(err) => panic!("replicate provider should accept test config: {err}"),
+        };
+
+        assert_eq!(provider.transport_attempts(), 5);
+    }
+
+    #[test]
+    fn test_streaming_prediction_flag_follows_config() {
+        let mut config = ReplicateConfig::new("test-token");
+        config.use_streaming = false;
+        let provider = match ReplicateProvider::new(config) {
+            Ok(provider) => provider,
+            Err(err) => panic!("replicate provider should accept test config: {err}"),
+        };
+
+        let input = serde_json::json!({"prompt": "hello"});
+        let version_hash = ReplicateConfig::extract_version_hash("meta/llama-2-70b-chat");
+        let request = ReplicateClient::create_prediction_request(
+            input.clone(),
+            version_hash.clone(),
+            provider.config.use_streaming,
+        );
+        assert_eq!(request.stream, None);
+
+        let mut config = ReplicateConfig::new("test-token");
+        config.use_streaming = true;
+        let provider = match ReplicateProvider::new(config) {
+            Ok(provider) => provider,
+            Err(err) => panic!("replicate provider should accept test config: {err}"),
+        };
+        let request = ReplicateClient::create_prediction_request(
+            input,
+            version_hash,
+            provider.config.use_streaming,
+        );
+        assert_eq!(request.stream, Some(true));
     }
 
     #[test]

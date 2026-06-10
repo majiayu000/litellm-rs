@@ -12,7 +12,7 @@ use crate::core::providers::{
 #[cfg(feature = "providers-extra")]
 use crate::core::providers::{azure, azure_ai, vertex_ai};
 #[cfg(feature = "providers-extended")]
-use crate::core::providers::{cohere, fal_ai, gemini, github_copilot};
+use crate::core::providers::{cohere, fal_ai, gemini, github_copilot, replicate};
 
 #[cfg(feature = "providers-extended")]
 use super::builder::build_github_copilot_config_from_factory;
@@ -20,7 +20,7 @@ use super::builder::{
     apply_tier1_openai_like_overrides, build_anthropic_config_from_factory,
     build_bedrock_config_from_factory, build_cloudflare_config_from_factory,
     build_mistral_config_from_factory, build_openai_config_from_factory,
-    build_openai_like_config_from_factory, build_replicate_config_from_factory, config_str,
+    build_openai_like_config_from_factory, config_str,
 };
 #[cfg(feature = "providers-extra")]
 use super::builder::{
@@ -37,6 +37,8 @@ use super::cohere_builder::build_cohere_config_from_factory;
 use super::fal_ai_builder::build_fal_ai_config_from_factory;
 #[cfg(feature = "providers-extended")]
 use super::gemini_builder::build_gemini_config_from_factory;
+#[cfg(feature = "providers-extended")]
+use super::replicate_builder::build_replicate_config_from_factory;
 
 impl Provider {
     /// Create provider from configuration asynchronously
@@ -191,11 +193,20 @@ impl Provider {
                 }
             }
             ProviderType::Replicate => {
-                let oai_config = build_replicate_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization("replicate", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
+                #[cfg(feature = "providers-extended")]
+                {
+                    let replicate_config = build_replicate_config_from_factory(&config)?;
+                    let provider = replicate::ReplicateProvider::new(replicate_config)
+                        .map_err(|e| ProviderError::initialization("replicate", e.to_string()))?;
+                    Ok(Provider::Replicate(provider))
+                }
+                #[cfg(not(feature = "providers-extended"))]
+                {
+                    Err(ProviderError::not_implemented(
+                        "replicate",
+                        "Replicate native prediction dispatch requires the providers-extended feature",
+                    ))
+                }
             }
             ProviderType::GitHubCopilot => {
                 #[cfg(feature = "providers-extended")]
@@ -329,6 +340,15 @@ mod tests {
                 "output_format": "png",
                 "sync_mode": true
             }),
+            ProviderType::Replicate => serde_json::json!({
+                "api_key": "test-replicate-token",
+                "api_base": "https://api.replicate.com/v1",
+                "timeout": 30,
+                "max_retries": 2,
+                "polling_delay_seconds": 1,
+                "polling_retries": 3,
+                "use_streaming": true
+            }),
             _ => minimal_dispatch_config(),
         }
     }
@@ -367,6 +387,8 @@ mod tests {
                     (ProviderType::Cohere, Provider::Cohere(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::FalAI, Provider::FalAI(_)) => {}
+                    #[cfg(feature = "providers-extended")]
+                    (ProviderType::Replicate, Provider::Replicate(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::Gemini, Provider::Gemini(_)) => {}
                     #[cfg(feature = "providers-extended")]
@@ -538,6 +560,77 @@ mod tests {
             provider
                 .capabilities()
                 .contains(&crate::core::types::model::ProviderCapability::ImageGeneration)
+        );
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_replicate_creates_native_prediction_provider() {
+        let provider = Provider::from_config_async(
+            ProviderType::Replicate,
+            minimal_dispatch_config_for(&ProviderType::Replicate),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("replicate should create native provider: {err}"));
+
+        assert!(matches!(provider, Provider::Replicate(_)));
+        assert_eq!(provider.name(), "replicate");
+        assert_eq!(provider.provider_type(), ProviderType::Replicate);
+        assert!(
+            provider
+                .capabilities()
+                .contains(&crate::core::types::model::ProviderCapability::ImageGeneration)
+        );
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_replicate_rejects_invalid_polling_delay() {
+        let result = Provider::from_config_async(
+            ProviderType::Replicate,
+            serde_json::json!({
+                "api_key": "test-replicate-token",
+                "polling_delay_seconds": 0
+            }),
+        )
+        .await;
+        let err = match result {
+            Ok(_) => panic!("replicate should reject zero polling delay"),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, ProviderError::Configuration { .. }),
+            "expected Configuration, got {err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("Polling delay must be greater than 0"),
+            "error should identify invalid Replicate polling delay: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "providers-extended"))]
+    #[tokio::test]
+    async fn test_from_config_async_replicate_requires_providers_extended() {
+        let result = Provider::from_config_async(
+            ProviderType::Replicate,
+            serde_json::json!({"api_key": "test-replicate-token"}),
+        )
+        .await;
+        let err = match result {
+            Ok(_) => panic!("replicate should require providers-extended without the feature"),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, ProviderError::NotImplemented { .. }),
+            "expected NotImplemented, got {err}"
+        );
+        assert_eq!(err.provider(), "replicate");
+        assert!(
+            err.to_string().contains("providers-extended"),
+            "error should identify required feature: {err}"
         );
     }
 

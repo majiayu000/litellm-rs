@@ -196,9 +196,9 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "specialized provider module; not wired through the LLM factory yet",
     ),
     internal("registry", "provider catalog and lifecycle infrastructure"),
-    stub(
+    providers_extended_wire(
         "replicate",
-        "native Replicate module retained; ProviderType::Replicate currently uses a generic OpenAI-compatible adapter",
+        "ProviderType::Replicate dispatches to native prediction lifecycle paths when providers-extended is enabled",
     ),
     stub(
         "runwayml",
@@ -389,6 +389,14 @@ mod tests {
             }
         );
         assert_eq!(
+            lifecycle_for("replicate"),
+            if cfg!(feature = "providers-extended") {
+                ProviderModuleLifecycle::Wire
+            } else {
+                ProviderModuleLifecycle::Stub
+            }
+        );
+        assert_eq!(
             lifecycle_for("gemini"),
             if cfg!(feature = "providers-extended") {
                 ProviderModuleLifecycle::Wire
@@ -421,6 +429,8 @@ mod tests {
             "gemini",
             #[cfg(feature = "providers-extended")]
             "github_copilot",
+            #[cfg(feature = "providers-extended")]
+            "replicate",
             "mistral",
             "openai",
             "openai_like",
