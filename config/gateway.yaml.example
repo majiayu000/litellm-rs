@@ -109,6 +109,11 @@ auth:
   jwt_secret: "${LITELLM_JWT_SECRET}"
   jwt_expiration: 86400
   api_key_header: "Authorization"
+  # allow_anonymous: when both enable_jwt and enable_api_key are false, config
+  # validation rejects the combination unless this is explicitly set to true.
+  # Setting it to true allows unauthenticated access to all routes —
+  # development only, never use in production.
+  allow_anonymous: false
   rbac:
     enabled: false
     default_role: "user"
@@ -132,6 +137,8 @@ monitoring:
   logging: null
 
 cache:
+  # NOT YET IMPLEMENTED: the response cache is not wired into the request
+  # path; all cache settings below currently have no effect.
   enabled: false
   ttl: 3600
   max_size: 1000
@@ -147,11 +154,11 @@ rate_limit:
   enabled: true
   strategy: token_bucket
   default_rpm: 1000
-  default_tpm: 100000
-  requests_per_second: null
+  default_tpm: 100000 # NOT YET IMPLEMENTED: not enforced by the rate limiter
+  requests_per_second: null # NOT YET IMPLEMENTED: not enforced by the rate limiter
   requests_per_minute: null
-  tokens_per_minute: null
-  burst_size: null
+  tokens_per_minute: null # NOT YET IMPLEMENTED: not enforced by the rate limiter
+  burst_size: null # NOT YET IMPLEMENTED: not enforced by the rate limiter
 
 enterprise:
   enabled: false

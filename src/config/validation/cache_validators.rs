@@ -41,6 +41,14 @@ impl Validate for RateLimitConfig {
             return Err("Default TPM must be greater than 0".to_string());
         }
 
+        let unimplemented = self.unimplemented_runtime_field_names();
+        if !unimplemented.is_empty() {
+            return Err(format!(
+                "rate_limit fields [{}] are parsed but not enforced yet; leave them unset until support lands",
+                unimplemented.join(", ")
+            ));
+        }
+
         Ok(())
     }
 }

@@ -13,6 +13,8 @@ pub fn select_provider_for_model(
         return Err(GatewayError::validation("Model is required"));
     }
 
+    reject_unimplemented_route_capability(&capability)?;
+
     let deployments = router.get_deployments_for_model(model);
     let supports_capability = deployments.iter().any(|deployment_id| {
         router
@@ -44,6 +46,19 @@ pub fn select_provider_for_model(
         })?;
 
     Ok(deployment.model)
+}
+
+fn reject_unimplemented_route_capability(
+    capability: &ProviderCapability,
+) -> Result<(), GatewayError> {
+    match capability {
+        ProviderCapability::AudioTranscription
+        | ProviderCapability::AudioTranslation
+        | ProviderCapability::TextToSpeech => Err(GatewayError::not_implemented(
+            "Audio routes are not wired to provider execution yet",
+        )),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -95,10 +110,27 @@ mod tests {
     async fn select_provider_for_model_reports_validation_for_unsupported_capability() {
         let router = build_embeddings_router().await;
 
-        let err =
-            select_provider_for_model(&router, "embedding-model", ProviderCapability::TextToSpeech)
-                .expect_err("unsupported capability should be a validation failure");
+        let err = select_provider_for_model(
+            &router,
+            "embedding-model",
+            ProviderCapability::CodeExecution,
+        )
+        .expect_err("unsupported capability should be a validation failure");
 
         assert!(matches!(err, GatewayError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn select_provider_for_model_rejects_audio_capability_before_selection() {
+        let router = build_embeddings_router().await;
+
+        let err = select_provider_for_model(
+            &router,
+            "embedding-model",
+            ProviderCapability::AudioTranscription,
+        )
+        .expect_err("audio capabilities should fail closed until provider execution is wired");
+
+        assert!(matches!(err, GatewayError::NotImplemented(_)));
     }
 }

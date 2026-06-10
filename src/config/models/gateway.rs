@@ -525,7 +525,13 @@ impl GatewayConfig {
 
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
-        crate::config::validation::Validate::validate(self)
+        crate::config::validation::Validate::validate(self)?;
+        // Surface dead cache configuration at error level without blocking
+        // startup: the response cache is not wired into the runtime yet.
+        for warning in self.cache.not_yet_implemented_warnings() {
+            tracing::error!("{}", warning);
+        }
+        Ok(())
     }
 
     /// Get provider by name

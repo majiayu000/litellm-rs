@@ -40,6 +40,7 @@ mod tests {
             jwt_expiration: 3600, // 1 hour
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         }
     }

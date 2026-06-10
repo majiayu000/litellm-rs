@@ -37,6 +37,24 @@ impl Default for CacheConfig {
 }
 
 impl CacheConfig {
+    /// Warnings for cache options that are parsed but not consumed by any
+    /// runtime path yet (the response cache is never constructed at startup),
+    /// so dead configuration is surfaced instead of silently ignored.
+    pub fn not_yet_implemented_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self.enabled {
+            warnings.push(
+                "cache.enabled is set but the response cache is not wired into the request path yet; this setting currently has no effect".to_string(),
+            );
+        }
+        if self.semantic_cache {
+            warnings.push(
+                "cache.semantic_cache is set but semantic caching is not implemented yet; this setting currently has no effect".to_string(),
+            );
+        }
+        warnings
+    }
+
     /// Merge cache configurations
     pub fn merge(mut self, other: Self) -> Self {
         self.enabled = other.enabled;
@@ -188,6 +206,50 @@ mod tests {
         };
         let merged = base.merge(other);
         assert!(!merged.semantic_cache);
+    }
+
+    #[test]
+    fn test_cache_config_not_yet_implemented_warnings_default_empty() {
+        let config = CacheConfig::default();
+        assert!(config.not_yet_implemented_warnings().is_empty());
+    }
+
+    #[test]
+    fn test_cache_config_not_yet_implemented_warnings_enabled() {
+        let config = CacheConfig {
+            enabled: true,
+            ..CacheConfig::default()
+        };
+        let warnings = config.not_yet_implemented_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("cache.enabled"));
+        assert!(warnings[0].contains("no effect"));
+    }
+
+    #[test]
+    fn test_cache_config_not_yet_implemented_warnings_semantic() {
+        let config = CacheConfig {
+            enabled: true,
+            semantic_cache: true,
+            ..CacheConfig::default()
+        };
+        let warnings = config.not_yet_implemented_warnings();
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[1].contains("cache.semantic_cache"));
+    }
+
+    #[test]
+    fn test_cache_config_not_yet_implemented_warnings_semantic_only() {
+        // semantic_cache alone must produce exactly its own warning, so the
+        // semantic branch can't be silently dropped without a test failing.
+        let config = CacheConfig {
+            enabled: false,
+            semantic_cache: true,
+            ..CacheConfig::default()
+        };
+        let warnings = config.not_yet_implemented_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("cache.semantic_cache"));
     }
 
     #[test]
