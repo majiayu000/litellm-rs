@@ -71,7 +71,11 @@ impl SagemakerSigV4Signer {
 
         // Sort headers by key (case-insensitive)
         let mut sorted_headers: Vec<_> = canonical_headers.iter().collect();
-        sorted_headers.sort_by_key(|(key, _)| key.to_lowercase());
+        sorted_headers.sort_by(|(a_key, _), (b_key, _)| {
+            let a_bytes = a_key.as_bytes().iter().map(|b| b.to_ascii_lowercase());
+            let b_bytes = b_key.as_bytes().iter().map(|b| b.to_ascii_lowercase());
+            a_bytes.cmp(b_bytes)
+        });
 
         // Build canonical headers string
         let canonical_headers_str = sorted_headers
