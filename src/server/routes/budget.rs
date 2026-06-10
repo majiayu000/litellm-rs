@@ -27,6 +27,7 @@ use crate::core::models::{
     user::types::{User, UserRole},
 };
 use crate::server::routes::ApiResponse;
+use crate::server::state::AppState;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result as ActixResult, web};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -197,12 +198,26 @@ pub struct BudgetSummaryResponse {
 /// Budget mutations affect global provider/model limits, so only admins
 /// (SuperAdmin passes via the `has_role` hierarchy) may perform them.
 ///
-/// When authentication is disabled the middleware bypasses all credential
-/// checks and inserts no identity, so the role check is skipped to preserve
-/// no-auth mode (same behaviour as the keys routes).
+/// When both auth backends are disabled the middleware bypasses all
+/// credential checks, so the role check is skipped too — read explicitly
+/// from config (same as the keys routes' `is_auth_enabled`), never inferred
+/// from a missing identity, so a failed identity injection cannot grant
+/// access. With auth enabled, requests without an identity are rejected.
 ///
 /// Returns `Some(403 response)` when the caller must be rejected.
-fn require_admin(req: &HttpRequest, action: &str) -> Option<HttpResponse> {
+fn require_admin(
+    req: &HttpRequest,
+    state: Option<&web::Data<AppState>>,
+    action: &str,
+) -> Option<HttpResponse> {
+    if let Some(state) = state {
+        let cfg = state.config.load();
+        if !cfg.auth().enable_jwt && !cfg.auth().enable_api_key {
+            // No-auth mode: handler-level checks are skipped to preserve it.
+            return None;
+        }
+    }
+
     let extensions = req.extensions();
 
     if let Some(user) = extensions.get::<User>() {
@@ -217,9 +232,9 @@ fn require_admin(req: &HttpRequest, action: &str) -> Option<HttpResponse> {
         // Team-only API key: authenticated but carries no admin user.
         warn!("Team-scoped API key attempted to {}", action);
     } else {
-        // No identity in the extensions: the auth middleware ran in no-auth
-        // mode, where all credential checks are intentionally bypassed.
-        return None;
+        // Auth is enabled (or state is unavailable) and no identity reached
+        // the handler: fail closed.
+        warn!("Unidentified caller attempted to {}", action);
     }
 
     Some(HttpResponse::Forbidden().json(ApiResponse::<()>::error(
@@ -232,10 +247,11 @@ fn require_admin(req: &HttpRequest, action: &str) -> Option<HttpResponse> {
 /// POST /v1/budget/providers - Set a provider budget
 pub async fn set_provider_budget(
     req: HttpRequest,
+    state: Option<web::Data<AppState>>,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     request: web::Json<SetProviderBudgetRequest>,
 ) -> ActixResult<HttpResponse> {
-    if let Some(forbidden) = require_admin(&req, "set provider budget") {
+    if let Some(forbidden) = require_admin(&req, state.as_ref(), "set provider budget") {
         return Ok(forbidden);
     }
 
@@ -388,10 +404,11 @@ pub async fn get_provider_budget(
 /// DELETE /v1/budget/providers/{name} - Remove provider budget
 pub async fn delete_provider_budget(
     req: HttpRequest,
+    state: Option<web::Data<AppState>>,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     path: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
-    if let Some(forbidden) = require_admin(&req, "delete provider budget") {
+    if let Some(forbidden) = require_admin(&req, state.as_ref(), "delete provider budget") {
         return Ok(forbidden);
     }
 
@@ -421,10 +438,11 @@ pub async fn delete_provider_budget(
 /// POST /v1/budget/providers/{name}/reset - Reset provider budget
 pub async fn reset_provider_budget(
     req: HttpRequest,
+    state: Option<web::Data<AppState>>,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     path: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
-    if let Some(forbidden) = require_admin(&req, "reset provider budget") {
+    if let Some(forbidden) = require_admin(&req, state.as_ref(), "reset provider budget") {
         return Ok(forbidden);
     }
 
@@ -478,10 +496,11 @@ pub async fn reset_provider_budget(
 /// POST /v1/budget/models - Set a model budget
 pub async fn set_model_budget(
     req: HttpRequest,
+    state: Option<web::Data<AppState>>,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     request: web::Json<SetModelBudgetRequest>,
 ) -> ActixResult<HttpResponse> {
-    if let Some(forbidden) = require_admin(&req, "set model budget") {
+    if let Some(forbidden) = require_admin(&req, state.as_ref(), "set model budget") {
         return Ok(forbidden);
     }
 
@@ -626,10 +645,11 @@ pub async fn get_model_budget(
 /// DELETE /v1/budget/models/{name} - Remove model budget
 pub async fn delete_model_budget(
     req: HttpRequest,
+    state: Option<web::Data<AppState>>,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     path: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
-    if let Some(forbidden) = require_admin(&req, "delete model budget") {
+    if let Some(forbidden) = require_admin(&req, state.as_ref(), "delete model budget") {
         return Ok(forbidden);
     }
 
@@ -656,10 +676,11 @@ pub async fn delete_model_budget(
 /// POST /v1/budget/models/{name}/reset - Reset model budget
 pub async fn reset_model_budget(
     req: HttpRequest,
+    state: Option<web::Data<AppState>>,
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
     path: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
-    if let Some(forbidden) = require_admin(&req, "reset model budget") {
+    if let Some(forbidden) = require_admin(&req, state.as_ref(), "reset model budget") {
         return Ok(forbidden);
     }
 
@@ -781,8 +802,13 @@ mod tests {
     #[actix_web::test]
     async fn test_set_provider_budget() {
         let budget_limits = Arc::new(UnifiedBudgetLimits::new());
+        let admin = make_test_user(UserRole::Admin);
         let app = test::init_service(
             App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<User>(admin.clone());
+                    srv.call(req)
+                })
                 .app_data(web::Data::new(budget_limits))
                 .configure(configure_budget_routes),
         )
@@ -809,8 +835,13 @@ mod tests {
     #[actix_web::test]
     async fn test_set_provider_budget_validation() {
         let budget_limits = Arc::new(UnifiedBudgetLimits::new());
+        let admin = make_test_user(UserRole::Admin);
         let app = test::init_service(
             App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<User>(admin.clone());
+                    srv.call(req)
+                })
                 .app_data(web::Data::new(budget_limits))
                 .configure(configure_budget_routes),
         )
@@ -929,8 +960,13 @@ mod tests {
             ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
         );
 
+        let admin = make_test_user(UserRole::Admin);
         let app = test::init_service(
             App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<User>(admin.clone());
+                    srv.call(req)
+                })
                 .app_data(web::Data::new(budget_limits))
                 .configure(configure_budget_routes),
         )
@@ -947,8 +983,13 @@ mod tests {
     #[actix_web::test]
     async fn test_set_model_budget() {
         let budget_limits = Arc::new(UnifiedBudgetLimits::new());
+        let admin = make_test_user(UserRole::Admin);
         let app = test::init_service(
             App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<User>(admin.clone());
+                    srv.call(req)
+                })
                 .app_data(web::Data::new(budget_limits))
                 .configure(configure_budget_routes),
         )
