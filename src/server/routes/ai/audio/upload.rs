@@ -96,7 +96,8 @@ where
     )
     .await?;
 
-    Ok(String::from_utf8_lossy(&data).to_string())
+    Ok(String::from_utf8(data)
+        .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned()))
 }
 
 pub(super) async fn drain_field<S, E>(field: &mut S) -> Result<(), AudioUploadError>
@@ -104,13 +105,22 @@ where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: Display,
 {
-    let _ = read_limited_field(
-        field,
-        MAX_AUDIO_FORM_FIELD_SIZE_BYTES,
-        AudioUploadError::FieldTooLarge,
-        "multipart field",
-    )
-    .await?;
+    let mut total_size = 0;
+
+    while let Some(chunk) = field.next().await {
+        let bytes = chunk.map_err(|e| {
+            error!("Error draining multipart field chunk: {}", e);
+            AudioUploadError::ReadChunk
+        })?;
+
+        ensure_field_within_limit(
+            total_size,
+            bytes.len(),
+            MAX_AUDIO_FORM_FIELD_SIZE_BYTES,
+            AudioUploadError::FieldTooLarge,
+        )?;
+        total_size += bytes.len();
+    }
 
     Ok(())
 }
@@ -180,6 +190,20 @@ mod tests {
         assert_eq!(
             read_audio_file(&mut chunks).await,
             Err(AudioUploadError::ReadChunk)
+        );
+    }
+
+    #[actix_web::test]
+    async fn drain_field_limit_rejects_oversized_chunk() {
+        let mut chunks = stream::iter(vec![Ok::<Bytes, TestChunkError>(Bytes::from(vec![
+            b'a';
+            MAX_AUDIO_FORM_FIELD_SIZE_BYTES
+                + 1
+        ]))]);
+
+        assert_eq!(
+            drain_field(&mut chunks).await,
+            Err(AudioUploadError::FieldTooLarge)
         );
     }
 }
