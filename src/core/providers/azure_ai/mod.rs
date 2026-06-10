@@ -353,8 +353,8 @@ mod tests {
             if read_http_headers(&mut socket).await.is_err() {
                 return;
             }
-            if socket.write_all(response.as_bytes()).await.is_err() {
-                return;
+            if let Err(err) = socket.write_all(response.as_bytes()).await {
+                eprintln!("test server failed to write response: {err}");
             }
         });
 

@@ -13,6 +13,7 @@ async fn create_test_handler() -> JwtHandler {
         enable_api_key: true,
         enable_jwt: true,
         api_key_hmac_secret: None,
+        allow_anonymous: false,
         rbac: crate::config::models::auth::RbacConfig {
             enabled: true,
             default_role: "user".to_string(),
