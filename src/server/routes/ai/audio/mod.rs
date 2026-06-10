@@ -3,6 +3,7 @@
 mod speech;
 mod transcriptions;
 mod translations;
+mod upload;
 
 // Re-export the public functions
 pub use speech::audio_speech;

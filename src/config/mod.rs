@@ -22,6 +22,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use tracing::{debug, info};
 
+const REDACTED_SECRET: &str = "[REDACTED]";
+
 /// Canonical alias for gateway server runtime configuration.
 pub type GatewayServerConfig = crate::config::models::server::ServerConfig;
 /// Canonical alias for gateway provider runtime configuration.
@@ -242,20 +244,62 @@ impl Config {
 
     /// Convert to JSON string
     pub fn to_json(&self) -> Result<String> {
-        serde_json::to_string_pretty(&self.gateway)
+        serde_json::to_string_pretty(&self.sanitized_gateway_for_export())
             .map_err(|e| GatewayError::Config(format!("Failed to serialize config to JSON: {}", e)))
     }
 
     /// Convert to YAML string
     pub fn to_yaml(&self) -> Result<String> {
-        serde_yml::to_string(&self.gateway)
+        serde_yml::to_string(&self.sanitized_gateway_for_export())
             .map_err(|e| GatewayError::Config(format!("Failed to serialize config to YAML: {}", e)))
+    }
+
+    fn sanitized_gateway_for_export(&self) -> GatewayConfig {
+        let mut gateway = self.gateway.clone();
+
+        for provider in &mut gateway.providers {
+            redact_string(&mut provider.api_key);
+        }
+
+        redact_string(&mut gateway.auth.jwt_secret);
+        redact_optional_string(&mut gateway.auth.api_key_hmac_secret);
+
+        if let Some(s3) = &mut gateway.storage.files.s3 {
+            redact_string(&mut s3.access_key_id);
+            redact_string(&mut s3.secret_access_key);
+        }
+
+        if let Some(vector_db) = &mut gateway.storage.vector_db {
+            redact_string(&mut vector_db.api_key);
+        }
+
+        if let Some(sso) = &mut gateway.enterprise.sso {
+            redact_string(&mut sso.client_secret);
+        }
+
+        gateway
+    }
+}
+
+fn redact_string(value: &mut String) {
+    if !value.is_empty() {
+        *value = REDACTED_SECRET.to_string();
+    }
+}
+
+fn redact_optional_string(value: &mut Option<String>) {
+    if let Some(secret) = value
+        && !secret.is_empty()
+    {
+        *secret = REDACTED_SECRET.to_string();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::models::enterprise::SsoConfig;
+    use crate::config::models::file_storage::{S3Config, VectorDbConfig};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -503,5 +547,100 @@ typo_field: true
 
         let yaml = config.to_yaml().unwrap();
         assert!(!yaml.is_empty());
+    }
+
+    #[test]
+    fn test_config_serialization_redacts_secrets() {
+        let provider_secret = "issue677-provider-secret-sentinel";
+        let jwt_secret = "Issue677JwtSecretSentinelWithMixedCase123!";
+        let hmac_secret = "issue677-hmac-secret-sentinel";
+        let s3_access_key_id = "issue677-s3-access-key-id-sentinel";
+        let s3_secret_access_key = "issue677-s3-secret-access-key-sentinel";
+        let vector_api_key = "issue677-vector-api-key-sentinel";
+        let sso_client_secret = "issue677-sso-client-secret-sentinel";
+
+        let mut config = Config::default();
+        config.gateway.providers.push(ProviderConfig {
+            name: "openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: provider_secret.to_string(),
+            ..ProviderConfig::default()
+        });
+        config.gateway.auth.jwt_secret = jwt_secret.to_string();
+        config.gateway.auth.api_key_hmac_secret = Some(hmac_secret.to_string());
+        config.gateway.storage.files.s3 = Some(S3Config {
+            bucket: "bucket".to_string(),
+            region: "us-east-1".to_string(),
+            access_key_id: s3_access_key_id.to_string(),
+            secret_access_key: s3_secret_access_key.to_string(),
+            endpoint: None,
+        });
+        config.gateway.storage.vector_db = Some(VectorDbConfig {
+            db_type: "pinecone".to_string(),
+            url: "https://vector.example.test".to_string(),
+            api_key: vector_api_key.to_string(),
+            index_name: "default".to_string(),
+            allow_degraded: false,
+        });
+        config.gateway.enterprise.sso = Some(SsoConfig {
+            provider: "okta".to_string(),
+            client_id: "client-id".to_string(),
+            client_secret: sso_client_secret.to_string(),
+            redirect_url: "https://gateway.example.test/callback".to_string(),
+            settings: std::collections::HashMap::new(),
+        });
+
+        let json = match config.to_json() {
+            Ok(json) => json,
+            Err(error) => panic!("JSON export failed: {error}"),
+        };
+        let yaml = match config.to_yaml() {
+            Ok(yaml) => yaml,
+            Err(error) => panic!("YAML export failed: {error}"),
+        };
+
+        for exported in [&json, &yaml] {
+            assert!(!exported.contains(provider_secret));
+            assert!(!exported.contains(jwt_secret));
+            assert!(!exported.contains(hmac_secret));
+            assert!(!exported.contains(s3_access_key_id));
+            assert!(!exported.contains(s3_secret_access_key));
+            assert!(!exported.contains(vector_api_key));
+            assert!(!exported.contains(sso_client_secret));
+            assert!(exported.contains(REDACTED_SECRET));
+        }
+
+        assert_eq!(config.gateway.providers[0].api_key, provider_secret);
+        assert_eq!(config.gateway.auth.jwt_secret, jwt_secret);
+        assert_eq!(
+            config.gateway.auth.api_key_hmac_secret.as_deref(),
+            Some(hmac_secret)
+        );
+        let s3 = match config.gateway.storage.files.s3.as_ref() {
+            Some(s3) => s3,
+            None => panic!("S3 config missing after export"),
+        };
+        assert_eq!(s3.access_key_id, s3_access_key_id);
+        assert_eq!(s3.secret_access_key, s3_secret_access_key);
+        let vector_db = match config.gateway.storage.vector_db.as_ref() {
+            Some(vector_db) => vector_db,
+            None => panic!("Vector DB config missing after export"),
+        };
+        assert_eq!(vector_db.api_key, vector_api_key);
+        let sso = match config.gateway.enterprise.sso.as_ref() {
+            Some(sso) => sso,
+            None => panic!("SSO config missing after export"),
+        };
+        assert_eq!(sso.client_secret, sso_client_secret);
+    }
+
+    #[test]
+    fn test_config_serialization_preserves_empty_optional_secret() {
+        let mut config = Config::default();
+        config.gateway.auth.api_key_hmac_secret = Some(String::new());
+
+        let exported = config.sanitized_gateway_for_export();
+
+        assert_eq!(exported.auth.api_key_hmac_secret.as_deref(), Some(""));
     }
 }

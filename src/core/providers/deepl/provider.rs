@@ -36,7 +36,7 @@ crate::define_http_provider_with_hooks!(
     error_mapper: super::error_mapper::DeepLErrorMapper,
     model_info: super::model_info::get_supported_models,
     capabilities: &[
-        crate::core::types::model::ProviderCapability::AudioTranslation,
+        crate::core::types::model::ProviderCapability::ChatCompletion,
     ],
     url_builder: |provider: &DeepLProvider| -> String {
         let base_url = provider
@@ -356,8 +356,8 @@ mod tests {
         let provider = DeepLProvider::new(config).unwrap();
 
         let caps = provider.capabilities();
-        assert!(caps.contains(&ProviderCapability::AudioTranslation));
-        assert!(!caps.contains(&ProviderCapability::ChatCompletion));
+        assert!(caps.contains(&ProviderCapability::ChatCompletion));
+        assert!(!caps.contains(&ProviderCapability::AudioTranslation));
     }
 
     #[test]

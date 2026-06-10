@@ -129,14 +129,20 @@ fn get_pricing_with_shared_source<F>(
 where
     F: FnOnce(&str) -> Result<ModelPricing, CostError>,
 {
+    // Some(..) means the shared catalog matched this model; an inner Err means
+    // it matched but carried no usable pricing — that must not fall through to
+    // hardcoded defaults, or an unpriced catalog entry would bill at $0.
     if let Some(pricing) = get_shared_model_pricing(model, provider_aliases) {
-        return Ok(pricing);
+        return pricing;
     }
 
     fallback(model)
 }
 
-fn get_shared_model_pricing(model: &str, provider_aliases: &[&str]) -> Option<ModelPricing> {
+fn get_shared_model_pricing(
+    model: &str,
+    provider_aliases: &[&str],
+) -> Option<Result<ModelPricing, CostError>> {
     let db = crate::core::pricing::get_pricing_db();
 
     if let Some(info) = db.get_model_info(model)
@@ -183,10 +189,40 @@ fn normalize_pricing_provider(provider: &str) -> String {
 fn litellm_to_cost_pricing(
     model: &str,
     info: &crate::core::pricing::LiteLLMModelInfo,
-) -> ModelPricing {
+) -> Result<ModelPricing, CostError> {
     use chrono::Utc;
 
-    ModelPricing {
+    // A catalog entry with neither token cost is unpriced data, not a free
+    // model: charging $0 would silently under-bill, so surface it instead.
+    if info.input_cost_per_token.is_none() && info.output_cost_per_token.is_none() {
+        return Err(CostError::MissingPricing {
+            model: model.to_string(),
+        });
+    }
+    // Chat/completion requests consume both prompt and completion tokens; a
+    // single missing side would under-bill real completions, so fail closed.
+    if requires_bidirectional_token_pricing(info)
+        && (info.input_cost_per_token.is_none() || info.output_cost_per_token.is_none())
+    {
+        return Err(CostError::MissingPricing {
+            model: model.to_string(),
+        });
+    }
+    // Non-chat modes such as embeddings may only price one token direction.
+    // Keep allowing that shape, but flag the gap so catalog data can be fixed.
+    if info.input_cost_per_token.is_none() || info.output_cost_per_token.is_none() {
+        tracing::warn!(
+            "model '{}' is missing {} token cost; billing that side at $0",
+            model,
+            if info.input_cost_per_token.is_none() {
+                "input"
+            } else {
+                "output"
+            }
+        );
+    }
+
+    Ok(ModelPricing {
         model: model.to_string(),
         input_cost_per_1k_tokens: price_per_token_to_per_1k(
             info.input_cost_per_token.unwrap_or(0.0),
@@ -211,7 +247,11 @@ fn litellm_to_cost_pricing(
         batch_discount: extra_f64(info, "batch_discount"),
         currency: "USD".to_string(),
         updated_at: Utc::now(),
-    }
+    })
+}
+
+fn requires_bidirectional_token_pricing(info: &crate::core::pricing::LiteLLMModelInfo) -> bool {
+    matches!(info.mode.as_str(), "chat" | "completion")
 }
 
 fn extra_f64(info: &crate::core::pricing::LiteLLMModelInfo, key: &str) -> Option<f64> {
@@ -377,5 +417,7 @@ pub fn compare_model_costs(
 
 #[cfg(test)]
 mod gpt55_tests;
+#[cfg(test)]
+mod pricing_regression_tests;
 #[cfg(test)]
 mod tests;

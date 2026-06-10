@@ -9,6 +9,7 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use futures::StreamExt;
 use tracing::{error, info};
 
+use super::upload::{drain_field, read_audio_file, read_text_field, upload_error_response};
 use crate::server::routes::ai::context::get_request_context;
 use crate::server::routes::ai::openai_errors;
 use crate::server::routes::ai::provider_selection::select_provider_for_model;
@@ -55,7 +56,12 @@ pub async fn audio_transcriptions(
 
         let field_name = match field.name() {
             Some(name) => name.to_string(),
-            None => continue,
+            None => {
+                if let Err(e) = drain_field(&mut field).await {
+                    return Ok(upload_error_response(e));
+                }
+                continue;
+            }
         };
 
         match field_name.as_str() {
@@ -67,49 +73,44 @@ pub async fn audio_transcriptions(
                     filename = fname.to_string();
                 }
 
-                // Read file data
-                let mut data = Vec::new();
-                while let Some(chunk) = field.next().await {
-                    match chunk {
-                        Ok(bytes) => data.extend_from_slice(&bytes),
-                        Err(e) => {
-                            error!("Error reading file chunk: {}", e);
-                            return Ok(openai_errors::validation_error("Error reading file"));
-                        }
-                    }
-                }
+                let data = match read_audio_file(&mut field).await {
+                    Ok(data) => data,
+                    Err(e) => return Ok(upload_error_response(e)),
+                };
                 file_data = Some(data);
             }
-            "model" => {
-                if let Some(Ok(bytes)) = field.next().await {
-                    model = String::from_utf8_lossy(&bytes).to_string();
+            "model" => match read_text_field(&mut field).await {
+                Ok(value) if !value.is_empty() => model = value,
+                Ok(_) => {}
+                Err(e) => return Ok(upload_error_response(e)),
+            },
+            "language" => match read_text_field(&mut field).await {
+                Ok(value) if !value.is_empty() => language = Some(value),
+                Ok(_) => {}
+                Err(e) => return Ok(upload_error_response(e)),
+            },
+            "prompt" => match read_text_field(&mut field).await {
+                Ok(value) if !value.is_empty() => prompt = Some(value),
+                Ok(_) => {}
+                Err(e) => return Ok(upload_error_response(e)),
+            },
+            "response_format" => match read_text_field(&mut field).await {
+                Ok(value) if !value.is_empty() => response_format = Some(value),
+                Ok(_) => {}
+                Err(e) => return Ok(upload_error_response(e)),
+            },
+            "temperature" => match read_text_field(&mut field).await {
+                Ok(value) => {
+                    if let Ok(temp) = value.parse::<f32>() {
+                        temperature = Some(temp);
+                    }
                 }
-            }
-            "language" => {
-                if let Some(Ok(bytes)) = field.next().await {
-                    language = Some(String::from_utf8_lossy(&bytes).to_string());
-                }
-            }
-            "prompt" => {
-                if let Some(Ok(bytes)) = field.next().await {
-                    prompt = Some(String::from_utf8_lossy(&bytes).to_string());
-                }
-            }
-            "response_format" => {
-                if let Some(Ok(bytes)) = field.next().await {
-                    response_format = Some(String::from_utf8_lossy(&bytes).to_string());
-                }
-            }
-            "temperature" => {
-                if let Some(Ok(bytes)) = field.next().await
-                    && let Ok(temp) = String::from_utf8_lossy(&bytes).parse::<f32>()
-                {
-                    temperature = Some(temp);
-                }
-            }
+                Err(e) => return Ok(upload_error_response(e)),
+            },
             _ => {
-                // Skip unknown fields
-                while field.next().await.is_some() {}
+                if let Err(e) = drain_field(&mut field).await {
+                    return Ok(upload_error_response(e));
+                }
             }
         }
     }

@@ -64,11 +64,13 @@ mod tests {
     async fn build_test_state_with_rate_limit(
         enable_jwt: bool,
         enable_api_key: bool,
+        allow_anonymous: bool,
         default_rpm: Option<u32>,
     ) -> AppState {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = enable_jwt;
         config.gateway.auth.enable_api_key = enable_api_key;
+        config.gateway.auth.allow_anonymous = allow_anonymous;
         config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
@@ -91,7 +93,7 @@ mod tests {
     }
 
     async fn build_test_state(enable_jwt: bool, enable_api_key: bool) -> AppState {
-        build_test_state_with_rate_limit(enable_jwt, enable_api_key, None).await
+        build_test_state_with_rate_limit(enable_jwt, enable_api_key, false, None).await
     }
 
     async fn seed_valid_principal(state: &AppState) -> SeededPrincipal {
@@ -198,7 +200,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_missing_auth_hits_gateway_rate_limit_before_auth_short_circuit() {
-        let state = build_test_state_with_rate_limit(true, true, Some(1)).await;
+        let state = build_test_state_with_rate_limit(true, true, false, Some(1)).await;
         let hit_counter = Arc::new(AtomicUsize::new(0));
 
         let app = test::init_service(
@@ -239,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rotating_invalid_auth_hits_gateway_rate_limit_before_auth_short_circuit() {
-        let state = build_test_state_with_rate_limit(true, true, Some(1)).await;
+        let state = build_test_state_with_rate_limit(true, true, false, Some(1)).await;
         let hit_counter = Arc::new(AtomicUsize::new(0));
 
         let app = test::init_service(
@@ -282,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_valid_auth_releases_gateway_auth_attempt_reservation() {
-        let state = build_test_state_with_rate_limit(true, true, Some(1)).await;
+        let state = build_test_state_with_rate_limit(true, true, false, Some(1)).await;
         let principal = seed_valid_principal(&state).await;
         let hit_counter = Arc::new(AtomicUsize::new(0));
 
@@ -365,8 +367,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auth_middleware_bypasses_auth_when_disabled_but_sets_context() {
+    async fn test_auth_middleware_fails_closed_when_disabled_without_anonymous_opt_in() {
         let state = build_test_state(false, false).await;
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(AuthMiddleware)
+                .route(AUTH_PROBE_PATH, web::get().to(auth_probe)),
+        )
+        .await;
+
+        let request = test::TestRequest::get().uri(AUTH_PROBE_PATH).to_request();
+        let error = test::try_call_service(&app, request)
+            .await
+            .expect_err("disabled auth without allow_anonymous should fail closed");
+
+        assert_eq!(
+            error.as_response_error().status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
+        assert!(
+            error
+                .to_string()
+                .contains("Authentication is not configured")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_bypasses_auth_when_disabled_but_sets_context() {
+        let state = build_test_state_with_rate_limit(false, false, true, None).await;
         let hit_counter = Arc::new(AtomicUsize::new(0));
 
         let app = test::init_service(

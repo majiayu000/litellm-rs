@@ -14,7 +14,7 @@ pub fn get_supported_models() -> Vec<ModelInfo> {
         supports_streaming: false,
         supports_tools: false,
         supports_multimodal: false,
-        capabilities: vec![ProviderCapability::AudioTranslation],
+        capabilities: vec![ProviderCapability::ChatCompletion],
         currency: "USD".to_string(),
         ..Default::default()
     }]
@@ -47,6 +47,11 @@ mod tests {
         let translate_model = models.iter().find(|m| m.id == "deepl-translate").unwrap();
         assert!(
             translate_model
+                .capabilities
+                .contains(&ProviderCapability::ChatCompletion)
+        );
+        assert!(
+            !translate_model
                 .capabilities
                 .contains(&ProviderCapability::AudioTranslation)
         );
