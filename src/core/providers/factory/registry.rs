@@ -462,6 +462,30 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_cohere_rejects_invalid_embedding_input_type() {
+        let err = Provider::from_config_async(
+            ProviderType::Cohere,
+            serde_json::json!({
+                "api_key": "test-cohere-key",
+                "default_embedding_input_type": "chat"
+            }),
+        )
+        .await
+        .expect_err("cohere should reject invalid default embedding input types");
+
+        assert!(
+            matches!(err, ProviderError::Configuration { .. }),
+            "expected Configuration, got {err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("default_embedding_input_type must be one of"),
+            "error should identify valid Cohere embedding input types: {err}"
+        );
+    }
+
     #[tokio::test]
     async fn test_from_config_async_cloudflare_accepts_alias_fields() {
         let config = serde_json::json!({

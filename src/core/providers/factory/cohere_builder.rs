@@ -42,11 +42,23 @@ pub(super) fn build_cohere_config_from_factory(
         cohere_config.max_retries = max_retries;
     }
     if let Some(input_type) = config_str(config, "default_embedding_input_type") {
-        cohere_config.default_embedding_input_type = input_type.to_string();
+        cohere_config.default_embedding_input_type =
+            normalize_default_embedding_input_type(input_type)?;
     }
 
     cohere_config
         .validate()
         .map_err(|err| ProviderError::configuration("cohere", err))?;
     Ok(cohere_config)
+}
+
+fn normalize_default_embedding_input_type(input_type: &str) -> Result<String, ProviderError> {
+    let normalized = input_type.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "search_document" | "search_query" | "classification" | "clustering" => Ok(normalized),
+        _ => Err(ProviderError::configuration(
+            "cohere",
+            "default_embedding_input_type must be one of search_document, search_query, classification, or clustering",
+        )),
+    }
 }

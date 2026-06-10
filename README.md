@@ -124,7 +124,7 @@ Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLA
 | Anthropic (`anthropic`) | always | ✅ | ✅ | – | – | – | Native Anthropic messages API. |
 | Mistral (`mistral`) | always | ✅ | ✅ | passthrough | – | – | Native client. |
 | Cloudflare Workers AI (`cloudflare`) | always | ✅ | – | – | – | – | Native client with account-id auth; streaming and embeddings currently return `NotSupported`. |
-| Cohere (`cohere`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native Cohere `/v2/chat`, `/v2/embed`, and `/v1/rerank`; explicitly unsupported without `providers-extended`. |
+| Cohere (`cohere`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native Cohere `/v2/chat` and `/v2/embed`; the concrete provider also exposes a `/v1/rerank` helper. Explicitly unsupported without `providers-extended`. |
 | Azure OpenAI (`azure`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
 | Azure AI Inference (`azure_ai`) | wired via factory (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but the factory path uses OpenAILike chat/stream only. |
 | AWS Bedrock (`bedrock`) | always | ✅ | ✅ | ✅ | helper API | – | Native AWS Bedrock runtime path with SigV4 signing. Use `openai_compatible` for Bedrock Access Gateway or other OpenAI-compatible proxies. |
