@@ -268,6 +268,8 @@ macro_rules! dispatch_provider {
             Provider::Azure(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(p) => p.$method($($arg),*),
+            #[cfg(feature = "providers-extra")]
+            Provider::VertexAI(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => p.$method($($arg),*),
             Provider::Mistral(p) => p.$method($($arg),*),
@@ -285,6 +287,8 @@ macro_rules! dispatch_provider {
             Provider::Azure(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            #[cfg(feature = "providers-extra")]
+            Provider::VertexAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
@@ -302,6 +306,8 @@ macro_rules! dispatch_provider {
             Provider::Azure(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(p) => LLMProvider::$method(p, $($arg),*),
+            #[cfg(feature = "providers-extra")]
+            Provider::VertexAI(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*),
@@ -319,6 +325,8 @@ macro_rules! dispatch_provider {
             Provider::Azure(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(p) => LLMProvider::$method(p).await,
+            #[cfg(feature = "providers-extra")]
+            Provider::VertexAI(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p).await,
             Provider::Mistral(p) => LLMProvider::$method(p).await,
@@ -360,6 +368,8 @@ pub enum Provider {
     Azure(azure::AzureOpenAIProvider),
     #[cfg(feature = "providers-extra")]
     AzureAI(azure_ai::AzureAIProvider),
+    #[cfg(feature = "providers-extra")]
+    VertexAI(vertex_ai::VertexAIProvider),
     #[cfg(feature = "providers-extended")]
     GitHubCopilot(github_copilot::GitHubCopilotProvider),
     Mistral(mistral::MistralProvider),
@@ -379,6 +389,8 @@ impl Provider {
             Provider::Azure(_) => "azure",
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(_) => "azure_ai",
+            #[cfg(feature = "providers-extra")]
+            Provider::VertexAI(_) => "vertex_ai",
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(_) => "github_copilot",
             Provider::Mistral(_) => "mistral",
@@ -400,6 +412,8 @@ impl Provider {
             Provider::Azure(_) => ProviderType::Azure,
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(_) => ProviderType::AzureAI,
+            #[cfg(feature = "providers-extra")]
+            Provider::VertexAI(_) => ProviderType::VertexAI,
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(_) => ProviderType::GitHubCopilot,
             Provider::Mistral(_) => ProviderType::Mistral,

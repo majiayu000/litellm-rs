@@ -12,7 +12,7 @@ use crate::core::providers::{
     Provider, anthropic, bedrock, cloudflare, mistral, openai, openai_like,
 };
 #[cfg(feature = "providers-extra")]
-use crate::core::providers::{azure, azure_ai};
+use crate::core::providers::{azure, azure_ai, vertex_ai};
 
 #[cfg(feature = "providers-extended")]
 use super::builder::build_github_copilot_config_from_factory;
@@ -21,10 +21,13 @@ use super::builder::{
     build_bedrock_config_from_factory, build_cloudflare_config_from_factory,
     build_fal_ai_config_from_factory, build_mistral_config_from_factory,
     build_openai_config_from_factory, build_openai_like_config_from_factory,
-    build_replicate_config_from_factory, build_vertex_ai_config_from_factory, config_str,
+    build_replicate_config_from_factory, config_str,
 };
 #[cfg(feature = "providers-extra")]
-use super::builder::{build_azure_ai_config_from_factory, build_azure_config_from_factory};
+use super::builder::{
+    build_azure_ai_config_from_factory, build_azure_config_from_factory,
+    build_vertex_ai_config_from_factory,
+};
 #[cfg(not(feature = "providers-extra"))]
 use super::builder::{
     build_azure_ai_openai_like_config_from_factory, build_azure_openai_like_config_from_factory,
@@ -124,11 +127,21 @@ impl Provider {
                 Ok(Provider::Bedrock(provider))
             }
             ProviderType::VertexAI => {
-                let oai_config = build_vertex_ai_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization("vertex_ai", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
+                #[cfg(feature = "providers-extra")]
+                {
+                    let vertex_config = build_vertex_ai_config_from_factory(&config)?;
+                    let provider = vertex_ai::VertexAIProvider::new(vertex_config)
+                        .await
+                        .map_err(|e| ProviderError::initialization("vertex_ai", e.to_string()))?;
+                    Ok(Provider::VertexAI(provider))
+                }
+                #[cfg(not(feature = "providers-extra"))]
+                {
+                    Err(ProviderError::not_implemented(
+                        "vertex_ai",
+                        "Vertex AI native dispatch requires the providers-extra feature",
+                    ))
+                }
             }
             ProviderType::Replicate => {
                 let oai_config = build_replicate_config_from_factory(&config)?;
@@ -224,8 +237,17 @@ mod tests {
     }
 
     fn minimal_dispatch_config_for(provider_type: &ProviderType) -> serde_json::Value {
-        if matches!(provider_type, ProviderType::GitHubCopilot) {
-            serde_json::json!({
+        match provider_type {
+            ProviderType::VertexAI => serde_json::json!({
+                "project_id": "test-project",
+                "location": "us-central1",
+                "api_version": "v1",
+                "access_token": "ya29.test-token",
+                "timeout": 30,
+                "max_retries": 2,
+                "enable_experimental": true
+            }),
+            ProviderType::GitHubCopilot => serde_json::json!({
                 "token_dir": "/tmp/litellm-rs-github-copilot-test",
                 "access_token_file": "access-token",
                 "api_key_file": "api-key.json",
@@ -234,9 +256,8 @@ mod tests {
                 "max_retries": 2,
                 "disable_system_to_assistant": true,
                 "debug": true
-            })
-        } else {
-            minimal_dispatch_config()
+            }),
+            _ => minimal_dispatch_config(),
         }
     }
 
@@ -268,7 +289,8 @@ mod tests {
                     | (ProviderType::Cloudflare, Provider::Cloudflare(_)) => {}
                     #[cfg(feature = "providers-extra")]
                     (ProviderType::Azure, Provider::Azure(_))
-                    | (ProviderType::AzureAI, Provider::AzureAI(_)) => {}
+                    | (ProviderType::AzureAI, Provider::AzureAI(_))
+                    | (ProviderType::VertexAI, Provider::VertexAI(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::GitHubCopilot, Provider::GitHubCopilot(_)) => {}
                     _ => panic!(
@@ -390,6 +412,44 @@ mod tests {
         )
         .await
         .expect_err("github_copilot native auth should reject static api_key");
+
+        assert!(
+            matches!(err, ProviderError::InvalidRequest { .. }),
+            "expected InvalidRequest, got {err}"
+        );
+        assert!(
+            err.to_string().contains("static api_key"),
+            "error should identify static api_key rejection: {err}"
+        );
+    }
+
+    #[cfg(feature = "providers-extra")]
+    #[tokio::test]
+    async fn test_from_config_async_vertex_ai_creates_native_with_access_token() {
+        let provider = Provider::from_config_async(
+            ProviderType::VertexAI,
+            minimal_dispatch_config_for(&ProviderType::VertexAI),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("vertex_ai should create native provider: {err}"));
+
+        assert!(matches!(provider, Provider::VertexAI(_)));
+        assert_eq!(provider.name(), "vertex_ai");
+        assert_eq!(provider.provider_type(), ProviderType::VertexAI);
+    }
+
+    #[cfg(feature = "providers-extra")]
+    #[tokio::test]
+    async fn test_from_config_async_vertex_ai_rejects_static_api_key() {
+        let err = Provider::from_config_async(
+            ProviderType::VertexAI,
+            serde_json::json!({
+                "api_key": "sk-test",
+                "project_id": "test-project"
+            }),
+        )
+        .await
+        .expect_err("vertex_ai native auth should reject static api_key");
 
         assert!(
             matches!(err, ProviderError::InvalidRequest { .. }),

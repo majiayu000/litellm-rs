@@ -8,10 +8,12 @@ use super::super::github_copilot;
 use super::super::unified_provider::ProviderError;
 use super::super::{anthropic, bedrock, cloudflare, macros, mistral, openai, openai_like};
 #[cfg(feature = "providers-extra")]
-use super::super::{azure, azure_ai};
-#[cfg(feature = "providers-extended")]
+use super::super::{azure, azure_ai, vertex_ai};
+#[cfg(any(feature = "providers-extra", feature = "providers-extended"))]
 use crate::core::traits::provider::ProviderConfig as _;
 use std::env;
+#[cfg(feature = "providers-extra")]
+use std::fs;
 
 // ==================== Config Extraction Helpers ====================
 
@@ -548,27 +550,125 @@ pub(super) fn build_bedrock_config_from_factory(
     Ok(bedrock_config)
 }
 
+#[cfg(feature = "providers-extra")]
 pub(super) fn build_vertex_ai_config_from_factory(
     config: &serde_json::Value,
-) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
-    let api_key = macros::require_config_str(config, "api_key", "vertex_ai")?;
-    let api_base = config_str(config, "base_url")
+) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
+    if config_str(config, "api_key").is_some() {
+        return Err(ProviderError::invalid_request(
+            "vertex_ai",
+            "Vertex AI native auth does not accept static api_key; configure project/project_id with access_token, credentials_json, credentials_file, or Application Default Credentials",
+        ));
+    }
+
+    let project_id = config_str_any(
+        config,
+        &["project_id", "project", "gcp_project", "google_project_id"],
+    )
+    .map(str::to_string)
+    .or_else(|| {
+        env_str_any(&[
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_PROJECT_ID",
+            "GCP_PROJECT",
+            "GCLOUD_PROJECT",
+        ])
+    })
+    .ok_or_else(|| {
+        ProviderError::configuration("vertex_ai", "project_id (or project) is required")
+    })?;
+
+    let mut vertex_config = vertex_ai::VertexAIProviderConfig {
+        project_id,
+        ..Default::default()
+    };
+
+    if let Some(location) = config_str_any(config, &["location", "region", "vertex_location"])
+        .map(str::to_string)
+        .or_else(|| env_str_any(&["GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION"]))
+    {
+        vertex_config.location = location;
+    }
+    if let Some(api_version) = config_str(config, "api_version") {
+        vertex_config.api_version = api_version.to_string();
+    }
+    if let Some(api_base) = config_str(config, "base_url")
         .or_else(|| config_str(config, "api_base"))
-        .ok_or_else(|| ProviderError::configuration("vertex_ai", "base_url is required"))?;
-
-    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
-    oai_config.provider_name = "vertex_ai".to_string();
-
+        .or_else(|| config_str(config, "endpoint"))
+    {
+        vertex_config.api_base = Some(api_base.to_string());
+    }
     if let Some(timeout) = config_u64(config, "timeout") {
-        oai_config.base.timeout = timeout;
+        vertex_config.timeout_seconds = timeout;
     }
     if let Some(max_retries) = config_u32(config, "max_retries") {
-        oai_config.base.max_retries = max_retries;
+        vertex_config.max_retries = max_retries;
     }
-    merge_string_headers(&mut oai_config.base.headers, config, "headers");
-    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
+    if let Some(enable_experimental) = config_bool(config, "enable_experimental") {
+        vertex_config.enable_experimental = enable_experimental;
+    }
+    vertex_config.credentials = build_vertex_credentials_from_factory(config)?;
 
-    Ok(oai_config)
+    vertex_config
+        .validate()
+        .map_err(|err| ProviderError::configuration("vertex_ai", err))?;
+    Ok(vertex_config)
+}
+
+#[cfg(feature = "providers-extra")]
+fn build_vertex_credentials_from_factory(
+    config: &serde_json::Value,
+) -> Result<vertex_ai::VertexCredentials, ProviderError> {
+    if let Some(access_token) = config_str_any(
+        config,
+        &[
+            "access_token",
+            "vertex_access_token",
+            "google_access_token",
+            "bearer_token",
+        ],
+    ) {
+        return Ok(vertex_ai::VertexCredentials::AccessToken(
+            access_token.to_string(),
+        ));
+    }
+
+    if let Some(credentials_json) = config_str_any(
+        config,
+        &[
+            "credentials_json",
+            "vertex_ai_credentials",
+            "google_credentials_json",
+        ],
+    ) {
+        return vertex_ai::VertexAuth::parse_credentials(credentials_json).map_err(|err| {
+            ProviderError::configuration("vertex_ai", format!("invalid credentials_json: {err}"))
+        });
+    }
+
+    if let Some(credentials_file) = config_str_any(
+        config,
+        &[
+            "credentials_file",
+            "credential_file",
+            "google_application_credentials",
+        ],
+    )
+    .map(str::to_string)
+    .or_else(|| env_str_any(&["GOOGLE_APPLICATION_CREDENTIALS"]))
+    {
+        let contents = fs::read_to_string(&credentials_file).map_err(|err| {
+            ProviderError::configuration(
+                "vertex_ai",
+                format!("failed to read credentials file '{credentials_file}': {err}"),
+            )
+        })?;
+        return vertex_ai::VertexAuth::parse_credentials(&contents).map_err(|err| {
+            ProviderError::configuration("vertex_ai", format!("invalid credentials file: {err}"))
+        });
+    }
+
+    Ok(vertex_ai::VertexCredentials::ApplicationDefault)
 }
 
 pub(super) fn build_replicate_config_from_factory(

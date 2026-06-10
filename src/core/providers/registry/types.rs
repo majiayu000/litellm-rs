@@ -85,7 +85,7 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::VertexAI,
         "vertex_ai",
         &["vertexai", "vertex-ai"],
-        ProviderDispatchKind::ExplicitOpenAiLike,
+        provider_extra_only_native_dispatch_kind(),
         false,
     ),
     entry(
@@ -343,6 +343,14 @@ const fn providers_extended_native_dispatch_kind() -> ProviderDispatchKind {
     }
 }
 
+const fn provider_extra_only_native_dispatch_kind() -> ProviderDispatchKind {
+    if cfg!(feature = "providers-extra") {
+        ProviderDispatchKind::Native
+    } else {
+        ProviderDispatchKind::UnsupportedEnum
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,6 +427,8 @@ mod tests {
             ProviderType::Azure,
             #[cfg(feature = "providers-extra")]
             ProviderType::AzureAI,
+            #[cfg(feature = "providers-extra")]
+            ProviderType::VertexAI,
             #[cfg(feature = "providers-extended")]
             ProviderType::GitHubCopilot,
         ])
@@ -435,7 +445,7 @@ mod tests {
         );
         assert_eq!(
             dispatch_kind_for(&ProviderType::VertexAI),
-            ProviderDispatchKind::ExplicitOpenAiLike
+            provider_extra_only_native_dispatch_kind()
         );
         assert_eq!(
             dispatch_kind_for(&ProviderType::Azure),

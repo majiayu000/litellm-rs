@@ -249,9 +249,9 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "vercel_ai",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    stub(
+    provider_extra_wire(
         "vertex_ai",
-        "native Vertex AI module retained; ProviderType::VertexAI currently uses a generic OpenAI-compatible adapter",
+        "ProviderType::VertexAI dispatches to native Vertex AI auth when providers-extra is enabled",
     ),
     stub(
         "voyage",
@@ -340,7 +340,14 @@ mod tests {
     #[test]
     fn lifecycle_classifies_phase0_key_provider_modules() {
         assert_eq!(lifecycle_for("bedrock"), ProviderModuleLifecycle::Wire);
-        assert_eq!(lifecycle_for("vertex_ai"), ProviderModuleLifecycle::Stub);
+        assert_eq!(
+            lifecycle_for("vertex_ai"),
+            if cfg!(feature = "providers-extra") {
+                ProviderModuleLifecycle::Wire
+            } else {
+                ProviderModuleLifecycle::Stub
+            }
+        );
         assert_eq!(
             lifecycle_for("azure"),
             if cfg!(feature = "providers-extra") {
@@ -389,6 +396,8 @@ mod tests {
             "mistral",
             "openai",
             "openai_like",
+            #[cfg(feature = "providers-extra")]
+            "vertex_ai",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
