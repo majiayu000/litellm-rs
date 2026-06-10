@@ -268,6 +268,8 @@ macro_rules! dispatch_provider {
             Provider::Azure(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(p) => p.$method($($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::GitHubCopilot(p) => p.$method($($arg),*),
             Provider::Mistral(p) => p.$method($($arg),*),
             Provider::Cloudflare(p) => p.$method($($arg),*),
             Provider::OpenAILike(p) => p.$method($($arg),*),
@@ -283,6 +285,8 @@ macro_rules! dispatch_provider {
             Provider::Azure(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            #[cfg(feature = "providers-extended")]
+            Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
@@ -298,6 +302,8 @@ macro_rules! dispatch_provider {
             Provider::Azure(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(p) => LLMProvider::$method(p, $($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*),
@@ -313,6 +319,8 @@ macro_rules! dispatch_provider {
             Provider::Azure(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(p) => LLMProvider::$method(p).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::GitHubCopilot(p) => LLMProvider::$method(p).await,
             Provider::Mistral(p) => LLMProvider::$method(p).await,
             Provider::Cloudflare(p) => LLMProvider::$method(p).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
@@ -352,6 +360,8 @@ pub enum Provider {
     Azure(azure::AzureOpenAIProvider),
     #[cfg(feature = "providers-extra")]
     AzureAI(azure_ai::AzureAIProvider),
+    #[cfg(feature = "providers-extended")]
+    GitHubCopilot(github_copilot::GitHubCopilotProvider),
     Mistral(mistral::MistralProvider),
     Cloudflare(cloudflare::CloudflareProvider),
     /// Tier 1: data-driven OpenAI-compatible providers (groq, together, fireworks, etc.)
@@ -369,6 +379,8 @@ impl Provider {
             Provider::Azure(_) => "azure",
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(_) => "azure_ai",
+            #[cfg(feature = "providers-extended")]
+            Provider::GitHubCopilot(_) => "github_copilot",
             Provider::Mistral(_) => "mistral",
             Provider::Cloudflare(_) => "cloudflare",
             Provider::OpenAILike(p) => {
@@ -388,6 +400,8 @@ impl Provider {
             Provider::Azure(_) => ProviderType::Azure,
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(_) => ProviderType::AzureAI,
+            #[cfg(feature = "providers-extended")]
+            Provider::GitHubCopilot(_) => ProviderType::GitHubCopilot,
             Provider::Mistral(_) => ProviderType::Mistral,
             Provider::Cloudflare(_) => ProviderType::Cloudflare,
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,

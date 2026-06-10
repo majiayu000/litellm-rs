@@ -218,7 +218,7 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::GitHubCopilot,
         "github_copilot",
         &["github-copilot", "copilot"],
-        ProviderDispatchKind::ExplicitOpenAiLike,
+        providers_extended_native_dispatch_kind(),
         false,
     ),
     entry(
@@ -335,6 +335,14 @@ const fn provider_extra_native_dispatch_kind() -> ProviderDispatchKind {
     }
 }
 
+const fn providers_extended_native_dispatch_kind() -> ProviderDispatchKind {
+    if cfg!(feature = "providers-extended") {
+        ProviderDispatchKind::Native
+    } else {
+        ProviderDispatchKind::UnsupportedEnum
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +419,8 @@ mod tests {
             ProviderType::Azure,
             #[cfg(feature = "providers-extra")]
             ProviderType::AzureAI,
+            #[cfg(feature = "providers-extended")]
+            ProviderType::GitHubCopilot,
         ])
         .collect::<HashSet<_>>();
 
@@ -434,6 +444,10 @@ mod tests {
         assert_eq!(
             dispatch_kind_for(&ProviderType::AzureAI),
             provider_extra_native_dispatch_kind()
+        );
+        assert_eq!(
+            dispatch_kind_for(&ProviderType::GitHubCopilot),
+            providers_extended_native_dispatch_kind()
         );
         assert_eq!(
             dispatch_kind_for(&ProviderType::OpenAICompatible),

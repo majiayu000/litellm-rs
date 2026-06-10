@@ -3,6 +3,8 @@
 //! Implements `Provider::from_config_async`, which maps each `ProviderType`
 //! to its concrete provider instantiation logic.
 
+#[cfg(feature = "providers-extended")]
+use crate::core::providers::github_copilot;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry as provider_registry;
 use crate::core::providers::unified_provider::ProviderError;
@@ -12,13 +14,14 @@ use crate::core::providers::{
 #[cfg(feature = "providers-extra")]
 use crate::core::providers::{azure, azure_ai};
 
+#[cfg(feature = "providers-extended")]
+use super::builder::build_github_copilot_config_from_factory;
 use super::builder::{
     apply_tier1_openai_like_overrides, build_anthropic_config_from_factory,
     build_bedrock_config_from_factory, build_cloudflare_config_from_factory,
-    build_fal_ai_config_from_factory, build_github_copilot_config_from_factory,
-    build_mistral_config_from_factory, build_openai_config_from_factory,
-    build_openai_like_config_from_factory, build_replicate_config_from_factory,
-    build_vertex_ai_config_from_factory, config_str,
+    build_fal_ai_config_from_factory, build_mistral_config_from_factory,
+    build_openai_config_from_factory, build_openai_like_config_from_factory,
+    build_replicate_config_from_factory, build_vertex_ai_config_from_factory, config_str,
 };
 #[cfg(feature = "providers-extra")]
 use super::builder::{build_azure_ai_config_from_factory, build_azure_config_from_factory};
@@ -135,11 +138,23 @@ impl Provider {
                 Ok(Provider::OpenAILike(provider))
             }
             ProviderType::GitHubCopilot => {
-                let oai_config = build_github_copilot_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization("github_copilot", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
+                #[cfg(feature = "providers-extended")]
+                {
+                    let copilot_config = build_github_copilot_config_from_factory(&config)?;
+                    let provider = github_copilot::GitHubCopilotProvider::new(copilot_config)
+                        .await
+                        .map_err(|e| {
+                            ProviderError::initialization("github_copilot", e.to_string())
+                        })?;
+                    Ok(Provider::GitHubCopilot(provider))
+                }
+                #[cfg(not(feature = "providers-extended"))]
+                {
+                    Err(ProviderError::not_implemented(
+                        "github_copilot",
+                        "GitHub Copilot native dispatch requires the providers-extended feature",
+                    ))
+                }
             }
             // Catalog-covered provider types: delegate to the Tier 1 registry after
             // all explicit branches, so catalog metadata cannot shadow provider-specific builders.
@@ -208,6 +223,23 @@ mod tests {
         })
     }
 
+    fn minimal_dispatch_config_for(provider_type: &ProviderType) -> serde_json::Value {
+        if matches!(provider_type, ProviderType::GitHubCopilot) {
+            serde_json::json!({
+                "token_dir": "/tmp/litellm-rs-github-copilot-test",
+                "access_token_file": "access-token",
+                "api_key_file": "api-key.json",
+                "api_base": "https://example.test",
+                "timeout": 30,
+                "max_retries": 2,
+                "disable_system_to_assistant": true,
+                "debug": true
+            })
+        } else {
+            minimal_dispatch_config()
+        }
+    }
+
     #[tokio::test]
     async fn test_dispatch_kind_matches_runtime_variant() {
         for entry in provider_type_registry() {
@@ -215,15 +247,17 @@ mod tests {
                 continue;
             }
 
-            let provider =
-                Provider::from_config_async(entry.provider_type.clone(), minimal_dispatch_config())
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "{:?} should be creatable for dispatch-kind guard: {}",
-                            entry.provider_type, err
-                        )
-                    });
+            let provider = Provider::from_config_async(
+                entry.provider_type.clone(),
+                minimal_dispatch_config_for(&entry.provider_type),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "{:?} should be creatable for dispatch-kind guard: {}",
+                    entry.provider_type, err
+                )
+            });
 
             match entry.dispatch_kind {
                 ProviderDispatchKind::Native => match (&entry.provider_type, &provider) {
@@ -235,6 +269,8 @@ mod tests {
                     #[cfg(feature = "providers-extra")]
                     (ProviderType::Azure, Provider::Azure(_))
                     | (ProviderType::AzureAI, Provider::AzureAI(_)) => {}
+                    #[cfg(feature = "providers-extended")]
+                    (ProviderType::GitHubCopilot, Provider::GitHubCopilot(_)) => {}
                     _ => panic!(
                         "{:?} is classified Native but created runtime provider {:?}",
                         entry.provider_type,
@@ -328,6 +364,41 @@ mod tests {
             .await
             .unwrap_or_else(|err| panic!("openai_compatible should be creatable: {err}"));
         assert!(matches!(provider, Provider::OpenAILike(_)));
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_github_copilot_creates_native_without_static_key() {
+        let provider = Provider::from_config_async(
+            ProviderType::GitHubCopilot,
+            minimal_dispatch_config_for(&ProviderType::GitHubCopilot),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("github_copilot should create native provider: {err}"));
+
+        assert!(matches!(provider, Provider::GitHubCopilot(_)));
+        assert_eq!(provider.name(), "github_copilot");
+        assert_eq!(provider.provider_type(), ProviderType::GitHubCopilot);
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_github_copilot_rejects_static_api_key() {
+        let err = Provider::from_config_async(
+            ProviderType::GitHubCopilot,
+            serde_json::json!({"api_key": "sk-test"}),
+        )
+        .await
+        .expect_err("github_copilot native auth should reject static api_key");
+
+        assert!(
+            matches!(err, ProviderError::InvalidRequest { .. }),
+            "expected InvalidRequest, got {err}"
+        );
+        assert!(
+            err.to_string().contains("static api_key"),
+            "error should identify static api_key rejection: {err}"
+        );
     }
 
     #[tokio::test]

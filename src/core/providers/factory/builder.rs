@@ -3,10 +3,14 @@
 //! Contains config extraction helpers and per-provider config builder functions
 //! used by the factory when constructing provider instances.
 
+#[cfg(feature = "providers-extended")]
+use super::super::github_copilot;
 use super::super::unified_provider::ProviderError;
 use super::super::{anthropic, bedrock, cloudflare, macros, mistral, openai, openai_like};
 #[cfg(feature = "providers-extra")]
 use super::super::{azure, azure_ai};
+#[cfg(feature = "providers-extended")]
+use crate::core::traits::provider::ProviderConfig as _;
 use std::env;
 
 // ==================== Config Extraction Helpers ====================
@@ -590,27 +594,50 @@ pub(super) fn build_replicate_config_from_factory(
     Ok(oai_config)
 }
 
+#[cfg(feature = "providers-extended")]
 pub(super) fn build_github_copilot_config_from_factory(
     config: &serde_json::Value,
-) -> Result<openai_like::OpenAILikeConfig, ProviderError> {
-    let api_key = macros::require_config_str(config, "api_key", "github_copilot")?;
-    let api_base = config_str(config, "base_url")
-        .or_else(|| config_str(config, "api_base"))
-        .unwrap_or("https://api.githubcopilot.com");
+) -> Result<github_copilot::GitHubCopilotConfig, ProviderError> {
+    if config_str(config, "api_key").is_some() {
+        return Err(ProviderError::invalid_request(
+            "github_copilot",
+            "GitHub Copilot native auth does not accept static api_key; configure token_dir, access_token_file, or api_key_file",
+        ));
+    }
 
-    let mut oai_config = openai_like::OpenAILikeConfig::with_api_key(api_base, api_key);
-    oai_config.provider_name = "github_copilot".to_string();
+    let mut copilot_config = github_copilot::GitHubCopilotConfig::default();
 
+    if let Some(api_base) =
+        config_str(config, "base_url").or_else(|| config_str(config, "api_base"))
+    {
+        copilot_config.api_base = Some(api_base.to_string());
+    }
+    if let Some(token_dir) = config_str(config, "token_dir") {
+        copilot_config.token_dir = Some(token_dir.to_string());
+    }
+    if let Some(access_token_file) = config_str(config, "access_token_file") {
+        copilot_config.access_token_file = Some(access_token_file.to_string());
+    }
+    if let Some(api_key_file) = config_str(config, "api_key_file") {
+        copilot_config.api_key_file = Some(api_key_file.to_string());
+    }
     if let Some(timeout) = config_u64(config, "timeout") {
-        oai_config.base.timeout = timeout;
+        copilot_config.timeout = timeout;
     }
     if let Some(max_retries) = config_u32(config, "max_retries") {
-        oai_config.base.max_retries = max_retries;
+        copilot_config.max_retries = max_retries;
     }
-    merge_string_headers(&mut oai_config.base.headers, config, "headers");
-    merge_string_headers(&mut oai_config.custom_headers, config, "custom_headers");
+    if let Some(disable_system_to_assistant) = config_bool(config, "disable_system_to_assistant") {
+        copilot_config.disable_system_to_assistant = disable_system_to_assistant;
+    }
+    if let Some(debug) = config_bool(config, "debug") {
+        copilot_config.debug = debug;
+    }
 
-    Ok(oai_config)
+    copilot_config
+        .validate()
+        .map_err(|err| ProviderError::configuration("github_copilot", err))?;
+    Ok(copilot_config)
 }
 
 pub(super) fn build_openai_like_config_from_factory(

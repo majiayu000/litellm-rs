@@ -115,9 +115,9 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "github",
         "native GitHub module retained; ProviderType::GitHub currently uses a generic OpenAI-compatible adapter",
     ),
-    stub(
+    providers_extended_wire(
         "github_copilot",
-        "native GitHub Copilot module retained; ProviderType::GitHubCopilot currently uses a generic OpenAI-compatible adapter",
+        "ProviderType::GitHubCopilot dispatches to native GitHub Copilot auth when providers-extended is enabled",
     ),
     stub(
         "gigachat",
@@ -291,6 +291,18 @@ const fn provider_extra_wire(
     entry(module_name, lifecycle, reason)
 }
 
+const fn providers_extended_wire(
+    module_name: &'static str,
+    reason: &'static str,
+) -> ProviderModuleLifecycleEntry {
+    let lifecycle = if cfg!(feature = "providers-extended") {
+        ProviderModuleLifecycle::Wire
+    } else {
+        ProviderModuleLifecycle::Stub
+    };
+    entry(module_name, lifecycle, reason)
+}
+
 const fn entry(
     module_name: &'static str,
     lifecycle: ProviderModuleLifecycle,
@@ -345,6 +357,14 @@ mod tests {
                 ProviderModuleLifecycle::Stub
             }
         );
+        assert_eq!(
+            lifecycle_for("github_copilot"),
+            if cfg!(feature = "providers-extended") {
+                ProviderModuleLifecycle::Wire
+            } else {
+                ProviderModuleLifecycle::Stub
+            }
+        );
         assert_eq!(lifecycle_for("cohere"), ProviderModuleLifecycle::Stub);
         assert_eq!(lifecycle_for("gemini"), ProviderModuleLifecycle::Stub);
     }
@@ -364,6 +384,8 @@ mod tests {
             "azure_ai",
             "bedrock",
             "cloudflare",
+            #[cfg(feature = "providers-extended")]
+            "github_copilot",
             "mistral",
             "openai",
             "openai_like",
