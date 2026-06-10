@@ -176,7 +176,7 @@ impl WatsonxProvider {
         let iam_url = self.config.get_iam_url();
         debug!("Generating IAM token from {}", iam_url);
 
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let response = client
             .post(&iam_url)
             .header("Content-Type", "application/x-www-form-urlencoded")
@@ -544,7 +544,7 @@ impl LLMProvider for WatsonxProvider {
         let payload = self.prepare_payload(&request.model, &request)?;
 
         // Execute streaming request using reqwest directly for SSE
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let mut req_builder = client.post(&url);
 
         for (key, value) in headers {

@@ -269,7 +269,7 @@ impl LLMProvider for ClarifaiProvider {
 
         let url = format!("{}/chat/completions", self.config.get_api_base());
 
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))

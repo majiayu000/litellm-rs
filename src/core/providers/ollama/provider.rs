@@ -561,7 +561,7 @@ impl LLMProvider for OllamaProvider {
 
         // Use reqwest directly for streaming
         let url = self.config.get_chat_endpoint();
-        let mut req = crate::core::http::outbound::default_outbound_client()
+        let mut req = crate::core::http::outbound::streaming_outbound_client()
             .clone()
             .post(&url);
 

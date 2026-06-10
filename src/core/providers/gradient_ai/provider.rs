@@ -280,7 +280,7 @@ impl LLMProvider for GradientAIProvider {
         let url = self.config.get_complete_url();
         let request_body = self.build_request_body(&request);
 
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))

@@ -389,7 +389,7 @@ impl LLMProvider for OciProvider {
         }
 
         // Execute streaming request
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let mut req_builder = client.post(&url);
 
         for (key, value) in headers {

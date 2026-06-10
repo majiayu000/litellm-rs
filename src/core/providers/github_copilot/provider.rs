@@ -404,7 +404,7 @@ impl LLMProvider for GitHubCopilotProvider {
         let url = format!("{}/chat/completions", api_base.trim_end_matches('/'));
 
         // Execute request
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let response = client
             .post(&url)
             .headers(headers)
@@ -471,7 +471,7 @@ impl LLMProvider for GitHubCopilotProvider {
         let url = format!("{}/chat/completions", api_base.trim_end_matches('/'));
 
         // Execute request
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let response = client
             .post(&url)
             .headers(headers)
@@ -679,21 +679,21 @@ impl Stream for GitHubCopilotStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::message::MessageContent;
 
     #[tokio::test]
     async fn test_github_copilot_provider_creation() {
-        let config = GitHubCopilotConfig::default();
-        let provider = GitHubCopilotProvider::new(config).await;
-        assert!(provider.is_ok());
-
-        let provider = provider.unwrap();
+        let provider = GitHubCopilotProvider::new(GitHubCopilotConfig::default())
+            .await
+            .expect("provider should build");
         assert_eq!(provider.name(), "github_copilot");
     }
 
     #[tokio::test]
     async fn test_github_copilot_provider_capabilities() {
-        let config = GitHubCopilotConfig::default();
-        let provider = GitHubCopilotProvider::new(config).await.unwrap();
+        let provider = GitHubCopilotProvider::new(GitHubCopilotConfig::default())
+            .await
+            .expect("provider should build");
         let capabilities = provider.capabilities();
 
         assert!(capabilities.contains(&ProviderCapability::ChatCompletion));
@@ -703,13 +703,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_github_copilot_provider_models() {
-        let config = GitHubCopilotConfig::default();
-        let provider = GitHubCopilotProvider::new(config).await.unwrap();
+        let provider = GitHubCopilotProvider::new(GitHubCopilotConfig::default())
+            .await
+            .expect("provider should build");
         let models = provider.models();
 
         assert!(!models.is_empty());
-
-        // Check that we have expected models
         let model_ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
         assert!(model_ids.contains(&"gpt-4o"));
         assert!(model_ids.contains(&"claude-3.5-sonnet"));
@@ -717,21 +716,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_github_copilot_provider_supported_params() {
-        let config = GitHubCopilotConfig::default();
-        let provider = GitHubCopilotProvider::new(config).await.unwrap();
+        let provider = GitHubCopilotProvider::new(GitHubCopilotConfig::default())
+            .await
+            .expect("provider should build");
 
-        // Non-reasoning model
         let params = provider.get_supported_openai_params("gpt-4o");
         assert!(params.contains(&"temperature"));
         assert!(params.contains(&"max_tokens"));
         assert!(params.contains(&"tools"));
         assert!(!params.contains(&"reasoning_effort"));
 
-        // Reasoning model
         let params = provider.get_supported_openai_params("o1-preview");
         assert!(params.contains(&"reasoning_effort"));
 
-        // Claude reasoning model
         let params = provider.get_supported_openai_params("claude-3-7-sonnet");
         assert!(params.contains(&"thinking"));
         assert!(params.contains(&"reasoning_effort"));
@@ -758,57 +755,43 @@ mod tests {
         assert_eq!(chunk.choices.len(), 1);
     }
 
+    fn text_message(role: MessageRole, text: &str) -> ChatMessage {
+        ChatMessage {
+            role,
+            content: Some(MessageContent::Text(text.to_string())),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_determine_initiator() {
         let config = GitHubCopilotConfig::default();
-        // Create a sync provider for testing
-        let authenticator = CopilotAuthenticator::new(&config);
         let provider = GitHubCopilotProvider {
+            authenticator: CopilotAuthenticator::new(&config),
             config,
-            authenticator,
             models: vec![],
             cached_api_key: Arc::new(RwLock::new(None)),
             cached_api_base: Arc::new(RwLock::new(None)),
         };
 
-        // User message only
-        let messages = vec![ChatMessage {
-            role: MessageRole::User,
-            content: Some(crate::core::types::message::MessageContent::Text(
-                "Hello".to_string(),
-            )),
-            ..Default::default()
-        }];
+        let messages = vec![text_message(MessageRole::User, "Hello")];
         assert_eq!(provider.determine_initiator(&messages), "user");
 
-        // Assistant message present
         let messages = vec![
-            ChatMessage {
-                role: MessageRole::User,
-                content: Some(crate::core::types::message::MessageContent::Text(
-                    "Hello".to_string(),
-                )),
-                ..Default::default()
-            },
-            ChatMessage {
-                role: MessageRole::Assistant,
-                content: Some(crate::core::types::message::MessageContent::Text(
-                    "Hi!".to_string(),
-                )),
-                ..Default::default()
-            },
+            text_message(MessageRole::User, "Hello"),
+            text_message(MessageRole::Assistant, "Hi!"),
         ];
         assert_eq!(provider.determine_initiator(&messages), "agent");
     }
 
     #[tokio::test]
     async fn test_github_copilot_provider_cost_calculation() {
-        let config = GitHubCopilotConfig::default();
-        let provider = GitHubCopilotProvider::new(config).await.unwrap();
+        let provider = GitHubCopilotProvider::new(GitHubCopilotConfig::default())
+            .await
+            .expect("provider should build");
 
-        // Copilot is subscription-based, cost should be 0
         let cost = provider.calculate_cost("gpt-4o", 1000, 500).await;
         assert!(cost.is_ok());
-        assert_eq!(cost.unwrap(), 0.0);
+        assert_eq!(cost.expect("cost should be available"), 0.0);
     }
 }

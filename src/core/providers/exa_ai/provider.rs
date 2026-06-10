@@ -178,7 +178,7 @@ impl LLMProvider for ExaAiProvider {
             .get_effective_api_key("exa_ai")
             .ok_or_else(|| ProviderError::authentication("exa_ai", "API key is required"))?;
 
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))

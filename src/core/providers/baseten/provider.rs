@@ -248,7 +248,7 @@ impl LLMProvider for BasetenProvider {
         let api_base = self.get_api_base_for_request(&request.model);
         let url = format!("{}/chat/completions", api_base);
 
-        let client = crate::core::http::outbound::default_outbound_client().clone();
+        let client = crate::core::http::outbound::streaming_outbound_client().clone();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
