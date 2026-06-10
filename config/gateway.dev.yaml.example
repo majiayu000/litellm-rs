@@ -66,6 +66,7 @@ storage:
 auth:
   enable_jwt: false
   enable_api_key: false
+  allow_anonymous: true
   jwt_secret: ""
   jwt_expiration: 86400
   api_key_header: "Authorization"

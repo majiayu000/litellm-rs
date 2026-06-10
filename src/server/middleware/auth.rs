@@ -20,7 +20,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::rc::Rc;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 /// Auth middleware for Actix-web
 pub struct AuthMiddleware;
@@ -98,6 +98,21 @@ where
 
             let auth_enabled = enable_jwt || enable_api_key;
             if !auth_enabled {
+                // Fail closed: both auth methods are disabled. Only allow the
+                // request through when anonymous access was explicitly opted
+                // into. AuthConfig::validate() already rejects this combination,
+                // but guard here as defense in depth in case validation was
+                // bypassed.
+                if !cfg.auth().allow_anonymous {
+                    error!(
+                        "All authentication methods are disabled and allow_anonymous is false; \
+                         rejecting request to non-public route. Enable JWT or API key auth, or \
+                         set allow_anonymous: true (development only)."
+                    );
+                    return Err(actix_web::error::ErrorUnauthorized(
+                        "Authentication is not configured",
+                    ));
+                }
                 req.extensions_mut().insert(context);
                 return service.call(req).await;
             }
