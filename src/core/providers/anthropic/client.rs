@@ -251,6 +251,39 @@ impl AnthropicClient {
             anthropic_api_error(400, format!("Unsupported model: {}", request.model))
         })?;
 
+        // The Messages API only returns a single candidate; any n other than 1
+        // (including 0) cannot be honored, so reject it instead of silently
+        // returning the wrong number of choices.
+        if let Some(n) = request.n
+            && n != 1
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("anthropic only supports n=1 (got n={})", n),
+            ));
+        }
+
+        // Warn once about OpenAI-style parameters Anthropic has no equivalent for.
+        let mut ignored_params = Vec::new();
+        if request.frequency_penalty.is_some() {
+            ignored_params.push("frequency_penalty");
+        }
+        if request.presence_penalty.is_some() {
+            ignored_params.push("presence_penalty");
+        }
+        if request.seed.is_some() {
+            ignored_params.push("seed");
+        }
+        if request.logit_bias.is_some() {
+            ignored_params.push("logit_bias");
+        }
+        if !ignored_params.is_empty() {
+            tracing::warn!(
+                "Anthropic request ignores unsupported parameters: {}",
+                ignored_params.join(", ")
+            );
+        }
+
         // Separate system messages from user messages
         let (system_message, messages) = self.separate_system_messages(&request.messages)?;
 
@@ -726,37 +759,27 @@ impl AnthropicClient {
             logprobs: None,
         };
 
-        // Build usage
+        // Build usage — Anthropic bills cache creation/read tokens as input
+        // tokens, so they must count toward prompt_tokens and total_tokens.
         let usage = response.get("usage").map(|usage_data| {
-            let input_tokens = usage_data
-                .get("input_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            let output_tokens = usage_data
-                .get("output_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            let cache_creation_tokens = usage_data
-                .get("cache_creation_input_tokens")
-                .and_then(|v| v.as_u64())
-                .map(|tokens| tokens as u32);
-            let cache_read_tokens = usage_data
-                .get("cache_read_input_tokens")
-                .and_then(|v| v.as_u64())
-                .map(|tokens| tokens as u32);
+            let read = |key: &str| usage_data.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+            // Saturate instead of `as u32`, which silently wraps on overflow.
+            let to_u32 = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
+            let cache_creation = read("cache_creation_input_tokens");
+            let cache_read = read("cache_read_input_tokens");
+            let prompt_tokens = read("input_tokens") + cache_creation + cache_read;
+            let completion_tokens = read("output_tokens");
 
             Usage {
-                prompt_tokens: input_tokens,
-                completion_tokens: output_tokens,
-                total_tokens: input_tokens + output_tokens,
+                prompt_tokens: to_u32(prompt_tokens),
+                completion_tokens: to_u32(completion_tokens),
+                total_tokens: to_u32(prompt_tokens + completion_tokens),
                 completion_tokens_details: None,
-                prompt_tokens_details: if cache_creation_tokens.is_some()
-                    || cache_read_tokens.is_some()
-                {
+                prompt_tokens_details: if cache_creation > 0 || cache_read > 0 {
                     Some(PromptTokensDetails {
-                        cached_tokens: cache_read_tokens,
-                        cache_creation_tokens,
-                        cache_read_tokens,
+                        cached_tokens: Some(to_u32(cache_read)),
+                        cache_creation_tokens: Some(to_u32(cache_creation)),
+                        cache_read_tokens: Some(to_u32(cache_read)),
                         audio_tokens: None,
                     })
                 } else {

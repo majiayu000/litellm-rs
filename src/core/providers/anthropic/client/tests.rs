@@ -650,3 +650,81 @@ fn test_transform_chat_response_finish_reasons() {
         Some(crate::core::types::responses::FinishReason::PauseTurn)
     ));
 }
+
+// ==================== Unsupported Parameter Tests ====================
+
+#[test]
+fn test_transform_chat_request_rejects_n_greater_than_one() {
+    let config = AnthropicConfig::new_test("test-key");
+    let client = AnthropicClient::new(config).unwrap();
+
+    let mut request = ChatRequest::new("claude-opus-4-6").add_user_message("Hello");
+    request.n = Some(3);
+
+    let error = client.transform_chat_request(&request).unwrap_err();
+    assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+    assert!(
+        format!("{}", error).contains("only supports n=1"),
+        "unexpected error message"
+    );
+}
+
+#[test]
+fn test_transform_chat_request_rejects_n_zero() {
+    let config = AnthropicConfig::new_test("test-key");
+    let client = AnthropicClient::new(config).unwrap();
+
+    // n=0 is as unsatisfiable as n>1: the API always returns one candidate.
+    let mut request = ChatRequest::new("claude-opus-4-6").add_user_message("Hello");
+    request.n = Some(0);
+
+    let error = client.transform_chat_request(&request).unwrap_err();
+    assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+}
+
+#[test]
+fn test_transform_chat_request_allows_n_equal_one_and_ignores_unsupported_params() {
+    let config = AnthropicConfig::new_test("test-key");
+    let client = AnthropicClient::new(config).unwrap();
+
+    // n=1 plus unsupported-but-ignorable params must not fail the request
+    let mut request = ChatRequest::new("claude-opus-4-6").add_user_message("Hello");
+    request.n = Some(1);
+    request.frequency_penalty = Some(0.5);
+    request.presence_penalty = Some(0.5);
+    request.seed = Some(42);
+
+    let result = client.transform_chat_request(&request).unwrap();
+    assert_eq!(result["model"], "claude-opus-4-6");
+    // Ignored params must not leak into the Anthropic request body
+    assert!(result.get("frequency_penalty").is_none());
+    assert!(result.get("seed").is_none());
+}
+
+#[test]
+fn test_transform_chat_response_bills_cache_tokens_in_totals() {
+    let config = AnthropicConfig::new_test("test-key");
+    let client = AnthropicClient::new(config).unwrap();
+
+    let response = json!({
+        "id": "msg_123",
+        "model": "claude-3-opus-20240229",
+        "content": [{"type": "text", "text": "Hi"}],
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 30,
+            "cache_read_input_tokens": 20
+        }
+    });
+
+    let usage = client
+        .transform_chat_response(response)
+        .unwrap()
+        .usage
+        .unwrap();
+    // Anthropic bills cache tokens as input: prompt = 100 + 30 + 20
+    assert_eq!(usage.prompt_tokens, 150);
+    assert_eq!(usage.completion_tokens, 50);
+    assert_eq!(usage.total_tokens, 200);
+}
