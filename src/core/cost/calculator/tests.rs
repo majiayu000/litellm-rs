@@ -786,3 +786,47 @@ fn test_estimate_and_actual_cost_consistency() {
     assert!((breakdown.total_cost - estimate.max_cost).abs() < 1e-10);
     assert!((breakdown.input_cost - estimate.input_cost).abs() < 1e-10);
 }
+
+fn model_info_from_json(value: serde_json::Value) -> crate::core::pricing::LiteLLMModelInfo {
+    serde_json::from_value(value).expect("valid LiteLLMModelInfo json")
+}
+
+#[test]
+fn test_litellm_pricing_errors_when_both_token_costs_missing() {
+    // A catalog entry with neither input nor output cost must not bill at $0.
+    let info = model_info_from_json(serde_json::json!({
+        "litellm_provider": "openai",
+        "mode": "chat"
+    }));
+    let result = litellm_to_cost_pricing("mystery-model", &info);
+    assert!(matches!(
+        result,
+        Err(CostError::MissingPricing { ref model }) if model == "mystery-model"
+    ));
+}
+
+#[test]
+fn test_litellm_pricing_allows_single_missing_side() {
+    // Only one side missing: priced, the missing side billed at 0.
+    let info = model_info_from_json(serde_json::json!({
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000_01
+    }));
+    let pricing = litellm_to_cost_pricing("half-priced", &info).expect("should be priced");
+    assert!(pricing.input_cost_per_1k_tokens > 0.0);
+    assert_eq!(pricing.output_cost_per_1k_tokens, 0.0);
+}
+
+#[test]
+fn test_litellm_pricing_ok_when_both_present() {
+    let info = model_info_from_json(serde_json::json!({
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000_01,
+        "output_cost_per_token": 0.000_03
+    }));
+    let pricing = litellm_to_cost_pricing("full", &info).expect("should be priced");
+    assert!(pricing.input_cost_per_1k_tokens > 0.0);
+    assert!(pricing.output_cost_per_1k_tokens > 0.0);
+}
