@@ -28,6 +28,11 @@ pub struct AuthConfig {
     /// for production deployments.
     #[serde(default)]
     pub api_key_hmac_secret: Option<String>,
+    /// Allow anonymous access when both JWT and API key authentication are
+    /// disabled. Development only — validate() rejects the double-disabled
+    /// combination unless this is explicitly set to true.
+    #[serde(default)]
+    pub allow_anonymous: bool,
     /// RBAC configuration
     #[serde(default)]
     pub rbac: RbacConfig,
@@ -45,6 +50,7 @@ impl std::fmt::Debug for AuthConfig {
                 "api_key_hmac_secret",
                 &self.api_key_hmac_secret.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("allow_anonymous", &self.allow_anonymous)
             .field("rbac", &self.rbac)
             .finish()
     }
@@ -59,6 +65,7 @@ impl Default for AuthConfig {
             jwt_expiration: default_jwt_expiration(),
             api_key_header: default_api_key_header(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         }
     }
@@ -85,12 +92,26 @@ impl AuthConfig {
         if other.api_key_hmac_secret.is_some() {
             self.api_key_hmac_secret = other.api_key_hmac_secret;
         }
+        if other.allow_anonymous {
+            self.allow_anonymous = true;
+        }
         self.rbac = self.rbac.merge(other.rbac);
         self
     }
 
     /// Validate authentication configuration
     pub fn validate(&self) -> Result<(), String> {
+        // Reject the fail-open combination: both auth methods disabled without
+        // an explicit opt-in to anonymous access.
+        if !self.enable_jwt && !self.enable_api_key && !self.allow_anonymous {
+            return Err(
+                "Both JWT and API key authentication are disabled. Enable at least one \
+                 authentication method, or explicitly set allow_anonymous: true to opt in \
+                 to unauthenticated access (development only)"
+                    .to_string(),
+            );
+        }
+
         // Validate JWT secret strength
         if self.enable_jwt {
             if self.jwt_secret.is_empty() {
@@ -144,7 +165,9 @@ impl AuthConfig {
         Ok(())
     }
 
-    /// Check if authentication is properly configured for production
+    /// Check if authentication is properly configured for production.
+    /// `allow_anonymous` only takes effect when both auth methods are
+    /// disabled, so an enabled auth method always means production ready.
     pub fn is_production_ready(&self) -> bool {
         self.enable_jwt || self.enable_api_key
     }
@@ -349,6 +372,7 @@ mod tests {
             jwt_expiration: 7200,
             api_key_header: "Authorization".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(config.enable_jwt);
@@ -365,6 +389,7 @@ mod tests {
             jwt_expiration: 1800,
             api_key_header: "X-Token".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         let json = serde_json::to_value(&config).unwrap();
@@ -381,6 +406,7 @@ mod tests {
             jwt_expiration: 3600,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(config.validate().is_err());
@@ -397,6 +423,7 @@ mod tests {
             jwt_expiration: 3600,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         // 8 ASCII bytes + 12 CJK * 3 bytes = 44 bytes >= 32, should pass length check
@@ -419,6 +446,7 @@ mod tests {
                 jwt_expiration: 3600,
                 api_key_header: "X-API-Key".to_string(),
                 api_key_hmac_secret: None,
+                allow_anonymous: false,
                 rbac: RbacConfig::default(),
             };
             assert!(
@@ -437,6 +465,7 @@ mod tests {
             jwt_expiration: 3600,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(config.validate().is_err());
@@ -451,6 +480,7 @@ mod tests {
             jwt_expiration: 3600,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(config.validate().is_err());
@@ -465,6 +495,7 @@ mod tests {
             jwt_expiration: 100, // less than 300
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(config.validate().is_err());
@@ -479,6 +510,7 @@ mod tests {
             jwt_expiration: 86400 * 31, // more than 30 days
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(config.validate().is_err());
@@ -493,6 +525,7 @@ mod tests {
             jwt_expiration: 3600,
             api_key_header: "".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(config.validate().is_err());
@@ -507,6 +540,7 @@ mod tests {
             jwt_expiration: 3600,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(config.validate().is_ok());
@@ -524,9 +558,87 @@ mod tests {
             jwt_expiration: 3600,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         assert!(!disabled.is_production_ready());
+    }
+
+    #[test]
+    fn test_auth_config_validate_rejects_all_auth_disabled() {
+        let config = AuthConfig {
+            enable_jwt: false,
+            enable_api_key: false,
+            jwt_secret: String::new(),
+            jwt_expiration: 3600,
+            api_key_header: "X-API-Key".to_string(),
+            api_key_hmac_secret: None,
+            allow_anonymous: false,
+            rbac: RbacConfig::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("allow_anonymous"),
+            "Expected fail-closed error mentioning allow_anonymous, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_auth_config_validate_allow_anonymous_opt_in() {
+        let config = AuthConfig {
+            enable_jwt: false,
+            enable_api_key: false,
+            jwt_secret: String::new(),
+            jwt_expiration: 3600,
+            api_key_header: "X-API-Key".to_string(),
+            api_key_hmac_secret: None,
+            allow_anonymous: true,
+            rbac: RbacConfig::default(),
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_auth_config_allow_anonymous_not_production_ready() {
+        // The spec scenario: both auth methods disabled, anonymous opt-in.
+        // validate() accepts it, but it must never count as production ready.
+        let config = AuthConfig {
+            enable_jwt: false,
+            enable_api_key: false,
+            jwt_secret: secure_jwt_secret(),
+            jwt_expiration: 3600,
+            api_key_header: "X-API-Key".to_string(),
+            api_key_hmac_secret: None,
+            allow_anonymous: true,
+            rbac: RbacConfig::default(),
+        };
+        assert!(!config.is_production_ready());
+    }
+
+    #[test]
+    fn test_auth_config_allow_anonymous_with_auth_enabled_is_production_ready() {
+        // allow_anonymous is inert while an auth method is enabled; the
+        // "Authentication is disabled" warning must not fire here.
+        let config = AuthConfig {
+            enable_jwt: true,
+            enable_api_key: true,
+            jwt_secret: secure_jwt_secret(),
+            jwt_expiration: 3600,
+            api_key_header: "X-API-Key".to_string(),
+            api_key_hmac_secret: None,
+            allow_anonymous: true,
+            rbac: RbacConfig::default(),
+        };
+        assert!(config.is_production_ready());
+    }
+
+    #[test]
+    fn test_auth_config_allow_anonymous_defaults_to_false() {
+        assert!(!AuthConfig::default().allow_anonymous);
+        let json = r#"{"jwt_secret": ""}"#;
+        let config: AuthConfig = serde_json::from_str(json).unwrap();
+        assert!(!config.allow_anonymous);
     }
 
     #[test]
@@ -539,6 +651,7 @@ mod tests {
             jwt_expiration: 3600,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         let merged = base.merge(other);
@@ -555,6 +668,7 @@ mod tests {
             jwt_expiration: 7200,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         };
         let merged = base.merge(other);

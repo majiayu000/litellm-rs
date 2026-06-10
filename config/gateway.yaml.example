@@ -109,6 +109,11 @@ auth:
   jwt_secret: "${LITELLM_JWT_SECRET}"
   jwt_expiration: 86400
   api_key_header: "Authorization"
+  # allow_anonymous: when both enable_jwt and enable_api_key are false, config
+  # validation rejects the combination unless this is explicitly set to true.
+  # Setting it to true allows unauthenticated access to all routes —
+  # development only, never use in production.
+  allow_anonymous: false
   rbac:
     enabled: false
     default_role: "user"
