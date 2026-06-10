@@ -76,10 +76,7 @@ impl AzureAIConfig {
         }
 
         let host_and_path = base.split_once("://").map(|(_, rest)| rest).unwrap_or(base);
-        let (host, _) = host_and_path
-            .split_once('/')
-            .map(|(host, path)| (host, path))
-            .unwrap_or((host_and_path, ""));
+        let (host, _) = host_and_path.split_once('/').unwrap_or((host_and_path, ""));
 
         host.ends_with(".services.ai.azure.com") && !Self::has_models_path_segment(base)
     }
