@@ -12,16 +12,15 @@ use crate::core::providers::{
 #[cfg(feature = "providers-extra")]
 use crate::core::providers::{azure, azure_ai, vertex_ai};
 #[cfg(feature = "providers-extended")]
-use crate::core::providers::{cohere, gemini, github_copilot};
+use crate::core::providers::{cohere, fal_ai, gemini, github_copilot};
 
 #[cfg(feature = "providers-extended")]
 use super::builder::build_github_copilot_config_from_factory;
 use super::builder::{
     apply_tier1_openai_like_overrides, build_anthropic_config_from_factory,
     build_bedrock_config_from_factory, build_cloudflare_config_from_factory,
-    build_fal_ai_config_from_factory, build_mistral_config_from_factory,
-    build_openai_config_from_factory, build_openai_like_config_from_factory,
-    build_replicate_config_from_factory, config_str,
+    build_mistral_config_from_factory, build_openai_config_from_factory,
+    build_openai_like_config_from_factory, build_replicate_config_from_factory, config_str,
 };
 #[cfg(feature = "providers-extra")]
 use super::builder::{
@@ -34,6 +33,8 @@ use super::builder::{
 };
 #[cfg(feature = "providers-extended")]
 use super::cohere_builder::build_cohere_config_from_factory;
+#[cfg(feature = "providers-extended")]
+use super::fal_ai_builder::build_fal_ai_config_from_factory;
 #[cfg(feature = "providers-extended")]
 use super::gemini_builder::build_gemini_config_from_factory;
 
@@ -117,11 +118,20 @@ impl Provider {
                 }
             }
             ProviderType::FalAI => {
-                let oai_config = build_fal_ai_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization("fal_ai", e.to_string()))?;
-                Ok(Provider::OpenAILike(provider))
+                #[cfg(feature = "providers-extended")]
+                {
+                    let fal_config = build_fal_ai_config_from_factory(&config)?;
+                    let provider = fal_ai::FalAIProvider::new(fal_config)
+                        .map_err(|e| ProviderError::initialization("fal_ai", e.to_string()))?;
+                    Ok(Provider::FalAI(provider))
+                }
+                #[cfg(not(feature = "providers-extended"))]
+                {
+                    Err(ProviderError::not_implemented(
+                        "fal_ai",
+                        "Fal AI native image-generation dispatch requires the providers-extended feature",
+                    ))
+                }
             }
             ProviderType::Azure => {
                 #[cfg(feature = "providers-extra")]
@@ -311,6 +321,14 @@ mod tests {
                 "max_retries": 2,
                 "default_embedding_input_type": "search_query"
             }),
+            ProviderType::FalAI => serde_json::json!({
+                "api_key": "test-fal-ai-key",
+                "api_base": "https://fal.run",
+                "timeout": 30,
+                "max_retries": 2,
+                "output_format": "png",
+                "sync_mode": true
+            }),
             _ => minimal_dispatch_config(),
         }
     }
@@ -347,6 +365,8 @@ mod tests {
                     | (ProviderType::VertexAI, Provider::VertexAI(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::Cohere, Provider::Cohere(_)) => {}
+                    #[cfg(feature = "providers-extended")]
+                    (ProviderType::FalAI, Provider::FalAI(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::Gemini, Provider::Gemini(_)) => {}
                     #[cfg(feature = "providers-extended")]
@@ -499,6 +519,26 @@ mod tests {
                 panic!("cloudflare should be creatable from alias fields: {err}")
             });
         assert!(matches!(provider, Provider::Cloudflare(_)));
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn test_from_config_async_fal_ai_creates_native_image_provider() {
+        let provider = Provider::from_config_async(
+            ProviderType::FalAI,
+            minimal_dispatch_config_for(&ProviderType::FalAI),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("fal_ai should create native provider: {err}"));
+
+        assert!(matches!(provider, Provider::FalAI(_)));
+        assert_eq!(provider.name(), "fal_ai");
+        assert_eq!(provider.provider_type(), ProviderType::FalAI);
+        assert!(
+            provider
+                .capabilities()
+                .contains(&crate::core::types::model::ProviderCapability::ImageGeneration)
+        );
     }
 
     #[tokio::test]

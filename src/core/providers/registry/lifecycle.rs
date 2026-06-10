@@ -99,9 +99,9 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "specialized provider module; not wired through the LLM factory yet",
     ),
     internal("factory", "provider construction infrastructure"),
-    stub(
+    providers_extended_wire(
         "fal_ai",
-        "native Fal AI module retained; ProviderType::FalAI currently uses a generic OpenAI-compatible adapter",
+        "ProviderType::FalAI dispatches to native image-generation endpoints when providers-extended is enabled",
     ),
     stub(
         "firecrawl",
@@ -381,6 +381,14 @@ mod tests {
             }
         );
         assert_eq!(
+            lifecycle_for("fal_ai"),
+            if cfg!(feature = "providers-extended") {
+                ProviderModuleLifecycle::Wire
+            } else {
+                ProviderModuleLifecycle::Stub
+            }
+        );
+        assert_eq!(
             lifecycle_for("gemini"),
             if cfg!(feature = "providers-extended") {
                 ProviderModuleLifecycle::Wire
@@ -407,6 +415,8 @@ mod tests {
             "cloudflare",
             #[cfg(feature = "providers-extended")]
             "cohere",
+            #[cfg(feature = "providers-extended")]
+            "fal_ai",
             #[cfg(feature = "providers-extended")]
             "gemini",
             #[cfg(feature = "providers-extended")]

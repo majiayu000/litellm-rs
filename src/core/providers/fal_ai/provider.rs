@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::core::providers::base::{
-    GlobalPoolManager, HeaderPair, HttpErrorMapper, HttpMethod, header,
+    GlobalPoolManager, HeaderPair, HttpErrorMapper, apply_headers, header,
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
@@ -158,6 +158,78 @@ impl FalAIProvider {
 
         Ok(ImageGenerationResponse { created, data })
     }
+
+    fn build_image_request_body(
+        &self,
+        request: &ImageGenerationRequest,
+    ) -> Result<Value, ProviderError> {
+        let mut body = serde_json::json!({
+            "prompt": request.prompt,
+            "output_format": self.config.output_format,
+            "sync_mode": self.config.sync_mode,
+        });
+
+        if let Some(n) = request.n {
+            body["num_images"] = serde_json::json!(n);
+        }
+
+        if let Some(size) = &request.size {
+            let image_size = super::models::ImageSize::from_openai_size(size);
+            body["image_size"] = serde_json::to_value(image_size)
+                .map_err(|e| ProviderError::invalid_request("fal_ai", e.to_string()))?;
+        }
+
+        if let Some(format) = &request.response_format {
+            let output_format = match format.as_str() {
+                "b64_json" | "url" => "jpeg",
+                f => f,
+            };
+            body["output_format"] = serde_json::json!(output_format);
+        }
+
+        Ok(body)
+    }
+
+    fn transport_attempts(&self) -> u32 {
+        self.config.base.max_retries.saturating_add(1)
+    }
+
+    async fn execute_image_request(
+        &self,
+        url: &str,
+        headers: Vec<HeaderPair>,
+        body: Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let mut last_error = None;
+
+        for attempt in 0..self.transport_attempts() {
+            let request_builder = self
+                .pool_manager
+                .client()
+                .post(url)
+                .timeout(self.config.timeout())
+                .json(&body);
+            let request_builder = apply_headers(request_builder, headers.clone());
+
+            match request_builder.send().await {
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    let provider_err = if err.is_timeout() {
+                        ProviderError::timeout("fal_ai", err.to_string())
+                    } else {
+                        ProviderError::network("fal_ai", err.to_string())
+                    };
+                    if attempt + 1 == self.transport_attempts() {
+                        return Err(provider_err);
+                    }
+                    last_error = Some(provider_err);
+                }
+            }
+        }
+
+        Err(last_error
+            .unwrap_or_else(|| ProviderError::network("fal_ai", "request failed before execution")))
+    }
 }
 
 impl LLMProvider for FalAIProvider {
@@ -248,37 +320,11 @@ impl LLMProvider for FalAIProvider {
     ) -> Result<ImageGenerationResponse, ProviderError> {
         let model = request.model.as_deref().unwrap_or("fal-ai/flux/schnell");
         let url = self.get_model_endpoint(model);
-
-        // Build request body
-        let mut body = serde_json::json!({
-            "prompt": request.prompt,
-        });
-
-        // Map optional parameters
-        if let Some(n) = request.n {
-            body["num_images"] = serde_json::json!(n);
-        }
-
-        if let Some(size) = &request.size {
-            let image_size = super::models::ImageSize::from_openai_size(size);
-            body["image_size"] = serde_json::to_value(image_size)
-                .map_err(|e| ProviderError::invalid_request("fal_ai", e.to_string()))?;
-        }
-
-        if let Some(format) = &request.response_format {
-            let output_format = match format.as_str() {
-                "b64_json" | "url" => "jpeg",
-                f => f,
-            };
-            body["output_format"] = serde_json::json!(output_format);
-        }
+        let body = self.build_image_request_body(&request)?;
 
         let headers = self.get_request_headers();
 
-        let response = self
-            .pool_manager
-            .execute_request(&url, HttpMethod::POST, headers, Some(body))
-            .await?;
+        let response = self.execute_image_request(&url, headers, body).await?;
 
         let status = response.status();
         let response_bytes = response
@@ -479,5 +525,63 @@ mod tests {
         let mapped = result.unwrap();
         assert!(mapped.contains_key("num_images"));
         assert!(mapped.contains_key("image_size"));
+    }
+
+    #[test]
+    fn test_build_image_request_body_uses_config_defaults() {
+        let mut config = FalAIConfig::with_api_key("test-key");
+        config.output_format = "png".to_string();
+        config.sync_mode = false;
+        let provider = FalAIProvider::new(config).unwrap();
+
+        let body = provider
+            .build_image_request_body(&ImageGenerationRequest {
+                prompt: "test prompt".to_string(),
+                model: Some("fal-ai/flux/schnell".to_string()),
+                n: Some(2),
+                size: Some("1024x1024".to_string()),
+                quality: None,
+                response_format: None,
+                style: None,
+                user: None,
+            })
+            .unwrap();
+
+        assert_eq!(body["prompt"], "test prompt");
+        assert_eq!(body["num_images"], 2);
+        assert_eq!(body["output_format"], "png");
+        assert_eq!(body["sync_mode"], false);
+        assert_eq!(body["image_size"], "square_hd");
+    }
+
+    #[test]
+    fn test_build_image_request_body_response_format_overrides_default() {
+        let mut config = FalAIConfig::with_api_key("test-key");
+        config.output_format = "png".to_string();
+        let provider = FalAIProvider::new(config).unwrap();
+
+        let body = provider
+            .build_image_request_body(&ImageGenerationRequest {
+                prompt: "test prompt".to_string(),
+                model: Some("fal-ai/flux/schnell".to_string()),
+                n: None,
+                size: None,
+                quality: None,
+                response_format: Some("url".to_string()),
+                style: None,
+                user: None,
+            })
+            .unwrap();
+
+        assert_eq!(body["output_format"], "jpeg");
+    }
+
+    #[test]
+    fn test_transport_attempts_include_initial_request() {
+        let mut config = FalAIConfig::with_api_key("test-key");
+        config.base.max_retries = 2;
+        let provider = FalAIProvider::new(config).unwrap();
+
+        assert_eq!(provider.transport_attempts(), 3);
     }
 }

@@ -11,6 +11,8 @@ mod builder_tests;
 #[cfg(feature = "providers-extended")]
 mod cohere_builder;
 #[cfg(feature = "providers-extended")]
+mod fal_ai_builder;
+#[cfg(feature = "providers-extended")]
 mod gemini_builder;
 mod registry;
 mod resolver;
@@ -132,6 +134,8 @@ pub async fn create_provider(
     if let Some(value) = project.filter(|v| !v.is_empty()) {
         factory_config.insert("project".to_string(), Value::String(value));
     }
+    factory_config.insert("timeout".to_string(), Value::Number(timeout.into()));
+    factory_config.insert("max_retries".to_string(), Value::Number(max_retries.into()));
 
     for (key, value) in settings {
         factory_config.entry(key).or_insert(value);
@@ -268,6 +272,50 @@ mod tests {
                 "Expected NotImplemented error, got {err}"
             );
             assert_eq!(err.provider(), "cohere");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_provider_fal_ai_feature_split() {
+        let mut config = crate::config::models::provider::ProviderConfig {
+            name: "fal_ai".to_string(),
+            provider_type: "fal_ai".to_string(),
+            api_key: "test-fal-ai-key".to_string(),
+            base_url: Some("https://fal.run".to_string()),
+            timeout: 30,
+            max_retries: 2,
+            ..Default::default()
+        };
+        config
+            .settings
+            .insert("output_format".to_string(), serde_json::json!("png"));
+        config
+            .settings
+            .insert("sync_mode".to_string(), serde_json::json!(true));
+
+        let result = create_provider(config).await;
+
+        #[cfg(feature = "providers-extended")]
+        {
+            let provider =
+                result.unwrap_or_else(|err| panic!("fal_ai should create native provider: {err}"));
+            assert!(matches!(provider, Provider::FalAI(_)));
+            assert_eq!(provider.name(), "fal_ai");
+            assert!(
+                provider
+                    .capabilities()
+                    .contains(&crate::core::types::model::ProviderCapability::ImageGeneration)
+            );
+        }
+
+        #[cfg(not(feature = "providers-extended"))]
+        {
+            let err = result.expect_err("fal_ai should be unsupported without providers-extended");
+            assert!(
+                matches!(err, ProviderError::NotImplemented { .. }),
+                "Expected NotImplemented error, got {err}"
+            );
+            assert_eq!(err.provider(), "fal_ai");
         }
     }
 

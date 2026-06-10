@@ -95,6 +95,9 @@ impl ProviderConfig for FalAIConfig {
         if self.base.timeout == 0 {
             return Err("Timeout must be greater than 0".to_string());
         }
+        if self.base.max_retries > 10 {
+            return Err("Max retries must not exceed 10".to_string());
+        }
         Ok(())
     }
 
@@ -148,6 +151,15 @@ mod tests {
     fn test_validate_success() {
         let config = FalAIConfig::with_api_key("test-key");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_excessive_retries() {
+        let mut config = FalAIConfig::with_api_key("test-key");
+        config.base.max_retries = 11;
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Max retries"));
     }
 
     #[test]

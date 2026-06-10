@@ -211,7 +211,7 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::FalAI,
         "fal_ai",
         &["fal-ai", "fal"],
-        ProviderDispatchKind::ExplicitOpenAiLike,
+        providers_extended_native_dispatch_kind(),
         false,
     ),
     entry(
@@ -446,6 +446,8 @@ mod tests {
             #[cfg(feature = "providers-extended")]
             ProviderType::Cohere,
             #[cfg(feature = "providers-extended")]
+            ProviderType::FalAI,
+            #[cfg(feature = "providers-extended")]
             ProviderType::Gemini,
             #[cfg(feature = "providers-extended")]
             ProviderType::GitHubCopilot,
@@ -483,6 +485,10 @@ mod tests {
         );
         assert_eq!(
             dispatch_kind_for(&ProviderType::Cohere),
+            providers_extended_native_dispatch_kind()
+        );
+        assert_eq!(
+            dispatch_kind_for(&ProviderType::FalAI),
             providers_extended_native_dispatch_kind()
         );
         assert_eq!(

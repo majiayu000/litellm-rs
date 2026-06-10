@@ -274,6 +274,8 @@ macro_rules! dispatch_provider {
             Provider::Gemini(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => p.$method($($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::FalAI(p) => p.$method($($arg),*),
             Provider::Mistral(p) => p.$method($($arg),*),
             Provider::Cloudflare(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
@@ -297,6 +299,8 @@ macro_rules! dispatch_provider {
             Provider::Gemini(p) => LLMProvider::$method(p.as_ref(), $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            #[cfg(feature = "providers-extended")]
+            Provider::FalAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
@@ -320,6 +324,8 @@ macro_rules! dispatch_provider {
             Provider::Gemini(p) => LLMProvider::$method(p.as_ref(), $($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::FalAI(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
@@ -343,6 +349,8 @@ macro_rules! dispatch_provider {
             Provider::Gemini(p) => LLMProvider::$method(p.as_ref()).await,
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::FalAI(p) => LLMProvider::$method(p).await,
             Provider::Mistral(p) => LLMProvider::$method(p).await,
             Provider::Cloudflare(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
@@ -390,6 +398,8 @@ pub enum Provider {
     Gemini(std::sync::Arc<gemini::GeminiProvider>),
     #[cfg(feature = "providers-extended")]
     GitHubCopilot(github_copilot::GitHubCopilotProvider),
+    #[cfg(feature = "providers-extended")]
+    FalAI(fal_ai::FalAIProvider),
     Mistral(mistral::MistralProvider),
     Cloudflare(cloudflare::CloudflareProvider),
     #[cfg(feature = "providers-extended")]
@@ -415,6 +425,8 @@ impl Provider {
             Provider::Gemini(_) => "gemini",
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(_) => "github_copilot",
+            #[cfg(feature = "providers-extended")]
+            Provider::FalAI(_) => "fal_ai",
             Provider::Mistral(_) => "mistral",
             Provider::Cloudflare(_) => "cloudflare",
             #[cfg(feature = "providers-extended")]
@@ -442,6 +454,8 @@ impl Provider {
             Provider::Gemini(_) => ProviderType::Gemini,
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(_) => ProviderType::GitHubCopilot,
+            #[cfg(feature = "providers-extended")]
+            Provider::FalAI(_) => ProviderType::FalAI,
             Provider::Mistral(_) => ProviderType::Mistral,
             Provider::Cloudflare(_) => ProviderType::Cloudflare,
             #[cfg(feature = "providers-extended")]
