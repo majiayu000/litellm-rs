@@ -114,10 +114,10 @@ impl AzureChatHandler {
         // Check status
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+            let error_body =
+                crate::core::providers::base::connection_pool::read_streaming_error_body(response)
+                    .await
+                    .map_err(|err| err.into_provider_error("azure"))?;
             return Err(azure_api_error(status, error_body));
         }
 
@@ -174,10 +174,10 @@ impl AzureChatHandler {
         // Check status
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+            let error_body =
+                crate::core::providers::base::connection_pool::read_streaming_error_body(response)
+                    .await
+                    .map_err(|err| err.into_provider_error("azure"))?;
             return Err(azure_api_error(status, error_body));
         }
 

@@ -293,12 +293,16 @@ impl LLMProvider for GradientAIProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let body = response.text().await.ok();
             return Err(match status {
-                400 => ProviderError::invalid_request(
-                    "gradient_ai",
-                    body.unwrap_or_else(|| "Bad request".to_string()),
-                ),
+                400 => {
+                    let body =
+                        crate::core::providers::base::connection_pool::read_streaming_error_body(
+                            response,
+                        )
+                        .await
+                        .map_err(|err| err.into_provider_error("gradient_ai"))?;
+                    ProviderError::invalid_request("gradient_ai", body)
+                }
                 401 => ProviderError::authentication("gradient_ai", "Invalid API key"),
                 429 => ProviderError::rate_limit("gradient_ai", None),
                 _ => ProviderError::streaming_error(

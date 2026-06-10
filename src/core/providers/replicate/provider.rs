@@ -349,10 +349,12 @@ impl LLMProvider for ReplicateProvider {
 
             if !response.status().is_success() {
                 let status_code = response.status().as_u16();
-                let error_text = response
-                    .text()
+                let error_text =
+                    crate::core::providers::base::connection_pool::read_streaming_error_body(
+                        response,
+                    )
                     .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
+                    .map_err(|err| err.into_provider_error("replicate"))?;
                 return Err(ProviderError::replicate_api_error(status_code, error_text));
             }
 

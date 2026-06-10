@@ -191,10 +191,10 @@ impl LLMProvider for ExaAiProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text =
+                crate::core::providers::base::connection_pool::read_streaming_error_body(response)
+                    .await
+                    .map_err(|err| err.into_provider_error("exa_ai"))?;
             return Err(HttpErrorMapper::map_status_code(
                 "exa_ai",
                 status.as_u16(),

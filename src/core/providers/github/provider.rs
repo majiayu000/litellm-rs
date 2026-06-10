@@ -278,8 +278,10 @@ impl LLMProvider for GitHubProvider {
         // Check status
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let body = response.text().await.ok();
-            let body_str = body.unwrap_or_else(|| "Unknown error".to_string());
+            let body_str =
+                crate::core::providers::base::connection_pool::read_streaming_error_body(response)
+                    .await
+                    .map_err(|err| err.into_provider_error("github"))?;
             return Err(match status {
                 401 => ProviderError::authentication("github", "Invalid API key"),
                 404 => ProviderError::model_not_found("github", body_str.clone()),

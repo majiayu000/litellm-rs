@@ -451,10 +451,10 @@ impl LLMProvider for DatabricksProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text =
+                crate::core::providers::base::connection_pool::read_streaming_error_body(response)
+                    .await
+                    .map_err(|err| err.into_provider_error("databricks"))?;
             return Err(self
                 .get_error_mapper()
                 .map_http_error(status.as_u16(), &error_text));

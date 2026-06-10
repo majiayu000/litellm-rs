@@ -404,9 +404,12 @@ impl LLMProvider for OciProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let body = response.text().await.ok();
+            let body =
+                crate::core::providers::base::connection_pool::read_streaming_error_body(response)
+                    .await
+                    .map_err(|err| err.into_provider_error("oci"))?;
             let mapper = OciErrorMapper;
-            return Err(mapper.map_http_error(status, &body.unwrap_or_default()));
+            return Err(mapper.map_http_error(status, &body));
         }
 
         let stream = super::streaming::create_oci_stream(response.bytes_stream());

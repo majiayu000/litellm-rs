@@ -261,12 +261,16 @@ impl LLMProvider for BasetenProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let body = response.text().await.ok();
             return Err(match status {
-                400 => BasetenError::invalid_request(
-                    "baseten",
-                    body.unwrap_or_else(|| "Bad request".to_string()),
-                ),
+                400 => {
+                    let body =
+                        crate::core::providers::base::connection_pool::read_streaming_error_body(
+                            response,
+                        )
+                        .await
+                        .map_err(|err| err.into_provider_error("baseten"))?;
+                    BasetenError::invalid_request("baseten", body)
+                }
                 401 => BasetenError::authentication("baseten", "Invalid API key"),
                 429 => BasetenError::rate_limit("baseten", None),
                 _ => BasetenError::api_error(
