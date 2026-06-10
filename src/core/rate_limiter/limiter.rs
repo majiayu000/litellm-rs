@@ -5,6 +5,7 @@ use crate::config::models::rate_limit::{RateLimitConfig, RateLimitStrategy};
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::error;
 #[cfg(feature = "gateway")]
 use tracing::warn;
 
@@ -110,19 +111,33 @@ impl RateLimiter {
         }
     }
 
+    /// Names of config fields that are parsed but not enforced by any
+    /// strategy yet; only enabled/strategy/default_rpm take effect.
+    fn unimplemented_field_names(config: &RateLimitConfig) -> Vec<&'static str> {
+        config.unimplemented_runtime_field_names()
+    }
+
+    /// Surface dead configuration at error level without blocking startup
+    /// so silently ignored limits are visible (no silent degradation).
+    fn warn_unimplemented_fields(config: &RateLimitConfig) {
+        let unimplemented = Self::unimplemented_field_names(config);
+        if !unimplemented.is_empty() {
+            error!(
+                "rate_limit fields [{}] are set but not enforced yet; only enabled/strategy/default_rpm take effect",
+                unimplemented.join(", ")
+            );
+        }
+    }
+
     /// Create a new rate limiter
     pub fn new(config: RateLimitConfig) -> Self {
-        Self {
-            config,
-            entries: Arc::new(DashMap::new()),
-            window: Duration::from_secs(60), // 1 minute window
-            #[cfg(feature = "gateway")]
-            redis: None,
-        }
+        Self::with_window(config, Duration::from_secs(60)) // 1 minute window
     }
 
     /// Create a rate limiter with custom window
     pub fn with_window(config: RateLimitConfig, window: Duration) -> Self {
+        Self::warn_unimplemented_fields(&config);
+
         Self {
             config,
             entries: Arc::new(DashMap::new()),
@@ -138,6 +153,8 @@ impl RateLimiter {
         config: RateLimitConfig,
         redis: Arc<crate::storage::redis::RedisPool>,
     ) -> Self {
+        Self::warn_unimplemented_fields(&config);
+
         Self {
             config,
             entries: Arc::new(DashMap::new()),
@@ -382,5 +399,48 @@ impl Clone for RateLimiter {
             #[cfg(feature = "gateway")]
             redis: self.redis.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unimplemented_field_names_default_empty() {
+        let config = RateLimitConfig::default();
+        assert!(RateLimiter::unimplemented_field_names(&config).is_empty());
+    }
+
+    #[test]
+    fn test_unimplemented_field_names_lists_set_fields() {
+        let config = RateLimitConfig {
+            default_tpm: 50_000,
+            requests_per_second: Some(10),
+            tokens_per_minute: Some(60_000),
+            burst_size: Some(20),
+            ..RateLimitConfig::default()
+        };
+        assert_eq!(
+            RateLimiter::unimplemented_field_names(&config),
+            vec![
+                "default_tpm",
+                "requests_per_second",
+                "tokens_per_minute",
+                "burst_size"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unimplemented_field_names_partial() {
+        let config = RateLimitConfig {
+            burst_size: Some(5),
+            ..RateLimitConfig::default()
+        };
+        assert_eq!(
+            RateLimiter::unimplemented_field_names(&config),
+            vec!["burst_size"]
+        );
     }
 }

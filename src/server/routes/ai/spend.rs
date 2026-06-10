@@ -164,6 +164,7 @@ mod tests {
             .unwrap_or(0.0);
         assert_eq!(spent, 0.0);
     }
+
     #[test]
     fn budget_available_when_unconfigured() {
         // No limits set: precheck must allow the request through.

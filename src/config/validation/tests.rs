@@ -233,6 +233,43 @@ fn test_rate_limit_validation_skips_when_disabled() {
 }
 
 #[test]
+fn test_rate_limit_validation_rejects_unenforced_tpm_when_enabled() {
+    let config = RateLimitConfig {
+        enabled: true,
+        default_tpm: 50_000,
+        ..Default::default()
+    };
+
+    let error = Validate::validate(&config).unwrap_err();
+    assert!(error.contains("default_tpm"));
+    assert!(error.contains("not enforced"));
+}
+
+#[test]
+fn test_rate_limit_validation_rejects_unenforced_burst_when_enabled() {
+    let config = RateLimitConfig {
+        enabled: true,
+        burst_size: Some(20),
+        ..Default::default()
+    };
+
+    let error = Validate::validate(&config).unwrap_err();
+    assert!(error.contains("burst_size"));
+    assert!(error.contains("not enforced"));
+}
+
+#[test]
+fn test_rate_limit_validation_allows_enforced_rpm_only() {
+    let config = RateLimitConfig {
+        enabled: true,
+        default_rpm: 500,
+        ..Default::default()
+    };
+
+    assert!(Validate::validate(&config).is_ok());
+}
+
+#[test]
 fn test_database_validation_skips_when_disabled() {
     let config = DatabaseConfig {
         enabled: false,

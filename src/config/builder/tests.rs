@@ -16,6 +16,7 @@ fn test_config_builder() {
             jwt_expiration: 3600,
             api_key_header: "X-API-Key".to_string(),
             api_key_hmac_secret: None,
+            allow_anonymous: false,
             rbac: RbacConfig::default(),
         })
         .add_provider(
