@@ -153,6 +153,35 @@ mod tests {
         assert!(matches!(provider, Provider::OpenAILike(_)));
     }
 
+    /// Test creating Xiaomi MiMo provider via create_provider (catalog path)
+    #[tokio::test]
+    async fn test_xiaomi_mimo_provider_from_config() {
+        let config = litellm_rs::config::models::provider::ProviderConfig {
+            name: "xiaomi_mimo".to_string(),
+            provider_type: "xiaomi_mimo".to_string(),
+            api_key: "mimo-test-key".to_string(),
+            ..Default::default()
+        };
+
+        let result = create_provider(config).await;
+        assert!(
+            result.is_ok(),
+            "Failed to create Xiaomi MiMo provider: {:?}",
+            result.err()
+        );
+
+        match result.unwrap() {
+            Provider::OpenAILike(provider) => {
+                assert_eq!(provider.config().provider_name, "xiaomi_mimo");
+                assert_eq!(
+                    provider.config().base.api_base.as_deref(),
+                    Some("https://api.xiaomimimo.com/v1")
+                );
+            }
+            _ => panic!("Expected Xiaomi MiMo to create OpenAILike provider"),
+        }
+    }
+
     /// Test creating Moonshot provider from catalog (Tier 1 → OpenAILike)
     #[tokio::test]
     async fn test_moonshot_provider_from_config() {

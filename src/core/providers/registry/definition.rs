@@ -29,6 +29,8 @@ pub struct ProviderDefinition {
     pub base_url: &'static str,
     /// Environment variable that holds the API key
     pub auth_env_var: &'static str,
+    /// Compatibility environment variables checked after `auth_env_var`
+    pub alternate_auth_env_vars: &'static [&'static str],
     /// Authentication method
     pub auth_type: AuthType,
     /// Whether API key can be skipped (local providers)
@@ -88,5 +90,10 @@ impl ProviderDefinition {
         explicit
             .map(|s| s.to_string())
             .or_else(|| std::env::var(self.auth_env_var).ok())
+            .or_else(|| {
+                self.alternate_auth_env_vars
+                    .iter()
+                    .find_map(|env_var| std::env::var(env_var).ok())
+            })
     }
 }

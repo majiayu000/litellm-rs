@@ -38,7 +38,7 @@ mod tests {
         let config = def.to_openai_like_config(Some(&api_key), None);
         let provider = OpenAILikeProvider::new(config).await.unwrap();
 
-        let request = create_chat_request("deepseek-chat", "Say hello");
+        let request = create_chat_request("deepseek-v4-flash", "Say hello");
         let context = RequestContext::default();
         let response = provider.chat_completion(request, context).await;
 

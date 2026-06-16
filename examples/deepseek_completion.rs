@@ -1,6 +1,6 @@
 //! DeepSeek Provider Completion Example
 //!
-//! DeepSeek provides advanced reasoning capabilities with V3.1 models
+//! DeepSeek provides advanced reasoning capabilities with V4 models
 //! Run with: DEEPSEEK_API_KEY=xxx cargo run --example deepseek_completion
 
 use litellm_rs::completion;
@@ -9,27 +9,27 @@ use litellm_rs::{system_message, user_message};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🧠 DeepSeek Completion Example\n");
-    println!("DeepSeek V3.1 offers both standard chat and advanced reasoning modes\n");
+    println!("DeepSeek V4 offers both standard chat and advanced reasoning modes\n");
 
     let messages = vec![
         system_message("You are a helpful assistant."),
         user_message("Hello! Briefly introduce yourself and mention which model you are."),
     ];
 
-    // DeepSeek Chat Mode (faster, good for general tasks)
-    println!("📤 Testing DeepSeek Chat Mode...\n");
+    // DeepSeek V4 Flash (fast general-purpose model)
+    println!("📤 Testing DeepSeek V4 Flash...\n");
 
-    match completion("deepseek/deepseek-chat", messages.clone(), None).await {
+    match completion("deepseek/deepseek-v4-flash", messages.clone(), None).await {
         Ok(response) => {
             if let Some(ref content) = response.choices[0].message.content {
-                println!("✅ DeepSeek Chat Response: {:?}\n", content);
+                println!("✅ DeepSeek V4 Flash Response: {:?}\n", content);
             }
         }
         Err(e) => println!("❌ Error: {}\n", e),
     }
 
-    // DeepSeek Reasoner Mode (thinking mode, better for complex reasoning)
-    println!("📤 Testing DeepSeek Reasoner Mode...\n");
+    // DeepSeek V4 Pro (higher-quality model for complex reasoning)
+    println!("📤 Testing DeepSeek V4 Pro...\n");
 
     let reasoning_messages = vec![
         system_message("You are a helpful assistant capable of deep reasoning."),
@@ -38,10 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     ];
 
-    match completion("deepseek/deepseek-reasoner", reasoning_messages, None).await {
+    match completion("deepseek/deepseek-v4-pro", reasoning_messages, None).await {
         Ok(response) => {
             if let Some(ref content) = response.choices[0].message.content {
-                println!("✅ DeepSeek Reasoner Response: {:?}\n", content);
+                println!("✅ DeepSeek V4 Pro Response: {:?}\n", content);
             }
         }
         Err(e) => println!("❌ Error: {}\n", e),
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         user_message("Write a simple function in Rust that calculates the factorial of a number."),
     ];
 
-    match completion("deepseek/deepseek-chat", coding_messages, None).await {
+    match completion("deepseek/deepseek-v4-flash", coding_messages, None).await {
         Ok(response) => {
             if let Some(ref content) = response.choices[0].message.content {
                 println!("✅ DeepSeek Coding Response: {:?}\n", content);
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Complex reasoning example
-    println!("📤 Testing DeepSeek Reasoner with Complex Problem...\n");
+    println!("📤 Testing DeepSeek V4 Pro with Complex Problem...\n");
 
     let complex_messages = vec![
         system_message("You are a helpful assistant that thinks step by step."),
@@ -74,10 +74,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     ];
 
-    match completion("deepseek/deepseek-reasoner", complex_messages, None).await {
+    match completion("deepseek/deepseek-v4-pro", complex_messages, None).await {
         Ok(response) => {
             if let Some(ref content) = response.choices[0].message.content {
-                println!("✅ DeepSeek Complex Reasoning Response: {:?}\n", content);
+                println!(
+                    "✅ DeepSeek V4 Pro Complex Reasoning Response: {:?}\n",
+                    content
+                );
             }
         }
         Err(e) => println!("❌ Error: {}\n", e),

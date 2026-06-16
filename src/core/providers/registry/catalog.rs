@@ -209,12 +209,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://ark.cn-beijing.volces.com/api/v3",
             "VOLCENGINE_API_KEY",
         ),
-        def(
-            "xiaomi_mimo",
-            "Xiaomi MiMo",
-            "https://api.xiaomi.com/v1",
-            "XIAOMI_API_KEY",
-        ),
+        ProviderDefinition {
+            alternate_auth_env_vars: &["XIAOMI_API_KEY"],
+            ..def(
+                "xiaomi_mimo",
+                "Xiaomi MiMo",
+                "https://api.xiaomimimo.com/v1",
+                "MIMO_API_KEY",
+            )
+        },
         def(
             "zhipu",
             "Zhipu AI",
@@ -330,6 +333,7 @@ fn def(
         display_name,
         base_url,
         auth_env_var,
+        alternate_auth_env_vars: &[],
         auth_type: AuthType::Bearer,
         skip_api_key: false,
         model_prefix: None,
@@ -347,6 +351,7 @@ fn def_local(
         display_name,
         base_url,
         auth_env_var: "",
+        alternate_auth_env_vars: &[],
         auth_type: AuthType::None,
         skip_api_key: true,
         model_prefix: None,
@@ -367,12 +372,27 @@ mod tests {
         assert_eq!(definition.display_name, "xAI");
         assert_eq!(definition.base_url, "https://api.x.ai/v1");
         assert_eq!(definition.auth_env_var, "XAI_API_KEY");
+        assert!(definition.alternate_auth_env_vars.is_empty());
         assert_eq!(definition.auth_type, AuthType::Bearer);
         assert!(!definition.skip_api_key);
         assert_eq!(definition.model_prefix, Some("xai/"));
 
         let config = definition.to_openai_like_config(Some("sk-test"), None);
         assert_eq!(config.model_prefix.as_deref(), Some("xai/"));
+    }
+
+    #[test]
+    fn test_xiaomi_mimo_uses_official_endpoint_and_key_name() {
+        let Some(definition) = get_definition("xiaomi_mimo") else {
+            panic!("Xiaomi MiMo provider definition should be registered");
+        };
+
+        assert_eq!(definition.display_name, "Xiaomi MiMo");
+        assert_eq!(definition.base_url, "https://api.xiaomimimo.com/v1");
+        assert_eq!(definition.auth_env_var, "MIMO_API_KEY");
+        assert_eq!(definition.alternate_auth_env_vars, &["XIAOMI_API_KEY"]);
+        assert_eq!(definition.auth_type, AuthType::Bearer);
+        assert!(!definition.skip_api_key);
     }
 
     #[test]

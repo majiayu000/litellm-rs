@@ -862,7 +862,7 @@
     "supports_system_message": true,
     "alias_for": "deepseek-v4-flash",
     "thinking_mode": "disabled",
-    "deprecation_status": "future_deprecation_announced"
+    "deprecation_status": "deprecated_on_2026_07_24_1559_utc"
   },
   "deepseek-reasoner": {
     "max_tokens": 1048576,
@@ -879,7 +879,7 @@
     "supports_reasoning": true,
     "alias_for": "deepseek-v4-flash",
     "thinking_mode": "enabled",
-    "deprecation_status": "future_deprecation_announced"
+    "deprecation_status": "deprecated_on_2026_07_24_1559_utc"
   },
   "deepseek-coder": {
     "max_tokens": 4096,
@@ -890,6 +890,34 @@
     "litellm_provider": "deepseek",
     "mode": "chat",
     "supports_streaming": true
+  },
+  "mimo-v2.5-pro": {
+    "max_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "input_cost_per_token": 4.35e-07,
+    "output_cost_per_token": 8.7e-07,
+    "cache_read_input_token_cost": 3.6e-09,
+    "litellm_provider": "xiaomi_mimo",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": false,
+    "supports_streaming": true,
+    "supports_system_message": true
+  },
+  "mimo-v2.5": {
+    "max_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "input_cost_per_token": 1.4e-07,
+    "output_cost_per_token": 2.8e-07,
+    "cache_read_input_token_cost": 2.8e-09,
+    "litellm_provider": "xiaomi_mimo",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true
   },
   "yi-large": {
     "max_tokens": 4096,

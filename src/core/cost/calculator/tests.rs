@@ -248,6 +248,23 @@ fn test_get_deepseek_pricing() {
 }
 
 #[test]
+fn test_get_xiaomi_mimo_pricing() {
+    let Ok(pro) = get_model_pricing("mimo-v2.5-pro", "xiaomi_mimo") else {
+        panic!("mimo-v2.5-pro pricing should load from shared pricing data");
+    };
+    assert_cost_eq(pro.input_cost_per_1k_tokens, 0.000435);
+    assert_cost_eq(pro.output_cost_per_1k_tokens, 0.00087);
+    assert_eq!(pro.cache_read_input_token_cost, Some(0.0000036));
+
+    let Ok(base) = get_model_pricing("mimo-v2.5", "mimo") else {
+        panic!("mimo-v2.5 pricing should load through provider aliases");
+    };
+    assert_cost_eq(base.input_cost_per_1k_tokens, 0.00014);
+    assert_cost_eq(base.output_cost_per_1k_tokens, 0.00028);
+    assert_eq!(base.cache_read_input_token_cost, Some(0.0000028));
+}
+
+#[test]
 fn test_get_moonshot_pricing_8k() {
     let pricing = get_model_pricing("moonshot-v1-8k", "moonshot");
     assert!(pricing.is_ok());

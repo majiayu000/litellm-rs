@@ -110,6 +110,14 @@ pub fn get_model_pricing(model: &str, provider: &str) -> Result<ModelPricing, Co
             get_pricing_with_shared_source(model, &["vertex_ai", "google"], get_vertex_ai_pricing)
         }
         "deepseek" => get_pricing_with_shared_source(model, &["deepseek"], get_deepseek_pricing),
+        "xiaomi_mimo" | "xiaomi" | "mimo" => {
+            get_pricing_with_shared_source(model, &["xiaomi_mimo", "xiaomi", "mimo"], |model| {
+                Err(CostError::ModelNotSupported {
+                    model: model.to_string(),
+                    provider: "xiaomi_mimo".to_string(),
+                })
+            })
+        }
         "moonshot" => get_pricing_with_shared_source(model, &["moonshot"], get_moonshot_pricing),
         "minimax" => get_pricing_with_shared_source(model, &["minimax"], get_minimax_pricing),
         "zhipu" | "zhipuai" | "glm" | "zai" => {
@@ -182,6 +190,7 @@ fn normalize_pricing_provider(provider: &str) -> String {
     match provider.to_lowercase().replace('-', "_").as_str() {
         "vertexai" | "google" => "vertex_ai".to_string(),
         "zhipu" | "glm" | "zai" => "zhipuai".to_string(),
+        "xiaomi" | "mimo" => "xiaomi_mimo".to_string(),
         other => other.to_string(),
     }
 }

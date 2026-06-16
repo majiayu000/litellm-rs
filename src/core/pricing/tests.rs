@@ -140,6 +140,27 @@ fn extended_pricing_has_explicit_cohere_command_a_rates() {
 }
 
 #[test]
+fn xiaomi_mimo_provider_aliases_share_pricing_rows() {
+    let Ok(db) = PricingDatabase::from_default_source() else {
+        panic!("shared pricing source should load");
+    };
+    let usage = Usage::new(1000, 500);
+    let expected = 1000.0 * 0.00000014 + 500.0 * 0.00000028;
+
+    for provider in ["xiaomi_mimo", "mimo", "xiaomi"] {
+        assert!(
+            (db.calculate_for_provider(provider, "mimo-v2.5", &usage) - expected).abs() < 1e-12,
+            "{provider} should resolve Xiaomi MiMo pricing"
+        );
+        assert!(
+            db.get_provider_models(provider)
+                .contains(&"mimo-v2.5".to_string()),
+            "{provider} should list Xiaomi MiMo models"
+        );
+    }
+}
+
+#[test]
 fn test_model_info() {
     let db = PricingDatabase::default();
 

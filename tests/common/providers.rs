@@ -32,22 +32,23 @@ impl ProviderTestConfig {
 
 /// Get API key for a provider from environment
 pub fn get_api_key(provider: &str) -> Option<String> {
-    let key_var = match provider.to_lowercase().as_str() {
-        "openai" => "OPENAI_API_KEY",
-        "anthropic" | "claude" => "ANTHROPIC_API_KEY",
-        "groq" => "GROQ_API_KEY",
-        "gemini" | "google" => "GOOGLE_API_KEY",
-        "azure" | "azure_openai" => "AZURE_OPENAI_API_KEY",
-        "cohere" => "COHERE_API_KEY",
-        "mistral" => "MISTRAL_API_KEY",
-        "deepseek" => "DEEPSEEK_API_KEY",
-        "together" => "TOGETHER_API_KEY",
-        "openrouter" => "OPENROUTER_API_KEY",
-        "deepinfra" => "DEEPINFRA_API_KEY",
+    let key_vars: &[&str] = match provider.to_lowercase().as_str() {
+        "openai" => &["OPENAI_API_KEY"],
+        "anthropic" | "claude" => &["ANTHROPIC_API_KEY"],
+        "groq" => &["GROQ_API_KEY"],
+        "gemini" | "google" => &["GOOGLE_API_KEY"],
+        "azure" | "azure_openai" => &["AZURE_OPENAI_API_KEY"],
+        "cohere" => &["COHERE_API_KEY"],
+        "mistral" => &["MISTRAL_API_KEY"],
+        "deepseek" => &["DEEPSEEK_API_KEY"],
+        "xiaomi_mimo" | "mimo" => &["MIMO_API_KEY", "XIAOMI_API_KEY"],
+        "together" => &["TOGETHER_API_KEY"],
+        "openrouter" => &["OPENROUTER_API_KEY"],
+        "deepinfra" => &["DEEPINFRA_API_KEY"],
         _ => return None,
     };
 
-    env::var(key_var).ok()
+    key_vars.iter().find_map(|key_var| env::var(key_var).ok())
 }
 
 /// Check if API key is available for a provider
@@ -66,6 +67,7 @@ pub fn available_providers() -> Vec<String> {
         "cohere",
         "mistral",
         "deepseek",
+        "xiaomi_mimo",
         "together",
         "openrouter",
         "deepinfra",
@@ -86,7 +88,8 @@ pub fn test_models() -> std::collections::HashMap<&'static str, &'static str> {
     models.insert("groq", "llama-3.1-8b-instant");
     models.insert("gemini", "gemini-1.5-flash");
     models.insert("mistral", "mistral-small-latest");
-    models.insert("deepseek", "deepseek-chat");
+    models.insert("deepseek", "deepseek-v4-flash");
+    models.insert("xiaomi_mimo", "mimo-v2.5");
     models.insert("together", "meta-llama/Llama-3.2-3B-Instruct-Turbo");
     models
 }

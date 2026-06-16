@@ -19,6 +19,7 @@ A high-performance AI Gateway written in Rust that provides unified access to 10
 ### Provider Documentation
 - [Provider Overview](./providers/README.md) - Supported providers and capabilities
 - [DeepSeek](./providers/deepseek.md) - DeepSeek V4 integration guide
+- [Xiaomi MiMo](./providers/xiaomi-mimo.md) - Xiaomi MiMo V2.5 OpenAI-compatible guide
 - [OpenAI](./providers/openai.md) - OpenAI and compatible providers
 - [Anthropic](./providers/anthropic.md) - Claude models integration
 - [Adding Providers](./providers/adding-new-provider.md) - Step-by-step provider implementation

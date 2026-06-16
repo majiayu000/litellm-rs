@@ -15,8 +15,7 @@ official DeepSeek API base is `https://api.deepseek.com`.
 ### Legacy Aliases
 
 DeepSeek's current docs keep these aliases for compatibility and announce that
-they will be deprecated in the future. The official pricing page does not
-publish a concrete deprecation date.
+they will be deprecated on 2026-07-24 at 15:59 UTC.
 
 | Alias | Current mapping | Thinking behavior |
 |-------|-----------------|-------------------|
@@ -105,7 +104,7 @@ For current V4 pricing:
 
 - `deepseek-v4-flash`: $0.14 cache-miss input, $0.0028 cache-hit input, $0.28 output per 1M tokens.
 - `deepseek-v4-pro`: $0.435 cache-miss input, $0.003625 cache-hit input, $0.87 output per 1M tokens.
-- `deepseek-chat` and `deepseek-reasoner` use `deepseek-v4-flash` pricing.
+- `deepseek-chat` and `deepseek-reasoner` use `deepseek-v4-flash` pricing until their announced 2026-07-24 deprecation.
 
 ## Integration Testing
 

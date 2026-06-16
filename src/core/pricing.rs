@@ -235,12 +235,13 @@ impl PricingDatabase {
 
     /// Get all models associated with a provider.
     pub fn get_provider_models(&self, provider: &str) -> Vec<String> {
+        let provider = normalize_pricing_provider(provider);
         self.models
             .iter()
             .filter_map(|(model_id, pricing)| {
-                if pricing.litellm_provider.to_lowercase() == provider.to_lowercase()
-                    || model_id.to_lowercase().contains(&provider.to_lowercase())
-                {
+                let pricing_provider = normalize_pricing_provider(&pricing.litellm_provider);
+                let model_id = model_id.to_lowercase();
+                if pricing_provider == provider || model_id.contains(&provider) {
                     Some(model_id.clone())
                 } else {
                     None
@@ -293,11 +294,18 @@ impl PricingDatabase {
 }
 
 fn pricing_matches_provider(model_key: &str, pricing: &ModelPricing, provider: &str) -> bool {
-    let provider = provider.to_ascii_lowercase();
-    let pricing_provider = pricing.litellm_provider.to_ascii_lowercase();
+    let provider = normalize_pricing_provider(provider);
+    let pricing_provider = normalize_pricing_provider(&pricing.litellm_provider);
     let model_key = model_key.to_ascii_lowercase();
 
     pricing_provider == provider || model_key.starts_with(&format!("{provider}/"))
+}
+
+fn normalize_pricing_provider(provider: &str) -> String {
+    match provider.to_ascii_lowercase().replace('-', "_").as_str() {
+        "mimo" | "xiaomi" => "xiaomi_mimo".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn model_matches_key(model: &str, key: &str) -> bool {
