@@ -123,7 +123,8 @@ impl ModelUtils {
                     4096
                 }),
             }
-        } else if model_lower.starts_with("claude-opus-4-7")
+        } else if model_lower.starts_with("claude-opus-4-8")
+            || model_lower.starts_with("claude-opus-4-7")
             || model_lower.starts_with("claude-opus-4-6")
             || model_lower.starts_with("claude-sonnet-4-6")
         {
@@ -330,6 +331,8 @@ impl ModelUtils {
             } else {
                 "gpt-3.5-turbo".to_string()
             }
+        } else if model_lower.starts_with("claude-opus-4-8") {
+            "claude-opus-4-8".to_string()
         } else if model_lower.starts_with("claude-opus-4-7") {
             "claude-opus-4-7".to_string()
         } else if model_lower.starts_with("claude-opus-4-6") {
@@ -357,7 +360,7 @@ impl ModelUtils {
         } else if model_lower.starts_with("gemini-3.1-pro") {
             "gemini-3.1-pro-preview".to_string()
         } else if model_lower.starts_with("gemini-3.1-flash-lite") {
-            "gemini-3.1-flash-lite-preview".to_string()
+            "gemini-3.1-flash-lite".to_string()
         } else if model_lower.starts_with("gemini-3.1-flash") {
             "gemini-3.1-flash".to_string()
         } else if model_lower.starts_with("gemini-3-flash") {
@@ -413,15 +416,17 @@ impl ModelUtils {
             "o4-mini",
             "claude-opus-4",
             "claude-sonnet-4",
+            "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-sonnet-4-6",
             "claude-haiku-4-5",
             "claude-3",
             "claude-2",
             "gemini",
+            "gemini-3.5-flash",
             "gemini-3.1-pro-preview",
             "gemini-3-flash-preview",
-            "gemini-3.1-flash-lite-preview",
+            "gemini-3.1-flash-lite",
             "command",
             "mistral",
         ];
@@ -520,6 +525,7 @@ impl ModelUtils {
                 "gpt-3.5-turbo-16k".to_string(),
             ],
             "anthropic" => vec![
+                "claude-opus-4-8".to_string(),
                 "claude-opus-4-7".to_string(),
                 "claude-sonnet-4-6".to_string(),
                 "claude-haiku-4-5".to_string(),
@@ -534,6 +540,8 @@ impl ModelUtils {
                 "claude-instant".to_string(),
             ],
             "google" => vec![
+                "gemini-3.5-flash".to_string(),
+                "gemini-3.1-flash-lite".to_string(),
                 "gemini-pro".to_string(),
                 "gemini-pro-vision".to_string(),
                 "gemini-1.5-pro".to_string(),
@@ -545,7 +553,6 @@ impl ModelUtils {
                 "gemini-3.1-pro-preview".to_string(),
                 "gemini-3.1-flash".to_string(),
                 "gemini-3-flash-preview".to_string(),
-                "gemini-3.1-flash-lite-preview".to_string(),
                 "gemini-2.5-pro".to_string(),
                 "gemini-2.5-flash".to_string(),
                 "gemini-2.5-flash-lite".to_string(),

@@ -64,10 +64,10 @@ let reasoning = completion("deepseek-v4-pro", messages, None).await?;
 let response = completion("xiaomi_mimo/mimo-v2.5", messages, None).await?;
 
 // Anthropic Claude
-let response = completion("claude-opus-4-7", messages, None).await?;
+let response = completion("claude-opus-4-8", messages, None).await?;
 
 // Google Gemini
-let response = completion("gemini-3.1-pro-preview", messages, None).await?;
+let response = completion("gemini-3.5-flash", messages, None).await?;
 
 // xAI Grok, routed through the OpenAI-compatible provider catalog
 let response = completion("xai/grok-4.3", messages, None).await?;
@@ -77,7 +77,7 @@ let response = completion("xai/grok-4.3", messages, None).await?;
 ```rust
 // Explicit provider specification
 let openai_response = completion("openai/gpt-5.5", messages, None).await?;
-let anthropic_response = completion("anthropic/claude-opus-4-7", messages, None).await?;
+let anthropic_response = completion("anthropic/claude-opus-4-8", messages, None).await?;
 let deepseek_response = completion("deepseek/deepseek-v4-flash", messages, None).await?;
 let mimo_response = completion("xiaomi_mimo/mimo-v2.5-pro", messages, None).await?;
 let xai_response = completion("xai/grok-4.3", messages, None).await?;

@@ -43,10 +43,10 @@ pub fn anthropic_provider(name: &str, api_key: &str) -> Result<ProviderConfigBui
         .name(name)?
         .provider_type("anthropic")?
         .api_key(api_key)
+        .add_model("claude-opus-4-8")
         .add_model("claude-opus-4-7")
         .add_model("claude-sonnet-4-6")
         .add_model("claude-haiku-4-5-20251001")
-        .add_model("claude-3-5-haiku-20241022")
         .rate_limit(1000))
 }
 
@@ -235,17 +235,13 @@ mod tests {
     fn test_anthropic_provider_models() {
         let builder = anthropic_provider("test", "key").unwrap();
         assert_eq!(builder.models.len(), 4);
+        assert!(builder.models.contains(&"claude-opus-4-8".to_string()));
         assert!(builder.models.contains(&"claude-opus-4-7".to_string()));
         assert!(builder.models.contains(&"claude-sonnet-4-6".to_string()));
         assert!(
             builder
                 .models
                 .contains(&"claude-haiku-4-5-20251001".to_string())
-        );
-        assert!(
-            builder
-                .models
-                .contains(&"claude-3-5-haiku-20241022".to_string())
         );
     }
 

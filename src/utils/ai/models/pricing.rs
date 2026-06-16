@@ -40,6 +40,7 @@ impl ModelUtils {
             m if m.starts_with("gpt-4-turbo") => Some((0.01, 0.03)),
             m if m.starts_with("gpt-4") => Some((0.03, 0.06)),
             m if m.starts_with("gpt-3.5-turbo") => Some((0.0015, 0.002)),
+            m if m.contains("claude-opus-4-8") => Some((0.005, 0.025)),
             m if m.contains("claude-opus-4-7") => Some((0.005, 0.025)),
             m if m.contains("claude-opus-4-6") => Some((0.005, 0.025)),
             m if m.contains("claude-opus-4-5") => Some((0.005, 0.025)),
@@ -51,7 +52,7 @@ impl ModelUtils {
             m if m.contains("claude-3-sonnet") => Some((0.003, 0.015)),
             m if m.contains("claude-3-haiku") => Some((0.00025, 0.00125)),
             m if m.starts_with("gemini-3.1-pro-preview") => Some((0.002, 0.012)),
-            m if m.starts_with("gemini-3.1-flash-lite") => Some((0.0000375, 0.00015)),
+            m if m.starts_with("gemini-3.1-flash-lite") => Some((0.00025, 0.0015)),
             m if m.starts_with("gemini-3.1-flash") => Some((0.000075, 0.0003)),
             m if m.starts_with("gemini-3-flash-preview") => Some((0.0005, 0.003)),
             m if m.starts_with("gemini-2.5-pro") => Some((0.00125, 0.010)),
@@ -98,6 +99,9 @@ impl ModelUtils {
                     "gpt-5.2-codex".to_string(),
                     "gpt-5-codex".to_string(),
                 ]);
+            }
+            "claude-opus-4-8" => {
+                aliases.extend_from_slice(&["anthropic/claude-opus-4.8".to_string()]);
             }
             "claude-opus-4-7" => {
                 aliases.extend_from_slice(&[
@@ -391,8 +395,8 @@ mod tests {
         let pricing = ModelUtils::get_model_pricing("gemini-3.1-flash-lite");
         assert!(pricing.is_some());
         let (input, output) = pricing.unwrap();
-        assert!((input - 0.0000375).abs() < f64::EPSILON);
-        assert!((output - 0.00015).abs() < f64::EPSILON);
+        assert!((input - 0.00025).abs() < f64::EPSILON);
+        assert!((output - 0.0015).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -188,8 +188,8 @@ LITELLM_VERBOSE=true  # Enable verbose logging
 use litellm_rs::{completion, user_message};
 
 // Automatically routes to the right provider based on model name
-let openai = completion("gpt-4", vec![user_message("Hi")], None).await?;
-let anthropic = completion("anthropic/claude-3-opus", vec![user_message("Hi")], None).await?;
+let openai = completion("gpt-5.5", vec![user_message("Hi")], None).await?;
+let anthropic = completion("anthropic/claude-opus-4-8", vec![user_message("Hi")], None).await?;
 let groq = completion("groq/llama-3.1-8b-instant", vec![user_message("Hi")], None).await?;
 let bedrock = completion(
     "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",

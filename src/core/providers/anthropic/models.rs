@@ -39,7 +39,9 @@ pub enum ModelFeature {
 /// Model
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnthropicModelFamily {
-    /// Claude Opus 4.7 models (latest flagship)
+    /// Claude Opus 4.8 models (latest flagship)
+    ClaudeOpus48,
+    /// Claude Opus 4.7 models
     ClaudeOpus47,
     /// Claude Opus 4.6 models
     ClaudeOpus46,
@@ -207,7 +209,10 @@ impl AnthropicModelRegistry {
         let model_lower = model_name.to_lowercase();
 
         // Check newest models first (most specific)
-        if model_lower.contains("claude-opus-4-7") || model_lower.contains("claude-opus-4.7") {
+        if model_lower.contains("claude-opus-4-8") || model_lower.contains("claude-opus-4.8") {
+            Some(AnthropicModelFamily::ClaudeOpus48)
+        } else if model_lower.contains("claude-opus-4-7") || model_lower.contains("claude-opus-4.7")
+        {
             Some(AnthropicModelFamily::ClaudeOpus47)
         } else if model_lower.contains("claude-opus-4-6") || model_lower.contains("claude-opus-4.6")
         {
@@ -288,8 +293,8 @@ mod tests {
         let registry = get_anthropic_registry();
 
         // Test latest flagship model
-        let opus_spec = registry.get_model_spec("claude-opus-4-7").unwrap();
-        assert_eq!(opus_spec.family, AnthropicModelFamily::ClaudeOpus47);
+        let opus_spec = registry.get_model_spec("claude-opus-4-8").unwrap();
+        assert_eq!(opus_spec.family, AnthropicModelFamily::ClaudeOpus48);
         assert!(
             opus_spec
                 .features
@@ -371,6 +376,11 @@ mod tests {
     #[test]
     fn test_model_family_detection() {
         assert_eq!(
+            AnthropicModelRegistry::from_model_name("claude-opus-4-8"),
+            Some(AnthropicModelFamily::ClaudeOpus48)
+        );
+
+        assert_eq!(
             AnthropicModelRegistry::from_model_name("claude-opus-4-7"),
             Some(AnthropicModelFamily::ClaudeOpus47)
         );
@@ -393,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_cost_calculation() {
-        let cost = CostCalculator::calculate_cost("claude-opus-4-7", 1000, 500);
+        let cost = CostCalculator::calculate_cost("claude-opus-4-8", 1000, 500);
         assert!(cost.is_some());
 
         let cost_value = cost.unwrap();
@@ -405,8 +415,8 @@ mod tests {
     fn test_feature_support() {
         let registry = get_anthropic_registry();
 
-        // Claude Opus 4.7 supports computer tools
-        assert!(registry.supports_feature("claude-opus-4-7", &ModelFeature::ComputerUse));
+        // Claude Opus 4.8 supports computer tools
+        assert!(registry.supports_feature("claude-opus-4-8", &ModelFeature::ComputerUse));
 
         // Claude 2.1 does not support computer tools
         assert!(!registry.supports_feature("claude-2.1", &ModelFeature::ComputerUse));

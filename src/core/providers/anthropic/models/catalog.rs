@@ -7,15 +7,14 @@ use crate::core::types::model::ModelInfo;
 impl AnthropicModelRegistry {
     /// Initialize model registry
     pub(super) fn initialize_models(&mut self) {
-        // Claude Opus 4.7 (Latest generally available flagship - April 2026)
-        // Pricing source: https://docs.anthropic.com/en/docs/about-claude/models
-        // Re-verified 2026-05-25 — matches Opus 4.6 ($5/$25 per 1M tokens).
+        // Claude Opus 4.8 (Latest generally available flagship - May 2026)
+        // Pricing source: https://docs.anthropic.com/en/docs/about-claude/pricing
         self.register_model(
-            "claude-opus-4-7",
+            "claude-opus-4-8",
             ModelSpec {
                 model_info: ModelInfo {
-                    id: "claude-opus-4-7".to_string(),
-                    name: "Claude Opus 4.7".to_string(),
+                    id: "claude-opus-4-8".to_string(),
+                    name: "Claude Opus 4.8".to_string(),
                     provider: "anthropic".to_string(),
                     max_context_length: 1_000_000,
                     max_output_length: Some(128_000),
@@ -34,7 +33,7 @@ impl AnthropicModelRegistry {
                     updated_at: None,
                     metadata: std::collections::HashMap::new(),
                 },
-                family: AnthropicModelFamily::ClaudeOpus47,
+                family: AnthropicModelFamily::ClaudeOpus48,
                 features: vec![
                     ModelFeature::MultimodalSupport,
                     ModelFeature::ToolCalling,
@@ -56,6 +55,13 @@ impl AnthropicModelRegistry {
                 config: ModelConfig::default(),
             },
         );
+
+        if let Some(mut spec) = self.models.get("claude-opus-4-8").cloned() {
+            spec.model_info.id = "claude-opus-4-7".to_string();
+            spec.model_info.name = "Claude Opus 4.7".to_string();
+            spec.family = AnthropicModelFamily::ClaudeOpus47;
+            self.register_model("claude-opus-4-7", spec);
+        }
 
         // Claude Opus 4.6 (Previous flagship model - January 2026)
         self.register_model(
@@ -203,10 +209,10 @@ impl AnthropicModelRegistry {
 
         // Claude Sonnet 4.6 (October 2025)
         self.register_model(
-            "claude-sonnet-4-6-20251001",
+            "claude-sonnet-4-6",
             ModelSpec {
                 model_info: ModelInfo {
-                    id: "claude-sonnet-4-6-20251001".to_string(),
+                    id: "claude-sonnet-4-6".to_string(),
                     name: "Claude Sonnet 4.6".to_string(),
                     provider: "anthropic".to_string(),
                     max_context_length: 1_000_000,
@@ -754,7 +760,7 @@ impl AnthropicModelRegistry {
         self.register_alias("claude-opus-4-1", "claude-opus-4-1-20250805");
         self.register_alias("claude-opus-4", "claude-opus-4-20250514");
         self.register_alias("claude-opus-4-0", "claude-opus-4-20250514");
-        self.register_alias("claude-sonnet-4-6", "claude-sonnet-4-6-20251001");
+        self.register_alias("claude-sonnet-4-6-20251001", "claude-sonnet-4-6");
         self.register_alias("claude-haiku-4-5", "claude-haiku-4-5-20251001");
         self.register_alias("claude-sonnet-4-5", "claude-sonnet-4-5-20250929");
         self.register_alias("claude-sonnet-4-5-20251101", "claude-sonnet-4-5-20250929");

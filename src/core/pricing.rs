@@ -301,15 +301,38 @@ fn pricing_matches_provider(model_key: &str, pricing: &ModelPricing, provider: &
     pricing_provider == provider || model_key.starts_with(&format!("{provider}/"))
 }
 
-fn normalize_pricing_provider(provider: &str) -> String {
+pub(crate) fn normalize_pricing_provider(provider: &str) -> String {
     match provider.to_ascii_lowercase().replace('-', "_").as_str() {
+        "vertexai" | "google" => "vertex_ai".to_string(),
+        "zhipu" | "glm" | "zai" => "zhipuai".to_string(),
         "mimo" | "xiaomi" => "xiaomi_mimo".to_string(),
         other => other.to_string(),
     }
 }
 
 fn model_matches_key(model: &str, key: &str) -> bool {
-    model == key || model.contains(key) || key.contains(model)
+    fn model_id_matches(candidate: &str, requested: &str) -> bool {
+        if candidate == requested {
+            return true;
+        }
+
+        candidate
+            .strip_prefix(requested)
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            .is_some_and(|suffix| {
+                let digit_prefix_len = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
+                digit_prefix_len >= 4
+                    && suffix
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+            })
+    }
+
+    model_id_matches(key, model)
+        || key
+            .rsplit_once('/')
+            .map(|(_, model_id)| model_id_matches(model_id, model))
+            .unwrap_or(false)
 }
 
 fn normalize_model_key(model: &str) -> &str {

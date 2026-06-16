@@ -122,13 +122,13 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
         },
     );
 
-    // Gemini 3.1 Flash Lite
+    // Gemini 3.1 Flash-Lite
     registry.register_model(
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite",
         ModelSpec {
             model_info: ModelInfo {
-                id: "gemini-3.1-flash-lite-preview".to_string(),
-                name: "Gemini 3.1 Flash-Lite Preview".to_string(),
+                id: "gemini-3.1-flash-lite".to_string(),
+                name: "Gemini 3.1 Flash-Lite".to_string(),
                 provider: "gemini".to_string(),
                 max_context_length: 1_048_576,
                 max_output_length: Some(65536),

@@ -219,6 +219,29 @@ fn test_get_vertex_ai_pricing_gemini_35_flash() {
 }
 
 #[test]
+fn test_shared_pricing_does_not_match_flash_lite_for_flash() {
+    let pricing = get_model_pricing("gemini-3.1-flash", "vertex_ai");
+    let Err(CostError::ModelNotSupported { model, provider }) = pricing else {
+        panic!("gemini-3.1-flash must not borrow gemini-3.1-flash-lite shared pricing");
+    };
+    assert_eq!(model, "gemini-3.1-flash");
+    assert_eq!(provider, "vertex_ai");
+}
+
+#[test]
+fn test_runtime_pricing_reaches_groq_and_native_gemini_shared_rows() {
+    let usage = create_usage(1000, 500);
+
+    let gemini = generic_cost_per_token("gemini-3.1-flash-lite", &usage, "gemini")
+        .expect("native Gemini provider should use shared Gemini pricing rows");
+    assert_cost_eq(gemini.total_cost, 0.001);
+
+    let groq = generic_cost_per_token("gpt-oss-120b", &usage, "groq")
+        .expect("Groq provider should match prefixed shared pricing rows by model id");
+    assert_cost_eq(groq.total_cost, 0.00045);
+}
+
+#[test]
 fn test_get_deepseek_pricing() {
     let Ok(flash) = get_model_pricing("deepseek-v4-flash", "deepseek") else {
         panic!("deepseek-v4-flash pricing should be available");
@@ -714,6 +737,10 @@ fn test_new_openai_models_have_cost_pricing() {
 
 #[test]
 fn test_new_anthropic_models_have_cost_pricing() {
+    let opus48 = get_model_pricing("claude-opus-4-8", "anthropic").unwrap();
+    assert_eq!(opus48.input_cost_per_1k_tokens, 0.005);
+    assert_eq!(opus48.output_cost_per_1k_tokens, 0.025);
+
     let opus47 = get_model_pricing("claude-opus-4-7", "anthropic").unwrap();
     assert_eq!(opus47.input_cost_per_1k_tokens, 0.005);
     assert_eq!(opus47.output_cost_per_1k_tokens, 0.025);
@@ -737,13 +764,42 @@ fn test_vertex_ai_provider_variants() {
 
     let result1 = generic_cost_per_token("gemini-pro", &usage, "vertex_ai");
     let result2 = generic_cost_per_token("gemini-pro", &usage, "vertexai");
+    let result3 = generic_cost_per_token("gemini-pro", &usage, "google");
 
     assert!(result1.is_ok());
     assert!(result2.is_ok());
+    assert!(result3.is_ok());
 
     let cost1 = result1.unwrap().total_cost;
     let cost2 = result2.unwrap().total_cost;
+    let cost3 = result3.unwrap().total_cost;
     assert!((cost1 - cost2).abs() < 1e-10);
+    assert!((cost1 - cost3).abs() < 1e-10);
+}
+
+#[test]
+fn test_cost_calculator_uses_shared_provider_normalization() {
+    let google = get_model_pricing("gemini-1.5-flash", "google").unwrap();
+    let vertex_ai = get_model_pricing("gemini-1.5-flash", "vertex_ai").unwrap();
+    assert_eq!(
+        google.input_cost_per_1k_tokens,
+        vertex_ai.input_cost_per_1k_tokens
+    );
+    assert_eq!(
+        google.output_cost_per_1k_tokens,
+        vertex_ai.output_cost_per_1k_tokens
+    );
+
+    let glm = get_model_pricing("glm-5", "glm").unwrap();
+    let zhipuai = get_model_pricing("glm-5", "zhipuai").unwrap();
+    assert_eq!(
+        glm.input_cost_per_1k_tokens,
+        zhipuai.input_cost_per_1k_tokens
+    );
+    assert_eq!(
+        glm.output_cost_per_1k_tokens,
+        zhipuai.output_cost_per_1k_tokens
+    );
 }
 
 #[test]

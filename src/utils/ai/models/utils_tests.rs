@@ -365,6 +365,10 @@ fn test_get_base_model_claude3() {
 #[test]
 fn test_get_base_model_claude4() {
     assert_eq!(
+        ModelUtils::get_base_model("claude-opus-4-8"),
+        "claude-opus-4-8"
+    );
+    assert_eq!(
         ModelUtils::get_base_model("claude-opus-4-7"),
         "claude-opus-4-7"
     );
@@ -396,9 +400,12 @@ fn test_is_valid_model_known() {
     assert!(ModelUtils::is_valid_model("gpt-4"));
     assert!(ModelUtils::is_valid_model("gpt-3.5-turbo"));
     assert!(ModelUtils::is_valid_model("claude-3-opus"));
+    assert!(ModelUtils::is_valid_model("claude-opus-4-8"));
     assert!(ModelUtils::is_valid_model("claude-opus-4-6"));
     assert!(ModelUtils::is_valid_model("claude-sonnet-4-5"));
     assert!(ModelUtils::is_valid_model("gemini-pro"));
+    assert!(ModelUtils::is_valid_model("gemini-3.5-flash"));
+    assert!(ModelUtils::is_valid_model("gemini-3.1-flash-lite"));
     assert!(ModelUtils::is_valid_model("gemini-2.5-pro"));
     assert!(ModelUtils::is_valid_model("gemini-3.1-pro-preview"));
     assert!(ModelUtils::is_valid_model("command-r"));
@@ -496,6 +503,7 @@ fn test_get_compatible_models_openai() {
 #[test]
 fn test_get_compatible_models_anthropic() {
     let models = ModelUtils::get_compatible_models_for_provider("anthropic");
+    assert!(models.contains(&"claude-opus-4-8".to_string()));
     assert!(models.contains(&"claude-3-opus".to_string()));
     assert!(models.contains(&"claude-2".to_string()));
 }
@@ -503,6 +511,8 @@ fn test_get_compatible_models_anthropic() {
 #[test]
 fn test_get_compatible_models_google() {
     let models = ModelUtils::get_compatible_models_for_provider("google");
+    assert!(models.contains(&"gemini-3.5-flash".to_string()));
+    assert!(models.contains(&"gemini-3.1-flash-lite".to_string()));
     assert!(models.contains(&"gemini-pro".to_string()));
     assert!(models.contains(&"gemini-1.5-pro".to_string()));
     assert!(models.contains(&"gemini-2.0-flash".to_string()));

@@ -130,11 +130,11 @@ let response = completion("provider/model", messages, Some(params)).await?;
 - **Docs**: https://platform.deepseek.com/docs
 
 ### OpenAI (built-in)
-- **Models**: gpt-4o, gpt-4-turbo, gpt-3.5-turbo, text-embedding-3-large
+- **Models**: gpt-5.5, gpt-5.5-pro, gpt-4o, text-embedding-3-large
 - **Features**: Streaming, Function Calling, Vision, Embeddings
 
 ### Anthropic (built-in)
-- **Models**: claude-3-opus, claude-3-sonnet, claude-3-haiku
+- **Models**: claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5-20251001
 - **Features**: Streaming, Function Calling, Vision
 
 ## Environment Variables

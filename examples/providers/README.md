@@ -70,7 +70,7 @@ cargo run --example openrouter_completion
 ### Direct Provider Access
 ```rust
 completion("gpt-5.5", messages)                // OpenAI
-completion("claude-opus-4-7", messages)        // Anthropic
+completion("claude-opus-4-8", messages)        // Anthropic
 completion("mistral-large-latest", messages)     // Mistral
 completion("moonshot/kimi-k2.6", messages)       // Moonshot/Kimi
 completion("minimax/MiniMax-M2.5", messages)     // MiniMax
@@ -81,14 +81,14 @@ completion("bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0", messages)
 ### Via OpenRouter
 ```rust
 completion("openrouter/openai/gpt-5.5", messages)
-completion("openrouter/anthropic/claude-opus-4-7", messages)
+completion("openrouter/anthropic/claude-opus-4-8", messages)
 completion("openrouter/meta-llama/llama-3-70b", messages)
 ```
 
 ### Special Formats
 ```rust
 completion("azure/deployment-name", messages)    // Azure OpenAI
-completion("vertex_ai/gemini-pro", messages)     // Google Vertex AI
+completion("vertex_ai/gemini-3.5-flash", messages) // Google Vertex AI
 ```
 
 ## Provider-Specific Features

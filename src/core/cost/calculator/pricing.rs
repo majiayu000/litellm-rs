@@ -293,6 +293,14 @@ pub(super) fn get_anthropic_pricing(model: &str) -> Result<ModelPricing, CostErr
     use chrono::Utc;
 
     let pricing = match model.to_lowercase().as_str() {
+        m if m.contains("claude-opus-4-8") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.005,
+            output_cost_per_1k_tokens: 0.025,
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
         m if m.contains("claude-opus-4-7") => ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.005,

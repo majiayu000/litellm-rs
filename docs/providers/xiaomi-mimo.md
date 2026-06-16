@@ -51,7 +51,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    println!("{}", response.choices[0].message.content);
+    println!(
+        "{}",
+        response.choices[0]
+            .message
+            .content
+            .as_ref()
+            .map(|content| content.to_string())
+            .unwrap_or_default()
+    );
     Ok(())
 }
 ```
