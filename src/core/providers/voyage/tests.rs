@@ -50,8 +50,9 @@ mod provider_tests {
         let models = provider.models();
         assert!(!models.is_empty());
 
-        // Check that we have voyage-3 model
-        assert!(models.iter().any(|m| m.id == "voyage-3"));
+        assert!(models.iter().any(|m| m.id == "voyage-4-large"));
+        assert!(models.iter().any(|m| m.id == "voyage-4"));
+        assert!(models.iter().any(|m| m.id == "voyage-4-lite"));
     }
 
     #[tokio::test]
@@ -70,7 +71,7 @@ mod provider_tests {
     #[tokio::test]
     async fn test_get_supported_openai_params() {
         let provider = create_test_provider().await;
-        let params = provider.get_supported_openai_params("voyage-3");
+        let params = provider.get_supported_openai_params("voyage-4-large");
         assert!(params.contains(&"encoding_format"));
         assert!(params.contains(&"dimensions"));
     }
@@ -82,11 +83,11 @@ mod provider_tests {
         params.insert("dimensions".to_string(), serde_json::json!(512));
 
         let mapped = provider
-            .map_openai_params(params, "voyage-3")
+            .map_openai_params(params, "voyage-4-large")
             .await
             .unwrap();
 
-        // dimensions should be mapped to output_dimension for voyage-3
+        // dimensions should be mapped to output_dimension for current models
         assert!(mapped.contains_key("output_dimension"));
         assert!(!mapped.contains_key("dimensions"));
     }
@@ -110,11 +111,11 @@ mod provider_tests {
     async fn test_calculate_cost() {
         let provider = create_test_provider().await;
         let cost = provider
-            .calculate_cost("voyage-3", 1000000, 0)
+            .calculate_cost("voyage-4", 1000000, 0)
             .await
             .unwrap();
 
-        // Voyage 3 costs $0.06 per million tokens
+        // Voyage 4 costs $0.06 per million tokens
         assert!((cost - 0.06).abs() < 0.001);
     }
 
@@ -122,11 +123,11 @@ mod provider_tests {
     async fn test_calculate_cost_lite() {
         let provider = create_test_provider().await;
         let cost = provider
-            .calculate_cost("voyage-3-lite", 1000000, 0)
+            .calculate_cost("voyage-4-lite", 1000000, 0)
             .await
             .unwrap();
 
-        // Voyage 3 Lite costs $0.02 per million tokens
+        // Voyage 4 Lite costs $0.02 per million tokens
         assert!((cost - 0.02).abs() < 0.001);
     }
 
@@ -172,7 +173,7 @@ mod provider_tests {
         let provider = create_test_provider().await;
 
         let request = EmbeddingRequest {
-            model: "voyage-3".to_string(),
+            model: "voyage-4-large".to_string(),
             input: EmbeddingInput::Text("Hello world".to_string()),
             encoding_format: Some("float".to_string()),
             dimensions: Some(512),
@@ -184,7 +185,7 @@ mod provider_tests {
         assert!(result.is_ok());
 
         let json = result.unwrap();
-        assert_eq!(json["model"], "voyage-3");
+        assert_eq!(json["model"], "voyage-4-large");
         assert_eq!(json["encoding_format"], "float");
         assert_eq!(json["output_dimension"], 512);
         assert_eq!(json["input_type"], "document");
@@ -284,23 +285,28 @@ mod model_info_tests {
     fn test_get_available_models() {
         let models = get_available_models();
         assert!(!models.is_empty());
-        assert!(models.contains(&"voyage-3"));
+        assert!(models.contains(&"voyage-4-large"));
+        assert!(models.contains(&"voyage-4"));
+        assert!(models.contains(&"voyage-4-lite"));
     }
 
     #[test]
     fn test_get_model_info() {
-        let model = get_model_info("voyage-3").unwrap();
-        assert_eq!(model.display_name, "Voyage 3");
+        let model = get_model_info("voyage-4-large").unwrap();
+        assert_eq!(model.display_name, "Voyage 4 Large");
         assert_eq!(model.embedding_dimensions, 1024);
     }
 
     #[test]
     fn test_get_default_model() {
-        assert_eq!(get_default_model(), "voyage-3");
+        assert_eq!(get_default_model(), "voyage-4-large");
     }
 
     #[test]
     fn test_get_model_dimensions() {
+        assert_eq!(get_model_dimensions("voyage-4-large"), Some(1024));
+        assert_eq!(get_model_dimensions("voyage-4"), Some(1024));
+        assert_eq!(get_model_dimensions("voyage-4-lite"), Some(1024));
         assert_eq!(get_model_dimensions("voyage-3"), Some(1024));
         assert_eq!(get_model_dimensions("voyage-3-lite"), Some(512));
         assert_eq!(get_model_dimensions("unknown"), None);
@@ -308,8 +314,12 @@ mod model_info_tests {
 
     #[test]
     fn test_supports_custom_dimensions() {
-        assert!(supports_custom_dimensions("voyage-3"));
-        assert!(supports_custom_dimensions("voyage-3-lite"));
+        assert!(supports_custom_dimensions("voyage-4-large"));
+        assert!(supports_custom_dimensions("voyage-4"));
+        assert!(supports_custom_dimensions("voyage-3.5"));
+        assert!(supports_custom_dimensions("voyage-code-3"));
+        assert!(!supports_custom_dimensions("voyage-3"));
+        assert!(!supports_custom_dimensions("voyage-3-lite"));
         assert!(!supports_custom_dimensions("voyage-2"));
     }
 }

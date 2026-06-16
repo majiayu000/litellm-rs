@@ -72,6 +72,25 @@ fn test_resolve_dynamic_route_for_groq() {
 }
 
 #[test]
+fn test_resolve_dynamic_route_for_xiaomi_mimo() {
+    let options = CompletionOptions::default();
+    let Some(route) = resolve_dynamic_provider_route("xiaomi_mimo/mimo-v2.5-pro", &options) else {
+        panic!("Xiaomi MiMo route should resolve");
+    };
+
+    assert_eq!(route.provider_type, "xiaomi_mimo");
+    assert_eq!(route.provider_label, "Xiaomi MiMo");
+    assert_eq!(route.actual_model, "mimo-v2.5-pro");
+    assert_eq!(route.api_base, "https://api.xiaomimimo.com/v1");
+
+    let Some(alias_route) = resolve_dynamic_provider_route("mimo/mimo-v2.5", &options) else {
+        panic!("MiMo alias route should resolve");
+    };
+    assert_eq!(alias_route.provider_type, "xiaomi_mimo");
+    assert_eq!(alias_route.actual_model, "mimo-v2.5");
+}
+
+#[test]
 fn test_resolve_dynamic_route_with_custom_api_base() {
     let options = CompletionOptions {
         api_base: Some("http://localhost:5567/v1".to_string()),
@@ -144,6 +163,7 @@ fn test_dynamic_provider_api_key_env_var_maps_named_routes() {
         ("zhipu/glm-5", "zhipu", "ZHIPU_API_KEY"),
         ("xai/grok-4.3", "xai", "XAI_API_KEY"),
         ("groq/llama-3.3-70b-versatile", "groq", "GROQ_API_KEY"),
+        ("xiaomi_mimo/mimo-v2.5-pro", "xiaomi_mimo", "MIMO_API_KEY"),
         ("azure_ai/gpt-4.1", "azure_ai", "AZURE_AI_API_KEY"),
     ];
 
@@ -172,6 +192,7 @@ fn test_custom_api_base_fallback_supports_openai_compatible_named_routes() {
         "zhipu/glm-5",
         "xai/grok-4.3",
         "groq/llama-3.3-70b-versatile",
+        "xiaomi_mimo/mimo-v2.5-pro",
     ];
 
     for model in models {

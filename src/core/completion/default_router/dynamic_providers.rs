@@ -78,6 +78,18 @@ const DYNAMIC_PROVIDER_PREFIXES: &[DynamicProviderPrefix] = &[
         default_api_base: "https://api.groq.com/openai/v1",
     },
     DynamicProviderPrefix {
+        prefix: "xiaomi_mimo/",
+        provider_type: "xiaomi_mimo",
+        provider_label: "Xiaomi MiMo",
+        default_api_base: "https://api.xiaomimimo.com/v1",
+    },
+    DynamicProviderPrefix {
+        prefix: "mimo/",
+        provider_type: "xiaomi_mimo",
+        provider_label: "Xiaomi MiMo",
+        default_api_base: "https://api.xiaomimimo.com/v1",
+    },
+    DynamicProviderPrefix {
         prefix: "openai/",
         provider_type: "openai",
         provider_label: "OpenAI",
@@ -180,6 +192,7 @@ fn dynamic_provider_api_key_env_var(route: &DynamicProviderRoute<'_>) -> Option<
         "zhipu" => Some("ZHIPU_API_KEY"),
         "xai" => Some("XAI_API_KEY"),
         "groq" => Some("GROQ_API_KEY"),
+        "xiaomi_mimo" => Some("MIMO_API_KEY"),
         "azure_ai" => Some("AZURE_AI_API_KEY"),
         _ => None,
     }
@@ -197,11 +210,15 @@ fn is_openai_compatible_api_key_fallback(route: &DynamicProviderRoute<'_>) -> bo
             | "zhipu"
             | "xai"
             | "groq"
+            | "xiaomi_mimo"
     )
 }
 
 fn uses_dynamic_openai_like_provider(route: &DynamicProviderRoute<'_>) -> bool {
-    matches!(route.provider_type, "openrouter" | "xai" | "groq")
+    matches!(
+        route.provider_type,
+        "openrouter" | "xai" | "groq" | "xiaomi_mimo"
+    )
 }
 
 fn custom_api_base_api_key_fallback(

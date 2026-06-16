@@ -74,6 +74,68 @@
     "supports_streaming": false,
     "supports_system_message": true
   },
+  "gpt-5.4": {
+    "max_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 128000,
+    "input_cost_per_token": 2.5e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 2.5e-07,
+    "input_cost_per_token_above_272k_tokens": 5e-06,
+    "output_cost_per_token_above_272k_tokens": 2.25e-05,
+    "cache_read_input_token_cost_above_272k_tokens": 5e-07,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true
+  },
+  "gpt-5.4-mini": {
+    "max_tokens": 400000,
+    "max_input_tokens": 400000,
+    "max_output_tokens": 128000,
+    "input_cost_per_token": 7.5e-07,
+    "output_cost_per_token": 4.5e-06,
+    "cache_read_input_token_cost": 7.5e-08,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true
+  },
+  "gpt-5.4-nano": {
+    "max_tokens": 400000,
+    "max_input_tokens": 400000,
+    "max_output_tokens": 128000,
+    "input_cost_per_token": 2e-07,
+    "output_cost_per_token": 1.25e-06,
+    "cache_read_input_token_cost": 2e-08,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true
+  },
+  "gpt-5.4-pro": {
+    "max_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 128000,
+    "input_cost_per_token": 3e-05,
+    "output_cost_per_token": 0.00018,
+    "cache_read_input_token_cost": 3e-05,
+    "input_cost_per_token_above_272k_tokens": 6e-05,
+    "output_cost_per_token_above_272k_tokens": 0.00027,
+    "cache_read_input_token_cost_above_272k_tokens": 6e-05,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": false,
+    "supports_system_message": true
+  },
   "gpt-4-turbo": {
     "max_tokens": 4096,
     "max_input_tokens": 128000,
@@ -116,9 +178,52 @@
     "mode": "embedding",
     "supports_streaming": false
   },
+  "text-embedding-3-small": {
+    "max_tokens": 8191,
+    "input_cost_per_token": 2e-08,
+    "output_cost_per_token": 0,
+    "litellm_provider": "openai",
+    "mode": "embedding",
+    "supports_streaming": false
+  },
+  "text-embedding-3-large": {
+    "max_tokens": 8191,
+    "input_cost_per_token": 1.3e-07,
+    "output_cost_per_token": 0,
+    "litellm_provider": "openai",
+    "mode": "embedding",
+    "supports_streaming": false
+  },
   "dall-e-3": {
     "input_cost_per_token": 0.04,
     "output_cost_per_token": 0,
+    "litellm_provider": "openai",
+    "mode": "image_generation",
+    "supports_streaming": false
+  },
+  "gpt-image-2": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 3e-05,
+    "cache_read_input_token_cost": 1.25e-06,
+    "image_cost_per_token": 8e-06,
+    "litellm_provider": "openai",
+    "mode": "image_generation",
+    "supports_streaming": false
+  },
+  "gpt-image-1.5": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 3.2e-05,
+    "cache_read_input_token_cost": 1.25e-06,
+    "image_cost_per_token": 8e-06,
+    "litellm_provider": "openai",
+    "mode": "image_generation",
+    "supports_streaming": false
+  },
+  "gpt-image-1-mini": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 8e-06,
+    "cache_read_input_token_cost": 2e-07,
+    "image_cost_per_token": 2.5e-06,
     "litellm_provider": "openai",
     "mode": "image_generation",
     "supports_streaming": false
@@ -918,6 +1023,76 @@
     "supports_system_message": true,
     "pricing_status": "official_command_a_pricing_2026_06_02"
   },
+  "command-a-reasoning-08-2025": {
+    "max_tokens": 32000,
+    "max_input_tokens": 256000,
+    "max_output_tokens": 32000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": false,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "command-a-vision-07-2025": {
+    "max_tokens": 8000,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 8000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_function_calling": false,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "command-a-translate-08-2025": {
+    "max_tokens": 8000,
+    "max_input_tokens": 8000,
+    "max_output_tokens": 8000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_function_calling": false,
+    "supports_vision": false,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "command-r7b-12-2024": {
+    "max_tokens": 4096,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 4096,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": false,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "command-r-plus-08-2024": {
+    "max_tokens": 4096,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 4096,
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_streaming": true
+  },
+  "command-r-08-2024": {
+    "max_tokens": 4096,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 4096,
+    "input_cost_per_token": 5e-07,
+    "output_cost_per_token": 1.5e-06,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_streaming": true
+  },
   "embed-v4.0": {
     "max_tokens": 128000,
     "max_input_tokens": 128000,
@@ -957,6 +1132,103 @@
     "output_cost_per_token": 0,
     "litellm_provider": "cohere",
     "mode": "embedding"
+  },
+  "embed-multilingual-v3.0": {
+    "max_tokens": 512,
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 0,
+    "litellm_provider": "cohere",
+    "mode": "embedding",
+    "supports_vision": true
+  },
+  "embed-english-light-v3.0": {
+    "max_tokens": 512,
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 0,
+    "litellm_provider": "cohere",
+    "mode": "embedding",
+    "supports_vision": true
+  },
+  "embed-multilingual-light-v3.0": {
+    "max_tokens": 512,
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 0,
+    "litellm_provider": "cohere",
+    "mode": "embedding",
+    "supports_vision": true
+  },
+  "rerank-v3.5": {
+    "max_tokens": 4096,
+    "max_input_tokens": 4096,
+    "litellm_provider": "cohere",
+    "mode": "rerank",
+    "pricing_status": "search_unit_pricing_not_token_pricing"
+  },
+  "cohere-transcribe-03-2026": {
+    "litellm_provider": "cohere",
+    "mode": "audio_transcription",
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "tiny-aya-global": {
+    "max_tokens": 8000,
+    "max_input_tokens": 8000,
+    "max_output_tokens": 8000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "tiny-aya-earth": {
+    "max_tokens": 8000,
+    "max_input_tokens": 8000,
+    "max_output_tokens": 8000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "tiny-aya-fire": {
+    "max_tokens": 8000,
+    "max_input_tokens": 8000,
+    "max_output_tokens": 8000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "tiny-aya-water": {
+    "max_tokens": 8000,
+    "max_input_tokens": 8000,
+    "max_output_tokens": 8000,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "c4ai-aya-expanse-32b": {
+    "max_tokens": 4096,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 4096,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "c4ai-aya-vision-32b": {
+    "max_tokens": 4096,
+    "max_input_tokens": 16000,
+    "max_output_tokens": 4096,
+    "litellm_provider": "cohere",
+    "mode": "chat",
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
   },
   "mistral-large-2407": {
     "max_tokens": 32768,
@@ -1368,7 +1640,42 @@
     "mode": "image_generation",
     "supports_streaming": false
   },
-  "voyage-large-2": {
+  "voyage-4-large": {
+    "max_tokens": 32000,
+    "input_cost_per_token": 1.2e-07,
+    "output_cost_per_token": 0,
+    "litellm_provider": "voyage",
+    "mode": "embedding"
+  },
+  "voyage-4": {
+    "max_tokens": 32000,
+    "input_cost_per_token": 6e-08,
+    "output_cost_per_token": 0,
+    "litellm_provider": "voyage",
+    "mode": "embedding"
+  },
+  "voyage-4-lite": {
+    "max_tokens": 32000,
+    "input_cost_per_token": 2e-08,
+    "output_cost_per_token": 0,
+    "litellm_provider": "voyage",
+    "mode": "embedding"
+  },
+  "voyage-code-3": {
+    "max_tokens": 32000,
+    "input_cost_per_token": 1.8e-07,
+    "output_cost_per_token": 0,
+    "litellm_provider": "voyage",
+    "mode": "embedding"
+  },
+  "voyage-finance-2": {
+    "max_tokens": 32000,
+    "input_cost_per_token": 1.2e-07,
+    "output_cost_per_token": 0,
+    "litellm_provider": "voyage",
+    "mode": "embedding"
+  },
+  "voyage-law-2": {
     "max_tokens": 16000,
     "input_cost_per_token": 1.2e-07,
     "output_cost_per_token": 0,
@@ -1380,7 +1687,8 @@
     "input_cost_per_token": 1.2e-07,
     "output_cost_per_token": 0,
     "litellm_provider": "voyage",
-    "mode": "embedding"
+    "mode": "embedding",
+    "model_status": "previous_generation"
   },
   "amazon.nova-2-lite-v1:0": {
     "max_tokens": 64000,

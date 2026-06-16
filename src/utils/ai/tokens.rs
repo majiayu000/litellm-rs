@@ -34,6 +34,7 @@ impl TokenUtils {
         "gpt-5.1-thinking",
         "gpt-5-mini",
         "gpt-5-nano",
+        "gpt-image-2",
         "gpt-image-1",
         "gpt-image-1-mini",
         "gpt-image-1.5",
@@ -58,6 +59,7 @@ impl TokenUtils {
     ];
 
     const CLAUDE_MODELS: &'static [&'static str] = &[
+        "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
@@ -271,6 +273,7 @@ impl TokenUtils {
             m if m.contains("gpt-4") => Some(8192),
             m if m.contains("gpt-3.5-turbo-16k") => Some(16384),
             m if m.contains("gpt-3.5-turbo") => Some(4096),
+            m if m.contains("claude-opus-4-8") => Some(1_000_000),
             m if m.contains("claude-opus-4-7") => Some(1_000_000),
             m if m.contains("claude-opus-4-6") => Some(1_000_000),
             m if m.contains("claude-sonnet-4-6") => Some(1_000_000),
@@ -324,6 +327,7 @@ impl TokenUtils {
             m if m.contains("gpt-5.1") => (0.00125, 0.010),
             m if m.contains("gpt-5-mini") => (0.00025, 0.002),
             m if m.contains("gpt-5-nano") => (0.00005, 0.0004),
+            m if m.contains("gpt-image-2") => (0.005, 0.030),
             m if m.contains("gpt-image-1-mini") => (0.0025, 0.010),
             m if m.contains("gpt-image-1.5") => (0.005, 0.020),
             m if m.contains("chatgpt-image-latest") => (0.005, 0.020),
@@ -333,6 +337,7 @@ impl TokenUtils {
             m if m.contains("gpt-4.1") => (0.002, 0.008),
             m if m.contains("gpt-4") => (0.03, 0.06),
             m if m.contains("gpt-3.5-turbo") => (0.0015, 0.002),
+            m if m.contains("claude-opus-4-8") => (0.005, 0.025),
             m if m.contains("claude-opus-4-7") => (0.005, 0.025),
             m if m.contains("claude-opus-4-6") => (0.005, 0.025),
             m if m.contains("claude-opus-4-5") => (0.005, 0.025),
@@ -462,6 +467,10 @@ mod tests {
             Some(1_048_576)
         );
         assert_eq!(
+            TokenUtils::get_max_tokens_for_model("claude-opus-4-8"),
+            Some(1_000_000)
+        );
+        assert_eq!(
             TokenUtils::get_max_tokens_for_model("claude-opus-4-6"),
             Some(1_000_000)
         );
@@ -486,6 +495,16 @@ mod tests {
             panic!("gpt-5.5 token utility cost should calculate");
         };
         assert!((gpt55_long_context_cost - 3.09).abs() < 1e-12);
+
+        let Ok(gpt_image_2_cost) = TokenUtils::calculate_cost("gpt-image-2", 1000, 500) else {
+            panic!("gpt-image-2 token utility cost should calculate");
+        };
+        assert!((gpt_image_2_cost - 0.020).abs() < 1e-12);
+
+        let Ok(opus48_cost) = TokenUtils::calculate_cost("claude-opus-4-8", 1000, 500) else {
+            panic!("claude-opus-4-8 token utility cost should calculate");
+        };
+        assert!((opus48_cost - 0.0175).abs() < 1e-12);
 
         let result = TokenUtils::calculate_cost("unknown-model", 1000, 500);
         assert!(result.is_err());

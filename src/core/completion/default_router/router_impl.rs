@@ -51,6 +51,24 @@ impl DefaultRouter {
                 Self::select_provider_by_name(providers, "groq", model, "groq/", chat_request)
             })
             .or_else(|| {
+                Self::select_provider_by_name(
+                    providers,
+                    "xiaomi_mimo",
+                    model,
+                    "xiaomi_mimo/",
+                    chat_request,
+                )
+            })
+            .or_else(|| {
+                Self::select_provider_by_name(
+                    providers,
+                    "xiaomi_mimo",
+                    model,
+                    "mimo/",
+                    chat_request,
+                )
+            })
+            .or_else(|| {
                 Self::select_provider_by_name(providers, "xai", model, "xai/", chat_request)
             })
             .or_else(|| {
@@ -326,6 +344,31 @@ mod tests {
         assert_eq!(provider.name(), "xai");
         assert_eq!(routed_request.model, "grok-4.3");
         assert_eq!(chat_request.model, "xai/grok-4.3");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn select_static_provider_routes_xiaomi_mimo_prefix_to_mimo() -> Result<()> {
+        let xiaomi_mimo = tier1_provider("xiaomi_mimo").await?;
+        let providers = vec![&xiaomi_mimo];
+        let chat_request = ChatRequest {
+            model: "xiaomi_mimo/mimo-v2.5-pro".to_string(),
+            ..Default::default()
+        };
+
+        let Some((provider, routed_request)) = DefaultRouter::select_static_provider(
+            &providers,
+            "xiaomi_mimo/mimo-v2.5-pro",
+            &chat_request,
+        ) else {
+            return Err(GatewayError::internal(
+                "xiaomi_mimo-prefixed models must select Xiaomi MiMo provider",
+            ));
+        };
+
+        assert_eq!(provider.name(), "xiaomi_mimo");
+        assert_eq!(routed_request.model, "mimo-v2.5-pro");
+        assert_eq!(chat_request.model, "xiaomi_mimo/mimo-v2.5-pro");
         Ok(())
     }
 }

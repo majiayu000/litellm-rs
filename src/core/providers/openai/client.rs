@@ -425,7 +425,7 @@ impl LLMProvider for OpenAIProvider {
         let response = self
             .generate_images(
                 request.prompt,
-                Some(request.model.unwrap_or_else(|| "dall-e-3".to_string())),
+                Some(request.model.unwrap_or_else(|| "gpt-image-2".to_string())),
                 request.n,
                 request.size,
                 request.quality,

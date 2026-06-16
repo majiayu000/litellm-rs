@@ -120,6 +120,12 @@ pub fn get_model_pricing(model: &str, provider: &str) -> Result<ModelPricing, Co
                 provider: "groq".to_string(),
             })
         }),
+        "cohere" => get_pricing_with_shared_source(model, &["cohere"], |model| {
+            Err(CostError::ModelNotSupported {
+                model: model.to_string(),
+                provider: "cohere".to_string(),
+            })
+        }),
         "deepseek" => get_pricing_with_shared_source(model, &["deepseek"], get_deepseek_pricing),
         "xiaomi_mimo" => {
             get_pricing_with_shared_source(model, &["xiaomi_mimo", "xiaomi", "mimo"], |model| {
@@ -198,13 +204,7 @@ fn is_shared_model_match(candidate: &str, requested: &str) -> bool {
         candidate
             .strip_prefix(requested)
             .and_then(|suffix| suffix.strip_prefix('-'))
-            .is_some_and(|suffix| {
-                let digit_prefix_len = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
-                digit_prefix_len >= 4
-                    && suffix
-                        .chars()
-                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-            })
+            .is_some_and(alias_suffix_matches)
     }
 
     if candidate == requested {
@@ -212,10 +212,25 @@ fn is_shared_model_match(candidate: &str, requested: &str) -> bool {
     }
 
     model_id_matches(candidate, requested)
+        || model_id_matches(requested, candidate)
         || candidate
             .rsplit_once('/')
-            .map(|(_, model_id)| model_id_matches(model_id, requested))
+            .map(|(_, model_id)| {
+                model_id_matches(model_id, requested) || model_id_matches(requested, model_id)
+            })
             .unwrap_or(false)
+}
+
+fn alias_suffix_matches(suffix: &str) -> bool {
+    if suffix == "latest" {
+        return true;
+    }
+
+    let digit_prefix_len = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    digit_prefix_len >= 4
+        && suffix
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 fn litellm_provider_matches(provider: &str, aliases: &[&str]) -> bool {
@@ -233,7 +248,10 @@ fn litellm_to_cost_pricing(
 
     // A catalog entry with neither token cost is unpriced data, not a free
     // model: charging $0 would silently under-bill, so surface it instead.
-    if info.input_cost_per_token.is_none() && info.output_cost_per_token.is_none() {
+    if info.input_cost_per_token.is_none()
+        && info.output_cost_per_token.is_none()
+        && !has_non_token_pricing(info)
+    {
         return Err(CostError::MissingPricing {
             model: model.to_string(),
         });
@@ -291,6 +309,13 @@ fn litellm_to_cost_pricing(
 
 fn requires_bidirectional_token_pricing(info: &crate::core::pricing::LiteLLMModelInfo) -> bool {
     matches!(info.mode.as_str(), "chat" | "completion")
+}
+
+fn has_non_token_pricing(info: &crate::core::pricing::LiteLLMModelInfo) -> bool {
+    info.cost_per_second.is_some()
+        || extra_f64(info, "video_cost_per_second").is_some()
+        || extra_f64(info, "audio_cost_per_second").is_some()
+        || extra_f64(info, "image_cost_per_token").is_some()
 }
 
 fn extra_f64(info: &crate::core::pricing::LiteLLMModelInfo, key: &str) -> Option<f64> {
@@ -456,6 +481,8 @@ pub fn compare_model_costs(
 
 #[cfg(test)]
 mod gpt55_tests;
+#[cfg(test)]
+mod openai_current_tests;
 #[cfg(test)]
 mod pricing_regression_tests;
 #[cfg(test)]

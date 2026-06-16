@@ -14,11 +14,13 @@ use tracing::debug;
 use super::chat::CohereChatHandler;
 use super::config::CohereConfig;
 use super::embed::CohereEmbeddingHandler;
+use super::models::create_model_registry;
 use super::rerank::{CohereRerankHandler, RerankRequest, RerankResponse};
 use super::streaming::create_cohere_stream;
+use crate::core::cost::calculator::generic_cost_per_token;
+use crate::core::cost::types::UsageTokens;
 use crate::core::providers::base::{
-    BaseConfig, BaseHttpClient, HttpErrorMapper, apply_headers, get_pricing_db, header,
-    header_static,
+    BaseConfig, BaseHttpClient, HttpErrorMapper, apply_headers, header, header_static,
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
@@ -30,8 +32,7 @@ use crate::core::types::{
     context::RequestContext,
     embedding::EmbeddingRequest,
     health::HealthStatus,
-    model::ModelInfo,
-    model::ProviderCapability,
+    model::{ModelInfo, ProviderCapability},
     responses::{ChatChunk, ChatResponse, EmbeddingResponse},
 };
 
@@ -79,38 +80,6 @@ pub struct CohereProvider {
     models: Vec<ModelInfo>,
 }
 
-fn cohere_metadata(status: &str) -> HashMap<String, Value> {
-    HashMap::from([("status".to_string(), Value::String(status.to_string()))])
-}
-
-fn cohere_model(
-    id: &str,
-    name: &str,
-    max_context_length: u32,
-    max_output_length: Option<u32>,
-    supports_tools: bool,
-    supports_multimodal: bool,
-    mode: &str,
-) -> ModelInfo {
-    ModelInfo {
-        id: id.to_string(),
-        name: name.to_string(),
-        provider: "cohere".to_string(),
-        max_context_length,
-        max_output_length,
-        supports_streaming: mode == "chat",
-        supports_tools,
-        supports_multimodal,
-        input_cost_per_1k_tokens: None,
-        output_cost_per_1k_tokens: None,
-        currency: "USD".to_string(),
-        capabilities: vec![],
-        created_at: None,
-        updated_at: None,
-        metadata: cohere_metadata("live"),
-    }
-}
-
 impl CohereProvider {
     /// Create a new Cohere provider instance
     pub async fn new(config: CohereConfig) -> Result<Self, ProviderError> {
@@ -130,7 +99,7 @@ impl CohereProvider {
 
         let client = BaseHttpClient::new(base_config)?;
 
-        let models = Self::create_model_registry();
+        let models = create_model_registry();
 
         Ok(Self {
             config,
@@ -143,233 +112,6 @@ impl CohereProvider {
     pub async fn with_api_key(api_key: impl Into<String>) -> Result<Self, ProviderError> {
         let config = CohereConfig::new(api_key);
         Self::new(config).await
-    }
-
-    /// Create the model registry with all supported models
-    fn create_model_registry() -> Vec<ModelInfo> {
-        vec![
-            // Current Command models (Chat)
-            cohere_model(
-                "command-a-plus-05-2026",
-                "Command A+",
-                128000,
-                Some(64000),
-                true,
-                true,
-                "chat",
-            ),
-            cohere_model(
-                "command-a-03-2025",
-                "Command A",
-                256000,
-                Some(8000),
-                true,
-                false,
-                "chat",
-            ),
-            // Current embedding models
-            cohere_model(
-                "embed-v4.0",
-                "Embed v4.0",
-                128000,
-                None,
-                false,
-                true,
-                "embedding",
-            ),
-            // Current rerank models
-            cohere_model(
-                "rerank-v4.0-pro",
-                "Rerank v4.0 Pro",
-                32000,
-                None,
-                false,
-                false,
-                "rerank",
-            ),
-            cohere_model(
-                "rerank-v4.0-fast",
-                "Rerank v4.0 Fast",
-                32000,
-                None,
-                false,
-                false,
-                "rerank",
-            ),
-            // Legacy Command models (kept routable for compatibility)
-            ModelInfo {
-                id: "command-r-plus".to_string(),
-                name: "Command R+".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 128000,
-                max_output_length: Some(4096),
-                supports_streaming: true,
-                supports_tools: true,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.003),
-                output_cost_per_1k_tokens: Some(0.015),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: cohere_metadata("deprecated_2025_09_15"),
-            },
-            ModelInfo {
-                id: "command-r".to_string(),
-                name: "Command R".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 128000,
-                max_output_length: Some(4096),
-                supports_streaming: true,
-                supports_tools: true,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.0005),
-                output_cost_per_1k_tokens: Some(0.0015),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: cohere_metadata("deprecated_2025_09_15"),
-            },
-            ModelInfo {
-                id: "command".to_string(),
-                name: "Command".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 4096,
-                max_output_length: Some(4096),
-                supports_streaming: true,
-                supports_tools: true,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.001),
-                output_cost_per_1k_tokens: Some(0.002),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: cohere_metadata("deprecated_2025_09_15"),
-            },
-            ModelInfo {
-                id: "command-light".to_string(),
-                name: "Command Light".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 4096,
-                max_output_length: Some(4096),
-                supports_streaming: true,
-                supports_tools: false,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.0003),
-                output_cost_per_1k_tokens: Some(0.0006),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: cohere_metadata("deprecated_2025_09_15"),
-            },
-            // Embedding models
-            ModelInfo {
-                id: "embed-english-v3.0".to_string(),
-                name: "Embed English v3.0".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 512,
-                max_output_length: None,
-                supports_streaming: false,
-                supports_tools: false,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.0001),
-                output_cost_per_1k_tokens: Some(0.0),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: HashMap::new(),
-            },
-            ModelInfo {
-                id: "embed-multilingual-v3.0".to_string(),
-                name: "Embed Multilingual v3.0".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 512,
-                max_output_length: None,
-                supports_streaming: false,
-                supports_tools: false,
-                supports_multimodal: true, // Supports images
-                input_cost_per_1k_tokens: Some(0.0001),
-                output_cost_per_1k_tokens: Some(0.0),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: HashMap::new(),
-            },
-            ModelInfo {
-                id: "embed-english-light-v3.0".to_string(),
-                name: "Embed English Light v3.0".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 512,
-                max_output_length: None,
-                supports_streaming: false,
-                supports_tools: false,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.0001),
-                output_cost_per_1k_tokens: Some(0.0),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: HashMap::new(),
-            },
-            ModelInfo {
-                id: "embed-multilingual-light-v3.0".to_string(),
-                name: "Embed Multilingual Light v3.0".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 512,
-                max_output_length: None,
-                supports_streaming: false,
-                supports_tools: false,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.0001),
-                output_cost_per_1k_tokens: Some(0.0),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: HashMap::new(),
-            },
-            // Rerank models
-            ModelInfo {
-                id: "rerank-english-v3.0".to_string(),
-                name: "Rerank English v3.0".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 4096,
-                max_output_length: None,
-                supports_streaming: false,
-                supports_tools: false,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.002),
-                output_cost_per_1k_tokens: Some(0.0),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: HashMap::new(),
-            },
-            ModelInfo {
-                id: "rerank-multilingual-v3.0".to_string(),
-                name: "Rerank Multilingual v3.0".to_string(),
-                provider: "cohere".to_string(),
-                max_context_length: 4096,
-                max_output_length: None,
-                supports_streaming: false,
-                supports_tools: false,
-                supports_multimodal: false,
-                input_cost_per_1k_tokens: Some(0.002),
-                output_cost_per_1k_tokens: Some(0.0),
-                currency: "USD".to_string(),
-                capabilities: vec![],
-                created_at: None,
-                updated_at: None,
-                metadata: HashMap::new(),
-            },
-        ]
     }
 
     /// Check if model is an embedding model
@@ -634,8 +376,12 @@ impl LLMProvider for CohereProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        let usage = crate::core::pricing::Usage::new(input_tokens, output_tokens);
-        Ok(get_pricing_db().calculate(model, &usage))
+        let breakdown = generic_cost_per_token(
+            model,
+            &UsageTokens::new(input_tokens, output_tokens),
+            "cohere",
+        )?;
+        Ok(breakdown.total_cost)
     }
 }
 
@@ -743,7 +489,7 @@ mod tests {
         let provider = CohereProvider::new(create_test_config()).await.unwrap();
 
         let result = provider.calculate_cost("unknown-model", 1000, 500).await;
-        assert!(matches!(result, Ok(v) if v >= 0.0));
+        assert!(matches!(result, Err(ProviderError::ModelNotFound { .. })));
     }
 
     #[tokio::test]

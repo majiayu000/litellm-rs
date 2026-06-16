@@ -125,7 +125,10 @@ impl OpenAIModelRegistry {
             || model_id.starts_with("chatgpt-image-")
         {
             features.push(OpenAIModelFeature::ImageGeneration);
-            if model_id.contains("dall-e-3") {
+            if model_id.contains("dall-e-3")
+                || model_id.starts_with("gpt-image-")
+                || model_id.starts_with("chatgpt-image-")
+            {
                 features.push(OpenAIModelFeature::ImageEditing);
             }
         }
@@ -477,7 +480,7 @@ impl OpenAIModelRegistry {
             OpenAIUseCase::CodeGeneration => Some("gpt-5.5".to_string()),
             OpenAIUseCase::Reasoning => Some("o3-pro".to_string()),
             OpenAIUseCase::Vision => Some("gpt-5.5".to_string()),
-            OpenAIUseCase::ImageGeneration => Some("gpt-image-1.5".to_string()),
+            OpenAIUseCase::ImageGeneration => Some("gpt-image-2".to_string()),
             OpenAIUseCase::AudioTranscription => Some("whisper-1".to_string()),
             OpenAIUseCase::TextToSpeech => Some("tts-1-hd".to_string()),
             OpenAIUseCase::Embeddings => Some("text-embedding-3-large".to_string()),
@@ -523,10 +526,10 @@ mod tests {
             eprintln!("Warning: o1-preview model not found or doesn't support ReasoningMode");
         }
 
-        let has_dalle_generation =
-            registry.supports_feature("dall-e-3", &OpenAIModelFeature::ImageGeneration);
-        if !has_dalle_generation {
-            eprintln!("Warning: dall-e-3 model not found or doesn't support ImageGeneration");
+        let has_gpt_image_generation =
+            registry.supports_feature("gpt-image-2", &OpenAIModelFeature::ImageGeneration);
+        if !has_gpt_image_generation {
+            eprintln!("Warning: gpt-image-2 model not found or doesn't support ImageGeneration");
         }
     }
 

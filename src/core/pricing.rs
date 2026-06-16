@@ -240,8 +240,7 @@ impl PricingDatabase {
             .iter()
             .filter_map(|(model_id, pricing)| {
                 let pricing_provider = normalize_pricing_provider(&pricing.litellm_provider);
-                let model_id = model_id.to_lowercase();
-                if pricing_provider == provider || model_id.contains(&provider) {
+                if pricing_provider == provider {
                     Some(model_id.clone())
                 } else {
                     None
@@ -293,12 +292,11 @@ impl PricingDatabase {
     }
 }
 
-fn pricing_matches_provider(model_key: &str, pricing: &ModelPricing, provider: &str) -> bool {
+fn pricing_matches_provider(_model_key: &str, pricing: &ModelPricing, provider: &str) -> bool {
     let provider = normalize_pricing_provider(provider);
     let pricing_provider = normalize_pricing_provider(&pricing.litellm_provider);
-    let model_key = model_key.to_ascii_lowercase();
 
-    pricing_provider == provider || model_key.starts_with(&format!("{provider}/"))
+    pricing_provider == provider
 }
 
 pub(crate) fn normalize_pricing_provider(provider: &str) -> String {
@@ -319,20 +317,29 @@ fn model_matches_key(model: &str, key: &str) -> bool {
         candidate
             .strip_prefix(requested)
             .and_then(|suffix| suffix.strip_prefix('-'))
-            .is_some_and(|suffix| {
-                let digit_prefix_len = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
-                digit_prefix_len >= 4
-                    && suffix
-                        .chars()
-                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-            })
+            .is_some_and(alias_suffix_matches)
     }
 
     model_id_matches(key, model)
+        || model_id_matches(model, key)
         || key
             .rsplit_once('/')
-            .map(|(_, model_id)| model_id_matches(model_id, model))
+            .map(|(_, model_id)| {
+                model_id_matches(model_id, model) || model_id_matches(model, model_id)
+            })
             .unwrap_or(false)
+}
+
+fn alias_suffix_matches(suffix: &str) -> bool {
+    if suffix == "latest" {
+        return true;
+    }
+
+    let digit_prefix_len = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    digit_prefix_len >= 4
+        && suffix
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 fn normalize_model_key(model: &str) -> &str {

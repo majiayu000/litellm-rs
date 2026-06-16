@@ -34,6 +34,15 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.030,
             output_cost_per_1k_tokens: 0.180,
+            cache_read_input_token_cost: Some(0.030),
+            tiered_pricing: Some(std::collections::HashMap::from([
+                ("input_cost_per_token_above_272k_tokens".to_string(), 0.060),
+                ("output_cost_per_token_above_272k_tokens".to_string(), 0.270),
+                (
+                    "cache_read_input_token_cost_above_272k_tokens".to_string(),
+                    0.060,
+                ),
+            ])),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
@@ -42,6 +51,7 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.00075,
             output_cost_per_1k_tokens: 0.0045,
+            cache_read_input_token_cost: Some(0.000075),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
@@ -50,6 +60,7 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.0002,
             output_cost_per_1k_tokens: 0.00125,
+            cache_read_input_token_cost: Some(0.00002),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
@@ -58,6 +69,18 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.0025,
             output_cost_per_1k_tokens: 0.015,
+            cache_read_input_token_cost: Some(0.00025),
+            tiered_pricing: Some(std::collections::HashMap::from([
+                ("input_cost_per_token_above_272k_tokens".to_string(), 0.005),
+                (
+                    "output_cost_per_token_above_272k_tokens".to_string(),
+                    0.0225,
+                ),
+                (
+                    "cache_read_input_token_cost_above_272k_tokens".to_string(),
+                    0.0005,
+                ),
+            ])),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
@@ -126,10 +149,22 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
             updated_at: Utc::now(),
             ..Default::default()
         },
+        m if m.contains("gpt-image-2") => ModelPricing {
+            model: model.to_string(),
+            input_cost_per_1k_tokens: 0.005,
+            output_cost_per_1k_tokens: 0.030,
+            image_cost_per_token: Some(0.000008),
+            cache_read_input_token_cost: Some(0.00125),
+            currency: "USD".to_string(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
         m if m.contains("gpt-image-1-mini") => ModelPricing {
             model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0025,
-            output_cost_per_1k_tokens: 0.010,
+            input_cost_per_1k_tokens: 0.002,
+            output_cost_per_1k_tokens: 0.008,
+            image_cost_per_token: Some(0.0000025),
+            cache_read_input_token_cost: Some(0.0002),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
@@ -137,7 +172,9 @@ pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError>
         m if m.contains("gpt-image-1.5") || m.contains("chatgpt-image-latest") => ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.005,
-            output_cost_per_1k_tokens: 0.020,
+            output_cost_per_1k_tokens: 0.032,
+            image_cost_per_token: Some(0.000008),
+            cache_read_input_token_cost: Some(0.00125),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()

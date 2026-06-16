@@ -10,6 +10,7 @@ mod chat;
 mod config;
 mod embed;
 mod error;
+mod models;
 mod provider;
 mod rerank;
 mod streaming;

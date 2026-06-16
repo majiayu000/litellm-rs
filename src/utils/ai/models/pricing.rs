@@ -30,9 +30,10 @@ impl ModelUtils {
             m if m.starts_with("gpt-5.1") => Some((0.00125, 0.010)),
             m if m.starts_with("gpt-5-mini") => Some((0.00025, 0.002)),
             m if m.starts_with("gpt-5-nano") => Some((0.00005, 0.0004)),
-            m if m.starts_with("gpt-image-1-mini") => Some((0.0025, 0.010)),
-            m if m.starts_with("gpt-image-1.5") => Some((0.005, 0.020)),
-            m if m.starts_with("chatgpt-image-latest") => Some((0.005, 0.020)),
+            m if m.starts_with("gpt-image-2") => Some((0.005, 0.030)),
+            m if m.starts_with("gpt-image-1-mini") => Some((0.002, 0.008)),
+            m if m.starts_with("gpt-image-1.5") => Some((0.005, 0.032)),
+            m if m.starts_with("chatgpt-image-latest") => Some((0.005, 0.032)),
             m if m.starts_with("gpt-image-1") => Some((0.005, 0.020)),
             m if m.starts_with("o3-pro") => Some((0.020, 0.080)),
             m if m.starts_with("o3-mini") || m.starts_with("o4-mini") => Some((0.0011, 0.0044)),
@@ -246,6 +247,12 @@ mod tests {
         let (input, output) = pricing.unwrap();
         assert!((input - 0.0025).abs() < f64::EPSILON);
         assert!((output - 0.015).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_model_pricing_gpt_image_2() {
+        let pricing = ModelUtils::get_model_pricing("gpt-image-2");
+        assert_eq!(pricing, Some((0.005, 0.030)));
     }
 
     #[test]

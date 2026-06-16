@@ -288,6 +288,33 @@ fn test_get_xiaomi_mimo_pricing() {
 }
 
 #[test]
+fn test_get_cohere_pricing_from_shared_catalog() {
+    let Ok(command_r) = get_model_pricing("command-r", "cohere") else {
+        panic!("command-r pricing should load from shared pricing data");
+    };
+    assert_cost_eq(command_r.input_cost_per_1k_tokens, 0.0005);
+    assert_cost_eq(command_r.output_cost_per_1k_tokens, 0.0015);
+
+    let Ok(embed) = get_model_pricing("embed-english-v3.0", "cohere") else {
+        panic!("embed-english-v3.0 pricing should load from shared pricing data");
+    };
+    assert_cost_eq(embed.input_cost_per_1k_tokens, 0.0001);
+    assert_cost_eq(embed.output_cost_per_1k_tokens, 0.0);
+
+    let unpriced = get_model_pricing("command-a-reasoning-08-2025", "cohere");
+    assert!(matches!(unpriced, Err(CostError::MissingPricing { .. })));
+}
+
+#[test]
+fn test_get_groq_time_based_pricing_from_shared_catalog() {
+    let Ok(whisper) = get_model_pricing("whisper-large-v3-turbo", "groq") else {
+        panic!("Groq Whisper Turbo pricing should expose cost_per_second");
+    };
+
+    assert_eq!(whisper.cost_per_second, Some(0.000011111111111111112));
+}
+
+#[test]
 fn test_get_moonshot_pricing_8k() {
     let pricing = get_model_pricing("moonshot-v1-8k", "moonshot");
     assert!(pricing.is_ok());

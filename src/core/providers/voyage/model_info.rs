@@ -16,7 +16,56 @@ pub struct VoyageModel {
 
 /// Static model registry for Voyage AI
 const VOYAGE_MODELS: &[VoyageModel] = &[
-    // Voyage 3 models (latest)
+    // Voyage 4 models
+    VoyageModel {
+        model_id: "voyage-4-large",
+        display_name: "Voyage 4 Large",
+        max_tokens: 32000,
+        embedding_dimensions: 1024,
+        supports_truncation: true,
+        cost_per_million_tokens: 0.12,
+    },
+    VoyageModel {
+        model_id: "voyage-4",
+        display_name: "Voyage 4",
+        max_tokens: 32000,
+        embedding_dimensions: 1024,
+        supports_truncation: true,
+        cost_per_million_tokens: 0.06,
+    },
+    VoyageModel {
+        model_id: "voyage-4-lite",
+        display_name: "Voyage 4 Lite",
+        max_tokens: 32000,
+        embedding_dimensions: 1024,
+        supports_truncation: true,
+        cost_per_million_tokens: 0.02,
+    },
+    // Voyage 3 models
+    VoyageModel {
+        model_id: "voyage-3-large",
+        display_name: "Voyage 3 Large",
+        max_tokens: 32000,
+        embedding_dimensions: 1024,
+        supports_truncation: true,
+        cost_per_million_tokens: 0.12,
+    },
+    VoyageModel {
+        model_id: "voyage-3.5",
+        display_name: "Voyage 3.5",
+        max_tokens: 32000,
+        embedding_dimensions: 1024,
+        supports_truncation: true,
+        cost_per_million_tokens: 0.06,
+    },
+    VoyageModel {
+        model_id: "voyage-3.5-lite",
+        display_name: "Voyage 3.5 Lite",
+        max_tokens: 32000,
+        embedding_dimensions: 1024,
+        supports_truncation: true,
+        cost_per_million_tokens: 0.02,
+    },
     VoyageModel {
         model_id: "voyage-3",
         display_name: "Voyage 3",
@@ -73,7 +122,7 @@ const VOYAGE_MODELS: &[VoyageModel] = &[
         max_tokens: 32000,
         embedding_dimensions: 1024,
         supports_truncation: true,
-        cost_per_million_tokens: 0.06,
+        cost_per_million_tokens: 0.18,
     },
     // Finance model
     VoyageModel {
@@ -129,7 +178,7 @@ fn normalize_model_id(model_id: &str) -> &str {
 /// Get default embedding model
 #[cfg(test)]
 pub fn get_default_model() -> &'static str {
-    "voyage-3"
+    "voyage-4-large"
 }
 
 /// Get model dimensions
@@ -140,9 +189,12 @@ pub fn get_model_dimensions(model_id: &str) -> Option<u32> {
 
 /// Check if model supports custom dimensions
 pub fn supports_custom_dimensions(model_id: &str) -> bool {
-    // Voyage 3 models support output_dimension parameter
     let normalized = normalize_model_id(model_id);
-    normalized.starts_with("voyage-3")
+    normalized.starts_with("voyage-4")
+        || matches!(
+            normalized,
+            "voyage-3-large" | "voyage-3.5" | "voyage-3.5-lite" | "voyage-code-3"
+        )
 }
 
 #[cfg(test)]
@@ -153,24 +205,24 @@ mod tests {
     fn test_get_available_models() {
         let models = get_available_models();
         assert!(!models.is_empty());
-        assert!(models.contains(&"voyage-3"));
+        assert!(models.contains(&"voyage-4-large"));
         assert!(models.contains(&"voyage-2"));
     }
 
     #[test]
     fn test_get_model_info() {
-        let model = get_model_info("voyage-3").unwrap();
-        assert_eq!(model.display_name, "Voyage 3");
+        let model = get_model_info("voyage-4-large").unwrap();
+        assert_eq!(model.display_name, "Voyage 4 Large");
         assert_eq!(model.embedding_dimensions, 1024);
         assert_eq!(model.max_tokens, 32000);
     }
 
     #[test]
     fn test_get_model_info_with_prefix() {
-        let model = get_model_info("voyage/voyage-3");
+        let model = get_model_info("voyage/voyage-4-large");
         assert!(model.is_some());
 
-        let model = get_model_info("voyage_ai/voyage-3");
+        let model = get_model_info("voyage_ai/voyage-4-large");
         assert!(model.is_some());
     }
 
@@ -182,11 +234,14 @@ mod tests {
 
     #[test]
     fn test_get_default_model() {
-        assert_eq!(get_default_model(), "voyage-3");
+        assert_eq!(get_default_model(), "voyage-4-large");
     }
 
     #[test]
     fn test_get_model_dimensions() {
+        assert_eq!(get_model_dimensions("voyage-4-large"), Some(1024));
+        assert_eq!(get_model_dimensions("voyage-4"), Some(1024));
+        assert_eq!(get_model_dimensions("voyage-4-lite"), Some(1024));
         assert_eq!(get_model_dimensions("voyage-3"), Some(1024));
         assert_eq!(get_model_dimensions("voyage-3-lite"), Some(512));
         assert_eq!(get_model_dimensions("voyage-large-2"), Some(1536));
@@ -195,19 +250,26 @@ mod tests {
 
     #[test]
     fn test_supports_custom_dimensions() {
-        assert!(supports_custom_dimensions("voyage-3"));
-        assert!(supports_custom_dimensions("voyage-3-lite"));
+        assert!(supports_custom_dimensions("voyage-4-large"));
+        assert!(supports_custom_dimensions("voyage-4"));
+        assert!(supports_custom_dimensions("voyage-3.5"));
+        assert!(supports_custom_dimensions("voyage-code-3"));
+        assert!(!supports_custom_dimensions("voyage-3"));
+        assert!(!supports_custom_dimensions("voyage-3-lite"));
         assert!(!supports_custom_dimensions("voyage-2"));
         assert!(!supports_custom_dimensions("voyage-large-2"));
     }
 
     #[test]
     fn test_model_pricing() {
-        let model = get_model_info("voyage-3").unwrap();
+        let model = get_model_info("voyage-4").unwrap();
         assert_eq!(model.cost_per_million_tokens, 0.06);
 
-        let model = get_model_info("voyage-3-lite").unwrap();
+        let model = get_model_info("voyage-4-lite").unwrap();
         assert_eq!(model.cost_per_million_tokens, 0.02);
+
+        let model = get_model_info("voyage-code-3").unwrap();
+        assert_eq!(model.cost_per_million_tokens, 0.18);
     }
 
     #[test]

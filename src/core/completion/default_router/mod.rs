@@ -60,12 +60,12 @@ impl DefaultRouter {
     async fn register_openai_like_provider_from_env(
         provider_registry: &mut ProviderRegistry,
         provider_name: &str,
-        env_var: &str,
+        _env_var: &str,
     ) {
-        let Ok(api_key) = std::env::var(env_var) else {
+        let Some(def) = crate::core::providers::registry::get_definition(provider_name) else {
             return;
         };
-        let Some(def) = crate::core::providers::registry::get_definition(provider_name) else {
+        let Some(api_key) = def.resolve_api_key(None) else {
             return;
         };
 
@@ -200,6 +200,14 @@ impl DefaultRouter {
             &mut provider_registry,
             "groq",
             "GROQ_API_KEY",
+        )
+        .await;
+
+        // Add Xiaomi MiMo provider if API key is available
+        Self::register_openai_like_provider_from_env(
+            &mut provider_registry,
+            "xiaomi_mimo",
+            "MIMO_API_KEY",
         )
         .await;
 

@@ -266,7 +266,7 @@ impl LLMProvider for VoyageProvider {
         mut params: HashMap<String, serde_json::Value>,
         model: &str,
     ) -> Result<HashMap<String, serde_json::Value>, ProviderError> {
-        // Map 'dimensions' to 'output_dimension' for Voyage 3 models
+        // Map 'dimensions' to 'output_dimension' for models that support flexible dimensions.
         if let Some(dimensions) = params.remove("dimensions")
             && supports_custom_dimensions(model)
         {
@@ -357,7 +357,7 @@ impl LLMProvider for VoyageProvider {
 
         // Make a minimal embedding request
         let test_body = serde_json::json!({
-            "model": "voyage-3",
+            "model": "voyage-4-large",
             "input": ["test"]
         });
 

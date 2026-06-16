@@ -153,6 +153,12 @@ async fn test_provider_has_command_models() {
 
     assert!(models.iter().any(|m| m.id == "command-a-plus-05-2026"));
     assert!(models.iter().any(|m| m.id == "command-a-03-2025"));
+    assert!(models.iter().any(|m| m.id == "command-a-reasoning-08-2025"));
+    assert!(models.iter().any(|m| m.id == "command-a-vision-07-2025"));
+    assert!(models.iter().any(|m| m.id == "command-a-translate-08-2025"));
+    assert!(models.iter().any(|m| m.id == "command-r7b-12-2024"));
+    assert!(models.iter().any(|m| m.id == "command-r-plus-08-2024"));
+    assert!(models.iter().any(|m| m.id == "command-r-08-2024"));
     assert!(models.iter().any(|m| m.id == "command-r-plus"));
     assert!(models.iter().any(|m| m.id == "command-r"));
     assert!(models.iter().any(|m| m.id == "command"));
@@ -177,8 +183,23 @@ async fn test_provider_has_rerank_models() {
 
     assert!(models.iter().any(|m| m.id == "rerank-v4.0-pro"));
     assert!(models.iter().any(|m| m.id == "rerank-v4.0-fast"));
+    assert!(models.iter().any(|m| m.id == "rerank-v3.5"));
     assert!(models.iter().any(|m| m.id == "rerank-english-v3.0"));
     assert!(models.iter().any(|m| m.id == "rerank-multilingual-v3.0"));
+}
+
+#[tokio::test]
+async fn test_provider_has_current_audio_and_aya_models() {
+    let provider = CohereProvider::with_api_key("key").await.unwrap();
+    let models = provider.models();
+
+    assert!(models.iter().any(|m| m.id == "cohere-transcribe-03-2026"));
+    assert!(models.iter().any(|m| m.id == "tiny-aya-global"));
+    assert!(models.iter().any(|m| m.id == "tiny-aya-earth"));
+    assert!(models.iter().any(|m| m.id == "tiny-aya-fire"));
+    assert!(models.iter().any(|m| m.id == "tiny-aya-water"));
+    assert!(models.iter().any(|m| m.id == "c4ai-aya-expanse-32b"));
+    assert!(models.iter().any(|m| m.id == "c4ai-aya-vision-32b"));
 }
 
 #[tokio::test]
@@ -213,6 +234,16 @@ async fn test_current_cohere_model_metadata() {
     assert!(command_a_plus.supports_tools);
     assert!(command_a_plus.supports_multimodal);
 
+    let Some(command_a_vision) = models
+        .iter()
+        .find(|model| model.id == "command-a-vision-07-2025")
+    else {
+        panic!("command-a-vision-07-2025 should be registered");
+    };
+    assert_eq!(command_a_vision.max_context_length, 128000);
+    assert_eq!(command_a_vision.max_output_length, Some(8000));
+    assert!(command_a_vision.supports_multimodal);
+
     let Some(command) = models.iter().find(|model| model.id == "command") else {
         panic!("command should remain registered as a deprecated legacy alias");
     };
@@ -232,7 +263,7 @@ async fn test_calculate_cost_command_r_plus() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
 
     let cost = provider.calculate_cost("command-r-plus", 1000, 1000).await;
-    assert!(matches!(cost, Ok(v) if v >= 0.0));
+    assert!(matches!(cost, Ok(v) if v > 0.0));
 }
 
 #[tokio::test]
@@ -240,7 +271,7 @@ async fn test_calculate_cost_command_r() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
 
     let cost = provider.calculate_cost("command-r", 1000, 1000).await;
-    assert!(matches!(cost, Ok(v) if v >= 0.0));
+    assert!(matches!(cost, Ok(v) if v > 0.0));
 }
 
 #[tokio::test]
@@ -248,17 +279,18 @@ async fn test_calculate_cost_embed_model() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
 
     let cost = provider.calculate_cost("embed-english-v3.0", 1000, 0).await;
-    assert!(matches!(cost, Ok(v) if v >= 0.0));
+    assert!(matches!(cost, Ok(v) if v > 0.0));
 }
 
 #[tokio::test]
 async fn test_calculate_cost_rerank_model() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
 
-    let cost = provider
-        .calculate_cost("rerank-english-v3.0", 1000, 0)
-        .await;
-    assert!(matches!(cost, Ok(v) if v >= 0.0));
+    let result = provider.calculate_cost("rerank-v3.5", 1000, 0).await;
+    assert!(matches!(
+        result,
+        Err(crate::core::providers::unified_provider::ProviderError::InvalidRequest { .. })
+    ));
 }
 
 #[tokio::test]
@@ -266,7 +298,23 @@ async fn test_calculate_cost_unknown_model() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
 
     let result = provider.calculate_cost("unknown-model", 1000, 500).await;
-    assert!(matches!(result, Ok(v) if v >= 0.0));
+    assert!(matches!(
+        result,
+        Err(crate::core::providers::unified_provider::ProviderError::ModelNotFound { .. })
+    ));
+}
+
+#[tokio::test]
+async fn test_calculate_cost_unpriced_model_errors() {
+    let provider = CohereProvider::with_api_key("key").await.unwrap();
+
+    let result = provider
+        .calculate_cost("command-a-reasoning-08-2025", 1000, 500)
+        .await;
+    assert!(matches!(
+        result,
+        Err(crate::core::providers::unified_provider::ProviderError::InvalidRequest { .. })
+    ));
 }
 
 #[tokio::test]

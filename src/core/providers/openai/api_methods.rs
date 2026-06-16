@@ -71,7 +71,7 @@ impl OpenAIProvider {
         })
     }
 
-    /// Generate images (DALL-E)
+    /// Generate images
     pub async fn generate_images(
         &self,
         prompt: String,
@@ -81,7 +81,7 @@ impl OpenAIProvider {
         quality: Option<String>,
         style: Option<String>,
     ) -> Result<Value, OpenAIError> {
-        let model = model.unwrap_or_else(|| "dall-e-3".to_string());
+        let model = model.unwrap_or_else(|| "gpt-image-2".to_string());
 
         // Validate image generation capability
         if !self

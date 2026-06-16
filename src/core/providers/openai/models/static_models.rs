@@ -513,6 +513,15 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             0.0024,
         ),
         (
+            "gpt-image-2",
+            "GPT Image 2",
+            OpenAIModelFamily::GPTImage,
+            128000,
+            Some(16384),
+            0.005,
+            0.030,
+        ),
+        (
             "gpt-image-1",
             "GPT Image 1",
             OpenAIModelFamily::GPTImage,
@@ -527,8 +536,8 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             OpenAIModelFamily::GPTImage,
             128000,
             Some(16384),
-            0.0025,
-            0.010,
+            0.002,
+            0.008,
         ),
         (
             "gpt-image-1.5",
@@ -537,7 +546,7 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             128000,
             Some(16384),
             0.005,
-            0.020,
+            0.032,
         ),
         (
             "chatgpt-image-latest",
@@ -546,7 +555,7 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             128000,
             Some(16384),
             0.005,
-            0.020,
+            0.032,
         ),
         // Computer Use Preview
         (

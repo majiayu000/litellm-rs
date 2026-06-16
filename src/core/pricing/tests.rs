@@ -225,6 +225,47 @@ fn extended_pricing_has_current_anthropic_gemini_and_groq_rates() {
 }
 
 #[test]
+fn provider_model_listing_does_not_cross_advertise_foreign_prefixed_rows() {
+    let Ok(db) = PricingDatabase::from_default_source() else {
+        panic!("shared pricing source should load");
+    };
+    let usage = Usage::new(1000, 500);
+
+    assert!(
+        !db.get_provider_models("openai")
+            .contains(&"openai/gpt-oss-120b".to_string()),
+        "Groq-hosted OpenAI OSS rows must not be advertised as OpenAI models"
+    );
+    assert!(
+        db.get_provider_models("groq")
+            .contains(&"openai/gpt-oss-120b".to_string()),
+        "Groq provider should still list its OpenAI OSS compatibility rows"
+    );
+    assert_eq!(
+        db.calculate_for_provider("openai", "openai/gpt-oss-120b", &usage),
+        0.0
+    );
+    assert!((db.calculate_for_provider("groq", "gpt-oss-120b", &usage) - 0.00045).abs() < 1e-12);
+}
+
+#[test]
+fn pricing_alias_fallback_preserves_longer_model_aliases() {
+    let Ok(db) = PricingDatabase::from_default_source() else {
+        panic!("shared pricing source should load");
+    };
+    let usage = Usage::new(1000, 500);
+
+    assert_eq!(
+        db.calculate_for_provider("openai", "gpt-4-0613", &usage),
+        db.calculate_for_provider("openai", "gpt-4", &usage)
+    );
+    assert_eq!(
+        db.calculate_for_provider("anthropic", "claude-opus-4-7-latest", &usage),
+        db.calculate_for_provider("anthropic", "claude-opus-4-7", &usage)
+    );
+}
+
+#[test]
 fn provider_aliases_share_normalized_pricing_rows() {
     let Ok(db) = PricingDatabase::from_default_source() else {
         panic!("shared pricing source should load");

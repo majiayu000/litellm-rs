@@ -300,7 +300,9 @@ impl ModelUtils {
             }
         } else if model_lower.starts_with("gpt-image-") || model_lower.starts_with("chatgpt-image-")
         {
-            if model_lower.contains("1-mini") {
+            if model_lower.contains("image-2") {
+                "gpt-image-2".to_string()
+            } else if model_lower.contains("1-mini") {
                 "gpt-image-1-mini".to_string()
             } else if model_lower.contains("1.5") || model_lower.starts_with("chatgpt-image-") {
                 "gpt-image-1.5".to_string()
@@ -407,6 +409,7 @@ impl ModelUtils {
             "gpt-5.4-mini",
             "gpt-5.4-nano",
             "gpt-5.4-pro",
+            "gpt-image-2",
             "gpt-image-1",
             "gpt-4.1",
             "gpt-4",
@@ -508,6 +511,7 @@ impl ModelUtils {
                 "gpt-5.4-nano".to_string(),
                 "gpt-5.4-pro".to_string(),
                 "gpt-5.2".to_string(),
+                "gpt-image-2".to_string(),
                 "gpt-image-1".to_string(),
                 "gpt-image-1-mini".to_string(),
                 "gpt-image-1.5".to_string(),
