@@ -89,16 +89,11 @@ pub(in crate::core::cost::calculator) fn get_zhipu_pricing(
             updated_at: Utc::now(),
             ..Default::default()
         }
-    } else if normalized_model.contains("glm-5.2") || normalized_model.contains("glm-5-2") {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0014,
-            output_cost_per_1k_tokens: 0.0044,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if normalized_model.contains("glm-5.1") || normalized_model.contains("glm-5-1") {
+    } else if normalized_model.contains("glm-5.2")
+        || normalized_model.contains("glm-5-2")
+        || normalized_model.contains("glm-5.1")
+        || normalized_model.contains("glm-5-1")
+    {
         ModelPricing {
             model: model.to_string(),
             input_cost_per_1k_tokens: 0.0014,
