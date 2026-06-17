@@ -1,5 +1,9 @@
 use crate::core::cost::types::{CostError, ModelPricing};
 
+mod regional;
+
+pub(super) use regional::{get_minimax_pricing, get_zhipu_pricing};
+
 pub(super) fn get_openai_pricing(model: &str) -> Result<ModelPricing, CostError> {
     use chrono::Utc;
 
@@ -623,141 +627,6 @@ pub(super) fn get_moonshot_pricing(model: &str) -> Result<ModelPricing, CostErro
         return Err(CostError::ModelNotSupported {
             model: model.to_string(),
             provider: "moonshot".to_string(),
-        });
-    };
-
-    Ok(pricing)
-}
-
-pub(super) fn get_minimax_pricing(model: &str) -> Result<ModelPricing, CostError> {
-    use chrono::Utc;
-
-    let normalized_model = model.to_lowercase();
-
-    let pricing = if normalized_model.contains("m2.5-lightning") {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0003,
-            output_cost_per_1k_tokens: 0.0024,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if normalized_model.contains("m2.5")
-        || normalized_model.contains("m2.1")
-        || normalized_model.contains("minimax-m2")
-    {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0003,
-            output_cost_per_1k_tokens: 0.0012,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else {
-        return Err(CostError::ModelNotSupported {
-            model: model.to_string(),
-            provider: "minimax".to_string(),
-        });
-    };
-
-    Ok(pricing)
-}
-
-pub(super) fn get_zhipu_pricing(model: &str) -> Result<ModelPricing, CostError> {
-    use chrono::Utc;
-
-    let normalized_model = model.to_lowercase();
-
-    let pricing = if normalized_model.contains("glm-5-code") {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0012,
-            output_cost_per_1k_tokens: 0.005,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if normalized_model.contains("glm-5.1") || normalized_model.contains("glm-5-1") {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0014,
-            output_cost_per_1k_tokens: 0.0044,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if normalized_model.contains("glm-5-turbo") || normalized_model.contains("glm-5v") {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0012,
-            output_cost_per_1k_tokens: 0.004,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if normalized_model.contains("glm-5") {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.001,
-            output_cost_per_1k_tokens: 0.0032,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if (normalized_model.contains("glm-4.7-flash")
-        || normalized_model.contains("glm-4.5-flash")
-        || normalized_model.contains("glm-4.6v-flash"))
-        && !normalized_model.contains("flashx")
-    {
-        // Free tier flash models
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0,
-            output_cost_per_1k_tokens: 0.0,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if normalized_model.contains("glm-4.7")
-        || normalized_model.contains("glm-4-7")
-        || normalized_model.contains("glm-4.6")
-        || normalized_model.contains("glm-4.5")
-    {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0006,
-            output_cost_per_1k_tokens: 0.0022,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if normalized_model.contains("glm-4-flash") {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.00005,
-            output_cost_per_1k_tokens: 0.0001,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else if normalized_model.contains("glm-4-plus")
-        || normalized_model.contains("glm-4-air")
-        || normalized_model.contains("glm-4")
-    {
-        ModelPricing {
-            model: model.to_string(),
-            input_cost_per_1k_tokens: 0.0001,
-            output_cost_per_1k_tokens: 0.0003,
-            currency: "USD".to_string(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        }
-    } else {
-        return Err(CostError::ModelNotSupported {
-            model: model.to_string(),
-            provider: "zhipu".to_string(),
         });
     };
 

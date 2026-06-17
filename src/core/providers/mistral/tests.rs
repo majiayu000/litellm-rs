@@ -134,6 +134,9 @@ async fn test_provider_models() {
     let models = provider.models();
 
     assert!(!models.is_empty());
+    assert!(models.iter().any(|m| m.id == "mistral-large-latest"));
+    assert!(models.iter().any(|m| m.id == "mistral-small-latest"));
+    assert!(models.iter().any(|m| m.id == "mistral-medium-latest"));
     assert!(models.iter().any(|m| m.id == "mistral-large-2512"));
     assert!(models.iter().any(|m| m.id == "mistral-small-2603"));
     assert!(models.iter().any(|m| m.id == "mistral-small-2506"));
@@ -144,10 +147,17 @@ async fn test_provider_models() {
     assert!(models.iter().any(|m| m.id == "mistral-medium"));
     assert!(models.iter().any(|m| m.id == "mistral-embed"));
     assert!(models.iter().any(|m| m.id == "magistral-medium-2509"));
+    assert!(models.iter().any(|m| m.id == "magistral-medium-latest"));
+    assert!(models.iter().any(|m| m.id == "magistral-small-latest"));
     assert!(models.iter().any(|m| m.id == "magistral-medium-1-2"));
     assert!(models.iter().any(|m| m.id == "pixtral-large-2411"));
+    assert!(models.iter().any(|m| m.id == "devstral-medium-latest"));
+    assert!(models.iter().any(|m| m.id == "devstral-small-latest"));
     assert!(models.iter().any(|m| m.id == "devstral-2512"));
     assert!(models.iter().any(|m| m.id == "devstral-2-2512"));
+    assert!(models.iter().any(|m| m.id == "ministral-3b-latest"));
+    assert!(models.iter().any(|m| m.id == "ministral-8b-latest"));
+    assert!(models.iter().any(|m| m.id == "ministral-14b-latest"));
 }
 
 #[tokio::test]
@@ -160,35 +170,35 @@ async fn test_current_mistral_alias_metadata() {
     };
     assert_eq!(
         alias.metadata.get("alias_for"),
-        Some(&serde_json::json!("mistral-small-2603"))
+        Some(&serde_json::json!("mistral-small-latest"))
     );
 
-    let Some(small_4) = models.iter().find(|m| m.id == "mistral-small-2603") else {
-        panic!("mistral-small-2603 should be present");
+    let Some(small_4) = models.iter().find(|m| m.id == "mistral-small-latest") else {
+        panic!("mistral-small-latest should be present");
     };
     assert_eq!(small_4.max_context_length, 256000);
     assert!(small_4.supports_multimodal);
-    assert_eq!(small_4.input_cost_per_1k_tokens, Some(0.00015));
-    assert_eq!(small_4.output_cost_per_1k_tokens, Some(0.0006));
+    assert_eq!(small_4.input_cost_per_1k_tokens, Some(0.0001));
+    assert_eq!(small_4.output_cost_per_1k_tokens, Some(0.0003));
 
     let Some(medium_alias) = models.iter().find(|m| m.id == "mistral-medium") else {
         panic!("mistral-medium alias should be present");
     };
     assert_eq!(
         medium_alias.metadata.get("alias_for"),
-        Some(&serde_json::json!("mistral-medium-3-5"))
+        Some(&serde_json::json!("mistral-medium-latest"))
     );
 
-    let Some(medium_3_5) = models.iter().find(|m| m.id == "mistral-medium-3-5") else {
-        panic!("mistral-medium-3-5 should be present");
+    let Some(medium_3_5) = models.iter().find(|m| m.id == "mistral-medium-latest") else {
+        panic!("mistral-medium-latest should be present");
     };
     assert_eq!(medium_3_5.max_context_length, 256000);
     assert!(medium_3_5.supports_multimodal);
     assert_eq!(medium_3_5.input_cost_per_1k_tokens, Some(0.0015));
     assert_eq!(medium_3_5.output_cost_per_1k_tokens, Some(0.0075));
 
-    let Some(magistral) = models.iter().find(|m| m.id == "magistral-medium-2509") else {
-        panic!("magistral-medium-2509 should be present");
+    let Some(magistral) = models.iter().find(|m| m.id == "magistral-medium-latest") else {
+        panic!("magistral-medium-latest should be present");
     };
     assert!(magistral.supports_tools);
     assert!(magistral.supports_multimodal);
@@ -300,7 +310,7 @@ async fn test_transform_request_basic() {
 
     assert!(result.is_ok());
     let transformed = result.unwrap();
-    assert_eq!(transformed["model"], "mistral-large-2512");
+    assert_eq!(transformed["model"], "mistral-large-latest");
     assert!(transformed["messages"].is_array());
 }
 
@@ -326,7 +336,7 @@ async fn test_transform_request_rewrites_current_alias() {
     let Ok(transformed) = result else {
         panic!("transform_request should succeed for mistral-small-4");
     };
-    assert_eq!(transformed["model"], "mistral-small-2603");
+    assert_eq!(transformed["model"], "mistral-small-latest");
 }
 
 #[tokio::test]
@@ -351,7 +361,7 @@ async fn test_transform_request_strips_mistral_prefix() {
     let Ok(transformed) = result else {
         panic!("transform_request should succeed for mistral-prefixed model");
     };
-    assert_eq!(transformed["model"], "mistral-small-2603");
+    assert_eq!(transformed["model"], "mistral-small-latest");
 }
 
 #[tokio::test]
@@ -405,9 +415,9 @@ async fn test_calculate_cost_current_small_model() {
     let provider = MistralProvider::new(create_test_config()).await.unwrap();
 
     let cost = provider
-        .calculate_cost("mistral-small-2603", 1000, 500)
+        .calculate_cost("mistral-small-latest", 1000, 500)
         .await;
-    assert!(matches!(cost, Ok(v) if v > 0.0));
+    assert!(matches!(cost, Ok(v) if (v - 0.00025).abs() < f64::EPSILON));
 }
 
 #[tokio::test]
@@ -433,7 +443,7 @@ async fn test_calculate_cost_current_alias_prices_are_deterministic() {
     let small = provider.calculate_cost("mistral-small", 1000, 500).await;
 
     assert!(matches!(large, Ok(v) if (v - 0.00125).abs() < f64::EPSILON));
-    assert!(matches!(small, Ok(v) if (v - 0.00045).abs() < f64::EPSILON));
+    assert!(matches!(small, Ok(v) if (v - 0.00025).abs() < f64::EPSILON));
 }
 
 #[tokio::test]
@@ -443,9 +453,9 @@ async fn test_calculate_cost_new_aliases_use_canonical_pricing() {
     };
 
     let cases = [
-        ("magistral-medium-1-2", "magistral-medium-2509", 0.0045),
-        ("magistral-small-1-2", "magistral-small-2509", 0.00125),
-        ("devstral-2-2512", "devstral-2512", 0.0014),
+        ("magistral-medium-1-2", "magistral-medium-latest", 0.0045),
+        ("magistral-small-1-2", "magistral-small-latest", 0.00125),
+        ("devstral-2-2512", "devstral-medium-latest", 0.0014),
     ];
 
     for (alias, canonical, expected) in cases {

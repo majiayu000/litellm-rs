@@ -366,6 +366,32 @@ fn test_get_minimax_pricing_m2_5() {
     let pricing = pricing.unwrap();
     assert_eq!(pricing.input_cost_per_1k_tokens, 0.0003);
     assert_eq!(pricing.output_cost_per_1k_tokens, 0.0012);
+    assert_eq!(pricing.cache_read_input_token_cost, Some(0.00003));
+    assert_eq!(pricing.cache_creation_input_token_cost, Some(0.000375));
+}
+
+#[test]
+fn test_get_minimax_pricing_m3_and_m2_7_highspeed() {
+    let pricing = get_model_pricing("MiniMax-M3", "minimax");
+    assert!(pricing.is_ok());
+    let pricing = pricing.unwrap();
+    assert_eq!(pricing.input_cost_per_1k_tokens, 0.0003);
+    assert_eq!(pricing.output_cost_per_1k_tokens, 0.0012);
+    assert_eq!(pricing.cache_read_input_token_cost, Some(0.00006));
+    assert_eq!(
+        pricing
+            .tiered_pricing
+            .as_ref()
+            .and_then(|tiered| tiered.get("input_cost_per_token_above_512k_tokens")),
+        Some(&0.0006)
+    );
+
+    let pricing = get_model_pricing("MiniMax-M2.7-highspeed", "minimax");
+    assert!(pricing.is_ok());
+    let pricing = pricing.unwrap();
+    assert_eq!(pricing.input_cost_per_1k_tokens, 0.0006);
+    assert_eq!(pricing.output_cost_per_1k_tokens, 0.0024);
+    assert_eq!(pricing.cache_read_input_token_cost, Some(0.00006));
 }
 
 #[test]
@@ -380,6 +406,15 @@ fn test_get_zhipu_pricing_glm_5() {
 #[test]
 fn test_get_zhipu_pricing_glm_5_1() {
     let pricing = get_model_pricing("glm-5.1", "zhipuai");
+    assert!(pricing.is_ok());
+    let pricing = pricing.unwrap();
+    assert_eq!(pricing.input_cost_per_1k_tokens, 0.0014);
+    assert_eq!(pricing.output_cost_per_1k_tokens, 0.0044);
+}
+
+#[test]
+fn test_get_zhipu_pricing_glm_5_2() {
+    let pricing = get_model_pricing("glm-5.2", "zhipuai");
     assert!(pricing.is_ok());
     let pricing = pricing.unwrap();
     assert_eq!(pricing.input_cost_per_1k_tokens, 0.0014);

@@ -80,8 +80,8 @@ fn extended_pricing_uses_exact_mistral_alias_rates() {
     let small_2506 = db.calculate_for_provider("mistral", "mistral-small-2506", &usage);
 
     assert!((large - 0.00125).abs() < 1e-12);
-    assert!((small - 0.00045).abs() < 1e-12);
-    assert!((small_4 - 0.00045).abs() < 1e-12);
+    assert!((small - 0.00025).abs() < 1e-12);
+    assert!((small_4 - 0.00025).abs() < 1e-12);
     assert!((small_2506 - 0.00025).abs() < 1e-12);
 }
 
@@ -106,10 +106,10 @@ fn extended_pricing_has_nova_2_lite_rates_and_magistral_capabilities() {
         Some(true)
     );
 
-    assert!(db.supports_feature("magistral-small-2509", "function_calling"));
-    assert!(db.supports_feature("magistral-small-2509", "vision"));
-    assert!(db.supports_feature("magistral-medium-2509", "function_calling"));
-    assert!(db.supports_feature("magistral-medium-2509", "vision"));
+    assert!(db.supports_feature("magistral-small-latest", "function_calling"));
+    assert!(db.supports_feature("magistral-small-latest", "vision"));
+    assert!(db.supports_feature("magistral-medium-latest", "function_calling"));
+    assert!(db.supports_feature("magistral-medium-latest", "vision"));
 }
 
 #[test]
@@ -330,7 +330,7 @@ fn gpt55_shared_pricing_charges_long_context_tiers() {
 #[test]
 fn mistral_medium_2508_shared_pricing_uses_exact_row() {
     let usage = Usage::new(1_000, 500);
-    let expected_cost = 0.0014;
+    let expected_cost = 0.00525;
 
     let Ok(shared_db) = PricingDatabase::from_default_source() else {
         panic!("shared pricing source should load");
