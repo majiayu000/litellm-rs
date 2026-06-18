@@ -342,7 +342,7 @@ fn alias_suffix_matches(suffix: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
-fn normalize_model_key(model: &str) -> &str {
+pub(crate) fn normalize_model_key(model: &str) -> &str {
     model
         .rsplit_once('/')
         .map(|(_, model)| model)

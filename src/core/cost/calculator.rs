@@ -176,7 +176,15 @@ fn get_shared_model_pricing(
         return Some(litellm_to_cost_pricing(model, info));
     }
 
-    let model_lower = model.to_lowercase();
+    let normalized_model = crate::core::pricing::normalize_model_key(model);
+    if normalized_model != model
+        && let Some(info) = db.get_model_info(normalized_model)
+        && litellm_provider_matches(&info.litellm_provider, provider_aliases)
+    {
+        return Some(litellm_to_cost_pricing(normalized_model, info));
+    }
+
+    let model_lower = normalized_model.to_lowercase();
     for provider in provider_aliases {
         let mut candidates = db.get_provider_models(provider);
         candidates.sort();

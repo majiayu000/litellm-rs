@@ -242,6 +242,19 @@ fn test_runtime_pricing_reaches_groq_and_native_gemini_shared_rows() {
 }
 
 #[test]
+fn test_runtime_pricing_normalizes_provider_prefixed_shared_models() {
+    let usage = create_usage(1000, 500);
+
+    let mimo = generic_cost_per_token("mimo/mimo-v2.5", &usage, "mimo")
+        .expect("Mimo provider-prefixed model should resolve shared pricing");
+    assert_cost_eq(mimo.total_cost, 0.00028);
+
+    let groq = generic_cost_per_token("groq/llama-3.3-70b-versatile", &usage, "groq")
+        .expect("Groq provider-prefixed model should resolve shared pricing");
+    assert_cost_eq(groq.total_cost, 0.000985);
+}
+
+#[test]
 fn test_get_deepseek_pricing() {
     let Ok(flash) = get_model_pricing("deepseek-v4-flash", "deepseek") else {
         panic!("deepseek-v4-flash pricing should be available");
