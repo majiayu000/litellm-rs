@@ -122,14 +122,18 @@ fn extended_pricing_handles_cohere_command_a_rates() {
     let Some(command_a_plus) = db.get_model_info("command-a-plus-05-2026") else {
         panic!("command-a-plus-05-2026 pricing entry should exist");
     };
-    assert_eq!(command_a_plus.input_cost_per_token, None);
-    assert_eq!(command_a_plus.output_cost_per_token, None);
+    assert_eq!(command_a_plus.input_cost_per_token, Some(0.0));
+    assert_eq!(command_a_plus.output_cost_per_token, Some(0.0));
     assert_eq!(
         command_a_plus
             .extra
             .get("pricing_status")
             .and_then(|v| v.as_str()),
-        Some("official_api_free_until_rate_limits_model_vault_custom_pricing_2026_06_19")
+        Some("official_free_until_rate_limits")
+    );
+    assert_eq!(
+        db.calculate_for_provider("cohere", "command-a-plus-05-2026", &usage),
+        0.0
     );
 
     let Some(command_a) = db.get_model_info("command-a-03-2025") else {
@@ -342,6 +346,22 @@ fn mistral_medium_2508_shared_pricing_uses_exact_row() {
     assert!(
         (shared_db.calculate_for_provider("mistral", "mistral-medium-2508", &usage)
             - expected_cost)
+            .abs()
+            < 1e-12
+    );
+}
+
+#[test]
+fn devstral_2_2512_shared_pricing_uses_exact_row() {
+    let usage = Usage::new(1_000, 500);
+    let expected_cost = 0.0014;
+
+    let Ok(shared_db) = PricingDatabase::from_default_source() else {
+        panic!("shared pricing source should load");
+    };
+
+    assert!(
+        (shared_db.calculate_for_provider("mistral", "devstral-2-2512", &usage) - expected_cost)
             .abs()
             < 1e-12
     );

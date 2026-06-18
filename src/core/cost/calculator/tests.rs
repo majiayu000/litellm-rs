@@ -314,11 +314,19 @@ fn test_get_cohere_pricing_from_shared_catalog() {
     assert_cost_eq(embed.input_cost_per_1k_tokens, 0.0001);
     assert_cost_eq(embed.output_cost_per_1k_tokens, 0.0);
 
-    let command_a_plus = get_model_pricing("command-a-plus-05-2026", "cohere");
-    assert!(matches!(
-        command_a_plus,
-        Err(CostError::MissingPricing { .. })
-    ));
+    let Ok(command_a_plus) = get_model_pricing("command-a-plus-05-2026", "cohere") else {
+        panic!("command-a-plus-05-2026 free pricing should load from shared pricing data");
+    };
+    assert_cost_eq(command_a_plus.input_cost_per_1k_tokens, 0.0);
+    assert_cost_eq(command_a_plus.output_cost_per_1k_tokens, 0.0);
+
+    let free_usage = UsageTokens::new(1000, 500);
+    let Ok(command_a_plus_cost) =
+        generic_cost_per_token("command-a-plus-05-2026", &free_usage, "cohere")
+    else {
+        panic!("command-a-plus-05-2026 free pricing should calculate");
+    };
+    assert_cost_eq(command_a_plus_cost.total_cost, 0.0);
 
     let unpriced = get_model_pricing("command-a-reasoning-08-2025", "cohere");
     assert!(matches!(unpriced, Err(CostError::MissingPricing { .. })));

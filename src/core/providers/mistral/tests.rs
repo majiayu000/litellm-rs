@@ -345,23 +345,25 @@ async fn test_transform_request_preserves_versioned_snapshot_model() {
         panic!("mistral test provider should initialize");
     };
 
-    let request = ChatRequest {
-        model: "mistral-medium-2508".to_string(),
-        messages: vec![ChatMessage {
-            role: MessageRole::User,
-            content: Some(MessageContent::Text("Hello".to_string())),
+    for model in ["mistral-medium-2508", "devstral-2512", "devstral-2-2512"] {
+        let request = ChatRequest {
+            model: model.to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("Hello".to_string())),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    };
+        };
 
-    let context = RequestContext::default();
-    let result = provider.transform_request(request, context).await;
+        let context = RequestContext::default();
+        let result = provider.transform_request(request, context).await;
 
-    let Ok(transformed) = result else {
-        panic!("transform_request should succeed for mistral-medium-2508");
-    };
-    assert_eq!(transformed["model"], "mistral-medium-2508");
+        let Ok(transformed) = result else {
+            panic!("transform_request should succeed for {model}");
+        };
+        assert_eq!(transformed["model"], model);
+    }
 }
 
 #[tokio::test]
@@ -480,7 +482,6 @@ async fn test_calculate_cost_new_aliases_use_canonical_pricing() {
     let cases = [
         ("magistral-medium-1-2", "magistral-medium-latest", 0.0045),
         ("magistral-small-1-2", "magistral-small-latest", 0.00125),
-        ("devstral-2-2512", "devstral-medium-latest", 0.0014),
     ];
 
     for (alias, canonical, expected) in cases {
