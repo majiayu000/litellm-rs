@@ -314,6 +314,12 @@ fn test_get_cohere_pricing_from_shared_catalog() {
     assert_cost_eq(embed.input_cost_per_1k_tokens, 0.0001);
     assert_cost_eq(embed.output_cost_per_1k_tokens, 0.0);
 
+    let command_a_plus = get_model_pricing("command-a-plus-05-2026", "cohere");
+    assert!(matches!(
+        command_a_plus,
+        Err(CostError::MissingPricing { .. })
+    ));
+
     let unpriced = get_model_pricing("command-a-reasoning-08-2025", "cohere");
     assert!(matches!(unpriced, Err(CostError::MissingPricing { .. })));
 }

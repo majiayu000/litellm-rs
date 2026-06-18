@@ -294,19 +294,41 @@ impl TokenUtils {
     ) -> Result<f64, ProviderError> {
         let model_lower = model.to_lowercase();
         if model_lower.contains("gpt-5.5") {
-            let input_price = if !model_lower.contains("gpt-5.5-pro") && input_tokens > 272_000 {
-                0.010
-            } else if model_lower.contains("gpt-5.5-pro") {
+            let input_price = if model_lower.contains("gpt-5.5-pro") {
                 0.030
+            } else if input_tokens > 272_000 {
+                0.010
             } else {
                 0.005
             };
-            let output_price = if !model_lower.contains("gpt-5.5-pro") && input_tokens > 272_000 {
-                0.045
-            } else if model_lower.contains("gpt-5.5-pro") {
+            let output_price = if model_lower.contains("gpt-5.5-pro") {
                 0.180
+            } else if input_tokens > 272_000 {
+                0.045
             } else {
                 0.030
+            };
+            return Ok((input_tokens as f64 / 1000.0) * input_price
+                + (output_tokens as f64 / 1000.0) * output_price);
+        }
+
+        if model_lower.contains("gpt-5.4")
+            && !model_lower.contains("gpt-5.4-mini")
+            && !model_lower.contains("gpt-5.4-nano")
+        {
+            let input_price = if model_lower.contains("gpt-5.4-pro") {
+                if input_tokens > 272_000 { 0.060 } else { 0.030 }
+            } else if input_tokens > 272_000 {
+                0.005
+            } else {
+                0.0025
+            };
+            let output_price = if model_lower.contains("gpt-5.4-pro") {
+                if input_tokens > 272_000 { 0.270 } else { 0.180 }
+            } else if input_tokens > 272_000 {
+                0.0225
+            } else {
+                0.015
             };
             return Ok((input_tokens as f64 / 1000.0) * input_price
                 + (output_tokens as f64 / 1000.0) * output_price);
@@ -495,6 +517,19 @@ mod tests {
             panic!("gpt-5.5 token utility cost should calculate");
         };
         assert!((gpt55_long_context_cost - 3.09).abs() < 1e-12);
+
+        let Ok(gpt54_long_context_cost) = TokenUtils::calculate_cost("gpt-5.4", 300_000, 2_000)
+        else {
+            panic!("gpt-5.4 token utility cost should calculate");
+        };
+        assert!((gpt54_long_context_cost - 1.545).abs() < 1e-12);
+
+        let Ok(gpt54_pro_long_context_cost) =
+            TokenUtils::calculate_cost("gpt-5.4-pro", 300_000, 2_000)
+        else {
+            panic!("gpt-5.4-pro token utility cost should calculate");
+        };
+        assert!((gpt54_pro_long_context_cost - 18.54).abs() < 1e-12);
 
         let Ok(gpt_image_2_cost) = TokenUtils::calculate_cost("gpt-image-2", 1000, 500) else {
             panic!("gpt-image-2 token utility cost should calculate");

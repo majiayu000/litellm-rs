@@ -78,12 +78,9 @@ impl OpenAIModelRegistry {
 
         let model_id = &model_info.id;
 
-        // Keep streaming feature aligned with create_config().
-        // Streaming support for gpt-5.5-pro not yet documented at
-        // https://platform.openai.com/docs/models; verify before enabling.
-        if !model_id.contains("embedding")
+        if model_info.supports_streaming
+            && !model_id.contains("embedding")
             && !model_id.starts_with("whisper")
-            && !model_id.starts_with("gpt-5.5-pro")
         {
             features.push(OpenAIModelFeature::StreamingSupport);
         }
@@ -291,11 +288,9 @@ impl OpenAIModelRegistry {
                     | "text-embedding-3-large"
             );
 
-        // Streaming support for gpt-5.5-pro not yet documented at
-        // https://platform.openai.com/docs/models; verify before enabling.
-        config.supports_streaming = !model_id.contains("embedding")
-            && !model_id.contains("whisper")
-            && !model_id.starts_with("gpt-5.5-pro");
+        config.supports_streaming = model_info.supports_streaming
+            && !model_id.contains("embedding")
+            && !model_id.contains("whisper");
 
         config
     }
@@ -384,9 +379,9 @@ impl OpenAIModelRegistry {
                 model_info.supports_tools = false;
             }
 
-            // Streaming support for gpt-5.5-pro not yet documented at
+            // Streaming support for pro models not yet documented at
             // https://platform.openai.com/docs/models; verify before enabling.
-            if id.starts_with("gpt-5.5-pro") {
+            if id.starts_with("gpt-5.5-pro") || id.starts_with("gpt-5.4-pro") {
                 model_info.supports_streaming = false;
             }
 
@@ -598,6 +593,23 @@ mod tests {
                 .contains(&OpenAIModelFeature::StreamingSupport)
         );
         assert!(registry.supports_feature("gpt-5.5-pro", &OpenAIModelFeature::ReasoningMode));
+    }
+
+    #[test]
+    fn test_gpt54_pro_honors_non_streaming_catalog_metadata() {
+        let registry = get_openai_registry();
+
+        let Some(gpt54_pro) = registry.get_model_spec("gpt-5.4-pro") else {
+            panic!("gpt-5.4-pro should be in the OpenAI catalog");
+        };
+
+        assert!(!gpt54_pro.model_info.supports_streaming);
+        assert!(!gpt54_pro.config.supports_streaming);
+        assert!(
+            !gpt54_pro
+                .features
+                .contains(&OpenAIModelFeature::StreamingSupport)
+        );
     }
 
     #[test]

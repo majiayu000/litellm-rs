@@ -113,7 +113,7 @@ fn extended_pricing_has_nova_2_lite_rates_and_magistral_capabilities() {
 }
 
 #[test]
-fn extended_pricing_has_explicit_cohere_command_a_rates() {
+fn extended_pricing_handles_cohere_command_a_rates() {
     let Ok(db) = PricingDatabase::from_default_source() else {
         panic!("extended pricing source should load");
     };
@@ -122,11 +122,14 @@ fn extended_pricing_has_explicit_cohere_command_a_rates() {
     let Some(command_a_plus) = db.get_model_info("command-a-plus-05-2026") else {
         panic!("command-a-plus-05-2026 pricing entry should exist");
     };
-    assert_eq!(command_a_plus.input_cost_per_token, Some(0.0));
-    assert_eq!(command_a_plus.output_cost_per_token, Some(0.0));
+    assert_eq!(command_a_plus.input_cost_per_token, None);
+    assert_eq!(command_a_plus.output_cost_per_token, None);
     assert_eq!(
-        db.calculate_for_provider("cohere", "command-a-plus-05-2026", &usage),
-        0.0
+        command_a_plus
+            .extra
+            .get("pricing_status")
+            .and_then(|v| v.as_str()),
+        Some("official_api_free_until_rate_limits_model_vault_custom_pricing_2026_06_19")
     );
 
     let Some(command_a) = db.get_model_info("command-a-03-2025") else {

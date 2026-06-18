@@ -340,6 +340,31 @@ async fn test_transform_request_rewrites_current_alias() {
 }
 
 #[tokio::test]
+async fn test_transform_request_preserves_versioned_snapshot_model() {
+    let Ok(provider) = MistralProvider::new(create_test_config()).await else {
+        panic!("mistral test provider should initialize");
+    };
+
+    let request = ChatRequest {
+        model: "mistral-medium-2508".to_string(),
+        messages: vec![ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("Hello".to_string())),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let context = RequestContext::default();
+    let result = provider.transform_request(request, context).await;
+
+    let Ok(transformed) = result else {
+        panic!("transform_request should succeed for mistral-medium-2508");
+    };
+    assert_eq!(transformed["model"], "mistral-medium-2508");
+}
+
+#[tokio::test]
 async fn test_transform_request_strips_mistral_prefix() {
     let Ok(provider) = MistralProvider::new(create_test_config()).await else {
         panic!("mistral test provider should initialize");
