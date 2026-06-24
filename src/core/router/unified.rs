@@ -13,10 +13,11 @@ use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::model::ProviderCapability;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::time::Duration;
+
+const MAX_ALIAS_HOPS: usize = 16;
 
 /// Snapshot of routing metrics counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,15 +265,21 @@ impl Router {
         }
 
         let mut current = name.to_string();
-        let mut visited = HashSet::new();
 
-        while visited.insert(current.clone()) {
-            let Some(next) = self.model_aliases.get(&current) else {
+        for _ in 0..MAX_ALIAS_HOPS {
+            if let Some(next) = self.model_aliases.get(&current) {
+                current = next.value().clone();
+            } else {
                 return current;
-            };
-            current = next.value().clone();
+            }
         }
 
+        tracing::debug!(
+            requested_model = %name,
+            resolved_model = %current,
+            max_alias_hops = MAX_ALIAS_HOPS,
+            "model alias resolution hit hop limit"
+        );
         current
     }
 

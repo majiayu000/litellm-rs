@@ -191,7 +191,7 @@ impl Router {
             };
 
             if deployment.model_name != resolved_name {
-                tracing::warn!(
+                tracing::debug!(
                     deployment_id = id.as_str(),
                     requested_model = %model_name,
                     resolved_model = %resolved_name,
