@@ -13,6 +13,7 @@ use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::model::ProviderCapability;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::time::Duration;
@@ -125,25 +126,45 @@ impl Router {
         let model_name = deployment.model_name.clone();
         let deployment_id = deployment.id.clone();
 
+        if let Some(existing) = self.deployments.get(&deployment_id) {
+            let old_model_name = existing.model_name.clone();
+            drop(existing);
+
+            if old_model_name != model_name {
+                self.remove_from_model_index(&old_model_name, &deployment_id);
+            }
+        }
+
         self.deployments.insert(deployment_id.clone(), deployment);
 
-        self.model_index
-            .entry(model_name)
-            .or_default()
-            .push(deployment_id);
+        let mut entry = self.model_index.entry(model_name).or_default();
+        if !entry.iter().any(|id| id == &deployment_id) {
+            entry.push(deployment_id);
+        }
     }
 
     /// Remove a deployment from the router
     pub fn remove_deployment(&self, id: &str) -> Option<Deployment> {
         let removed = self.deployments.remove(id).map(|(_, v)| v);
 
-        if let Some(ref deployment) = removed
-            && let Some(mut entry) = self.model_index.get_mut(&deployment.model_name)
-        {
-            entry.retain(|did| did != id);
+        if let Some(ref deployment) = removed {
+            self.remove_from_model_index(&deployment.model_name, id);
         }
 
         removed
+    }
+
+    fn remove_from_model_index(&self, model_name: &str, deployment_id: &str) {
+        let should_remove = if let Some(mut entry) = self.model_index.get_mut(model_name) {
+            entry.retain(|did| did != deployment_id);
+            entry.is_empty()
+        } else {
+            false
+        };
+
+        if should_remove {
+            self.model_index.remove(model_name);
+        }
     }
 
     /// Get a deployment by ID
@@ -162,8 +183,27 @@ impl Router {
         for deployment in deployments {
             let model_name = deployment.model_name.clone();
             let id = deployment.id.clone();
-            new_deployments.insert(id.clone(), deployment);
-            new_index.entry(model_name).or_default().push(id);
+            if let Some(old) = new_deployments.insert(id.clone(), deployment)
+                && old.model_name != model_name
+            {
+                let old_model_name = old.model_name;
+                let should_remove = if let Some(mut old_entry) = new_index.get_mut(&old_model_name)
+                {
+                    old_entry.retain(|did| did != &id);
+                    old_entry.is_empty()
+                } else {
+                    false
+                };
+
+                if should_remove {
+                    new_index.remove(&old_model_name);
+                }
+            }
+
+            let mut entry = new_index.entry(model_name).or_default();
+            if !entry.iter().any(|existing| existing == &id) {
+                entry.push(id);
+            }
         }
 
         self.deployments
@@ -217,47 +257,42 @@ impl Router {
         Ok(())
     }
 
-    #[inline]
-    pub(crate) fn maybe_model_alias<'a>(&'a self, name: &str) -> Option<Ref<'a, String, String>> {
-        if self.has_model_aliases.load(Relaxed) {
-            self.model_aliases.get(name)
-        } else {
-            None
-        }
-    }
-
     /// Resolve a model name (handles aliases)
     pub fn resolve_model_name(&self, name: &str) -> String {
-        self.maybe_model_alias(name)
-            .map(|v| v.clone())
-            .unwrap_or_else(|| name.to_string())
+        if !self.has_model_aliases.load(Relaxed) {
+            return name.to_string();
+        }
+
+        let mut current = name.to_string();
+        let mut visited = HashSet::new();
+
+        while visited.insert(current.clone()) {
+            let Some(next) = self.model_aliases.get(&current) else {
+                return current;
+            };
+            current = next.value().clone();
+        }
+
+        current
     }
 
     // ========== Query Methods ==========
 
     /// Get all deployment IDs for a given model
     pub fn get_deployments_for_model(&self, model_name: &str) -> Vec<DeploymentId> {
-        let alias_guard = self.maybe_model_alias(model_name);
-        let resolved_name = alias_guard
-            .as_ref()
-            .map(|alias| alias.value().as_str())
-            .unwrap_or(model_name);
+        let resolved_name = self.resolve_model_name(model_name);
 
         self.model_index
-            .get(resolved_name)
+            .get(&resolved_name)
             .map(|v| v.clone())
             .unwrap_or_default()
     }
 
     /// Get healthy deployment IDs for a given model
     pub fn get_healthy_deployments(&self, model_name: &str) -> Vec<DeploymentId> {
-        let alias_guard = self.maybe_model_alias(model_name);
-        let resolved_name = alias_guard
-            .as_ref()
-            .map(|alias| alias.value().as_str())
-            .unwrap_or(model_name);
+        let resolved_name = self.resolve_model_name(model_name);
 
-        let Some(deployment_ids) = self.model_index.get(resolved_name) else {
+        let Some(deployment_ids) = self.model_index.get(&resolved_name) else {
             return Vec::new();
         };
 
@@ -285,18 +320,18 @@ impl Router {
         model_name: &str,
         capability: &ProviderCapability,
     ) -> Option<CapabilityDeployment> {
-        let alias_guard = self.maybe_model_alias(model_name);
-        let resolved_name = alias_guard
-            .as_ref()
-            .map(|alias| alias.value().as_str())
-            .unwrap_or(model_name);
+        let resolved_name = self.resolve_model_name(model_name);
 
-        let deployment_ids = self.model_index.get(resolved_name)?;
+        let deployment_ids = self.model_index.get(&resolved_name)?;
 
         for id in deployment_ids.iter() {
             let Some(deployment) = self.deployments.get(id.as_str()) else {
                 continue;
             };
+
+            if deployment.model_name != resolved_name {
+                continue;
+            }
 
             if deployment.is_in_cooldown() || !deployment.is_healthy() {
                 continue;

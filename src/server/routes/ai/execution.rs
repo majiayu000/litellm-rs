@@ -113,9 +113,9 @@ where
     for attempt in 1..=max_attempts {
         let started_at = Instant::now();
 
-        let deployment_id =
-            match router.select_deployment_for_capability(requested_model, &capability) {
-                Ok(id) => id,
+        let deployment_lease =
+            match router.select_deployment_lease_for_capability(requested_model, &capability) {
+                Ok(lease) => lease,
                 Err(router_err) => {
                     let provider_err = router_error_to_provider_error(router_err);
 
@@ -129,9 +129,10 @@ where
                     return Err(GatewayError::Provider(provider_err));
                 }
             };
+        let deployment_id = deployment_lease.clone_deployment_id();
 
         let Some(deployment) = router.get_deployment(&deployment_id) else {
-            router.release_deployment(&deployment_id);
+            drop(deployment_lease);
             let err = ProviderError::other("router", "Selected deployment not found");
             if is_retryable_error(&err) && attempt < max_attempts {
                 let delay = calculate_retry_delay(router.config(), attempt);
@@ -148,12 +149,13 @@ where
 
         match operation.clone()(provider, selected_model).await {
             Ok(stream) => {
+                let deployment_id = deployment_lease.into_deployment_id();
                 let lease =
                     StreamingDeploymentLease::new(router.clone(), deployment_id, started_at);
                 return Ok((stream, lease));
             }
             Err(err) => {
-                router.release_deployment(&deployment_id);
+                drop(deployment_lease);
 
                 if is_retryable_error(&err) && attempt < max_attempts {
                     router.record_failure_with_reason(
@@ -432,5 +434,66 @@ mod tests {
             .expect("deployment should exist");
         assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
         assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_execute_stream_startup_abort_releases_parallel_slot() {
+        let router = Arc::new(UnifiedRouter::default());
+        let Ok(openai_provider) = OpenAIProvider::with_api_key("sk-test-key").await else {
+            panic!("test provider should build");
+        };
+        let provider = Provider::OpenAI(openai_provider);
+        router.add_deployment(
+            Deployment::new(
+                "deployment-1".to_string(),
+                provider,
+                "gpt-4o-mini".to_string(),
+                "gpt-4".to_string(),
+            )
+            .with_config(DeploymentConfig {
+                max_parallel_requests: Some(1),
+                ..Default::default()
+            }),
+        );
+
+        let operation_entered = Arc::new(tokio::sync::Notify::new());
+        let handle = {
+            let router = router.clone();
+            let operation_entered = operation_entered.clone();
+            tokio::spawn(async move {
+                execute_stream_with_selected_deployment(
+                    router,
+                    "gpt-4",
+                    ProviderCapability::ChatCompletionStream,
+                    move |_provider, _model| {
+                        let operation_entered = operation_entered.clone();
+                        async move {
+                            operation_entered.notify_one();
+                            std::future::pending::<Result<String, ProviderError>>().await
+                        }
+                    },
+                )
+                .await
+            })
+        };
+
+        operation_entered.notified().await;
+
+        let Some(deployment) = router.get_deployment("deployment-1") else {
+            panic!("deployment should exist");
+        };
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+        drop(deployment);
+
+        handle.abort();
+        match handle.await {
+            Err(cancelled) => assert!(cancelled.is_cancelled()),
+            Ok(_) => panic!("task should be cancelled"),
+        }
+
+        let Some(deployment) = router.get_deployment("deployment-1") else {
+            panic!("deployment should exist");
+        };
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
     }
 }

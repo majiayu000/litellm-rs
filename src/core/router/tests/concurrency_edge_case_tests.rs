@@ -177,6 +177,114 @@ async fn test_concurrent_select_deployment_least_busy() {
 }
 
 #[tokio::test]
+async fn test_concurrent_select_deployment_enforces_max_parallel_requests() {
+    let router = Arc::new(Router::new(RouterConfig {
+        routing_strategy: RoutingStrategy::SimpleShuffle,
+        ..Default::default()
+    }));
+
+    let d = create_test_deployment("limited-1", "gpt-4")
+        .await
+        .with_config(DeploymentConfig {
+            max_parallel_requests: Some(1),
+            ..Default::default()
+        });
+    d.state
+        .health
+        .store(HealthStatus::Healthy as u8, Ordering::Relaxed);
+    router.add_deployment(d);
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(101));
+    let mut handles = Vec::new();
+
+    for _ in 0..100 {
+        let r = router.clone();
+        let b = barrier.clone();
+        handles.push(tokio::spawn(async move {
+            b.wait().await;
+            r.select_deployment("gpt-4").ok()
+        }));
+    }
+
+    barrier.wait().await;
+
+    let mut selected_ids = Vec::new();
+    for handle in handles {
+        if let Some(id) = handle.await.unwrap() {
+            selected_ids.push(id);
+        }
+    }
+
+    assert_eq!(
+        selected_ids.len(),
+        1,
+        "only one concurrent selector should reserve the single parallel slot"
+    );
+
+    let d = router.get_deployment("limited-1").unwrap();
+    assert_eq!(d.state.active_requests.load(Ordering::Relaxed), 1);
+    drop(d);
+
+    router.release_deployment(&selected_ids[0]);
+
+    let d = router.get_deployment("limited-1").unwrap();
+    assert_eq!(d.state.active_requests.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn test_aborted_execute_once_releases_parallel_slot() {
+    let router = Arc::new(Router::default());
+    let d = create_test_deployment("abort-1", "gpt-4")
+        .await
+        .with_config(DeploymentConfig {
+            max_parallel_requests: Some(1),
+            ..Default::default()
+        });
+    router.add_deployment(d);
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let handle = {
+        let r = router.clone();
+        tokio::spawn(async move {
+            r.execute_once("gpt-4", move |_deployment_id| async move {
+                let _ = entered_tx.send(());
+                std::future::pending::<
+                    Result<((), u64), crate::core::providers::unified_provider::ProviderError>,
+                >()
+                .await
+            })
+            .await
+        })
+    };
+
+    entered_rx
+        .await
+        .expect("operation should start after deployment selection");
+
+    let d = router.get_deployment("abort-1").unwrap();
+    assert_eq!(d.state.active_requests.load(Ordering::Relaxed), 1);
+    drop(d);
+
+    handle.abort();
+    let cancelled = handle.await.expect_err("task should be cancelled");
+    assert!(cancelled.is_cancelled());
+
+    for _ in 0..10 {
+        if router
+            .get_deployment("abort-1")
+            .map(|d| d.state.active_requests.load(Ordering::Relaxed))
+            == Some(0)
+        {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    let d = router.get_deployment("abort-1").unwrap();
+    assert_eq!(d.state.active_requests.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
 async fn test_concurrent_record_success_and_failure() {
     let router = Arc::new(Router::new(RouterConfig {
         allowed_fails: 1000, // high to prevent cooldown

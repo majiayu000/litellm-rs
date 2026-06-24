@@ -10,7 +10,51 @@ use super::strategy_impl::{self, RoutingContext};
 use super::unified::Router;
 use crate::core::types::model::ProviderCapability;
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicUsize,
+    Ordering::{AcqRel, Acquire, Relaxed},
+};
+
+/// Active-request reservation for a selected deployment.
+///
+/// Dropping the lease releases the selected deployment unless ownership was
+/// explicitly converted back into the legacy deployment-id API.
+pub struct DeploymentLease<'router> {
+    router: &'router Router,
+    deployment_id: DeploymentId,
+    release_on_drop: bool,
+}
+
+impl<'router> DeploymentLease<'router> {
+    fn new(router: &'router Router, deployment_id: DeploymentId) -> Self {
+        Self {
+            router,
+            deployment_id,
+            release_on_drop: true,
+        }
+    }
+
+    pub fn deployment_id(&self) -> &str {
+        &self.deployment_id
+    }
+
+    pub fn clone_deployment_id(&self) -> DeploymentId {
+        self.deployment_id().to_string()
+    }
+
+    pub fn into_deployment_id(mut self) -> DeploymentId {
+        self.release_on_drop = false;
+        std::mem::take(&mut self.deployment_id)
+    }
+}
+
+impl Drop for DeploymentLease<'_> {
+    fn drop(&mut self) {
+        if self.release_on_drop {
+            self.router.release_deployment(&self.deployment_id);
+        }
+    }
+}
 
 impl Router {
     /// Select the best deployment for a given model (core routing method)
@@ -23,6 +67,18 @@ impl Router {
     /// 4. Select based on routing strategy
     /// 5. Increment active_requests counter
     pub fn select_deployment(&self, model_name: &str) -> Result<DeploymentId, RouterError> {
+        self.select_deployment_lease(model_name)
+            .map(DeploymentLease::into_deployment_id)
+    }
+
+    /// Select and reserve the best deployment for a given model.
+    ///
+    /// The returned lease releases the deployment on drop, which protects
+    /// router-owned execution paths from cancellation leaks.
+    pub fn select_deployment_lease(
+        &self,
+        model_name: &str,
+    ) -> Result<DeploymentLease<'_>, RouterError> {
         self.select_deployment_matching(model_name, |_| true, None)
     }
 
@@ -36,6 +92,17 @@ impl Router {
         model_name: &str,
         capability: &ProviderCapability,
     ) -> Result<DeploymentId, RouterError> {
+        self.select_deployment_lease_for_capability(model_name, capability)
+            .map(DeploymentLease::into_deployment_id)
+    }
+
+    /// Select and reserve the best deployment for a model that supports
+    /// `capability`.
+    pub fn select_deployment_lease_for_capability(
+        &self,
+        model_name: &str,
+        capability: &ProviderCapability,
+    ) -> Result<DeploymentLease<'_>, RouterError> {
         let no_matching_candidate_error = RouterError::UnsupportedCapability {
             model: model_name.to_string(),
             capability: format!("{capability:?}"),
@@ -94,22 +161,17 @@ impl Router {
         model_name: &str,
         is_candidate: F,
         no_matching_candidate_error: Option<RouterError>,
-    ) -> Result<DeploymentId, RouterError>
+    ) -> Result<DeploymentLease<'_>, RouterError>
     where
         F: Fn(&Deployment) -> bool,
     {
-        // 1. Resolve model name with a borrowed fast path so the hot routing
-        // path only allocates when we finally return the selected deployment ID.
-        let alias_guard = self.maybe_model_alias(model_name);
-        let resolved_name = alias_guard
-            .as_ref()
-            .map(|alias| alias.value().as_str())
-            .unwrap_or(model_name);
+        // 1. Resolve model aliases consistently with the public resolver.
+        let resolved_name = self.resolve_model_name(model_name);
 
         // 2. Get all deployment IDs for this model.
         let deployment_ids_ref = self
             .model_index
-            .get(resolved_name)
+            .get(&resolved_name)
             .ok_or_else(|| RouterError::ModelNotFound(model_name.to_string()))?;
 
         if deployment_ids_ref.is_empty() {
@@ -127,6 +189,17 @@ impl Router {
             let Some(deployment) = self.deployments.get(id.as_str()) else {
                 continue;
             };
+
+            if deployment.model_name != resolved_name {
+                tracing::warn!(
+                    deployment_id = id.as_str(),
+                    requested_model = %model_name,
+                    resolved_model = %resolved_name,
+                    deployment_model = %deployment.model_name,
+                    "deployment index entry points at a different model"
+                );
+                continue;
+            }
             existing_deployments += 1;
 
             if !is_candidate(&deployment) {
@@ -230,32 +303,80 @@ impl Router {
             return Err(RouterError::NoAvailableDeployment(model_name.to_string()));
         }
 
-        // 4. Select based on the immutable routing contexts.
-        let selected_id = Self::select_from_routing_contexts(
-            self.config.routing_strategy,
-            resolved_name,
-            &routing_contexts,
-            &self.round_robin_counters,
-        )
-        .ok_or_else(|| RouterError::NoAvailableDeployment(model_name.to_string()))?
-        .clone();
+        // 4. Select based on immutable routing contexts, then atomically reserve
+        // the selected deployment. If another caller wins the race for the last
+        // slot, remove that candidate and retry within this selection attempt.
+        while !routing_contexts.is_empty() {
+            let selected_id = Self::select_from_routing_contexts(
+                self.config.routing_strategy,
+                &resolved_name,
+                &routing_contexts,
+                &self.round_robin_counters,
+            )
+            .ok_or_else(|| RouterError::NoAvailableDeployment(model_name.to_string()))?
+            .clone();
 
-        // 5. Increment active_requests counter and routing metrics.
-        if let Some(deployment) = self.deployments.get(&selected_id) {
-            deployment.state.active_requests.fetch_add(1, Relaxed);
+            if self.try_reserve_deployment(&selected_id) {
+                self.provider_selected_count.fetch_add(1, Relaxed);
+                self.strategy_used_count.fetch_add(1, Relaxed);
+
+                tracing::debug!(
+                    model = %model_name,
+                    strategy = ?self.config.routing_strategy,
+                    candidate_count = routing_contexts.len(),
+                    selected_id = %selected_id,
+                    "deployment selected for routing"
+                );
+
+                return Ok(DeploymentLease::new(self, selected_id));
+            }
+
+            if let Some(pos) = routing_contexts
+                .iter()
+                .position(|ctx| ctx.deployment_id == &selected_id)
+            {
+                routing_contexts.swap_remove(pos);
+            } else {
+                break;
+            }
         }
-        self.provider_selected_count.fetch_add(1, Relaxed);
-        self.strategy_used_count.fetch_add(1, Relaxed);
 
-        tracing::debug!(
+        tracing::warn!(
             model = %model_name,
-            strategy = ?self.config.routing_strategy,
-            candidate_count = routing_contexts.len(),
-            selected_id = %selected_id,
-            "deployment selected for routing"
+            "no available deployments after reservation"
         );
+        Err(RouterError::NoAvailableDeployment(model_name.to_string()))
+    }
 
-        Ok(selected_id)
+    fn try_reserve_deployment(&self, deployment_id: &str) -> bool {
+        let Some(deployment) = self.deployments.get(deployment_id) else {
+            return false;
+        };
+
+        match deployment.config.max_parallel_requests {
+            Some(limit) => {
+                let mut current = deployment.state.active_requests.load(Acquire);
+                loop {
+                    if current >= limit {
+                        return false;
+                    }
+
+                    match deployment.state.active_requests.compare_exchange_weak(
+                        current,
+                        current + 1,
+                        AcqRel,
+                        Acquire,
+                    ) {
+                        Ok(_) => return true,
+                        Err(next) => current = next,
+                    }
+                }
+            }
+            None => {
+                deployment.state.active_requests.fetch_add(1, Relaxed);
+                true
+            }
+        }
     }
 
     /// Release a deployment after request completion

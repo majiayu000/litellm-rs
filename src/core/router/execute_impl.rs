@@ -33,8 +33,8 @@ impl Router {
             let start = std::time::Instant::now();
 
             // Try to select a deployment
-            let deployment_id = match self.select_deployment(model_name) {
-                Ok(id) => id,
+            let deployment_lease = match self.select_deployment_lease(model_name) {
+                Ok(lease) => lease,
                 Err(router_err) => {
                     let provider_err = router_error_to_provider_error(router_err);
 
@@ -48,6 +48,7 @@ impl Router {
                     }
                 }
             };
+            let deployment_id = deployment_lease.clone_deployment_id();
 
             // Execute the operation
             let result = operation(deployment_id.clone()).await;
@@ -56,12 +57,12 @@ impl Router {
 
             match result {
                 Ok((value, tokens_used)) => {
-                    self.release_deployment(&deployment_id);
+                    drop(deployment_lease);
                     self.record_success(&deployment_id, tokens_used, latency_us);
                     return Ok((value, deployment_id, attempt, latency_us));
                 }
                 Err(err) => {
-                    self.release_deployment(&deployment_id);
+                    drop(deployment_lease);
 
                     if is_retryable_error(&err) && attempt < max_attempts {
                         // Use ConsecutiveFailures so the deployment only enters
@@ -111,34 +112,35 @@ impl Router {
         for attempt in 1..=max_attempts {
             let start = std::time::Instant::now();
 
-            let deployment_id = match self.select_deployment_for_capability(model_name, capability)
-            {
-                Ok(id) => id,
-                Err(router_err) => {
-                    let provider_err = router_error_to_provider_error(router_err);
+            let deployment_lease =
+                match self.select_deployment_lease_for_capability(model_name, capability) {
+                    Ok(lease) => lease,
+                    Err(router_err) => {
+                        let provider_err = router_error_to_provider_error(router_err);
 
-                    if is_retryable_error(&provider_err) && attempt < max_attempts {
-                        let delay = calculate_retry_delay(&self.config, attempt);
-                        last_error = Some(provider_err);
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    } else {
-                        return Err((provider_err, attempt));
+                        if is_retryable_error(&provider_err) && attempt < max_attempts {
+                            let delay = calculate_retry_delay(&self.config, attempt);
+                            last_error = Some(provider_err);
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        } else {
+                            return Err((provider_err, attempt));
+                        }
                     }
-                }
-            };
+                };
+            let deployment_id = deployment_lease.clone_deployment_id();
 
             let result = operation(deployment_id.clone()).await;
             let latency_us = start.elapsed().as_micros() as u64;
 
             match result {
                 Ok((value, tokens_used)) => {
-                    self.release_deployment(&deployment_id);
+                    drop(deployment_lease);
                     self.record_success(&deployment_id, tokens_used, latency_us);
                     return Ok((value, deployment_id, attempt, latency_us));
                 }
                 Err(err) => {
-                    self.release_deployment(&deployment_id);
+                    drop(deployment_lease);
 
                     if is_retryable_error(&err) && attempt < max_attempts {
                         self.record_failure_with_reason(
@@ -261,13 +263,14 @@ impl Router {
     {
         let start = std::time::Instant::now();
 
-        let deployment_id = self.select_deployment(model_name)?;
+        let deployment_lease = self.select_deployment_lease(model_name)?;
+        let deployment_id = deployment_lease.clone_deployment_id();
 
         let result = operation(deployment_id.clone()).await;
 
         let latency_us = start.elapsed().as_micros() as u64;
 
-        self.release_deployment(&deployment_id);
+        drop(deployment_lease);
 
         match result {
             Ok((value, tokens_used)) => {

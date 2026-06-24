@@ -76,6 +76,37 @@ async fn test_add_multiple_deployments_same_model() {
 }
 
 #[tokio::test]
+async fn test_add_same_deployment_id_does_not_duplicate_model_index() {
+    let router = Router::default();
+    let deployment1 = create_test_deployment("test-1", "gpt-4").await;
+    let deployment2 = create_test_deployment("test-1", "gpt-4").await;
+
+    router.add_deployment(deployment1);
+    router.add_deployment(deployment2);
+
+    assert_eq!(router.list_deployments().len(), 1);
+    assert_eq!(router.get_deployments_for_model("gpt-4"), vec!["test-1"]);
+}
+
+#[tokio::test]
+async fn test_add_same_deployment_id_reindexes_when_model_changes() {
+    let router = Router::default();
+    let deployment1 = create_test_deployment("test-1", "gpt-4").await;
+    let deployment2 = create_test_deployment("test-1", "claude").await;
+
+    router.add_deployment(deployment1);
+    router.add_deployment(deployment2);
+
+    assert!(router.get_deployments_for_model("gpt-4").is_empty());
+    assert_eq!(router.get_deployments_for_model("claude"), vec!["test-1"]);
+
+    assert!(router.select_deployment("gpt-4").is_err());
+    let selected = router.select_deployment("claude").unwrap();
+    assert_eq!(selected, "test-1");
+    router.release_deployment(&selected);
+}
+
+#[tokio::test]
 async fn test_add_multiple_models() {
     let router = Router::default();
     let deployment1 = create_test_deployment("test-1", "gpt-4").await;
@@ -144,6 +175,20 @@ async fn test_set_model_list() {
 }
 
 #[tokio::test]
+async fn test_set_model_list_duplicate_id_reindexes_without_empty_old_model() {
+    let router = Router::default();
+
+    router.set_model_list(vec![
+        create_test_deployment("test-1", "gpt-4").await,
+        create_test_deployment("test-1", "claude").await,
+    ]);
+
+    assert!(!router.list_models().contains(&"gpt-4".to_string()));
+    assert!(router.get_deployments_for_model("gpt-4").is_empty());
+    assert_eq!(router.get_deployments_for_model("claude"), vec!["test-1"]);
+}
+
+#[tokio::test]
 async fn test_model_aliases() {
     let router = Router::default();
     let deployment = create_test_deployment("test-1", "gpt-4").await;
@@ -151,21 +196,30 @@ async fn test_model_aliases() {
     router.add_deployment(deployment);
     router.add_model_alias("gpt4", "gpt-4").unwrap();
     router.add_model_alias("gpt-4-latest", "gpt-4").unwrap();
+    router.add_model_alias("best", "gpt4").unwrap();
 
     assert_eq!(router.resolve_model_name("gpt4"), "gpt-4");
     assert_eq!(router.resolve_model_name("gpt-4-latest"), "gpt-4");
+    assert_eq!(router.resolve_model_name("best"), "gpt-4");
     assert_eq!(router.resolve_model_name("gpt-4"), "gpt-4");
     assert_eq!(router.resolve_model_name("unknown"), "unknown");
 
     let deployments1 = router.get_deployments_for_model("gpt-4");
     let deployments2 = router.get_deployments_for_model("gpt4");
     let deployments3 = router.get_deployments_for_model("gpt-4-latest");
+    let deployments4 = router.get_deployments_for_model("best");
 
     assert_eq!(deployments1.len(), 1);
     assert_eq!(deployments2.len(), 1);
     assert_eq!(deployments3.len(), 1);
+    assert_eq!(deployments4.len(), 1);
     assert_eq!(deployments1, deployments2);
     assert_eq!(deployments2, deployments3);
+    assert_eq!(deployments3, deployments4);
+
+    let selected = router.select_deployment("best").unwrap();
+    assert_eq!(selected, "test-1");
+    router.release_deployment(&selected);
 }
 
 #[tokio::test]
