@@ -10,6 +10,7 @@ use super::strategy_impl::{self, RoutingContext};
 use super::unified::Router;
 use crate::core::types::model::ProviderCapability;
 use dashmap::DashMap;
+use std::sync::Arc;
 use std::sync::atomic::{
     AtomicUsize,
     Ordering::{AcqRel, Acquire, Relaxed},
@@ -19,39 +20,49 @@ use std::sync::atomic::{
 ///
 /// Dropping the lease releases the selected deployment unless ownership was
 /// explicitly converted back into the legacy deployment-id API.
-pub struct DeploymentLease<'router> {
-    router: &'router Router,
-    deployment_id: DeploymentId,
+pub struct DeploymentLease {
+    deployment: Arc<Deployment>,
     release_on_drop: bool,
 }
 
-impl<'router> DeploymentLease<'router> {
-    fn new(router: &'router Router, deployment_id: DeploymentId) -> Self {
+impl DeploymentLease {
+    fn new(deployment: Arc<Deployment>) -> Self {
         Self {
-            router,
-            deployment_id,
+            deployment,
             release_on_drop: true,
         }
     }
 
     pub fn deployment_id(&self) -> &str {
-        &self.deployment_id
+        &self.deployment.id
+    }
+
+    pub fn deployment(&self) -> &Deployment {
+        &self.deployment
     }
 
     pub fn clone_deployment_id(&self) -> DeploymentId {
         self.deployment_id().to_string()
     }
 
+    pub fn clone_deployment(&self) -> Arc<Deployment> {
+        self.deployment.clone()
+    }
+
+    /// Convert this lease into the legacy deployment-id API.
+    ///
+    /// Prefer keeping the lease alive so drop releases the exact snapshot
+    /// deployment. This exists for deprecated ID-returning selectors.
     pub fn into_deployment_id(mut self) -> DeploymentId {
         self.release_on_drop = false;
-        std::mem::take(&mut self.deployment_id)
+        self.deployment_id().to_string()
     }
 }
 
-impl Drop for DeploymentLease<'_> {
+impl Drop for DeploymentLease {
     fn drop(&mut self) {
         if self.release_on_drop {
-            self.router.release_deployment(&self.deployment_id);
+            Router::release_selected_deployment(self.deployment());
         }
     }
 }
@@ -66,6 +77,10 @@ impl Router {
     /// 3. Filter: healthy + not in cooldown + not rate limited
     /// 4. Select based on routing strategy
     /// 5. Increment active_requests counter
+    #[deprecated(
+        since = "0.5.0",
+        note = "Use select_deployment_lease so the selected snapshot deployment is released by RAII"
+    )]
     pub fn select_deployment(&self, model_name: &str) -> Result<DeploymentId, RouterError> {
         self.select_deployment_lease(model_name)
             .map(DeploymentLease::into_deployment_id)
@@ -78,7 +93,7 @@ impl Router {
     pub fn select_deployment_lease(
         &self,
         model_name: &str,
-    ) -> Result<DeploymentLease<'_>, RouterError> {
+    ) -> Result<DeploymentLease, RouterError> {
         self.select_deployment_matching(model_name, |_| true, None)
     }
 
@@ -87,6 +102,10 @@ impl Router {
     /// This uses the same health, cooldown, concurrency, rate-limit, and
     /// strategy filters as `select_deployment`, then reserves the selected
     /// deployment by incrementing its active request count.
+    #[deprecated(
+        since = "0.5.0",
+        note = "Use select_deployment_lease_for_capability so the selected snapshot deployment is released by RAII"
+    )]
     pub fn select_deployment_for_capability(
         &self,
         model_name: &str,
@@ -102,7 +121,7 @@ impl Router {
         &self,
         model_name: &str,
         capability: &ProviderCapability,
-    ) -> Result<DeploymentLease<'_>, RouterError> {
+    ) -> Result<DeploymentLease, RouterError> {
         let no_matching_candidate_error = RouterError::UnsupportedCapability {
             model: model_name.to_string(),
             capability: format!("{capability:?}"),
@@ -161,15 +180,17 @@ impl Router {
         model_name: &str,
         is_candidate: F,
         no_matching_candidate_error: Option<RouterError>,
-    ) -> Result<DeploymentLease<'_>, RouterError>
+    ) -> Result<DeploymentLease, RouterError>
     where
         F: Fn(&Deployment) -> bool,
     {
-        // 1. Resolve model aliases consistently with the public resolver.
-        let resolved_name = self.resolve_model_name(model_name);
+        // 1. Resolve model aliases and deployment indexes from one immutable
+        // routing generation.
+        let snapshot = self.routing_snapshot.load();
+        let resolved_name = snapshot.resolve_model_name(model_name);
 
         // 2. Get all deployment IDs for this model.
-        let deployment_ids_ref = self
+        let deployment_ids_ref = snapshot
             .model_index
             .get(&resolved_name)
             .ok_or_else(|| RouterError::ModelNotFound(model_name.to_string()))?;
@@ -186,7 +207,7 @@ impl Router {
         let mut routing_contexts = Vec::with_capacity(total_deployments);
 
         for id in deployment_ids_ref.iter() {
-            let Some(deployment) = self.deployments.get(id.as_str()) else {
+            let Some(deployment) = snapshot.deployments.get(id.as_str()) else {
                 continue;
             };
 
@@ -202,7 +223,7 @@ impl Router {
             }
             existing_deployments += 1;
 
-            if !is_candidate(&deployment) {
+            if !is_candidate(deployment) {
                 tracing::trace!(
                     deployment_id = id.as_str(),
                     model = %resolved_name,
@@ -316,7 +337,11 @@ impl Router {
             .ok_or_else(|| RouterError::NoAvailableDeployment(model_name.to_string()))?
             .clone();
 
-            if self.try_reserve_deployment(&selected_id) {
+            let Some(deployment) = snapshot.deployments.get(&selected_id).cloned() else {
+                continue;
+            };
+
+            if self.try_reserve_deployment(&deployment, &resolved_name) {
                 self.provider_selected_count.fetch_add(1, Relaxed);
                 self.strategy_used_count.fetch_add(1, Relaxed);
 
@@ -328,7 +353,7 @@ impl Router {
                     "deployment selected for routing"
                 );
 
-                return Ok(DeploymentLease::new(self, selected_id));
+                return Ok(DeploymentLease::new(deployment));
             }
 
             if let Some(pos) = routing_contexts
@@ -348,10 +373,10 @@ impl Router {
         Err(RouterError::NoAvailableDeployment(model_name.to_string()))
     }
 
-    fn try_reserve_deployment(&self, deployment_id: &str) -> bool {
-        let Some(deployment) = self.deployments.get(deployment_id) else {
+    fn try_reserve_deployment(&self, deployment: &Deployment, expected_model: &str) -> bool {
+        if deployment.model_name != expected_model {
             return false;
-        };
+        }
 
         match deployment.config.max_parallel_requests {
             Some(limit) => {
@@ -382,12 +407,22 @@ impl Router {
     /// Release a deployment after request completion
     ///
     /// Decrements the active_requests counter for the deployment.
+    #[deprecated(
+        since = "0.5.0",
+        note = "Use select_deployment_lease so release targets the selected snapshot deployment"
+    )]
     pub fn release_deployment(&self, deployment_id: &str) {
-        if let Some(deployment) = self.deployments.get(deployment_id) {
-            let _ = deployment
-                .state
-                .active_requests
-                .fetch_update(Relaxed, Relaxed, |v| Some(v.saturating_sub(1)));
+        let snapshot = self.routing_snapshot.load();
+        if let Some(deployment) = snapshot.deployments.get(deployment_id) {
+            Self::release_selected_deployment(deployment);
         }
+    }
+
+    pub(crate) fn release_selected_deployment(deployment: &Deployment) {
+        let result = deployment
+            .state
+            .active_requests
+            .fetch_update(Relaxed, Relaxed, |v| Some(v.saturating_sub(1)));
+        debug_assert!(result.is_ok());
     }
 }

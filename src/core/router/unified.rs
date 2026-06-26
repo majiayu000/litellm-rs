@@ -11,10 +11,12 @@ use super::fallback::{FallbackConfig, FallbackType};
 use crate::core::providers::Provider;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::model::ProviderCapability;
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use dashmap::mapref::one::Ref;
+use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::time::Duration;
 
 const MAX_ALIAS_HOPS: usize = 16;
@@ -38,26 +40,149 @@ pub struct CapabilityDeployment {
     pub model: String,
 }
 
+/// Immutable deployment routing generation.
+///
+/// Each snapshot owns a complete, internally consistent view of deployments,
+/// model indexes, and aliases. Router readers load one snapshot and never walk
+/// split mutable maps from different generations.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RoutingSnapshot {
+    pub(crate) deployments: HashMap<DeploymentId, Arc<Deployment>>,
+    pub(crate) model_index: HashMap<String, Vec<DeploymentId>>,
+    pub(crate) model_aliases: HashMap<String, String>,
+}
+
+impl RoutingSnapshot {
+    fn from_deployments_preserving_state(
+        deployments: Vec<Deployment>,
+        previous: &RoutingSnapshot,
+    ) -> Self {
+        let mut snapshot = Self {
+            model_aliases: previous.model_aliases.clone(),
+            ..Default::default()
+        };
+
+        for mut deployment in deployments {
+            if let Some(old) = previous.deployments.get(&deployment.id) {
+                deployment.state = old.state.clone();
+            }
+            snapshot.insert_deployment(deployment);
+        }
+
+        snapshot
+    }
+
+    fn insert_deployment(&mut self, mut deployment: Deployment) {
+        let model_name = deployment.model_name.clone();
+        let deployment_id = deployment.id.clone();
+        if let Some(old) = self.deployments.get(&deployment_id) {
+            deployment.state = old.state.clone();
+        }
+
+        if let Some(old) = self
+            .deployments
+            .insert(deployment_id.clone(), Arc::new(deployment))
+            && old.model_name != model_name
+        {
+            self.remove_from_model_index(&old.model_name, &deployment_id);
+        }
+
+        let entry = self.model_index.entry(model_name).or_default();
+        if !entry.iter().any(|id| id == &deployment_id) {
+            entry.push(deployment_id);
+        }
+    }
+
+    fn remove_deployment(&mut self, id: &str) -> Option<Deployment> {
+        let removed = self.deployments.remove(id);
+
+        if let Some(ref deployment) = removed {
+            self.remove_from_model_index(&deployment.model_name, id);
+        }
+
+        removed.map(|deployment| deployment.as_ref().clone())
+    }
+
+    fn remove_from_model_index(&mut self, model_name: &str, deployment_id: &str) {
+        let should_remove = if let Some(entry) = self.model_index.get_mut(model_name) {
+            entry.retain(|did| did != deployment_id);
+            entry.is_empty()
+        } else {
+            false
+        };
+
+        if should_remove {
+            self.model_index.remove(model_name);
+        }
+    }
+
+    fn add_model_alias(
+        &mut self,
+        alias: &str,
+        model_name: &str,
+    ) -> Result<(), super::error::RouterError> {
+        if alias == model_name {
+            return Err(super::error::RouterError::AliasCycle(format!(
+                "'{alias}' -> '{model_name}' would create a cycle"
+            )));
+        }
+
+        let mut current = model_name.to_string();
+        let mut visited = HashSet::new();
+        visited.insert(alias.to_string());
+
+        while let Some(next) = self.model_aliases.get(&current) {
+            let next_val = next.clone();
+            if !visited.insert(next_val.clone()) {
+                return Err(super::error::RouterError::AliasCycle(format!(
+                    "'{alias}' -> '{model_name}' would create a cycle"
+                )));
+            }
+            current = next_val;
+        }
+
+        self.model_aliases
+            .insert(alias.to_string(), model_name.to_string());
+        Ok(())
+    }
+
+    pub(crate) fn resolve_model_name(&self, name: &str) -> String {
+        if self.model_aliases.is_empty() {
+            return name.to_string();
+        }
+
+        let mut current = name.to_string();
+
+        for _ in 0..MAX_ALIAS_HOPS {
+            if let Some(next) = self.model_aliases.get(&current) {
+                current = next.clone();
+            } else {
+                return current;
+            }
+        }
+
+        tracing::debug!(
+            requested_model = %name,
+            resolved_model = %current,
+            max_alias_hops = MAX_ALIAS_HOPS,
+            "model alias resolution hit hop limit"
+        );
+        current
+    }
+}
+
 /// Unified Router
 ///
 /// The central orchestrator for deployment management and intelligent routing.
 /// Uses lock-free data structures for high-performance concurrent access.
 #[derive(Debug)]
 pub struct Router {
-    /// All deployments (DashMap for lock-free concurrent access)
-    pub(crate) deployments: DashMap<DeploymentId, Deployment>,
+    /// Atomically installed routing metadata generation.
+    pub(crate) routing_snapshot: ArcSwap<RoutingSnapshot>,
 
-    /// Model name to deployment IDs index (for fast lookup)
-    pub(crate) model_index: DashMap<String, Vec<DeploymentId>>,
-
-    /// Model name aliases: "gpt4" -> "gpt-4"
-    pub(crate) model_aliases: DashMap<String, String>,
-
-    /// Fast-path gate for alias lookups in hot routing paths.
-    ///
-    /// Most deployments do not use aliases; this avoids an unnecessary DashMap
-    /// lookup when `model_aliases` is known to be empty.
-    pub(crate) has_model_aliases: AtomicBool,
+    /// Serializes snapshot writers so concurrent updates cannot overwrite one
+    /// another while readers keep using lock-free ArcSwap loads.
+    pub(crate) routing_snapshot_write_lock: Mutex<()>,
 
     /// Router configuration
     pub(crate) config: RouterConfig,
@@ -82,13 +207,11 @@ impl Router {
     /// Create a new router with the given configuration
     pub fn new(config: RouterConfig) -> Self {
         Self {
-            deployments: DashMap::new(),
-            model_index: DashMap::new(),
-            model_aliases: DashMap::new(),
-            has_model_aliases: AtomicBool::new(false),
+            routing_snapshot: ArcSwap::from_pointee(RoutingSnapshot::default()),
+            routing_snapshot_write_lock: Mutex::new(()),
             config,
             fallback_config: FallbackConfig::default(),
-            round_robin_counters: DashMap::new(),
+            round_robin_counters: Default::default(),
             provider_selected_count: AtomicU64::new(0),
             strategy_used_count: AtomicU64::new(0),
             fallback_triggered_count: AtomicU64::new(0),
@@ -122,101 +245,40 @@ impl Router {
 
     // ========== Deployment Management ==========
 
+    fn update_routing_snapshot(&self, update: impl FnOnce(&mut RoutingSnapshot)) {
+        let _guard = self.routing_snapshot_write_lock.lock();
+        let mut next = self.routing_snapshot.load_full().as_ref().clone();
+        update(&mut next);
+        self.routing_snapshot.store(Arc::new(next));
+    }
+
     /// Add a deployment to the router
     pub fn add_deployment(&self, deployment: Deployment) {
-        let model_name = deployment.model_name.clone();
-        let deployment_id = deployment.id.clone();
-
-        if let Some(existing) = self.deployments.get(&deployment_id) {
-            let old_model_name = existing.model_name.clone();
-            drop(existing);
-
-            if old_model_name != model_name {
-                self.remove_from_model_index(&old_model_name, &deployment_id);
-            }
-        }
-
-        self.deployments.insert(deployment_id.clone(), deployment);
-
-        let mut entry = self.model_index.entry(model_name).or_default();
-        if !entry.iter().any(|id| id == &deployment_id) {
-            entry.push(deployment_id);
-        }
+        self.update_routing_snapshot(|snapshot| snapshot.insert_deployment(deployment));
     }
 
     /// Remove a deployment from the router
     pub fn remove_deployment(&self, id: &str) -> Option<Deployment> {
-        let removed = self.deployments.remove(id).map(|(_, v)| v);
-
-        if let Some(ref deployment) = removed {
-            self.remove_from_model_index(&deployment.model_name, id);
-        }
-
+        let mut removed = None;
+        self.update_routing_snapshot(|snapshot| {
+            removed = snapshot.remove_deployment(id);
+        });
         removed
     }
 
-    fn remove_from_model_index(&self, model_name: &str, deployment_id: &str) {
-        let should_remove = if let Some(mut entry) = self.model_index.get_mut(model_name) {
-            entry.retain(|did| did != deployment_id);
-            entry.is_empty()
-        } else {
-            false
-        };
-
-        if should_remove {
-            self.model_index.remove(model_name);
-        }
-    }
-
     /// Get a deployment by ID
-    pub fn get_deployment(&self, id: &str) -> Option<Ref<'_, DeploymentId, Deployment>> {
-        self.deployments.get(id)
+    pub fn get_deployment(&self, id: &str) -> Option<Arc<Deployment>> {
+        self.routing_snapshot.load().deployments.get(id).cloned()
     }
 
     /// Set the complete list of deployments (batch operation)
     ///
-    /// Builds the new maps locally first, then swaps entry-by-entry so
-    /// concurrent readers never observe an empty deployment window.
+    /// Builds the new generation locally first, then installs it with a single
+    /// ArcSwap store so readers never observe mixed deployment/index state.
     pub fn set_model_list(&self, deployments: Vec<Deployment>) {
-        let new_deployments: DashMap<DeploymentId, Deployment> = DashMap::new();
-        let new_index: DashMap<String, Vec<DeploymentId>> = DashMap::new();
-
-        for deployment in deployments {
-            let model_name = deployment.model_name.clone();
-            let id = deployment.id.clone();
-            if let Some(old) = new_deployments.insert(id.clone(), deployment)
-                && old.model_name != model_name
-            {
-                let old_model_name = old.model_name;
-                let should_remove = if let Some(mut old_entry) = new_index.get_mut(&old_model_name)
-                {
-                    old_entry.retain(|did| did != &id);
-                    old_entry.is_empty()
-                } else {
-                    false
-                };
-
-                if should_remove {
-                    new_index.remove(&old_model_name);
-                }
-            }
-
-            let mut entry = new_index.entry(model_name).or_default();
-            if !entry.iter().any(|existing| existing == &id) {
-                entry.push(id);
-            }
-        }
-
-        self.deployments
-            .retain(|k, _| new_deployments.contains_key(k));
-        for (k, v) in new_deployments {
-            self.deployments.insert(k, v);
-        }
-
-        self.model_index.retain(|k, _| new_index.contains_key(k));
-        for (k, v) in new_index {
-            self.model_index.insert(k, v);
-        }
+        self.update_routing_snapshot(|snapshot| {
+            *snapshot = RoutingSnapshot::from_deployments_preserving_state(deployments, snapshot);
+        });
     }
 
     // ========== Model Aliases ==========
@@ -230,83 +292,45 @@ impl Router {
         alias: &str,
         model_name: &str,
     ) -> Result<(), super::error::RouterError> {
-        // Self-alias is always a cycle
-        if alias == model_name {
-            return Err(super::error::RouterError::AliasCycle(format!(
-                "'{alias}' -> '{model_name}' would create a cycle"
-            )));
-        }
-
-        // Walk the alias chain starting from model_name to detect cycles
-        let mut current = model_name.to_string();
-        let mut visited = std::collections::HashSet::new();
-        visited.insert(alias.to_string());
-
-        while let Some(next) = self.model_aliases.get(&current) {
-            let next_val = next.value().clone();
-            if !visited.insert(next_val.clone()) {
-                return Err(super::error::RouterError::AliasCycle(format!(
-                    "'{alias}' -> '{model_name}' would create a cycle"
-                )));
-            }
-            current = next_val;
-        }
-
-        self.model_aliases
-            .insert(alias.to_string(), model_name.to_string());
-        self.has_model_aliases.store(true, Relaxed);
+        let _guard = self.routing_snapshot_write_lock.lock();
+        let mut next = self.routing_snapshot.load_full().as_ref().clone();
+        next.add_model_alias(alias, model_name)?;
+        self.routing_snapshot.store(Arc::new(next));
         Ok(())
     }
 
     /// Resolve a model name (handles aliases)
     pub fn resolve_model_name(&self, name: &str) -> String {
-        if !self.has_model_aliases.load(Relaxed) {
-            return name.to_string();
-        }
-
-        let mut current = name.to_string();
-
-        for _ in 0..MAX_ALIAS_HOPS {
-            if let Some(next) = self.model_aliases.get(&current) {
-                current = next.value().clone();
-            } else {
-                return current;
-            }
-        }
-
-        tracing::debug!(
-            requested_model = %name,
-            resolved_model = %current,
-            max_alias_hops = MAX_ALIAS_HOPS,
-            "model alias resolution hit hop limit"
-        );
-        current
+        self.routing_snapshot.load().resolve_model_name(name)
     }
 
     // ========== Query Methods ==========
 
     /// Get all deployment IDs for a given model
     pub fn get_deployments_for_model(&self, model_name: &str) -> Vec<DeploymentId> {
-        let resolved_name = self.resolve_model_name(model_name);
+        let snapshot = self.routing_snapshot.load();
+        let resolved_name = snapshot.resolve_model_name(model_name);
 
-        self.model_index
+        snapshot
+            .model_index
             .get(&resolved_name)
-            .map(|v| v.clone())
+            .cloned()
             .unwrap_or_default()
     }
 
     /// Get healthy deployment IDs for a given model
     pub fn get_healthy_deployments(&self, model_name: &str) -> Vec<DeploymentId> {
-        let resolved_name = self.resolve_model_name(model_name);
+        let snapshot = self.routing_snapshot.load();
+        let resolved_name = snapshot.resolve_model_name(model_name);
 
-        let Some(deployment_ids) = self.model_index.get(&resolved_name) else {
+        let Some(deployment_ids) = snapshot.model_index.get(&resolved_name) else {
             return Vec::new();
         };
 
         let mut healthy = Vec::with_capacity(deployment_ids.len());
 
         for id in deployment_ids.iter() {
-            if let Some(deployment) = self.deployments.get(id.as_str())
+            if let Some(deployment) = snapshot.deployments.get(id.as_str())
                 && deployment.is_healthy()
                 && !deployment.is_in_cooldown()
             {
@@ -327,12 +351,13 @@ impl Router {
         model_name: &str,
         capability: &ProviderCapability,
     ) -> Option<CapabilityDeployment> {
-        let resolved_name = self.resolve_model_name(model_name);
+        let snapshot = self.routing_snapshot.load();
+        let resolved_name = snapshot.resolve_model_name(model_name);
 
-        let deployment_ids = self.model_index.get(&resolved_name)?;
+        let deployment_ids = snapshot.model_index.get(&resolved_name)?;
 
         for id in deployment_ids.iter() {
-            let Some(deployment) = self.deployments.get(id.as_str()) else {
+            let Some(deployment) = snapshot.deployments.get(id.as_str()) else {
                 continue;
             };
 
@@ -384,17 +409,21 @@ impl Router {
 
     /// List all model names
     pub fn list_models(&self) -> Vec<String> {
-        self.model_index
-            .iter()
-            .map(|entry| entry.key().clone())
+        self.routing_snapshot
+            .load()
+            .model_index
+            .keys()
+            .cloned()
             .collect()
     }
 
     /// List all deployment IDs
     pub fn list_deployments(&self) -> Vec<DeploymentId> {
-        self.deployments
-            .iter()
-            .map(|entry| entry.key().clone())
+        self.routing_snapshot
+            .load()
+            .deployments
+            .keys()
+            .cloned()
             .collect()
     }
 
@@ -405,19 +434,29 @@ impl Router {
     /// After recording, checks whether the deployment should be promoted from
     /// Degraded (half-open) back to Healthy based on `success_threshold`.
     pub fn record_success(&self, deployment_id: &str, tokens: u64, latency_us: u64) {
-        if let Some(deployment) = self.deployments.get(deployment_id) {
-            deployment.record_success(tokens, latency_us);
+        let snapshot = self.routing_snapshot.load();
+        if let Some(deployment) = snapshot.deployments.get(deployment_id) {
+            self.record_success_for_deployment(deployment, tokens, latency_us);
+        }
+    }
 
-            // Promote Degraded -> Healthy once enough consecutive successes
-            let current_health = deployment.state.health.load(Relaxed);
-            if current_health == super::deployment::HealthStatus::Degraded as u8 {
-                let consec = deployment.state.consecutive_successes.load(Relaxed);
-                if consec >= self.config.success_threshold {
-                    deployment
-                        .state
-                        .health
-                        .store(super::deployment::HealthStatus::Healthy as u8, Relaxed);
-                }
+    pub(crate) fn record_success_for_deployment(
+        &self,
+        deployment: &Deployment,
+        tokens: u64,
+        latency_us: u64,
+    ) {
+        deployment.record_success(tokens, latency_us);
+
+        // Promote Degraded -> Healthy once enough consecutive successes
+        let current_health = deployment.state.health.load(Relaxed);
+        if current_health == super::deployment::HealthStatus::Degraded as u8 {
+            let consec = deployment.state.consecutive_successes.load(Relaxed);
+            if consec >= self.config.success_threshold {
+                deployment
+                    .state
+                    .health
+                    .store(super::deployment::HealthStatus::Healthy as u8, Relaxed);
             }
         }
     }
@@ -428,65 +467,79 @@ impl Router {
     /// reaches `allowed_fails` **and** the total requests this minute meet the
     /// `min_requests` threshold.
     pub fn record_failure(&self, deployment_id: &str) {
-        if let Some(deployment) = self.deployments.get(deployment_id) {
-            deployment.record_failure();
+        let snapshot = self.routing_snapshot.load();
+        if let Some(deployment) = snapshot.deployments.get(deployment_id) {
+            self.record_failure_for_deployment(deployment);
+        }
+    }
 
-            let fails = deployment.state.fails_this_minute.load(Relaxed);
-            let successes_this_minute = deployment.state.rpm_current.load(Relaxed);
-            let total_this_minute = successes_this_minute + fails as u64;
-            if fails >= self.config.allowed_fails
-                && total_this_minute >= self.config.min_requests as u64
-            {
-                tracing::info!(
-                    deployment_id = %deployment_id,
-                    model = %deployment.model_name,
-                    reason = "consecutive_failures",
-                    cooldown_secs = self.config.cooldown_time_secs,
-                    fails_this_minute = fails,
-                    "deployment entering cooldown"
-                );
-                deployment.enter_cooldown(self.config.cooldown_time_secs);
-            }
+    pub(crate) fn record_failure_for_deployment(&self, deployment: &Deployment) {
+        deployment.record_failure();
+
+        let fails = deployment.state.fails_this_minute.load(Relaxed);
+        let successes_this_minute = deployment.state.rpm_current.load(Relaxed);
+        let total_this_minute = successes_this_minute + fails as u64;
+        if fails >= self.config.allowed_fails
+            && total_this_minute >= self.config.min_requests as u64
+        {
+            tracing::info!(
+                deployment_id = %deployment.id,
+                model = %deployment.model_name,
+                reason = "consecutive_failures",
+                cooldown_secs = self.config.cooldown_time_secs,
+                fails_this_minute = fails,
+                "deployment entering cooldown"
+            );
+            deployment.enter_cooldown(self.config.cooldown_time_secs);
         }
     }
 
     /// Record a failed request with a specific reason
     pub fn record_failure_with_reason(&self, deployment_id: &str, reason: CooldownReason) {
-        if let Some(d) = self.deployments.get(deployment_id) {
-            d.record_failure();
+        let snapshot = self.routing_snapshot.load();
+        if let Some(d) = snapshot.deployments.get(deployment_id) {
+            self.record_failure_with_reason_for_deployment(d, reason);
+        }
+    }
 
-            let should_cooldown = match reason {
-                CooldownReason::RateLimit
-                | CooldownReason::AuthError
-                | CooldownReason::NotFound
-                | CooldownReason::Timeout
-                | CooldownReason::Manual => true,
+    pub(crate) fn record_failure_with_reason_for_deployment(
+        &self,
+        deployment: &Deployment,
+        reason: CooldownReason,
+    ) {
+        deployment.record_failure();
 
-                CooldownReason::ConsecutiveFailures => {
-                    let fails = d.state.fails_this_minute.load(Relaxed);
-                    let successes_this_minute = d.state.rpm_current.load(Relaxed);
-                    let total_this_minute = successes_this_minute + fails as u64;
-                    fails >= self.config.allowed_fails
-                        && total_this_minute >= self.config.min_requests as u64
-                }
+        let should_cooldown = match reason {
+            CooldownReason::RateLimit
+            | CooldownReason::AuthError
+            | CooldownReason::NotFound
+            | CooldownReason::Timeout
+            | CooldownReason::Manual => true,
 
-                CooldownReason::HighFailureRate => {
-                    let total = d.state.total_requests.load(Relaxed);
-                    let fails = d.state.fail_requests.load(Relaxed);
-                    total >= self.config.min_requests as u64 && (fails * 100 / total) > 50
-                }
-            };
-
-            if should_cooldown {
-                tracing::info!(
-                    deployment_id = %deployment_id,
-                    model = %d.model_name,
-                    reason = ?reason,
-                    cooldown_secs = self.config.cooldown_time_secs,
-                    "deployment entering cooldown"
-                );
-                d.enter_cooldown(self.config.cooldown_time_secs);
+            CooldownReason::ConsecutiveFailures => {
+                let fails = deployment.state.fails_this_minute.load(Relaxed);
+                let successes_this_minute = deployment.state.rpm_current.load(Relaxed);
+                let total_this_minute = successes_this_minute + fails as u64;
+                fails >= self.config.allowed_fails
+                    && total_this_minute >= self.config.min_requests as u64
             }
+
+            CooldownReason::HighFailureRate => {
+                let total = deployment.state.total_requests.load(Relaxed);
+                let fails = deployment.state.fail_requests.load(Relaxed);
+                total >= self.config.min_requests as u64 && (fails * 100 / total) > 50
+            }
+        };
+
+        if should_cooldown {
+            tracing::info!(
+                deployment_id = %deployment.id,
+                model = %deployment.model_name,
+                reason = ?reason,
+                cooldown_secs = self.config.cooldown_time_secs,
+                "deployment entering cooldown"
+            );
+            deployment.enter_cooldown(self.config.cooldown_time_secs);
         }
     }
 
@@ -534,8 +587,9 @@ impl Router {
 
     /// Reset per-minute counters for all deployments
     pub fn reset_minute_counters(&self) {
-        for entry in self.deployments.iter() {
-            entry.value().state.reset_minute();
+        let snapshot = self.routing_snapshot.load();
+        for deployment in snapshot.deployments.values() {
+            deployment.state.reset_minute();
         }
     }
 

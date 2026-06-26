@@ -1,5 +1,7 @@
 //! Strategy selection tests
 
+#![allow(deprecated)]
+
 use super::router_tests::create_test_deployment;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::deployment::HealthStatus;

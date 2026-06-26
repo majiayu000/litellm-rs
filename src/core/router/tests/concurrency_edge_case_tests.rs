@@ -7,6 +7,8 @@
 //! 4. EMA latency calculation edge cases (overflow, boundary values)
 //! 5. Cooldown expiry race conditions
 
+#![allow(deprecated)]
+
 use super::router_tests::create_test_deployment;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::deployment::{
@@ -461,13 +463,15 @@ async fn test_set_model_list_with_concurrent_selectors() {
         total_error += e;
     }
 
-    // The vast majority should succeed; transient errors during swap are acceptable
+    // Snapshot swaps install one complete generation, so selectors should see
+    // either the old or the new deployment set without transient routing gaps.
     assert!(
-        total_success > total_error * 10,
-        "too many errors: {} success vs {} errors",
+        total_error == 0,
+        "snapshot swap should not produce transient selector errors: {} success vs {} errors",
         total_success,
         total_error
     );
+    assert!(total_success > 0, "selectors should have made progress");
 }
 
 // ====================================================================================

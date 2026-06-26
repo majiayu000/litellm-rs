@@ -1,5 +1,7 @@
 //! Execution flow tests
 
+#![allow(deprecated)]
+
 use super::router_tests::create_test_deployment;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::router::config::RouterConfig;
@@ -59,6 +61,36 @@ async fn test_execute_once_success() {
     assert_eq!(exec_result.attempts, 1);
     assert!(!exec_result.used_fallback);
     assert!(exec_result.latency_us > 0);
+}
+
+#[tokio::test]
+async fn test_execute_once_with_selected_deployment_keeps_snapshot_after_same_id_swap() {
+    let router = std::sync::Arc::new(Router::default());
+    let deployment = create_test_deployment("same-id", "gpt-4").await;
+    router.add_deployment(deployment);
+
+    let router_for_operation = router.clone();
+    let result = router
+        .execute_once_with_selected_deployment("gpt-4", move |deployment| {
+            let router = router_for_operation.clone();
+            async move {
+                let selected_model = deployment.model.clone();
+                let mut replacement = create_test_deployment("same-id", "gpt-4").await;
+                replacement.model = "replacement-model".to_string();
+                router.set_model_list(vec![replacement]);
+                let current_model = router.get_deployment("same-id").unwrap().model.clone();
+                Ok(((selected_model, current_model), 100u64))
+            }
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(result.result.0, "gpt-4-turbo");
+    assert_eq!(result.result.1, "replacement-model");
+    assert_eq!(result.deployment_id, "same-id");
+    assert_eq!(result.model_used, "gpt-4-turbo");
+    let current = router.get_deployment("same-id").unwrap();
+    assert_eq!(current.state.total_requests.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]

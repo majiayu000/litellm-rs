@@ -3,6 +3,8 @@
 //! Tests edge cases and deterministic behavior for SimpleShuffle,
 //! RoundRobin, and LatencyBased strategies via `select_deployment`.
 
+#![allow(deprecated)]
+
 use super::router_tests::create_test_deployment;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::deployment::HealthStatus;

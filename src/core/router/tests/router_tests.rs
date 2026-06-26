@@ -1,9 +1,11 @@
 //! Core router tests
 
+#![allow(deprecated)]
+
 use crate::core::providers::Provider;
 use crate::core::providers::openai::OpenAIProvider;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
-use crate::core::router::deployment::Deployment;
+use crate::core::router::deployment::{Deployment, HealthStatus};
 use crate::core::router::unified::Router;
 use crate::core::types::model::ProviderCapability;
 use std::sync::atomic::Ordering;
@@ -107,6 +109,30 @@ async fn test_add_same_deployment_id_reindexes_when_model_changes() {
 }
 
 #[tokio::test]
+async fn test_add_same_deployment_id_preserves_runtime_state_when_model_changes() {
+    let router = Router::default();
+    let deployment1 = create_test_deployment("test-1", "gpt-4").await;
+    deployment1.state.tpm_current.store(321, Ordering::Relaxed);
+    deployment1.state.rpm_current.store(9, Ordering::Relaxed);
+    deployment1
+        .state
+        .active_requests
+        .store(3, Ordering::Relaxed);
+    deployment1.enter_cooldown(60);
+
+    router.add_deployment(deployment1);
+    router.add_deployment(create_test_deployment("test-1", "claude").await);
+
+    let current = router.get_deployment("test-1").unwrap();
+    assert_eq!(current.model_name, "claude");
+    assert_eq!(current.state.tpm_current.load(Ordering::Relaxed), 321);
+    assert_eq!(current.state.rpm_current.load(Ordering::Relaxed), 9);
+    assert_eq!(current.state.active_requests.load(Ordering::Relaxed), 3);
+    assert_eq!(current.state.health_status(), HealthStatus::Cooldown);
+    assert!(current.is_in_cooldown());
+}
+
+#[tokio::test]
 async fn test_add_multiple_models() {
     let router = Router::default();
     let deployment1 = create_test_deployment("test-1", "gpt-4").await;
@@ -186,6 +212,74 @@ async fn test_set_model_list_duplicate_id_reindexes_without_empty_old_model() {
     assert!(!router.list_models().contains(&"gpt-4".to_string()));
     assert!(router.get_deployments_for_model("gpt-4").is_empty());
     assert_eq!(router.get_deployments_for_model("claude"), vec!["test-1"]);
+}
+
+#[tokio::test]
+async fn test_set_model_list_installs_complete_snapshot_generation() {
+    let router = Router::default();
+
+    router.add_deployment(create_test_deployment("old-1", "gpt-4").await);
+    let old_snapshot = router.routing_snapshot.load_full();
+
+    router.set_model_list(vec![create_test_deployment("new-1", "claude").await]);
+    let new_snapshot = router.routing_snapshot.load_full();
+
+    assert!(old_snapshot.deployments.contains_key("old-1"));
+    assert_eq!(
+        old_snapshot.model_index.get("gpt-4"),
+        Some(&vec!["old-1".to_string()])
+    );
+    assert!(!old_snapshot.deployments.contains_key("new-1"));
+
+    assert!(new_snapshot.deployments.contains_key("new-1"));
+    assert_eq!(
+        new_snapshot.model_index.get("claude"),
+        Some(&vec!["new-1".to_string()])
+    );
+    assert!(!new_snapshot.deployments.contains_key("old-1"));
+    assert!(!new_snapshot.model_index.contains_key("gpt-4"));
+}
+
+#[tokio::test]
+async fn test_deployment_lease_releases_selected_snapshot_after_same_id_swap() {
+    let router = Router::default();
+
+    router.add_deployment(create_test_deployment("shared-id", "gpt-4").await);
+    let lease = router.select_deployment_lease("gpt-4").unwrap();
+    let selected_state = lease.deployment().state.clone();
+    assert_eq!(selected_state.active_requests.load(Ordering::Relaxed), 1);
+
+    router.set_model_list(vec![create_test_deployment("shared-id", "gpt-4").await]);
+
+    let current = router.get_deployment("shared-id").unwrap();
+    assert_eq!(current.state.active_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(selected_state.active_requests.load(Ordering::Relaxed), 1);
+
+    drop(lease);
+
+    assert_eq!(selected_state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(current.state.active_requests.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn test_set_model_list_preserves_runtime_state_for_existing_deployment_id() {
+    let router = Router::default();
+    let deployment = create_test_deployment("shared-id", "gpt-4").await;
+    deployment.state.tpm_current.store(123, Ordering::Relaxed);
+    deployment.state.rpm_current.store(7, Ordering::Relaxed);
+    deployment.state.active_requests.store(2, Ordering::Relaxed);
+    deployment.enter_cooldown(60);
+    router.add_deployment(deployment);
+
+    router.set_model_list(vec![create_test_deployment("shared-id", "claude").await]);
+
+    let current = router.get_deployment("shared-id").unwrap();
+    assert_eq!(current.model_name, "claude");
+    assert_eq!(current.state.tpm_current.load(Ordering::Relaxed), 123);
+    assert_eq!(current.state.rpm_current.load(Ordering::Relaxed), 7);
+    assert_eq!(current.state.active_requests.load(Ordering::Relaxed), 2);
+    assert_eq!(current.state.health_status(), HealthStatus::Cooldown);
+    assert!(current.is_in_cooldown());
 }
 
 #[tokio::test]

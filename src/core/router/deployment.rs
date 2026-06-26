@@ -21,6 +21,8 @@
 //! - Cache-friendly: Hot path fields grouped together
 
 use crate::core::providers::Provider;
+use std::ops::Deref;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -110,8 +112,25 @@ impl Default for DeploymentConfig {
 ///
 /// TPM/RPM counters are reset every minute by a background task.
 /// The `minute_reset_at` timestamp tracks when the last reset occurred.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeploymentState {
+    inner: Arc<DeploymentStateInner>,
+}
+
+impl Deref for DeploymentState {
+    type Target = DeploymentStateInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+/// Shared deployment runtime counters.
+///
+/// `DeploymentState` is a cheap cloneable handle around this inner state so
+/// cloned deployments and routing snapshots cannot fork runtime counters.
+#[derive(Debug)]
+pub struct DeploymentStateInner {
     /// Health status (0=unknown, 1=healthy, 2=degraded, 3=unhealthy, 4=cooldown)
     pub health: AtomicU8,
 
@@ -157,19 +176,21 @@ impl DeploymentState {
     pub fn new() -> Self {
         let now = current_timestamp();
         Self {
-            health: AtomicU8::new(HealthStatus::Healthy as u8),
-            tpm_current: AtomicU64::new(0),
-            rpm_current: AtomicU64::new(0),
-            active_requests: AtomicU32::new(0),
-            total_requests: AtomicU64::new(0),
-            success_requests: AtomicU64::new(0),
-            fail_requests: AtomicU64::new(0),
-            fails_this_minute: AtomicU32::new(0),
-            cooldown_until: AtomicU64::new(0),
-            last_request_at: AtomicU64::new(0),
-            avg_latency_us: AtomicU64::new(0),
-            consecutive_successes: AtomicU32::new(0),
-            minute_reset_at: AtomicU64::new(now),
+            inner: Arc::new(DeploymentStateInner {
+                health: AtomicU8::new(HealthStatus::Healthy as u8),
+                tpm_current: AtomicU64::new(0),
+                rpm_current: AtomicU64::new(0),
+                active_requests: AtomicU32::new(0),
+                total_requests: AtomicU64::new(0),
+                success_requests: AtomicU64::new(0),
+                fail_requests: AtomicU64::new(0),
+                fails_this_minute: AtomicU32::new(0),
+                cooldown_until: AtomicU64::new(0),
+                last_request_at: AtomicU64::new(0),
+                avg_latency_us: AtomicU64::new(0),
+                consecutive_successes: AtomicU32::new(0),
+                minute_reset_at: AtomicU64::new(now),
+            }),
         }
     }
 
@@ -193,29 +214,6 @@ impl DeploymentState {
 impl Default for DeploymentState {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Manual Clone implementation because AtomicU64 doesn't implement Clone
-impl Clone for DeploymentState {
-    fn clone(&self) -> Self {
-        Self {
-            health: AtomicU8::new(self.health.load(Ordering::Relaxed)),
-            tpm_current: AtomicU64::new(self.tpm_current.load(Ordering::Relaxed)),
-            rpm_current: AtomicU64::new(self.rpm_current.load(Ordering::Relaxed)),
-            active_requests: AtomicU32::new(self.active_requests.load(Ordering::Relaxed)),
-            total_requests: AtomicU64::new(self.total_requests.load(Ordering::Relaxed)),
-            success_requests: AtomicU64::new(self.success_requests.load(Ordering::Relaxed)),
-            fail_requests: AtomicU64::new(self.fail_requests.load(Ordering::Relaxed)),
-            fails_this_minute: AtomicU32::new(self.fails_this_minute.load(Ordering::Relaxed)),
-            cooldown_until: AtomicU64::new(self.cooldown_until.load(Ordering::Relaxed)),
-            last_request_at: AtomicU64::new(self.last_request_at.load(Ordering::Relaxed)),
-            avg_latency_us: AtomicU64::new(self.avg_latency_us.load(Ordering::Relaxed)),
-            consecutive_successes: AtomicU32::new(
-                self.consecutive_successes.load(Ordering::Relaxed),
-            ),
-            minute_reset_at: AtomicU64::new(self.minute_reset_at.load(Ordering::Relaxed)),
-        }
     }
 }
 
@@ -564,6 +562,34 @@ mod tests {
         let cloned = state.clone();
         assert_eq!(cloned.total_requests.load(Ordering::Relaxed), 100);
         assert_eq!(cloned.success_requests.load(Ordering::Relaxed), 95);
+
+        cloned.total_requests.store(101, Ordering::Relaxed);
+        state.success_requests.store(96, Ordering::Relaxed);
+
+        assert_eq!(state.total_requests.load(Ordering::Relaxed), 101);
+        assert_eq!(cloned.success_requests.load(Ordering::Relaxed), 96);
+    }
+
+    #[tokio::test]
+    async fn test_deployment_clone_shares_runtime_state()
+    -> Result<(), crate::core::providers::unified_provider::ProviderError> {
+        let deployment = Deployment::new(
+            "test-1".to_string(),
+            Provider::OpenAI(
+                crate::core::providers::openai::OpenAIProvider::with_api_key(
+                    "sk-test-key-for-unit-testing-only",
+                )
+                .await?,
+            ),
+            "gpt-4-turbo".to_string(),
+            "gpt-4".to_string(),
+        );
+
+        let cloned = deployment.clone();
+        cloned.state.active_requests.store(7, Ordering::Relaxed);
+
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 7);
+        Ok(())
     }
 
     // ==================== current_timestamp Tests ====================

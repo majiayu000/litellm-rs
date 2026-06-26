@@ -4,6 +4,8 @@
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use litellm_rs::core::providers::Provider;
     use litellm_rs::core::providers::openai::OpenAIProvider;
     use litellm_rs::core::router::deployment::{

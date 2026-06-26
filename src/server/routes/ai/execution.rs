@@ -2,6 +2,7 @@
 
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::router::UnifiedRouter;
+use crate::core::router::deployment::Deployment;
 use crate::core::router::execution::{
     calculate_retry_delay, infer_cooldown_reason, is_retryable_error,
     router_error_to_provider_error,
@@ -14,16 +15,16 @@ use std::time::Instant;
 /// Holds a selected deployment active for the lifetime of a streaming response.
 pub(super) struct StreamingDeploymentLease {
     router: Arc<UnifiedRouter>,
-    deployment_id: String,
+    deployment: Arc<Deployment>,
     started_at: Instant,
     finalized: bool,
 }
 
 impl StreamingDeploymentLease {
-    fn new(router: Arc<UnifiedRouter>, deployment_id: String, started_at: Instant) -> Self {
+    fn new(router: Arc<UnifiedRouter>, deployment: Arc<Deployment>, started_at: Instant) -> Self {
         Self {
             router,
-            deployment_id,
+            deployment,
             started_at,
             finalized: false,
         }
@@ -32,20 +33,20 @@ impl StreamingDeploymentLease {
     pub(super) fn finish_success(mut self, tokens_used: u64) {
         let latency_us = self.started_at.elapsed().as_micros() as u64;
         self.router
-            .record_success(&self.deployment_id, tokens_used, latency_us);
+            .record_success_for_deployment(&self.deployment, tokens_used, latency_us);
         self.release();
     }
 
     pub(super) fn finish_failure(mut self, error: &ProviderError) {
         let cooldown_reason = infer_cooldown_reason(error);
         self.router
-            .record_failure_with_reason(&self.deployment_id, cooldown_reason);
+            .record_failure_with_reason_for_deployment(&self.deployment, cooldown_reason);
         self.release();
     }
 
     fn release(&mut self) {
         if !self.finalized {
-            self.router.release_deployment(&self.deployment_id);
+            UnifiedRouter::release_selected_deployment(&self.deployment);
             self.finalized = true;
         }
     }
@@ -71,25 +72,73 @@ where
     F: Fn(Provider, String) -> Fut + Clone,
     Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
 {
-    let execution = router
-        .execute_with_capability_retry(requested_model, &capability, move |deployment_id| {
-            let operation = operation.clone();
-            async move {
-                let deployment = router.get_deployment(&deployment_id).ok_or_else(|| {
-                    ProviderError::other("router", "Selected deployment not found")
-                })?;
+    let max_attempts = router.config().num_retries + 1;
+    let mut last_error = None;
 
-                let provider = deployment.provider.clone();
-                let selected_model = deployment.model.clone();
-                drop(deployment);
+    for attempt in 1..=max_attempts {
+        let started_at = Instant::now();
 
-                operation(provider, selected_model).await
+        let deployment_lease =
+            match router.select_deployment_lease_for_capability(requested_model, &capability) {
+                Ok(lease) => lease,
+                Err(router_err) => {
+                    let provider_err = router_error_to_provider_error(router_err);
+
+                    if is_retryable_error(&provider_err) && attempt < max_attempts {
+                        let delay = calculate_retry_delay(router.config(), attempt);
+                        last_error = Some(provider_err);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+
+                    return Err(GatewayError::Provider(provider_err));
+                }
+            };
+
+        let provider = deployment_lease.deployment().provider.clone();
+        let selected_model = deployment_lease.deployment().model.clone();
+
+        match operation.clone()(provider, selected_model).await {
+            Ok((value, tokens_used)) => {
+                let latency_us = started_at.elapsed().as_micros() as u64;
+                router.record_success_for_deployment(
+                    deployment_lease.deployment(),
+                    tokens_used,
+                    latency_us,
+                );
+                drop(deployment_lease);
+                return Ok(value);
             }
-        })
-        .await
-        .map_err(|(e, _)| GatewayError::Provider(e))?;
+            Err(err) => {
+                if is_retryable_error(&err) && attempt < max_attempts {
+                    router.record_failure_with_reason_for_deployment(
+                        deployment_lease.deployment(),
+                        crate::core::router::CooldownReason::ConsecutiveFailures,
+                    );
+                    drop(deployment_lease);
+                    let delay = calculate_retry_delay(router.config(), attempt);
+                    last_error = Some(err);
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
 
-    Ok(execution.0)
+                let cooldown_reason = infer_cooldown_reason(&err);
+                router.record_failure_with_reason_for_deployment(
+                    deployment_lease.deployment(),
+                    cooldown_reason,
+                );
+                drop(deployment_lease);
+                return Err(GatewayError::Provider(err));
+            }
+        }
+    }
+
+    Err(GatewayError::Provider(last_error.unwrap_or_else(|| {
+        ProviderError::Other {
+            provider: "router",
+            message: "Unknown error during selected deployment retry".to_string(),
+        }
+    })))
 }
 
 /// Start a streaming operation while keeping the selected deployment active.
@@ -129,39 +178,23 @@ where
                     return Err(GatewayError::Provider(provider_err));
                 }
             };
-        let deployment_id = deployment_lease.clone_deployment_id();
-
-        let Some(deployment) = router.get_deployment(&deployment_id) else {
-            drop(deployment_lease);
-            let err = ProviderError::other("router", "Selected deployment not found");
-            if is_retryable_error(&err) && attempt < max_attempts {
-                let delay = calculate_retry_delay(router.config(), attempt);
-                last_error = Some(err);
-                tokio::time::sleep(delay).await;
-                continue;
-            }
-            return Err(GatewayError::Provider(err));
-        };
-
+        let deployment = deployment_lease.clone_deployment();
         let provider = deployment.provider.clone();
         let selected_model = deployment.model.clone();
-        drop(deployment);
 
         match operation.clone()(provider, selected_model).await {
             Ok(stream) => {
-                let deployment_id = deployment_lease.into_deployment_id();
-                let lease =
-                    StreamingDeploymentLease::new(router.clone(), deployment_id, started_at);
+                let _deployment_id = deployment_lease.into_deployment_id();
+                let lease = StreamingDeploymentLease::new(router.clone(), deployment, started_at);
                 return Ok((stream, lease));
             }
             Err(err) => {
-                drop(deployment_lease);
-
                 if is_retryable_error(&err) && attempt < max_attempts {
-                    router.record_failure_with_reason(
-                        &deployment_id,
+                    router.record_failure_with_reason_for_deployment(
+                        deployment_lease.deployment(),
                         crate::core::router::CooldownReason::ConsecutiveFailures,
                     );
+                    drop(deployment_lease);
                     let delay = calculate_retry_delay(router.config(), attempt);
                     last_error = Some(err);
                     tokio::time::sleep(delay).await;
@@ -169,7 +202,11 @@ where
                 }
 
                 let cooldown_reason = infer_cooldown_reason(&err);
-                router.record_failure_with_reason(&deployment_id, cooldown_reason);
+                router.record_failure_with_reason_for_deployment(
+                    deployment_lease.deployment(),
+                    cooldown_reason,
+                );
+                drop(deployment_lease);
                 return Err(GatewayError::Provider(err));
             }
         }
