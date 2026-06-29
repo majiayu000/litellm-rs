@@ -72,8 +72,23 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
 #[cfg(test)]
 mod tests {
+    use crate::Config;
     use crate::core::types::context::RequestContext;
-    use actix_web::{App, http::StatusCode, test};
+    use crate::server::HttpServer as GatewayHttpServer;
+    use actix_web::{App, http::StatusCode, test, web};
+    use serde_json::Value;
+
+    async fn build_no_provider_state() -> crate::server::state::AppState {
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+
+        GatewayHttpServer::new(&config)
+            .await
+            .expect("gateway server should initialize")
+            .state()
+            .clone()
+    }
 
     #[actix_web::test]
     async fn test_get_request_context() {
@@ -86,29 +101,46 @@ mod tests {
 
     #[actix_web::test]
     async fn test_batch_routes_mounted_with_expected_methods() {
-        let app = test::init_service(App::new().configure(super::configure_routes)).await;
+        let state = build_no_provider_state().await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(super::configure_routes),
+        )
+        .await;
 
         let create_req = test::TestRequest::post()
             .uri("/v1/batches")
-            .set_json(serde_json::json!({}))
+            .set_json(serde_json::json!({
+                "input_file_id": "file_123",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h"
+            }))
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(create_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let create_body: Value = test::read_body_json(create_resp).await;
+        assert!(
+            create_body["error"]["message"]
+                .as_str()
+                .expect("error message")
+                .contains("Batch API requires")
+        );
 
         let list_req = test::TestRequest::get().uri("/v1/batches").to_request();
         let list_resp = test::call_service(&app, list_req).await;
-        assert_eq!(list_resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(list_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let get_req = test::TestRequest::get()
             .uri("/v1/batches/batch_test")
             .to_request();
         let get_resp = test::call_service(&app, get_req).await;
-        assert_eq!(get_resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(get_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let cancel_req = test::TestRequest::post()
             .uri("/v1/batches/batch_test/cancel")
             .to_request();
         let cancel_resp = test::call_service(&app, cancel_req).await;
-        assert_eq!(cancel_resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(cancel_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
