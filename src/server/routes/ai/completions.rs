@@ -6,7 +6,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -174,7 +174,7 @@ async fn handle_streaming_completion(
     {
         Ok(((mut stream, served_provider, served_model, mut budget_reservation), lease)) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
-            let idle_timeout_secs = state.config().gateway.server.stream_idle_timeout;
+            let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
             let budget_limits = state.budget_limits.clone();
             let key_manager = state.key_manager.clone();
             let pricing_service = state.pricing.clone();
@@ -482,7 +482,7 @@ fn completion_request_from_value(
 }
 
 fn reject_unsupported_fields(object: &serde_json::Map<String, Value>) -> Result<(), GatewayError> {
-    let allowed = [
+    const ALLOWED: &[&str] = &[
         "model",
         "prompt",
         "max_tokens",
@@ -498,17 +498,16 @@ fn reject_unsupported_fields(object: &serde_json::Map<String, Value>) -> Result<
         "user",
         "logprobs",
         "echo",
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
-    let unsupported = ["best_of", "suffix"];
+    ];
+    const UNSUPPORTED: &[&str] = &["best_of", "suffix"];
     for key in object.keys() {
-        if unsupported.contains(&key.as_str()) {
+        let key_str = key.as_str();
+        if UNSUPPORTED.contains(&key_str) {
             return Err(GatewayError::validation(format!(
                 "Unsupported /v1/completions field: {key}"
             )));
         }
-        if !allowed.contains(key.as_str()) {
+        if !ALLOWED.contains(&key_str) {
             return Err(GatewayError::validation(format!(
                 "Unknown /v1/completions field: {key}"
             )));
