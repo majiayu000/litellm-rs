@@ -11,6 +11,7 @@ mod embeddings;
 mod execution;
 mod files;
 mod fine_tuning;
+mod gemini;
 mod images;
 mod models;
 mod openai_errors;
@@ -34,6 +35,10 @@ pub use files::{create_file, delete_file, get_file, get_file_content, list_files
 pub use fine_tuning::{
     cancel_fine_tuning_job, create_fine_tuning_job, get_fine_tuning_job,
     list_fine_tuning_checkpoints, list_fine_tuning_events, list_fine_tuning_jobs,
+};
+pub use gemini::{
+    gemini_generate_content_v1, gemini_generate_content_v1beta, gemini_stream_generate_content_v1,
+    gemini_stream_generate_content_v1beta,
 };
 pub use images::{image_edits, image_generations, image_variations};
 pub use models::{get_model, list_models};
@@ -109,6 +114,14 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // Models
             .route("/models", web::get().to(list_models))
             .route("/models/{model_id}", web::get().to(get_model))
+            .route(
+                "/models/{model}:generateContent",
+                web::post().to(gemini_generate_content_v1),
+            )
+            .route(
+                "/models/{model}:streamGenerateContent",
+                web::post().to(gemini_stream_generate_content_v1),
+            )
             .route("/engines", web::get().to(list_models))
             .route("/engines/{model_id}", web::get().to(get_model))
             // Audio (future implementation)
@@ -118,6 +131,39 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             )
             .route("/audio/translations", web::post().to(audio_translations))
             .route("/audio/speech", web::post().to(audio_speech)),
+    );
+    cfg.service(
+        web::scope("/v1beta")
+            .route(
+                "/models/{model}:generateContent",
+                web::post().to(gemini_generate_content_v1beta),
+            )
+            .route(
+                "/models/{model}:streamGenerateContent",
+                web::post().to(gemini_stream_generate_content_v1beta),
+            ),
+    );
+    cfg.service(
+        web::scope("/gemini/v1beta")
+            .route(
+                "/models/{model}:generateContent",
+                web::post().to(gemini_generate_content_v1beta),
+            )
+            .route(
+                "/models/{model}:streamGenerateContent",
+                web::post().to(gemini_stream_generate_content_v1beta),
+            ),
+    );
+    cfg.service(
+        web::scope("/gemini/v1")
+            .route(
+                "/models/{model}:generateContent",
+                web::post().to(gemini_generate_content_v1),
+            )
+            .route(
+                "/models/{model}:streamGenerateContent",
+                web::post().to(gemini_stream_generate_content_v1),
+            ),
     );
 }
 
