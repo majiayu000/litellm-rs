@@ -6,6 +6,7 @@ mod tests {
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::server::HttpServer as GatewayHttpServer;
+    use litellm_rs::server::state::AppState;
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -211,9 +212,7 @@ mod tests {
         }))
     }
 
-    async fn build_test_state(
-        providers: Vec<ProviderConfig>,
-    ) -> litellm_rs::server::state::AppState {
+    async fn build_test_state(providers: Vec<ProviderConfig>) -> AppState {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
@@ -229,9 +228,7 @@ mod tests {
             .clone()
     }
 
-    async fn build_auth_required_state(
-        providers: Vec<ProviderConfig>,
-    ) -> litellm_rs::server::state::AppState {
+    async fn build_auth_required_state(providers: Vec<ProviderConfig>) -> AppState {
         let mut config = Config::default();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
@@ -247,7 +244,7 @@ mod tests {
     fn gemini_provider(name: &str, base_url: &str, models: Vec<String>) -> ProviderConfig {
         let mut provider = ProviderConfig {
             name: name.to_string(),
-            provider_type: "gemini".to_string(),
+            provider_type: "openai_compatible".to_string(),
             api_key: "test-api-key-12345678901234567890".to_string(),
             base_url: Some(base_url.to_string()),
             models,
@@ -321,19 +318,19 @@ mod tests {
         let mock = MockGeminiServer::start().await;
         let state = build_test_state(vec![
             gemini_provider(
-                "wrong-gemini",
+                "googleai",
                 "http://127.0.0.1:9",
                 vec!["other-model".to_string()],
             ),
             gemini_provider(
-                "mock-gemini",
+                "gemini",
                 &mock.base_url,
                 vec!["gemini-3.1-flash-lite".to_string()],
             ),
         ])
         .await;
         state.budget_limits.providers.set_provider_limit(
-            "mock-gemini",
+            "gemini",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         state.budget_limits.models.set_model_limit(
@@ -378,7 +375,7 @@ mod tests {
 
         let provider_usage = budget_limits
             .providers
-            .get_provider_usage("mock-gemini")
+            .get_provider_usage("gemini")
             .expect("provider spend should be recorded");
         assert!(provider_usage.current_spend > 0.0);
         let model_usage = budget_limits
@@ -394,13 +391,13 @@ mod tests {
     async fn gemini_sdk_stream_route_uses_sse_alt_query() {
         let mock = MockGeminiServer::start().await;
         let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             &mock.base_url,
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
         .await;
         state.budget_limits.providers.set_provider_limit(
-            "mock-gemini",
+            "gemini",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         state.budget_limits.models.set_model_limit(
@@ -442,7 +439,7 @@ mod tests {
         );
         let provider_usage = budget_limits
             .providers
-            .get_provider_usage("mock-gemini")
+            .get_provider_usage("gemini")
             .expect("provider stream spend should be recorded");
         assert!(provider_usage.current_spend > 0.0);
         let model_usage = budget_limits
@@ -458,7 +455,7 @@ mod tests {
     async fn gemini_prefixed_sdk_route_is_supported() {
         let mock = MockGeminiServer::start().await;
         let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             &mock.base_url,
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
@@ -493,7 +490,7 @@ mod tests {
     async fn gemini_sdk_route_rejects_unauthenticated_when_auth_enabled() {
         let mock = MockGeminiServer::start().await;
         let state = build_auth_required_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             &mock.base_url,
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
@@ -522,12 +519,8 @@ mod tests {
     #[tokio::test]
     async fn gemini_sdk_route_rejects_unsafe_model_segment_before_upstream() {
         let mock = MockGeminiServer::start().await;
-        let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
-            &mock.base_url,
-            Vec::new(),
-        )])
-        .await;
+        let state =
+            build_test_state(vec![gemini_provider("gemini", &mock.base_url, Vec::new())]).await;
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state))
@@ -553,18 +546,18 @@ mod tests {
     async fn gemini_sdk_route_rejects_exhausted_provider_budget_before_upstream() {
         let mock = MockGeminiServer::start().await;
         let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             &mock.base_url,
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
         .await;
         state.budget_limits.providers.set_provider_limit(
-            "mock-gemini",
+            "gemini",
             ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
         );
         state
             .budget_limits
-            .record_spend("mock-gemini", "gemini-3.1-flash-lite", 0.01);
+            .record_spend("gemini", "gemini-3.1-flash-lite", 0.01);
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state))
@@ -590,13 +583,13 @@ mod tests {
     async fn gemini_sdk_route_reserves_budget_before_upstream() {
         let mock = MockGeminiServer::start().await;
         let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             &mock.base_url,
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
         .await;
         state.budget_limits.providers.set_provider_limit(
-            "mock-gemini",
+            "gemini",
             ProviderLimitConfig::new(0.000001, ResetPeriod::Monthly),
         );
         state.budget_limits.models.set_model_limit(
@@ -627,7 +620,7 @@ mod tests {
     #[tokio::test]
     async fn gemini_sdk_route_network_error_does_not_leak_provider_key() {
         let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             "http://127.0.0.1:9",
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
@@ -659,7 +652,7 @@ mod tests {
     async fn gemini_sdk_route_redacts_key_from_upstream_error_body() {
         let mock = MockGeminiServer::start().await;
         let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             &mock.base_url,
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
@@ -694,13 +687,13 @@ mod tests {
     async fn gemini_sdk_stream_route_does_not_charge_upstream_error_body() {
         let mock = MockGeminiServer::start().await;
         let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             &mock.base_url,
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
         .await;
         state.budget_limits.providers.set_provider_limit(
-            "mock-gemini",
+            "gemini",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         state.budget_limits.models.set_model_limit(
@@ -732,7 +725,7 @@ mod tests {
         assert!(!stream_text.contains("test-api-key-12345678901234567890"));
         let provider_usage = budget_limits
             .providers
-            .get_provider_usage("mock-gemini")
+            .get_provider_usage("gemini")
             .expect("provider budget should exist");
         assert_eq!(provider_usage.current_spend, 0.0);
         let model_usage = budget_limits
@@ -748,13 +741,13 @@ mod tests {
     async fn gemini_sdk_stream_route_releases_budget_on_midstream_read_error() {
         let broken = BrokenGeminiStreamServer::start().await;
         let state = build_test_state(vec![gemini_provider(
-            "mock-gemini",
+            "gemini",
             &broken.base_url,
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
         .await;
         state.budget_limits.providers.set_provider_limit(
-            "mock-gemini",
+            "gemini",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         state.budget_limits.models.set_model_limit(
@@ -785,7 +778,7 @@ mod tests {
         assert!(stream_text.contains("Gemini upstream stream error"));
         let provider_usage = budget_limits
             .providers
-            .get_provider_usage("mock-gemini")
+            .get_provider_usage("gemini")
             .expect("provider budget should exist");
         assert_eq!(provider_usage.current_spend, 0.0);
         let model_usage = budget_limits
