@@ -6,6 +6,7 @@
 mod audio;
 mod batches;
 mod chat;
+mod completions;
 mod context;
 mod embeddings;
 mod execution;
@@ -26,6 +27,7 @@ mod spend;
 pub use audio::{audio_speech, audio_transcriptions, audio_translations};
 pub use batches::{cancel_batch, create_batch, get_batch, list_batches};
 pub use chat::chat_completions;
+pub use completions::{completions, engine_completions};
 pub use context::{
     check_permission, get_authenticated_api_key, get_authenticated_user, get_request_context,
     handle_ai_request, log_api_usage,
@@ -52,8 +54,23 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 
 /// Configure AI API routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
+    cfg.route("/completions", web::post().to(completions))
+        .route(
+            "/engines/{model_id}/completions",
+            web::post().to(engine_completions),
+        )
+        .route(
+            "/openai/deployments/{model_id}/completions",
+            web::post().to(engine_completions),
+        );
     cfg.service(
         web::scope("/v1")
+            // Legacy text completions
+            .route("/completions", web::post().to(completions))
+            .route(
+                "/engines/{model_id}/completions",
+                web::post().to(engine_completions),
+            )
             // Chat completions
             .route("/chat/completions", web::post().to(chat_completions))
             // Responses API

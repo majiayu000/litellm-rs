@@ -670,7 +670,7 @@ fn convert_usage(usage: types::responses::Usage) -> Usage {
 }
 
 /// Format a provider error into SSE error type and code for OpenAI-compatible responses.
-fn sse_error_classification(error: &ProviderError) -> (&'static str, &'static str) {
+pub(super) fn sse_error_classification(error: &ProviderError) -> (&'static str, &'static str) {
     match error {
         ProviderError::Authentication { .. } => ("invalid_request_error", "authentication_error"),
         ProviderError::RateLimit { .. } => ("rate_limit_error", "rate_limit_exceeded"),
