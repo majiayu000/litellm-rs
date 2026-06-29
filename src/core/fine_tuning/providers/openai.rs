@@ -3,8 +3,11 @@
 //! Implementation of fine-tuning for OpenAI API.
 
 use async_trait::async_trait;
-use reqwest::Client;
+use reqwest::{Client, Method, Url, header::RETRY_AFTER};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -16,28 +19,38 @@ use crate::core::fine_tuning::types::{
 };
 use crate::utils::net::http::create_custom_client;
 
+static CLIENTS_BY_TIMEOUT: OnceLock<Mutex<HashMap<u64, Client>>> = OnceLock::new();
+
 /// OpenAI fine-tuning provider
 pub struct OpenAIFineTuningProvider {
     config: ProviderFineTuningConfig,
     client: Client,
     api_base: String,
+    provider_name: String,
 }
 
 impl OpenAIFineTuningProvider {
     /// Create a new OpenAI fine-tuning provider
     pub fn new(config: ProviderFineTuningConfig) -> Self {
-        let client =
-            create_custom_client(Duration::from_secs(config.timeout_seconds)).unwrap_or_default();
+        Self::new_named(config, "openai")
+    }
+
+    /// Create a new OpenAI-compatible fine-tuning provider with a gateway provider name.
+    pub fn new_named(config: ProviderFineTuningConfig, provider_name: impl Into<String>) -> Self {
+        let client = shared_client(config.timeout_seconds);
 
         let api_base = config
             .api_base
             .clone()
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
 
         Self {
             config,
             client,
             api_base,
+            provider_name: provider_name.into(),
         }
     }
 
@@ -60,19 +73,35 @@ impl OpenAIFineTuningProvider {
             .ok_or_else(|| FineTuningError::auth("No API key configured"))
     }
 
+    /// Build a provider endpoint URL without concatenating untrusted path segments.
+    fn endpoint_url(&self, segments: &[&str]) -> FineTuningResult<Url> {
+        let mut url = Url::parse(&self.api_base)
+            .map_err(|e| FineTuningError::provider(format!("Invalid API base URL: {}", e)))?;
+        {
+            let mut path_segments = url.path_segments_mut().map_err(|_| {
+                FineTuningError::provider("API base URL cannot accept path segments")
+            })?;
+            for segment in segments {
+                path_segments.push(segment);
+            }
+        }
+        Ok(url)
+    }
+
     /// Make an authenticated request
-    async fn request<T: for<'de> Deserialize<'de>>(
+    async fn request<T: DeserializeOwned>(
         &self,
-        method: reqwest::Method,
-        path: &str,
-        body: Option<impl Serialize>,
+        method: Method,
+        url: Url,
+        body: Option<serde_json::Value>,
+        not_found_job_id: Option<&str>,
     ) -> FineTuningResult<T> {
-        let url = format!("{}{}", self.api_base, path);
         let auth = self.auth_header()?;
+        let request_url = url.to_string();
 
         let mut request = self
             .client
-            .request(method, &url)
+            .request(method, url)
             .header("Authorization", auth);
 
         // Add organization header if configured
@@ -90,7 +119,7 @@ impl OpenAIFineTuningProvider {
             request = request.json(&body);
         }
 
-        debug!("OpenAI fine-tuning request: {}", url);
+        debug!("OpenAI fine-tuning request: {}", request_url);
 
         let response = request
             .send()
@@ -105,6 +134,12 @@ impl OpenAIFineTuningProvider {
                 .await
                 .map_err(|e| FineTuningError::other(format!("Failed to parse response: {}", e)))
         } else {
+            let retry_after_seconds = response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(60);
             let error_text = response.text().await.unwrap_or_else(|e| {
                 warn!(
                     "Failed to read OpenAI fine-tuning error response payload: {}",
@@ -122,16 +157,12 @@ impl OpenAIFineTuningProvider {
 
             match status.as_u16() {
                 401 => Err(FineTuningError::auth("Invalid API key")),
-                404 => {
-                    // Try to extract job ID from error
-                    Err(FineTuningError::job_not_found("unknown"))
-                }
-                429 => {
-                    // Try to parse retry-after
-                    Err(FineTuningError::RateLimited {
-                        retry_after_seconds: 60,
-                    })
-                }
+                404 => Err(FineTuningError::job_not_found(
+                    not_found_job_id.unwrap_or("unknown"),
+                )),
+                429 => Err(FineTuningError::RateLimited {
+                    retry_after_seconds,
+                }),
                 _ => Err(FineTuningError::provider(format!(
                     "API error {}: {}",
                     status,
@@ -143,6 +174,31 @@ impl OpenAIFineTuningProvider {
             }
         }
     }
+
+    fn annotate_job(&self, mut job: FineTuningJob) -> FineTuningJob {
+        job.provider = Some(self.provider_name.clone());
+        job
+    }
+}
+
+fn shared_client(timeout_seconds: u64) -> Client {
+    let clients = CLIENTS_BY_TIMEOUT.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut clients = clients
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    clients
+        .entry(timeout_seconds)
+        .or_insert_with(|| {
+            create_custom_client(Duration::from_secs(timeout_seconds)).unwrap_or_else(|error| {
+                warn!(
+                    "Failed to create custom fine-tuning HTTP client, using default client: {}",
+                    error
+                );
+                Client::new()
+            })
+        })
+        .clone()
 }
 
 fn extract_openai_error_message(error_text: &str) -> Option<String> {
@@ -171,6 +227,8 @@ struct OpenAICreateJobRequest {
     suffix: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    metadata: HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,6 +263,7 @@ impl From<&CreateJobRequest> for OpenAICreateJobRequest {
             hyperparameters,
             suffix: req.suffix.clone(),
             seed: req.seed,
+            metadata: req.metadata.clone(),
         }
     }
 }
@@ -217,17 +276,14 @@ impl FineTuningProvider for OpenAIFineTuningProvider {
 
     async fn create_job(&self, request: CreateJobRequest) -> FineTuningResult<FineTuningJob> {
         let openai_request = OpenAICreateJobRequest::from(&request);
+        let url = self.endpoint_url(&["fine_tuning", "jobs"])?;
+        let body = serde_json::to_value(&openai_request)
+            .map_err(|e| FineTuningError::other(format!("Failed to serialize request: {}", e)))?;
 
-        let mut job: FineTuningJob = self
-            .request(
-                reqwest::Method::POST,
-                "/fine_tuning/jobs",
-                Some(&openai_request),
-            )
-            .await?;
+        let mut job: FineTuningJob = self.request(Method::POST, url, Some(body), None).await?;
 
         // Add provider info
-        job.provider = Some("openai".to_string());
+        job.provider = Some(self.provider_name.clone());
 
         // Copy metadata from request
         job.metadata = request.metadata;
@@ -236,54 +292,41 @@ impl FineTuningProvider for OpenAIFineTuningProvider {
     }
 
     async fn list_jobs(&self, params: ListJobsParams) -> FineTuningResult<ListJobsResponse> {
-        let mut query = Vec::new();
-        if let Some(after) = &params.after {
-            query.push(format!("after={}", after));
-        }
-        if let Some(limit) = params.limit {
-            query.push(format!("limit={}", limit));
+        let mut url = self.endpoint_url(&["fine_tuning", "jobs"])?;
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(after) = &params.after {
+                query.append_pair("after", after);
+            }
+            if let Some(limit) = params.limit {
+                query.append_pair("limit", &limit.to_string());
+            }
         }
 
-        let path = if query.is_empty() {
-            "/fine_tuning/jobs".to_string()
-        } else {
-            format!("/fine_tuning/jobs?{}", query.join("&"))
-        };
-
-        let mut response: ListJobsResponse = self
-            .request::<ListJobsResponse>(reqwest::Method::GET, &path, None::<()>)
-            .await?;
+        let mut response: ListJobsResponse = self.request(Method::GET, url, None, None).await?;
 
         // Add provider info to all jobs
         for job in &mut response.data {
-            job.provider = Some("openai".to_string());
+            job.provider = Some(self.provider_name.clone());
         }
 
         Ok(response)
     }
 
     async fn get_job(&self, job_id: &str) -> FineTuningResult<FineTuningJob> {
-        let path = format!("/fine_tuning/jobs/{}", job_id);
+        let url = self.endpoint_url(&["fine_tuning", "jobs", job_id])?;
 
-        let mut job: FineTuningJob = self
-            .request::<FineTuningJob>(reqwest::Method::GET, &path, None::<()>)
-            .await?;
+        let job: FineTuningJob = self.request(Method::GET, url, None, Some(job_id)).await?;
 
-        job.provider = Some("openai".to_string());
-
-        Ok(job)
+        Ok(self.annotate_job(job))
     }
 
     async fn cancel_job(&self, job_id: &str) -> FineTuningResult<FineTuningJob> {
-        let path = format!("/fine_tuning/jobs/{}/cancel", job_id);
+        let url = self.endpoint_url(&["fine_tuning", "jobs", job_id, "cancel"])?;
 
-        let mut job: FineTuningJob = self
-            .request::<FineTuningJob>(reqwest::Method::POST, &path, None::<()>)
-            .await?;
+        let job: FineTuningJob = self.request(Method::POST, url, None, Some(job_id)).await?;
 
-        job.provider = Some("openai".to_string());
-
-        Ok(job)
+        Ok(self.annotate_job(job))
     }
 
     async fn list_events(
@@ -291,35 +334,30 @@ impl FineTuningProvider for OpenAIFineTuningProvider {
         job_id: &str,
         params: ListEventsParams,
     ) -> FineTuningResult<ListEventsResponse> {
-        let mut query = Vec::new();
-        if let Some(after) = &params.after {
-            query.push(format!("after={}", after));
-        }
-        if let Some(limit) = params.limit {
-            query.push(format!("limit={}", limit));
+        let mut url = self.endpoint_url(&["fine_tuning", "jobs", job_id, "events"])?;
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(after) = &params.after {
+                query.append_pair("after", after);
+            }
+            if let Some(limit) = params.limit {
+                query.append_pair("limit", &limit.to_string());
+            }
         }
 
-        let path = if query.is_empty() {
-            format!("/fine_tuning/jobs/{}/events", job_id)
-        } else {
-            format!("/fine_tuning/jobs/{}/events?{}", job_id, query.join("&"))
-        };
-
-        self.request::<ListEventsResponse>(reqwest::Method::GET, &path, None::<()>)
-            .await
+        self.request(Method::GET, url, None, Some(job_id)).await
     }
 
     async fn list_checkpoints(&self, job_id: &str) -> FineTuningResult<Vec<FineTuningCheckpoint>> {
-        let path = format!("/fine_tuning/jobs/{}/checkpoints", job_id);
+        let url = self.endpoint_url(&["fine_tuning", "jobs", job_id, "checkpoints"])?;
 
         #[derive(Deserialize)]
         struct CheckpointsResponse {
             data: Vec<FineTuningCheckpoint>,
         }
 
-        let response: CheckpointsResponse = self
-            .request::<CheckpointsResponse>(reqwest::Method::GET, &path, None::<()>)
-            .await?;
+        let response: CheckpointsResponse =
+            self.request(Method::GET, url, None, Some(job_id)).await?;
 
         Ok(response.data)
     }

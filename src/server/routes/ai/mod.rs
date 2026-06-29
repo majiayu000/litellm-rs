@@ -10,9 +10,11 @@ mod context;
 mod embeddings;
 mod execution;
 mod files;
+mod fine_tuning;
 mod images;
 mod models;
 mod openai_errors;
+mod provider_config;
 #[cfg(test)]
 mod provider_selection;
 mod responses;
@@ -29,6 +31,10 @@ pub use context::{
 };
 pub use embeddings::embeddings;
 pub use files::{create_file, delete_file, get_file, get_file_content, list_files};
+pub use fine_tuning::{
+    cancel_fine_tuning_job, create_fine_tuning_job, get_fine_tuning_job,
+    list_fine_tuning_checkpoints, list_fine_tuning_events, list_fine_tuning_jobs,
+};
 pub use images::image_generations;
 pub use models::{get_model, list_models};
 pub use responses::{
@@ -71,6 +77,25 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/batches", web::get().to(list_batches))
             .route("/batches/{batch_id}", web::get().to(get_batch))
             .route("/batches/{batch_id}/cancel", web::post().to(cancel_batch))
+            // Fine-tuning
+            .route("/fine_tuning/jobs", web::post().to(create_fine_tuning_job))
+            .route("/fine_tuning/jobs", web::get().to(list_fine_tuning_jobs))
+            .route(
+                "/fine_tuning/jobs/{job_id}",
+                web::get().to(get_fine_tuning_job),
+            )
+            .route(
+                "/fine_tuning/jobs/{job_id}/cancel",
+                web::post().to(cancel_fine_tuning_job),
+            )
+            .route(
+                "/fine_tuning/jobs/{job_id}/events",
+                web::get().to(list_fine_tuning_events),
+            )
+            .route(
+                "/fine_tuning/jobs/{job_id}/checkpoints",
+                web::get().to(list_fine_tuning_checkpoints),
+            )
             // Files
             .route("/files", web::post().to(create_file))
             .route("/files", web::get().to(list_files))

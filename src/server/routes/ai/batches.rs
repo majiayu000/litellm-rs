@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 use tracing::error;
 
 use super::openai_errors;
+use super::provider_config;
 
 const OPENAI_BATCH_BASE_URL: &str = "https://api.openai.com/v1";
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -221,8 +222,8 @@ fn batch_base_url(provider: &ProviderConfig) -> Result<String, GatewayError> {
         }
     }
 
-    if normalize_provider_selector(&provider.provider_type) == "openai"
-        || normalize_provider_selector(&provider.name) == "openai"
+    if provider_config::normalize_provider_selector(&provider.provider_type) == "openai"
+        || provider_config::normalize_provider_selector(&provider.name) == "openai"
     {
         return Ok(OPENAI_BATCH_BASE_URL.to_string());
     }
@@ -295,30 +296,13 @@ fn batch_provider_headers(
     if let Some(project) = provider.project.as_deref() {
         push_header(&mut headers, "OpenAI-Project", project)?;
     }
-    append_string_header_map(&mut headers, provider, "headers")?;
-    append_string_header_map(&mut headers, provider, "custom_headers")?;
+    provider_config::append_string_header_map(provider, "headers", |key, value| {
+        push_header(&mut headers, key, value)
+    })?;
+    provider_config::append_string_header_map(provider, "custom_headers", |key, value| {
+        push_header(&mut headers, key, value)
+    })?;
     Ok(headers)
-}
-
-fn append_string_header_map(
-    headers: &mut Vec<(HeaderName, HeaderValue)>,
-    provider: &ProviderConfig,
-    settings_key: &str,
-) -> Result<(), GatewayError> {
-    let Some(header_map) = provider
-        .settings
-        .get(settings_key)
-        .and_then(serde_json::Value::as_object)
-    else {
-        return Ok(());
-    };
-
-    for (key, value) in header_map {
-        if let Some(value) = value.as_str() {
-            push_header(headers, key, value)?;
-        }
-    }
-    Ok(())
 }
 
 fn push_header(
@@ -366,17 +350,13 @@ fn validate_batch_id(batch_id: &str) -> Result<(), GatewayError> {
 }
 
 fn is_openai_batch_provider(provider: &ProviderConfig) -> bool {
-    let provider_type = normalize_provider_selector(&provider.provider_type);
-    let provider_name = normalize_provider_selector(&provider.name);
+    let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
+    let provider_name = provider_config::normalize_provider_selector(&provider.name);
 
     provider_type == "openai"
         || provider_type == "openaicompatible"
         || provider_name == "openai"
         || provider_name == "openaicompatible"
-}
-
-fn normalize_provider_selector(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace(['_', '-'], "")
 }
 
 #[cfg(test)]
