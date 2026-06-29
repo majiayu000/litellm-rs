@@ -99,28 +99,14 @@ async fn engine_embeddings(
     model_id: web::Path<String>,
     request: web::Json<EmbeddingRequest>,
 ) -> ActixResult<HttpResponse> {
-    embeddings_for_path_model(state, req, model_id.into_inner(), request).await
-}
-
-async fn embeddings_for_path_model(
-    state: web::Data<AppState>,
-    req: HttpRequest,
-    model: String,
-    request: web::Json<EmbeddingRequest>,
-) -> ActixResult<HttpResponse> {
     let mut request = request.into_inner();
-    override_embedding_model(&mut request, model);
+    request.model = model_id.into_inner();
     embeddings(state, req, web::Json(request)).await
-}
-
-fn override_embedding_model(request: &mut EmbeddingRequest, model: String) {
-    request.model = model;
 }
 
 #[cfg(test)]
 mod tests {
     use crate::Config;
-    use crate::core::models::openai::EmbeddingRequest;
     use crate::core::types::context::RequestContext;
     use crate::server::HttpServer as GatewayHttpServer;
     use actix_web::{App, http::StatusCode, test, web};
@@ -297,18 +283,5 @@ mod tests {
         let req = test::TestRequest::get().uri("/engines").to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[actix_web::test]
-    async fn test_alias_embedding_model_overrides_body_model() {
-        let mut request = EmbeddingRequest {
-            model: "body-model".to_string(),
-            input: serde_json::json!("Hello"),
-            user: None,
-        };
-
-        super::override_embedding_model(&mut request, "path-model".to_string());
-
-        assert_eq!(request.model, "path-model");
     }
 }
