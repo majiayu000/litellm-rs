@@ -179,7 +179,7 @@ async fn handle_streaming_completion(
             let key_manager = state.key_manager.clone();
             let pricing_service = state.pricing.clone();
             let include_usage = adapter_request.include_usage;
-            let echo_prefix = adapter_request.echo.then_some(adapter_request.prompt);
+            let mut echo_prefix = adapter_request.echo.then_some(adapter_request.prompt);
 
             tokio::spawn(async move {
                 let mut lease = Some(lease);
@@ -217,7 +217,7 @@ async fn handle_streaming_completion(
                                     );
                                     lease.finish_failure(&error);
                                 }
-                                settle_stream_spend(
+                                settle_stream_spend_if_chargeable(
                                     pricing_service.as_ref(),
                                     &budget_limits,
                                     &key_manager,
@@ -245,9 +245,14 @@ async fn handle_streaming_completion(
                                 tokens_used = u64::from(usage.total_tokens);
                                 final_usage = Some(usage.clone());
                             }
+                            let prefix_for_chunk = if chunk_has_text_delta(&chunk) {
+                                echo_prefix.take()
+                            } else {
+                                None
+                            };
                             let completion_chunk = completion_chunk_from_core(
                                 chunk,
-                                echo_prefix.as_deref(),
+                                prefix_for_chunk.as_deref(),
                                 include_usage,
                             );
                             if !include_usage && completion_chunk.choices.is_empty() {
@@ -271,7 +276,7 @@ async fn handle_streaming_completion(
                                         );
                                         lease.finish_failure(&error);
                                     }
-                                    settle_stream_spend(
+                                    settle_stream_spend_if_chargeable(
                                         pricing_service.as_ref(),
                                         &budget_limits,
                                         &key_manager,
@@ -296,7 +301,7 @@ async fn handle_streaming_completion(
                             if let Some(lease) = lease.take() {
                                 lease.finish_failure(&error);
                             }
-                            settle_stream_spend(
+                            settle_stream_spend_if_chargeable(
                                 pricing_service.as_ref(),
                                 &budget_limits,
                                 &key_manager,
@@ -313,7 +318,7 @@ async fn handle_streaming_completion(
                     };
 
                     if tx.send(bytes).await.is_err() {
-                        settle_stream_spend(
+                        settle_stream_spend_if_chargeable(
                             pricing_service.as_ref(),
                             &budget_limits,
                             &key_manager,
@@ -393,6 +398,34 @@ async fn settle_stream_spend(
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn settle_stream_spend_if_chargeable(
+    pricing_service: &crate::core::pricing_service::PricingService,
+    budget_limits: &crate::core::budget::UnifiedBudgetLimits,
+    key_manager: &crate::core::keys::KeyManager,
+    api_key_id: Option<uuid::Uuid>,
+    provider: &str,
+    model: &str,
+    usage: Option<&Usage>,
+    budget_reservation: Option<crate::core::budget::UnifiedBudgetReservation>,
+    saw_upstream_output: bool,
+) {
+    if usage.is_some() || saw_upstream_output {
+        settle_stream_spend(
+            pricing_service,
+            budget_limits,
+            key_manager,
+            api_key_id,
+            provider,
+            model,
+            usage,
+            budget_reservation,
+            saw_upstream_output,
+        )
+        .await;
+    }
+}
+
 fn completion_request_from_value(
     body: Value,
     path_model: Option<String>,
@@ -402,18 +435,15 @@ fn completion_request_from_value(
         .ok_or_else(|| GatewayError::validation("request body must be a JSON object"))?;
     reject_unsupported_fields(object)?;
 
-    let model = path_model
-        .or_else(|| string_field(object, "model").map(str::to_string))
-        .ok_or_else(|| GatewayError::validation("Model is required"))?;
+    let model = match path_model {
+        Some(model) => model,
+        None => required_string_field(object, "model", "Model is required")?,
+    };
     let prompt = prompt_field(object.get("prompt"))?;
-    let stream = bool_field(object, "stream").unwrap_or(false);
-    let include_usage = object
-        .get("stream_options")
-        .and_then(|value| value.get("include_usage"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let echo = bool_field(object, "echo").unwrap_or(false);
-    let logprobs = u32_field(object, "logprobs");
+    let stream = bool_field(object, "stream")?.unwrap_or(false);
+    let include_usage = include_usage_field(object.get("stream_options"))?.unwrap_or(false);
+    let echo = bool_field(object, "echo")?.unwrap_or(false);
+    let logprobs = u32_field(object, "logprobs")?;
 
     Ok(CompletionAdapterRequest {
         prompt: prompt.clone(),
@@ -431,10 +461,10 @@ fn completion_request_from_value(
                 tool_call_id: None,
                 audio: None,
             }],
-            max_tokens: u32_field(object, "max_tokens"),
+            max_tokens: u32_field(object, "max_tokens")?,
             temperature: f32_field(object, "temperature")?,
             top_p: f32_field(object, "top_p")?,
-            n: u32_field(object, "n"),
+            n: u32_field(object, "n")?,
             stream: Some(stream),
             stream_options: Some(StreamOptions {
                 include_usage: Some(include_usage),
@@ -443,7 +473,7 @@ fn completion_request_from_value(
             presence_penalty: f32_field(object, "presence_penalty")?,
             frequency_penalty: f32_field(object, "frequency_penalty")?,
             logit_bias: logit_bias_field(object.get("logit_bias"))?,
-            user: string_field(object, "user").map(str::to_string),
+            user: optional_string_field(object, "user")?,
             logprobs: logprobs.map(|_| true),
             top_logprobs: logprobs.filter(|value| *value > 0),
             ..ChatCompletionRequest::default()
@@ -543,19 +573,74 @@ fn logit_bias_field(value: Option<&Value>) -> Result<Option<HashMap<String, f32>
     Ok(Some(result))
 }
 
-fn string_field<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
-    object.get(key).and_then(Value::as_str).map(str::trim)
+fn required_string_field(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    missing_message: &'static str,
+) -> Result<String, GatewayError> {
+    match object.get(key) {
+        Some(Value::String(value)) => Ok(value.trim().to_string()),
+        Some(_) => Err(GatewayError::validation(format!("{key} must be a string"))),
+        None => Err(GatewayError::validation(missing_message)),
+    }
 }
 
-fn bool_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<bool> {
-    object.get(key).and_then(Value::as_bool)
+fn optional_string_field(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, GatewayError> {
+    match object.get(key) {
+        Some(Value::String(value)) => Ok(Some(value.trim().to_string())),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(GatewayError::validation(format!("{key} must be a string"))),
+    }
 }
 
-fn u32_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<u32> {
-    object
-        .get(key)
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
+fn bool_field(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<bool>, GatewayError> {
+    match object.get(key) {
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(GatewayError::validation(format!("{key} must be a boolean"))),
+    }
+}
+
+fn u32_field(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<u32>, GatewayError> {
+    match object.get(key) {
+        Some(Value::Number(value)) => {
+            let Some(value) = value.as_u64() else {
+                return Err(GatewayError::validation(format!(
+                    "{key} must be a non-negative integer"
+                )));
+            };
+            u32::try_from(value).map(Some).map_err(|_| {
+                GatewayError::validation(format!("{key} must fit in an unsigned 32-bit integer"))
+            })
+        }
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(GatewayError::validation(format!(
+            "{key} must be an integer"
+        ))),
+    }
+}
+
+fn include_usage_field(value: Option<&Value>) -> Result<Option<bool>, GatewayError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(map)) => match map.get("include_usage") {
+            Some(Value::Bool(value)) => Ok(Some(*value)),
+            Some(Value::Null) | None => Ok(None),
+            Some(_) => Err(GatewayError::validation(
+                "stream_options.include_usage must be a boolean",
+            )),
+        },
+        Some(_) => Err(GatewayError::validation("stream_options must be an object")),
+    }
 }
 
 fn f32_field(
@@ -624,6 +709,16 @@ fn completion_chunk_from_core(
             .collect(),
         usage: include_usage.then_some(chunk.usage).flatten(),
     }
+}
+
+fn chunk_has_text_delta(chunk: &types::responses::ChatChunk) -> bool {
+    chunk.choices.iter().any(|choice| {
+        choice
+            .delta
+            .content
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+    })
 }
 
 fn completion_text_from_message(
