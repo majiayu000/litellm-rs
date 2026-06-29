@@ -104,18 +104,36 @@ impl S3Storage {
     /// Store a file to S3
     #[allow(unused_variables)]
     pub async fn store(&self, filename: &str, content: &[u8]) -> Result<String> {
+        self.store_with_purpose(filename, content, None).await
+    }
+
+    /// Store a file to S3 with optional OpenAI purpose metadata.
+    #[allow(unused_variables)]
+    pub async fn store_with_purpose(
+        &self,
+        filename: &str,
+        content: &[u8],
+        purpose: Option<&str>,
+    ) -> Result<String> {
         #[cfg(feature = "s3")]
         {
             if let Some(client) = &self.client {
                 use aws_s3::primitives::ByteStream;
 
                 let file_id = Self::file_id_for_object(&Uuid::new_v4().to_string(), filename);
-
-                client
+                let mut request = client
                     .put_object()
                     .bucket(&self.bucket)
                     .key(&file_id)
-                    .body(ByteStream::from(content.to_vec()))
+                    .content_type(Self::detect_content_type(filename))
+                    .metadata("filename", filename)
+                    .body(ByteStream::from(content.to_vec()));
+
+                if let Some(purpose) = Self::normalize_purpose(purpose) {
+                    request = request.metadata("purpose", purpose);
+                }
+
+                request
                     .send()
                     .await
                     .map_err(|e| GatewayError::Internal(format!("S3 upload failed: {}", e)))?;
@@ -261,9 +279,15 @@ impl S3Storage {
                     .and_then(|t| chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos()))
                     .unwrap_or_else(chrono::Utc::now);
 
-                let filename = Self::filename_from_file_id(file_id);
+                let filename = head
+                    .metadata()
+                    .and_then(|metadata| metadata.get("filename").cloned())
+                    .unwrap_or_else(|| Self::filename_from_file_id(file_id));
 
                 let checksum = head.e_tag().unwrap_or("").trim_matches('"').to_string();
+                let purpose = head
+                    .metadata()
+                    .and_then(|metadata| metadata.get("purpose").cloned());
 
                 Ok(FileMetadata {
                     id: file_id.to_string(),
@@ -271,6 +295,7 @@ impl S3Storage {
                     content_type,
                     size,
                     created_at,
+                    purpose,
                     checksum,
                 })
             } else {
@@ -361,13 +386,26 @@ impl S3Storage {
     }
 
     #[cfg_attr(not(feature = "s3"), allow(dead_code))]
-    fn file_id_for_object(object_id: &str, filename: &str) -> String {
-        format!("{}/{}", object_id, filename)
+    fn file_id_for_object(object_id: &str, _filename: &str) -> String {
+        object_id.to_string()
     }
 
     #[cfg_attr(not(feature = "s3"), allow(dead_code))]
     fn filename_from_file_id(file_id: &str) -> String {
         file_id.rsplit('/').next().unwrap_or(file_id).to_string()
+    }
+
+    #[cfg_attr(not(feature = "s3"), allow(dead_code))]
+    fn detect_content_type(filename: &str) -> String {
+        super::local::LocalStorage::detect_content_type(filename)
+    }
+
+    #[cfg_attr(not(feature = "s3"), allow(dead_code))]
+    fn normalize_purpose(purpose: Option<&str>) -> Option<String> {
+        purpose
+            .map(str::trim)
+            .filter(|purpose| !purpose.is_empty())
+            .map(ToOwned::to_owned)
     }
 }
 
@@ -376,11 +414,12 @@ mod tests {
     use super::S3Storage;
 
     #[test]
-    fn store_identifier_matches_s3_object_key() {
+    fn store_identifier_is_route_safe() {
         let object_id = "550e8400-e29b-41d4-a716-446655440000";
         let file_id = S3Storage::file_id_for_object(object_id, "batch.jsonl");
 
-        assert_eq!(file_id, "550e8400-e29b-41d4-a716-446655440000/batch.jsonl");
+        assert_eq!(file_id, "550e8400-e29b-41d4-a716-446655440000");
+        assert!(!file_id.contains('/'));
     }
 
     #[test]

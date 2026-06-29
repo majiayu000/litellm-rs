@@ -40,9 +40,23 @@ impl FileStorage {
 
     /// Store a file and return its ID
     pub async fn store(&self, filename: &str, content: &[u8]) -> Result<String> {
+        self.store_with_purpose(filename, content, None).await
+    }
+
+    /// Store a file with optional OpenAI purpose metadata and return its ID
+    pub async fn store_with_purpose(
+        &self,
+        filename: &str,
+        content: &[u8],
+        purpose: Option<&str>,
+    ) -> Result<String> {
         match self {
-            FileStorage::Local(storage) => storage.store(filename, content).await,
-            FileStorage::S3(storage) => storage.store(filename, content).await,
+            FileStorage::Local(storage) => {
+                storage.store_with_purpose(filename, content, purpose).await
+            }
+            FileStorage::S3(storage) => {
+                storage.store_with_purpose(filename, content, purpose).await
+            }
         }
     }
 

@@ -9,6 +9,7 @@ mod chat;
 mod context;
 mod embeddings;
 mod execution;
+mod files;
 mod images;
 mod models;
 mod openai_errors;
@@ -26,6 +27,7 @@ pub use context::{
     handle_ai_request, log_api_usage,
 };
 pub use embeddings::embeddings;
+pub use files::{create_file, delete_file, get_file, get_file_content, list_files};
 pub use images::image_generations;
 pub use models::{get_model, list_models};
 pub use responses::create_response;
@@ -47,6 +49,12 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/batches", web::get().to(list_batches))
             .route("/batches/{batch_id}", web::get().to(get_batch))
             .route("/batches/{batch_id}/cancel", web::post().to(cancel_batch))
+            // Files
+            .route("/files", web::post().to(create_file))
+            .route("/files", web::get().to(list_files))
+            .route("/files/{file_id}", web::get().to(get_file))
+            .route("/files/{file_id}", web::delete().to(delete_file))
+            .route("/files/{file_id}/content", web::get().to(get_file_content))
             // Image generation
             .route("/images/generations", web::post().to(image_generations))
             // Models

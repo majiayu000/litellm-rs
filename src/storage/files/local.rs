@@ -33,6 +33,16 @@ impl LocalStorage {
 
     /// Store a file
     pub async fn store(&self, filename: &str, content: &[u8]) -> Result<String> {
+        self.store_with_purpose(filename, content, None).await
+    }
+
+    /// Store a file with optional OpenAI purpose metadata.
+    pub async fn store_with_purpose(
+        &self,
+        filename: &str,
+        content: &[u8],
+        purpose: Option<&str>,
+    ) -> Result<String> {
         let file_id = Uuid::new_v4().to_string();
         let file_path = self.get_file_path(&file_id);
 
@@ -59,6 +69,7 @@ impl LocalStorage {
             content_type: Self::detect_content_type(filename),
             size: content.len() as u64,
             created_at: chrono::Utc::now(),
+            purpose: Self::normalize_purpose(purpose),
             checksum: Self::calculate_checksum(content),
         };
 
@@ -148,36 +159,66 @@ impl LocalStorage {
     /// List files
     pub async fn list(&self, prefix: Option<&str>, limit: Option<usize>) -> Result<Vec<String>> {
         let mut files = Vec::new();
-        let mut entries = fs::read_dir(&self.base_path)
+        let mut subdirs = fs::read_dir(&self.base_path)
             .await
             .map_err(|e| GatewayError::Internal(format!("Failed to read directory: {}", e)))?;
 
-        while let Some(entry) = entries
+        while let Some(subdir) = subdirs
             .next_entry()
             .await
             .map_err(|e| GatewayError::Internal(format!("Failed to read entry: {}", e)))?
         {
-            let file_name = entry.file_name().to_string_lossy().to_string();
-
-            // Skip metadata files
-            if file_name.ends_with(".meta") {
+            let subdir_name = subdir.file_name().to_string_lossy().to_string();
+            if subdir_name.len() != 2 || !subdir_name.chars().all(|c| c.is_ascii_alphanumeric()) {
                 continue;
             }
 
-            // Apply prefix filter
-            if let Some(prefix) = prefix
-                && !file_name.starts_with(prefix)
-            {
+            let file_type = subdir
+                .file_type()
+                .await
+                .map_err(|e| GatewayError::Internal(format!("Failed to read entry type: {}", e)))?;
+            if !file_type.is_dir() {
                 continue;
             }
 
-            files.push(file_name);
+            let mut entries = fs::read_dir(subdir.path())
+                .await
+                .map_err(|e| GatewayError::Internal(format!("Failed to read directory: {}", e)))?;
 
-            // Apply limit
-            if let Some(limit) = limit
-                && files.len() >= limit
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|e| GatewayError::Internal(format!("Failed to read entry: {}", e)))?
             {
-                break;
+                let file_type = entry.file_type().await.map_err(|e| {
+                    GatewayError::Internal(format!("Failed to read entry type: {}", e))
+                })?;
+                if !file_type.is_file() {
+                    continue;
+                }
+
+                let file_name = entry.file_name().to_string_lossy().to_string();
+
+                // Skip metadata files
+                if file_name.ends_with(".meta") {
+                    continue;
+                }
+
+                // Apply prefix filter to the stored file id, not to shard paths.
+                if let Some(prefix) = prefix
+                    && !file_name.starts_with(prefix)
+                {
+                    continue;
+                }
+
+                files.push(file_name);
+
+                // Apply limit
+                if let Some(limit) = limit
+                    && files.len() >= limit
+                {
+                    return Ok(files);
+                }
             }
         }
 
@@ -293,6 +334,13 @@ impl LocalStorage {
         let mut hasher = Sha256::new();
         hasher.update(content);
         hex::encode(hasher.finalize())
+    }
+
+    fn normalize_purpose(purpose: Option<&str>) -> Option<String> {
+        purpose
+            .map(str::trim)
+            .filter(|purpose| !purpose.is_empty())
+            .map(ToOwned::to_owned)
     }
 }
 

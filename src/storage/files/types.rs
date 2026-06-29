@@ -24,6 +24,9 @@ pub struct FileMetadata {
     pub size: u64,
     /// Creation timestamp
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// OpenAI file purpose, when supplied at upload time
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     /// File checksum
     pub checksum: String,
 }
@@ -41,6 +44,7 @@ mod tests {
             content_type: "text/plain".to_string(),
             size: 1024,
             created_at: Utc::now(),
+            purpose: Some("assistants".to_string()),
             checksum: "abc123".to_string(),
         };
 
@@ -48,6 +52,7 @@ mod tests {
         assert_eq!(metadata.filename, "test.txt");
         assert_eq!(metadata.content_type, "text/plain");
         assert_eq!(metadata.size, 1024);
+        assert_eq!(metadata.purpose.as_deref(), Some("assistants"));
         assert_eq!(metadata.checksum, "abc123");
     }
 
@@ -59,6 +64,7 @@ mod tests {
             content_type: "text/plain".to_string(),
             size: 1024,
             created_at: Utc::now(),
+            purpose: None,
             checksum: "abc123".to_string(),
         };
 
@@ -76,6 +82,7 @@ mod tests {
             content_type: "application/pdf".to_string(),
             size: 2048,
             created_at: Utc::now(),
+            purpose: Some("batch".to_string()),
             checksum: "def456".to_string(),
         };
 
@@ -84,6 +91,7 @@ mod tests {
         assert_eq!(json["filename"], "document.pdf");
         assert_eq!(json["content_type"], "application/pdf");
         assert_eq!(json["size"], 2048);
+        assert_eq!(json["purpose"], "batch");
     }
 
     #[test]
@@ -94,6 +102,7 @@ mod tests {
             "content_type": "image/png",
             "size": 4096,
             "created_at": "2024-01-01T00:00:00Z",
+            "purpose": "fine-tune",
             "checksum": "ghi789"
         }"#;
 
@@ -102,7 +111,24 @@ mod tests {
         assert_eq!(metadata.filename, "image.png");
         assert_eq!(metadata.content_type, "image/png");
         assert_eq!(metadata.size, 4096);
+        assert_eq!(metadata.purpose.as_deref(), Some("fine-tune"));
         assert_eq!(metadata.checksum, "ghi789");
+    }
+
+    #[test]
+    fn test_file_metadata_deserializes_legacy_without_purpose() {
+        let json = r#"{
+            "id": "file-legacy",
+            "filename": "legacy.jsonl",
+            "content_type": "application/json",
+            "size": 128,
+            "created_at": "2024-01-01T00:00:00Z",
+            "checksum": "legacy"
+        }"#;
+
+        let metadata: FileMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.id, "file-legacy");
+        assert_eq!(metadata.purpose, None);
     }
 
     #[test]
@@ -113,6 +139,7 @@ mod tests {
             content_type: "text/plain".to_string(),
             size: 0,
             created_at: Utc::now(),
+            purpose: None,
             checksum: "empty".to_string(),
         };
 
@@ -127,6 +154,7 @@ mod tests {
             content_type: "application/octet-stream".to_string(),
             size: u64::MAX,
             created_at: Utc::now(),
+            purpose: None,
             checksum: "large".to_string(),
         };
 

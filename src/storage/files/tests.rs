@@ -47,10 +47,67 @@ async fn test_local_storage() {
     let metadata = storage.metadata(&file_id).await.unwrap();
     assert_eq!(metadata.filename, "test.txt");
     assert_eq!(metadata.size, content.len() as u64);
+    assert_eq!(metadata.purpose, None);
 
     // Test delete
     storage.delete(&file_id).await.unwrap();
     assert!(!storage.exists(&file_id).await.unwrap());
+}
+
+#[tokio::test]
+async fn test_local_storage_persists_purpose_metadata() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage = LocalStorage::new(temp_dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let file_id = storage
+        .store_with_purpose("batch.jsonl", b"{\"custom_id\":\"1\"}\n", Some("batch"))
+        .await
+        .unwrap();
+
+    let metadata = storage.metadata(&file_id).await.unwrap();
+    assert_eq!(metadata.filename, "batch.jsonl");
+    assert_eq!(metadata.purpose.as_deref(), Some("batch"));
+}
+
+#[tokio::test]
+async fn test_local_storage_list_returns_stored_files() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage = LocalStorage::new(temp_dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let first_id = storage
+        .store("first.jsonl", b"{\"index\":1}\n")
+        .await
+        .unwrap();
+    let second_id = storage
+        .store("second.jsonl", b"{\"index\":2}\n")
+        .await
+        .unwrap();
+
+    let mut listed = storage.list(None, None).await.unwrap();
+    listed.sort();
+
+    let mut expected = vec![first_id.clone(), second_id.clone()];
+    expected.sort();
+    assert_eq!(listed, expected);
+
+    assert_eq!(
+        storage.list(Some(&first_id), None).await.unwrap(),
+        vec![first_id]
+    );
+
+    let limited = storage.list(None, Some(1)).await.unwrap();
+    assert_eq!(limited.len(), 1);
+    assert!(expected.contains(&limited[0]));
+
+    for file_id in listed {
+        let metadata = storage.metadata(&file_id).await.unwrap();
+        assert_eq!(metadata.id, file_id);
+        assert!(metadata.filename.ends_with(".jsonl"));
+    }
 }
 
 #[test]
