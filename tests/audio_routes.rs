@@ -59,7 +59,7 @@ mod tests {
             .run();
             let handle = server.handle();
             let task = tokio::spawn(server);
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            wait_for_server(address).await;
 
             Self {
                 base_url: format!("http://{address}"),
@@ -80,6 +80,16 @@ mod tests {
                 panic!("mock server should stop cleanly: {error}");
             }
         }
+    }
+
+    async fn wait_for_server(address: std::net::SocketAddr) {
+        for _ in 0..20 {
+            if tokio::net::TcpStream::connect(address).await.is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("mock server did not accept connections at {address}");
     }
 
     async fn mock_audio_transcriptions(

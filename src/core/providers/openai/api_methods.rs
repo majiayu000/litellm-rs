@@ -19,7 +19,7 @@ use crate::core::audio::types::{
     SpeechRequest, SpeechResponse, TranscriptionRequest, TranscriptionResponse, TranslationRequest,
     TranslationResponse, format_to_content_type,
 };
-use crate::core::providers::base::{HttpMethod, apply_headers, global_client};
+use crate::core::providers::base::{HttpMethod, apply_headers};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::types::embedding::EmbeddingRequest;
 use crate::core::types::responses::EmbeddingResponse;
@@ -156,7 +156,7 @@ impl OpenAIProvider {
         let form = transcription_form(request);
         let url = format!("{}/audio/transcriptions", self.config.get_api_base());
         let response = apply_headers(
-            global_client().post(url).multipart(form),
+            self.pool_manager.client().post(url).multipart(form),
             self.get_request_headers(),
         )
         .send()
@@ -188,7 +188,7 @@ impl OpenAIProvider {
         let form = translation_form(request);
         let url = format!("{}/audio/translations", self.config.get_api_base());
         let response = apply_headers(
-            global_client().post(url).multipart(form),
+            self.pool_manager.client().post(url).multipart(form),
             self.get_request_headers(),
         )
         .send()
@@ -226,18 +226,20 @@ impl OpenAIProvider {
             "speed": request.speed,
         });
         let url = format!("{}/audio/speech", self.config.get_api_base());
-        let response = apply_headers(
-            global_client().post(url).json(&body),
-            self.get_request_headers(),
-        )
-        .send()
-        .await
-        .map_err(|e| OpenAIError::Network {
-            provider: "openai",
-            message: e.to_string(),
-        })?;
+        let response = self
+            .pool_manager
+            .execute_request(
+                &url,
+                HttpMethod::POST,
+                self.get_request_headers(),
+                Some(body),
+            )
+            .await
+            .map_err(|e| OpenAIError::Network {
+                provider: "openai",
+                message: e.to_string(),
+            })?;
 
-        let status = response.status();
         let content_type = response
             .headers()
             .get(CONTENT_TYPE)
@@ -246,15 +248,7 @@ impl OpenAIProvider {
             .unwrap_or_else(|| {
                 format_to_content_type(response_format.as_deref().unwrap_or("mp3")).to_string()
             });
-        let response_bytes = response.bytes().await.map_err(|e| OpenAIError::Network {
-            provider: "openai",
-            message: e.to_string(),
-        })?;
-
-        if !status.is_success() {
-            let body = String::from_utf8_lossy(&response_bytes);
-            return Err(OpenAIErrorMapper.map_http_error(status.as_u16(), &body));
-        }
+        let response_bytes = read_success_response_bytes(response).await?;
 
         Ok(SpeechResponse {
             audio: response_bytes.to_vec(),

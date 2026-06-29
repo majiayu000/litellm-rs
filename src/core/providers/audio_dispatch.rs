@@ -16,10 +16,7 @@ impl Provider {
         request: TranscriptionRequest,
         context: RequestContext,
     ) -> Result<TranscriptionResponse, ProviderError> {
-        match self {
-            Provider::OpenAI(provider) => provider.audio_transcription(request).await,
-            _ => dispatch_provider!(async_err, self, audio_transcription, request, context),
-        }
+        dispatch_provider!(async_err, self, audio_transcription, request, context)
     }
 
     /// Translate audio to English text.
@@ -31,10 +28,7 @@ impl Provider {
         request: TranslationRequest,
         context: RequestContext,
     ) -> Result<TranslationResponse, ProviderError> {
-        match self {
-            Provider::OpenAI(provider) => provider.audio_translation(request).await,
-            _ => dispatch_provider!(async_err, self, audio_translation, request, context),
-        }
+        dispatch_provider!(async_err, self, audio_translation, request, context)
     }
 
     /// Generate speech audio from text.
@@ -46,9 +40,6 @@ impl Provider {
         request: SpeechRequest,
         context: RequestContext,
     ) -> Result<SpeechResponse, ProviderError> {
-        match self {
-            Provider::OpenAI(provider) => provider.text_to_speech(request).await,
-            _ => dispatch_provider!(async_err, self, text_to_speech, request, context),
-        }
+        dispatch_provider!(async_err, self, text_to_speech, request, context)
     }
 }

@@ -8,6 +8,7 @@
 
 mod api_methods;
 pub mod client;
+mod client_convenience;
 #[cfg(test)]
 mod client_tests;
 pub mod config;
