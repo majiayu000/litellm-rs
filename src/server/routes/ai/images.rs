@@ -459,9 +459,9 @@ fn ensure_image_proxy_candidate_configured(
     {
         Ok(())
     } else {
-        return Err(GatewayError::Config(format!(
+        Err(GatewayError::Config(format!(
             "Image provider for model '{requested_model}' is not configured"
-        )));
+        )))
     }
 }
 
