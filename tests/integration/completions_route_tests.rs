@@ -232,6 +232,7 @@ mod tests {
         assert_eq!(requests[0]["messages"][0]["role"], "user");
         assert_eq!(requests[0]["messages"][0]["content"], "Hello");
         assert!(requests[0].get("stream").is_none());
+        assert!(requests[0].get("stream_options").is_none());
 
         mock_server.shutdown().await;
     }
@@ -361,6 +362,14 @@ mod tests {
             (
                 json!({"model":"gpt-4o","prompt":"Hello","logprobs":"1"}),
                 "logprobs",
+            ),
+            (
+                json!({"model":"gpt-4o","prompt":"Hello","logprobs":1}),
+                "logprobs",
+            ),
+            (
+                json!({"model":"gpt-4o","prompt":"Hello","stream_options":{"include_usage":true}}),
+                "stream_options",
             ),
             (
                 json!({"model":"gpt-4o","prompt":"Hello","stream_options":{"include_usage":"true"}}),
@@ -544,7 +553,7 @@ mod tests {
         let body = test::read_body(resp).await;
         let body_text = String::from_utf8(body.to_vec()).expect("streaming body should be utf8");
         assert!(body_text.contains("data: {"));
-        assert!(body_text.contains("\"object\":\"text_completion.chunk\""));
+        assert!(body_text.contains("\"object\":\"text_completion\""));
         assert!(body_text.contains("\"text\":\"Hel\""));
         assert!(body_text.contains("\"text\":\"lo\""));
         assert!(body_text.contains("[DONE]"));

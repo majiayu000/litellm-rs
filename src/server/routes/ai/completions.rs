@@ -441,9 +441,20 @@ fn completion_request_from_value(
     };
     let prompt = prompt_field(object.get("prompt"))?;
     let stream = bool_field(object, "stream")?.unwrap_or(false);
-    let include_usage = include_usage_field(object.get("stream_options"))?.unwrap_or(false);
+    let stream_options = object.get("stream_options");
+    let include_usage = include_usage_field(stream_options)?.unwrap_or(false);
+    if stream_options.is_some() && !stream {
+        return Err(GatewayError::validation(
+            "stream_options is only supported when stream is true",
+        ));
+    }
     let echo = bool_field(object, "echo")?.unwrap_or(false);
     let logprobs = u32_field(object, "logprobs")?;
+    if logprobs.is_some() {
+        return Err(GatewayError::validation(
+            "logprobs is not supported for /v1/completions compatibility",
+        ));
+    }
 
     Ok(CompletionAdapterRequest {
         prompt: prompt.clone(),
@@ -466,7 +477,7 @@ fn completion_request_from_value(
             top_p: f32_field(object, "top_p")?,
             n: u32_field(object, "n")?,
             stream: Some(stream),
-            stream_options: Some(StreamOptions {
+            stream_options: stream.then_some(StreamOptions {
                 include_usage: Some(include_usage),
             }),
             stop: stop_field(object.get("stop"))?,
@@ -474,8 +485,6 @@ fn completion_request_from_value(
             frequency_penalty: f32_field(object, "frequency_penalty")?,
             logit_bias: logit_bias_field(object.get("logit_bias"))?,
             user: optional_string_field(object, "user")?,
-            logprobs: logprobs.map(|_| true),
-            top_logprobs: logprobs.filter(|value| *value > 0),
             ..ChatCompletionRequest::default()
         },
     })
@@ -691,7 +700,7 @@ fn completion_chunk_from_core(
 ) -> CompletionSseChunk {
     CompletionSseChunk {
         id: chunk.id,
-        object: "text_completion.chunk",
+        object: "text_completion",
         created: chunk.created as u64,
         model: chunk.model,
         choices: chunk
