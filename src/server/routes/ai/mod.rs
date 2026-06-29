@@ -35,7 +35,7 @@ pub use fine_tuning::{
     cancel_fine_tuning_job, create_fine_tuning_job, get_fine_tuning_job,
     list_fine_tuning_checkpoints, list_fine_tuning_events, list_fine_tuning_jobs,
 };
-pub use images::image_generations;
+pub use images::{image_edits, image_generations, image_variations};
 pub use models::{get_model, list_models};
 pub use responses::{
     cancel_response, create_response, delete_response, get_response, list_response_input_items,
@@ -104,6 +104,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/files/{file_id}/content", web::get().to(get_file_content))
             // Image generation
             .route("/images/generations", web::post().to(image_generations))
+            .route("/images/edits", web::post().to(image_edits))
+            .route("/images/variations", web::post().to(image_variations))
             // Models
             .route("/models", web::get().to(list_models))
             .route("/models/{model_id}", web::get().to(get_model))
