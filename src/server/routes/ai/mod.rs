@@ -34,7 +34,9 @@ pub use responses::{
     cancel_response, create_response, delete_response, get_response, list_response_input_items,
 };
 
-use actix_web::web;
+use crate::core::models::openai::EmbeddingRequest;
+use crate::server::state::AppState;
+use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 
 /// Configure AI API routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
@@ -59,6 +61,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             )
             // Embeddings
             .route("/embeddings", web::post().to(embeddings))
+            .route(
+                "/engines/{model_id}/embeddings",
+                web::post().to(engine_embeddings),
+            )
             // Batch processing
             .route("/batches", web::post().to(create_batch))
             .route("/batches", web::get().to(list_batches))
@@ -75,6 +81,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // Models
             .route("/models", web::get().to(list_models))
             .route("/models/{model_id}", web::get().to(get_model))
+            .route("/engines", web::get().to(list_models))
+            .route("/engines/{model_id}", web::get().to(get_model))
             // Audio (future implementation)
             .route(
                 "/audio/transcriptions",
@@ -85,9 +93,34 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
 }
 
+async fn engine_embeddings(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    model_id: web::Path<String>,
+    request: web::Json<EmbeddingRequest>,
+) -> ActixResult<HttpResponse> {
+    embeddings_for_path_model(state, req, model_id.into_inner(), request).await
+}
+
+async fn embeddings_for_path_model(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    model: String,
+    request: web::Json<EmbeddingRequest>,
+) -> ActixResult<HttpResponse> {
+    let mut request = request.into_inner();
+    override_embedding_model(&mut request, model);
+    embeddings(state, req, web::Json(request)).await
+}
+
+fn override_embedding_model(request: &mut EmbeddingRequest, model: String) {
+    request.model = model;
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Config;
+    use crate::core::models::openai::EmbeddingRequest;
     use crate::core::types::context::RequestContext;
     use crate::server::HttpServer as GatewayHttpServer;
     use actix_web::{App, http::StatusCode, test, web};
@@ -209,5 +242,73 @@ mod tests {
             .to_request();
         let input_items_resp = test::call_service(&app, input_items_req).await;
         assert_eq!(input_items_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn test_engine_alias_routes_are_mounted_with_expected_methods() {
+        let state = build_no_provider_state().await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(super::configure_routes),
+        )
+        .await;
+
+        let list_req = test::TestRequest::get().uri("/v1/engines").to_request();
+        let list_resp = test::call_service(&app, list_req).await;
+        assert_eq!(list_resp.status(), StatusCode::OK);
+
+        let get_missing_req = test::TestRequest::get()
+            .uri("/v1/engines/missing-model")
+            .to_request();
+        let get_missing_resp = test::call_service(&app, get_missing_req).await;
+        assert_eq!(get_missing_resp.status(), StatusCode::NOT_FOUND);
+
+        let embeddings_req = test::TestRequest::post()
+            .uri("/v1/engines/text-embedding-3-small/embeddings")
+            .set_json(serde_json::json!({
+                "model": "body-model",
+                "input": "Hello"
+            }))
+            .to_request();
+        let embeddings_resp = test::call_service(&app, embeddings_req).await;
+        let embeddings_status = embeddings_resp.status();
+        let embeddings_body: Value = test::read_body_json(embeddings_resp).await;
+        assert_eq!(embeddings_status, StatusCode::NOT_FOUND);
+        assert!(
+            embeddings_body
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .is_some()
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_root_engine_aliases_remain_unmounted() {
+        let state = build_no_provider_state().await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(super::configure_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::get().uri("/engines").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn test_alias_embedding_model_overrides_body_model() {
+        let mut request = EmbeddingRequest {
+            model: "body-model".to_string(),
+            input: serde_json::json!("Hello"),
+            user: None,
+        };
+
+        super::override_embedding_model(&mut request, "path-model".to_string());
+
+        assert_eq!(request.model, "path-model");
     }
 }

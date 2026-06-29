@@ -6,7 +6,7 @@
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
     use actix_web::http::StatusCode;
-    use actix_web::{App, test, web};
+    use actix_web::{App, HttpResponse, HttpServer, test, web};
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
@@ -14,7 +14,8 @@ mod tests {
     use litellm_rs::server::routes;
     use litellm_rs::server::state::AppState;
     use serde_json::Value;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     async fn build_state_with_config(config: Config) -> AppState {
         let server = match GatewayHttpServer::new(&config).await {
@@ -52,6 +53,48 @@ mod tests {
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
 
         build_state_with_config(config).await
+    }
+
+    async fn build_openai_alias_state(base_url: &str) -> AppState {
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.providers = vec![ProviderConfig {
+            name: "mock-openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            base_url: Some(base_url.to_string()),
+            models: vec!["text-embedding-3-small".to_string()],
+            ..ProviderConfig::default()
+        }];
+
+        build_state_with_config(config).await
+    }
+
+    async fn mock_embeddings(
+        captured_requests: web::Data<Arc<Mutex<Vec<Value>>>>,
+        payload: web::Json<Value>,
+    ) -> HttpResponse {
+        captured_requests.lock().unwrap().push(payload.into_inner());
+
+        HttpResponse::Ok().json(serde_json::json!({
+            "object": "list",
+            "data": [{
+                "object": "embedding",
+                "index": 0,
+                "embedding": [0.1, 0.2]
+            }],
+            "model": "text-embedding-3-small",
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 0,
+                "total_tokens": 1
+            }
+        }))
     }
 
     /// Construct an actix-web test app with AuthMiddleware and route
@@ -256,6 +299,48 @@ mod tests {
         let resp = test::call_service(&app, req).await;
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_engine_embedding_alias_uses_path_model() {
+        let captured_requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+        let address = listener
+            .local_addr()
+            .expect("mock server should have local address");
+        let captured_for_server = Arc::clone(&captured_requests);
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(Arc::clone(&captured_for_server)))
+                .route("/embeddings", web::post().to(mock_embeddings))
+        })
+        .listen(listener)
+        .expect("mock server should listen")
+        .run();
+        let handle = server.handle();
+        let task = tokio::spawn(server);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let state = build_openai_alias_state(&format!("http://{address}")).await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::post()
+            .uri("/v1/engines/text-embedding-3-small/embeddings")
+            .set_json(serde_json::json!({
+                "model": "body-model",
+                "input": "hello"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        handle.stop(true).await;
+        let _ = task.await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let requests = captured_requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["model"], "text-embedding-3-small");
+        assert_ne!(requests[0]["model"], "body-model");
     }
 
     // ---------------------------------------------------------------
