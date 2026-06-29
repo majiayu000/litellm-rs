@@ -49,6 +49,8 @@ pub enum OpenAIModelFeature {
     LargeContext,
     /// Real-time audio processing
     RealtimeAudio,
+    /// Moderation support
+    Moderation,
 }
 
 impl OpenAIModelFeature {
@@ -64,6 +66,7 @@ impl OpenAIModelFeature {
             OpenAIModelFeature::Embeddings => Some(ProviderCapability::Embeddings),
             OpenAIModelFeature::AudioOutput => Some(ProviderCapability::TextToSpeech),
             OpenAIModelFeature::ImageEditing => Some(ProviderCapability::ImageEdit),
+            OpenAIModelFeature::Moderation => Some(ProviderCapability::Moderation),
             // Features that don't map directly to provider capabilities
             OpenAIModelFeature::SystemMessages
             | OpenAIModelFeature::JsonMode

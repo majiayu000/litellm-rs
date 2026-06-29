@@ -26,6 +26,8 @@ pub enum ProviderCapability {
     AudioTranslation,
     /// Text to speech
     TextToSpeech,
+    /// Moderation
+    Moderation,
     /// Tool calling
     ToolCalling,
     /// Function calling (backward compatibility)
@@ -184,6 +186,7 @@ mod tests {
             ProviderCapability::AudioTranscription,
             ProviderCapability::AudioTranslation,
             ProviderCapability::TextToSpeech,
+            ProviderCapability::Moderation,
             ProviderCapability::ToolCalling,
             ProviderCapability::FunctionCalling,
             ProviderCapability::CodeExecution,

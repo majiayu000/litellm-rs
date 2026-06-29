@@ -1,6 +1,8 @@
 //! OpenAI-compatible moderation API route.
 
 use crate::config::models::provider::ProviderConfig;
+use crate::core::providers::{Provider, ProviderError};
+use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
@@ -10,6 +12,7 @@ use serde_json::Value;
 use std::time::Duration;
 use tracing::error;
 
+use super::execution::execute_with_selected_deployment;
 use super::openai_errors;
 use super::provider_config;
 
@@ -69,30 +72,81 @@ async fn proxy_moderation(
 ) -> Result<HttpResponse, GatewayError> {
     let resolved_model = validate_moderation_request(&request)?;
     apply_resolved_moderation_model(&mut request, &resolved_model);
-    let Some(provider) = select_moderation_proxy_provider(
+    ensure_moderation_proxy_candidate_configured(
         state.config().gateway.providers.as_slice(),
         &resolved_model,
-    )?
-    else {
-        return Err(missing_moderation_provider_error());
-    };
-
-    super::spend::ensure_budget_available(
-        &state.budget_limits,
-        &provider.provider_name,
-        &resolved_model,
     )?;
+    let router_models =
+        moderation_router_models(state.config().gateway.providers.as_slice(), &resolved_model);
 
-    let response = provider_config::apply_proxy_headers(
-        provider_config::proxy_http_client().post(moderation_url(&provider)?),
-        &provider.headers,
-    )
-    .timeout(provider.timeout)
-    .json(&request)
-    .send()
-    .await?;
+    let mut last_router_error = None;
+    for router_model in router_models {
+        let result = execute_with_selected_deployment(
+            &state.unified_router,
+            &router_model,
+            ProviderCapability::Moderation,
+            {
+                let request = request.clone();
+                let resolved_model = resolved_model.clone();
+                move |selected_provider, selected_model| {
+                    let request = request.clone();
+                    let resolved_model = resolved_model.clone();
+                    async move {
+                        let provider = selected_moderation_proxy_provider(
+                            state.config().gateway.providers.as_slice(),
+                            &selected_provider,
+                            &selected_model,
+                            &resolved_model,
+                        )?;
+                        super::spend::ensure_budget_available(
+                            &state.budget_limits,
+                            &provider.provider_name,
+                            &resolved_model,
+                        )?;
 
-    provider_config::proxy_response_to_http_response(response).await
+                        let url = moderation_url(&provider)
+                            .map_err(moderation_gateway_error_to_provider_error)?;
+                        let response = provider_config::apply_proxy_headers(
+                            provider_config::proxy_http_client().post(url),
+                            &provider.headers,
+                        )
+                        .timeout(provider.timeout)
+                        .json(&request)
+                        .send()
+                        .await
+                        .map_err(|error| {
+                            ProviderError::network("moderation_proxy", error.to_string())
+                        })?;
+
+                        if !response.status().is_success() {
+                            return Err(moderation_upstream_error(response).await);
+                        }
+
+                        let response = provider_config::proxy_response_to_http_response(response)
+                            .await
+                            .map_err(moderation_gateway_error_to_provider_error)?;
+                        Ok((response, 0))
+                    }
+                }
+            },
+        )
+        .await;
+        match result {
+            Ok(response) => return Ok(response),
+            Err(GatewayError::Provider(ProviderError::QuotaExceeded {
+                provider: "budget",
+                message,
+            })) if message.starts_with("provider ") => {
+                last_router_error = Some(GatewayError::Provider(ProviderError::QuotaExceeded {
+                    provider: "budget",
+                    message,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_router_error.unwrap_or_else(missing_moderation_provider_error))
 }
 
 fn validate_moderation_request(request: &Value) -> Result<String, GatewayError> {
@@ -138,29 +192,97 @@ fn apply_resolved_moderation_model(request: &mut Value, resolved_model: &str) {
     }
 }
 
-fn select_moderation_proxy_provider(
+fn ensure_moderation_proxy_candidate_configured(
     providers: &[ProviderConfig],
     requested_model: &str,
-) -> Result<Option<ModerationProxyProvider>, GatewayError> {
-    let candidates = providers
+) -> Result<(), GatewayError> {
+    let candidates = moderation_candidate_configs(providers);
+    if candidates.is_empty() {
+        return Err(missing_moderation_provider_error());
+    }
+
+    if candidates
+        .iter()
+        .any(|provider| moderation_provider_supports_requested_model(provider, requested_model))
+    {
+        Ok(())
+    } else {
+        Err(GatewayError::Config(format!(
+            "Moderation provider for model '{requested_model}' is not configured"
+        )))
+    }
+}
+
+fn moderation_router_models(providers: &[ProviderConfig], requested_model: &str) -> Vec<String> {
+    let candidates = moderation_candidate_configs(providers);
+    let mut router_models = Vec::new();
+
+    if candidates
+        .iter()
+        .any(|provider| provider.models.iter().any(|model| model == requested_model))
+    {
+        router_models.push(requested_model.to_string());
+    }
+
+    router_models.extend(
+        candidates
+            .iter()
+            .filter(|provider| provider.models.is_empty())
+            .map(|provider| provider.name.clone()),
+    );
+
+    if router_models.is_empty() {
+        router_models.push(requested_model.to_string());
+    }
+
+    router_models
+}
+
+fn selected_moderation_proxy_provider(
+    providers: &[ProviderConfig],
+    selected_provider: &Provider,
+    selected_model: &str,
+    requested_model: &str,
+) -> Result<ModerationProxyProvider, ProviderError> {
+    let provider_name = selected_provider.name();
+    let candidates = moderation_candidate_configs(providers);
+    let matching = candidates
+        .iter()
+        .copied()
+        .filter(|provider| moderation_provider_supports_requested_model(provider, requested_model))
+        .find(|provider| {
+            provider.name == provider_name
+                || provider
+                    .settings
+                    .get("provider_name")
+                    .and_then(|value| value.as_str())
+                    == Some(provider_name)
+                || (provider.models.is_empty() && provider.name == selected_model)
+        })
+        .ok_or_else(|| {
+            ProviderError::configuration(
+                "moderation_proxy",
+                format!(
+                    "selected moderation provider '{provider_name}' for model '{selected_model}' has no matching gateway provider config"
+                ),
+            )
+        })?;
+
+    moderation_proxy_provider_from_config(matching)
+        .map_err(moderation_gateway_error_to_provider_error)
+}
+
+fn moderation_candidate_configs(providers: &[ProviderConfig]) -> Vec<&ProviderConfig> {
+    providers
         .iter()
         .filter(|provider| provider.enabled)
         .filter(|provider| is_openai_moderation_provider(provider))
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    let Some(provider) = candidates
-        .iter()
-        .copied()
-        .find(|provider| moderation_provider_supports_requested_model(provider, requested_model))
-    else {
-        if candidates.is_empty() {
-            return Ok(None);
-        }
-        return Err(GatewayError::Config(format!(
-            "Moderation provider for model '{requested_model}' is not configured"
-        )));
-    };
-
+fn moderation_proxy_provider_from_config(
+    provider: &ProviderConfig,
+) -> Result<ModerationProxyProvider, GatewayError> {
     if provider.api_key.trim().is_empty() {
         return Err(GatewayError::Config(format!(
             "Moderation provider '{}' is missing api_key",
@@ -168,12 +290,12 @@ fn select_moderation_proxy_provider(
         )));
     }
 
-    Ok(Some(ModerationProxyProvider {
+    Ok(ModerationProxyProvider {
         provider_name: provider.name.clone(),
         base_url: moderation_base_url(provider)?,
         headers: moderation_provider_headers(provider)?,
         timeout: Duration::from_secs(provider.timeout),
-    }))
+    })
 }
 
 fn moderation_provider_supports_requested_model(
@@ -210,6 +332,52 @@ fn moderation_url(provider: &ModerationProxyProvider) -> Result<Url, GatewayErro
         .map_err(|_| GatewayError::Config("Invalid moderation URL".to_string()))?
         .extend(["moderations"]);
     Ok(url)
+}
+
+fn moderation_gateway_error_to_provider_error(error: GatewayError) -> ProviderError {
+    match error {
+        GatewayError::Provider(error) => error,
+        GatewayError::Validation(message) | GatewayError::BadRequest(message) => {
+            ProviderError::invalid_request("moderation_proxy", message)
+        }
+        GatewayError::Config(message) => ProviderError::configuration("moderation_proxy", message),
+        GatewayError::Auth(message) | GatewayError::Forbidden(message) => {
+            ProviderError::authentication("moderation_proxy", message)
+        }
+        GatewayError::Timeout(message) => ProviderError::timeout("moderation_proxy", message),
+        GatewayError::RateLimit {
+            message,
+            retry_after,
+            ..
+        } => ProviderError::rate_limit_with_retry("moderation_proxy", message, retry_after),
+        GatewayError::HttpClient(error) => {
+            ProviderError::network("moderation_proxy", error.to_string())
+        }
+        GatewayError::Network(message) => ProviderError::network("moderation_proxy", message),
+        GatewayError::Unavailable(message) => {
+            ProviderError::provider_unavailable("moderation_proxy", message)
+        }
+        other => ProviderError::api_error("moderation_proxy", 500, other.to_string()),
+    }
+}
+
+async fn moderation_upstream_error(response: reqwest::Response) -> ProviderError {
+    let status = response.status().as_u16();
+    let message = response
+        .text()
+        .await
+        .unwrap_or_else(|error| format!("Failed to read moderation error body: {error}"));
+
+    match status {
+        400 => ProviderError::invalid_request("moderation_proxy", message),
+        401 | 403 => ProviderError::authentication("moderation_proxy", message),
+        402 => ProviderError::quota_exceeded("moderation_proxy", message),
+        404 => ProviderError::model_not_found("moderation_proxy", message),
+        408 | 504 => ProviderError::timeout("moderation_proxy", message),
+        429 => ProviderError::rate_limit_with_retry("moderation_proxy", message, None),
+        502 | 503 => ProviderError::provider_unavailable("moderation_proxy", message),
+        _ => ProviderError::api_error("moderation_proxy", status, message),
+    }
 }
 
 fn missing_moderation_provider_error() -> GatewayError {

@@ -372,6 +372,7 @@ impl LLMProvider for OpenAIProvider {
             ProviderCapability::AudioTranscription,
             ProviderCapability::AudioTranslation,
             ProviderCapability::TextToSpeech,
+            ProviderCapability::Moderation,
             ProviderCapability::ToolCalling,
             ProviderCapability::FunctionCalling,
             // New capabilities

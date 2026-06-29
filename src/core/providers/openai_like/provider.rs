@@ -495,6 +495,7 @@ impl LLMProvider for OpenAILikeProvider {
             ProviderCapability::ChatCompletionStream,
             ProviderCapability::ImageEdit,
             ProviderCapability::ImageVariation,
+            ProviderCapability::Moderation,
             ProviderCapability::ToolCalling,
             ProviderCapability::FunctionCalling,
         ];
