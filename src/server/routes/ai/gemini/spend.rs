@@ -41,14 +41,24 @@ pub(super) async fn settle_gemini_stream_spend(
 pub(super) fn extract_gemini_sse_usage(bytes: &Bytes, buffer: &mut String) -> Option<PricingUsage> {
     buffer.push_str(&String::from_utf8_lossy(bytes));
     let mut usage = None;
-    while let Some(event_end) = buffer.find("\n\n") {
+    while let Some((event_end, separator_len)) = next_sse_event_boundary(buffer) {
         let event = buffer[..event_end].to_string();
-        buffer.drain(..event_end + 2);
+        buffer.drain(..event_end + separator_len);
         if let Some(next_usage) = parse_gemini_sse_event_usage(&event) {
             usage = Some(next_usage);
         }
     }
     usage
+}
+
+fn next_sse_event_boundary(buffer: &str) -> Option<(usize, usize)> {
+    match (buffer.find("\n\n"), buffer.find("\r\n\r\n")) {
+        (Some(lf), Some(crlf)) if lf < crlf => Some((lf, 2)),
+        (Some(_), Some(crlf)) => Some((crlf, 4)),
+        (Some(lf), None) => Some((lf, 2)),
+        (None, Some(crlf)) => Some((crlf, 4)),
+        (None, None) => None,
+    }
 }
 
 pub(super) async fn record_gemini_spend(
@@ -271,8 +281,12 @@ fn u32_field(value: &Value, key: &str) -> Option<u32> {
 
 fn estimate_gemini_prompt_tokens(request: &Value) -> u32 {
     let mut chars = 0_usize;
-    collect_text_chars(request.get("contents"), &mut chars);
-    collect_text_chars(request.get("systemInstruction"), &mut chars);
+    if let Some(contents) = request.get("contents") {
+        collect_text_chars(contents, &mut chars);
+    }
+    if let Some(system_instruction) = request.get("systemInstruction") {
+        collect_text_chars(system_instruction, &mut chars);
+    }
     if chars == 0 {
         chars = serde_json::to_string(request)
             .map(|serialized| serialized.chars().count())
@@ -281,24 +295,45 @@ fn estimate_gemini_prompt_tokens(request: &Value) -> u32 {
     u32::try_from(chars.div_ceil(4).max(1)).unwrap_or(u32::MAX)
 }
 
-fn collect_text_chars(value: Option<&Value>, chars: &mut usize) {
-    let Some(value) = value else {
-        return;
-    };
+fn collect_text_chars(value: &Value, chars: &mut usize) {
     match value {
         Value::Object(map) => {
             if let Some(text) = map.get("text").and_then(Value::as_str) {
                 *chars = chars.saturating_add(text.chars().count());
             }
             for child in map.values() {
-                collect_text_chars(Some(child), chars);
+                collect_text_chars(child, chars);
             }
         }
         Value::Array(items) => {
             for item in items {
-                collect_text_chars(Some(item), chars);
+                collect_text_chars(item, chars);
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_usage_from_crlf_sse_event_boundaries() {
+        let mut buffer = String::new();
+        let usage = extract_gemini_sse_usage(
+            &Bytes::from_static(
+                b"event: message\r\n\
+                  data: {\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2,\"totalTokenCount\":3}}\r\n\r\n",
+            ),
+            &mut buffer,
+        );
+        assert!(usage.is_some(), "usage should be parsed");
+        let usage = usage.unwrap_or_default();
+
+        assert_eq!(usage.prompt_tokens, 1);
+        assert_eq!(usage.completion_tokens, 2);
+        assert_eq!(usage.total_tokens, 3);
+        assert!(buffer.is_empty());
     }
 }
