@@ -19,7 +19,8 @@ use crate::core::types::{context::RequestContext, model::ProviderCapability};
 use crate::server::routes::ai::chat::build_core_chat_request;
 use crate::server::routes::ai::execution::execute_stream_with_selected_deployment;
 use crate::server::routes::ai::responses::{
-    current_unix_ts, finish_reason_enum_to_status, uuid_v4_hex,
+    ResponseOwner, current_unix_ts, finish_reason_enum_to_status, store_response_if_requested,
+    uuid_v4_hex,
 };
 use crate::server::state::AppState;
 use actix_web::http::header::{CACHE_CONTROL, CONTENT_TYPE};
@@ -94,6 +95,7 @@ pub(crate) async fn handle_streaming_response(
     mut chat_request: ChatCompletionRequest,
     original: ResponsesApiRequest,
     context: RequestContext,
+    owner: Option<ResponseOwner>,
 ) -> ActixResult<HttpResponse> {
     info!(
         "Streaming Responses API request for model: {}",
@@ -650,9 +652,10 @@ pub(crate) async fn handle_streaming_response(
                     output: output_items,
                     usage,
                     error: None,
-                    previous_response_id: original.previous_response_id,
-                    metadata: original.metadata,
+                    previous_response_id: original.previous_response_id.clone(),
+                    metadata: original.metadata.clone(),
                 };
+                store_response_if_requested(&original, &completed, owner);
                 let _ = emit(
                     &tx,
                     &ResponseStreamEvent::ResponseCompleted {

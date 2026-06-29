@@ -30,7 +30,9 @@ pub use embeddings::embeddings;
 pub use files::{create_file, delete_file, get_file, get_file_content, list_files};
 pub use images::image_generations;
 pub use models::{get_model, list_models};
-pub use responses::create_response;
+pub use responses::{
+    cancel_response, create_response, delete_response, get_response, list_response_input_items,
+};
 
 use actix_web::web;
 
@@ -42,6 +44,19 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/chat/completions", web::post().to(chat_completions))
             // Responses API
             .route("/responses", web::post().to(create_response))
+            .route("/responses/{response_id}", web::get().to(get_response))
+            .route(
+                "/responses/{response_id}",
+                web::delete().to(delete_response),
+            )
+            .route(
+                "/responses/{response_id}/cancel",
+                web::post().to(cancel_response),
+            )
+            .route(
+                "/responses/{response_id}/input_items",
+                web::get().to(list_response_input_items),
+            )
             // Embeddings
             .route("/embeddings", web::post().to(embeddings))
             // Batch processing
@@ -142,5 +157,57 @@ mod tests {
             .to_request();
         let cancel_resp = test::call_service(&app, cancel_req).await;
         assert_eq!(cancel_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[actix_web::test]
+    async fn test_response_lifecycle_routes_mounted_with_expected_methods() {
+        let state = build_no_provider_state().await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(super::configure_routes),
+        )
+        .await;
+
+        let create_req = test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(serde_json::json!({
+                "model": "gpt-4o",
+                "input": "hello"
+            }))
+            .to_request();
+        let create_resp = test::call_service(&app, create_req).await;
+        assert_eq!(create_resp.status(), StatusCode::BAD_REQUEST);
+        let create_body: Value = test::read_body_json(create_resp).await;
+        assert!(
+            create_body["error"]["message"]
+                .as_str()
+                .expect("error message")
+                .contains("store=false")
+        );
+
+        let get_req = test::TestRequest::get()
+            .uri("/v1/responses/resp_missing")
+            .to_request();
+        let get_resp = test::call_service(&app, get_req).await;
+        assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
+
+        let delete_req = test::TestRequest::delete()
+            .uri("/v1/responses/resp_missing")
+            .to_request();
+        let delete_resp = test::call_service(&app, delete_req).await;
+        assert_eq!(delete_resp.status(), StatusCode::NOT_FOUND);
+
+        let cancel_req = test::TestRequest::post()
+            .uri("/v1/responses/resp_missing/cancel")
+            .to_request();
+        let cancel_resp = test::call_service(&app, cancel_req).await;
+        assert_eq!(cancel_resp.status(), StatusCode::NOT_FOUND);
+
+        let input_items_req = test::TestRequest::get()
+            .uri("/v1/responses/resp_missing/input_items?limit=1&order=asc")
+            .to_request();
+        let input_items_resp = test::call_service(&app, input_items_req).await;
+        assert_eq!(input_items_resp.status(), StatusCode::NOT_FOUND);
     }
 }

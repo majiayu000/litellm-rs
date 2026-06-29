@@ -19,6 +19,9 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use tracing::{error, info};
 
 use super::openai_errors;
+mod lifecycle;
+pub(crate) use lifecycle::{ResponseOwner, store_response_if_requested};
+pub use lifecycle::{cancel_response, delete_response, get_response, list_response_input_items};
 
 /// POST /v1/responses handler
 pub async fn create_response(
@@ -29,6 +32,7 @@ pub async fn create_response(
     info!("Responses API request for model: {}", payload.model);
 
     let context = super::context::get_request_context(&req)?;
+    let owner = lifecycle::response_owner(&context);
     let request = payload.into_inner();
 
     if request.model.trim().is_empty() {
@@ -49,34 +53,44 @@ pub async fn create_response(
         _ => {}
     }
 
-    if request.background.unwrap_or(false) {
-        return Ok(openai_errors::validation_error(
-            "background (async) execution is not supported; omit background or set it to false",
-        ));
+    if let Err(error) = lifecycle::validate_storage_owner(&request, &owner) {
+        return Ok(openai_errors::gateway_error_response(&error));
     }
 
-    if request.previous_response_id.is_some() {
-        return Ok(openai_errors::validation_error(
-            "previous_response_id (stateful chaining) is not supported; \
-             omit previous_response_id to make a fresh request",
-        ));
-    }
+    let request = match lifecycle::resolve_previous_response_context(request, &owner) {
+        Ok(request) => request,
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
 
     let chat_request = match build_chat_request(&request) {
         Ok(r) => r,
         Err(e) => return Ok(openai_errors::validation_error(e)),
     };
 
-    if request.stream.unwrap_or(false) {
+    if request.background.unwrap_or(false) {
+        if request.stream.unwrap_or(false) {
+            return Ok(openai_errors::validation_error(
+                "background responses do not support stream=true",
+            ));
+        }
+        Ok(lifecycle::handle_background_response(
+            state.get_ref().clone(),
+            chat_request,
+            request,
+            context,
+            owner,
+        ))
+    } else if request.stream.unwrap_or(false) {
         super::responses_stream::handle_streaming_response(
             state.get_ref(),
             chat_request,
             request,
             context,
+            owner,
         )
         .await
     } else {
-        handle_sync_response(state.get_ref(), chat_request, request, context).await
+        handle_sync_response(state.get_ref(), chat_request, request, context, owner).await
     }
 }
 
@@ -87,10 +101,12 @@ async fn handle_sync_response(
     chat_request: ChatCompletionRequest,
     original: ResponsesApiRequest,
     context: crate::core::types::context::RequestContext,
+    owner: Option<lifecycle::ResponseOwner>,
 ) -> ActixResult<HttpResponse> {
     match handle_chat_completion_with_state(state, chat_request, context).await {
         Ok(chat_resp) => {
             let resp = convert_to_responses_api(chat_resp, &original);
+            lifecycle::store_response_if_requested(&original, &resp, owner);
             Ok(HttpResponse::Ok().json(resp))
         }
         Err(e) => {
