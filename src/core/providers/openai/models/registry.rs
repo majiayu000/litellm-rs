@@ -132,6 +132,7 @@ impl OpenAIModelRegistry {
 
         if model_id.starts_with("whisper") {
             features.push(OpenAIModelFeature::AudioTranscription);
+            features.push(OpenAIModelFeature::AudioTranslation);
         }
 
         if model_id.starts_with("tts") {
@@ -645,6 +646,8 @@ mod tests {
         assert!(registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::AudioInput));
         assert!(registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::AudioOutput));
         assert!(!registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::VisionSupport));
+        assert!(registry.supports_feature("whisper-1", &OpenAIModelFeature::AudioTranscription));
+        assert!(registry.supports_feature("whisper-1", &OpenAIModelFeature::AudioTranslation));
     }
 
     #[test]

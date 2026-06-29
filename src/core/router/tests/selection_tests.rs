@@ -146,13 +146,13 @@ async fn test_capability_selection_reports_unsupported_capability() {
     router.add_deployment(d);
 
     let err = router
-        .select_deployment_for_capability("shared-model", &ProviderCapability::TextToSpeech)
+        .select_deployment_for_capability("shared-model", &ProviderCapability::CodeExecution)
         .expect_err("unsupported capability should not look unavailable");
 
     assert!(matches!(
         err,
         RouterError::UnsupportedCapability { model, capability }
-            if model == "shared-model" && capability == "TextToSpeech"
+            if model == "shared-model" && capability == "CodeExecution"
     ));
 }
 

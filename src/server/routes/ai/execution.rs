@@ -499,7 +499,7 @@ mod tests {
         let err = execute_with_selected_deployment(
             &router,
             "shared-model",
-            ProviderCapability::TextToSpeech,
+            ProviderCapability::CodeExecution,
             |_provider, _model| async { Ok::<_, ProviderError>(("should not run", 0)) },
         )
         .await

@@ -1,6 +1,5 @@
 //! Audio speech endpoint (text-to-speech)
 
-use crate::core::audio::AudioService;
 use crate::core::audio::types::SpeechRequest;
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
@@ -8,9 +7,9 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use serde::Deserialize;
 use tracing::{error, info};
 
+use super::super::execution::execute_with_selected_deployment;
 use crate::server::routes::ai::context::get_request_context;
 use crate::server::routes::ai::openai_errors;
-use crate::server::routes::ai::provider_selection::select_provider_for_model;
 
 /// Audio speech generation request
 #[derive(Debug, Deserialize)]
@@ -48,35 +47,46 @@ pub async fn audio_speech(
     );
 
     // Get request context (validates auth)
-    let _context = match get_request_context(&req) {
+    let context = match get_request_context(&req) {
         Ok(ctx) => ctx,
         Err(_) => {
             return Ok(openai_errors::unauthorized_error("Unauthorized"));
         }
     };
 
-    let unified_router = &state.unified_router;
-
-    let selected_model = match select_provider_for_model(
-        unified_router,
-        &request.model,
-        ProviderCapability::TextToSpeech,
-    ) {
-        Ok(selection) => selection,
-        Err(e) => return Ok(openai_errors::gateway_error_response(&e)),
-    };
+    if request.input.len() > 4096 {
+        return Ok(openai_errors::validation_error(
+            "Input text too long (max 4096 characters)",
+        ));
+    }
 
     let speech_request = SpeechRequest {
         input: request.input.clone(),
-        model: selected_model,
+        model: request.model.clone(),
         voice: request.voice.clone(),
         response_format: request.response_format.clone(),
         speed: request.speed,
     };
 
-    let audio_service = AudioService::new();
+    let requested_model = request.model.clone();
+    let context_for_execution = context.clone();
 
-    match audio_service.speech(speech_request).await {
+    match execute_with_selected_deployment(
+        &state.unified_router,
+        &requested_model,
+        ProviderCapability::TextToSpeech,
+        move |provider, selected_model| {
+            let mut request = speech_request.clone();
+            let context = context_for_execution.clone();
+            async move {
+                request.model = selected_model;
+                let response = provider.text_to_speech(request, context).await?;
+                Ok((response, 0))
+            }
+        },
+    )
+    .await
+    {
         Ok(response) => Ok(HttpResponse::Ok()
             .content_type(response.content_type)
             .body(response.audio)),

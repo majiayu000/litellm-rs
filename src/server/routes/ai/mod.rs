@@ -13,6 +13,7 @@ mod files;
 mod images;
 mod models;
 mod openai_errors;
+#[cfg(test)]
 mod provider_selection;
 mod responses;
 mod responses_stream;

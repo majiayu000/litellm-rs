@@ -8,6 +8,10 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::pin::Pin;
 
+use crate::core::audio::types::{
+    SpeechRequest, SpeechResponse, TranscriptionRequest, TranscriptionResponse, TranslationRequest,
+    TranslationResponse,
+};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::types::{
@@ -376,6 +380,51 @@ pub trait LLMProvider: Send + Sync + Debug + 'static {
         Err(ProviderError::not_supported(
             self.error_provider_name(),
             "image_generation",
+        ))
+    }
+
+    /// Transcribe audio to text.
+    ///
+    /// Route selection must confirm `ProviderCapability::AudioTranscription`
+    /// before calling this optional dispatch method.
+    async fn audio_transcription(
+        &self,
+        _request: TranscriptionRequest,
+        _context: RequestContext,
+    ) -> Result<TranscriptionResponse, ProviderError> {
+        Err(ProviderError::not_supported(
+            self.error_provider_name(),
+            "audio_transcription",
+        ))
+    }
+
+    /// Translate audio to English text.
+    ///
+    /// Route selection must confirm `ProviderCapability::AudioTranslation`
+    /// before calling this optional dispatch method.
+    async fn audio_translation(
+        &self,
+        _request: TranslationRequest,
+        _context: RequestContext,
+    ) -> Result<TranslationResponse, ProviderError> {
+        Err(ProviderError::not_supported(
+            self.error_provider_name(),
+            "audio_translation",
+        ))
+    }
+
+    /// Generate speech audio from text.
+    ///
+    /// Route selection must confirm `ProviderCapability::TextToSpeech` before
+    /// calling this optional dispatch method.
+    async fn text_to_speech(
+        &self,
+        _request: SpeechRequest,
+        _context: RequestContext,
+    ) -> Result<SpeechResponse, ProviderError> {
+        Err(ProviderError::not_supported(
+            self.error_provider_name(),
+            "text_to_speech",
         ))
     }
 

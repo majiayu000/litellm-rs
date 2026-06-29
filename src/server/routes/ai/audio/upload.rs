@@ -32,6 +32,17 @@ pub(super) fn upload_error_response(error: AudioUploadError) -> HttpResponse {
     }
 }
 
+pub(super) fn raw_response_format_error(response_format: Option<&str>) -> Option<HttpResponse> {
+    let response_format = response_format?;
+    match response_format.to_ascii_lowercase().as_str() {
+        "text" | "srt" | "vtt" => Some(openai_errors::validation_error(format!(
+            "response_format '{}' requires raw response passthrough, which is not supported yet",
+            response_format
+        ))),
+        _ => None,
+    }
+}
+
 fn ensure_field_within_limit(
     current_size: usize,
     chunk_size: usize,

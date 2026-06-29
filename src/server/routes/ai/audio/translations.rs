@@ -1,6 +1,5 @@
 //! Audio translations endpoint
 
-use crate::core::audio::AudioService;
 use crate::core::audio::types::TranslationRequest;
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
@@ -9,10 +8,12 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use futures::StreamExt;
 use tracing::{error, info};
 
-use super::upload::{drain_field, read_audio_file, read_text_field, upload_error_response};
+use super::super::execution::execute_with_selected_deployment;
+use super::upload::{
+    drain_field, raw_response_format_error, read_audio_file, read_text_field, upload_error_response,
+};
 use crate::server::routes::ai::context::get_request_context;
 use crate::server::routes::ai::openai_errors;
-use crate::server::routes::ai::provider_selection::select_provider_for_model;
 
 /// Audio translations endpoint
 ///
@@ -26,7 +27,7 @@ pub async fn audio_translations(
     info!("Audio translations request");
 
     // Get request context (validates auth)
-    let _context = match get_request_context(&req) {
+    let context = match get_request_context(&req) {
         Ok(ctx) => ctx,
         Err(_) => {
             return Ok(openai_errors::unauthorized_error("Unauthorized"));
@@ -114,29 +115,38 @@ pub async fn audio_translations(
         }
     };
 
-    let unified_router = &state.unified_router;
-
-    let selected_model = match select_provider_for_model(
-        unified_router,
-        &model,
-        ProviderCapability::AudioTranslation,
-    ) {
-        Ok(selection) => selection,
-        Err(e) => return Ok(openai_errors::gateway_error_response(&e)),
-    };
+    if let Some(error_response) = raw_response_format_error(response_format.as_deref()) {
+        return Ok(error_response);
+    }
 
     let translation_request = TranslationRequest {
         file,
         filename,
-        model: selected_model,
+        model: model.clone(),
         prompt,
         response_format,
         temperature,
     };
 
-    let audio_service = AudioService::new();
+    let requested_model = model;
+    let context_for_execution = context.clone();
 
-    match audio_service.translate(translation_request).await {
+    match execute_with_selected_deployment(
+        &state.unified_router,
+        &requested_model,
+        ProviderCapability::AudioTranslation,
+        move |provider, selected_model| {
+            let mut request = translation_request.clone();
+            let context = context_for_execution.clone();
+            async move {
+                request.model = selected_model;
+                let response = provider.audio_translation(request, context).await?;
+                Ok((response, 0))
+            }
+        },
+    )
+    .await
+    {
         Ok(response) => Ok(HttpResponse::Ok().json(response)),
         Err(e) => {
             error!("Translation error: {}", e);

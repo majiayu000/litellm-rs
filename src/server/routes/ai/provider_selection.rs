@@ -13,8 +13,6 @@ pub fn select_provider_for_model(
         return Err(GatewayError::validation("Model is required"));
     }
 
-    reject_unimplemented_route_capability(&capability)?;
-
     let deployments = router.get_deployments_for_model(model);
     let supports_capability = deployments.iter().any(|deployment_id| {
         router
@@ -42,19 +40,6 @@ pub fn select_provider_for_model(
     Ok(deployment.model)
 }
 
-fn reject_unimplemented_route_capability(
-    capability: &ProviderCapability,
-) -> Result<(), GatewayError> {
-    match capability {
-        ProviderCapability::AudioTranscription
-        | ProviderCapability::AudioTranslation
-        | ProviderCapability::TextToSpeech => Err(GatewayError::not_implemented(
-            "Audio routes are not wired to provider execution yet",
-        )),
-        _ => Ok(()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +61,30 @@ mod tests {
             provider,
             "text-embedding-3-small".to_string(),
             "embedding-model".to_string(),
+        ));
+
+        router
+    }
+
+    async fn build_audio_router() -> UnifiedRouter {
+        let router = UnifiedRouter::default();
+        let provider = Provider::OpenAI(
+            OpenAIProvider::with_api_key("sk-test-key")
+                .await
+                .expect("test provider should build"),
+        );
+
+        router.add_deployment(Deployment::new(
+            "whisper-1".to_string(),
+            provider.clone(),
+            "whisper-1".to_string(),
+            "whisper-1".to_string(),
+        ));
+        router.add_deployment(Deployment::new(
+            "tts-1".to_string(),
+            provider,
+            "tts-1".to_string(),
+            "tts-1".to_string(),
         ));
 
         router
@@ -115,16 +124,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn select_provider_for_model_rejects_audio_capability_before_selection() {
-        let router = build_embeddings_router().await;
+    async fn select_provider_for_model_routes_audio_capabilities() {
+        let router = build_audio_router().await;
 
-        let err = select_provider_for_model(
-            &router,
-            "embedding-model",
-            ProviderCapability::AudioTranscription,
-        )
-        .expect_err("audio capabilities should fail closed until provider execution is wired");
+        let transcription =
+            select_provider_for_model(&router, "whisper-1", ProviderCapability::AudioTranscription)
+                .expect("audio transcription should route through a capable provider");
+        let translation =
+            select_provider_for_model(&router, "whisper-1", ProviderCapability::AudioTranslation)
+                .expect("audio translation should route through a capable provider");
+        let speech = select_provider_for_model(&router, "tts-1", ProviderCapability::TextToSpeech)
+            .expect("text-to-speech should route through a capable provider");
 
-        assert!(matches!(err, GatewayError::NotImplemented(_)));
+        assert_eq!(transcription, "whisper-1");
+        assert_eq!(translation, "whisper-1");
+        assert_eq!(speech, "tts-1");
     }
 }

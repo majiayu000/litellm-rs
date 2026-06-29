@@ -37,6 +37,8 @@ pub enum OpenAIModelFeature {
     ImageEditing,
     /// Audio transcription
     AudioTranscription,
+    /// Audio translation
+    AudioTranslation,
     /// Fine-tuning support
     FineTuning,
     /// Embeddings generation
@@ -58,6 +60,7 @@ impl OpenAIModelFeature {
             OpenAIModelFeature::FunctionCalling => Some(ProviderCapability::ToolCalling),
             OpenAIModelFeature::ImageGeneration => Some(ProviderCapability::ImageGeneration),
             OpenAIModelFeature::AudioTranscription => Some(ProviderCapability::AudioTranscription),
+            OpenAIModelFeature::AudioTranslation => Some(ProviderCapability::AudioTranslation),
             OpenAIModelFeature::Embeddings => Some(ProviderCapability::Embeddings),
             OpenAIModelFeature::AudioOutput => Some(ProviderCapability::TextToSpeech),
             OpenAIModelFeature::ImageEditing => Some(ProviderCapability::ImageEdit),
