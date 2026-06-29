@@ -471,6 +471,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn image_edit_uses_router_budget_fallback_provider() {
+        let exhausted = MockImageServer::start_image_mock().await;
+        let fallback = MockImageServer::start_image_mock().await;
+        let state = build_test_state(vec![
+            image_route_provider_with_name_and_models(
+                "exhausted-image-provider",
+                &exhausted.base_url,
+                vec!["gpt-image-1-mini".to_string()],
+            ),
+            image_route_provider_with_name_and_models(
+                "fallback-image-provider",
+                &fallback.base_url,
+                vec!["gpt-image-1-mini".to_string()],
+            ),
+        ])
+        .await;
+        state.budget_limits.providers.set_provider_limit(
+            "exhausted-image-provider",
+            ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+        );
+        state
+            .budget_limits
+            .providers
+            .record_provider_spend("exhausted-image-provider", 2.0);
+        state.budget_limits.providers.set_provider_limit(
+            "fallback-image-provider",
+            ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+        let budget_limits = state.budget_limits.clone();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let boundary = "litellm-rs-image-boundary";
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/edits")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(image_edit_multipart_body(boundary))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(
+            body["data"][0]["url"],
+            "https://images.example.test/edit.png"
+        );
+        assert!(
+            exhausted.requests().is_empty(),
+            "router budget fallback must skip exhausted image provider"
+        );
+        let fallback_requests = fallback.requests();
+        assert_eq!(fallback_requests.len(), 1);
+        assert_eq!(fallback_requests[0].path, "/v1/images/edits");
+        assert!(
+            budget_limits
+                .providers
+                .get_provider_usage("fallback-image-provider")
+                .expect("fallback provider spend should be recorded")
+                .current_spend
+                > 0.0
+        );
+
+        exhausted.stop_image_mock().await;
+        fallback.stop_image_mock().await;
+    }
+
+    #[tokio::test]
     async fn image_edit_rejects_unauthenticated_request_when_auth_is_enabled() {
         let mock = MockImageServer::start_image_mock().await;
         let state = build_auth_required_state(vec![image_route_provider(&mock.base_url)]).await;

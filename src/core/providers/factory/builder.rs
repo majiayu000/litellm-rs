@@ -249,6 +249,9 @@ pub(super) fn build_openai_config_from_factory(
     let api_key = macros::require_config_str(config, "api_key", "openai")?;
     let mut openai_config = openai::OpenAIConfig::default();
     openai_config.base.api_key = Some(api_key.to_string());
+    if let Some(provider_name) = config_str(config, "provider_name") {
+        openai_config.provider_name = provider_name.to_string();
+    }
 
     if let Some(base_url) =
         config_str(config, "base_url").or_else(|| config_str(config, "api_base"))

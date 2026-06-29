@@ -217,6 +217,7 @@ impl Router for DefaultRouter {
                     organization: options.organization.clone(),
                     api_version: None,
                 },
+                provider_name: "openai".to_string(),
                 organization: options.organization.clone(),
                 project: None,
                 model_mappings: Default::default(),

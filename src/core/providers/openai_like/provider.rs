@@ -493,6 +493,8 @@ impl LLMProvider for OpenAILikeProvider {
         static CAPABILITIES: &[ProviderCapability] = &[
             ProviderCapability::ChatCompletion,
             ProviderCapability::ChatCompletionStream,
+            ProviderCapability::ImageEdit,
+            ProviderCapability::ImageVariation,
             ProviderCapability::ToolCalling,
             ProviderCapability::FunctionCalling,
         ];

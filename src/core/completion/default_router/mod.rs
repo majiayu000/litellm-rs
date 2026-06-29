@@ -105,6 +105,7 @@ impl DefaultRouter {
                     organization: std::env::var("OPENAI_ORGANIZATION").ok(),
                     api_version: None,
                 },
+                provider_name: "openai".to_string(),
                 organization: std::env::var("OPENAI_ORGANIZATION").ok(),
                 project: None,
                 model_mappings: Default::default(),

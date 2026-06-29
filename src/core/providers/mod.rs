@@ -433,7 +433,10 @@ impl Provider {
     /// Get provider name
     pub fn name(&self) -> &str {
         match self {
-            Provider::OpenAI(_) => "openai",
+            Provider::OpenAI(p) => {
+                use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+                p.name()
+            }
             Provider::Anthropic(_) => "anthropic",
             Provider::Bedrock(_) => "bedrock",
             #[cfg(feature = "providers-extra")]

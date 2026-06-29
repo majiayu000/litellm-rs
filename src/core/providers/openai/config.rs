@@ -16,6 +16,10 @@ pub struct OpenAIConfig {
     #[serde(flatten)]
     pub base: BaseConfig,
 
+    /// Gateway provider name for router deployment identity.
+    #[serde(default = "default_provider_name")]
+    pub provider_name: String,
+
     /// OpenAI-specific configuration
     /// Organization ID (optional)
     pub organization: Option<String>,
@@ -58,6 +62,10 @@ pub struct OpenAIFeatures {
     pub realtime_audio: bool,
 }
 
+fn default_provider_name() -> String {
+    "openai".to_string()
+}
+
 impl Default for OpenAIFeatures {
     fn default() -> Self {
         Self {
@@ -85,6 +93,7 @@ impl Default for OpenAIConfig {
                 organization: None,
                 api_version: None,
             },
+            provider_name: default_provider_name(),
             organization: None,
             project: None,
             model_mappings: HashMap::new(),

@@ -355,8 +355,8 @@ impl OpenAIProvider {
 }
 
 impl LLMProvider for OpenAIProvider {
-    fn name(&self) -> &'static str {
-        "openai"
+    fn name(&self) -> &str {
+        &self.config.provider_name
     }
 
     fn error_provider_name(&self) -> &'static str {

@@ -3,6 +3,7 @@
 use crate::config::models::provider::ProviderConfig;
 use crate::core::models::openai::{ImageGenerationRequest, ImageGenerationResponse};
 use crate::core::pricing_service::{PricingService, PricingUsage};
+use crate::core::providers::{Provider, ProviderError};
 use crate::core::types::context::RequestContext;
 use crate::core::types::image::ImageGenerationRequest as CoreImageRequest;
 use crate::core::types::model::ProviderCapability;
@@ -36,7 +37,6 @@ enum ImageProxyEndpoint {
 #[derive(Debug, Clone, PartialEq)]
 struct ImageProxyProvider {
     provider_name: String,
-    pricing_provider: String,
     base_url: String,
     headers: Vec<(HeaderName, HeaderValue)>,
     timeout: Duration,
@@ -70,10 +70,6 @@ pub async fn image_generations(
     .await
 }
 
-/// Image edit endpoint.
-///
-/// Proxies OpenAI-compatible multipart requests to an enabled OpenAI or
-/// OpenAI-compatible provider.
 pub async fn image_edits(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -90,10 +86,6 @@ pub async fn image_edits(
     }
 }
 
-/// Image variation endpoint.
-///
-/// Proxies OpenAI-compatible multipart requests to an enabled OpenAI or
-/// OpenAI-compatible provider.
 pub async fn image_variations(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -196,42 +188,100 @@ async fn proxy_image_multipart_endpoint(
     let body = read_image_multipart_payload(payload).await?;
     let form_fields = extract_image_proxy_form_fields(&body, &content_type);
     let requested_model = required_image_proxy_model(&form_fields)?;
-    let Some(provider) = select_image_proxy_provider(
+    ensure_image_proxy_candidate_configured(
         state.config().gateway.providers.as_slice(),
-        Some(requested_model),
-    )?
-    else {
-        return Err(missing_image_proxy_provider_error());
-    };
-    let (usage, estimated_cost) =
-        price_image_proxy_request(state, &provider, requested_model, &form_fields)?;
-
-    super::spend::ensure_budget_available(
-        &state.budget_limits,
-        &provider.provider_name,
         requested_model,
     )?;
-    let url = image_proxy_url(&provider, endpoint)?;
-    let response = apply_image_proxy_headers(image_http_client().post(url), &provider)
-        .header(reqwest::header::CONTENT_TYPE, content_type)
-        .body(body)
-        .timeout(provider.timeout)
-        .send()
-        .await?;
+    let router_models =
+        image_proxy_router_models(state.config().gateway.providers.as_slice(), requested_model);
+    let usage = estimated_image_proxy_usage(&form_fields);
+    let estimated_cost =
+        image_proxy_cost(state.pricing.as_ref(), "openai", requested_model, &usage)?;
+    if estimated_cost <= 0.0 {
+        return Err(GatewayError::Config(format!(
+            "Image model '{requested_model}' has non-positive pricing"
+        )));
+    }
+    let api_key_id = super::context::get_authenticated_api_key(req).map(|key| key.metadata.id);
 
-    if response.status().is_success() {
-        record_image_proxy_spend(
-            state,
-            &provider,
-            requested_model,
-            &usage,
-            estimated_cost,
-            req,
+    let mut last_router_error = None;
+    for router_model in router_models {
+        let result = execute_with_selected_deployment(
+            &state.unified_router,
+            &router_model,
+            endpoint.capability(),
+            {
+                let body = body.clone();
+                let content_type = content_type.clone();
+                let usage = usage.clone();
+                move |selected_provider, selected_model| {
+                    let body = body.clone();
+                    let content_type = content_type.clone();
+                    let usage = usage.clone();
+                    async move {
+                        let provider = selected_image_proxy_provider(
+                            state.config().gateway.providers.as_slice(),
+                            &selected_provider,
+                            &selected_model,
+                            requested_model,
+                        )?;
+                        super::spend::ensure_budget_available(
+                            &state.budget_limits,
+                            &provider.provider_name,
+                            requested_model,
+                        )?;
+                        let url = image_proxy_url(&provider, endpoint)
+                            .map_err(image_proxy_gateway_error_to_provider_error)?;
+                        let response =
+                            apply_image_proxy_headers(image_http_client().post(url), &provider)
+                                .header(reqwest::header::CONTENT_TYPE, content_type)
+                                .body(body)
+                                .timeout(provider.timeout)
+                                .send()
+                                .await
+                                .map_err(|error| {
+                                    ProviderError::network("image_proxy", error.to_string())
+                                })?;
+
+                        if !response.status().is_success() {
+                            return Err(image_proxy_upstream_error(response).await);
+                        }
+
+                        record_image_proxy_spend(
+                            state,
+                            &provider,
+                            requested_model,
+                            &usage,
+                            estimated_cost,
+                            api_key_id,
+                        )
+                        .await;
+                        let tokens_used = image_proxy_tokens_used(&usage);
+                        let response = image_proxy_response_to_http_response(response)
+                            .await
+                            .map_err(image_proxy_gateway_error_to_provider_error)?;
+                        Ok((response, tokens_used))
+                    }
+                }
+            },
         )
         .await;
+        match result {
+            Ok(response) => return Ok(response),
+            Err(GatewayError::Provider(ProviderError::QuotaExceeded {
+                provider: "budget",
+                message,
+            })) if message.starts_with("provider ") => {
+                last_router_error = Some(GatewayError::Provider(ProviderError::QuotaExceeded {
+                    provider: "budget",
+                    message,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
     }
 
-    image_proxy_response_to_http_response(response).await
+    Err(last_router_error.unwrap_or_else(missing_image_proxy_provider_error))
 }
 
 async fn record_image_proxy_spend(
@@ -240,14 +290,12 @@ async fn record_image_proxy_spend(
     model: &str,
     usage: &PricingUsage,
     cost: f64,
-    req: &HttpRequest,
+    api_key_id: Option<uuid::Uuid>,
 ) {
     state
         .budget_limits
         .record_spend(&provider.provider_name, model, cost);
-    if let Some(api_key_id) =
-        super::context::get_authenticated_api_key(req).map(|key| key.metadata.id)
-    {
+    if let Some(api_key_id) = api_key_id {
         let total_tokens = u64::from(
             usage
                 .total_tokens
@@ -261,29 +309,6 @@ async fn record_image_proxy_spend(
             error!("failed to record image proxy usage for key {api_key_id}: {error}");
         }
     }
-}
-
-fn price_image_proxy_request(
-    state: &AppState,
-    provider: &ImageProxyProvider,
-    model: &str,
-    form_fields: &ImageProxyFormFields,
-) -> Result<(PricingUsage, f64), GatewayError> {
-    let usage = estimated_image_proxy_usage(form_fields);
-    let cost = image_proxy_cost(
-        state.pricing.as_ref(),
-        &provider.pricing_provider,
-        model,
-        &usage,
-    )?;
-
-    if cost <= 0.0 {
-        return Err(GatewayError::Config(format!(
-            "Image model '{model}' has non-positive pricing"
-        )));
-    }
-
-    Ok((usage, cost))
 }
 
 fn required_image_proxy_model(form_fields: &ImageProxyFormFields) -> Result<&str, GatewayError> {
@@ -419,35 +444,96 @@ async fn image_proxy_response_to_http_response(
         .body(body))
 }
 
-fn select_image_proxy_provider(
+fn ensure_image_proxy_candidate_configured(
     providers: &[ProviderConfig],
-    requested_model: Option<&str>,
-) -> Result<Option<ImageProxyProvider>, GatewayError> {
-    let candidates = providers
+    requested_model: &str,
+) -> Result<(), GatewayError> {
+    let candidates = image_proxy_candidate_configs(providers);
+    if candidates.is_empty() {
+        return Err(missing_image_proxy_provider_error());
+    }
+
+    if candidates
+        .iter()
+        .any(|provider| image_provider_supports_requested_model(provider, Some(requested_model)))
+    {
+        Ok(())
+    } else {
+        return Err(GatewayError::Config(format!(
+            "Image provider for model '{requested_model}' is not configured"
+        )));
+    }
+}
+
+fn image_proxy_router_models(providers: &[ProviderConfig], requested_model: &str) -> Vec<String> {
+    let candidates = image_proxy_candidate_configs(providers);
+    let mut router_models = Vec::new();
+    if candidates.iter().any(|provider| {
+        !provider.models.is_empty() && provider.models.iter().any(|model| model == requested_model)
+    }) {
+        router_models.push(requested_model.to_string());
+    }
+
+    let wildcard_models = candidates
+        .into_iter()
+        .filter(|provider| provider.models.is_empty())
+        .map(|provider| provider.name.clone())
+        .collect::<Vec<_>>();
+    if wildcard_models.is_empty() {
+        if router_models.is_empty() {
+            router_models.push(requested_model.to_string());
+        }
+        router_models
+    } else {
+        router_models.extend(wildcard_models);
+        router_models
+    }
+}
+
+fn selected_image_proxy_provider(
+    providers: &[ProviderConfig],
+    selected_provider: &Provider,
+    selected_model: &str,
+    requested_model: &str,
+) -> Result<ImageProxyProvider, ProviderError> {
+    let provider_name = selected_provider.name();
+    let candidates = image_proxy_candidate_configs(providers);
+    let matching = candidates
+        .iter()
+        .copied()
+        .filter(|provider| image_provider_supports_requested_model(provider, Some(requested_model)))
+        .find(|provider| {
+            provider.name == provider_name
+                || provider
+                    .settings
+                    .get("provider_name")
+                    .and_then(|value| value.as_str())
+                    == Some(provider_name)
+                || (provider.models.is_empty() && provider.name == selected_model)
+        })
+        .ok_or_else(|| {
+            ProviderError::configuration(
+                "image_proxy",
+                format!(
+                    "selected image provider '{provider_name}' for model '{selected_model}' has no matching gateway provider config"
+                ),
+            )
+        })?;
+
+    image_proxy_provider_from_config(matching).map_err(image_proxy_gateway_error_to_provider_error)
+}
+
+fn image_proxy_candidate_configs(providers: &[ProviderConfig]) -> Vec<&ProviderConfig> {
+    providers
         .iter()
         .filter(|provider| provider.enabled)
         .filter(|provider| is_openai_image_provider(provider))
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
-    let requested_model = requested_model.and_then(|model| {
-        let model = model.trim();
-        (!model.is_empty()).then_some(model)
-    });
-    let Some(provider) = candidates
-        .iter()
-        .copied()
-        .find(|provider| image_provider_supports_requested_model(provider, requested_model))
-    else {
-        let model = requested_model.unwrap_or("");
-        return Err(GatewayError::Config(format!(
-            "Image provider for model '{model}' is not configured"
-        )));
-    };
-
+fn image_proxy_provider_from_config(
+    provider: &ProviderConfig,
+) -> Result<ImageProxyProvider, GatewayError> {
     if provider.api_key.trim().is_empty() {
         return Err(GatewayError::Config(format!(
             "Image provider '{}' is missing api_key",
@@ -455,13 +541,64 @@ fn select_image_proxy_provider(
         )));
     }
 
-    Ok(Some(ImageProxyProvider {
+    Ok(ImageProxyProvider {
         provider_name: provider.name.clone(),
-        pricing_provider: image_proxy_pricing_provider(provider),
         base_url: image_proxy_base_url(provider)?,
         headers: image_proxy_provider_headers(provider)?,
         timeout: Duration::from_secs(provider.timeout),
-    }))
+    })
+}
+
+fn image_proxy_gateway_error_to_provider_error(error: GatewayError) -> ProviderError {
+    match error {
+        GatewayError::Provider(error) => error,
+        GatewayError::Validation(message) | GatewayError::BadRequest(message) => {
+            ProviderError::invalid_request("image_proxy", message)
+        }
+        GatewayError::Config(message) => ProviderError::configuration("image_proxy", message),
+        GatewayError::Auth(message) | GatewayError::Forbidden(message) => {
+            ProviderError::authentication("image_proxy", message)
+        }
+        GatewayError::Timeout(message) => ProviderError::timeout("image_proxy", message),
+        GatewayError::RateLimit {
+            message,
+            retry_after,
+            ..
+        } => ProviderError::rate_limit_with_retry("image_proxy", message, retry_after),
+        GatewayError::HttpClient(error) => ProviderError::network("image_proxy", error.to_string()),
+        GatewayError::Network(message) => ProviderError::network("image_proxy", message),
+        GatewayError::Unavailable(message) => {
+            ProviderError::provider_unavailable("image_proxy", message)
+        }
+        other => ProviderError::api_error("image_proxy", 500, other.to_string()),
+    }
+}
+
+async fn image_proxy_upstream_error(response: reqwest::Response) -> ProviderError {
+    let status = response.status().as_u16();
+    let message = response
+        .text()
+        .await
+        .unwrap_or_else(|error| format!("failed to read image upstream error body: {error}"));
+
+    match status {
+        400 => ProviderError::invalid_request("image_proxy", message),
+        401 | 403 => ProviderError::authentication("image_proxy", message),
+        402 => ProviderError::quota_exceeded("image_proxy", message),
+        404 => ProviderError::model_not_found("image_proxy", message),
+        408 | 504 => ProviderError::timeout("image_proxy", message),
+        429 => ProviderError::rate_limit_with_retry("image_proxy", message, None),
+        502 | 503 => ProviderError::provider_unavailable("image_proxy", message),
+        _ => ProviderError::api_error("image_proxy", status, message),
+    }
+}
+
+fn image_proxy_tokens_used(usage: &PricingUsage) -> u64 {
+    u64::from(
+        usage
+            .total_tokens
+            .saturating_add(usage.image_tokens.unwrap_or(0)),
+    )
 }
 
 fn image_provider_supports_requested_model(
@@ -472,20 +609,6 @@ fn image_provider_supports_requested_model(
         return true;
     };
     provider.models.is_empty() || provider.models.iter().any(|model| model == requested_model)
-}
-
-fn image_proxy_pricing_provider(provider: &ProviderConfig) -> String {
-    let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
-    let provider_name = provider_config::normalize_provider_selector(&provider.name);
-    if provider_type == "openai"
-        || provider_type == "openaicompatible"
-        || provider_name == "openai"
-        || provider_name == "openaicompatible"
-    {
-        "openai".to_string()
-    } else {
-        provider.name.clone()
-    }
 }
 
 fn image_proxy_base_url(provider: &ProviderConfig) -> Result<String, GatewayError> {
@@ -657,6 +780,13 @@ fn is_openai_image_provider(provider: &ProviderConfig) -> bool {
 }
 
 impl ImageProxyEndpoint {
+    fn capability(self) -> ProviderCapability {
+        match self {
+            Self::Edits => ProviderCapability::ImageEdit,
+            Self::Variations => ProviderCapability::ImageVariation,
+        }
+    }
+
     fn path_segment(self) -> &'static str {
         match self {
             Self::Edits => "edits",

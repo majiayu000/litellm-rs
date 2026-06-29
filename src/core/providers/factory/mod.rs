@@ -171,6 +171,14 @@ pub async fn create_provider(
     {
         factory_config.insert("api_token".to_string(), Value::String(api_key));
     }
+    if matches!(
+        provider_type_enum,
+        ProviderType::OpenAI | ProviderType::OpenAICompatible
+    ) {
+        factory_config
+            .entry("provider_name".to_string())
+            .or_insert(Value::String(name));
+    }
 
     Provider::from_config_async(provider_type_enum, Value::Object(factory_config)).await
 }
