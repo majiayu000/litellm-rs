@@ -1,5 +1,6 @@
 //! Cohere rerank provider implementation
 
+use super::rerank_upstream_error;
 use crate::core::rerank::service::RerankProvider;
 use crate::core::rerank::types::{RerankRequest, RerankResponse, RerankResult, RerankUsage};
 use crate::utils::error::gateway_error::{GatewayError, Result};
@@ -82,10 +83,7 @@ impl RerankProvider for CohereRerankProvider {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(GatewayError::Network(format!(
-                "Cohere rerank error ({}): {}",
-                status, error_text
-            )));
+            return Err(rerank_upstream_error("cohere", status, error_text));
         }
 
         // Parse response

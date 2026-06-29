@@ -1,5 +1,6 @@
 //! Jina AI rerank provider implementation
 
+use super::rerank_upstream_error;
 use crate::core::rerank::service::RerankProvider;
 use crate::core::rerank::types::{RerankRequest, RerankResponse, RerankResult, RerankUsage};
 use crate::utils::error::gateway_error::{GatewayError, Result};
@@ -24,6 +25,12 @@ impl JinaRerankProvider {
             base_url: "https://api.jina.ai/v1".to_string(),
             client: crate::core::http::outbound::default_outbound_client().clone(),
         }
+    }
+
+    /// Set custom base URL
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = url.into();
+        self
     }
 }
 
@@ -69,10 +76,7 @@ impl RerankProvider for JinaRerankProvider {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(GatewayError::Network(format!(
-                "Jina rerank error ({}): {}",
-                status, error_text
-            )));
+            return Err(rerank_upstream_error("jina", status, error_text));
         }
 
         let jina_response: serde_json::Value = response.json().await.map_err(|e| {

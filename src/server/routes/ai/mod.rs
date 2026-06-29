@@ -20,6 +20,7 @@ mod openai_errors;
 mod provider_config;
 #[cfg(test)]
 mod provider_selection;
+mod rerank;
 mod responses;
 mod responses_stream;
 mod spend;
@@ -46,6 +47,7 @@ pub use gemini::{
 pub use images::{image_edits, image_generations, image_variations};
 pub use models::{get_model, list_models};
 pub use moderations::create_moderation;
+pub use rerank::rerank;
 pub use responses::{
     cancel_response, create_response, delete_response, get_response, list_response_input_items,
 };
@@ -58,6 +60,7 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/completions", web::post().to(completions))
         .route("/moderations", web::post().to(create_moderation))
+        .route("/rerank", web::post().to(rerank))
         .route(
             "/engines/{model_id}/completions",
             web::post().to(engine_completions),
@@ -133,6 +136,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/images/variations", web::post().to(image_variations))
             // Moderations
             .route("/moderations", web::post().to(create_moderation))
+            // Rerank
+            .route("/rerank", web::post().to(rerank))
             // Models
             .route("/models", web::get().to(list_models))
             .route("/models/{model_id}", web::get().to(get_model))

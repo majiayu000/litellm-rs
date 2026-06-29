@@ -52,8 +52,8 @@ pub fn get_authenticated_api_key(req: &HttpRequest) -> Option<ApiKey> {
 /// - Unauthenticated requests are always denied.
 /// - Admin roles (`SuperAdmin`, `Admin`) have full access to every operation.
 /// - API-usage operations (`chat`, `completions`, `models`, `embeddings`, `images`,
-///   `audio`, `moderations`, `assistants`, `files`, `fine_tuning`) are allowed for
-///   any authenticated user/key.
+///   `audio`, `moderations`, `rerank`, `assistants`, `files`, `fine_tuning`) are
+///   allowed for any authenticated user/key.
 /// - Management operations (`keys.list_all`, `users.manage`, `config.manage`,
 ///   `teams.manage`, `analytics.admin`) require an admin role.
 /// - API key `permissions` can grant admin-level access via `"*"` or `"system.admin"`,
