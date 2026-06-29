@@ -10,7 +10,8 @@ use tracing::{error, info};
 
 use super::super::execution::execute_with_selected_deployment;
 use super::upload::{
-    drain_field, raw_response_format_error, read_audio_file, read_text_field, upload_error_response,
+    drain_field, parse_optional_f32_field, raw_response_format_error, read_audio_file,
+    read_text_field, upload_error_response,
 };
 use crate::server::routes::ai::context::get_request_context;
 use crate::server::routes::ai::openai_errors;
@@ -93,11 +94,10 @@ pub async fn audio_translations(
                 Err(e) => return Ok(upload_error_response(e)),
             },
             "temperature" => match read_text_field(&mut field).await {
-                Ok(value) => {
-                    if let Ok(temp) = value.parse::<f32>() {
-                        temperature = Some(temp);
-                    }
-                }
+                Ok(value) => match parse_optional_f32_field("temperature", &value) {
+                    Ok(parsed) => temperature = parsed,
+                    Err(response) => return Ok(response),
+                },
                 Err(e) => return Ok(upload_error_response(e)),
             },
             _ => {

@@ -393,6 +393,7 @@ macro_rules! dispatch_provider_selective {
 }
 
 mod audio_dispatch;
+mod capability_dispatch;
 
 /// Unified built-in Provider enum (Rust-idiomatic design).
 ///

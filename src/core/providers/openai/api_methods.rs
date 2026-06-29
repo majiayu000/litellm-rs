@@ -153,7 +153,6 @@ impl OpenAIProvider {
             });
         }
 
-        let response_format = request.response_format.clone();
         let form = transcription_form(request);
         let url = format!("{}/audio/transcriptions", self.config.get_api_base());
         let response = apply_headers(
@@ -168,17 +167,6 @@ impl OpenAIProvider {
         })?;
 
         let response_bytes = read_success_response_bytes(response).await?;
-        if is_raw_audio_text_format(response_format.as_deref()) {
-            return Ok(TranscriptionResponse {
-                text: String::from_utf8_lossy(&response_bytes).into_owned(),
-                task: None,
-                language: None,
-                duration: None,
-                words: None,
-                segments: None,
-            });
-        }
-
         serde_json::from_slice(&response_bytes).map_err(|e| OpenAIError::ResponseParsing {
             provider: "openai",
             message: e.to_string(),
@@ -197,7 +185,6 @@ impl OpenAIProvider {
             });
         }
 
-        let response_format = request.response_format.clone();
         let form = translation_form(request);
         let url = format!("{}/audio/translations", self.config.get_api_base());
         let response = apply_headers(
@@ -212,16 +199,6 @@ impl OpenAIProvider {
         })?;
 
         let response_bytes = read_success_response_bytes(response).await?;
-        if is_raw_audio_text_format(response_format.as_deref()) {
-            return Ok(TranslationResponse {
-                text: String::from_utf8_lossy(&response_bytes).into_owned(),
-                task: None,
-                language: None,
-                duration: None,
-                segments: None,
-            });
-        }
-
         serde_json::from_slice(&response_bytes).map_err(|e| OpenAIError::ResponseParsing {
             provider: "openai",
             message: e.to_string(),
@@ -353,11 +330,4 @@ async fn read_success_response_bytes(response: reqwest::Response) -> Result<Vec<
     }
 
     Ok(response_bytes.to_vec())
-}
-
-fn is_raw_audio_text_format(response_format: Option<&str>) -> bool {
-    matches!(
-        response_format.map(str::to_ascii_lowercase).as_deref(),
-        Some("text" | "srt" | "vtt")
-    )
 }

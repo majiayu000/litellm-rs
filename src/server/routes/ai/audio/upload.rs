@@ -43,6 +43,19 @@ pub(super) fn raw_response_format_error(response_format: Option<&str>) -> Option
     }
 }
 
+pub(super) fn parse_optional_f32_field(
+    field_name: &str,
+    value: &str,
+) -> Result<Option<f32>, HttpResponse> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    value.parse::<f32>().map(Some).map_err(|_| {
+        openai_errors::validation_error(format!("{field_name} must be a valid number"))
+    })
+}
+
 fn ensure_field_within_limit(
     current_size: usize,
     chunk_size: usize,

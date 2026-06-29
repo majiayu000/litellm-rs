@@ -155,7 +155,10 @@ impl Router {
         self.select_deployment_matching(
             model_name,
             |deployment| {
-                deployment.provider.supports_capability(capability) && is_candidate(deployment)
+                deployment
+                    .provider
+                    .supports_capability_for_model(&deployment.model, capability)
+                    && is_candidate(deployment)
             },
             Some(no_matching_candidate_error),
         )

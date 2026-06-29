@@ -136,6 +136,14 @@ mod tests {
     }
 
     async fn build_audio_state(base_url: &str) -> litellm_rs::server::state::AppState {
+        build_audio_state_with_models(base_url, vec!["whisper-1".to_string(), "tts-1".to_string()])
+            .await
+    }
+
+    async fn build_audio_state_with_models(
+        base_url: &str,
+        models: Vec<String>,
+    ) -> litellm_rs::server::state::AppState {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
@@ -148,7 +156,7 @@ mod tests {
             provider_type: "openai".to_string(),
             api_key: "sk-test".to_string(),
             base_url: Some(base_url.to_string()),
-            models: vec!["whisper-1".to_string(), "tts-1".to_string()],
+            models,
             ..ProviderConfig::default()
         }];
 
@@ -165,11 +173,29 @@ mod tests {
         filename: &str,
         file_content: &[u8],
     ) -> Vec<u8> {
+        audio_multipart_body_with_fields(boundary, model, filename, file_content, &[])
+    }
+
+    fn audio_multipart_body_with_fields(
+        boundary: &str,
+        model: &str,
+        filename: &str,
+        file_content: &[u8],
+        fields: &[(&str, &str)],
+    ) -> Vec<u8> {
         let mut body = Vec::new();
         body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         body.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
         body.extend_from_slice(model.as_bytes());
         body.extend_from_slice(b"\r\n");
+        for (name, value) in fields {
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            );
+            body.extend_from_slice(value.as_bytes());
+            body.extend_from_slice(b"\r\n");
+        }
         body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         body.extend_from_slice(
             format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n")
@@ -312,6 +338,81 @@ mod tests {
         assert_eq!(forwarded["model"], "tts-1");
         assert_eq!(forwarded["input"], "hello from litellm rs");
         assert_eq!(forwarded["voice"], "alloy");
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn audio_speech_rejects_non_tts_openai_model_before_provider_call() {
+        let mock = MockAudioServer::start().await;
+        let state = build_audio_state_with_models(&mock.base_url, vec!["gpt-4".to_string()]).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/v1/audio/speech")
+            .set_json(json!({
+                "model": "gpt-4",
+                "input": "hello from litellm rs",
+                "voice": "alloy"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            mock.requests().is_empty(),
+            "unsupported model must fail before provider execution"
+        );
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn audio_routes_reject_invalid_temperature_before_provider_call() {
+        assert_invalid_temperature_rejected("/v1/audio/transcriptions").await;
+        assert_invalid_temperature_rejected("/v1/audio/translations").await;
+    }
+
+    async fn assert_invalid_temperature_rejected(uri: &str) {
+        let mock = MockAudioServer::start().await;
+        let state = build_audio_state(&mock.base_url).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let boundary = "litellm-rs-audio-boundary";
+
+        let req = test::TestRequest::post()
+            .uri(uri)
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(audio_multipart_body_with_fields(
+                boundary,
+                "whisper-1",
+                "sample.mp3",
+                b"audio-bytes",
+                &[("temperature", "not-a-number")],
+            ))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(
+            body["error"]["message"],
+            "temperature must be a valid number"
+        );
+        assert!(
+            mock.requests().is_empty(),
+            "invalid temperature must fail before provider execution"
+        );
         mock.shutdown().await;
     }
 }
