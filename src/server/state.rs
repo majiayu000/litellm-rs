@@ -3,7 +3,7 @@
 //! This module provides the AppState struct and its implementations.
 
 use crate::config::Config;
-use crate::core::budget::UnifiedBudgetLimits;
+use crate::core::budget::{BudgetManager, UnifiedBudgetLimits};
 use crate::core::keys::{DatabaseKeyRepository, KeyManager};
 use crate::core::pricing_service::PricingService;
 use crate::core::teams::TeamManager;
@@ -34,6 +34,8 @@ pub struct AppState {
     pub pricing: Arc<PricingService>,
     /// Budget limits for provider and model cost tracking
     pub budget_limits: Arc<UnifiedBudgetLimits>,
+    /// General budget manager for keyed budget scopes such as API key budgets
+    pub budget_manager: Arc<BudgetManager>,
     /// Team manager for team lifecycle operations (shared, in-memory by default)
     pub team_manager: Arc<TeamManager>,
     /// API key manager for `/v1/keys` route handlers (shared across requests)
@@ -63,6 +65,7 @@ impl AppState {
             storage,
             pricing,
             budget_limits,
+            budget_manager: Arc::new(BudgetManager::new()),
             team_manager,
             key_manager,
         }

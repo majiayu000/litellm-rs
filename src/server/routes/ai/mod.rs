@@ -24,6 +24,7 @@ mod rerank;
 mod responses;
 mod responses_stream;
 mod spend;
+mod token_policy;
 
 // Public re-exports for backward compatibility
 pub use audio::{audio_speech, audio_transcriptions, audio_translations};
@@ -31,8 +32,8 @@ pub use batches::{cancel_batch, create_batch, get_batch, list_batches};
 pub use chat::chat_completions;
 pub use completions::{completions, engine_completions};
 pub use context::{
-    check_permission, get_authenticated_api_key, get_authenticated_user, get_request_context,
-    handle_ai_request, log_api_usage,
+    api_key_allows_endpoint, check_permission, get_authenticated_api_key, get_authenticated_user,
+    get_request_context, handle_ai_request, log_api_usage,
 };
 pub use embeddings::embeddings;
 pub use files::{create_file, delete_file, get_file, get_file_content, list_files};

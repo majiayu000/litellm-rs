@@ -9,6 +9,7 @@ use crate::storage::StorageLayer;
 use crate::utils::error::gateway_error::Result;
 use std::sync::Arc;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 /// Main authentication system
 #[derive(Clone)]
@@ -160,6 +161,11 @@ impl AuthSystem {
         match self.api_key.verify_key(key).await {
             Ok(Some((api_key, user))) => {
                 context.set_api_key_id(api_key.metadata.id);
+                if let Some(budget_id) = api_key_budget_id(&api_key) {
+                    context.set_api_key_budget_id(budget_id);
+                } else {
+                    context.clear_api_key_budget_id();
+                }
                 context.user_id = api_key.user_id.map(|id| id.to_string());
                 if let Some(team_id) = api_key.team_id {
                     context.set_team_id(team_id);
@@ -290,4 +296,14 @@ impl AuthSystem {
     pub fn rbac(&self) -> &crate::auth::rbac::RbacSystem {
         &self.rbac
     }
+}
+
+fn api_key_budget_id(api_key: &crate::core::models::ApiKey) -> Option<Uuid> {
+    api_key
+        .metadata
+        .extra
+        .get("__core_keys")
+        .and_then(|value| value.get("budget_id"))
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
 }

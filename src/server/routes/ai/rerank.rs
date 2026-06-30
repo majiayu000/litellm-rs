@@ -27,6 +27,12 @@ pub async fn rerank(
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
+    if let Err(error) =
+        super::context::enforce_api_key_model_and_token_limits(&req, &request.model, None)
+    {
+        return Ok(openai_errors::gateway_error_response(&error));
+    }
+
     match handle_rerank_with_state(state.get_ref(), request.into_inner()).await {
         Ok(response) => Ok(HttpResponse::Ok().json(response)),
         Err(error) => {

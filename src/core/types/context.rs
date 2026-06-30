@@ -6,6 +6,8 @@ use uuid::Uuid;
 
 const TEAM_ID_METADATA_KEY: &str = "team_id";
 const API_KEY_ID_METADATA_KEY: &str = "api_key_id";
+const API_KEY_BUDGET_ID_METADATA_KEY: &str = "api_key_budget_id";
+const API_KEY_MAX_TOKENS_PER_REQUEST_KEY: &str = "api_key_max_tokens_per_request";
 
 /// Request context for tracking and metadata
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -72,6 +74,12 @@ impl RequestContext {
     /// Set API key information.
     pub fn with_api_key(mut self, api_key_id: Uuid) -> Self {
         self.set_api_key_id(api_key_id);
+        self
+    }
+
+    /// Set API key budget information.
+    pub fn with_api_key_budget(mut self, budget_id: Uuid) -> Self {
+        self.set_api_key_budget_id(budget_id);
         self
     }
 
@@ -165,6 +173,48 @@ impl RequestContext {
     /// Remove API key ID from metadata.
     pub fn clear_api_key_id(&mut self) {
         self.metadata.remove(API_KEY_ID_METADATA_KEY);
+    }
+
+    /// Set API key budget ID in metadata.
+    pub fn set_api_key_budget_id(&mut self, budget_id: Uuid) {
+        self.metadata.insert(
+            API_KEY_BUDGET_ID_METADATA_KEY.to_string(),
+            serde_json::json!(budget_id.to_string()),
+        );
+    }
+
+    /// Get API key budget ID from metadata.
+    pub fn api_key_budget_id(&self) -> Option<Uuid> {
+        self.metadata
+            .get(API_KEY_BUDGET_ID_METADATA_KEY)
+            .and_then(|value| value.as_str())
+            .and_then(|value| Uuid::parse_str(value).ok())
+    }
+
+    /// Remove API key budget ID from metadata.
+    pub fn clear_api_key_budget_id(&mut self) {
+        self.metadata.remove(API_KEY_BUDGET_ID_METADATA_KEY);
+    }
+
+    /// Set API key max output token policy in metadata.
+    pub fn set_api_key_max_tokens_per_request(&mut self, max_tokens: u32) {
+        self.metadata.insert(
+            API_KEY_MAX_TOKENS_PER_REQUEST_KEY.to_string(),
+            serde_json::json!(max_tokens),
+        );
+    }
+
+    /// Get API key max output token policy from metadata.
+    pub fn api_key_max_tokens_per_request(&self) -> Option<u32> {
+        self.metadata
+            .get(API_KEY_MAX_TOKENS_PER_REQUEST_KEY)
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+    }
+
+    /// Remove API key max output token policy from metadata.
+    pub fn clear_api_key_max_tokens_per_request(&mut self) {
+        self.metadata.remove(API_KEY_MAX_TOKENS_PER_REQUEST_KEY);
     }
 
     /// Get elapsed time

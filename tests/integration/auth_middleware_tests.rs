@@ -7,8 +7,8 @@ mod tests {
     use actix_web::http::StatusCode;
     use actix_web::{App, HttpMessage, HttpRequest, HttpResponse, test, web};
     use litellm_rs::Config;
-    use litellm_rs::core::models::user::types::{User, UserStatus};
-    use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
+    use litellm_rs::core::models::user::types::{User, UserRole, UserStatus};
+    use litellm_rs::core::models::{ApiKey, Metadata, RateLimits, UsageStats};
     use litellm_rs::core::types::context::RequestContext;
     use litellm_rs::server::http::HttpServer;
     use litellm_rs::server::middleware::{AuthMiddleware, RateLimitMiddleware};
@@ -35,6 +35,7 @@ mod tests {
         request_id: Option<String>,
         user_id: Option<String>,
         api_key_id: Option<String>,
+        api_key_budget_id: Option<String>,
     }
 
     async fn auth_probe(
@@ -56,6 +57,9 @@ mod tests {
             api_key_id: context
                 .as_ref()
                 .and_then(|ctx| ctx.api_key_id().map(|id| id.to_string())),
+            api_key_budget_id: context
+                .as_ref()
+                .and_then(|ctx| ctx.api_key_budget_id().map(|id| id.to_string())),
         };
 
         HttpResponse::Ok().json(payload)
@@ -97,11 +101,35 @@ mod tests {
     }
 
     async fn seed_valid_principal(state: &AppState) -> SeededPrincipal {
+        seed_principal_with_role_and_api_key(
+            state,
+            UserRole::User,
+            vec!["use:api".to_string()],
+            Metadata::new(),
+        )
+        .await
+    }
+
+    async fn seed_principal_with_api_key(
+        state: &AppState,
+        permissions: Vec<String>,
+        metadata: Metadata,
+    ) -> SeededPrincipal {
+        seed_principal_with_role_and_api_key(state, UserRole::User, permissions, metadata).await
+    }
+
+    async fn seed_principal_with_role_and_api_key(
+        state: &AppState,
+        role: UserRole,
+        permissions: Vec<String>,
+        metadata: Metadata,
+    ) -> SeededPrincipal {
         let mut user = User::new(
             "auth-mw-user".to_string(),
             "auth-mw-user@example.com".to_string(),
             "hashed-password".to_string(),
         );
+        user.role = role;
         user.status = UserStatus::Active;
 
         let user = state
@@ -113,13 +141,13 @@ mod tests {
 
         let raw_api_key = "gw-valid-auth-middleware-key-123456".to_string();
         let api_key = ApiKey {
-            metadata: Metadata::new(),
+            metadata,
             name: "auth-middleware-test-key".to_string(),
             key_hash: hash_api_key(&raw_api_key, None),
             key_prefix: extract_api_key_prefix(&raw_api_key),
             user_id: Some(user.id()),
             team_id: None,
-            permissions: vec!["use:api".to_string()],
+            permissions,
             rate_limits: None,
             expires_at: None,
             is_active: true,
@@ -322,6 +350,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_api_key_rpm_is_enforced_without_gateway_default_rate_limit() {
+        let state = build_test_state(true, true).await;
+        let principal = seed_valid_principal(&state).await;
+        let key_id = uuid::Uuid::parse_str(&principal.api_key_id)
+            .expect("seeded API key id should be a UUID");
+        state
+            .storage
+            .db()
+            .update_api_key_rate_limits(
+                key_id,
+                &RateLimits {
+                    rpm: Some(1),
+                    tpm: None,
+                    rpd: None,
+                    tpd: None,
+                    concurrent: None,
+                },
+            )
+            .await
+            .expect("failed to update seeded API key rate limit");
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(RateLimitMiddleware::optional(None))
+                .wrap(AuthMiddleware)
+                .route(AUTH_PROBE_PATH, web::get().to(auth_probe)),
+        )
+        .await;
+
+        let first = test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request();
+        let first_response = test::call_service(&app, first).await;
+        assert_eq!(first_response.status(), StatusCode::OK);
+
+        let second = test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request();
+        let second_error = test::try_call_service(&app, second)
+            .await
+            .expect_err("second request should hit the API key rpm limit");
+
+        assert_eq!(
+            second_error.as_response_error().status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn test_auth_middleware_accepts_valid_auth_and_propagates_principal_context() {
         let state = build_test_state(true, true).await;
         let principal = seed_valid_principal(&state).await;
@@ -363,6 +446,224 @@ mod tests {
                 .as_deref()
                 .is_some_and(|value| !value.is_empty()),
             "request context should include a non-empty request id"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_allows_legacy_use_api_permission_on_ai_route() {
+        let state = build_test_state(true, true).await;
+        let principal = seed_valid_principal(&state).await;
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(AuthMiddleware)
+                .route("/v1/chat/completions", web::post().to(auth_probe)),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .insert_header(("x-api-key", principal.raw_api_key.clone()))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_denies_ai_route_for_disallowed_api_permission() {
+        let state = build_test_state(true, true).await;
+        let principal = seed_principal_with_api_key(
+            &state,
+            vec!["api.embeddings".to_string()],
+            Metadata::new(),
+        )
+        .await;
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(AuthMiddleware)
+                .route("/v1/chat/completions", web::post().to(auth_probe)),
+        )
+        .await;
+
+        let request = test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request();
+        let error = test::try_call_service(&app, request)
+            .await
+            .expect_err("disallowed operation should fail in auth middleware");
+
+        assert_eq!(
+            error.as_response_error().status_code(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
+        assert!(error.to_string().contains("operation"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_keeps_admin_owned_api_key_permission_restricted() {
+        let state = build_test_state(true, true).await;
+        let principal = seed_principal_with_role_and_api_key(
+            &state,
+            UserRole::Admin,
+            vec!["api.embeddings".to_string()],
+            Metadata::new(),
+        )
+        .await;
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(AuthMiddleware)
+                .route("/v1/chat/completions", web::post().to(auth_probe)),
+        )
+        .await;
+
+        let request = test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request();
+        let error = test::try_call_service(&app, request)
+            .await
+            .expect_err("admin-owned limited key should stay limited");
+
+        assert_eq!(
+            error.as_response_error().status_code(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_denies_root_engine_completion_alias_for_disallowed_permission() {
+        let state = build_test_state(true, true).await;
+        let principal = seed_principal_with_api_key(
+            &state,
+            vec!["api.embeddings".to_string()],
+            Metadata::new(),
+        )
+        .await;
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(AuthMiddleware)
+                .route("/engines/gpt-4o/completions", web::post().to(auth_probe)),
+        )
+        .await;
+
+        let request = test::TestRequest::post()
+            .uri("/engines/gpt-4o/completions")
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request();
+        let error = test::try_call_service(&app, request)
+            .await
+            .expect_err("root engine completions alias should map to completions operation");
+
+        assert_eq!(
+            error.as_response_error().status_code(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_denies_ai_route_for_disallowed_endpoint_policy() {
+        let state = build_test_state(true, true).await;
+        let mut metadata = Metadata::new();
+        metadata.set_extra(
+            "__core_keys",
+            serde_json::json!({
+                "permissions": {
+                    "allowed_endpoints": ["/v1/embeddings"]
+                }
+            }),
+        );
+        let principal =
+            seed_principal_with_api_key(&state, vec!["use:api".to_string()], metadata).await;
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(AuthMiddleware)
+                .route("/v1/chat/completions", web::post().to(auth_probe)),
+        )
+        .await;
+
+        let request = test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request();
+        let error = test::try_call_service(&app, request)
+            .await
+            .expect_err("disallowed endpoint should fail in auth middleware");
+
+        assert_eq!(
+            error.as_response_error().status_code(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
+        assert!(error.to_string().contains("endpoint"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_propagates_api_key_budget_id_context() {
+        let state = build_test_state(true, true).await;
+        let budget_id = uuid::Uuid::new_v4();
+        let mut metadata = Metadata::new();
+        metadata.set_extra(
+            "__core_keys",
+            serde_json::json!({
+                "budget_id": budget_id.to_string()
+            }),
+        );
+        let principal =
+            seed_principal_with_api_key(&state, vec!["use:api".to_string()], metadata).await;
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(AuthMiddleware)
+                .route(AUTH_PROBE_PATH, web::get().to(auth_probe)),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(AUTH_PROBE_PATH)
+                .insert_header(("x-api-key", principal.raw_api_key.clone()))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: AuthProbePayload = test::read_body_json(response).await;
+        let budget_id_string = budget_id.to_string();
+        assert_eq!(
+            payload.api_key_budget_id.as_deref(),
+            Some(budget_id_string.as_str())
         );
     }
 

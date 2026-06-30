@@ -3,6 +3,7 @@
 use crate::config::models::provider::ProviderConfig;
 mod generation;
 
+use crate::core::budget::BudgetReservation;
 use crate::core::models::openai::ImageGenerationRequest;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::{Provider, ProviderError};
@@ -62,6 +63,13 @@ pub async fn image_generations(
 ) -> ActixResult<HttpResponse> {
     info!("Image generation request for model: {:?}", request.model);
 
+    if let Some(model) = request.model.as_deref()
+        && let Err(error) =
+            super::context::enforce_api_key_model_and_token_limits(&req, model, None)
+    {
+        return Ok(openai_errors::gateway_error_response(&error));
+    }
+
     handle_ai_request(
         &req,
         request.into_inner(),
@@ -116,11 +124,12 @@ async fn proxy_image_multipart_endpoint(
     payload: web::Payload,
     endpoint: ImageProxyEndpoint,
 ) -> Result<HttpResponse, GatewayError> {
-    ensure_image_route_authorized(state, req)?;
+    let context = ensure_image_route_authorized(state, req)?;
     let content_type = image_multipart_content_type(req)?;
     let body = read_image_multipart_payload(payload).await?;
     let form_fields = extract_image_proxy_form_fields(&body, &content_type);
     let requested_model = required_image_proxy_model(&form_fields)?;
+    super::context::enforce_api_key_model_and_token_limits(req, requested_model, None)?;
     ensure_image_proxy_candidate_configured(
         state.config().gateway.providers.as_slice(),
         requested_model,
@@ -136,6 +145,7 @@ async fn proxy_image_multipart_endpoint(
         )));
     }
     let api_key_id = super::context::get_authenticated_api_key(req).map(|key| key.metadata.id);
+    let api_key_budget_id = context.api_key_budget_id();
 
     let mut last_router_error = None;
     for router_model in router_models {
@@ -163,20 +173,37 @@ async fn proxy_image_multipart_endpoint(
                             &provider.provider_name,
                             requested_model,
                         )?;
+                        let mut key_budget_reservation = super::spend::reserve_api_key_budget(
+                            &state.budget_manager,
+                            api_key_budget_id,
+                            Some(estimated_cost),
+                        )?;
                         let url = image_proxy_url(&provider, endpoint)
                             .map_err(image_proxy_gateway_error_to_provider_error)?;
-                        let response =
+                        let response_result =
                             apply_image_proxy_headers(image_http_client().post(url), &provider)
                                 .header(reqwest::header::CONTENT_TYPE, content_type)
                                 .body(body)
                                 .timeout(provider.timeout)
                                 .send()
-                                .await
-                                .map_err(|error| {
-                                    ProviderError::network("image_proxy", error.to_string())
-                                })?;
+                                .await;
+                        let response = match response_result {
+                            Ok(response) => response,
+                            Err(error) => {
+                                if let Some(reservation) = key_budget_reservation.take() {
+                                    reservation.cancel();
+                                }
+                                return Err(ProviderError::network(
+                                    "image_proxy",
+                                    error.to_string(),
+                                ));
+                            }
+                        };
 
                         if !response.status().is_success() {
+                            if let Some(reservation) = key_budget_reservation.take() {
+                                reservation.cancel();
+                            }
                             return Err(image_proxy_upstream_error(response).await);
                         }
 
@@ -187,6 +214,7 @@ async fn proxy_image_multipart_endpoint(
                             &usage,
                             estimated_cost,
                             api_key_id,
+                            key_budget_reservation.take(),
                         )
                         .await;
                         let tokens_used = image_proxy_tokens_used(&usage);
@@ -224,6 +252,7 @@ async fn record_image_proxy_spend(
     usage: &PricingUsage,
     cost: f64,
     api_key_id: Option<uuid::Uuid>,
+    key_budget_reservation: Option<BudgetReservation>,
 ) {
     state
         .budget_limits
@@ -242,6 +271,7 @@ async fn record_image_proxy_spend(
             error!("failed to record image proxy usage for key {api_key_id}: {error}");
         }
     }
+    super::spend::settle_api_key_budget_reservation(key_budget_reservation, cost, "image proxy");
 }
 
 fn required_image_proxy_model(form_fields: &ImageProxyFormFields) -> Result<&str, GatewayError> {

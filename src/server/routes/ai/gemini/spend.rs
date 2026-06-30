@@ -2,7 +2,9 @@ use bytes::Bytes;
 use serde_json::Value;
 use tracing::error;
 
-use crate::core::budget::{BudgetReservationError, UnifiedBudgetLimits, UnifiedBudgetReservation};
+use crate::core::budget::{
+    BudgetReservation, BudgetReservationError, UnifiedBudgetLimits, UnifiedBudgetReservation,
+};
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::ProviderError;
@@ -23,15 +25,24 @@ pub(super) async fn settle_gemini_stream_spend(
     provider: &GeminiRouteProvider,
     usage: Option<PricingUsage>,
     budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
     saw_upstream_output: bool,
 ) {
     if let Some(usage) = usage {
-        record_gemini_usage(spend_state, provider, usage, budget_reservation).await;
+        record_gemini_usage(
+            spend_state,
+            provider,
+            usage,
+            budget_reservation,
+            key_budget_reservation,
+        )
+        .await;
     } else if saw_upstream_output {
         settle_gemini_reserved_spend_without_usage(
             spend_state,
             provider,
             budget_reservation,
+            key_budget_reservation,
             "Gemini SDK stream ended without usageMetadata",
         )
         .await;
@@ -66,6 +77,7 @@ pub(super) async fn record_gemini_spend(
     provider: &GeminiRouteProvider,
     body: &[u8],
     budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
     settle_without_usage: bool,
 ) {
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
@@ -73,6 +85,7 @@ pub(super) async fn record_gemini_spend(
             spend_state,
             provider,
             budget_reservation,
+            key_budget_reservation,
             "Gemini SDK response was not valid JSON",
         )
         .await;
@@ -84,13 +97,21 @@ pub(super) async fn record_gemini_spend(
                 spend_state,
                 provider,
                 budget_reservation,
+                key_budget_reservation,
                 "Gemini SDK response had no usageMetadata",
             )
             .await;
         }
         return;
     };
-    record_gemini_usage(spend_state, provider, usage, budget_reservation).await;
+    record_gemini_usage(
+        spend_state,
+        provider,
+        usage,
+        budget_reservation,
+        key_budget_reservation,
+    )
+    .await;
 }
 
 pub(super) fn reserve_gemini_budget(
@@ -125,6 +146,7 @@ async fn record_gemini_usage(
     provider: &GeminiRouteProvider,
     usage: PricingUsage,
     budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
 ) {
     let cost = match spend_state
         .pricing
@@ -139,6 +161,7 @@ async fn record_gemini_usage(
                 spend_state,
                 provider,
                 budget_reservation,
+                key_budget_reservation,
                 &format!("Gemini SDK cost calculation failed: {error}"),
             )
             .await;
@@ -158,6 +181,11 @@ async fn record_gemini_usage(
             .budget_limits
             .record_spend(&provider.provider_name, &provider.model, cost);
     }
+    super::super::spend::settle_api_key_budget_reservation(
+        key_budget_reservation,
+        cost,
+        "Gemini SDK spend",
+    );
 
     if let Some(key_id) = spend_state.api_key_id
         && let Err(error) = spend_state
@@ -173,9 +201,15 @@ async fn settle_gemini_reserved_spend_without_usage(
     spend_state: &GeminiSpendState<'_>,
     provider: &GeminiRouteProvider,
     budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
     context: &str,
 ) {
     let Some(reservation) = budget_reservation else {
+        super::super::spend::settle_api_key_budget_reservation(
+            key_budget_reservation,
+            0.0,
+            context,
+        );
         error!(
             "{context} for provider '{}' model '{}'; spend not recorded",
             provider.provider_name, provider.model
@@ -189,6 +223,11 @@ async fn settle_gemini_reserved_spend_without_usage(
             provider.provider_name, provider.model
         );
     }
+    super::super::spend::settle_api_key_budget_reservation(
+        key_budget_reservation,
+        reserved,
+        context,
+    );
     if let Some(key_id) = spend_state.api_key_id
         && let Err(error) = spend_state
             .key_manager
@@ -317,6 +356,10 @@ fn collect_text_chars(value: &Value, chars: &mut usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::budget::{BudgetConfig, BudgetManager, BudgetScope};
+    use crate::core::keys::{InMemoryKeyRepository, KeyManager};
+    use crate::core::pricing_service::PricingService;
+    use crate::server::routes::ai::gemini::provider::test_gemini_route_provider;
 
     #[test]
     fn extracts_usage_from_crlf_sse_event_boundaries() {
@@ -335,5 +378,44 @@ mod tests {
         assert_eq!(usage.completion_tokens, 2);
         assert_eq!(usage.total_tokens, 3);
         assert!(buffer.is_empty());
+    }
+
+    #[tokio::test]
+    async fn record_gemini_spend_settles_api_key_budget_reservation() {
+        let pricing = PricingService::with_embedded_default()
+            .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+        let budget_limits = UnifiedBudgetLimits::new();
+        let key_manager = KeyManager::new(InMemoryKeyRepository::new());
+        let budget_manager = BudgetManager::new();
+        let scope = BudgetScope::ApiKey("gemini-key-budget".to_string());
+        budget_manager
+            .create_budget(scope.clone(), BudgetConfig::new("gemini key", 1.0))
+            .await
+            .unwrap_or_else(|error| panic!("API key budget should be created: {error}"));
+        let key_budget_reservation = budget_manager
+            .tracker()
+            .reserve_spend(&scope, 0.5)
+            .unwrap_or_else(|error| panic!("API key budget should reserve: {error:?}"));
+        let provider = test_gemini_route_provider("openai", "openai", "gpt-4o");
+        let spend_state = GeminiSpendState {
+            pricing: &pricing,
+            budget_limits: &budget_limits,
+            key_manager: &key_manager,
+            api_key_id: None,
+        };
+
+        record_gemini_spend(
+            &spend_state,
+            &provider,
+            br#"{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}"#,
+            None,
+            Some(key_budget_reservation),
+            true,
+        )
+        .await;
+
+        let spend = budget_manager.get_current_spend(&scope);
+        assert!(spend > 0.0, "API key budget spend should be recorded");
+        assert!(spend < 0.5, "reservation should settle to actual spend");
     }
 }

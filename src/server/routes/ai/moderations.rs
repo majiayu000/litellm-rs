@@ -37,7 +37,7 @@ pub async fn create_moderation(
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
-    match proxy_moderation(state.get_ref(), request.into_inner()).await {
+    match proxy_moderation(state.get_ref(), &req, request.into_inner()).await {
         Ok(response) => Ok(response),
         Err(error) => {
             error!("Moderation route error: {}", error);
@@ -68,9 +68,11 @@ fn ensure_moderation_route_authorized(
 
 async fn proxy_moderation(
     state: &AppState,
+    req: &HttpRequest,
     mut request: Value,
 ) -> Result<HttpResponse, GatewayError> {
     let resolved_model = validate_moderation_request(&request)?;
+    super::context::enforce_api_key_model_and_token_limits(req, &resolved_model, None)?;
     apply_resolved_moderation_model(&mut request, &resolved_model);
     ensure_moderation_proxy_candidate_configured(
         state.config().gateway.providers.as_slice(),

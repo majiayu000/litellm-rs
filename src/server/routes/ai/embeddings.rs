@@ -57,13 +57,16 @@ pub async fn embeddings(
     request: web::Json<EmbeddingRequest>,
 ) -> ActixResult<HttpResponse> {
     info!("Embedding request for model: {}", request.model);
+    let request = request.into_inner();
+    if let Err(error) =
+        super::context::enforce_api_key_model_and_token_limits(&req, &request.model, None)
+    {
+        return Ok(super::openai_errors::gateway_error_response(&error));
+    }
 
-    handle_ai_request(
-        &req,
-        request.into_inner(),
-        "Embedding",
-        |request, context| handle_embedding_with_state(state.get_ref(), request, context),
-    )
+    handle_ai_request(&req, request, "Embedding", |request, context| {
+        handle_embedding_with_state(state.get_ref(), request, context)
+    })
     .await
 }
 
@@ -101,7 +104,9 @@ async fn handle_embedding_internal(
     let requested_model = core_request.model.clone();
     let context_for_execution = context.clone();
     let api_key_id = context.api_key_id();
+    let api_key_budget_id = context.api_key_budget_id();
     let budget_limits = state.budget_limits.clone();
+    let budget_manager = state.budget_manager.clone();
     let key_manager = state.key_manager.clone();
     let pricing_service = state.pricing.clone();
     let core_response = execute_with_selected_deployment(
@@ -112,6 +117,7 @@ async fn handle_embedding_internal(
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             let budget_limits = budget_limits.clone();
+            let budget_manager = budget_manager.clone();
             let key_manager = key_manager.clone();
             let pricing_service = pricing_service.clone();
             async move {
@@ -134,6 +140,13 @@ async fn handle_embedding_internal(
                     &pricing_provider,
                     &pricing_model,
                     &core_request.input,
+                )?;
+                let key_budget_reservation = super::spend::reserve_api_key_budget(
+                    &budget_manager,
+                    api_key_budget_id,
+                    budget_reservation
+                        .as_ref()
+                        .map(|reservation| reservation.reserved_amount()),
                 )?;
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model.clone();
@@ -158,6 +171,7 @@ async fn handle_embedding_internal(
                         &pricing_model,
                         &usage,
                         budget_reservation,
+                        key_budget_reservation,
                     )
                     .await;
                 } else {
@@ -170,6 +184,7 @@ async fn handle_embedding_internal(
                         &selected_model,
                         None,
                         budget_reservation,
+                        key_budget_reservation,
                     )
                     .await;
                 }

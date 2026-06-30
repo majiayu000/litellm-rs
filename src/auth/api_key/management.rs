@@ -14,7 +14,7 @@ impl ApiKeyHandler {
     /// Look up an API key by ID and invalidate its Redis cache entry.
     /// Errors are logged but not propagated so the caller's primary
     /// mutation is never blocked by a cache failure.
-    async fn invalidate_cache_for_key_id(&self, key_id: Uuid) {
+    pub async fn invalidate_cache_for_key_id(&self, key_id: Uuid) {
         match self.storage.db().find_api_key_by_id(key_id).await {
             Ok(Some(key)) => self.invalidate_api_key_cache(&key.key_hash).await,
             Ok(None) => {

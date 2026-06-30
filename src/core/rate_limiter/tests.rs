@@ -159,6 +159,22 @@ async fn test_atomic_check_and_record() {
 }
 
 #[tokio::test]
+async fn test_check_and_record_with_source_and_limit_uses_override_rpm() {
+    let limiter = RateLimiter::new(test_config(true, 10));
+
+    let (first, _) = limiter
+        .check_and_record_with_source_and_limit("api-key", 1)
+        .await;
+    let (second, _) = limiter
+        .check_and_record_with_source_and_limit("api-key", 1)
+        .await;
+
+    assert!(first.allowed);
+    assert!(!second.allowed);
+    assert_eq!(second.limit, 1);
+}
+
+#[tokio::test]
 async fn test_release_recorded_local_source_restores_capacity() {
     let limiter = RateLimiter::new(test_config(true, 1));
 

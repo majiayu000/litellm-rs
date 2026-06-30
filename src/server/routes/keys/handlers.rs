@@ -1,227 +1,24 @@
 //! HTTP request handlers for API key management
 
+use super::access::{
+    authenticate_request, check_auth_result_ownership, check_ownership, filter_and_paginate_keys,
+    invalidate_api_key_auth_cache, is_auth_enabled, resolve_create_key_scope,
+    validate_create_key_rate_limits, validate_update_key_permissions,
+    validate_update_key_rate_limits,
+};
 use super::types::{
     CreateKeyRequest, CreateKeyResponse, KeyErrorResponse, KeyResponse, KeyUsageResponse,
     ListKeysQuery, ListKeysResponse, PaginationInfo, RevokeKeyResponse, RotateKeyResponse,
     UpdateKeyRequest, VerifyKeyRequest, VerifyKeyResponse,
 };
-use crate::auth::{AuthMethod, AuthResult};
 use crate::core::keys::KeyManager;
-use crate::core::keys::{CreateKeyConfig, KeyInfo, KeyStatus, UpdateKeyConfig};
-use crate::core::models::user::types::{User, UserRole};
-use crate::core::types::context::RequestContext;
-use crate::server::middleware::extract_auth_method_with_api_key_header;
+use crate::core::keys::{CreateKeyConfig, KeyStatus, UpdateKeyConfig};
+use crate::core::models::user::types::UserRole;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use tracing::{error, info, warn};
 use uuid::Uuid;
-
-const MANAGEMENT_PERMISSIONS: &[&str] = &[
-    "*",
-    "system.admin",
-    "keys.list_all",
-    "users.manage",
-    "config.manage",
-    "teams.manage",
-    "analytics.admin",
-];
-
-fn permissions_grant_management_access(permissions: &crate::core::keys::KeyPermissions) -> bool {
-    permissions.is_admin
-        || permissions
-            .custom_permissions
-            .iter()
-            .any(|permission| MANAGEMENT_PERMISSIONS.contains(&permission.as_str()))
-}
-
-fn auth_can_grant_management_access(auth: &AuthResult) -> bool {
-    auth.user
-        .as_ref()
-        .map(|user| user.has_role(&UserRole::Admin))
-        .unwrap_or(false)
-}
-
-/// Check whether `requesting_user` is allowed to access the key.
-///
-/// Admins and super-admins bypass the ownership check.
-/// Managers can access team-scoped keys for teams they belong to.
-fn check_ownership(
-    requesting_user: &User,
-    key_user_id: Option<Uuid>,
-    key_team_id: Option<Uuid>,
-) -> bool {
-    // Admin (and SuperAdmin via has_role hierarchy) bypass all ownership checks.
-    if requesting_user.has_role(&UserRole::Admin) {
-        return true;
-    }
-    // User directly owns the key.
-    if key_user_id == Some(requesting_user.id()) {
-        return true;
-    }
-    // Managers can access team-scoped keys for teams they belong to.
-    // has_role(Manager) is true for Manager, Admin, and SuperAdmin.
-    if requesting_user.has_role(&UserRole::Manager)
-        && let Some(team_id) = key_team_id
-    {
-        return requesting_user.team_ids.contains(&team_id);
-    }
-    false
-}
-
-/// Check whether an authenticated caller is allowed to access a key.
-///
-/// Handles both user-based callers (JWT / user-linked API key) and team-only
-/// API keys (`user == None`, team context set on the request context).
-fn check_auth_result_ownership(
-    auth: &AuthResult,
-    key_user_id: Option<Uuid>,
-    key_team_id: Option<Uuid>,
-) -> bool {
-    if let Some(ref user) = auth.user {
-        check_ownership(user, key_user_id, key_team_id)
-    } else {
-        // Team-only API key: allow access only to keys owned by the same team.
-        let caller_team = auth.context.team_id();
-        caller_team.is_some() && caller_team == key_team_id
-    }
-}
-
-/// Returns `true` when at least one auth backend is enabled.
-///
-/// When both backends are disabled the gateway runs in no-auth mode and the
-/// middleware already bypasses all credential checks, so handler-level checks
-/// must be skipped too to preserve that behaviour.
-fn is_auth_enabled(state: &web::Data<AppState>) -> bool {
-    let cfg = state.config.load();
-    cfg.auth().enable_jwt || cfg.auth().enable_api_key
-}
-
-/// Extract and authenticate the requesting caller from the request headers.
-///
-/// Supports the same credential schemes as the auth middleware:
-/// `Authorization: Bearer`, `Authorization: ApiKey`, `Authorization: gw-...`,
-/// and `X-API-Key`.
-///
-/// Returns `Ok(Some(result))` when valid credentials are present and accepted
-/// (the caller may be a user OR a team-only API key with `result.user == None`),
-/// `Ok(None)` when no credentials are present at all, and `Err(HttpResponse)`
-/// when credentials are present but invalid.
-async fn authenticate_request(
-    req: &HttpRequest,
-    state: &web::Data<AppState>,
-) -> Result<Option<AuthResult>, HttpResponse> {
-    let api_key_header = state.config.load().auth().api_key_header.clone();
-    let auth_method =
-        extract_auth_method_with_api_key_header(req.headers(), api_key_header.as_str());
-
-    if matches!(auth_method, AuthMethod::None) {
-        return Ok(None);
-    }
-
-    let context = RequestContext::new();
-    match state.auth.authenticate(auth_method, context).await {
-        Ok(result) if result.success => Ok(Some(result)),
-        Ok(result) => {
-            let msg = result
-                .error
-                .unwrap_or_else(|| "Authentication failed".to_string());
-            let error_response = KeyErrorResponse::unauthorized(msg);
-            Err(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error)))
-        }
-        Err(e) => {
-            error!("Authentication error: {}", e);
-            let error_response = KeyErrorResponse::unauthorized("Authentication error");
-            Err(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error)))
-        }
-    }
-}
-
-/// Resolve and authorize create-key ownership scope from caller auth context.
-///
-/// Returns the effective `(user_id, team_id)` pair to persist.
-fn resolve_create_key_scope(
-    auth: &AuthResult,
-    request: &CreateKeyRequest,
-) -> std::result::Result<(Option<Uuid>, Option<Uuid>), &'static str> {
-    let requested_user_id = request.user_id;
-    let requested_team_id = request.team_id;
-    let requests_management_key = request
-        .permissions
-        .as_ref()
-        .map(permissions_grant_management_access)
-        .unwrap_or(false);
-
-    if let Some(ref user) = auth.user {
-        let is_admin = user.has_role(&UserRole::Admin);
-        if is_admin {
-            return Ok((requested_user_id, requested_team_id));
-        }
-
-        if requests_management_key {
-            return Err("Only admin can create API keys with management permissions");
-        }
-
-        match (requested_user_id, requested_team_id) {
-            (Some(user_id), None) if user_id == user.id() => Ok((Some(user_id), None)),
-            (None, Some(team_id))
-                if user.has_role(&UserRole::Manager) && user.team_ids.contains(&team_id) =>
-            {
-                Ok((None, Some(team_id)))
-            }
-            (None, None) => Ok((Some(user.id()), None)),
-            _ => Err("Not authorized to create API key for this scope"),
-        }
-    } else {
-        // Team-only API key caller.
-        if requests_management_key {
-            return Err("Team-scoped API keys cannot create API keys with management permissions");
-        }
-
-        let caller_team_id = auth.context.team_id();
-        match (requested_user_id, requested_team_id, caller_team_id) {
-            (None, Some(requested_team), Some(caller_team)) if requested_team == caller_team => {
-                Ok((None, Some(caller_team)))
-            }
-            (None, None, Some(caller_team)) => Ok((None, Some(caller_team))),
-            _ => Err("Not authorized to create API key for this scope"),
-        }
-    }
-}
-
-fn validate_update_key_permissions(
-    auth: Option<&AuthResult>,
-    request: &UpdateKeyRequest,
-) -> std::result::Result<(), &'static str> {
-    let Some(permissions) = request.permissions.as_ref() else {
-        return Ok(());
-    };
-
-    if !permissions_grant_management_access(permissions) {
-        return Ok(());
-    }
-
-    if auth.map(auth_can_grant_management_access).unwrap_or(true) {
-        return Ok(());
-    }
-
-    Err("Only admin can update API keys with management permissions")
-}
-
-fn filter_and_paginate_keys(
-    keys: Vec<KeyInfo>,
-    status: Option<KeyStatus>,
-    limit: usize,
-    offset: usize,
-) -> (Vec<KeyInfo>, u64) {
-    let filtered: Vec<KeyInfo> = keys
-        .into_iter()
-        .filter(|key| status.map(|s| key.status == s).unwrap_or(true))
-        .collect();
-    let total = filtered.len() as u64;
-    let page = filtered.into_iter().skip(offset).take(limit).collect();
-    (page, total)
-}
 
 /// POST /v1/keys - Create a new API key
 pub async fn create_key(
@@ -258,6 +55,20 @@ pub async fn create_key(
 
     // Get key manager from state
     let key_manager = get_key_manager(&state);
+    if let Err(message) = super::api_key_budget::validate_create_key_budget_fields(
+        state.get_ref(),
+        request.budget_id,
+        request.max_budget,
+    )
+    .await
+    {
+        let error_response = KeyErrorResponse::validation(message);
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(error_response.error)));
+    }
+    if let Err(message) = validate_create_key_rate_limits(&request) {
+        let error_response = KeyErrorResponse::validation(message);
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(error_response.error)));
+    }
 
     // Build creation config
     let config = CreateKeyConfig {
@@ -561,6 +372,17 @@ pub async fn update_key(
         return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
     }
 
+    if let Err(message) =
+        super::api_key_budget::validate_update_key_budget_fields(state.get_ref(), &request).await
+    {
+        let error_response = KeyErrorResponse::validation(message);
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(error_response.error)));
+    }
+    if let Err(message) = validate_update_key_rate_limits(&request) {
+        let error_response = KeyErrorResponse::validation(message);
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(error_response.error)));
+    }
+
     let config = UpdateKeyConfig {
         name: request.name.clone(),
         description: request.description.clone(),
@@ -573,6 +395,7 @@ pub async fn update_key(
 
     match key_manager.update_key(key_id, config).await {
         Ok(key) => {
+            invalidate_api_key_auth_cache(&state, key_id).await;
             info!("API key updated successfully: {}", key_id);
             let response = KeyResponse { key };
             Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
@@ -653,6 +476,7 @@ pub async fn revoke_key(
 
     match key_manager.revoke_key(key_id).await {
         Ok(()) => {
+            invalidate_api_key_auth_cache(&state, key_id).await;
             info!("API key revoked successfully: {}", key_id);
             let response = RevokeKeyResponse {
                 key_id,
@@ -738,6 +562,7 @@ pub async fn rotate_key(
 
     match key_manager.rotate_key(key_id).await {
         Ok((new_key_id, new_raw_key)) => {
+            invalidate_api_key_auth_cache(&state, key_id).await;
             // Get new key info
             let key_info = key_manager
                 .get_key(new_key_id)
@@ -886,424 +711,5 @@ fn get_key_manager(state: &web::Data<AppState>) -> KeyManager {
 }
 
 #[cfg(test)]
-mod handler_tests {
-    use super::*;
-    use crate::core::keys::{KeyPermissions, KeyRateLimits, KeyUsageStats};
-    use chrono::Utc;
-
-    #[test]
-    fn test_create_key_config_from_request() {
-        let request = CreateKeyRequest {
-            name: "Test Key".to_string(),
-            description: Some("A test".to_string()),
-            user_id: None,
-            team_id: None,
-            budget_id: None,
-            permissions: None,
-            rate_limits: None,
-            expires_at: None,
-            metadata: None,
-        };
-
-        let config = CreateKeyConfig {
-            name: request.name.clone(),
-            description: request.description.clone(),
-            user_id: request.user_id,
-            team_id: request.team_id,
-            budget_id: request.budget_id,
-            permissions: request.permissions.clone().unwrap_or_default(),
-            rate_limits: request.rate_limits.clone().unwrap_or_default(),
-            expires_at: request.expires_at,
-            metadata: request.metadata.clone().unwrap_or(serde_json::Value::Null),
-        };
-
-        assert_eq!(config.name, "Test Key");
-        assert!(config.description.is_some());
-    }
-
-    fn make_user(role: UserRole, team_ids: Vec<Uuid>) -> User {
-        use crate::core::models::Metadata;
-        use crate::core::models::UsageStats;
-        use crate::core::models::user::preferences::UserPreferences;
-        use crate::core::models::user::types::{UserProfile, UserStatus};
-        User {
-            metadata: Metadata::new(),
-            username: "testuser".to_string(),
-            email: "test@example.com".to_string(),
-            display_name: None,
-            password_hash: "hash".to_string(),
-            role,
-            status: UserStatus::Active,
-            team_ids,
-            preferences: UserPreferences::default(),
-            usage_stats: UsageStats::default(),
-            rate_limits: None,
-            last_login_at: None,
-            email_verified: true,
-            two_factor_enabled: false,
-            profile: UserProfile::default(),
-        }
-    }
-
-    fn make_user_auth(user: User) -> AuthResult {
-        AuthResult {
-            success: true,
-            user: Some(user),
-            api_key: None,
-            session: None,
-            error: None,
-            context: RequestContext::new(),
-        }
-    }
-
-    fn make_team_auth(team_id: Uuid) -> AuthResult {
-        let mut context = RequestContext::new();
-        context.set_team_id(team_id);
-        AuthResult {
-            success: true,
-            user: None,
-            api_key: None,
-            session: None,
-            error: None,
-            context,
-        }
-    }
-
-    fn create_request_with_permissions(permissions: Option<KeyPermissions>) -> CreateKeyRequest {
-        CreateKeyRequest {
-            name: "scoped".to_string(),
-            description: None,
-            user_id: None,
-            team_id: None,
-            budget_id: None,
-            permissions,
-            rate_limits: None,
-            expires_at: None,
-            metadata: None,
-        }
-    }
-
-    fn update_request_with_permissions(permissions: Option<KeyPermissions>) -> UpdateKeyRequest {
-        UpdateKeyRequest {
-            name: None,
-            description: None,
-            permissions,
-            rate_limits: None,
-            budget_id: None,
-            expires_at: None,
-            metadata: None,
-        }
-    }
-
-    fn make_key_info(id: Uuid, status: KeyStatus) -> KeyInfo {
-        KeyInfo {
-            id,
-            key_prefix: "gw-test".to_string(),
-            name: format!("key-{id}"),
-            description: None,
-            user_id: None,
-            team_id: None,
-            status,
-            permissions: KeyPermissions::default(),
-            rate_limits: KeyRateLimits::default(),
-            expires_at: None,
-            created_at: Utc::now(),
-            last_used_at: None,
-            usage_stats: KeyUsageStats::default(),
-        }
-    }
-
-    #[test]
-    fn test_check_ownership_admin_bypasses() {
-        let admin = make_user(UserRole::Admin, vec![]);
-        let other_user_id = Uuid::new_v4();
-        assert!(check_ownership(&admin, Some(other_user_id), None));
-        assert!(check_ownership(&admin, None, None));
-        assert!(check_ownership(&admin, None, Some(Uuid::new_v4())));
-    }
-
-    #[test]
-    fn test_check_ownership_super_admin_bypasses() {
-        let super_admin = make_user(UserRole::SuperAdmin, vec![]);
-        let other_user_id = Uuid::new_v4();
-        assert!(check_ownership(&super_admin, Some(other_user_id), None));
-        assert!(check_ownership(&super_admin, None, None));
-    }
-
-    #[test]
-    fn test_check_ownership_user_owns_key() {
-        let user = make_user(UserRole::User, vec![]);
-        let user_id = user.id();
-        assert!(check_ownership(&user, Some(user_id), None));
-        assert!(!check_ownership(&user, Some(Uuid::new_v4()), None));
-        // Key without owner — regular user cannot access
-        assert!(!check_ownership(&user, None, None));
-    }
-
-    #[test]
-    fn test_check_ownership_manager_team_access() {
-        let team_id = Uuid::new_v4();
-        let other_team = Uuid::new_v4();
-        let manager = make_user(UserRole::Manager, vec![team_id]);
-
-        // Manager can access team-scoped keys for their own team
-        assert!(check_ownership(&manager, None, Some(team_id)));
-        // Manager cannot access keys for a team they don't belong to
-        assert!(!check_ownership(&manager, None, Some(other_team)));
-        // Manager cannot access user-owned keys for other users
-        assert!(!check_ownership(&manager, Some(Uuid::new_v4()), None));
-    }
-
-    #[test]
-    fn test_check_ownership_regular_user_cannot_access_team_key() {
-        let team_id = Uuid::new_v4();
-        let user = make_user(UserRole::User, vec![team_id]);
-        // Regular users do NOT get team-level management access even if team members
-        assert!(!check_ownership(&user, None, Some(team_id)));
-    }
-
-    #[test]
-    fn test_is_auth_enabled_logic() {
-        let regular_user = make_user(UserRole::User, vec![]);
-        // Regular users must NOT pass the list-all-keys gate
-        assert!(!check_ownership(&regular_user, None, None));
-    }
-
-    #[test]
-    fn test_resolve_create_key_scope_user_defaults_to_self() {
-        let user = make_user(UserRole::User, vec![]);
-        let user_id = user.id();
-        let auth = make_user_auth(user);
-        let request = CreateKeyRequest {
-            name: "self".to_string(),
-            description: None,
-            user_id: None,
-            team_id: None,
-            budget_id: None,
-            permissions: None,
-            rate_limits: None,
-            expires_at: None,
-            metadata: None,
-        };
-
-        let resolved = resolve_create_key_scope(&auth, &request).unwrap();
-        assert_eq!(resolved, (Some(user_id), None));
-    }
-
-    #[test]
-    fn test_resolve_create_key_scope_user_cannot_target_other_user() {
-        let user = make_user(UserRole::User, vec![]);
-        let auth = make_user_auth(user);
-        let request = CreateKeyRequest {
-            name: "other".to_string(),
-            description: None,
-            user_id: Some(Uuid::new_v4()),
-            team_id: None,
-            budget_id: None,
-            permissions: None,
-            rate_limits: None,
-            expires_at: None,
-            metadata: None,
-        };
-
-        assert!(resolve_create_key_scope(&auth, &request).is_err());
-    }
-
-    #[test]
-    fn test_resolve_create_key_scope_user_cannot_create_admin_key() {
-        let user = make_user(UserRole::User, vec![]);
-        let auth = make_user_auth(user);
-        let request = create_request_with_permissions(Some(KeyPermissions::admin()));
-
-        assert_eq!(
-            resolve_create_key_scope(&auth, &request),
-            Err("Only admin can create API keys with management permissions")
-        );
-    }
-
-    #[test]
-    fn test_resolve_create_key_scope_user_cannot_create_system_admin_custom_permission() {
-        let user = make_user(UserRole::User, vec![]);
-        let auth = make_user_auth(user);
-        let permissions = KeyPermissions {
-            custom_permissions: vec!["system.admin".to_string()],
-            ..Default::default()
-        };
-        let request = create_request_with_permissions(Some(permissions));
-
-        assert_eq!(
-            resolve_create_key_scope(&auth, &request),
-            Err("Only admin can create API keys with management permissions")
-        );
-    }
-
-    #[test]
-    fn test_resolve_create_key_scope_team_api_key_cannot_create_management_permission() {
-        let team_id = Uuid::new_v4();
-        let auth = make_team_auth(team_id);
-        let permissions = KeyPermissions {
-            custom_permissions: vec!["users.manage".to_string()],
-            ..Default::default()
-        };
-        let request = create_request_with_permissions(Some(permissions));
-
-        assert_eq!(
-            resolve_create_key_scope(&auth, &request),
-            Err("Team-scoped API keys cannot create API keys with management permissions")
-        );
-    }
-
-    #[test]
-    fn test_resolve_create_key_scope_admin_can_create_management_key() {
-        let admin = make_user(UserRole::Admin, vec![]);
-        let auth = make_user_auth(admin);
-        let request = create_request_with_permissions(Some(KeyPermissions::admin()));
-
-        assert!(resolve_create_key_scope(&auth, &request).is_ok());
-    }
-
-    #[test]
-    fn test_resolve_create_key_scope_manager_can_target_own_team() {
-        let team_id = Uuid::new_v4();
-        let manager = make_user(UserRole::Manager, vec![team_id]);
-        let auth = make_user_auth(manager);
-        let request = CreateKeyRequest {
-            name: "team".to_string(),
-            description: None,
-            user_id: None,
-            team_id: Some(team_id),
-            budget_id: None,
-            permissions: None,
-            rate_limits: None,
-            expires_at: None,
-            metadata: None,
-        };
-
-        let resolved = resolve_create_key_scope(&auth, &request).unwrap();
-        assert_eq!(resolved, (None, Some(team_id)));
-    }
-
-    #[test]
-    fn test_resolve_create_key_scope_team_api_key_defaults_to_team_scope() {
-        let team_id = Uuid::new_v4();
-        let auth = make_team_auth(team_id);
-        let request = CreateKeyRequest {
-            name: "team-api".to_string(),
-            description: None,
-            user_id: None,
-            team_id: None,
-            budget_id: None,
-            permissions: None,
-            rate_limits: None,
-            expires_at: None,
-            metadata: None,
-        };
-
-        let resolved = resolve_create_key_scope(&auth, &request).unwrap();
-        assert_eq!(resolved, (None, Some(team_id)));
-    }
-
-    #[test]
-    fn test_validate_update_key_permissions_user_cannot_promote_to_admin() {
-        let user = make_user(UserRole::User, vec![]);
-        let auth = make_user_auth(user);
-        let request = update_request_with_permissions(Some(KeyPermissions::admin()));
-
-        assert_eq!(
-            validate_update_key_permissions(Some(&auth), &request),
-            Err("Only admin can update API keys with management permissions")
-        );
-    }
-
-    #[test]
-    fn test_validate_update_key_permissions_manager_cannot_grant_system_admin() {
-        let team_id = Uuid::new_v4();
-        let manager = make_user(UserRole::Manager, vec![team_id]);
-        let auth = make_user_auth(manager);
-        let permissions = KeyPermissions {
-            custom_permissions: vec!["system.admin".to_string()],
-            ..Default::default()
-        };
-        let request = update_request_with_permissions(Some(permissions));
-
-        assert_eq!(
-            validate_update_key_permissions(Some(&auth), &request),
-            Err("Only admin can update API keys with management permissions")
-        );
-    }
-
-    #[test]
-    fn test_validate_update_key_permissions_team_api_key_cannot_grant_wildcard() {
-        let auth = make_team_auth(Uuid::new_v4());
-        let permissions = KeyPermissions {
-            custom_permissions: vec!["*".to_string()],
-            ..Default::default()
-        };
-        let request = update_request_with_permissions(Some(permissions));
-
-        assert_eq!(
-            validate_update_key_permissions(Some(&auth), &request),
-            Err("Only admin can update API keys with management permissions")
-        );
-    }
-
-    #[test]
-    fn test_validate_update_key_permissions_admin_can_grant_management_access() {
-        let admin = make_user(UserRole::Admin, vec![]);
-        let auth = make_user_auth(admin);
-        let request = update_request_with_permissions(Some(KeyPermissions::admin()));
-
-        assert!(validate_update_key_permissions(Some(&auth), &request).is_ok());
-    }
-
-    #[test]
-    fn test_validate_update_key_permissions_allows_non_management_permissions() {
-        let user = make_user(UserRole::User, vec![]);
-        let auth = make_user_auth(user);
-        let permissions = KeyPermissions {
-            custom_permissions: vec!["api.chat".to_string()],
-            ..Default::default()
-        };
-        let request = update_request_with_permissions(Some(permissions));
-
-        assert!(validate_update_key_permissions(Some(&auth), &request).is_ok());
-    }
-
-    #[test]
-    fn test_filter_and_paginate_keys_reports_filtered_total() {
-        let first_active = Uuid::new_v4();
-        let revoked = Uuid::new_v4();
-        let second_active = Uuid::new_v4();
-        let keys = vec![
-            make_key_info(first_active, KeyStatus::Active),
-            make_key_info(revoked, KeyStatus::Revoked),
-            make_key_info(second_active, KeyStatus::Active),
-        ];
-
-        let (page, total) = filter_and_paginate_keys(keys, Some(KeyStatus::Active), 1, 1);
-
-        assert_eq!(total, 2);
-        assert_eq!(page.len(), 1);
-        assert_eq!(page[0].id, second_active);
-    }
-
-    #[test]
-    fn test_filter_and_paginate_keys_applies_limit_without_status_filter() {
-        let first = Uuid::new_v4();
-        let second = Uuid::new_v4();
-        let third = Uuid::new_v4();
-        let keys = vec![
-            make_key_info(first, KeyStatus::Active),
-            make_key_info(second, KeyStatus::Revoked),
-            make_key_info(third, KeyStatus::Active),
-        ];
-
-        let (page, total) = filter_and_paginate_keys(keys, None, 2, 1);
-
-        assert_eq!(total, 3);
-        assert_eq!(
-            page.iter().map(|key| key.id).collect::<Vec<_>>(),
-            vec![second, third]
-        );
-    }
-}
+#[path = "handlers_tests.rs"]
+mod handler_tests;

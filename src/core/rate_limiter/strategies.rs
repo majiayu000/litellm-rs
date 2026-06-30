@@ -11,11 +11,11 @@ impl RateLimiter {
     pub(super) async fn check_sliding_window_impl(
         &self,
         key: &str,
+        limit: u32,
         record: bool,
         now: Instant,
     ) -> RateLimitResult {
         let window_start = now - self.window;
-        let limit = self.config.default_rpm;
 
         let mut entry = self.entries.entry(key.to_string()).or_default();
 
@@ -71,10 +71,10 @@ impl RateLimiter {
     pub(super) async fn check_token_bucket_impl(
         &self,
         key: &str,
+        limit: u32,
         record: bool,
         now: Instant,
     ) -> RateLimitResult {
-        let limit = self.config.default_rpm;
         let tokens_per_second = limit as f64 / 60.0;
 
         let mut entry = self
@@ -139,11 +139,10 @@ impl RateLimiter {
     pub(super) async fn check_fixed_window_impl(
         &self,
         key: &str,
+        limit: u32,
         record: bool,
         now: Instant,
     ) -> RateLimitResult {
-        let limit = self.config.default_rpm;
-
         let mut entry = self.entries.entry(key.to_string()).or_default();
 
         if entry.timestamps.is_empty() {

@@ -14,6 +14,7 @@ mod auth_rate_limiter;
 mod helpers;
 mod metrics;
 mod rate_limit;
+mod rate_limit_key_policy;
 mod request_id;
 mod security;
 

@@ -11,6 +11,7 @@ use crate::server::middleware::rate_limit::{
     AuthRateLimitReservation, enforce_rate_limit_for_rejected_auth,
     reserve_rate_limit_for_auth_attempt,
 };
+use crate::server::routes::ai::{api_key_allows_endpoint, check_permission};
 use crate::server::state::AppState;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::{HttpMessage, HttpRequest, web};
@@ -197,6 +198,35 @@ where
                     rate_limiter.record_success(&client_id);
                     debug!("Authentication succeeded");
 
+                    if let Some(operation) = ai_operation_for_path(req.path())
+                        && !check_permission(
+                            result.user.as_ref(),
+                            result.api_key.as_ref(),
+                            operation,
+                        )
+                    {
+                        warn!(
+                            "Authenticated caller is not permitted to access AI operation '{}'",
+                            operation
+                        );
+                        return Err(actix_web::error::ErrorForbidden(
+                            "API key is not permitted for this operation",
+                        ));
+                    }
+                    match api_key_allows_endpoint(result.api_key.as_ref(), req.path()) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            warn!("Authenticated API key is not permitted to access this endpoint");
+                            return Err(actix_web::error::ErrorForbidden(
+                                "API key is not permitted for this endpoint",
+                            ));
+                        }
+                        Err(error) => {
+                            warn!("Authenticated API key policy is invalid: {}", error);
+                            return Err(actix_web::error::ErrorForbidden(error.to_string()));
+                        }
+                    }
+
                     req.extensions_mut().insert(result.context.clone());
                     if let Some(user) = result.user {
                         req.extensions_mut().insert::<User>(user);
@@ -312,6 +342,74 @@ fn parse_peer_ip(peer: &str) -> String {
 fn hash_credential(credential: &str) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(credential.as_bytes()))
+}
+
+fn ai_operation_for_path(path: &str) -> Option<&'static str> {
+    let normalized = path.trim_end_matches('/');
+
+    if normalized == "/v1/chat/completions"
+        || (normalized.starts_with("/v1/engines/") && normalized.ends_with("/chat/completions"))
+        || (normalized.starts_with("/openai/deployments/")
+            && normalized.ends_with("/chat/completions"))
+    {
+        return Some("chat");
+    }
+    if normalized == "/completions"
+        || normalized == "/v1/completions"
+        || (normalized.starts_with("/engines/") && normalized.ends_with("/completions"))
+        || (normalized.starts_with("/v1/engines/") && normalized.ends_with("/completions"))
+        || (normalized.starts_with("/openai/deployments/") && normalized.ends_with("/completions"))
+    {
+        return Some("completions");
+    }
+    if normalized == "/v1/embeddings"
+        || (normalized.starts_with("/v1/engines/") && normalized.ends_with("/embeddings"))
+        || (normalized.starts_with("/openai/deployments/") && normalized.ends_with("/embeddings"))
+    {
+        return Some("embeddings");
+    }
+    if normalized.starts_with("/v1/images/") {
+        return Some("images");
+    }
+    if normalized.starts_with("/v1/audio/") {
+        return Some("audio");
+    }
+    if normalized == "/moderations" || normalized == "/v1/moderations" {
+        return Some("moderations");
+    }
+    if normalized == "/rerank" || normalized == "/v1/rerank" {
+        return Some("rerank");
+    }
+    if normalized == "/v1/files" || normalized.starts_with("/v1/files/") {
+        return Some("files");
+    }
+    if normalized == "/v1/fine_tuning/jobs" || normalized.starts_with("/v1/fine_tuning/jobs/") {
+        return Some("fine_tuning");
+    }
+    if normalized == "/v1/models" || normalized == "/v1/engines" {
+        return Some("models");
+    }
+    if normalized.starts_with("/v1/models/") || normalized.starts_with("/v1/engines/") {
+        if normalized.contains(":generateContent") || normalized.contains(":streamGenerateContent")
+        {
+            return Some("chat");
+        }
+        return Some("models");
+    }
+    if normalized == "/v1/responses" || normalized.starts_with("/v1/responses/") {
+        return Some("responses");
+    }
+    if normalized == "/v1/batches" || normalized.starts_with("/v1/batches/") {
+        return Some("batches");
+    }
+    if normalized.starts_with("/v1beta/models/")
+        || normalized.starts_with("/gemini/v1beta/models/")
+        || normalized.starts_with("/gemini/v1/models/")
+    {
+        return Some("chat");
+    }
+
+    None
 }
 
 fn build_request_context(req: &mut ServiceRequest) -> RequestContext {

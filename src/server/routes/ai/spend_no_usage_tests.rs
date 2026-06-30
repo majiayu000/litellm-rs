@@ -34,6 +34,7 @@ async fn successful_completion_without_usage_settles_reserved_budget() {
         "gpt-4o",
         None,
         Some(reservation),
+        None,
     )
     .await;
 

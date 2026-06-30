@@ -35,6 +35,8 @@ pub async fn handle_image_generation_with_state(
 
     let context_for_execution = context.clone();
     let api_key_id = context.api_key_id();
+    let api_key_budget_id = context.api_key_budget_id();
+    let budget_manager = state.budget_manager.clone();
     let budget_limits = state.budget_limits.clone();
     let key_manager = state.key_manager.clone();
     let pricing_service = state.pricing.clone();
@@ -45,6 +47,7 @@ pub async fn handle_image_generation_with_state(
         move |provider, selected_model, _deployment_id| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
+            let budget_manager = budget_manager.clone();
             let budget_limits = budget_limits.clone();
             let key_manager = key_manager.clone();
             let pricing_service = pricing_service.clone();
@@ -72,6 +75,12 @@ pub async fn handle_image_generation_with_state(
                         &pricing_model,
                         &usage,
                     )?;
+                let key_budget_reservation =
+                    super::super::spend::reserve_api_key_budget_for_reservation(
+                        &budget_manager,
+                        api_key_budget_id,
+                        budget_reservation.as_ref(),
+                    )?;
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = Some(selected_model.clone());
                 let response = provider
@@ -93,6 +102,7 @@ pub async fn handle_image_generation_with_state(
                     &pricing_model,
                     &usage,
                     budget_reservation,
+                    key_budget_reservation,
                 )
                 .await;
                 Ok((response, tokens_used))

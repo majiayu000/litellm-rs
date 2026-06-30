@@ -8,7 +8,9 @@ use serde::Deserialize;
 use tracing::{error, info};
 
 use super::super::execution::execute_with_selected_deployment;
-use crate::server::routes::ai::context::get_request_context;
+use crate::server::routes::ai::context::{
+    enforce_api_key_model_and_token_limits, get_request_context,
+};
 use crate::server::routes::ai::openai_errors;
 
 /// Audio speech generation request
@@ -60,6 +62,10 @@ pub async fn audio_speech(
         ));
     }
 
+    if let Err(error) = enforce_api_key_model_and_token_limits(&req, &request.model, None) {
+        return Ok(openai_errors::gateway_error_response(&error));
+    }
+
     let speech_request = SpeechRequest {
         input: request.input.clone(),
         model: request.model.clone(),
@@ -71,6 +77,8 @@ pub async fn audio_speech(
     let requested_model = request.model.clone();
     let context_for_execution = context.clone();
     let api_key_id = context.api_key_id();
+    let api_key_budget_id = context.api_key_budget_id();
+    let budget_manager = state.budget_manager.clone();
     let budget_limits = state.budget_limits.clone();
     let key_manager = state.key_manager.clone();
     let pricing_service = state.pricing.clone();
@@ -82,17 +90,12 @@ pub async fn audio_speech(
         move |provider, selected_model, _deployment_id| {
             let mut request = speech_request.clone();
             let context = context_for_execution.clone();
+            let budget_manager = budget_manager.clone();
             let budget_limits = budget_limits.clone();
             let key_manager = key_manager.clone();
             let pricing_service = pricing_service.clone();
             async move {
                 let usage = super::budgeting::speech_usage(&request.input);
-                super::budgeting::reserve_audio_budget(
-                    &budget_limits,
-                    provider.name(),
-                    &selected_model,
-                    &usage,
-                )?;
                 let budget_provider = provider.name().to_string();
                 let (pricing_provider, pricing_model) =
                     super::super::spend::pricing_identity_for_provider(
@@ -100,6 +103,19 @@ pub async fn audio_speech(
                         &provider,
                         &selected_model,
                     );
+                let (budget_reservation, key_budget_reservation) =
+                    super::budgeting::reserve_audio_budget_with_pricing(
+                        pricing_service.as_ref(),
+                        &budget_manager,
+                        &budget_limits,
+                        api_key_budget_id,
+                        &budget_provider,
+                        &selected_model,
+                        &pricing_provider,
+                        &pricing_model,
+                        None,
+                        &usage,
+                    )?;
                 request.model = selected_model.clone();
                 let response = provider.text_to_speech(request, context).await?;
                 let tokens_used = u64::from(usage.total_tokens);
@@ -114,6 +130,8 @@ pub async fn audio_speech(
                     &pricing_model,
                     None,
                     &usage,
+                    budget_reservation,
+                    key_budget_reservation,
                 )
                 .await;
                 Ok((response, tokens_used))

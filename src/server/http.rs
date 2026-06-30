@@ -188,6 +188,8 @@ impl HttpServer {
         let cors_config = &cfg.gateway.server.cors;
         let rate_limit_enabled = cfg.gateway.rate_limit.enabled;
         let rate_limit_rpm = cfg.gateway.rate_limit.default_rpm;
+        let api_key_auth_enabled = cfg.gateway.auth.enable_api_key;
+        let default_rate_limit_rpm = rate_limit_enabled.then_some(rate_limit_rpm);
         let cors = Self::build_cors_for_app_factory(cors_config);
 
         let budget_limits = web::Data::new(Arc::clone(&state.budget_limits));
@@ -203,8 +205,8 @@ impl HttpServer {
             // limiter before auth so successful auth context is available when
             // rate-limit keys are chosen.
             .wrap(Condition::new(
-                rate_limit_enabled,
-                RateLimitMiddleware::new(rate_limit_rpm),
+                rate_limit_enabled || api_key_auth_enabled,
+                RateLimitMiddleware::optional(default_rate_limit_rpm),
             ))
             .wrap(AuthMiddleware)
             .wrap(RequestIdMiddleware)

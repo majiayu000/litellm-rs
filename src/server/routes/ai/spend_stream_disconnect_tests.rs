@@ -34,6 +34,7 @@ async fn stream_disconnect_without_usage_records_reserved_key_cost() {
         "gpt-4o",
         None,
         Some(reservation),
+        None,
     )
     .await;
 
@@ -79,6 +80,7 @@ async fn finished_stream_without_usage_records_reserved_key_cost_after_output() 
         usage: None,
         saw_upstream_output: true,
         budget_reservation: Some(reservation),
+        key_budget_reservation: None,
     })
     .await;
 

@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::core::budget::UnifiedBudgetReservation;
+use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
 use crate::core::providers::ProviderError;
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
@@ -119,11 +119,19 @@ async fn proxy_gemini_route_inner(
     stream: bool,
     request: Value,
 ) -> Result<HttpResponse, GatewayError> {
-    let context = ensure_gemini_route_authorized(state, req)?;
+    let mut context = ensure_gemini_route_authorized(state, req)?;
+    super::token_policy::attach_api_key_token_limit(req, &mut context)?;
+    let request =
+        apply_gemini_api_key_output_token_limit(context.api_key_max_tokens_per_request(), request)?;
     validate_api_version(api_version)?;
     validate_method(method)?;
     validate_model_segment(&requested_model)?;
     validate_gemini_request_size(&request)?;
+    super::context::enforce_api_key_model_and_token_limits(
+        req,
+        &requested_model,
+        gemini_requested_max_output_tokens(&request),
+    )?;
 
     ensure_gemini_provider_candidate_configured(state.config().providers(), &requested_model)?;
     if stream {
@@ -162,21 +170,24 @@ async fn proxy_gemini_route_inner(
                             &selected_model,
                             &requested_model,
                         )?;
-                        let (budget_reservation, response) = send_gemini_request(
-                            state,
-                            &provider,
-                            api_version,
-                            method,
-                            false,
-                            &request,
-                        )
-                        .await?;
+                        let (budget_reservation, key_budget_reservation, response) =
+                            send_gemini_request(
+                                state,
+                                &provider,
+                                api_version,
+                                method,
+                                false,
+                                &request,
+                                context.api_key_budget_id(),
+                            )
+                            .await?;
 
                         let response = gemini_upstream_response_to_http_response(
                             state,
                             context,
                             provider,
                             budget_reservation,
+                            key_budget_reservation,
                             response,
                             stream,
                             None,
@@ -217,6 +228,7 @@ async fn proxy_gemini_stream_route_inner(
     request: Value,
 ) -> Result<HttpResponse, GatewayError> {
     let router_models = gemini_router_models(state.config().providers(), &requested_model);
+    let api_key_budget_id = context.api_key_budget_id();
     let mut last_router_error = None;
     for router_model in router_models {
         let result = execute_stream_with_selected_deployment(
@@ -237,16 +249,23 @@ async fn proxy_gemini_stream_route_inner(
                             &selected_model,
                             &requested_model,
                         )?;
-                        let (budget_reservation, response) = send_gemini_request(
-                            state,
-                            &provider,
-                            api_version,
-                            method,
-                            true,
-                            &request,
-                        )
-                        .await?;
-                        Ok((provider, budget_reservation, response))
+                        let (budget_reservation, key_budget_reservation, response) =
+                            send_gemini_request(
+                                state,
+                                &provider,
+                                api_version,
+                                method,
+                                true,
+                                &request,
+                                api_key_budget_id,
+                            )
+                            .await?;
+                        Ok((
+                            provider,
+                            budget_reservation,
+                            key_budget_reservation,
+                            response,
+                        ))
                     }
                 }
             },
@@ -254,12 +273,13 @@ async fn proxy_gemini_stream_route_inner(
         .await;
 
         match result {
-            Ok(((provider, budget_reservation, response), lease)) => {
+            Ok(((provider, budget_reservation, key_budget_reservation, response), lease)) => {
                 return gemini_upstream_response_to_http_response(
                     state,
                     context,
                     provider,
                     budget_reservation,
+                    key_budget_reservation,
                     response,
                     true,
                     Some(lease),
@@ -287,6 +307,7 @@ async fn gemini_upstream_response_to_http_response(
     context: crate::core::types::context::RequestContext,
     provider: GeminiRouteProvider,
     budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
     response: reqwest::Response,
     stream: bool,
     stream_lease: Option<StreamingDeploymentLease>,
@@ -313,6 +334,7 @@ async fn gemini_upstream_response_to_http_response(
                 context,
                 provider,
                 budget_reservation,
+                key_budget_reservation,
                 response,
                 status,
                 content_type,
@@ -329,7 +351,15 @@ async fn gemini_upstream_response_to_http_response(
             key_manager: &state.key_manager,
             api_key_id: context.api_key_id(),
         };
-        record_gemini_spend(&spend_state, &provider, &body, budget_reservation, true).await;
+        record_gemini_spend(
+            &spend_state,
+            &provider,
+            &body,
+            budget_reservation,
+            key_budget_reservation,
+            true,
+        )
+        .await;
     }
 
     Ok(HttpResponse::build(status)
@@ -341,6 +371,7 @@ struct GeminiStreamResponseParts {
     context: crate::core::types::context::RequestContext,
     provider: GeminiRouteProvider,
     budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
     response: reqwest::Response,
     status: StatusCode,
     content_type: String,
@@ -352,6 +383,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
         context,
         provider,
         mut budget_reservation,
+        mut key_budget_reservation,
         response,
         status,
         content_type,
@@ -397,6 +429,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                         &provider,
                         should_record_spend.then(|| final_usage.take()).flatten(),
                         budget_reservation.take(),
+                        key_budget_reservation.take(),
                         false,
                     )
                     .await;
@@ -428,6 +461,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                     &provider,
                     should_record_spend.then(|| final_usage.take()).flatten(),
                     budget_reservation.take(),
+                    key_budget_reservation.take(),
                     should_record_spend && saw_upstream_output,
                 )
                 .await;
@@ -454,6 +488,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                 None
             },
             budget_reservation.take(),
+            key_budget_reservation.take(),
             should_record_spend && saw_upstream_output,
         )
         .await;
@@ -536,4 +571,47 @@ fn validate_gemini_request_size(request: &Value) -> Result<(), GatewayError> {
         return Err(GatewayError::validation("Gemini request body too large"));
     }
     Ok(())
+}
+
+fn gemini_requested_max_output_tokens(request: &Value) -> Option<u32> {
+    request
+        .pointer("/generationConfig/maxOutputTokens")
+        .and_then(Value::as_u64)
+        .and_then(|tokens| u32::try_from(tokens).ok())
+}
+
+fn apply_gemini_api_key_output_token_limit(
+    max_tokens_per_request: Option<u32>,
+    mut request: Value,
+) -> Result<Value, GatewayError> {
+    let Some(limit) = max_tokens_per_request else {
+        return Ok(request);
+    };
+
+    if let Some(requested) = gemini_requested_max_output_tokens(&request)
+        && requested > limit
+    {
+        return Err(GatewayError::validation(format!(
+            "requested token limit {requested} exceeds API key max_tokens_per_request {limit}"
+        )));
+    }
+
+    let Some(object) = request.as_object_mut() else {
+        return Err(GatewayError::validation(
+            "Gemini request body must be a JSON object",
+        ));
+    };
+    let generation_config = object
+        .entry("generationConfig")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let Some(generation_config) = generation_config.as_object_mut() else {
+        return Err(GatewayError::validation(
+            "generationConfig must be a JSON object",
+        ));
+    };
+    generation_config
+        .entry("maxOutputTokens")
+        .or_insert_with(|| Value::from(limit));
+
+    Ok(request)
 }

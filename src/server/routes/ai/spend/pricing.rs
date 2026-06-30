@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::core::budget::{UnifiedBudgetLimits, UnifiedBudgetReservation};
+use crate::core::budget::{BudgetReservation, UnifiedBudgetLimits, UnifiedBudgetReservation};
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::Provider;
@@ -141,6 +141,7 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
     pricing_model: &str,
     usage: &PricingUsage,
     budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
 ) {
     let cost = match pricing_service.calculate_loaded_usage_cost_for_provider(
         pricing_provider,
@@ -169,6 +170,11 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
         } else {
             budget_limits.record_spend(budget_provider, budget_model, cost);
         }
+        super::settle_api_key_budget_reservation(
+            key_budget_reservation,
+            cost,
+            &format!("{budget_provider}/{budget_model}"),
+        );
     }
 
     if let Some(key_id) = api_key_id {

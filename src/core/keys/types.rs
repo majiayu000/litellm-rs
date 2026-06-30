@@ -428,6 +428,9 @@ pub struct KeyInfo {
     /// Team ID
     pub team_id: Option<Uuid>,
 
+    /// Associated budget ID for spend tracking
+    pub budget_id: Option<Uuid>,
+
     /// Current status
     pub status: KeyStatus,
 
@@ -459,6 +462,7 @@ impl From<&ManagedApiKey> for KeyInfo {
             description: key.description.clone(),
             user_id: key.user_id,
             team_id: key.team_id,
+            budget_id: key.budget_id,
             status: key.effective_status(),
             permissions: key.permissions.clone(),
             rate_limits: key.rate_limits.clone(),

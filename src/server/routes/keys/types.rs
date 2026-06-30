@@ -31,6 +31,10 @@ pub struct CreateKeyRequest {
     #[serde(default)]
     pub budget_id: Option<Uuid>,
 
+    /// Unsupported until API-key-scoped budgets are persisted; use budget_id.
+    #[serde(default)]
+    pub max_budget: Option<f64>,
+
     /// Key permissions
     #[serde(default)]
     pub permissions: Option<KeyPermissions>,
@@ -70,6 +74,10 @@ pub struct UpdateKeyRequest {
     /// Update budget ID
     #[serde(default)]
     pub budget_id: Option<Option<Uuid>>,
+
+    /// Unsupported until API-key-scoped budgets are persisted; use budget_id.
+    #[serde(default)]
+    pub max_budget: Option<f64>,
 
     /// Update expiration date
     #[serde(default)]

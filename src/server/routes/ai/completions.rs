@@ -5,7 +5,7 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use bytes::Bytes;
 use futures::StreamExt;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -25,6 +25,12 @@ use crate::utils::error::gateway_error::GatewayError;
 use super::context::get_request_context;
 use super::execution::execute_stream_with_selected_deployment;
 use super::openai_errors;
+#[path = "completions_spend.rs"]
+mod completions_spend;
+use completions_spend::settle_stream_spend_if_chargeable;
+#[path = "completions_sse.rs"]
+mod completions_sse;
+use completions_sse::send_stream_error;
 
 #[derive(Debug, Clone)]
 struct CompletionAdapterRequest {
@@ -69,7 +75,8 @@ async fn completions_inner(
     path_model: Option<String>,
     request: Value,
 ) -> ActixResult<HttpResponse> {
-    let context = get_request_context(&req)?;
+    let mut context = get_request_context(&req)?;
+    super::token_policy::attach_api_key_token_limit(&req, &mut context)?;
     let adapter_request = match completion_request_from_value(request, path_model) {
         Ok(request) => request,
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
@@ -83,6 +90,13 @@ async fn completions_inner(
     ) {
         warn!("Invalid completions request: {}", error);
         return Ok(openai_errors::validation_error(error.to_string()));
+    }
+    if let Err(error) = super::context::enforce_api_key_model_and_token_limits(
+        &req,
+        &adapter_request.chat_request.model,
+        super::token_policy::requested_chat_output_token_limit(&adapter_request.chat_request),
+    ) {
+        return Ok(openai_errors::gateway_error_response(&error));
     }
 
     if adapter_request.stream {
@@ -137,6 +151,8 @@ async fn handle_streaming_completion(
     let context_for_execution = context.clone();
     let (budget_limits, pricing_service) = (state.budget_limits.clone(), state.pricing.clone());
     let api_key_id = context.api_key_id();
+    let api_key_budget_id = context.api_key_budget_id();
+    let budget_manager = state.budget_manager.clone();
 
     match execute_stream_with_selected_deployment(
         state.unified_router.clone(),
@@ -146,33 +162,60 @@ async fn handle_streaming_completion(
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             let (budget_limits, pricing_service) = (budget_limits.clone(), pricing_service.clone());
+            let budget_manager = budget_manager.clone();
             let request_for_budget = request_for_budget.clone();
             async move {
+                let provider_name = provider.name().to_string();
+                let (request_for_provider, request_for_budget) =
+                    super::token_policy::prepare_chat_request_for_provider(
+                        context.api_key_max_tokens_per_request(),
+                        &provider_name,
+                        &selected_model,
+                        core_request.clone(),
+                        request_for_budget,
+                    )?;
                 super::spend::ensure_budget_available(
                     &budget_limits,
-                    provider.name(),
+                    &provider_name,
                     &selected_model,
                 )?;
                 let budget_reservation = super::spend::reserve_chat_completion_budget_with_pricing(
                     pricing_service.as_ref(),
                     &budget_limits,
-                    provider.name(),
+                    &provider_name,
                     &selected_model,
                     &request_for_budget,
                 )?;
-                let provider_name = provider.name().to_string();
-                let mut request_for_provider = core_request.clone();
-                request_for_provider.model = selected_model.clone();
+                let key_budget_reservation = super::spend::reserve_api_key_budget_for_reservation(
+                    &budget_manager,
+                    api_key_budget_id,
+                    budget_reservation.as_ref(),
+                )?;
                 let stream = provider
                     .chat_completion_stream(request_for_provider, context)
                     .await?;
-                Ok((stream, provider_name, selected_model, budget_reservation))
+                Ok((
+                    stream,
+                    provider_name,
+                    selected_model,
+                    budget_reservation,
+                    key_budget_reservation,
+                ))
             }
         },
     )
     .await
     {
-        Ok(((mut stream, served_provider, served_model, mut budget_reservation), lease)) => {
+        Ok((
+            (
+                mut stream,
+                served_provider,
+                served_model,
+                mut budget_reservation,
+                mut key_budget_reservation,
+            ),
+            lease,
+        )) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
             let budget_limits = state.budget_limits.clone();
@@ -226,6 +269,7 @@ async fn handle_streaming_completion(
                                     &served_model,
                                     final_usage.as_ref(),
                                     budget_reservation.take(),
+                                    key_budget_reservation.take(),
                                     saw_upstream_output,
                                 )
                                 .await;
@@ -285,6 +329,7 @@ async fn handle_streaming_completion(
                                         &served_model,
                                         final_usage.as_ref(),
                                         budget_reservation.take(),
+                                        key_budget_reservation.take(),
                                         saw_upstream_output,
                                     )
                                     .await;
@@ -310,6 +355,7 @@ async fn handle_streaming_completion(
                                 &served_model,
                                 final_usage.as_ref(),
                                 budget_reservation.take(),
+                                key_budget_reservation.take(),
                                 saw_upstream_output,
                             )
                             .await;
@@ -327,6 +373,7 @@ async fn handle_streaming_completion(
                             &served_model,
                             final_usage.as_ref(),
                             budget_reservation.take(),
+                            key_budget_reservation.take(),
                             saw_upstream_output,
                         )
                         .await;
@@ -346,6 +393,7 @@ async fn handle_streaming_completion(
                         usage: final_usage.as_ref(),
                         saw_upstream_output,
                         budget_reservation: budget_reservation.take(),
+                        key_budget_reservation: key_budget_reservation.take(),
                     },
                 )
                 .await;
@@ -367,62 +415,6 @@ async fn handle_streaming_completion(
             error!("Failed to create streaming completion response: {}", error);
             Ok(openai_errors::gateway_error_response(&error))
         }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn settle_stream_spend(
-    pricing_service: &crate::core::pricing_service::PricingService,
-    budget_limits: &crate::core::budget::UnifiedBudgetLimits,
-    key_manager: &crate::core::keys::KeyManager,
-    api_key_id: Option<uuid::Uuid>,
-    provider: &str,
-    model: &str,
-    usage: Option<&Usage>,
-    budget_reservation: Option<crate::core::budget::UnifiedBudgetReservation>,
-    saw_upstream_output: bool,
-) {
-    super::spend::record_finished_stream_spend_with_reservation_with_pricing(
-        pricing_service,
-        super::spend::StreamSpendSettlement {
-            budget_limits,
-            key_manager,
-            api_key_id,
-            provider,
-            model,
-            usage,
-            saw_upstream_output,
-            budget_reservation,
-        },
-    )
-    .await;
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn settle_stream_spend_if_chargeable(
-    pricing_service: &crate::core::pricing_service::PricingService,
-    budget_limits: &crate::core::budget::UnifiedBudgetLimits,
-    key_manager: &crate::core::keys::KeyManager,
-    api_key_id: Option<uuid::Uuid>,
-    provider: &str,
-    model: &str,
-    usage: Option<&Usage>,
-    budget_reservation: Option<crate::core::budget::UnifiedBudgetReservation>,
-    saw_upstream_output: bool,
-) {
-    if usage.is_some() || saw_upstream_output {
-        settle_stream_spend(
-            pricing_service,
-            budget_limits,
-            key_manager,
-            api_key_id,
-            provider,
-            model,
-            usage,
-            budget_reservation,
-            saw_upstream_output,
-        )
-        .await;
     }
 }
 
@@ -773,20 +765,4 @@ fn finish_reason_to_string(reason: types::responses::FinishReason) -> String {
         types::responses::FinishReason::PauseTurn => "pause_turn",
     }
     .to_string()
-}
-
-async fn send_stream_error(tx: &mpsc::Sender<Bytes>, message: &str, error_type: &str, code: &str) {
-    let error_json = json!({
-        "error": {
-            "message": message,
-            "type": error_type,
-            "code": code,
-        }
-    });
-    let mut bytes = Event::default()
-        .data(&error_json.to_string())
-        .to_bytes()
-        .to_vec();
-    bytes.extend_from_slice(&Event::default().data("[DONE]").to_bytes());
-    let _ = tx.send(Bytes::from(bytes)).await;
 }

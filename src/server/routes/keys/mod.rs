@@ -13,6 +13,8 @@
 //! - `GET /v1/keys/{id}/usage` - Get usage statistics
 //! - `POST /v1/keys/verify` - Verify a key
 
+mod access;
+mod api_key_budget;
 mod handlers;
 mod middleware;
 mod types;

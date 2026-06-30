@@ -166,6 +166,7 @@ async fn disconnect_after_upstream_output_settles_reserved_budget() {
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
         reservation: Some(reservation),
+        key_budget_reservation: None,
     };
 
     settlement.record_disconnect(None).await;
@@ -212,6 +213,7 @@ async fn completed_stream_without_usage_after_output_settles_reserved_budget() {
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
         reservation: Some(reservation),
+        key_budget_reservation: None,
     };
 
     settlement.record_completion(None, true).await;

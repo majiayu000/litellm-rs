@@ -190,15 +190,15 @@ impl RateLimiter {
 
         match self.config.strategy {
             RateLimitStrategy::SlidingWindow => {
-                self.check_sliding_window_impl(key, false, Instant::now())
+                self.check_sliding_window_impl(key, self.config.default_rpm, false, Instant::now())
                     .await
             }
             RateLimitStrategy::TokenBucket => {
-                self.check_token_bucket_impl(key, false, Instant::now())
+                self.check_token_bucket_impl(key, self.config.default_rpm, false, Instant::now())
                     .await
             }
             RateLimitStrategy::FixedWindow => {
-                self.check_fixed_window_impl(key, false, Instant::now())
+                self.check_fixed_window_impl(key, self.config.default_rpm, false, Instant::now())
                     .await
             }
         }
@@ -217,6 +217,16 @@ impl RateLimiter {
         &self,
         key: &str,
     ) -> (RateLimitResult, RateLimitReservation) {
+        self.check_and_record_with_source_and_limit(key, self.config.default_rpm)
+            .await
+    }
+
+    /// Atomically check and record a request with a per-request RPM limit.
+    pub(crate) async fn check_and_record_with_source_and_limit(
+        &self,
+        key: &str,
+        requests_per_minute: u32,
+    ) -> (RateLimitResult, RateLimitReservation) {
         if !self.config.enabled {
             let recorded_at = Instant::now();
             return (
@@ -228,7 +238,7 @@ impl RateLimiter {
         #[cfg(feature = "gateway")]
         if let Some(redis) = &self.redis {
             match redis
-                .rate_limit_check_and_record(key, self.config.default_rpm, self.window.as_secs())
+                .rate_limit_check_and_record(key, requests_per_minute, self.window.as_secs())
                 .await
             {
                 Ok(result) => {
@@ -257,7 +267,9 @@ impl RateLimiter {
         }
 
         let recorded_at = Instant::now();
-        let result = self.check_and_record_local(key, recorded_at).await;
+        let result = self
+            .check_and_record_local(key, recorded_at, requests_per_minute)
+            .await;
         let reservation = if result.allowed {
             let reset_after_secs = self.local_reservation_reset_after_secs(&result);
             RateLimitReservation::new(RateLimitRecordSource::Local, recorded_at, reset_after_secs)
@@ -267,16 +279,24 @@ impl RateLimiter {
         (result, reservation)
     }
 
-    async fn check_and_record_local(&self, key: &str, recorded_at: Instant) -> RateLimitResult {
+    async fn check_and_record_local(
+        &self,
+        key: &str,
+        recorded_at: Instant,
+        requests_per_minute: u32,
+    ) -> RateLimitResult {
         match self.config.strategy {
             RateLimitStrategy::SlidingWindow => {
-                self.check_sliding_window_impl(key, true, recorded_at).await
+                self.check_sliding_window_impl(key, requests_per_minute, true, recorded_at)
+                    .await
             }
             RateLimitStrategy::TokenBucket => {
-                self.check_token_bucket_impl(key, true, recorded_at).await
+                self.check_token_bucket_impl(key, requests_per_minute, true, recorded_at)
+                    .await
             }
             RateLimitStrategy::FixedWindow => {
-                self.check_fixed_window_impl(key, true, recorded_at).await
+                self.check_fixed_window_impl(key, requests_per_minute, true, recorded_at)
+                    .await
             }
         }
     }

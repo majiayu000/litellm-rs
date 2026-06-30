@@ -26,6 +26,13 @@ use tracing::{error, info, warn};
 use super::context::get_request_context;
 use super::execution::{execute_stream_with_selected_deployment, execute_with_selected_deployment};
 use super::openai_errors;
+#[path = "chat_delta.rs"]
+mod chat_delta;
+use chat_delta::{convert_function_call_delta, convert_tool_call_delta};
+#[path = "chat_sse.rs"]
+pub(super) mod chat_sse;
+use chat_sse::format_sse_error;
+pub(super) use chat_sse::sse_error_classification;
 
 /// Chat completions endpoint
 ///
@@ -37,7 +44,8 @@ pub async fn chat_completions(
 ) -> ActixResult<HttpResponse> {
     info!("Chat completion request for model: {}", request.model);
 
-    let context = get_request_context(&req)?;
+    let mut context = get_request_context(&req)?;
+    super::token_policy::attach_api_key_token_limit(&req, &mut context)?;
 
     if let Err(e) = RequestValidator::validate_chat_completion_request(
         &request.model,
@@ -47,6 +55,13 @@ pub async fn chat_completions(
     ) {
         warn!("Invalid chat completion request: {}", e);
         return Ok(openai_errors::validation_error(e.to_string()));
+    }
+    if let Err(error) = super::context::enforce_api_key_model_and_token_limits(
+        &req,
+        &request.model,
+        super::token_policy::requested_chat_output_token_limit(&request),
+    ) {
+        return Ok(openai_errors::gateway_error_response(&error));
     }
 
     if request.stream.unwrap_or(false) {
@@ -97,6 +112,8 @@ async fn handle_streaming_chat_completion(
     let context_for_execution = context.clone();
     let (budget_limits, pricing_service) = (state.budget_limits.clone(), state.pricing.clone());
     let api_key_id = context.api_key_id();
+    let api_key_budget_id = context.api_key_budget_id();
+    let budget_manager = state.budget_manager.clone();
     match execute_stream_with_selected_deployment(
         state.unified_router.clone(),
         &requested_model,
@@ -105,6 +122,7 @@ async fn handle_streaming_chat_completion(
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             let (budget_limits, pricing_service) = (budget_limits.clone(), pricing_service.clone());
+            let budget_manager = budget_manager.clone();
             let request_for_budget = request_for_budget.clone();
             async move {
                 super::spend::ensure_budget_available(
@@ -112,6 +130,15 @@ async fn handle_streaming_chat_completion(
                     provider.name(),
                     &selected_model,
                 )?;
+                let provider_name = provider.name().to_string();
+                let (request_for_provider, request_for_budget) =
+                    super::token_policy::prepare_chat_request_for_provider(
+                        context.api_key_max_tokens_per_request(),
+                        provider.name(),
+                        &selected_model,
+                        core_request.clone(),
+                        request_for_budget,
+                    )?;
                 let budget_reservation = super::spend::reserve_chat_completion_budget_with_pricing(
                     pricing_service.as_ref(),
                     &budget_limits,
@@ -119,19 +146,36 @@ async fn handle_streaming_chat_completion(
                     &selected_model,
                     &request_for_budget,
                 )?;
-                let provider_name = provider.name().to_string();
-                let mut request_for_provider = core_request.clone();
-                request_for_provider.model = selected_model.clone();
+                let key_budget_reservation = super::spend::reserve_api_key_budget_for_reservation(
+                    &budget_manager,
+                    api_key_budget_id,
+                    budget_reservation.as_ref(),
+                )?;
                 let stream = provider
                     .chat_completion_stream(request_for_provider, context)
                     .await?;
-                Ok((stream, provider_name, selected_model, budget_reservation))
+                Ok((
+                    stream,
+                    provider_name,
+                    selected_model,
+                    budget_reservation,
+                    key_budget_reservation,
+                ))
             }
         },
     )
     .await
     {
-        Ok(((mut stream, served_provider, served_model, mut budget_reservation), lease)) => {
+        Ok((
+            (
+                mut stream,
+                served_provider,
+                served_model,
+                mut budget_reservation,
+                mut key_budget_reservation,
+            ),
+            lease,
+        )) => {
             // Use a channel so that when the client disconnects and actix-web
             // drops the response stream, the receiver is dropped, which causes
             // the sender to fail. This breaks the upstream read loop and drops
@@ -158,6 +202,7 @@ async fn handle_streaming_chat_completion(
                                 &served_model,
                                 final_usage.as_ref(),
                                 budget_reservation.take(),
+                                key_budget_reservation.take(),
                             )
                             .await;
                         }
@@ -293,6 +338,7 @@ async fn handle_streaming_chat_completion(
                             &served_model,
                             final_usage.as_ref(),
                             budget_reservation.take(),
+                            key_budget_reservation.take(),
                         )
                         .await;
                         return;
@@ -315,6 +361,7 @@ async fn handle_streaming_chat_completion(
                         usage: final_usage.as_ref(),
                         saw_upstream_output,
                         budget_reservation: budget_reservation.take(),
+                        key_budget_reservation: key_budget_reservation.take(),
                     },
                 )
                 .await;
@@ -366,6 +413,8 @@ async fn handle_chat_completion_internal(
     let (budget_limits, pricing_service) = (state.budget_limits.clone(), state.pricing.clone());
     let key_manager = state.key_manager.clone();
     let api_key_id = context.api_key_id();
+    let api_key_budget_id = context.api_key_budget_id();
+    let budget_manager = state.budget_manager.clone();
 
     let core_response = execute_with_selected_deployment(
         unified_router,
@@ -376,6 +425,7 @@ async fn handle_chat_completion_internal(
             let context = context_for_execution.clone();
             let (budget_limits, pricing_service) = (budget_limits.clone(), pricing_service.clone());
             let key_manager = key_manager.clone();
+            let budget_manager = budget_manager.clone();
             let request_for_budget = request_for_budget.clone();
             async move {
                 // Reject before spending upstream tokens when the selected
@@ -385,6 +435,14 @@ async fn handle_chat_completion_internal(
                     provider.name(),
                     &selected_model,
                 )?;
+                let (request_for_provider, request_for_budget) =
+                    super::token_policy::prepare_chat_request_for_provider(
+                        context.api_key_max_tokens_per_request(),
+                        provider.name(),
+                        &selected_model,
+                        core_request.clone(),
+                        request_for_budget,
+                    )?;
                 let budget_reservation = super::spend::reserve_chat_completion_budget_with_pricing(
                     pricing_service.as_ref(),
                     &budget_limits,
@@ -392,8 +450,11 @@ async fn handle_chat_completion_internal(
                     &selected_model,
                     &request_for_budget,
                 )?;
-                let mut request_for_provider = core_request.clone();
-                request_for_provider.model = selected_model.clone();
+                let key_budget_reservation = super::spend::reserve_api_key_budget_for_reservation(
+                    &budget_manager,
+                    api_key_budget_id,
+                    budget_reservation.as_ref(),
+                )?;
                 let response = provider
                     .chat_completion(request_for_provider, context)
                     .await?;
@@ -411,6 +472,7 @@ async fn handle_chat_completion_internal(
                     &selected_model,
                     response.usage.as_ref(),
                     budget_reservation,
+                    key_budget_reservation,
                 )
                 .await;
                 Ok((response, tokens))
@@ -669,48 +731,6 @@ fn convert_usage(usage: types::responses::Usage) -> Usage {
     }
 }
 
-/// Format a provider error into SSE error type and code for OpenAI-compatible responses.
-pub(super) fn sse_error_classification(error: &ProviderError) -> (&'static str, &'static str) {
-    match error {
-        ProviderError::Authentication { .. } => ("invalid_request_error", "authentication_error"),
-        ProviderError::RateLimit { .. } => ("rate_limit_error", "rate_limit_exceeded"),
-        ProviderError::InvalidRequest { .. } => ("invalid_request_error", "invalid_request"),
-        ProviderError::ModelNotFound { .. } => ("invalid_request_error", "model_not_found"),
-        ProviderError::Timeout { .. } => ("server_error", "timeout"),
-        ProviderError::ContentFiltered { .. } => ("invalid_request_error", "content_filter"),
-        ProviderError::ContextLengthExceeded { .. } => {
-            ("invalid_request_error", "context_length_exceeded")
-        }
-        ProviderError::TokenLimitExceeded { .. } => {
-            ("invalid_request_error", "token_limit_exceeded")
-        }
-        _ => ("server_error", "internal_error"),
-    }
-}
-
-/// Format an error as an SSE event matching OpenAI's streaming error format.
-///
-/// Produces:
-/// ```text
-/// data: {"error":{"message":"...","type":"server_error","code":"internal_error"}}
-///
-/// data: [DONE]
-/// ```
-fn format_sse_error(message: &str, error_type: &str, code: &str) -> Bytes {
-    let error_json = json!({
-        "error": {
-            "message": message,
-            "type": error_type,
-            "code": code,
-        }
-    });
-    let error_event = Event::default().data(&error_json.to_string());
-    let done_event = Event::default().data("[DONE]");
-    let mut combined = error_event.to_bytes().to_vec();
-    combined.extend_from_slice(&done_event.to_bytes());
-    Bytes::from(combined)
-}
-
 fn convert_core_chunk_to_streaming(
     chunk: types::responses::ChatChunk,
 ) -> Result<ChatCompletionChunk, ProviderError> {
@@ -767,31 +787,6 @@ fn convert_core_chunk_to_streaming(
         choices,
         usage: chunk.usage.map(convert_usage),
     })
-}
-
-fn convert_function_call_delta(
-    function: types::responses::FunctionCallDelta,
-) -> crate::core::streaming::types::FunctionCallDelta {
-    crate::core::streaming::types::FunctionCallDelta {
-        name: function.name,
-        arguments: function.arguments,
-    }
-}
-
-fn convert_tool_call_delta(
-    delta: types::responses::ToolCallDelta,
-) -> crate::core::streaming::types::ToolCallDelta {
-    crate::core::streaming::types::ToolCallDelta {
-        index: delta.index,
-        id: delta.id,
-        tool_type: delta.tool_type,
-        function: delta.function.map(
-            |function| crate::core::streaming::types::FunctionCallDelta {
-                name: function.name,
-                arguments: function.arguments,
-            },
-        ),
-    }
 }
 
 #[cfg(test)]

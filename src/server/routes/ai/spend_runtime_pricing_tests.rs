@@ -170,6 +170,7 @@ async fn record_completion_spend_uses_runtime_pricing_service() {
         "runtime-only-priced-model",
         Some(&response_usage(1000, 500)),
         None,
+        None,
     )
     .await;
 
@@ -211,6 +212,7 @@ async fn record_completion_spend_prices_xai_openai_like_prefix() {
         "openai_like",
         "xai/grok-4.3",
         Some(&response_usage(1000, 500)),
+        None,
         None,
     )
     .await;

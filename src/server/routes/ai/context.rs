@@ -5,9 +5,25 @@ use crate::core::models::user::types::User;
 use crate::core::types::context::RequestContext;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result as ActixResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use tracing::{debug, error};
+
+const CORE_KEYS_EXTRA_NAMESPACE: &str = "__core_keys";
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RuntimeKeyPermissions {
+    #[serde(default)]
+    allowed_models: Vec<String>,
+    #[serde(default)]
+    allowed_endpoints: Vec<String>,
+    #[serde(default)]
+    max_tokens_per_request: Option<u32>,
+    #[serde(default)]
+    is_admin: bool,
+    #[serde(default)]
+    custom_permissions: Vec<String>,
+}
 
 /// Get request context from headers and middleware extensions
 pub fn get_request_context(req: &HttpRequest) -> ActixResult<RequestContext> {
@@ -51,13 +67,13 @@ pub fn get_authenticated_api_key(req: &HttpRequest) -> Option<ApiKey> {
 /// Permission logic (two-role model: admin vs user):
 /// - Unauthenticated requests are always denied.
 /// - Admin roles (`SuperAdmin`, `Admin`) have full access to every operation.
-/// - API-usage operations (`chat`, `completions`, `models`, `embeddings`, `images`,
-///   `audio`, `moderations`, `rerank`, `assistants`, `files`, `fine_tuning`) are
-///   allowed for any authenticated user/key.
+/// - API-usage operations are allowed for authenticated users and for legacy
+///   API keys that carry no explicit operation permissions.
 /// - Management operations (`keys.list_all`, `users.manage`, `config.manage`,
 ///   `teams.manage`, `analytics.admin`) require an admin role.
 /// - API key `permissions` can grant admin-level access via `"*"` or `"system.admin"`,
-///   or grant a specific operation directly.
+///   grant a specific operation directly, or restrict the key to its listed
+///   operations.
 pub fn check_permission(user: Option<&User>, api_key: Option<&ApiKey>, operation: &str) -> bool {
     use crate::core::models::user::types::UserRole;
 
@@ -66,45 +82,200 @@ pub fn check_permission(user: Option<&User>, api_key: Option<&ApiKey>, operation
         return false;
     }
 
-    // Check if the user has an admin role
-    let user_is_admin = user
-        .map(|u| matches!(u.role, UserRole::SuperAdmin | UserRole::Admin))
-        .unwrap_or(false);
-
     // Check if the API key carries admin-level permissions
-    let key_is_admin = api_key
-        .map(|k| {
-            k.permissions
-                .iter()
-                .any(|p| p == "*" || p == "system.admin")
-        })
-        .unwrap_or(false);
+    let key_is_admin = api_key.map(api_key_has_admin_permission).unwrap_or(false);
 
-    if user_is_admin || key_is_admin {
+    if key_is_admin {
         return true;
     }
 
     // Check if the API key explicitly grants this operation
     let key_has_operation = api_key
-        .map(|k| k.permissions.iter().any(|p| p == operation))
+        .map(|k| api_key_has_operation_permission(k, operation))
         .unwrap_or(false);
 
     if key_has_operation {
         return true;
     }
 
-    // Management operations require admin — deny for non-admin callers
-    let is_management_op = matches!(
-        operation,
-        "keys.list_all" | "users.manage" | "config.manage" | "teams.manage" | "analytics.admin"
-    );
+    if api_key
+        .map(api_key_has_explicit_operation_permissions)
+        .unwrap_or(false)
+    {
+        return false;
+    }
 
-    if is_management_op {
+    // Check if the user has an admin role. This intentionally happens after
+    // API-key restrictions so an admin-owned limited key remains limited.
+    let user_is_admin = user
+        .map(|u| matches!(u.role, UserRole::SuperAdmin | UserRole::Admin))
+        .unwrap_or(false);
+
+    if user_is_admin {
+        return true;
+    }
+
+    // Management operations require admin — deny for non-admin callers
+    if is_management_operation(operation) {
         return false;
     }
 
     // API-usage operations are allowed for any authenticated caller
     true
+}
+
+fn api_key_has_admin_permission(api_key: &ApiKey) -> bool {
+    if api_key
+        .permissions
+        .iter()
+        .any(|p| p == "*" || p == "system.admin")
+    {
+        return true;
+    }
+
+    matches!(
+        runtime_key_permissions(api_key),
+        Ok(Some(permissions))
+            if permissions.is_admin
+                || permissions
+                    .custom_permissions
+                    .iter()
+                    .any(|p| p == "*" || p == "system.admin")
+    )
+}
+
+fn api_key_has_explicit_operation_permissions(api_key: &ApiKey) -> bool {
+    if !api_key.permissions.is_empty() {
+        return true;
+    }
+
+    matches!(
+        runtime_key_permissions(api_key),
+        Ok(Some(permissions))
+            if permissions.is_admin || !permissions.custom_permissions.is_empty()
+    )
+}
+
+fn api_key_has_operation_permission(api_key: &ApiKey, operation: &str) -> bool {
+    if api_key
+        .permissions
+        .iter()
+        .any(|p| permission_matches_operation(p, operation))
+    {
+        return true;
+    }
+
+    matches!(
+        runtime_key_permissions(api_key),
+        Ok(Some(permissions))
+            if permissions
+                .custom_permissions
+                .iter()
+                .any(|p| permission_matches_operation(p, operation))
+    )
+}
+
+fn is_management_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "keys.list_all" | "users.manage" | "config.manage" | "teams.manage" | "analytics.admin"
+    )
+}
+
+fn permission_matches_operation(permission: &str, operation: &str) -> bool {
+    permission == operation
+        || permission.strip_prefix("api.") == Some(operation)
+        || (permission == "use:api" && !is_management_operation(operation))
+}
+
+fn pattern_list_allows(patterns: &[String], value: &str) -> bool {
+    if patterns.is_empty() {
+        return true;
+    }
+
+    patterns.iter().any(|pattern| {
+        pattern == "*"
+            || pattern == value
+            || pattern
+                .strip_suffix('*')
+                .is_some_and(|prefix| value.starts_with(prefix))
+    })
+}
+
+fn runtime_key_permissions(
+    api_key: &ApiKey,
+) -> Result<Option<RuntimeKeyPermissions>, GatewayError> {
+    let Some(payload) = api_key.metadata.extra.get(CORE_KEYS_EXTRA_NAMESPACE) else {
+        return Ok(None);
+    };
+    let Some(permissions) = payload.get("permissions") else {
+        return Ok(None);
+    };
+    if permissions.is_null() {
+        return Ok(None);
+    }
+
+    serde_json::from_value::<RuntimeKeyPermissions>(permissions.clone())
+        .map(Some)
+        .map_err(|error| {
+            GatewayError::forbidden(format!("API key runtime policy is invalid: {error}"))
+        })
+}
+
+pub fn api_key_allows_endpoint(
+    api_key: Option<&ApiKey>,
+    endpoint: &str,
+) -> Result<bool, GatewayError> {
+    let Some(permissions) = api_key.map(runtime_key_permissions).transpose()?.flatten() else {
+        return Ok(true);
+    };
+
+    Ok(pattern_list_allows(
+        &permissions.allowed_endpoints,
+        endpoint,
+    ))
+}
+
+pub fn api_key_max_tokens_per_request(req: &HttpRequest) -> Result<Option<u32>, GatewayError> {
+    let extensions = req.extensions();
+    let Some(api_key) = extensions.get::<ApiKey>() else {
+        return Ok(None);
+    };
+    let Some(permissions) = runtime_key_permissions(api_key)? else {
+        return Ok(None);
+    };
+    Ok(permissions.max_tokens_per_request)
+}
+
+pub fn enforce_api_key_model_and_token_limits(
+    req: &HttpRequest,
+    model: &str,
+    requested_tokens: Option<u32>,
+) -> Result<(), GatewayError> {
+    let extensions = req.extensions();
+    let Some(api_key) = extensions.get::<ApiKey>() else {
+        return Ok(());
+    };
+    let Some(permissions) = runtime_key_permissions(api_key)? else {
+        return Ok(());
+    };
+
+    if !pattern_list_allows(&permissions.allowed_models, model) {
+        return Err(GatewayError::forbidden(format!(
+            "API key is not permitted to use model '{model}'"
+        )));
+    }
+
+    if let (Some(limit), Some(requested_tokens)) =
+        (permissions.max_tokens_per_request, requested_tokens)
+        && requested_tokens > limit
+    {
+        return Err(GatewayError::forbidden(format!(
+            "requested token limit {requested_tokens} exceeds API key max_tokens_per_request {limit}"
+        )));
+    }
+
+    Ok(())
 }
 
 /// Log API usage for billing and analytics
@@ -193,6 +364,27 @@ mod tests {
     fn create_admin_api_key() -> ApiKey {
         let mut key = create_test_api_key();
         key.permissions = vec!["*".to_string()];
+        key
+    }
+
+    fn api_key_with_runtime_permissions(
+        allowed_models: Vec<&str>,
+        allowed_endpoints: Vec<&str>,
+        max_tokens_per_request: Option<u32>,
+    ) -> ApiKey {
+        let mut key = create_test_api_key();
+        key.metadata.set_extra(
+            CORE_KEYS_EXTRA_NAMESPACE,
+            serde_json::json!({
+                "permissions": {
+                    "allowed_models": allowed_models,
+                    "allowed_endpoints": allowed_endpoints,
+                    "max_tokens_per_request": max_tokens_per_request,
+                    "is_admin": false,
+                    "custom_permissions": [],
+                }
+            }),
+        );
         key
     }
 
@@ -330,6 +522,49 @@ mod tests {
         key.permissions = vec!["keys.list_all".to_string()];
         assert!(check_permission(None, Some(&key), "keys.list_all"));
         assert!(!check_permission(None, Some(&key), "users.manage"));
+    }
+
+    #[test]
+    fn test_api_key_with_specific_api_permission_denies_other_api_usage() {
+        let mut key = create_test_api_key();
+        key.permissions = vec!["embeddings".to_string()];
+
+        assert!(check_permission(None, Some(&key), "embeddings"));
+        assert!(!check_permission(None, Some(&key), "chat"));
+    }
+
+    #[test]
+    fn test_api_key_accepts_rbac_api_permission_namespace() {
+        let mut key = create_test_api_key();
+        key.permissions = vec!["api.chat".to_string()];
+
+        assert!(check_permission(None, Some(&key), "chat"));
+        assert!(!check_permission(None, Some(&key), "embeddings"));
+    }
+
+    #[test]
+    fn test_api_key_endpoint_payload_restricts_endpoint_patterns() {
+        let key = api_key_with_runtime_permissions(Vec::new(), vec!["/v1/chat/*"], None);
+
+        assert!(matches!(
+            api_key_allows_endpoint(Some(&key), "/v1/chat/completions"),
+            Ok(true)
+        ));
+        assert!(matches!(
+            api_key_allows_endpoint(Some(&key), "/v1/embeddings"),
+            Ok(false)
+        ));
+    }
+
+    #[test]
+    fn test_api_key_model_and_token_payload_restricts_request() {
+        let key = api_key_with_runtime_permissions(vec!["gpt-4o"], Vec::new(), Some(128));
+        let req = actix_web::test::TestRequest::default().to_http_request();
+        req.extensions_mut().insert(key);
+
+        assert!(enforce_api_key_model_and_token_limits(&req, "gpt-4o", Some(128)).is_ok());
+        assert!(enforce_api_key_model_and_token_limits(&req, "gpt-4o-mini", Some(128)).is_err());
+        assert!(enforce_api_key_model_and_token_limits(&req, "gpt-4o", Some(129)).is_err());
     }
 
     // ==================== get_authenticated_user Tests ====================

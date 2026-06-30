@@ -31,12 +31,20 @@ pub async fn create_response(
 ) -> ActixResult<HttpResponse> {
     info!("Responses API request for model: {}", payload.model);
 
-    let context = super::context::get_request_context(&req)?;
+    let mut context = super::context::get_request_context(&req)?;
+    super::token_policy::attach_api_key_token_limit(&req, &mut context)?;
     let owner = lifecycle::response_owner(&context);
     let request = payload.into_inner();
 
     if request.model.trim().is_empty() {
         return Ok(openai_errors::validation_error("model must not be empty"));
+    }
+    if let Err(error) = super::context::enforce_api_key_model_and_token_limits(
+        &req,
+        &request.model,
+        request.max_output_tokens,
+    ) {
+        return Ok(openai_errors::gateway_error_response(&error));
     }
 
     match &request.input {
@@ -243,6 +251,7 @@ pub(crate) fn build_chat_request(
         model: req.model.clone(),
         messages,
         temperature: req.temperature,
+        max_tokens: req.max_output_tokens,
         max_completion_tokens: req.max_output_tokens,
         top_p: req.top_p,
         stream: req.stream,
@@ -488,6 +497,7 @@ mod tests {
         req.max_output_tokens = Some(512);
         let chat = build_chat_request(&req).unwrap();
         assert_eq!(chat.max_completion_tokens, Some(512));
+        assert_eq!(chat.max_tokens, Some(512));
     }
 
     #[test]

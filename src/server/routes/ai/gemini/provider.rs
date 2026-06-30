@@ -8,13 +8,14 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::config::models::provider::ProviderConfig;
-use crate::core::budget::UnifiedBudgetReservation;
+use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
 use crate::core::providers::shared::parse_retry_after_from_body;
 use crate::core::providers::{Provider, ProviderError};
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
 use super::{validate_api_version, validate_method, validate_model_segment};
+use uuid::Uuid;
 
 const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 
@@ -29,6 +30,23 @@ pub(super) struct GeminiRouteProvider {
     base_url: String,
     headers: Vec<(HeaderName, HeaderValue)>,
     timeout: Duration,
+}
+
+#[cfg(test)]
+pub(super) fn test_gemini_route_provider(
+    provider_name: impl Into<String>,
+    pricing_provider: impl Into<String>,
+    model: impl Into<String>,
+) -> GeminiRouteProvider {
+    GeminiRouteProvider {
+        provider_name: provider_name.into(),
+        pricing_provider: pricing_provider.into(),
+        model: model.into(),
+        api_key: String::new(),
+        base_url: String::new(),
+        headers: Vec::new(),
+        timeout: Duration::from_secs(1),
+    }
 }
 
 pub(super) fn ensure_gemini_provider_candidate_configured(
@@ -285,7 +303,15 @@ pub(super) async fn send_gemini_request(
     method: &'static str,
     stream: bool,
     request: &Value,
-) -> Result<(Option<UnifiedBudgetReservation>, reqwest::Response), ProviderError> {
+    api_key_budget_id: Option<Uuid>,
+) -> Result<
+    (
+        Option<UnifiedBudgetReservation>,
+        Option<BudgetReservation>,
+        reqwest::Response,
+    ),
+    ProviderError,
+> {
     super::super::spend::ensure_budget_available(
         &state.budget_limits,
         &provider.provider_name,
@@ -293,6 +319,11 @@ pub(super) async fn send_gemini_request(
     )?;
     let mut budget_reservation = super::spend::reserve_gemini_budget(state, provider, request)
         .map_err(gemini_gateway_error_to_provider_error)?;
+    let mut key_budget_reservation = super::super::spend::reserve_api_key_budget_for_reservation(
+        &state.budget_manager,
+        api_key_budget_id,
+        budget_reservation.as_ref(),
+    )?;
     let url = gemini_url(provider, api_version, method, stream)
         .map_err(gemini_gateway_error_to_provider_error)?;
     let response_result = apply_gemini_headers(gemini_http_client().post(url), provider)
@@ -307,6 +338,9 @@ pub(super) async fn send_gemini_request(
             if let Some(reservation) = budget_reservation.take() {
                 reservation.cancel();
             }
+            if let Some(reservation) = key_budget_reservation.take() {
+                reservation.cancel();
+            }
             return Err(gemini_gateway_error_to_provider_error(gemini_http_error(
                 error,
             )));
@@ -318,10 +352,13 @@ pub(super) async fn send_gemini_request(
             if let Some(reservation) = budget_reservation.take() {
                 reservation.cancel();
             }
+            if let Some(reservation) = key_budget_reservation.take() {
+                reservation.cancel();
+            }
             return Err(error);
         }
     };
-    Ok((budget_reservation, response))
+    Ok((budget_reservation, key_budget_reservation, response))
 }
 
 async fn gemini_response_or_provider_error(

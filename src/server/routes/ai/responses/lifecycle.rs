@@ -339,6 +339,7 @@ fn cleanup_response_store() {
             remove_response_and_task(response_id);
         }
     }
+    remove_orphaned_background_tasks();
 
     entries.retain(|(_, created_at)| now.saturating_sub(*created_at) <= RESPONSE_STORE_TTL_SECS);
     let overflow = entries
@@ -359,6 +360,19 @@ fn remove_response_and_task(response_id: &str) {
     RESPONSE_STORE.remove(response_id);
     if let Some((_, task)) = BACKGROUND_TASKS.remove(response_id) {
         task.abort();
+    }
+}
+
+fn remove_orphaned_background_tasks() {
+    let orphaned = BACKGROUND_TASKS
+        .iter()
+        .filter(|entry| !RESPONSE_STORE.contains_key(entry.key().as_str()))
+        .map(|entry| entry.key().clone())
+        .collect::<Vec<_>>();
+    for response_id in orphaned {
+        if let Some((_, task)) = BACKGROUND_TASKS.remove(&response_id) {
+            task.abort();
+        }
     }
 }
 

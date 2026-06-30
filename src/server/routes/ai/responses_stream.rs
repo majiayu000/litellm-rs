@@ -3,15 +3,12 @@
 //! Translates internal `ChatChunk` SSE events into Responses API streaming
 //! events as defined in the OpenAI Responses API specification.
 
-use crate::core::budget::{UnifiedBudgetLimits, UnifiedBudgetReservation};
-use crate::core::keys::KeyManager;
 use crate::core::models::openai::requests::{ChatCompletionRequest, StreamOptions};
 use crate::core::models::openai::responses_api::{
     ResponseFunctionCall, ResponseInputTokensDetails, ResponseOutputContent, ResponseOutputItem,
     ResponseOutputMessage, ResponseOutputTokensDetails, ResponseReasoningItem, ResponseStreamEvent,
     ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
 };
-use crate::core::pricing_service::PricingService;
 use crate::core::providers::ProviderError;
 use crate::core::streaming::types::Event;
 use crate::core::types::responses::Usage as ChatUsage;
@@ -29,13 +26,14 @@ use bytes::Bytes;
 use futures::StreamExt;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 use super::{openai_errors, spend};
+#[path = "responses_stream_budget.rs"]
+mod responses_stream_budget;
+use responses_stream_budget::StreamBudgetSettlement;
 
 /// Accumulated state for one in-progress tool call during streaming.
 struct ToolCallAccum {
@@ -44,49 +42,6 @@ struct ToolCallAccum {
     name: String,
     arguments: String,
     output_index: u32,
-}
-
-struct StreamBudgetSettlement {
-    pricing_service: Arc<PricingService>,
-    budget_limits: Arc<UnifiedBudgetLimits>,
-    key_manager: KeyManager,
-    api_key_id: Option<Uuid>,
-    provider: String,
-    model: String,
-    reservation: Option<UnifiedBudgetReservation>,
-}
-
-impl StreamBudgetSettlement {
-    async fn record_completion(mut self, usage: Option<&ChatUsage>, saw_upstream_output: bool) {
-        spend::record_finished_stream_spend_with_reservation_with_pricing(
-            self.pricing_service.as_ref(),
-            spend::StreamSpendSettlement {
-                budget_limits: self.budget_limits.as_ref(),
-                key_manager: &self.key_manager,
-                api_key_id: self.api_key_id,
-                provider: &self.provider,
-                model: &self.model,
-                usage,
-                saw_upstream_output,
-                budget_reservation: self.reservation.take(),
-            },
-        )
-        .await;
-    }
-
-    async fn record_disconnect(&mut self, usage: Option<&ChatUsage>) {
-        spend::record_stream_disconnect_spend_with_reservation_with_pricing(
-            self.pricing_service.as_ref(),
-            self.budget_limits.as_ref(),
-            &self.key_manager,
-            self.api_key_id,
-            &self.provider,
-            &self.model,
-            usage,
-            self.reservation.take(),
-        )
-        .await;
-    }
 }
 
 /// Streaming path for POST /v1/responses.
@@ -123,6 +78,8 @@ pub(crate) async fn handle_streaming_response(
     let budget_limits = state.budget_limits.clone();
     let pricing_service = state.pricing.clone();
     let api_key_id = context.api_key_id();
+    let api_key_budget_id = context.api_key_budget_id();
+    let budget_manager = state.budget_manager.clone();
 
     match execute_stream_with_selected_deployment(
         state.unified_router.clone(),
@@ -133,27 +90,48 @@ pub(crate) async fn handle_streaming_response(
             let ctx = context_clone.clone();
             let budget_limits = budget_limits.clone();
             let pricing_service = pricing_service.clone();
+            let budget_manager = budget_manager.clone();
             let request_for_budget = request_for_budget.clone();
             async move {
-                spend::ensure_budget_available(&budget_limits, provider.name(), &selected_model)?;
+                let provider_name = provider.name().to_string();
+                let (req, request_for_budget) =
+                    super::token_policy::prepare_chat_request_for_provider(
+                        ctx.api_key_max_tokens_per_request(),
+                        &provider_name,
+                        &selected_model,
+                        core_request.clone(),
+                        request_for_budget,
+                    )?;
+                spend::ensure_budget_available(&budget_limits, &provider_name, &selected_model)?;
                 let budget_reservation = spend::reserve_chat_completion_budget_with_pricing(
                     pricing_service.as_ref(),
                     &budget_limits,
-                    provider.name(),
+                    &provider_name,
                     &selected_model,
                     &request_for_budget,
                 )?;
-                let provider_name = provider.name().to_string();
-                let mut req = core_request.clone();
-                req.model = selected_model.clone();
+                let key_budget_reservation = spend::reserve_api_key_budget_for_reservation(
+                    &budget_manager,
+                    api_key_budget_id,
+                    budget_reservation.as_ref(),
+                )?;
                 let stream = provider.chat_completion_stream(req, ctx).await?;
-                Ok((stream, provider_name, selected_model, budget_reservation))
+                Ok((
+                    stream,
+                    provider_name,
+                    selected_model,
+                    budget_reservation,
+                    key_budget_reservation,
+                ))
             }
         },
     )
     .await
     {
-        Ok(((mut stream, served_provider, served_model, budget_reservation), lease)) => {
+        Ok((
+            (mut stream, served_provider, served_model, budget_reservation, key_budget_reservation),
+            lease,
+        )) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout = state.config.load().gateway.server.stream_idle_timeout;
             let settlement = StreamBudgetSettlement {
@@ -164,6 +142,7 @@ pub(crate) async fn handle_streaming_response(
                 provider: served_provider,
                 model: served_model,
                 reservation: budget_reservation,
+                key_budget_reservation,
             };
 
             tokio::spawn(async move {

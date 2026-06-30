@@ -57,6 +57,7 @@ async fn records_provider_spend_for_priced_model() {
         "gpt-4o",
         Some(&usage(1000, 1000)),
         None,
+        None,
     )
     .await;
 
@@ -102,6 +103,7 @@ async fn reserved_completion_settles_actual_spend_and_refunds_estimate() {
         "gpt-4o",
         Some(&usage(0, 50)),
         Some(reservation),
+        None,
     )
     .await;
 
@@ -153,6 +155,7 @@ async fn reserved_completion_records_actual_when_usage_exceeds_estimate() {
         "gpt-4o",
         Some(&usage(0, 100)),
         Some(reservation),
+        None,
     )
     .await;
 
@@ -592,6 +595,7 @@ async fn reservation_settlement_after_reset_records_actual_spend() {
         "gpt-4o",
         Some(&usage(0, 50)),
         Some(reservation),
+        None,
     )
     .await;
 
@@ -641,6 +645,7 @@ async fn stream_disconnect_without_usage_settles_reserved_budget() {
         "gpt-4o",
         None,
         Some(reservation),
+        None,
     )
     .await;
 
@@ -742,6 +747,7 @@ async fn unpriced_model_records_no_budget_spend() {
         "openai",
         "definitely-not-a-real-model-xyz",
         Some(&usage(1000, 1000)),
+        None,
         None,
     )
     .await;
