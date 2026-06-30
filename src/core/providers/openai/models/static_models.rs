@@ -557,6 +557,16 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             0.005,
             0.032,
         ),
+        // ==================== Moderation Models ====================
+        (
+            "omni-moderation-latest",
+            "Omni Moderation Latest",
+            OpenAIModelFamily::Moderation,
+            32768,
+            None,
+            0.0,
+            0.0,
+        ),
         // Computer Use Preview
         (
             "computer-use-preview",

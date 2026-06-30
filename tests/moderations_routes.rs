@@ -164,7 +164,12 @@ mod tests {
     }
 
     fn moderation_provider_with_models(base_url: &str, models: Vec<String>) -> ProviderConfig {
-        named_moderation_provider("mock-openai-compatible", base_url, models)
+        named_moderation_provider_with_type(
+            "mock-openai-compatible",
+            "openai_compatible",
+            base_url,
+            models,
+        )
     }
 
     fn named_moderation_provider(
@@ -172,9 +177,18 @@ mod tests {
         base_url: &str,
         models: Vec<String>,
     ) -> ProviderConfig {
+        named_moderation_provider_with_type(name, "openai_compatible", base_url, models)
+    }
+
+    fn named_moderation_provider_with_type(
+        name: &str,
+        provider_type: &str,
+        base_url: &str,
+        models: Vec<String>,
+    ) -> ProviderConfig {
         let mut provider = ProviderConfig {
             name: name.to_string(),
-            provider_type: "openai_compatible".to_string(),
+            provider_type: provider_type.to_string(),
             api_key: "sk-test".to_string(),
             base_url: Some(base_url.to_string()),
             organization: Some("org-test".to_string()),
@@ -617,6 +631,41 @@ mod tests {
 
         exhausted.stop_moderation_mock().await;
         fallback.stop_moderation_mock().await;
+    }
+
+    #[tokio::test]
+    async fn native_openai_moderation_route_uses_default_model_with_empty_config_models() {
+        let mock = MockModerationServer::start_moderation_mock().await;
+        let state = build_test_app_state(vec![named_moderation_provider_with_type(
+            "mock-openai-native",
+            "openai",
+            &mock.base_url,
+            Vec::new(),
+        )])
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({ "input": "moderate this text" }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/moderations");
+        assert_eq!(requests[0].body["model"], "omni-moderation-latest");
+
+        mock.stop_moderation_mock().await;
     }
 
     #[tokio::test]

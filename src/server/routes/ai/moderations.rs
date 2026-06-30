@@ -217,17 +217,19 @@ fn moderation_router_models(providers: &[ProviderConfig], requested_model: &str)
     let candidates = moderation_candidate_configs(providers);
     let mut router_models = Vec::new();
 
-    if candidates
-        .iter()
-        .any(|provider| provider.models.iter().any(|model| model == requested_model))
-    {
+    if candidates.iter().any(|provider| {
+        provider.models.iter().any(|model| model == requested_model)
+            || (provider.models.is_empty() && moderation_provider_uses_registry_models(provider))
+    }) {
         router_models.push(requested_model.to_string());
     }
 
     router_models.extend(
         candidates
             .iter()
-            .filter(|provider| provider.models.is_empty())
+            .filter(|provider| {
+                provider.models.is_empty() && !moderation_provider_uses_registry_models(provider)
+            })
             .map(|provider| provider.name.clone()),
     );
 
@@ -303,6 +305,13 @@ fn moderation_provider_supports_requested_model(
     requested_model: &str,
 ) -> bool {
     provider.models.is_empty() || provider.models.iter().any(|model| model == requested_model)
+}
+
+fn moderation_provider_uses_registry_models(provider: &ProviderConfig) -> bool {
+    let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
+    let provider_name = provider_config::normalize_provider_selector(&provider.name);
+
+    provider_type == "openai" || provider_name == "openai"
 }
 
 fn moderation_base_url(provider: &ProviderConfig) -> Result<String, GatewayError> {

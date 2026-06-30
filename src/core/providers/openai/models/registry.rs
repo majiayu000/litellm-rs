@@ -139,6 +139,10 @@ impl OpenAIModelRegistry {
             features.push(OpenAIModelFeature::AudioOutput);
         }
 
+        if model_id.starts_with("omni-moderation") {
+            features.push(OpenAIModelFeature::Moderation);
+        }
+
         if model_id.contains("embedding") {
             features.push(OpenAIModelFeature::Embeddings);
         }
@@ -242,6 +246,8 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::Whisper
         } else if model_id.starts_with("tts") {
             OpenAIModelFamily::TTS
+        } else if model_id.starts_with("omni-moderation") {
+            OpenAIModelFamily::Moderation
         } else if model_id.contains("embedding") {
             OpenAIModelFamily::Embedding
         } else {
@@ -308,7 +314,8 @@ impl OpenAIModelRegistry {
                 max_context_length: max_context,
                 max_output_length: max_output,
                 supports_streaming: family != OpenAIModelFamily::Embedding
-                    && family != OpenAIModelFamily::Whisper,
+                    && family != OpenAIModelFamily::Whisper
+                    && family != OpenAIModelFamily::Moderation,
                 supports_tools: matches!(
                     family,
                     OpenAIModelFamily::GPT4
@@ -648,6 +655,9 @@ mod tests {
         assert!(!registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::VisionSupport));
         assert!(registry.supports_feature("whisper-1", &OpenAIModelFeature::AudioTranscription));
         assert!(registry.supports_feature("whisper-1", &OpenAIModelFeature::AudioTranslation));
+        assert!(
+            registry.supports_feature("omni-moderation-latest", &OpenAIModelFeature::Moderation)
+        );
     }
 
     #[test]
