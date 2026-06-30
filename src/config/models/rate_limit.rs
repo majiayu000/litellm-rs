@@ -95,6 +95,9 @@ impl RateLimitConfig {
         }
         if other.default_rpm != default_rpm() {
             self.default_rpm = other.default_rpm;
+            if other.requests_per_minute.is_none() {
+                self.requests_per_minute = None;
+            }
         }
         if other.default_tpm != default_tpm() {
             self.default_tpm = other.default_tpm;
@@ -257,6 +260,23 @@ mod tests {
         assert!(!merged.enabled);
         assert_eq!(merged.default_rpm, 1000);
         assert_eq!(merged.default_tpm, 100_000);
+    }
+
+    #[test]
+    fn test_rate_limit_config_merge_default_rpm_clears_alias() {
+        let base = RateLimitConfig {
+            requests_per_minute: Some(25),
+            ..RateLimitConfig::default()
+        };
+        let other = RateLimitConfig {
+            default_rpm: 500,
+            ..RateLimitConfig::default()
+        };
+
+        let merged = base.merge(other);
+
+        assert_eq!(merged.requests_per_minute, None);
+        assert_eq!(merged.effective_rpm(), 500);
     }
 
     #[test]

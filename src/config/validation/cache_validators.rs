@@ -33,16 +33,12 @@ impl Validate for RateLimitConfig {
             return Ok(());
         }
 
-        if self.default_rpm == 0 {
-            return Err("Default RPM must be greater than 0".to_string());
+        if self.effective_rpm() == 0 {
+            return Err("Effective RPM must be greater than 0".to_string());
         }
 
         if self.default_tpm == 0 {
             return Err("Default TPM must be greater than 0".to_string());
-        }
-
-        if self.requests_per_minute == Some(0) {
-            return Err("requests_per_minute must be greater than 0".to_string());
         }
 
         let unimplemented = self.unimplemented_runtime_field_names();
