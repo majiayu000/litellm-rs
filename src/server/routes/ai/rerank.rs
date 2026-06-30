@@ -1,9 +1,11 @@
 //! Rerank endpoint.
 
 use crate::config::models::provider::ProviderConfig;
+use crate::core::providers::{Provider, ProviderError};
 use crate::core::rerank::{
     CohereRerankProvider, JinaRerankProvider, RerankRequest, RerankResponse, RerankService,
 };
+use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
@@ -11,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 
-use super::{openai_errors, provider_config};
+use super::{execution::execute_with_selected_deployment, openai_errors, provider_config};
 
 /// Rerank documents against a query.
 pub async fn rerank(
@@ -38,17 +40,72 @@ async fn handle_rerank_with_state(
     state: &AppState,
     request: RerankRequest,
 ) -> Result<RerankResponse, GatewayError> {
-    let selected = select_rerank_provider(state.config().gateway.providers.as_slice(), &request)?;
-    let served_model = served_rerank_model(&request.model);
-
-    super::spend::ensure_budget_available(
-        &state.budget_limits,
-        &selected.provider_name,
-        served_model,
+    let requested_model = request.model.clone();
+    ensure_rerank_provider_candidate_configured(
+        state.config().gateway.providers.as_slice(),
+        &requested_model,
     )?;
+    let router_models = rerank_router_models(
+        state.config().gateway.providers.as_slice(),
+        &requested_model,
+    );
 
-    let service = build_rerank_service(&selected)?;
-    service.rerank(request).await
+    let mut last_router_error = None;
+    for router_model in router_models {
+        let result = execute_with_selected_deployment(
+            &state.unified_router,
+            &router_model,
+            ProviderCapability::Rerank,
+            {
+                let request = request.clone();
+                let requested_model = requested_model.clone();
+                move |selected_provider, selected_model| {
+                    let request = request.clone();
+                    let requested_model = requested_model.clone();
+                    async move {
+                        let selected = selected_rerank_provider(
+                            state.config().gateway.providers.as_slice(),
+                            &selected_provider,
+                            &selected_model,
+                            &requested_model,
+                        )?;
+                        let served_model = served_rerank_model(&requested_model);
+
+                        super::spend::ensure_budget_available(
+                            &state.budget_limits,
+                            &selected.provider_name,
+                            served_model,
+                        )?;
+
+                        let service = build_rerank_service(&selected)
+                            .map_err(rerank_gateway_error_to_provider_error)?;
+                        let response = service
+                            .rerank(request)
+                            .await
+                            .map_err(rerank_gateway_error_to_provider_error)?;
+                        Ok((response, 0))
+                    }
+                }
+            },
+        )
+        .await;
+
+        match result {
+            Ok(response) => return Ok(response),
+            Err(GatewayError::Provider(ProviderError::QuotaExceeded {
+                provider: "budget",
+                message,
+            })) if message.starts_with("provider ") => {
+                last_router_error = Some(GatewayError::Provider(ProviderError::QuotaExceeded {
+                    provider: "budget",
+                    message,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_router_error.unwrap_or_else(missing_rerank_provider_error))
 }
 
 fn ensure_rerank_route_authorized(state: &AppState, req: &HttpRequest) -> Result<(), GatewayError> {
@@ -94,32 +151,48 @@ fn build_rerank_service(provider: &SelectedRerankProvider) -> Result<RerankServi
     Ok(service)
 }
 
+#[cfg(test)]
 fn select_rerank_provider(
     providers: &[ProviderConfig],
     request: &RerankRequest,
 ) -> Result<SelectedRerankProvider, GatewayError> {
-    let candidates = providers
-        .iter()
-        .filter(|provider| provider.enabled)
-        .filter_map(|provider| rerank_provider_kind(provider).map(|kind| (provider, kind)))
-        .collect::<Vec<_>>();
+    ensure_rerank_provider_candidate_configured(providers, &request.model)?;
 
-    if candidates.is_empty() {
-        return Err(GatewayError::NotFound(
-            "No configured rerank provider found; configure a cohere or jina provider".to_string(),
-        ));
-    }
-
-    let Some((provider, kind)) = candidates
+    let Some((provider, kind)) = rerank_candidate_configs(providers)
         .into_iter()
         .find(|(provider, kind)| rerank_provider_supports_model(provider, *kind, &request.model))
     else {
-        return Err(GatewayError::NotFound(format!(
-            "No configured rerank provider supports model '{}'",
-            request.model
-        )));
+        return Err(missing_rerank_provider_error());
     };
 
+    selected_rerank_provider_from_config(provider, kind)
+}
+
+fn ensure_rerank_provider_candidate_configured(
+    providers: &[ProviderConfig],
+    requested_model: &str,
+) -> Result<(), GatewayError> {
+    let candidates = rerank_candidate_configs(providers);
+    if candidates.is_empty() {
+        return Err(missing_rerank_provider_error());
+    }
+
+    if candidates
+        .iter()
+        .any(|(provider, kind)| rerank_provider_supports_model(provider, *kind, requested_model))
+    {
+        Ok(())
+    } else {
+        Err(GatewayError::NotFound(format!(
+            "No configured rerank provider supports model '{requested_model}'"
+        )))
+    }
+}
+
+fn selected_rerank_provider_from_config(
+    provider: &ProviderConfig,
+    kind: RerankProviderKind,
+) -> Result<SelectedRerankProvider, GatewayError> {
     if provider.api_key.trim().is_empty() {
         return Err(GatewayError::Config(format!(
             "Rerank provider '{}' is missing api_key",
@@ -134,6 +207,93 @@ fn select_rerank_provider(
         base_url: provider.base_url.clone(),
         timeout: Duration::from_secs(provider.timeout),
     })
+}
+
+fn selected_rerank_provider(
+    providers: &[ProviderConfig],
+    selected_provider: &Provider,
+    selected_model: &str,
+    requested_model: &str,
+) -> Result<SelectedRerankProvider, ProviderError> {
+    let selected_provider_name = selected_provider.name();
+    let candidates = rerank_candidate_configs(providers);
+    let matching = candidates
+        .iter()
+        .copied()
+        .filter(|(provider, kind)| {
+            rerank_provider_supports_model(provider, *kind, requested_model)
+        })
+        .find(|(provider, kind)| {
+            provider.name == selected_provider_name
+                || provider
+                    .settings
+                    .get("provider_name")
+                    .and_then(|value| value.as_str())
+                    == Some(selected_provider_name)
+                || (provider.models.is_empty() && provider.name == selected_model)
+                || (provider.models.iter().any(|model| model == selected_model)
+                    && kind.as_str() == selected_provider_name)
+        })
+        .ok_or_else(|| {
+            ProviderError::configuration(
+                "rerank_proxy",
+                format!(
+                    "selected rerank provider '{selected_provider_name}' for model '{selected_model}' has no matching gateway provider config"
+                ),
+            )
+        })?;
+
+    selected_rerank_provider_from_config(matching.0, matching.1)
+        .map_err(rerank_gateway_error_to_provider_error)
+}
+
+fn rerank_router_models(providers: &[ProviderConfig], requested_model: &str) -> Vec<String> {
+    let (_, served_model) = split_rerank_model(requested_model);
+    let mut router_models = Vec::new();
+
+    for (provider, kind) in rerank_candidate_configs(providers) {
+        if !rerank_provider_supports_model(provider, kind, requested_model) {
+            continue;
+        }
+
+        if provider.models.is_empty() {
+            if rerank_provider_uses_registry_models(provider) {
+                push_unique_model(&mut router_models, served_model);
+                push_unique_model(&mut router_models, requested_model);
+            } else {
+                push_unique_model(&mut router_models, &provider.name);
+            }
+            continue;
+        }
+
+        for model in &provider.models {
+            if model == requested_model || model == served_model {
+                push_unique_model(&mut router_models, model);
+            }
+        }
+    }
+
+    if router_models.is_empty() {
+        push_unique_model(&mut router_models, served_model);
+    }
+
+    router_models
+}
+
+fn push_unique_model(router_models: &mut Vec<String>, model: &str) {
+    if !router_models.iter().any(|existing| existing == model) {
+        router_models.push(model.to_string());
+    }
+}
+
+fn rerank_candidate_configs(
+    providers: &[ProviderConfig],
+) -> Vec<(&ProviderConfig, RerankProviderKind)> {
+    providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .filter_map(|provider| rerank_provider_kind(provider).map(|kind| (provider, kind)))
+        .collect()
 }
 
 fn rerank_provider_supports_model(
@@ -175,8 +335,45 @@ fn rerank_provider_kind(provider: &ProviderConfig) -> Option<RerankProviderKind>
     None
 }
 
+fn rerank_provider_uses_registry_models(provider: &ProviderConfig) -> bool {
+    let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
+    provider_type == "cohere"
+}
+
 fn served_rerank_model(model: &str) -> &str {
     split_rerank_model(model).1
+}
+
+fn rerank_gateway_error_to_provider_error(error: GatewayError) -> ProviderError {
+    match error {
+        GatewayError::Provider(error) => error,
+        GatewayError::Validation(message) | GatewayError::BadRequest(message) => {
+            ProviderError::invalid_request("rerank_proxy", message)
+        }
+        GatewayError::Config(message) => ProviderError::configuration("rerank_proxy", message),
+        GatewayError::Auth(message) => ProviderError::authentication("rerank_proxy", message),
+        GatewayError::Forbidden(message) => ProviderError::api_error("rerank_proxy", 403, message),
+        GatewayError::Timeout(message) => ProviderError::timeout("rerank_proxy", message),
+        GatewayError::RateLimit {
+            message,
+            retry_after,
+            ..
+        } => ProviderError::rate_limit_with_retry("rerank_proxy", message, retry_after),
+        GatewayError::HttpClient(error) => {
+            ProviderError::network("rerank_proxy", error.to_string())
+        }
+        GatewayError::Network(message) => ProviderError::network("rerank_proxy", message),
+        GatewayError::Unavailable(message) => {
+            ProviderError::provider_unavailable("rerank_proxy", message)
+        }
+        other => ProviderError::api_error("rerank_proxy", 500, other.to_string()),
+    }
+}
+
+fn missing_rerank_provider_error() -> GatewayError {
+    GatewayError::NotFound(
+        "No configured rerank provider found; configure a cohere or jina provider".to_string(),
+    )
 }
 
 fn split_rerank_model(model: &str) -> (Option<&str>, &str) {

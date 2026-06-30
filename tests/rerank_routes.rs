@@ -5,6 +5,7 @@ mod tests {
     use bytes::Bytes;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
+    use litellm_rs::config::models::router::RoutingStrategyConfig;
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::server::HttpServer as GatewayHttpServer;
@@ -170,6 +171,7 @@ mod tests {
         config.gateway.auth.allow_anonymous = allow_anonymous;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
+        config.gateway.router.strategy = RoutingStrategyConfig::RoundRobin;
         config.gateway.providers = providers;
 
         GatewayHttpServer::new(&config)
@@ -489,15 +491,6 @@ mod tests {
 
     #[tokio::test]
     async fn rerank_route_preserves_upstream_error_statuses() {
-        let mock = MockRerankServer::start_rerank_mock().await;
-        let state = build_test_app_state(vec![cohere_rerank_provider(&mock.base_url)]).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
-        .await;
-
         let cases = [
             (
                 "force bad request",
@@ -526,6 +519,14 @@ mod tests {
         ];
 
         for (query, expected_status, expected_type, expected_code) in cases {
+            let mock = MockRerankServer::start_rerank_mock().await;
+            let state = build_test_app_state(vec![cohere_rerank_provider(&mock.base_url)]).await;
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
             let mut body = rerank_body();
             body["query"] = json!(query);
 
@@ -542,11 +543,18 @@ mod tests {
             let body: Value = test::read_body_json(resp).await;
             assert_eq!(body["error"]["type"], expected_type, "query: {query}");
             assert_eq!(body["error"]["code"], expected_code, "query: {query}");
+
+            let request_count = mock.requests().len();
+            if expected_status == StatusCode::TOO_MANY_REQUESTS {
+                assert_eq!(
+                    request_count, 4,
+                    "router retry policy should retry pre-output 429 responses"
+                );
+            } else {
+                assert_eq!(request_count, 1, "query: {query}");
+            }
+            mock.stop_rerank_mock().await;
         }
-
-        assert_eq!(mock.requests().len(), cases.len());
-
-        mock.stop_rerank_mock().await;
     }
 
     #[tokio::test]
@@ -618,6 +626,124 @@ mod tests {
         );
 
         mock.stop_rerank_mock().await;
+    }
+
+    #[tokio::test]
+    async fn rerank_route_uses_router_budget_fallback_provider() {
+        let exhausted = MockRerankServer::start_rerank_mock().await;
+        let fallback = MockRerankServer::start_rerank_mock().await;
+        let state = build_test_app_state(vec![
+            cohere_rerank_provider_with_name_and_models(
+                "exhausted-cohere",
+                &exhausted.base_url,
+                vec!["rerank-english-v3.0".to_string()],
+            ),
+            cohere_rerank_provider_with_name_and_models(
+                "fallback-cohere",
+                &fallback.base_url,
+                vec!["rerank-english-v3.0".to_string()],
+            ),
+        ])
+        .await;
+        state.budget_limits.providers.set_provider_limit(
+            "exhausted-cohere",
+            ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+        );
+        state
+            .budget_limits
+            .providers
+            .record_provider_spend("exhausted-cohere", 2.0);
+        state.budget_limits.providers.set_provider_limit(
+            "fallback-cohere",
+            ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/rerank")
+                .set_json(rerank_body())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            exhausted.requests().is_empty(),
+            "exhausted provider must be skipped before upstream call"
+        );
+        let requests = fallback.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/rerank");
+        assert_eq!(requests[0].body["model"], "rerank-english-v3.0");
+
+        exhausted.stop_rerank_mock().await;
+        fallback.stop_rerank_mock().await;
+    }
+
+    #[tokio::test]
+    async fn wildcard_rerank_provider_tries_next_provider_name_key() {
+        let exhausted = MockRerankServer::start_rerank_mock().await;
+        let fallback = MockRerankServer::start_rerank_mock().await;
+        let state = build_test_app_state(vec![
+            cohere_rerank_provider_with_name_and_models(
+                "wild-primary-cohere",
+                &exhausted.base_url,
+                Vec::new(),
+            ),
+            cohere_rerank_provider_with_name_and_models(
+                "wild-secondary-cohere",
+                &fallback.base_url,
+                Vec::new(),
+            ),
+        ])
+        .await;
+        state.budget_limits.providers.set_provider_limit(
+            "wild-primary-cohere",
+            ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+        );
+        state
+            .budget_limits
+            .providers
+            .record_provider_spend("wild-primary-cohere", 2.0);
+        state.budget_limits.providers.set_provider_limit(
+            "wild-secondary-cohere",
+            ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/rerank")
+                .set_json(rerank_body())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            exhausted.requests().is_empty(),
+            "wildcard exhausted provider must be skipped before upstream call"
+        );
+        let requests = fallback.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/rerank");
+        assert_eq!(requests[0].body["model"], "rerank-english-v3.0");
+
+        exhausted.stop_rerank_mock().await;
+        fallback.stop_rerank_mock().await;
     }
 
     #[tokio::test]

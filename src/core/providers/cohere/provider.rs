@@ -42,6 +42,7 @@ const COHERE_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletionStream,
     ProviderCapability::ToolCalling,
     ProviderCapability::Embeddings,
+    ProviderCapability::Rerank,
 ];
 
 /// Cohere error mapper
@@ -424,6 +425,7 @@ mod tests {
         assert!(caps.contains(&ProviderCapability::ChatCompletion));
         assert!(caps.contains(&ProviderCapability::ChatCompletionStream));
         assert!(caps.contains(&ProviderCapability::Embeddings));
+        assert!(caps.contains(&ProviderCapability::Rerank));
         assert!(caps.contains(&ProviderCapability::ToolCalling));
     }
 

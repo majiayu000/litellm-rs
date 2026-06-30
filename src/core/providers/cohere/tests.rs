@@ -135,6 +135,7 @@ async fn test_provider_capabilities() {
     assert!(caps.contains(&ProviderCapability::ChatCompletion));
     assert!(caps.contains(&ProviderCapability::ChatCompletionStream));
     assert!(caps.contains(&ProviderCapability::Embeddings));
+    assert!(caps.contains(&ProviderCapability::Rerank));
     assert!(caps.contains(&ProviderCapability::ToolCalling));
 }
 

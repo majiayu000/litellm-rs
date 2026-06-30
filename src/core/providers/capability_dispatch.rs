@@ -22,7 +22,20 @@ impl Provider {
                     LLMProvider::supports_capability(provider, capability)
                 }
             }
+            Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
+                openai_like_provider_supports_rerank(provider.name())
+            }
             _ => self.supports_capability(capability),
         }
     }
+}
+
+fn openai_like_provider_supports_rerank(provider_name: &str) -> bool {
+    let normalized = provider_name
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect::<String>();
+
+    normalized.contains("cohere") || normalized.contains("jina")
 }

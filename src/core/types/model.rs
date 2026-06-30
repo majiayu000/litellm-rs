@@ -28,6 +28,8 @@ pub enum ProviderCapability {
     TextToSpeech,
     /// Moderation
     Moderation,
+    /// Reranking
+    Rerank,
     /// Tool calling
     ToolCalling,
     /// Function calling (backward compatibility)
@@ -136,6 +138,13 @@ mod tests {
     }
 
     #[test]
+    fn test_provider_capability_rerank() {
+        let cap = ProviderCapability::Rerank;
+        let json = serde_json::to_string(&cap).unwrap();
+        assert_eq!(json, "\"rerank\"");
+    }
+
+    #[test]
     fn test_provider_capability_audio_transcription() {
         let cap = ProviderCapability::AudioTranscription;
         let json = serde_json::to_string(&cap).unwrap();
@@ -187,6 +196,7 @@ mod tests {
             ProviderCapability::AudioTranslation,
             ProviderCapability::TextToSpeech,
             ProviderCapability::Moderation,
+            ProviderCapability::Rerank,
             ProviderCapability::ToolCalling,
             ProviderCapability::FunctionCalling,
             ProviderCapability::CodeExecution,
