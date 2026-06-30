@@ -311,7 +311,7 @@ fn moderation_provider_uses_registry_models(provider: &ProviderConfig) -> bool {
     let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
     let provider_name = provider_config::normalize_provider_selector(&provider.name);
 
-    provider_type == "openai" || provider_name == "openai"
+    provider_type == "openai" || (provider_type.is_empty() && provider_name == "openai")
 }
 
 fn moderation_base_url(provider: &ProviderConfig) -> Result<String, GatewayError> {

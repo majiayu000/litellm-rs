@@ -669,6 +669,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn openai_compatible_named_openai_uses_provider_name_wildcard_fallback() {
+        let mock = MockModerationServer::start_moderation_mock().await;
+        let state = build_test_app_state(vec![named_moderation_provider_with_type(
+            "openai",
+            "openai_compatible",
+            &mock.base_url,
+            Vec::new(),
+        )])
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({ "input": "moderate this text" }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/moderations");
+        assert_eq!(requests[0].body["model"], "omni-moderation-latest");
+
+        mock.stop_moderation_mock().await;
+    }
+
+    #[tokio::test]
     async fn moderation_route_uses_wildcard_provider_name_fallback() {
         let exhausted = MockModerationServer::start_moderation_mock().await;
         let fallback = MockModerationServer::start_moderation_mock().await;
