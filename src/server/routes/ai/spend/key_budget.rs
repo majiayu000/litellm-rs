@@ -13,12 +13,15 @@ pub(in crate::server::routes::ai) fn reserve_api_key_budget(
     let Some(budget_id) = api_key_budget_id else {
         return Ok(None);
     };
-    let Some(estimated_cost) = estimated_cost.filter(|cost| *cost > 0.0) else {
+    let Some(estimated_cost) = estimated_cost else {
         return Err(ProviderError::invalid_request(
             "pricing",
             format!("pricing is required for API key budget '{budget_id}'"),
         ));
     };
+    if estimated_cost <= 0.0 {
+        return Ok(None);
+    }
 
     let scope = key_budget_scope(budget_manager, budget_id)?;
     budget_manager
@@ -33,10 +36,13 @@ pub(in crate::server::routes::ai) fn reserve_api_key_budget_for_reservation(
     api_key_budget_id: Option<Uuid>,
     budget_reservation: Option<&UnifiedBudgetReservation>,
 ) -> Result<Option<BudgetReservation>, ProviderError> {
+    let Some(budget_reservation) = budget_reservation else {
+        return Ok(None);
+    };
     reserve_api_key_budget(
         budget_manager,
         api_key_budget_id,
-        budget_reservation.map(UnifiedBudgetReservation::reserved_amount),
+        Some(budget_reservation.reserved_amount()),
     )
 }
 
@@ -138,5 +144,44 @@ mod tests {
         settle_api_key_budget_reservation(Some(reservation), 0.10, "test");
 
         assert_eq!(manager.get_current_spend(&scope), 0.10);
+    }
+
+    #[tokio::test]
+    async fn reserve_api_key_budget_allows_zero_cost_priced_request() {
+        let manager = BudgetManager::new();
+        let scope = BudgetScope::ApiKey("free-key-budget-scope".to_string());
+        let budget = match manager
+            .create_budget(scope.clone(), BudgetConfig::new("free key budget", 1.0))
+            .await
+        {
+            Ok(budget) => budget,
+            Err(error) => panic!("key budget should be created: {error}"),
+        };
+        let budget_id = match Uuid::parse_str(&budget.id) {
+            Ok(budget_id) => budget_id,
+            Err(error) => panic!("budget id should be a UUID string: {error}"),
+        };
+
+        let reservation = match reserve_api_key_budget(&manager, Some(budget_id), Some(0.0)) {
+            Ok(reservation) => reservation,
+            Err(error) => panic!("zero-cost priced request should not fail: {error}"),
+        };
+
+        assert!(reservation.is_none());
+        assert_eq!(manager.get_current_spend(&scope), 0.0);
+    }
+
+    #[tokio::test]
+    async fn reserve_api_key_budget_for_absent_reservation_is_noop() {
+        let manager = BudgetManager::new();
+        let budget_id = Uuid::new_v4();
+
+        let reservation =
+            match reserve_api_key_budget_for_reservation(&manager, Some(budget_id), None) {
+                Ok(reservation) => reservation,
+                Err(error) => panic!("absent upstream reservation should not fail: {error}"),
+            };
+
+        assert!(reservation.is_none());
     }
 }
