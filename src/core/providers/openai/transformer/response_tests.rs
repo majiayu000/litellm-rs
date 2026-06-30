@@ -95,11 +95,15 @@ fn test_transform_response_with_usage_details() {
             total_tokens: 150,
             prompt_tokens_details: Some(OpenAITokenDetails {
                 cached_tokens: Some(20),
+                cache_creation_tokens: Some(3),
+                cache_read_tokens: Some(17),
                 audio_tokens: Some(5),
                 reasoning_tokens: None,
             }),
             completion_tokens_details: Some(OpenAITokenDetails {
                 cached_tokens: None,
+                cache_creation_tokens: None,
+                cache_read_tokens: None,
                 audio_tokens: Some(10),
                 reasoning_tokens: Some(15),
             }),
@@ -114,6 +118,22 @@ fn test_transform_response_with_usage_details() {
     assert_eq!(
         usage.prompt_tokens_details.as_ref().unwrap().cached_tokens,
         Some(20)
+    );
+    assert_eq!(
+        usage
+            .prompt_tokens_details
+            .as_ref()
+            .unwrap()
+            .cache_creation_tokens,
+        Some(3)
+    );
+    assert_eq!(
+        usage
+            .prompt_tokens_details
+            .as_ref()
+            .unwrap()
+            .cache_read_tokens,
+        Some(17)
     );
     assert_eq!(
         usage

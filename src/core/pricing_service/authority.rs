@@ -500,18 +500,31 @@ fn calculate_usage_cost_with_pricing(
     );
     let cache_read_cost_per_token = tiered_cost_per_token(
         model_info,
-        extra_f64(model_info, "cache_read_input_token_cost"),
+        model_info
+            .extra
+            .get("cache_read_input_token_cost")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(input_cost_per_token),
         "cache_read_input_token_cost_above_",
         usage.prompt_tokens,
     );
-
-    let non_cached_tokens = usage
-        .cached_tokens
-        .map(|cached| usage.prompt_tokens.saturating_sub(cached))
-        .unwrap_or(usage.prompt_tokens);
+    let cache_creation_cost_per_token = tiered_cost_per_token(
+        model_info,
+        model_info
+            .extra
+            .get("cache_creation_input_token_cost")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(input_cost_per_token),
+        "cache_creation_input_token_cost_above_",
+        usage.prompt_tokens,
+    );
+    let cache_creation_tokens = usage.cache_creation_token_count();
+    let cache_read_tokens = usage.cache_read_token_count();
+    let non_cached_tokens = usage.non_cached_prompt_tokens();
     let input_cost = non_cached_tokens as f64 * input_cost_per_token;
     let output_cost = usage.completion_tokens as f64 * output_cost_per_token;
-    let cache_cost = usage.cached_tokens.unwrap_or(0) as f64 * cache_read_cost_per_token;
+    let cache_cost = cache_creation_tokens as f64 * cache_creation_cost_per_token
+        + cache_read_tokens as f64 * cache_read_cost_per_token;
     let audio_cost = usage.audio_tokens.unwrap_or(0) as f64
         * extra_f64(model_info, "input_cost_per_audio_token");
     let image_cost =
@@ -741,21 +754,9 @@ mod tests {
 
         assert_eq!(cost.model, "azure/gpt-5.5-2026-04-23");
         assert_eq!(cost.provider, "azure");
-        assert!(
-            (cost.input_cost - 3.0).abs() < 1e-12,
-            "unexpected input cost: {}",
-            cost.input_cost
-        );
-        assert!(
-            (cost.output_cost - 0.045).abs() < 1e-12,
-            "unexpected output cost: {}",
-            cost.output_cost
-        );
-        assert!(
-            (cost.total_cost - 3.045).abs() < 1e-12,
-            "unexpected total cost: {}",
-            cost.total_cost
-        );
+        assert!((cost.input_cost - 3.0).abs() < 1e-12);
+        assert!((cost.output_cost - 0.045).abs() < 1e-12);
+        assert!((cost.total_cost - 3.045).abs() < 1e-12);
     }
 
     #[test]

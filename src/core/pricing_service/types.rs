@@ -78,6 +78,8 @@ pub struct PricingUsage {
     pub completion_tokens: u32,
     pub total_tokens: u32,
     pub cached_tokens: Option<u32>,
+    pub cache_creation_tokens: Option<u32>,
+    pub cache_read_tokens: Option<u32>,
     pub audio_tokens: Option<u32>,
     pub image_tokens: Option<u32>,
     pub reasoning_tokens: Option<u32>,
@@ -90,27 +92,41 @@ impl PricingUsage {
             completion_tokens,
             total_tokens: prompt_tokens.saturating_add(completion_tokens),
             cached_tokens: None,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
             audio_tokens: None,
             image_tokens: None,
             reasoning_tokens: None,
         }
     }
+
+    pub fn cache_creation_token_count(&self) -> u32 {
+        self.cache_creation_tokens.unwrap_or(0)
+    }
+
+    pub fn cache_read_token_count(&self) -> u32 {
+        self.cache_read_tokens.or(self.cached_tokens).unwrap_or(0)
+    }
+
+    pub fn non_cached_prompt_tokens(&self) -> u32 {
+        self.prompt_tokens.saturating_sub(
+            self.cache_creation_token_count()
+                .saturating_add(self.cache_read_token_count()),
+        )
+    }
 }
 
 impl From<&crate::core::types::responses::Usage> for PricingUsage {
     fn from(usage: &crate::core::types::responses::Usage) -> Self {
+        let prompt_details = usage.prompt_tokens_details.as_ref();
         Self {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
-            cached_tokens: usage
-                .prompt_tokens_details
-                .as_ref()
-                .and_then(|details| details.cached_tokens),
-            audio_tokens: usage
-                .prompt_tokens_details
-                .as_ref()
-                .and_then(|details| details.audio_tokens),
+            cached_tokens: prompt_details.and_then(|details| details.cached_tokens),
+            cache_creation_tokens: prompt_details.and_then(|details| details.cache_creation_tokens),
+            cache_read_tokens: prompt_details.and_then(|details| details.cache_read_tokens),
+            audio_tokens: prompt_details.and_then(|details| details.audio_tokens),
             image_tokens: None,
             reasoning_tokens: usage
                 .completion_tokens_details

@@ -8,9 +8,10 @@ pub(super) fn build_usage(usage_data: &Value) -> Usage {
     let to_u32 = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
     let cache_creation = read("cache_creation_input_tokens");
     let cache_read = read("cache_read_input_tokens");
-    // Anthropic input_tokens already includes cache creation/read tokens;
-    // expose cache details without double-counting prompt or total tokens.
-    let prompt_tokens = read("input_tokens");
+    let input_tokens = read("input_tokens");
+    let prompt_tokens = input_tokens
+        .saturating_add(cache_creation)
+        .saturating_add(cache_read);
     let completion_tokens = read("output_tokens");
 
     Usage {

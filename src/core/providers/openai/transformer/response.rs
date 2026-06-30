@@ -177,8 +177,8 @@ impl OpenAIResponseTransformer {
             prompt_tokens_details: usage.prompt_tokens_details.map(|details| {
                 crate::core::types::responses::PromptTokensDetails {
                     cached_tokens: details.cached_tokens,
-                    cache_creation_tokens: None,
-                    cache_read_tokens: details.cached_tokens,
+                    cache_creation_tokens: details.cache_creation_tokens,
+                    cache_read_tokens: details.cache_read_tokens,
                     audio_tokens: details.audio_tokens,
                 }
             }),

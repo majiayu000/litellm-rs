@@ -490,6 +490,7 @@ fn test_anthropic_usage_cache_details() {
         .as_ref()
         .and_then(|usage| usage.prompt_tokens_details.as_ref())
         .unwrap();
+    assert_eq!(result.usage.as_ref().unwrap().prompt_tokens, 146);
     assert_eq!(details.cached_tokens, Some(34));
     assert_eq!(details.cache_creation_tokens, Some(12));
     assert_eq!(details.cache_read_tokens, Some(34));
@@ -789,8 +790,7 @@ fn test_transform_chat_response_preserves_cache_details_without_double_counting(
         .unwrap()
         .usage
         .unwrap();
-    // Anthropic input_tokens already includes cache_creation and cache_read tokens.
-    assert_eq!(usage.prompt_tokens, 100);
+    assert_eq!(usage.prompt_tokens, 150);
     assert_eq!(usage.completion_tokens, 50);
-    assert_eq!(usage.total_tokens, 150);
+    assert_eq!(usage.total_tokens, 200);
 }
