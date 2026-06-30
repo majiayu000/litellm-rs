@@ -49,16 +49,12 @@ async fn records_provider_spend_for_priced_model() {
     );
     let keys = KeyManager::new(InMemoryKeyRepository::new());
 
-    record_completion_spend_with_reservation(
-        &budget,
-        &keys,
-        None,
-        "openai",
-        "gpt-4o",
-        Some(&usage(1000, 1000)),
+    record_completion_spend_with_reservation(usage_spend_settlement(
+        (&budget, &keys, None),
+        ("openai", "gpt-4o", Some(&usage(1000, 1000))),
         None,
         None,
-    )
+    ))
     .await;
 
     let spent = budget
@@ -95,16 +91,12 @@ async fn reserved_completion_settles_actual_spend_and_refunds_estimate() {
         estimate.max_cost
     );
 
-    record_completion_spend_with_reservation(
-        &budget,
-        &keys,
-        None,
-        "openai",
-        "gpt-4o",
-        Some(&usage(0, 50)),
+    record_completion_spend_with_reservation(usage_spend_settlement(
+        (&budget, &keys, None),
+        ("openai", "gpt-4o", Some(&usage(0, 50))),
         Some(reservation),
         None,
-    )
+    ))
     .await;
 
     let expected = generic_cost_per_token("gpt-4o", &UsageTokens::new(0, 50), "openai")
@@ -147,16 +139,12 @@ async fn reserved_completion_records_actual_when_usage_exceeds_estimate() {
         .unwrap()
         .unwrap();
 
-    record_completion_spend_with_reservation(
-        &budget,
-        &keys,
-        None,
-        "openai",
-        "gpt-4o",
-        Some(&usage(0, 100)),
+    record_completion_spend_with_reservation(usage_spend_settlement(
+        (&budget, &keys, None),
+        ("openai", "gpt-4o", Some(&usage(0, 100))),
         Some(reservation),
         None,
-    )
+    ))
     .await;
 
     assert_eq!(
@@ -587,16 +575,12 @@ async fn reservation_settlement_after_reset_records_actual_spend() {
         .unwrap();
     assert!(budget.providers.reset_provider_budget("openai"));
 
-    record_completion_spend_with_reservation(
-        &budget,
-        &keys,
-        None,
-        "openai",
-        "gpt-4o",
-        Some(&usage(0, 50)),
+    record_completion_spend_with_reservation(usage_spend_settlement(
+        (&budget, &keys, None),
+        ("openai", "gpt-4o", Some(&usage(0, 50))),
         Some(reservation),
         None,
-    )
+    ))
     .await;
 
     let expected = generic_cost_per_token("gpt-4o", &UsageTokens::new(0, 50), "openai")
@@ -637,16 +621,12 @@ async fn stream_disconnect_without_usage_settles_reserved_budget() {
         .unwrap();
     let reserved = reservation.reserved_amount();
 
-    record_stream_disconnect_spend_with_reservation(
-        &budget,
-        &keys,
-        None,
-        "openai",
-        "gpt-4o",
-        None,
+    record_stream_disconnect_spend_with_reservation(usage_spend_settlement(
+        (&budget, &keys, None),
+        ("openai", "gpt-4o", None),
         Some(reservation),
         None,
-    )
+    ))
     .await;
 
     assert_eq!(
@@ -740,16 +720,16 @@ async fn unpriced_model_records_no_budget_spend() {
 
     // Unknown model has no pricing: budget spend must stay at 0 rather than
     // being booked at a fabricated $0 cost silently.
-    record_completion_spend_with_reservation(
-        &budget,
-        &keys,
+    record_completion_spend_with_reservation(usage_spend_settlement(
+        (&budget, &keys, None),
+        (
+            "openai",
+            "definitely-not-a-real-model-xyz",
+            Some(&usage(1000, 1000)),
+        ),
         None,
-        "openai",
-        "definitely-not-a-real-model-xyz",
-        Some(&usage(1000, 1000)),
         None,
-        None,
-    )
+    ))
     .await;
 
     let spent = budget

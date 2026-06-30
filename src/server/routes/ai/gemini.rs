@@ -184,13 +184,15 @@ async fn proxy_gemini_route_inner(
 
                         let response = gemini_upstream_response_to_http_response(
                             state,
-                            context,
-                            provider,
-                            budget_reservation,
-                            key_budget_reservation,
-                            response,
-                            stream,
-                            None,
+                            GeminiUpstreamResponseParts {
+                                context,
+                                provider,
+                                budget_reservation,
+                                key_budget_reservation,
+                                response,
+                                stream,
+                                stream_lease: None,
+                            },
                         )
                         .await
                         .map_err(gemini_gateway_error_to_provider_error)?;
@@ -276,13 +278,15 @@ async fn proxy_gemini_stream_route_inner(
             Ok(((provider, budget_reservation, key_budget_reservation, response), lease)) => {
                 return gemini_upstream_response_to_http_response(
                     state,
-                    context,
-                    provider,
-                    budget_reservation,
-                    key_budget_reservation,
-                    response,
-                    true,
-                    Some(lease),
+                    GeminiUpstreamResponseParts {
+                        context,
+                        provider,
+                        budget_reservation,
+                        key_budget_reservation,
+                        response,
+                        stream: true,
+                        stream_lease: Some(lease),
+                    },
                 )
                 .await;
             }
@@ -302,8 +306,7 @@ async fn proxy_gemini_stream_route_inner(
     Err(last_router_error.unwrap_or_else(|| missing_gemini_provider_error(&requested_model)))
 }
 
-async fn gemini_upstream_response_to_http_response(
-    state: &AppState,
+struct GeminiUpstreamResponseParts {
     context: crate::core::types::context::RequestContext,
     provider: GeminiRouteProvider,
     budget_reservation: Option<UnifiedBudgetReservation>,
@@ -311,7 +314,22 @@ async fn gemini_upstream_response_to_http_response(
     response: reqwest::Response,
     stream: bool,
     stream_lease: Option<StreamingDeploymentLease>,
+}
+
+async fn gemini_upstream_response_to_http_response(
+    state: &AppState,
+    parts: GeminiUpstreamResponseParts,
 ) -> Result<HttpResponse, GatewayError> {
+    let GeminiUpstreamResponseParts {
+        context,
+        provider,
+        budget_reservation,
+        key_budget_reservation,
+        response,
+        stream,
+        stream_lease,
+    } = parts;
+
     let status = StatusCode::from_u16(response.status().as_u16())
         .map_err(|error| GatewayError::internal(format!("Invalid upstream status: {error}")))?;
     let content_type = response

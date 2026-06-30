@@ -177,14 +177,12 @@ async fn handle_embedding_internal(
                 } else {
                     super::spend::record_completion_spend_with_reservation_with_pricing(
                         pricing_service.as_ref(),
-                        &budget_limits,
-                        &key_manager,
-                        api_key_id,
-                        &budget_provider,
-                        &selected_model,
-                        None,
-                        budget_reservation,
-                        key_budget_reservation,
+                        super::spend::usage_spend_settlement(
+                            (&budget_limits, &key_manager, api_key_id),
+                            (&budget_provider, &selected_model, None),
+                            budget_reservation,
+                            key_budget_reservation,
+                        ),
                     )
                     .await;
                 }

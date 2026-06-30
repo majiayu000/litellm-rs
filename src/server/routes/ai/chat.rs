@@ -195,14 +195,13 @@ async fn handle_streaming_chat_completion(
                     () => {
                         if final_usage.is_some() || saw_upstream_output {
                             super::spend::record_stream_disconnect_spend_with_reservation_with_pricing(
-                                pricing_service.as_ref(), &budget_limits,
-                                &key_manager,
-                                api_key_id,
-                                &served_provider,
-                                &served_model,
-                                final_usage.as_ref(),
-                                budget_reservation.take(),
-                                key_budget_reservation.take(),
+                                pricing_service.as_ref(),
+                                super::spend::usage_spend_settlement(
+                                    (&budget_limits, &key_manager, api_key_id),
+                                    (&served_provider, &served_model, final_usage.as_ref()),
+                                    budget_reservation.take(),
+                                    key_budget_reservation.take(),
+                                ),
                             )
                             .await;
                         }
@@ -331,14 +330,12 @@ async fn handle_streaming_chat_completion(
                         info!("Client disconnected during streaming, cancelling upstream");
                         super::spend::record_stream_disconnect_spend_with_reservation_with_pricing(
                             pricing_service.as_ref(),
-                            &budget_limits,
-                            &key_manager,
-                            api_key_id,
-                            &served_provider,
-                            &served_model,
-                            final_usage.as_ref(),
-                            budget_reservation.take(),
-                            key_budget_reservation.take(),
+                            super::spend::usage_spend_settlement(
+                                (&budget_limits, &key_manager, api_key_id),
+                                (&served_provider, &served_model, final_usage.as_ref()),
+                                budget_reservation.take(),
+                                key_budget_reservation.take(),
+                            ),
                         )
                         .await;
                         return;
@@ -465,14 +462,12 @@ async fn handle_chat_completion_internal(
                     .unwrap_or_default();
                 super::spend::record_completion_spend_with_reservation_with_pricing(
                     pricing_service.as_ref(),
-                    &budget_limits,
-                    &key_manager,
-                    api_key_id,
-                    provider.name(),
-                    &selected_model,
-                    response.usage.as_ref(),
-                    budget_reservation,
-                    key_budget_reservation,
+                    super::spend::usage_spend_settlement(
+                        (&budget_limits, &key_manager, api_key_id),
+                        (provider.name(), &selected_model, response.usage.as_ref()),
+                        budget_reservation,
+                        key_budget_reservation,
+                    ),
                 )
                 .await;
                 Ok((response, tokens))

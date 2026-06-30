@@ -46,14 +46,16 @@ impl StreamBudgetSettlement {
     pub(super) async fn record_disconnect(&mut self, usage: Option<&ChatUsage>) {
         spend::record_stream_disconnect_spend_with_reservation_with_pricing(
             self.pricing_service.as_ref(),
-            self.budget_limits.as_ref(),
-            &self.key_manager,
-            self.api_key_id,
-            &self.provider,
-            &self.model,
-            usage,
-            self.reservation.take(),
-            self.key_budget_reservation.take(),
+            spend::usage_spend_settlement(
+                (
+                    self.budget_limits.as_ref(),
+                    &self.key_manager,
+                    self.api_key_id,
+                ),
+                (&self.provider, &self.model, usage),
+                self.reservation.take(),
+                self.key_budget_reservation.take(),
+            ),
         )
         .await;
     }

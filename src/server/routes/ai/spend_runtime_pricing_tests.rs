@@ -163,14 +163,16 @@ async fn record_completion_spend_uses_runtime_pricing_service() {
 
     record_completion_spend_with_reservation_with_pricing(
         &pricing,
-        &budget,
-        &keys,
-        None,
-        "runtime_provider",
-        "runtime-only-priced-model",
-        Some(&response_usage(1000, 500)),
-        None,
-        None,
+        usage_spend_settlement(
+            (&budget, &keys, None),
+            (
+                "runtime_provider",
+                "runtime-only-priced-model",
+                Some(&response_usage(1000, 500)),
+            ),
+            None,
+            None,
+        ),
     )
     .await;
 
@@ -206,14 +208,16 @@ async fn record_completion_spend_prices_xai_openai_like_prefix() {
 
     record_completion_spend_with_reservation_with_pricing(
         pricing,
-        &budget,
-        &keys,
-        None,
-        "openai_like",
-        "xai/grok-4.3",
-        Some(&response_usage(1000, 500)),
-        None,
-        None,
+        usage_spend_settlement(
+            (&budget, &keys, None),
+            (
+                "openai_like",
+                "xai/grok-4.3",
+                Some(&response_usage(1000, 500)),
+            ),
+            None,
+            None,
+        ),
     )
     .await;
 

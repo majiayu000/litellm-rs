@@ -26,16 +26,12 @@ async fn successful_completion_without_usage_settles_reserved_budget() {
         .expect("priced model should reserve budget");
     let reserved = reservation.reserved_amount();
 
-    record_completion_spend_with_reservation(
-        &budget,
-        &keys,
-        Some(key_id),
-        "openai",
-        "gpt-4o",
-        None,
+    record_completion_spend_with_reservation(usage_spend_settlement(
+        (&budget, &keys, Some(key_id)),
+        ("openai", "gpt-4o", None),
         Some(reservation),
         None,
-    )
+    ))
     .await;
 
     assert_eq!(
