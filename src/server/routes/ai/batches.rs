@@ -4,6 +4,8 @@
 //! configured OpenAI or OpenAI-compatible provider.
 
 use crate::config::models::provider::ProviderConfig;
+use crate::core::providers::ProviderError;
+use crate::core::router::execution::is_retryable_error;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpResponse, Result as ActixResult, http::StatusCode, http::header, web};
@@ -11,6 +13,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Client, RequestBuilder, Url};
 use serde::Deserialize;
 use serde_json::Value;
+use std::future::Future;
 use std::sync::OnceLock;
 use tracing::error;
 
@@ -95,79 +98,129 @@ async fn proxy_batch_create(
     request: Value,
 ) -> Result<HttpResponse, GatewayError> {
     validate_create_batch_request(&request)?;
-    let Some(provider) = select_batch_proxy_provider(state.config().gateway.providers.as_slice())?
-    else {
-        return Err(missing_batch_provider_error());
-    };
-    super::spend::ensure_budget_available(&state.budget_limits, &provider.provider_name, "")?;
-    let url = batch_url(&provider, None, None)?;
-
-    let response = apply_provider_headers(http_client().post(url), &provider)
-        .json(&request)
-        .send()
-        .await?;
-
-    response_to_http_response(response).await
+    execute_batch_proxy_request(state, move |provider| {
+        let request = request.clone();
+        async move {
+            let url = batch_url(&provider, None, None)?;
+            apply_provider_headers(http_client().post(url), &provider)
+                .json(&request)
+                .send()
+                .await
+                .map_err(GatewayError::from)
+        }
+    })
+    .await
 }
 
 async fn proxy_batch_list(
     state: &AppState,
     query: ListBatchesQuery,
 ) -> Result<HttpResponse, GatewayError> {
-    let Some(provider) = select_batch_proxy_provider(state.config().gateway.providers.as_slice())?
-    else {
-        return Err(missing_batch_provider_error());
-    };
-    super::spend::ensure_budget_available(&state.budget_limits, &provider.provider_name, "")?;
-    let mut url = batch_url(&provider, None, None)?;
-    {
-        let mut pairs = url.query_pairs_mut();
-        if let Some(after) = query.after.filter(|after| !after.trim().is_empty()) {
-            pairs.append_pair("after", &after);
-        }
-        if let Some(limit) = query.limit {
-            pairs.append_pair("limit", &limit.to_string());
-        }
-    }
+    execute_batch_proxy_request(state, move |provider| {
+        let query = ListBatchesQuery {
+            after: query.after.clone(),
+            limit: query.limit,
+        };
+        async move {
+            let mut url = batch_url(&provider, None, None)?;
+            {
+                let mut pairs = url.query_pairs_mut();
+                if let Some(after) = query.after.filter(|after| !after.trim().is_empty()) {
+                    pairs.append_pair("after", &after);
+                }
+                if let Some(limit) = query.limit {
+                    pairs.append_pair("limit", &limit.to_string());
+                }
+            }
 
-    let response = apply_provider_headers(http_client().get(url), &provider)
-        .send()
-        .await?;
-
-    response_to_http_response(response).await
+            apply_provider_headers(http_client().get(url), &provider)
+                .send()
+                .await
+                .map_err(GatewayError::from)
+        }
+    })
+    .await
 }
 
 async fn proxy_batch_get(state: &AppState, batch_id: &str) -> Result<HttpResponse, GatewayError> {
-    let Some(provider) = select_batch_proxy_provider(state.config().gateway.providers.as_slice())?
-    else {
-        return Err(missing_batch_provider_error());
-    };
-    super::spend::ensure_budget_available(&state.budget_limits, &provider.provider_name, "")?;
-    let url = batch_url(&provider, Some(batch_id), None)?;
-
-    let response = apply_provider_headers(http_client().get(url), &provider)
-        .send()
-        .await?;
-
-    response_to_http_response(response).await
+    let batch_id = batch_id.to_string();
+    execute_batch_proxy_request(state, move |provider| {
+        let batch_id = batch_id.clone();
+        async move {
+            let url = batch_url(&provider, Some(&batch_id), None)?;
+            apply_provider_headers(http_client().get(url), &provider)
+                .send()
+                .await
+                .map_err(GatewayError::from)
+        }
+    })
+    .await
 }
 
 async fn proxy_batch_cancel(
     state: &AppState,
     batch_id: &str,
 ) -> Result<HttpResponse, GatewayError> {
-    let Some(provider) = select_batch_proxy_provider(state.config().gateway.providers.as_slice())?
-    else {
+    let batch_id = batch_id.to_string();
+    execute_batch_proxy_request(state, move |provider| {
+        let batch_id = batch_id.clone();
+        async move {
+            let url = batch_url(&provider, Some(&batch_id), Some("cancel"))?;
+            apply_provider_headers(http_client().post(url), &provider)
+                .send()
+                .await
+                .map_err(GatewayError::from)
+        }
+    })
+    .await
+}
+
+async fn execute_batch_proxy_request<F, Fut>(
+    state: &AppState,
+    operation: F,
+) -> Result<HttpResponse, GatewayError>
+where
+    F: Fn(BatchProxyProvider) -> Fut,
+    Fut: Future<Output = Result<reqwest::Response, GatewayError>>,
+{
+    let config = state.config();
+    let provider_configs = select_batch_proxy_provider_configs(config.gateway.providers.as_slice());
+    if provider_configs.is_empty() {
         return Err(missing_batch_provider_error());
-    };
-    super::spend::ensure_budget_available(&state.budget_limits, &provider.provider_name, "")?;
-    let url = batch_url(&provider, Some(batch_id), Some("cancel"))?;
+    }
 
-    let response = apply_provider_headers(http_client().post(url), &provider)
-        .send()
-        .await?;
+    let provider_count = provider_configs.len();
+    let mut last_error = None;
+    for (index, provider_config) in provider_configs.into_iter().enumerate() {
+        let is_last_provider = index + 1 == provider_count;
+        let provider = batch_proxy_provider_from_config(provider_config)?;
+        if let Err(error) =
+            super::spend::ensure_budget_available(&state.budget_limits, &provider.provider_name, "")
+                .map_err(GatewayError::Provider)
+        {
+            if !is_last_provider && is_retryable_batch_error(&error) {
+                last_error = Some(error);
+                continue;
+            }
+            return Err(error);
+        }
 
-    response_to_http_response(response).await
+        match operation(provider).await {
+            Ok(response) if should_try_next_batch_provider(response.status()) => {
+                if is_last_provider {
+                    return response_to_http_response(response).await;
+                }
+                last_error = Some(batch_upstream_gateway_error(response).await);
+            }
+            Ok(response) => return response_to_http_response(response).await,
+            Err(error) if !is_last_provider && is_retryable_batch_error(&error) => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(missing_batch_provider_error))
 }
 
 async fn response_to_http_response(
@@ -188,17 +241,68 @@ async fn response_to_http_response(
         .body(body))
 }
 
+fn is_retryable_batch_error(error: &GatewayError) -> bool {
+    match error {
+        GatewayError::Provider(error) => is_retryable_error(error),
+        GatewayError::HttpClient(_)
+        | GatewayError::Network(_)
+        | GatewayError::Timeout(_)
+        | GatewayError::Unavailable(_)
+        | GatewayError::RateLimit { .. } => true,
+        _ => false,
+    }
+}
+
+fn should_try_next_batch_provider(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status.as_u16(),
+        408 | 429 | 500 | 502 | 503 | 504 | 507 | 529
+    )
+}
+
+async fn batch_upstream_gateway_error(response: reqwest::Response) -> GatewayError {
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|error| format!("failed to read batch upstream error body: {error}"));
+    let message = if body.trim().is_empty() {
+        format!("Batch upstream returned HTTP {status}")
+    } else {
+        format!("Batch upstream returned HTTP {status}: {body}")
+    };
+
+    let provider_error = match status {
+        408 | 504 => ProviderError::timeout("batch_proxy", message),
+        429 => ProviderError::rate_limit_with_retry("batch_proxy", message, None),
+        502 | 503 => ProviderError::provider_unavailable("batch_proxy", message),
+        _ => ProviderError::api_error("batch_proxy", status, message),
+    };
+    GatewayError::Provider(provider_error)
+}
+
+#[cfg(test)]
 fn select_batch_proxy_provider(
     providers: &[ProviderConfig],
 ) -> Result<Option<BatchProxyProvider>, GatewayError> {
-    let Some(provider) = providers
+    select_batch_proxy_provider_configs(providers)
+        .into_iter()
+        .next()
+        .map(batch_proxy_provider_from_config)
+        .transpose()
+}
+
+fn select_batch_proxy_provider_configs(providers: &[ProviderConfig]) -> Vec<&ProviderConfig> {
+    providers
         .iter()
         .filter(|provider| provider.enabled)
-        .find(|provider| is_openai_batch_provider(provider))
-    else {
-        return Ok(None);
-    };
+        .filter(|provider| is_openai_batch_provider(provider))
+        .collect()
+}
 
+fn batch_proxy_provider_from_config(
+    provider: &ProviderConfig,
+) -> Result<BatchProxyProvider, GatewayError> {
     if provider.api_key.trim().is_empty() {
         return Err(GatewayError::Config(format!(
             "Batch provider '{}' is missing api_key",
@@ -206,12 +310,12 @@ fn select_batch_proxy_provider(
         )));
     }
 
-    Ok(Some(BatchProxyProvider {
+    Ok(BatchProxyProvider {
         provider_name: provider.name.clone(),
         api_key: provider.api_key.clone(),
         base_url: batch_base_url(provider)?,
         headers: batch_provider_headers(provider)?,
-    }))
+    })
 }
 
 fn batch_base_url(provider: &ProviderConfig) -> Result<String, GatewayError> {

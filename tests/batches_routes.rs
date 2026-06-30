@@ -1,10 +1,16 @@
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
-    use actix_web::{App, HttpRequest, HttpResponse, HttpServer, http::StatusCode, test, web};
+    use actix_web::{
+        App, HttpRequest, HttpResponse, HttpServer,
+        http::{Method, StatusCode},
+        test, web,
+    };
     use bytes::Bytes;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
     use litellm_rs::server::HttpServer as GatewayHttpServer;
+    use litellm_rs::server::state::AppState;
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -22,6 +28,7 @@ mod tests {
     #[derive(Clone)]
     struct MockBatchServerState {
         captured_requests: Arc<Mutex<Vec<CapturedBatchRequest>>>,
+        failure_status: Option<StatusCode>,
     }
 
     struct MockBatchServer {
@@ -33,9 +40,18 @@ mod tests {
 
     impl MockBatchServer {
         async fn start_batch_mock() -> Self {
+            Self::start_batch_mock_with_status(None).await
+        }
+
+        async fn start_failing_batch_mock(status: StatusCode) -> Self {
+            Self::start_batch_mock_with_status(Some(status)).await
+        }
+
+        async fn start_batch_mock_with_status(failure_status: Option<StatusCode>) -> Self {
             let captured_requests = Arc::new(Mutex::new(Vec::new()));
             let state = MockBatchServerState {
                 captured_requests: Arc::clone(&captured_requests),
+                failure_status,
             };
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
@@ -87,6 +103,9 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
+        if let Some(response) = maybe_failure_response(&state, &request) {
+            return response;
+        }
         HttpResponse::Accepted().json(json!({
             "id": "batch_mock",
             "object": "batch",
@@ -100,6 +119,9 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
+        if let Some(response) = maybe_failure_response(&state, &request) {
+            return response;
+        }
         HttpResponse::Ok().json(json!({
             "object": "list",
             "data": [],
@@ -113,6 +135,9 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
+        if let Some(response) = maybe_failure_response(&state, &request) {
+            return response;
+        }
         HttpResponse::Ok().json(json!({
             "id": "batch_123",
             "object": "batch",
@@ -126,11 +151,27 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
+        if let Some(response) = maybe_failure_response(&state, &request) {
+            return response;
+        }
         HttpResponse::Ok().json(json!({
             "id": "batch_123",
             "object": "batch",
             "status": "cancelled"
         }))
+    }
+
+    fn maybe_failure_response(
+        state: &MockBatchServerState,
+        request: &HttpRequest,
+    ) -> Option<HttpResponse> {
+        state.failure_status.map(|status| {
+            HttpResponse::build(status).json(json!({
+                "error": {
+                    "message": format!("forced upstream {status} at {}", request.uri())
+                }
+            }))
+        })
     }
 
     fn capture_request(state: &MockBatchServerState, request: &HttpRequest, body: Bytes) {
@@ -163,9 +204,7 @@ mod tests {
             });
     }
 
-    async fn build_test_app_state(
-        providers: Vec<ProviderConfig>,
-    ) -> litellm_rs::server::state::AppState {
+    async fn build_test_app_state(providers: Vec<ProviderConfig>) -> AppState {
         let mut config = Config::default();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
@@ -204,6 +243,23 @@ mod tests {
             ),
         ]);
         provider
+    }
+
+    fn batch_route_provider(name: &str, base_url: &str) -> ProviderConfig {
+        let mut provider = batch_route_provider_with_headers(base_url);
+        provider.name = name.to_string();
+        provider.organization = None;
+        provider.project = None;
+        provider.settings.clear();
+        provider
+    }
+
+    fn configure_exhausted_primary_budget(state: &AppState, provider_name: &str) {
+        state.budget_limits.providers.set_provider_limit(
+            provider_name,
+            ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+        );
+        state.budget_limits.record_spend(provider_name, "", 0.01);
     }
 
     #[tokio::test]
@@ -299,5 +355,163 @@ mod tests {
         assert_eq!(requests[3].path, "/v1/batches/batch_123/cancel");
 
         mock_server.stop_batch_mock().await;
+    }
+
+    #[tokio::test]
+    async fn route_uses_batch_fallback_when_primary_budget_exhausted() {
+        let primary = MockBatchServer::start_batch_mock().await;
+        let fallback = MockBatchServer::start_batch_mock().await;
+        let state = build_test_app_state(vec![
+            batch_route_provider("primary-batch", &primary.base_url),
+            batch_route_provider("fallback-batch", &fallback.base_url),
+        ])
+        .await;
+        configure_exhausted_primary_budget(&state, "primary-batch");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let create_resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/batches")
+                .set_json(json!({
+                    "input_file_id": "file_123",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(create_resp.status(), StatusCode::ACCEPTED);
+        assert!(
+            primary.requests().is_empty(),
+            "budget fallback must skip the exhausted batch provider before upstream"
+        );
+        let fallback_requests = fallback.requests();
+        assert_eq!(fallback_requests.len(), 1);
+        assert_eq!(fallback_requests[0].method, "POST");
+        assert_eq!(fallback_requests[0].path, "/v1/batches");
+        assert_eq!(fallback_requests[0].body["input_file_id"], "file_123");
+
+        primary.stop_batch_mock().await;
+        fallback.stop_batch_mock().await;
+    }
+
+    #[tokio::test]
+    async fn route_uses_batch_fallback_when_primary_upstream_fails() {
+        let primary =
+            MockBatchServer::start_failing_batch_mock(StatusCode::SERVICE_UNAVAILABLE).await;
+        let fallback = MockBatchServer::start_batch_mock().await;
+        let state = build_test_app_state(vec![
+            batch_route_provider("primary-batch", &primary.base_url),
+            batch_route_provider("fallback-batch", &fallback.base_url),
+        ])
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let scenarios = [
+            (Method::POST, "/v1/batches", "/v1/batches", ""),
+            (
+                Method::GET,
+                "/v1/batches?after=batch_prev&limit=7",
+                "/v1/batches",
+                "after=batch_prev&limit=7",
+            ),
+            (
+                Method::GET,
+                "/v1/batches/batch_123",
+                "/v1/batches/batch_123",
+                "",
+            ),
+            (
+                Method::POST,
+                "/v1/batches/batch_123/cancel",
+                "/v1/batches/batch_123/cancel",
+                "",
+            ),
+        ];
+        for (method, uri, _, _) in &scenarios {
+            let mut request = test::TestRequest::with_uri(uri).method(method.clone());
+            if *uri == "/v1/batches" {
+                request = request.set_json(json!({
+                    "input_file_id": "file_123",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h"
+                }));
+            }
+            let response = test::call_service(&app, request.to_request()).await;
+            assert!(
+                response.status().is_success(),
+                "{uri} should succeed via fallback, got {}",
+                response.status()
+            );
+        }
+
+        assert_eq!(primary.requests().len(), scenarios.len());
+        let fallback_requests = fallback.requests();
+        assert_eq!(fallback_requests.len(), scenarios.len());
+        assert_eq!(fallback_requests[0].body["input_file_id"], "file_123");
+        for (request, (method, _, path, query)) in fallback_requests.iter().zip(scenarios.iter()) {
+            assert_eq!(request.method, method.as_str());
+            assert_eq!(request.path, *path);
+            assert_eq!(request.query, *query);
+        }
+
+        primary.stop_batch_mock().await;
+        fallback.stop_batch_mock().await;
+    }
+
+    #[tokio::test]
+    async fn route_does_not_validate_unreached_batch_fallback_provider() {
+        let primary = MockBatchServer::start_batch_mock().await;
+        let mut broken_fallback =
+            batch_route_provider("broken-fallback", "https://unused.invalid/v1");
+        broken_fallback.settings = HashMap::from([(
+            "headers".to_string(),
+            json!({
+                "invalid header name": "not reached"
+            }),
+        )]);
+        let state = build_test_app_state(vec![
+            batch_route_provider("primary-batch", &primary.base_url),
+            broken_fallback,
+        ])
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let create_resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/batches")
+                .set_json(json!({
+                    "input_file_id": "file_123",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(create_resp.status(), StatusCode::ACCEPTED);
+        let primary_requests = primary.requests();
+        assert_eq!(primary_requests.len(), 1);
+        assert_eq!(primary_requests[0].path, "/v1/batches");
+
+        primary.stop_batch_mock().await;
     }
 }
