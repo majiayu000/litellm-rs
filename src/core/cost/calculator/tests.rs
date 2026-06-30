@@ -279,10 +279,10 @@ fn test_runtime_pricing_normalizes_provider_prefixed_shared_models() {
 #[test]
 fn test_runtime_pricing_supports_bedrock_provider_name() {
     let pricing = get_model_pricing("amazon.titan-text-express-v1", "bedrock")
-        .expect("Bedrock provider should use local model pricing fallback");
+        .expect("Bedrock provider should use embedded LiteLLM catalog pricing");
 
-    assert_cost_eq(pricing.input_cost_per_1k_tokens, 0.0002);
-    assert_cost_eq(pricing.output_cost_per_1k_tokens, 0.0006);
+    assert_cost_eq(pricing.input_cost_per_1k_tokens, 0.0013);
+    assert_cost_eq(pricing.output_cost_per_1k_tokens, 0.0017);
 }
 
 #[test]
@@ -536,9 +536,9 @@ fn test_get_zhipu_pricing_glm_4_flash() {
 fn test_get_azure_pricing() {
     let pricing = get_model_pricing("gpt-4o", "azure");
     assert!(pricing.is_ok());
-    // Azure uses OpenAI pricing
+    // Azure uses the embedded LiteLLM catalog when present.
     let pricing = pricing.unwrap();
-    assert_eq!(pricing.input_cost_per_1k_tokens, 0.005);
+    assert_eq!(pricing.input_cost_per_1k_tokens, 0.0025);
 }
 
 // Tests for calculate_input_cost

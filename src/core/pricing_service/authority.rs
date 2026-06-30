@@ -578,7 +578,7 @@ fn tiered_cost_per_token(
 }
 
 fn extract_tier_threshold(key: &str) -> Option<u32> {
-    let threshold = key.split("_above_").nth(1)?.split("_tokens").next()?;
+    let threshold = key.split("_above_").nth(1)?.strip_suffix("_tokens")?;
     if let Some(number) = threshold.strip_suffix('k') {
         number.parse::<u32>().ok().map(|value| value * 1000)
     } else {
@@ -696,7 +696,7 @@ mod tests {
             Err(error) => panic!("xAI OpenAI-like prefixed model should resolve: {error}"),
         };
 
-        assert_eq!(cost.model, "grok-4.3");
+        assert_eq!(cost.model, "xai/grok-4.3-latest");
         assert_eq!(cost.provider, "openai_like");
         assert!((cost.total_cost - 0.0025).abs() < f64::EPSILON);
     }
@@ -739,7 +739,7 @@ mod tests {
             Err(error) => panic!("Azure tiered fallback pricing should resolve: {error}"),
         };
 
-        assert_eq!(cost.model, "gpt-5.5");
+        assert_eq!(cost.model, "azure/gpt-5.5-2026-04-23");
         assert_eq!(cost.provider, "azure");
         assert!(
             (cost.input_cost - 3.0).abs() < 1e-12,
@@ -755,6 +755,22 @@ mod tests {
             (cost.total_cost - 3.045).abs() < 1e-12,
             "unexpected total cost: {}",
             cost.total_cost
+        );
+    }
+
+    #[test]
+    fn tier_threshold_ignores_named_price_variants() {
+        assert_eq!(
+            extract_tier_threshold("input_cost_per_token_above_272k_tokens"),
+            Some(272_000)
+        );
+        assert_eq!(
+            extract_tier_threshold("input_cost_per_token_above_272k_tokens_priority"),
+            None
+        );
+        assert_eq!(
+            extract_tier_threshold("input_cost_per_token_above_272k_tokens_flex"),
+            None
         );
     }
 

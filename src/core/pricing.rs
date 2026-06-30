@@ -333,8 +333,8 @@ impl PricingDatabase {
                 .unwrap_or_else(|| pricing.max_tokens.unwrap_or(4096)),
             max_output_length: pricing.max_output_tokens,
             supports_streaming: pricing.supports_streaming.unwrap_or(true),
-            supports_tools: pricing.supports_function_calling.unwrap_or(false),
-            supports_multimodal: pricing.supports_vision.unwrap_or(false),
+            supports_tools: pricing_supports_tools(pricing),
+            supports_multimodal: pricing_supports_multimodal(pricing),
             input_cost_per_1k_tokens: pricing.input_cost_per_token.map(price_per_token_to_per_1k),
             output_cost_per_1k_tokens: pricing.output_cost_per_token.map(price_per_token_to_per_1k),
             currency: "USD".to_string(),
@@ -355,6 +355,35 @@ impl PricingDatabase {
             })
             .unwrap_or(false)
     }
+}
+
+fn pricing_supports_multimodal(pricing: &ModelPricing) -> bool {
+    pricing.supports_vision.unwrap_or(false)
+        || pricing
+            .extra
+            .get("supported_modalities")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|modalities| {
+                modalities.iter().any(|modality| {
+                    modality
+                        .as_str()
+                        .is_some_and(|value| matches!(value, "image" | "video"))
+                })
+            })
+        || pricing
+            .extra
+            .get("supports_video_input")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+}
+
+fn pricing_supports_tools(pricing: &ModelPricing) -> bool {
+    pricing.supports_function_calling.unwrap_or(false)
+        || pricing
+            .extra
+            .get("supports_tool_choice")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn requires_bidirectional_database_token_pricing(pricing: &ModelPricing) -> bool {

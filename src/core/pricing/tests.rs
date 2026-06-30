@@ -25,6 +25,42 @@ fn parse_litellm_pricing_json_filters_metadata_entries() {
 }
 
 #[test]
+fn embedded_default_pricing_catalog_tracks_litellm_scale() {
+    let models = match embedded_default_pricing_models() {
+        Ok(models) => models,
+        Err(error) => panic!("embedded LiteLLM pricing catalog should parse: {error}"),
+    };
+
+    assert!(
+        models.len() >= 2500,
+        "embedded LiteLLM pricing catalog has only {} model entries",
+        models.len()
+    );
+
+    for model in [
+        "1024-x-1024/dall-e-2",
+        "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0",
+        "ai21.j2-mid-v1",
+        "aiml/flux-pro",
+        "azure_ai/gpt-5.5",
+        "openrouter/deepseek/deepseek-v3.2",
+        "xai/grok-4",
+    ] {
+        assert!(
+            models.contains_key(model),
+            "embedded LiteLLM pricing catalog is missing {model}"
+        );
+    }
+
+    for model in ["mimo-v2.5-pro", "command-a-plus-05-2026"] {
+        assert!(
+            models.contains_key(model),
+            "embedded LiteLLM pricing catalog dropped local compatibility row {model}"
+        );
+    }
+}
+
+#[test]
 fn parse_litellm_pricing_json_rejects_malformed_model_entries() {
     let content = r#"{
             "bad-model": {
@@ -484,6 +520,55 @@ fn gpt55_builtin_pro_model_info_is_non_streaming() {
     };
 
     assert!(!info.supports_streaming);
+}
+
+#[test]
+fn to_model_info_uses_supported_modalities_for_visual_multimodal() {
+    let mut db = PricingDatabase {
+        models: HashMap::new(),
+    };
+    let mut visual = builtin_model("openai", 0.000001, 0.000002, 8_192, 4_096, true, false);
+    visual.extra.insert(
+        "supported_modalities".to_string(),
+        serde_json::json!(["text", "image"]),
+    );
+    let mut audio_only = builtin_model("openai", 0.000001, 0.000002, 8_192, 4_096, true, false);
+    audio_only.extra.insert(
+        "supported_modalities".to_string(),
+        serde_json::json!(["text", "audio"]),
+    );
+    db.models.insert("visual-model".to_string(), visual);
+    db.models.insert("audio-model".to_string(), audio_only);
+
+    let Some(visual_info) = db.to_model_info("visual-model", "openai") else {
+        panic!("visual model should convert to ModelInfo");
+    };
+    let Some(audio_info) = db.to_model_info("audio-model", "openai") else {
+        panic!("audio model should convert to ModelInfo");
+    };
+
+    assert!(visual_info.supports_multimodal);
+    assert!(!audio_info.supports_multimodal);
+}
+
+#[test]
+fn to_model_info_uses_supports_tool_choice_for_tools() {
+    let mut db = PricingDatabase {
+        models: HashMap::new(),
+    };
+    let mut model = builtin_model("ai21", 0.000001, 0.000002, 8_192, 4_096, true, false);
+    model.supports_function_calling = None;
+    model.extra.insert(
+        "supports_tool_choice".to_string(),
+        serde_json::Value::from(true),
+    );
+    db.models.insert("tool-choice-model".to_string(), model);
+
+    let Some(info) = db.to_model_info("tool-choice-model", "ai21") else {
+        panic!("tool-choice model should convert to ModelInfo");
+    };
+
+    assert!(info.supports_tools);
 }
 
 #[test]

@@ -316,7 +316,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let body: Value = test::read_body_json(response).await;
-        assert_eq!(body["model"], "grok-4.3");
+        assert_eq!(body["model"], "xai/grok-4.3-latest");
         assert_eq!(body["provider"], "xai");
         let total_cost = match body["total_cost"].as_f64() {
             Some(total_cost) => total_cost,
@@ -348,7 +348,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let body: Value = test::read_body_json(response).await;
-        assert_eq!(body["model"], "gpt-5.5");
+        assert_eq!(body["model"], "azure/gpt-5.5-2026-04-23");
         assert_eq!(body["provider"], "azure");
         let total_cost = match body["total_cost"].as_f64() {
             Some(total_cost) => total_cost,
