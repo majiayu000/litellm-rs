@@ -83,7 +83,7 @@ where
             let enable_api_key = cfg.auth().enable_api_key;
             let api_key_header = cfg.auth().api_key_header.clone();
             let rate_limit_enabled = cfg.gateway.rate_limit.enabled;
-            let rate_limit_rpm = cfg.gateway.rate_limit.default_rpm;
+            let rate_limit_rpm = cfg.gateway.rate_limit.effective_rpm();
             let trusted_proxies = cfg.server().trusted_proxies.clone();
 
             let context = build_request_context(&mut req);

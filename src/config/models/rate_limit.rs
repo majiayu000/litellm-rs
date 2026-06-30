@@ -58,6 +58,14 @@ impl Default for RateLimitConfig {
 }
 
 impl RateLimitConfig {
+    /// Effective gateway requests-per-minute limit.
+    ///
+    /// `requests_per_minute` is accepted for LiteLLM compatibility and takes
+    /// precedence over the older `default_rpm` field when present.
+    pub fn effective_rpm(&self) -> u32 {
+        self.requests_per_minute.unwrap_or(self.default_rpm)
+    }
+
     /// Fields parsed from config but not enforced by the current limiter.
     ///
     /// Keep this list shared with validation and runtime construction so a
@@ -249,6 +257,28 @@ mod tests {
         assert!(!merged.enabled);
         assert_eq!(merged.default_rpm, 1000);
         assert_eq!(merged.default_tpm, 100_000);
+    }
+
+    #[test]
+    fn test_rate_limit_effective_rpm_uses_requests_per_minute_alias() {
+        let config = RateLimitConfig {
+            default_rpm: 1000,
+            requests_per_minute: Some(25),
+            ..RateLimitConfig::default()
+        };
+
+        assert_eq!(config.effective_rpm(), 25);
+    }
+
+    #[test]
+    fn test_rate_limit_effective_rpm_falls_back_to_default_rpm() {
+        let config = RateLimitConfig {
+            default_rpm: 500,
+            requests_per_minute: None,
+            ..RateLimitConfig::default()
+        };
+
+        assert_eq!(config.effective_rpm(), 500);
     }
 
     #[test]

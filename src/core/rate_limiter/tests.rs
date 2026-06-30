@@ -25,6 +25,17 @@ fn test_config_with_strategy(
     }
 }
 
+fn test_config_with_requests_per_minute_alias(enabled: bool, rpm: u32) -> RateLimitConfig {
+    RateLimitConfig {
+        enabled,
+        default_rpm: 1000,
+        requests_per_minute: Some(rpm),
+        default_tpm: 100000,
+        strategy: RateLimitStrategy::SlidingWindow,
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn test_rate_limiter_disabled() {
     let limiter = RateLimiter::new(test_config(false, 10));
@@ -59,6 +70,22 @@ async fn test_sliding_window_blocks_over_limit() {
     let result = limiter.check_and_record("test-key").await;
     assert!(!result.allowed);
     assert!(result.retry_after_secs.is_some());
+}
+
+#[tokio::test]
+async fn test_requests_per_minute_alias_is_enforced() {
+    let limiter = RateLimiter::new(test_config_with_requests_per_minute_alias(true, 2));
+
+    let first = limiter.check_and_record("alias-key").await;
+    let second = limiter.check_and_record("alias-key").await;
+    let third = limiter.check_and_record("alias-key").await;
+
+    assert!(first.allowed);
+    assert_eq!(first.limit, 2);
+    assert!(second.allowed);
+    assert!(!third.allowed);
+    assert_eq!(third.limit, 2);
+    assert_eq!(limiter.limit(), 2);
 }
 
 #[tokio::test]

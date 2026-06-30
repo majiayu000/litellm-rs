@@ -101,18 +101,19 @@ impl RateLimiter {
     }
 
     fn disabled_result(&self) -> RateLimitResult {
+        let limit = self.config.effective_rpm();
         RateLimitResult {
             allowed: true,
             current_count: 0,
-            limit: self.config.default_rpm,
-            remaining: self.config.default_rpm,
+            limit,
+            remaining: limit,
             reset_after_secs: 0,
             retry_after_secs: None,
         }
     }
 
     /// Names of config fields that are parsed but not enforced by any
-    /// strategy yet; only enabled/strategy/default_rpm take effect.
+    /// strategy yet; only enabled/strategy/default_rpm/requests_per_minute take effect.
     fn unimplemented_field_names(config: &RateLimitConfig) -> Vec<&'static str> {
         config.unimplemented_runtime_field_names()
     }
@@ -123,7 +124,7 @@ impl RateLimiter {
         let unimplemented = Self::unimplemented_field_names(config);
         if !unimplemented.is_empty() {
             error!(
-                "rate_limit fields [{}] are set but not enforced yet; only enabled/strategy/default_rpm take effect",
+                "rate_limit fields [{}] are set but not enforced yet; only enabled/strategy/default_rpm/requests_per_minute take effect",
                 unimplemented.join(", ")
             );
         }
@@ -175,7 +176,7 @@ impl RateLimiter {
         #[cfg(feature = "gateway")]
         if let Some(redis) = &self.redis {
             match redis
-                .rate_limit_status(key, self.config.default_rpm, self.window.as_secs())
+                .rate_limit_status(key, self.config.effective_rpm(), self.window.as_secs())
                 .await
             {
                 Ok(result) => return result,
@@ -190,16 +191,31 @@ impl RateLimiter {
 
         match self.config.strategy {
             RateLimitStrategy::SlidingWindow => {
-                self.check_sliding_window_impl(key, self.config.default_rpm, false, Instant::now())
-                    .await
+                self.check_sliding_window_impl(
+                    key,
+                    self.config.effective_rpm(),
+                    false,
+                    Instant::now(),
+                )
+                .await
             }
             RateLimitStrategy::TokenBucket => {
-                self.check_token_bucket_impl(key, self.config.default_rpm, false, Instant::now())
-                    .await
+                self.check_token_bucket_impl(
+                    key,
+                    self.config.effective_rpm(),
+                    false,
+                    Instant::now(),
+                )
+                .await
             }
             RateLimitStrategy::FixedWindow => {
-                self.check_fixed_window_impl(key, self.config.default_rpm, false, Instant::now())
-                    .await
+                self.check_fixed_window_impl(
+                    key,
+                    self.config.effective_rpm(),
+                    false,
+                    Instant::now(),
+                )
+                .await
             }
         }
     }
@@ -217,7 +233,7 @@ impl RateLimiter {
         &self,
         key: &str,
     ) -> (RateLimitResult, RateLimitReservation) {
-        self.check_and_record_with_source_and_limit(key, self.config.default_rpm)
+        self.check_and_record_with_source_and_limit(key, self.config.effective_rpm())
             .await
     }
 
@@ -334,7 +350,7 @@ impl RateLimiter {
     }
 
     fn release_local(&self, key: &str, recorded_at: Option<Instant>) {
-        let limit = self.config.default_rpm as f64;
+        let limit = self.config.effective_rpm() as f64;
         let strategy = self.config.strategy.clone();
         let reservation_window = self.token_bucket_reservation_window();
 

@@ -96,6 +96,34 @@ mod tests {
         state
     }
 
+    async fn build_test_state_with_requests_per_minute_alias(
+        default_rpm: u32,
+        requests_per_minute: u32,
+    ) -> AppState {
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = true;
+        config.gateway.auth.enable_api_key = true;
+        config.gateway.auth.allow_anonymous = false;
+        config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.rate_limit.enabled = true;
+        config.gateway.rate_limit.default_rpm = default_rpm;
+        config.gateway.rate_limit.requests_per_minute = Some(requests_per_minute);
+
+        let server = HttpServer::new(&config)
+            .await
+            .expect("failed to build HTTP server for requests_per_minute integration test");
+        let state = server.state().clone();
+        state
+            .storage
+            .migrate()
+            .await
+            .expect("failed to run in-memory DB migrations for requests_per_minute test");
+        state
+    }
+
     async fn build_test_state(enable_jwt: bool, enable_api_key: bool) -> AppState {
         build_test_state_with_rate_limit(enable_jwt, enable_api_key, false, None).await
     }
@@ -303,6 +331,46 @@ mod tests {
         let second_error = test::try_call_service(&app, second)
             .await
             .expect_err("second rotating invalid-auth request should hit gateway rate limit");
+        assert_eq!(
+            second_error.as_response_error().status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_requests_per_minute_alias_limits_rejected_auth() {
+        let state = build_test_state_with_requests_per_minute_alias(1000, 1).await;
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(AuthMiddleware)
+                .route(AUTH_PROBE_PATH, web::get().to(auth_probe)),
+        )
+        .await;
+
+        let first = test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .peer_addr("203.0.113.152:1000".parse().unwrap())
+            .to_request();
+        let first_error = test::try_call_service(&app, first)
+            .await
+            .expect_err("first missing-auth request should fail in auth middleware");
+        assert_eq!(
+            first_error.as_response_error().status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let second = test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .peer_addr("203.0.113.152:1001".parse().unwrap())
+            .to_request();
+        let second_error = test::try_call_service(&app, second)
+            .await
+            .expect_err("second missing-auth request should hit requests_per_minute limit");
         assert_eq!(
             second_error.as_response_error().status_code(),
             StatusCode::TOO_MANY_REQUESTS

@@ -12,7 +12,7 @@ impl RateLimiter {
         let now = Instant::now();
         let window_start = now - self.window;
 
-        let limit = self.config.default_rpm as f64;
+        let limit = self.config.effective_rpm() as f64;
         self.entries.retain(|_, entry| {
             match self.config.strategy {
                 RateLimitStrategy::SlidingWindow => {
@@ -66,6 +66,6 @@ impl RateLimiter {
 
     /// Get the configured limit
     pub fn limit(&self) -> u32 {
-        self.config.default_rpm
+        self.config.effective_rpm()
     }
 }
