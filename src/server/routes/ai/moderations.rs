@@ -88,7 +88,7 @@ async fn proxy_moderation(
             {
                 let request = request.clone();
                 let resolved_model = resolved_model.clone();
-                move |selected_provider, selected_model| {
+                move |selected_provider, selected_model, _deployment_id| {
                     let request = request.clone();
                     let resolved_model = resolved_model.clone();
                     async move {

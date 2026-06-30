@@ -72,7 +72,7 @@ pub(super) async fn execute_with_selected_deployment<T, F, Fut>(
     operation: F,
 ) -> Result<T, GatewayError>
 where
-    F: Fn(Provider, String) -> Fut + Clone,
+    F: Fn(Provider, String, String) -> Fut + Clone,
     Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
 {
     let max_attempts = router.config().num_retries + 1;
@@ -116,10 +116,11 @@ where
             }
         };
 
+        let selected_deployment_id = deployment_lease.clone_deployment_id();
         let provider = deployment_lease.deployment().provider.clone();
         let selected_model = deployment_lease.deployment().model.clone();
 
-        match operation.clone()(provider, selected_model).await {
+        match operation.clone()(provider, selected_model, selected_deployment_id).await {
             Ok((value, tokens_used)) => {
                 let latency_us = started_at.elapsed().as_micros() as u64;
                 router.record_success_for_deployment(
@@ -440,7 +441,7 @@ mod tests {
             &router,
             "gpt-4",
             ProviderCapability::ChatCompletion,
-            |_provider, model| async { Ok((model, 0)) },
+            |_provider, model, _deployment_id| async { Ok((model, 0)) },
         )
         .await
         .expect("execution should succeed");
@@ -456,7 +457,9 @@ mod tests {
             &router,
             "shared-model",
             ProviderCapability::Embeddings,
-            |provider, model| async move { Ok(((provider.name().to_string(), model), 0)) },
+            |provider, model, _deployment_id| async move {
+                Ok(((provider.name().to_string(), model), 0))
+            },
         )
         .await
         .expect("execution should use an embeddings-capable deployment");
@@ -481,7 +484,9 @@ mod tests {
             &router,
             "shared-model",
             ProviderCapability::Embeddings,
-            |_provider, _model| async { Ok::<_, ProviderError>(("should not run", 0)) },
+            |_provider, _model, _deployment_id| async {
+                Ok::<_, ProviderError>(("should not run", 0))
+            },
         )
         .await
         .expect_err("unavailable capability should fail before execution");
@@ -500,7 +505,9 @@ mod tests {
             &router,
             "shared-model",
             ProviderCapability::CodeExecution,
-            |_provider, _model| async { Ok::<_, ProviderError>(("should not run", 0)) },
+            |_provider, _model, _deployment_id| async {
+                Ok::<_, ProviderError>(("should not run", 0))
+            },
         )
         .await
         .expect_err("unsupported capability should fail before execution");
@@ -519,7 +526,7 @@ mod tests {
             &router,
             "gpt-4",
             ProviderCapability::ChatCompletion,
-            |_provider, _model| async {
+            |_provider, _model, _deployment_id| async {
                 Err::<(String, u64), _>(ProviderError::timeout("test", "timed out"))
             },
         )
@@ -543,7 +550,7 @@ mod tests {
             ProviderCapability::ChatCompletion,
             {
                 let attempts = attempts.clone();
-                move |provider, model| {
+                move |provider, model, _deployment_id| {
                     let attempts = attempts.clone();
                     async move {
                         let provider_name = provider.name().to_string();
@@ -582,7 +589,7 @@ mod tests {
             ProviderCapability::ChatCompletion,
             {
                 let attempts = attempts.clone();
-                move |provider, model| {
+                move |provider, model, _deployment_id| {
                     let attempts = attempts.clone();
                     async move {
                         attempts.lock().unwrap().push(model.clone());

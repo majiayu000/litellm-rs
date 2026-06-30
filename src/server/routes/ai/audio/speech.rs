@@ -75,7 +75,7 @@ pub async fn audio_speech(
         &state.unified_router,
         &requested_model,
         ProviderCapability::TextToSpeech,
-        move |provider, selected_model| {
+        move |provider, selected_model, _deployment_id| {
             let mut request = speech_request.clone();
             let context = context_for_execution.clone();
             async move {

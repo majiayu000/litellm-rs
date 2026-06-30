@@ -82,7 +82,7 @@ async fn budget_fallback_ignores_retry_limit_and_keeps_same_provider_candidates(
         ProviderCapability::ChatCompletion,
         {
             let attempts = attempts.clone();
-            move |provider, model| {
+            move |provider, model, _deployment_id| {
                 let attempts = attempts.clone();
                 async move {
                     attempts

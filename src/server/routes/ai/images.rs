@@ -146,7 +146,7 @@ async fn handle_image_generation_internal(
         unified_router,
         &requested_model,
         ProviderCapability::ImageGeneration,
-        move |provider, selected_model| {
+        move |provider, selected_model, _deployment_id| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             async move {
@@ -214,7 +214,7 @@ async fn proxy_image_multipart_endpoint(
                 let body = body.clone();
                 let content_type = content_type.clone();
                 let usage = usage.clone();
-                move |selected_provider, selected_model| {
+                move |selected_provider, selected_model, _deployment_id| {
                     let body = body.clone();
                     let content_type = content_type.clone();
                     let usage = usage.clone();

@@ -59,12 +59,13 @@ async fn handle_rerank_with_state(
             {
                 let request = request.clone();
                 let requested_model = requested_model.clone();
-                move |selected_provider, selected_model| {
+                move |selected_provider, selected_model, selected_deployment_id| {
                     let request = request.clone();
                     let requested_model = requested_model.clone();
                     async move {
                         let selected = selected_rerank_provider(
                             state.config().gateway.providers.as_slice(),
+                            &selected_deployment_id,
                             &selected_provider,
                             &selected_model,
                             &requested_model,
@@ -211,20 +212,31 @@ fn selected_rerank_provider_from_config(
 
 fn selected_rerank_provider(
     providers: &[ProviderConfig],
+    selected_deployment_id: &str,
     selected_provider: &Provider,
     selected_model: &str,
     requested_model: &str,
 ) -> Result<SelectedRerankProvider, ProviderError> {
     let selected_provider_name = selected_provider.name();
     let candidates = rerank_candidate_configs(providers);
-    let matching = candidates
+    let supported_candidates = candidates
         .iter()
         .copied()
-        .filter(|(provider, kind)| {
-            rerank_provider_supports_model(provider, *kind, requested_model)
+        .filter(|(provider, kind)| rerank_provider_supports_model(provider, *kind, requested_model))
+        .collect::<Vec<_>>();
+    let matching = supported_candidates
+        .iter()
+        .copied()
+        .find(|(provider, _)| {
+            selected_deployment_matches_provider_config(
+                selected_deployment_id,
+                provider,
+                selected_model,
+            )
         })
-        .find(|(provider, kind)| {
-            provider.name == selected_provider_name
+        .or_else(|| {
+            supported_candidates.iter().copied().find(|(provider, kind)| {
+                provider.name == selected_provider_name
                 || provider
                     .settings
                     .get("provider_name")
@@ -233,6 +245,7 @@ fn selected_rerank_provider(
                 || (provider.models.is_empty() && provider.name == selected_model)
                 || (provider.models.iter().any(|model| model == selected_model)
                     && kind.as_str() == selected_provider_name)
+            })
         })
         .ok_or_else(|| {
             ProviderError::configuration(
@@ -245,6 +258,18 @@ fn selected_rerank_provider(
 
     selected_rerank_provider_from_config(matching.0, matching.1)
         .map_err(rerank_gateway_error_to_provider_error)
+}
+
+fn selected_deployment_matches_provider_config(
+    selected_deployment_id: &str,
+    provider: &ProviderConfig,
+    selected_model: &str,
+) -> bool {
+    selected_deployment_id == provider.name
+        || selected_deployment_id
+            .strip_prefix(provider.name.as_str())
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            == Some(selected_model)
 }
 
 fn rerank_router_models(providers: &[ProviderConfig], requested_model: &str) -> Vec<String> {
@@ -537,6 +562,35 @@ mod tests {
             .expect("matching provider should be selected");
 
         assert_eq!(selected.provider_name, "right-cohere");
+        assert_eq!(selected.kind, RerankProviderKind::Cohere);
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn selected_provider_uses_deployment_id_for_native_cohere_duplicate_model() {
+        let primary = provider_config("cohere-a", "cohere", vec!["rerank-english-v3.0"]);
+        let fallback = provider_config("cohere-b", "cohere", vec!["rerank-english-v3.0"]);
+        let cohere =
+            match crate::core::providers::cohere::CohereProvider::with_api_key("test-key").await {
+                Ok(provider) => provider,
+                Err(error) => panic!("native cohere provider should build: {error}"),
+            };
+        let provider = Provider::Cohere(cohere);
+
+        let selected = match selected_rerank_provider(
+            &[primary, fallback],
+            "cohere-b-rerank-english-v3.0",
+            &provider,
+            "rerank-english-v3.0",
+            "rerank-english-v3.0",
+        ) {
+            Ok(selected) => selected,
+            Err(error) => {
+                panic!("selected deployment id should identify the fallback config: {error}")
+            }
+        };
+
+        assert_eq!(selected.provider_name, "cohere-b");
         assert_eq!(selected.kind, RerankProviderKind::Cohere);
     }
 }

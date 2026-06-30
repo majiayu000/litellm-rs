@@ -147,7 +147,7 @@ pub async fn audio_transcriptions(
         &state.unified_router,
         &requested_model,
         ProviderCapability::AudioTranscription,
-        move |provider, selected_model| {
+        move |provider, selected_model, _deployment_id| {
             let mut request = transcription_request.clone();
             let context = context_for_execution.clone();
             async move {

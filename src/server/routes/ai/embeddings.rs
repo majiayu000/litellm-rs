@@ -104,7 +104,7 @@ async fn handle_embedding_internal(
         unified_router,
         &requested_model,
         ProviderCapability::Embeddings,
-        move |provider, selected_model| {
+        move |provider, selected_model, _deployment_id| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             async move {
