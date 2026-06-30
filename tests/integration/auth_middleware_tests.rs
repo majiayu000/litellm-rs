@@ -379,6 +379,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_requests_per_minute_alias_limits_authenticated_requests() {
+        let state = build_test_state_with_requests_per_minute_alias(1000, 1).await;
+        let principal = seed_valid_principal(&state).await;
+        let effective_rpm = state.config.load().gateway.rate_limit.effective_rpm();
+        let hit_counter = Arc::new(AtomicUsize::new(0));
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .app_data(web::Data::new(hit_counter.clone()))
+                .wrap(RateLimitMiddleware::optional(Some(effective_rpm)))
+                .wrap(AuthMiddleware)
+                .route(AUTH_PROBE_PATH, web::get().to(auth_probe)),
+        )
+        .await;
+
+        let first = test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request();
+        let first_response = test::call_service(&app, first).await;
+        assert_eq!(first_response.status(), StatusCode::OK);
+
+        let second = test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request();
+        let second_error = test::try_call_service(&app, second)
+            .await
+            .expect_err("second authenticated request should hit requests_per_minute limit");
+        assert_eq!(
+            second_error.as_response_error().status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(hit_counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn test_valid_auth_releases_gateway_auth_attempt_reservation() {
         let state = build_test_state_with_rate_limit(true, true, false, Some(1)).await;
         let principal = seed_valid_principal(&state).await;
