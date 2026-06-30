@@ -217,6 +217,7 @@ impl HttpServer {
             .configure(routes::keys::configure_routes)
             .configure(routes::teams::configure_routes)
             .configure(routes::budget::configure_budget_routes)
+            .configure(routes::admin::configure_routes)
             .configure(routes::ai::configure_routes)
             .configure(routes::pricing::configure_pricing_routes)
     }
@@ -635,5 +636,42 @@ mod tests {
         let body = MetricsMiddleware::render_prometheus();
         assert!(body.contains("gateway_http_requests_total 0"));
         assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 0"));
+    }
+
+    #[tokio::test]
+    async fn app_factory_mounts_explicit_cache_admin_surface() {
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.monitoring.metrics.enabled = false;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("server startup failed: {error}"),
+        };
+
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        let req = actix_test::TestRequest::get()
+            .uri("/admin/cache/status")
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+
+        let body: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert_eq!(body["status"], "unsupported");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("not wired")
+        );
     }
 }
