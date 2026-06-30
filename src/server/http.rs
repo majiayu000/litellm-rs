@@ -8,8 +8,8 @@ use crate::core::budget::UnifiedBudgetLimits;
 use crate::core::pricing_service::PricingService;
 use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter_with_redis};
 use crate::server::middleware::{
-    AuthMiddleware, RateLimitMiddleware, RequestIdMiddleware, SecurityHeadersMiddleware,
-    start_auth_rate_limiter_cleanup_task,
+    AuthMiddleware, MetricsMiddleware, RateLimitMiddleware, RequestIdMiddleware,
+    SecurityHeadersMiddleware, start_auth_rate_limiter_cleanup_task,
 };
 use crate::server::routes;
 use crate::server::state::AppState;
@@ -190,6 +190,7 @@ impl HttpServer {
         let rate_limit_rpm = cfg.gateway.rate_limit.effective_rpm();
         let api_key_auth_enabled = cfg.gateway.auth.enable_api_key;
         let default_rate_limit_rpm = rate_limit_enabled.then_some(rate_limit_rpm);
+        let metrics_enabled = cfg.gateway.monitoring.metrics.enabled;
         let cors = Self::build_cors_for_app_factory(cors_config);
 
         let budget_limits = web::Data::new(Arc::clone(&state.budget_limits));
@@ -210,6 +211,7 @@ impl HttpServer {
             ))
             .wrap(AuthMiddleware)
             .wrap(RequestIdMiddleware)
+            .wrap(Condition::new(metrics_enabled, MetricsMiddleware))
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)
             .configure(routes::keys::configure_routes)
@@ -377,6 +379,7 @@ impl HttpServer {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use actix_web::{http::StatusCode, test as actix_test};
 
     #[test]
     fn build_cors_rejects_wildcard_with_credentials() {
@@ -508,5 +511,129 @@ mod tests {
             "disabled DB must keep startup running with in-memory budgets, got: {:?}",
             result.err()
         );
+    }
+
+    #[tokio::test]
+    async fn app_factory_metrics_endpoint_includes_recorded_http_requests() {
+        let _metrics_guard = MetricsMiddleware::test_lock().await;
+        MetricsMiddleware::reset_for_tests();
+
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("server startup failed: {error}"),
+        };
+
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        let health_req = actix_test::TestRequest::get().uri("/health").to_request();
+        let health_resp = actix_test::call_service(&app, health_req).await;
+        assert_eq!(health_resp.status(), StatusCode::OK);
+        drop(actix_test::read_body(health_resp).await);
+
+        let metrics_req = actix_test::TestRequest::get().uri("/metrics").to_request();
+        let metrics_resp = actix_test::call_service(&app, metrics_req).await;
+        assert_eq!(metrics_resp.status(), StatusCode::OK);
+
+        let body = actix_test::read_body(metrics_resp).await;
+        let body = match std::str::from_utf8(&body) {
+            Ok(body) => body,
+            Err(error) => panic!("metrics response was not utf-8: {error}"),
+        };
+
+        assert!(body.contains("gateway_http_requests_total 1"));
+        assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 1"));
+
+        let rendered_after_scrape = MetricsMiddleware::render_prometheus();
+        assert!(rendered_after_scrape.contains("gateway_http_requests_total 1"));
+    }
+
+    #[tokio::test]
+    async fn app_factory_metrics_records_auth_rejections_before_handler() {
+        let _metrics_guard = MetricsMiddleware::test_lock().await;
+        MetricsMiddleware::reset_for_tests();
+
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = true;
+        config.gateway.auth.enable_api_key = true;
+        config.gateway.auth.allow_anonymous = false;
+        config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();
+        config.gateway.rate_limit.enabled = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("server startup failed: {error}"),
+        };
+
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        let models_req = actix_test::TestRequest::get()
+            .uri("/v1/models")
+            .to_request();
+        match actix_test::try_call_service(&app, models_req).await {
+            Ok(response) => {
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                drop(actix_test::read_body(response).await);
+            }
+            Err(error) => assert_eq!(
+                error.as_response_error().status_code(),
+                StatusCode::UNAUTHORIZED
+            ),
+        }
+
+        let body = MetricsMiddleware::render_prometheus();
+        assert!(body.contains("gateway_http_requests_total 1"));
+        assert!(body.contains("gateway_http_request_errors_total 1"));
+        assert!(body.contains("gateway_http_responses_total{class=\"4xx\"} 1"));
+    }
+
+    #[tokio::test]
+    async fn app_factory_does_not_collect_http_metrics_when_metrics_disabled() {
+        let _metrics_guard = MetricsMiddleware::test_lock().await;
+        MetricsMiddleware::reset_for_tests();
+
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.monitoring.metrics.enabled = false;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("server startup failed: {error}"),
+        };
+
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        let health_req = actix_test::TestRequest::get().uri("/health").to_request();
+        let health_resp = actix_test::call_service(&app, health_req).await;
+        assert_eq!(health_resp.status(), StatusCode::OK);
+        drop(actix_test::read_body(health_resp).await);
+
+        let body = MetricsMiddleware::render_prometheus();
+        assert!(body.contains("gateway_http_requests_total 0"));
+        assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 0"));
     }
 }

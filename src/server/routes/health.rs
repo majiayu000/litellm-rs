@@ -36,6 +36,7 @@
 
 #![allow(dead_code)]
 
+use crate::server::middleware::MetricsMiddleware;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpResponse, Result as ActixResult, web};
@@ -197,9 +198,18 @@ async fn version_info() -> HttpResponse {
 async fn metrics(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
     debug!("Metrics requested");
 
-    // NOTE: Proper Prometheus metrics not yet implemented.
-    // For now, return basic metrics in Prometheus format
-    let metrics = format!(
+    let metrics = render_prometheus_metrics(
+        state.config.load().providers().len(),
+        &MetricsMiddleware::render_prometheus(),
+    );
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; version=0.0.4; charset=utf-8")
+        .body(metrics))
+}
+
+fn render_prometheus_metrics(providers_count: usize, http_metrics: &str) -> String {
+    format!(
         r#"# HELP gateway_uptime_seconds Total uptime of the gateway in seconds
 # TYPE gateway_uptime_seconds counter
 gateway_uptime_seconds {}
@@ -215,16 +225,15 @@ gateway_cpu_usage_percent {}
 # HELP gateway_providers_total Total number of configured providers
 # TYPE gateway_providers_total gauge
 gateway_providers_total {}
+
+{}
 "#,
         get_uptime_seconds(),
         get_memory_usage(),
         get_cpu_usage(),
-        state.config.load().providers().len()
-    );
-
-    Ok(HttpResponse::Ok()
-        .content_type("text/plain; version=0.0.4; charset=utf-8")
-        .body(metrics))
+        providers_count,
+        http_metrics
+    )
 }
 
 /// Basic liveness response body.
@@ -679,6 +688,19 @@ mod tests {
         let verdict = aggregate_readiness(&storage_ok(), &providers);
         assert!(verdict.ready);
         assert_eq!(providers.enabled_providers, 1);
+    }
+
+    #[test]
+    fn prometheus_metrics_include_http_request_counters() {
+        let body = render_prometheus_metrics(
+            2,
+            "gateway_http_requests_total 7\n\
+             gateway_http_responses_total{class=\"2xx\"} 5\n",
+        );
+
+        assert!(body.contains("gateway_providers_total 2"));
+        assert!(body.contains("gateway_http_requests_total 7"));
+        assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 5"));
     }
 
     #[test]
