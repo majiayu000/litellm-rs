@@ -132,7 +132,7 @@ async fn stream_budget_fallback_ignores_retry_limit() {
         ProviderCapability::ChatCompletionStream,
         {
             let attempts = attempts.clone();
-            move |provider, model| {
+            move |provider, model, _selected_deployment_id| {
                 let attempts = attempts.clone();
                 async move {
                     attempts

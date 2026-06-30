@@ -128,7 +128,7 @@ pub(crate) async fn handle_streaming_response(
         state.unified_router.clone(),
         &requested_model,
         ProviderCapability::ChatCompletionStream,
-        move |provider, selected_model| {
+        move |provider, selected_model, _selected_deployment_id| {
             let core_request = core_request.clone();
             let ctx = context_clone.clone();
             let budget_limits = budget_limits.clone();

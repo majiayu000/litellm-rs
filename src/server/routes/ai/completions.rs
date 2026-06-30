@@ -142,7 +142,7 @@ async fn handle_streaming_completion(
         state.unified_router.clone(),
         &requested_model,
         ProviderCapability::ChatCompletionStream,
-        move |provider, selected_model| {
+        move |provider, selected_model, _selected_deployment_id| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             let (budget_limits, pricing_service) = (budget_limits.clone(), pricing_service.clone());

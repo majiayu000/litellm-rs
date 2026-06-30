@@ -3,46 +3,37 @@
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, http::StatusCode, web};
 use bytes::Bytes;
 use futures::StreamExt;
-use reqwest::{
-    Client, Url,
-    header::{CONTENT_TYPE, HeaderName, HeaderValue},
-};
+use reqwest::header::CONTENT_TYPE;
 use serde_json::Value;
-use std::sync::OnceLock;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::config::models::provider::ProviderConfig;
 use crate::core::budget::UnifiedBudgetReservation;
+use crate::core::providers::ProviderError;
+use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
-use super::{openai_errors, provider_config};
+use super::execution::{
+    StreamingDeploymentLease, execute_stream_with_selected_deployment,
+    execute_with_selected_deployment,
+};
+use super::openai_errors;
 
+mod provider;
 mod spend;
+use provider::{
+    GeminiRouteProvider, ensure_gemini_provider_candidate_configured,
+    gemini_gateway_error_to_provider_error, gemini_http_error, gemini_router_models,
+    missing_gemini_provider_error, selected_gemini_provider, send_gemini_request,
+};
 use spend::{
-    GeminiSpendState, extract_gemini_sse_usage, record_gemini_spend, reserve_gemini_budget,
-    settle_gemini_stream_spend,
+    GeminiSpendState, extract_gemini_sse_usage, record_gemini_spend, settle_gemini_stream_spend,
 };
 
-const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 const GEMINI_V1: &str = "v1";
 const GEMINI_V1BETA: &str = "v1beta";
 const GEMINI_MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
-
-static GEMINI_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
-
-#[derive(Debug, Clone)]
-struct GeminiRouteProvider {
-    provider_name: String,
-    pricing_provider: String,
-    model: String,
-    api_key: String,
-    base_url: String,
-    headers: Vec<(HeaderName, HeaderValue)>,
-    timeout: Duration,
-}
 
 macro_rules! gemini_route_handler {
     ($name:ident, $version:expr, $method:literal, $stream:expr) => {
@@ -134,32 +125,161 @@ async fn proxy_gemini_route_inner(
     validate_model_segment(&requested_model)?;
     validate_gemini_request_size(&request)?;
 
-    let provider = select_gemini_provider(state.config().providers(), &requested_model)?;
-    super::spend::ensure_budget_available(
-        &state.budget_limits,
-        &provider.provider_name,
-        &provider.model,
-    )?;
-    let budget_reservation = reserve_gemini_budget(state, &provider, &request)?;
+    ensure_gemini_provider_candidate_configured(state.config().providers(), &requested_model)?;
+    if stream {
+        return proxy_gemini_stream_route_inner(
+            state,
+            context,
+            api_version,
+            requested_model,
+            method,
+            request,
+        )
+        .await;
+    }
 
-    let url = gemini_url(&provider, api_version, method, stream)?;
-    let response = apply_gemini_headers(gemini_http_client().post(url), &provider)
-        .header(CONTENT_TYPE, "application/json")
-        .json(&request)
-        .timeout(provider.timeout)
-        .send()
-        .await
-        .map_err(gemini_http_error)?;
+    let router_models = gemini_router_models(state.config().providers(), &requested_model);
 
-    gemini_upstream_response_to_http_response(
-        state,
-        context,
-        provider,
-        budget_reservation,
-        response,
-        stream,
-    )
-    .await
+    let mut last_router_error = None;
+    for router_model in router_models {
+        let result = execute_with_selected_deployment(
+            &state.unified_router,
+            &router_model,
+            gemini_route_capability(stream),
+            {
+                let context = context.clone();
+                let request = request.clone();
+                let requested_model = requested_model.clone();
+                move |selected_provider, selected_model, selected_deployment_id| {
+                    let context = context.clone();
+                    let request = request.clone();
+                    let requested_model = requested_model.clone();
+                    async move {
+                        let provider = selected_gemini_provider(
+                            state.config().providers(),
+                            &selected_deployment_id,
+                            &selected_provider,
+                            &selected_model,
+                            &requested_model,
+                        )?;
+                        let (budget_reservation, response) = send_gemini_request(
+                            state,
+                            &provider,
+                            api_version,
+                            method,
+                            false,
+                            &request,
+                        )
+                        .await?;
+
+                        let response = gemini_upstream_response_to_http_response(
+                            state,
+                            context,
+                            provider,
+                            budget_reservation,
+                            response,
+                            stream,
+                            None,
+                        )
+                        .await
+                        .map_err(gemini_gateway_error_to_provider_error)?;
+                        Ok((response, 0))
+                    }
+                }
+            },
+        )
+        .await;
+
+        match result {
+            Ok(response) => return Ok(response),
+            Err(GatewayError::Provider(ProviderError::QuotaExceeded {
+                provider: "budget",
+                message,
+            })) if message.starts_with("provider ") => {
+                last_router_error = Some(GatewayError::Provider(ProviderError::QuotaExceeded {
+                    provider: "budget",
+                    message,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_router_error.unwrap_or_else(|| missing_gemini_provider_error(&requested_model)))
+}
+
+async fn proxy_gemini_stream_route_inner(
+    state: &AppState,
+    context: crate::core::types::context::RequestContext,
+    api_version: &str,
+    requested_model: String,
+    method: &'static str,
+    request: Value,
+) -> Result<HttpResponse, GatewayError> {
+    let router_models = gemini_router_models(state.config().providers(), &requested_model);
+    let mut last_router_error = None;
+    for router_model in router_models {
+        let result = execute_stream_with_selected_deployment(
+            state.unified_router.clone(),
+            &router_model,
+            gemini_route_capability(true),
+            {
+                let request = request.clone();
+                let requested_model = requested_model.clone();
+                move |selected_provider, selected_model, selected_deployment_id| {
+                    let request = request.clone();
+                    let requested_model = requested_model.clone();
+                    async move {
+                        let provider = selected_gemini_provider(
+                            state.config().providers(),
+                            &selected_deployment_id,
+                            &selected_provider,
+                            &selected_model,
+                            &requested_model,
+                        )?;
+                        let (budget_reservation, response) = send_gemini_request(
+                            state,
+                            &provider,
+                            api_version,
+                            method,
+                            true,
+                            &request,
+                        )
+                        .await?;
+                        Ok((provider, budget_reservation, response))
+                    }
+                }
+            },
+        )
+        .await;
+
+        match result {
+            Ok(((provider, budget_reservation, response), lease)) => {
+                return gemini_upstream_response_to_http_response(
+                    state,
+                    context,
+                    provider,
+                    budget_reservation,
+                    response,
+                    true,
+                    Some(lease),
+                )
+                .await;
+            }
+            Err(GatewayError::Provider(ProviderError::QuotaExceeded {
+                provider: "budget",
+                message,
+            })) if message.starts_with("provider ") => {
+                last_router_error = Some(GatewayError::Provider(ProviderError::QuotaExceeded {
+                    provider: "budget",
+                    message,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_router_error.unwrap_or_else(|| missing_gemini_provider_error(&requested_model)))
 }
 
 async fn gemini_upstream_response_to_http_response(
@@ -169,6 +289,7 @@ async fn gemini_upstream_response_to_http_response(
     budget_reservation: Option<UnifiedBudgetReservation>,
     response: reqwest::Response,
     stream: bool,
+    stream_lease: Option<StreamingDeploymentLease>,
 ) -> Result<HttpResponse, GatewayError> {
     let status = StatusCode::from_u16(response.status().as_u16())
         .map_err(|error| GatewayError::internal(format!("Invalid upstream status: {error}")))?;
@@ -183,26 +304,24 @@ async fn gemini_upstream_response_to_http_response(
         })
         .to_string();
 
-    if stream && !status.is_success() {
-        let body = response.bytes().await.map_err(gemini_http_error)?;
-        return Ok(HttpResponse::build(status)
-            .insert_header((actix_web::http::header::CONTENT_TYPE, content_type))
-            .body(sanitize_gemini_error_body(body, &provider)));
-    }
-
     if stream {
+        let stream_lease = stream_lease
+            .ok_or_else(|| GatewayError::internal("Gemini stream missing deployment lease"))?;
         return Ok(gemini_streaming_response(
             state,
-            context,
-            provider,
-            budget_reservation,
-            response,
-            status,
-            content_type,
+            GeminiStreamResponseParts {
+                context,
+                provider,
+                budget_reservation,
+                response,
+                status,
+                content_type,
+                stream_lease,
+            },
         ));
     }
 
-    let mut body = response.bytes().await.map_err(gemini_http_error)?;
+    let body = response.bytes().await.map_err(gemini_http_error)?;
     if status.is_success() {
         let spend_state = GeminiSpendState {
             pricing: state.pricing.as_ref(),
@@ -211,8 +330,6 @@ async fn gemini_upstream_response_to_http_response(
             api_key_id: context.api_key_id(),
         };
         record_gemini_spend(&spend_state, &provider, &body, budget_reservation, true).await;
-    } else {
-        body = sanitize_gemini_error_body(body, &provider);
     }
 
     Ok(HttpResponse::build(status)
@@ -220,15 +337,26 @@ async fn gemini_upstream_response_to_http_response(
         .body(body))
 }
 
-fn gemini_streaming_response(
-    state: &AppState,
+struct GeminiStreamResponseParts {
     context: crate::core::types::context::RequestContext,
     provider: GeminiRouteProvider,
-    mut budget_reservation: Option<UnifiedBudgetReservation>,
+    budget_reservation: Option<UnifiedBudgetReservation>,
     response: reqwest::Response,
     status: StatusCode,
     content_type: String,
-) -> HttpResponse {
+    stream_lease: StreamingDeploymentLease,
+}
+
+fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts) -> HttpResponse {
+    let GeminiStreamResponseParts {
+        context,
+        provider,
+        mut budget_reservation,
+        response,
+        status,
+        content_type,
+        stream_lease,
+    } = parts;
     let (tx, rx) = mpsc::channel::<Bytes>(8);
     let pricing = state.pricing.clone();
     let budget_limits = state.budget_limits.clone();
@@ -237,6 +365,7 @@ fn gemini_streaming_response(
     let should_record_spend = status.is_success();
 
     tokio::spawn(async move {
+        let mut stream_lease = Some(stream_lease);
         let mut upstream = response.bytes_stream();
         let mut sse_buffer = String::new();
         let mut final_usage = None;
@@ -247,6 +376,16 @@ fn gemini_streaming_response(
                 Ok(bytes) => bytes,
                 Err(_) => {
                     error!("Gemini SDK upstream stream error; closing client stream");
+                    if let Some(lease) = stream_lease.take() {
+                        let error = ProviderError::streaming_error(
+                            "gemini_proxy",
+                            "streamGenerateContent",
+                            None,
+                            None,
+                            "Gemini upstream stream error",
+                        );
+                        lease.finish_failure(&error);
+                    }
                     let spend_state = GeminiSpendState {
                         pricing: pricing.as_ref(),
                         budget_limits: &budget_limits,
@@ -302,6 +441,10 @@ fn gemini_streaming_response(
             key_manager: &key_manager,
             api_key_id,
         };
+        let tokens_used = final_usage
+            .as_ref()
+            .map(|usage| u64::from(usage.total_tokens))
+            .unwrap_or(0);
         settle_gemini_stream_spend(
             &spend_state,
             &provider,
@@ -314,6 +457,9 @@ fn gemini_streaming_response(
             should_record_spend && saw_upstream_output,
         )
         .await;
+        if let Some(lease) = stream_lease.take() {
+            lease.finish_success(tokens_used);
+        }
     });
 
     let upstream =
@@ -323,123 +469,12 @@ fn gemini_streaming_response(
         .streaming(upstream)
 }
 
-fn select_gemini_provider(
-    providers: &[ProviderConfig],
-    requested_model: &str,
-) -> Result<GeminiRouteProvider, GatewayError> {
-    let Some(provider) = providers
-        .iter()
-        .filter(|provider| provider.enabled)
-        .filter(|provider| is_gemini_provider(provider))
-        .find(|provider| provider_supports_requested_model(provider, requested_model))
-    else {
-        return Err(GatewayError::Config(format!(
-            "Gemini SDK route provider for model '{requested_model}' is not configured"
-        )));
-    };
-
-    if provider.api_key.trim().is_empty() {
-        return Err(GatewayError::Config(format!(
-            "Gemini provider '{}' is missing api_key",
-            provider.name
-        )));
+fn gemini_route_capability(stream: bool) -> ProviderCapability {
+    if stream {
+        ProviderCapability::ChatCompletionStream
+    } else {
+        ProviderCapability::ChatCompletion
     }
-
-    Ok(GeminiRouteProvider {
-        provider_name: provider.name.clone(),
-        pricing_provider: "gemini".to_string(),
-        model: requested_model.to_string(),
-        api_key: provider.api_key.clone(),
-        base_url: gemini_base_url(provider),
-        headers: gemini_provider_headers(provider)?,
-        timeout: Duration::from_secs(provider.timeout),
-    })
-}
-
-fn provider_supports_requested_model(provider: &ProviderConfig, requested_model: &str) -> bool {
-    provider.models.is_empty() || provider.models.iter().any(|model| model == requested_model)
-}
-
-fn is_gemini_provider(provider: &ProviderConfig) -> bool {
-    let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
-    let provider_name = provider_config::normalize_provider_selector(&provider.name);
-
-    matches!(
-        provider_type.as_str(),
-        "gemini" | "googleai" | "googleaistudio"
-    ) || matches!(
-        provider_name.as_str(),
-        "gemini" | "googleai" | "googleaistudio"
-    )
-}
-
-fn gemini_base_url(provider: &ProviderConfig) -> String {
-    provider
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|base_url| !base_url.is_empty())
-        .unwrap_or(GEMINI_BASE_URL)
-        .trim_end_matches('/')
-        .to_string()
-}
-
-fn gemini_provider_headers(
-    provider: &ProviderConfig,
-) -> Result<Vec<(HeaderName, HeaderValue)>, GatewayError> {
-    let mut headers = Vec::new();
-    provider_config::append_string_header_map(provider, "headers", |key, value| {
-        push_gemini_header(&mut headers, key, value)
-    })?;
-    provider_config::append_string_header_map(provider, "custom_headers", |key, value| {
-        push_gemini_header(&mut headers, key, value)
-    })?;
-    Ok(headers)
-}
-
-fn push_gemini_header(
-    headers: &mut Vec<(HeaderName, HeaderValue)>,
-    name: impl AsRef<str>,
-    value: impl AsRef<str>,
-) -> Result<(), GatewayError> {
-    let name = HeaderName::from_bytes(name.as_ref().as_bytes()).map_err(|error| {
-        GatewayError::Config(format!("Invalid Gemini provider header: {error}"))
-    })?;
-    let value = HeaderValue::from_str(value.as_ref()).map_err(|error| {
-        GatewayError::Config(format!("Invalid Gemini provider header value: {error}"))
-    })?;
-    headers.push((name, value));
-    Ok(())
-}
-
-fn gemini_url(
-    provider: &GeminiRouteProvider,
-    api_version: &str,
-    method: &'static str,
-    stream: bool,
-) -> Result<Url, GatewayError> {
-    validate_api_version(api_version)?;
-    validate_model_segment(&provider.model)?;
-    validate_method(method)?;
-
-    let mut url = Url::parse(&format!(
-        "{}/{}/models/{}:{}",
-        provider.base_url.trim_end_matches('/'),
-        api_version,
-        provider.model,
-        method
-    ))
-    .map_err(|error| GatewayError::Config(format!("Invalid Gemini base URL: {error}")))?;
-
-    {
-        let mut query = url.query_pairs_mut();
-        if stream {
-            query.append_pair("alt", "sse");
-        }
-        query.append_pair("key", &provider.api_key);
-    }
-
-    Ok(url)
 }
 
 fn ensure_gemini_route_authorized(
@@ -501,45 +536,4 @@ fn validate_gemini_request_size(request: &Value) -> Result<(), GatewayError> {
         return Err(GatewayError::validation("Gemini request body too large"));
     }
     Ok(())
-}
-
-fn gemini_http_client() -> &'static Client {
-    GEMINI_HTTP_CLIENT.get_or_init(Client::new)
-}
-
-fn gemini_http_error(error: reqwest::Error) -> GatewayError {
-    if error.is_timeout() {
-        GatewayError::timeout("Gemini upstream request timed out")
-    } else {
-        GatewayError::network("Gemini upstream request failed")
-    }
-}
-
-fn apply_gemini_headers(
-    mut request: reqwest::RequestBuilder,
-    provider: &GeminiRouteProvider,
-) -> reqwest::RequestBuilder {
-    for (name, value) in &provider.headers {
-        request = request.header(name.clone(), value.clone());
-    }
-    request
-}
-
-fn sanitize_gemini_error_body(body: Bytes, provider: &GeminiRouteProvider) -> Bytes {
-    if provider.api_key.is_empty() || body.is_empty() {
-        return body;
-    }
-
-    let text = String::from_utf8_lossy(&body);
-    let encoded_key: String =
-        url::form_urlencoded::byte_serialize(provider.api_key.as_bytes()).collect();
-    if !text.contains(&provider.api_key) && !text.contains(&encoded_key) {
-        return body;
-    }
-
-    let mut sanitized = text.replace(&provider.api_key, "[REDACTED]");
-    if encoded_key != provider.api_key {
-        sanitized = sanitized.replace(&encoded_key, "[REDACTED]");
-    }
-    Bytes::from(sanitized)
 }

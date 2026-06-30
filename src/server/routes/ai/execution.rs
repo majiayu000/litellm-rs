@@ -211,7 +211,7 @@ pub(super) async fn execute_stream_with_selected_deployment<T, F, Fut>(
     operation: F,
 ) -> Result<(T, StreamingDeploymentLease), GatewayError>
 where
-    F: Fn(Provider, String) -> Fut + Clone,
+    F: Fn(Provider, String, String) -> Fut + Clone,
     Fut: std::future::Future<Output = Result<T, ProviderError>>,
 {
     let max_attempts = router.config().num_retries + 1;
@@ -255,10 +255,11 @@ where
             }
         };
         let deployment = deployment_lease.clone_deployment();
+        let selected_deployment_id = deployment_lease.clone_deployment_id();
         let provider = deployment.provider.clone();
         let selected_model = deployment.model.clone();
 
-        match operation.clone()(provider, selected_model).await {
+        match operation.clone()(provider, selected_model, selected_deployment_id).await {
             Ok(stream) => {
                 let _deployment_id = deployment_lease.into_deployment_id();
                 let lease = StreamingDeploymentLease::new(router.clone(), deployment, started_at);
@@ -628,7 +629,7 @@ mod tests {
             router.clone(),
             "gpt-4",
             ProviderCapability::ChatCompletionStream,
-            |_provider, model| async move { Ok(model) },
+            |_provider, model, _selected_deployment_id| async move { Ok(model) },
         )
         .await
         .expect("stream creation should succeed");
@@ -658,7 +659,7 @@ mod tests {
             router.clone(),
             "gpt-4",
             ProviderCapability::ChatCompletionStream,
-            |_provider, model| async move { Ok(model) },
+            |_provider, model, _selected_deployment_id| async move { Ok(model) },
         )
         .await
         .expect("stream creation should succeed");
@@ -680,7 +681,7 @@ mod tests {
             router.clone(),
             "gpt-4",
             ProviderCapability::ChatCompletionStream,
-            |_provider, model| async move { Ok(model) },
+            |_provider, model, _selected_deployment_id| async move { Ok(model) },
         )
         .await
         .expect("stream creation should succeed");
@@ -706,7 +707,7 @@ mod tests {
             ProviderCapability::ChatCompletionStream,
             {
                 let attempts = attempts.clone();
-                move |provider, model| {
+                move |provider, model, _selected_deployment_id| {
                     let attempts = attempts.clone();
                     async move {
                         let provider_name = provider.name().to_string();
@@ -765,7 +766,7 @@ mod tests {
                     router,
                     "gpt-4",
                     ProviderCapability::ChatCompletionStream,
-                    move |_provider, _model| {
+                    move |_provider, _model, _selected_deployment_id| {
                         let operation_entered = operation_entered.clone();
                         async move {
                             operation_entered.notify_one();

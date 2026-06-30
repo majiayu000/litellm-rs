@@ -9,7 +9,7 @@ use crate::core::providers::ProviderError;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
-use super::GeminiRouteProvider;
+use super::provider::GeminiRouteProvider;
 
 pub(super) struct GeminiSpendState<'a> {
     pub(super) pricing: &'a PricingService,
