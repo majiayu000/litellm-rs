@@ -30,23 +30,27 @@ GH-727 / #727
 - [x] `SP727-T17` Owner: coordinator. Done when: `src/core/providers/vertex_ai/embeddings/mod.rs` delegates tests with `#[path = "tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/vertex_ai/embeddings/mod.rs`.
 - [x] `SP727-T18` Owner: coordinator. Done when: original inline Vertex AI embeddings tests are moved to `src/core/providers/vertex_ai/embeddings/tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/vertex_ai/embeddings/tests.rs`.
 - [x] `SP727-T19` Owner: verification owner. Done when: both Vertex AI embeddings files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/vertex_ai/embeddings/mod.rs src/core/providers/vertex_ai/embeddings/tests.rs`; `cargo test core::providers::vertex_ai::embeddings --lib --all-features`.
-- [ ] `SP727-T20` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Vertex AI embeddings tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [x] `SP727-T20` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Vertex AI embeddings tranche. Verify: #807 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T21` Owner: coordinator. Done when: `src/core/providers/azure/responses/transformation.rs` delegates tests with `#[path = "transformation_tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/azure/responses/transformation.rs`.
+- [x] `SP727-T22` Owner: coordinator. Done when: original inline Azure responses transformation tests are moved to `src/core/providers/azure/responses/transformation_tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/azure/responses/transformation_tests.rs`.
+- [x] `SP727-T23` Owner: verification owner. Done when: both Azure responses transformation files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/azure/responses/transformation.rs src/core/providers/azure/responses/transformation_tests.rs`; `cargo test core::providers::azure::responses::transformation --lib --all-features`.
+- [ ] `SP727-T24` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Azure responses transformation tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for one Vertex AI embeddings test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for one Azure responses transformation test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/providers/vertex_ai/embeddings/mod.rs`
-- `src/core/providers/vertex_ai/embeddings/tests.rs`
+- `src/core/providers/azure/responses/transformation.rs`
+- `src/core/providers/azure/responses/transformation_tests.rs`
 
 ## 验证
 
 - SpecRail packet validation.
 - `cargo fmt --all -- --check`
-- `cargo test core::providers::vertex_ai::embeddings --lib --all-features`
+- `cargo test core::providers::azure::responses::transformation --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 
