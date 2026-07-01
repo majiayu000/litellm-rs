@@ -108,9 +108,10 @@ async fn handle_sync_response(
     state: &AppState,
     chat_request: ChatCompletionRequest,
     original: ResponsesApiRequest,
-    context: crate::core::types::context::RequestContext,
+    mut context: crate::core::types::context::RequestContext,
     owner: Option<lifecycle::ResponseOwner>,
 ) -> ActixResult<HttpResponse> {
+    super::response_cache::bypass_chat_response_cache(&mut context);
     match handle_chat_completion_with_state(state, chat_request, context).await {
         Ok(chat_resp) => {
             let resp = convert_to_responses_api(chat_resp, &original);

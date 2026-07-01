@@ -136,7 +136,7 @@ pub(super) fn handle_background_response(
     state: AppState,
     chat_request: ChatCompletionRequest,
     original: ResponsesApiRequest,
-    context: crate::core::types::context::RequestContext,
+    mut context: crate::core::types::context::RequestContext,
     owner: Option<ResponseOwner>,
 ) -> HttpResponse {
     let Some(owner) = owner else {
@@ -155,6 +155,7 @@ pub(super) fn handle_background_response(
             owner,
         },
     );
+    super::super::response_cache::bypass_chat_response_cache(&mut context);
     let task_response_id = response_id.clone();
     let handle = tokio::spawn(async move {
         let _cleanup = BackgroundTaskCleanup {

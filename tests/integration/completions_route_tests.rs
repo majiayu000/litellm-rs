@@ -2,12 +2,13 @@
 
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
-    use actix_web::{App, HttpResponse, HttpServer, http::StatusCode, test, web};
+    use actix_web::{App, HttpMessage, HttpResponse, HttpServer, http::StatusCode, test, web};
     use bytes::Bytes;
     use futures::stream;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::core::types::context::RequestContext;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use litellm_rs::server::state::AppState;
     use serde_json::{Value, json};
@@ -278,6 +279,61 @@ mod tests {
             requests.len(),
             1,
             "second identical request should hit cache"
+        );
+
+        mock_server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_responses_api_bypasses_chat_response_cache() {
+        let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
+        let state = build_test_app_state_with_cache(&mock_server.base_url).await;
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let chat_req = {
+            let req = test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 16,
+                    "max_completion_tokens": 16
+                }))
+                .to_request();
+            req.extensions_mut()
+                .insert(RequestContext::new().with_user_id("cache-owner"));
+            req
+        };
+        let chat_resp = test::call_service(&app, chat_req).await;
+        assert_eq!(chat_resp.status(), StatusCode::OK);
+
+        let responses_req = {
+            let req = test::TestRequest::post()
+                .uri("/v1/responses")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "input": "Hello",
+                    "max_output_tokens": 16
+                }))
+                .to_request();
+            req.extensions_mut()
+                .insert(RequestContext::new().with_user_id("cache-owner"));
+            req
+        };
+        let responses_resp = test::call_service(&app, responses_req).await;
+        assert_eq!(responses_resp.status(), StatusCode::OK);
+
+        let requests = mock_server.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "Responses API calls should not reuse chat-completion cache entries"
         );
 
         mock_server.shutdown().await;
