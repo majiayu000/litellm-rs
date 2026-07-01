@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use serde_json::Value;
 use tracing::warn;
@@ -17,11 +17,21 @@ use crate::core::types::thinking::ThinkingDelta;
 ///
 /// Handles Anthropic's event-based SSE format with message_start, content_block_delta,
 /// message_delta, and message_stop events.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AnthropicTransformer {
     model: String,
     tool_name_map: HashMap<String, String>,
-    message_id: Arc<Mutex<Option<String>>>,
+    message_id: Mutex<Option<String>>,
+}
+
+impl Clone for AnthropicTransformer {
+    fn clone(&self) -> Self {
+        Self {
+            model: self.model.clone(),
+            tool_name_map: self.tool_name_map.clone(),
+            message_id: Mutex::new(None),
+        }
+    }
 }
 
 impl AnthropicTransformer {
@@ -29,7 +39,7 @@ impl AnthropicTransformer {
         Self {
             model: model.into(),
             tool_name_map: HashMap::new(),
-            message_id: Arc::new(Mutex::new(None)),
+            message_id: Mutex::new(None),
         }
     }
 
@@ -463,6 +473,52 @@ mod tests {
         let stop = serde_json::json!({"type": "message_stop"});
         let chunk = chunk_from_event(&t, stop);
         assert_eq!(chunk.id, "msg_123");
+    }
+
+    #[test]
+    fn test_cloned_transformers_keep_independent_message_ids() {
+        let base = AnthropicTransformer::new("claude-3-5-sonnet");
+        let stream_a = base.clone();
+        let stream_b = base.clone();
+
+        let chunk = chunk_from_event(
+            &stream_a,
+            serde_json::json!({
+                "type": "message_start",
+                "message": {"id": "msg_a"}
+            }),
+        );
+        assert_eq!(chunk.id, "msg_a");
+
+        let chunk = chunk_from_event(
+            &stream_b,
+            serde_json::json!({
+                "type": "message_start",
+                "message": {"id": "msg_b"}
+            }),
+        );
+        assert_eq!(chunk.id, "msg_b");
+
+        let chunk = chunk_from_event(
+            &stream_a,
+            serde_json::json!({
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "hello"}
+            }),
+        );
+        assert_eq!(chunk.id, "msg_a");
+
+        let chunk = chunk_from_event(&stream_b, serde_json::json!({"type": "message_stop"}));
+        assert_eq!(chunk.id, "msg_b");
+
+        let chunk = chunk_from_event(
+            &stream_a,
+            serde_json::json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"}
+            }),
+        );
+        assert_eq!(chunk.id, "msg_a");
     }
 
     #[test]
