@@ -34,23 +34,27 @@ GH-727 / #727
 - [x] `SP727-T21` Owner: coordinator. Done when: `src/core/providers/azure/responses/transformation.rs` delegates tests with `#[path = "transformation_tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/azure/responses/transformation.rs`.
 - [x] `SP727-T22` Owner: coordinator. Done when: original inline Azure responses transformation tests are moved to `src/core/providers/azure/responses/transformation_tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/azure/responses/transformation_tests.rs`.
 - [x] `SP727-T23` Owner: verification owner. Done when: both Azure responses transformation files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/azure/responses/transformation.rs src/core/providers/azure/responses/transformation_tests.rs`; `cargo test core::providers::azure::responses::transformation --lib --all-features`.
-- [ ] `SP727-T24` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Azure responses transformation tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [x] `SP727-T24` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Azure responses transformation tranche. Verify: #808 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T25` Owner: coordinator. Done when: `src/core/providers/azure/responses/utils.rs` delegates tests with `#[path = "utils_tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/azure/responses/utils.rs`.
+- [x] `SP727-T26` Owner: coordinator. Done when: original inline Azure responses utils tests are moved to `src/core/providers/azure/responses/utils_tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/azure/responses/utils_tests.rs`.
+- [x] `SP727-T27` Owner: verification owner. Done when: both Azure responses utils files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/azure/responses/utils.rs src/core/providers/azure/responses/utils_tests.rs`; `cargo test core::providers::azure::responses::utils --lib --all-features`.
+- [ ] `SP727-T28` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Azure responses utils tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for one Azure responses transformation test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for one Azure responses utils test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/providers/azure/responses/transformation.rs`
-- `src/core/providers/azure/responses/transformation_tests.rs`
+- `src/core/providers/azure/responses/utils.rs`
+- `src/core/providers/azure/responses/utils_tests.rs`
 
 ## 验证
 
 - SpecRail packet validation.
 - `cargo fmt --all -- --check`
-- `cargo test core::providers::azure::responses::transformation --lib --all-features`
+- `cargo test core::providers::azure::responses::utils --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 
