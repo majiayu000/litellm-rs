@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use tracing::warn;
@@ -20,6 +21,7 @@ use crate::core::types::thinking::ThinkingDelta;
 pub struct AnthropicTransformer {
     model: String,
     tool_name_map: HashMap<String, String>,
+    message_id: Arc<Mutex<Option<String>>>,
 }
 
 impl AnthropicTransformer {
@@ -27,6 +29,7 @@ impl AnthropicTransformer {
         Self {
             model: model.into(),
             tool_name_map: HashMap::new(),
+            message_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -40,6 +43,33 @@ impl AnthropicTransformer {
             .get(name)
             .cloned()
             .unwrap_or_else(|| name.to_string())
+    }
+
+    fn set_message_id(&self, message_id: String) {
+        let mut guard = match self.message_id.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = Some(message_id);
+    }
+
+    fn current_message_id(&self) -> String {
+        let guard = match self.message_id.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| "anthropic-stream".to_string())
+    }
+
+    fn clear_message_id(&self) {
+        let mut guard = match self.message_id.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = None;
     }
 
     fn parse_anthropic_finish_reason(reason: &str) -> FinishReason {
@@ -73,7 +103,7 @@ impl AnthropicTransformer {
         usage: Option<Usage>,
     ) -> ChatChunk {
         ChatChunk {
-            id: String::new(),
+            id: self.current_message_id(),
             object: "chat.completion.chunk".to_string(),
             created,
             model: self.model.clone(),
@@ -114,6 +144,7 @@ impl SSETransformer for AnthropicTransformer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("anthropic-stream")
                     .to_string();
+                self.set_message_id(message_id.clone());
 
                 Ok(Some(ChatChunk {
                     id: message_id,
@@ -315,15 +346,19 @@ impl SSETransformer for AnthropicTransformer {
                     usage,
                 )))
             }
-            "message_stop" => Ok(Some(ChatChunk {
-                id: String::new(),
-                object: "chat.completion.chunk".to_string(),
-                created,
-                model: self.model.clone(),
-                choices: vec![],
-                usage: None,
-                system_fingerprint: None,
-            })),
+            "message_stop" => {
+                let message_id = self.current_message_id();
+                self.clear_message_id();
+                Ok(Some(ChatChunk {
+                    id: message_id,
+                    object: "chat.completion.chunk".to_string(),
+                    created,
+                    model: self.model.clone(),
+                    choices: vec![],
+                    usage: None,
+                    system_fingerprint: None,
+                }))
+            }
             "error" => {
                 let msg = json
                     .get("error")
@@ -353,6 +388,14 @@ impl SSETransformer for AnthropicTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chunk_from_event(t: &AnthropicTransformer, event: Value) -> ChatChunk {
+        match t.transform_chunk(&event.to_string()) {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => panic!("expected Anthropic SSE event to produce a chunk"),
+            Err(error) => panic!("unexpected Anthropic SSE error: {}", error),
+        }
+    }
 
     #[test]
     fn test_message_delta_extracts_cache_tokens() {
@@ -391,6 +434,35 @@ mod tests {
         let chunk = t.transform_chunk(&event.to_string()).unwrap().unwrap();
         let usage = chunk.usage.as_ref().unwrap();
         assert!(usage.prompt_tokens_details.is_none());
+    }
+
+    #[test]
+    fn test_chunks_after_message_start_keep_message_id() {
+        let t = AnthropicTransformer::new("claude-3-5-sonnet");
+        let start = serde_json::json!({
+            "type": "message_start",
+            "message": {"id": "msg_123"}
+        });
+        let chunk = chunk_from_event(&t, start);
+        assert_eq!(chunk.id, "msg_123");
+
+        let delta = serde_json::json!({
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "hello"}
+        });
+        let chunk = chunk_from_event(&t, delta);
+        assert_eq!(chunk.id, "msg_123");
+
+        let message_delta = serde_json::json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"}
+        });
+        let chunk = chunk_from_event(&t, message_delta);
+        assert_eq!(chunk.id, "msg_123");
+
+        let stop = serde_json::json!({"type": "message_stop"});
+        let chunk = chunk_from_event(&t, stop);
+        assert_eq!(chunk.id, "msg_123");
     }
 
     #[test]
