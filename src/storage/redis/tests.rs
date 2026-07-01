@@ -44,6 +44,32 @@ async fn test_redis_set_get_roundtrip_with_live_pool() {
 }
 
 #[tokio::test]
+async fn test_redis_delete_by_prefix_with_live_pool() {
+    let Some(pool) = live_redis_pool().await else {
+        return;
+    };
+
+    let prefix = unique_test_key("prefix");
+    let first = format!("{prefix}:1");
+    let second = format!("{prefix}:2");
+
+    pool.set(&first, "one", Some(30))
+        .await
+        .expect("first set should write to redis");
+    pool.set(&second, "two", Some(30))
+        .await
+        .expect("second set should write to redis");
+
+    let deleted = pool
+        .delete_by_prefix(&prefix)
+        .await
+        .expect("prefix delete should remove matching redis keys");
+    assert_eq!(deleted, 2);
+    assert!(!pool.exists(&first).await.expect("exists should succeed"));
+    assert!(!pool.exists(&second).await.expect("exists should succeed"));
+}
+
+#[tokio::test]
 async fn test_redis_pool_creation_returns_error_for_unreachable_endpoint() {
     let config = RedisConfig {
         url: "redis://127.0.0.1:1".to_string(),
@@ -73,6 +99,17 @@ async fn test_redis_pool_disabled_is_noop() {
         .await
         .expect("Disabled redis config should create no-op pool");
     assert!(pool.is_noop());
+}
+
+#[tokio::test]
+async fn test_redis_delete_by_prefix_disabled_is_noop() {
+    let pool = RedisPool::create_noop();
+
+    let deleted = pool
+        .delete_by_prefix("litellm-rs:test:")
+        .await
+        .expect("disabled redis prefix delete should not fail");
+    assert_eq!(deleted, 0);
 }
 
 async fn live_redis_pool() -> Option<RedisPool> {

@@ -6,6 +6,7 @@ use crate::core::models::openai::{
 use crate::core::types::context::RequestContext;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
+use tracing::warn;
 
 const BYPASS_CHAT_RESPONSE_CACHE_KEY: &str = "bypass_chat_response_cache";
 
@@ -61,10 +62,16 @@ pub(super) async fn lookup_chat(
         return Ok(None);
     };
     let identity = cache_identity(context);
-    Ok(cache
+    match cache
         .get_chat_response_with_user(request, identity.as_deref())
-        .await?
-        .map(|response| response.as_ref().clone()))
+        .await
+    {
+        Ok(cached) => Ok(cached.map(|response| response.as_ref().clone())),
+        Err(error) => {
+            warn!(error = %error, "Chat response cache lookup failed; treating as miss");
+            Ok(None)
+        }
+    }
 }
 
 pub(super) async fn store_chat(
@@ -94,10 +101,13 @@ pub(super) async fn lookup_embedding(
         return Ok(None);
     };
     let request = embedding_request_for_cache(request, context);
-    Ok(cache
-        .get_embedding_response(&request)
-        .await?
-        .map(|response| response.as_ref().clone()))
+    match cache.get_embedding_response(&request).await {
+        Ok(cached) => Ok(cached.map(|response| response.as_ref().clone())),
+        Err(error) => {
+            warn!(error = %error, "Embedding response cache lookup failed; treating as miss");
+            Ok(None)
+        }
+    }
 }
 
 pub(super) async fn store_embedding(

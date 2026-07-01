@@ -13,6 +13,7 @@ use crate::storage::redis::RedisPool;
 use crate::utils::sync::AtomicValue;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::error;
 
 /// HTTP server state shared across handlers
 ///
@@ -90,6 +91,11 @@ impl AppState {
 
 fn build_response_cache(config: &Config, redis: Arc<RedisPool>) -> Option<Arc<LLMCache>> {
     if !config.gateway.cache.enabled {
+        return None;
+    }
+
+    if config.gateway.cache.ttl == 0 {
+        error!("cache.enabled=true requires cache.ttl > 0; response cache disabled");
         return None;
     }
 

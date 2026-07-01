@@ -59,6 +59,50 @@ impl RedisPool {
         Ok(())
     }
 
+    /// Delete all keys whose Redis key starts with the provided prefix.
+    pub async fn delete_by_prefix(&self, prefix: &str) -> Result<usize> {
+        if self.noop_mode {
+            return Ok(0);
+        }
+
+        let mut conn = self.get_connection().await?;
+        let Some(ref mut c) = conn.conn else {
+            return Ok(0);
+        };
+
+        let pattern = format!("{prefix}*");
+        let mut cursor = 0_u64;
+        let mut deleted = 0_usize;
+
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(100_usize)
+                .query_async(&mut *c)
+                .await
+                .map_err(GatewayError::from)?;
+
+            if !keys.is_empty() {
+                let count: usize = redis::cmd("DEL")
+                    .arg(&keys)
+                    .query_async(&mut *c)
+                    .await
+                    .map_err(GatewayError::from)?;
+                deleted += count;
+            }
+
+            if next_cursor == 0 {
+                break;
+            }
+            cursor = next_cursor;
+        }
+
+        Ok(deleted)
+    }
+
     /// Check if a key exists
     pub async fn exists(&self, key: &str) -> Result<bool> {
         if self.noop_mode {

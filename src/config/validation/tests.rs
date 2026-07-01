@@ -210,6 +210,19 @@ fn test_cache_validation_accepts_wired_cache_enabled() {
 }
 
 #[test]
+fn test_cache_validation_rejects_enabled_zero_ttl() {
+    let config = CacheConfig {
+        enabled: true,
+        ttl: 0,
+        ..Default::default()
+    };
+
+    let error = config.validate().unwrap_err();
+    assert!(error.contains("ttl"));
+    assert!(error.contains("greater than 0"));
+}
+
+#[test]
 fn test_cache_validation_rejects_unwired_semantic_cache() {
     let config = CacheConfig {
         semantic_cache: true,

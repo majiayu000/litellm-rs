@@ -9,6 +9,10 @@ use crate::config::models::rate_limit::RateLimitConfig;
 
 impl Validate for CacheConfig {
     fn validate(&self) -> Result<(), String> {
+        if self.enabled && self.ttl == 0 {
+            return Err("cache.ttl must be greater than 0 when cache.enabled=true".to_string());
+        }
+
         if self.semantic_cache {
             return Err(
                 "Semantic cache is not wired into runtime request handling; leave cache.semantic_cache=false until support lands"

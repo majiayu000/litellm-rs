@@ -216,6 +216,16 @@ where
         Ok(existed)
     }
 
+    /// Clear all Redis entries owned by this cache prefix.
+    pub async fn clear(&self) -> Result<usize> {
+        if self.pool.is_noop() {
+            return Ok(0);
+        }
+
+        let prefix = format!("{}:", self.config.key_prefix);
+        self.pool.delete_by_prefix(&prefix).await
+    }
+
     /// Check if a key exists in the cache
     pub async fn exists(&self, key: &CacheKey) -> Result<bool> {
         if self.pool.is_noop() {
@@ -394,6 +404,13 @@ mod tests {
 
         let result = cache.delete(&key).await.unwrap();
         assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_redis_cache_noop_clear() {
+        let cache = create_noop_cache();
+
+        assert_eq!(cache.clear().await.ok(), Some(0));
     }
 
     #[tokio::test]

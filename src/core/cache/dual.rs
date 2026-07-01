@@ -341,10 +341,14 @@ where
         // Clear memory cache
         self.memory.clear().await;
 
-        // Note: We don't clear Redis cache as it may be shared across instances
-        // Use delete_by_prefix for Redis if needed
+        let mut redis_deleted = 0_usize;
+        if self.config.mode != CacheMode::MemoryOnly
+            && let Some(ref redis) = self.redis
+        {
+            redis_deleted = redis.clear().await?;
+        }
 
-        debug!("Dual cache cleared (memory only)");
+        debug!(redis_deleted, "Dual cache cleared");
         Ok(())
     }
 
