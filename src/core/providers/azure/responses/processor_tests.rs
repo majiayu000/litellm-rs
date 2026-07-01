@@ -280,10 +280,10 @@ fn test_validate_embedding_structure_missing_embedding() {
 #[test]
 fn test_validate_image_generation_structure() {
     let processor = AzureResponseProcessor::new();
-    // Note: The validation logic checks for embedding data first if "data" is present
-    // Image generation with "data" array falls through embedding validation
-    // which requires "embedding" field. This is expected behavior - image response
-    // validation needs a non-empty data array with any structure
+    // TODO: Fix the order of checks in validate_response_structure in a separate PR
+    // so that image generation responses (which contain "created" and "data") are not
+    // eagerly intercepted by the embedding validation branch. Once fixed, remove the
+    // fake "embedding" field from this test fixture.
     let response = serde_json::json!({
         "created": 1700000000,
         "data": [{"embedding": [0.1], "url": "https://example.com/image.png"}]
