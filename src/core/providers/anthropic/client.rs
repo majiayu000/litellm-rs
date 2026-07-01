@@ -14,8 +14,11 @@ use crate::core::providers::base::{
 use crate::core::providers::shared::parse_retry_after_from_body;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::{
-    chat::ChatMessage, chat::ChatRequest, content::ContentPart, message::MessageRole,
+    chat::{ChatMessage, ChatRequest},
+    content::ContentPart,
+    message::{MessageContent, MessageRole},
     responses::ChatResponse,
+    tools::{Tool, ToolChoice},
 };
 
 use super::config::AnthropicConfig;
@@ -23,7 +26,11 @@ use super::error::{
     anthropic_api_error, anthropic_auth_error, anthropic_network_error, anthropic_parse_error,
     anthropic_rate_limit_error,
 };
-use super::models::{ModelFeature, get_anthropic_registry};
+#[cfg(test)]
+use super::models::get_anthropic_registry;
+use super::models::{ModelFeature, ModelSpec};
+
+const EXTENDED_CACHE_TTL_BETA: &str = "extended-cache-ttl-2025-04-11";
 
 /// Anthropic API client
 #[derive(Debug, Clone)]
@@ -175,7 +182,7 @@ impl AnthropicClient {
 
         // Extended / interleaved thinking requires the beta header.
         if request.thinking.as_ref().is_some_and(|t| t.enabled) {
-            features.push("interleaved-thinking-2025-05-14".to_string());
+            Self::push_beta_feature(&mut features, "interleaved-thinking-2025-05-14");
         }
 
         // Computer-use built-in tool requires its own beta header.
@@ -186,10 +193,14 @@ impl AnthropicClient {
         {
             for tool in arr {
                 if tool.get("type").and_then(|t| t.as_str()) == Some("computer_20241022") {
-                    features.push("computer-use-2024-10-22".to_string());
+                    Self::push_beta_feature(&mut features, "computer-use-2024-10-22");
                     break;
                 }
             }
+        }
+
+        if Self::request_uses_extended_cache_ttl(request) {
+            Self::push_beta_feature(&mut features, EXTENDED_CACHE_TTL_BETA);
         }
 
         // Caller-supplied beta flags via extra_params["anthropic_beta"].
@@ -198,15 +209,12 @@ impl AnthropicClient {
                 Value::Array(arr) => {
                     for item in arr {
                         if let Some(s) = item.as_str() {
-                            let s = s.to_string();
-                            if !features.contains(&s) {
-                                features.push(s);
-                            }
+                            Self::push_beta_feature(&mut features, s);
                         }
                     }
                 }
-                Value::String(s) if !features.contains(s) => {
-                    features.push(s.clone());
+                Value::String(s) => {
+                    Self::push_beta_feature(&mut features, s);
                 }
                 _ => {}
             }
@@ -217,6 +225,34 @@ impl AnthropicClient {
         }
 
         vec![header("anthropic-beta", features.join(","))]
+    }
+
+    fn push_beta_feature(features: &mut Vec<String>, feature: &str) {
+        if !features.iter().any(|existing| existing == feature) {
+            features.push(feature.to_string());
+        }
+    }
+
+    fn request_uses_extended_cache_ttl(request: &ChatRequest) -> bool {
+        request
+            .extra_params
+            .get("cache_control")
+            .is_some_and(Self::cache_control_value_uses_extended_ttl)
+    }
+
+    fn cache_control_value_uses_extended_ttl(value: &Value) -> bool {
+        match value {
+            Value::Object(map) => {
+                map.get("ttl").and_then(Value::as_str) == Some("1h")
+                    || map
+                        .values()
+                        .any(Self::cache_control_value_uses_extended_ttl)
+            }
+            Value::Array(values) => values
+                .iter()
+                .any(Self::cache_control_value_uses_extended_ttl),
+            _ => false,
+        }
     }
 
     /// Handle
@@ -250,228 +286,8 @@ impl AnthropicClient {
             _ => anthropic_api_error(status, body),
         }
     }
-
-    /// Request
-    fn transform_chat_request(&self, request: &ChatRequest) -> Result<Value, ProviderError> {
-        if self.config.uses_compatible_model_allow_list()
-            && !self.config.allows_unknown_model(&request.model)
-        {
-            return Err(anthropic_api_error(
-                400,
-                format!("Unsupported model: {}", request.model),
-            ));
-        }
-
-        let registry = get_anthropic_registry();
-
-        // Check
-        let model_spec = if self.config.uses_compatible_model_allow_list() {
-            None
-        } else {
-            registry.get_model_spec(&request.model)
-        };
-        if model_spec.is_none() && !self.config.allows_unknown_model(&request.model) {
-            return Err(anthropic_api_error(
-                400,
-                format!("Unsupported model: {}", request.model),
-            ));
-        }
-        if model_spec.is_none()
-            && (request
-                .tools
-                .as_ref()
-                .is_some_and(|tools| !tools.is_empty())
-                || Self::has_anthropic_tools_extra_param(request)
-                || request.functions.as_ref().is_some_and(|f| !f.is_empty())
-                || request.function_call.is_some())
-        {
-            return Err(ProviderError::not_supported(
-                "anthropic",
-                format!(
-                    "Unknown model {} cannot declare tool calling support",
-                    request.model
-                ),
-            ));
-        }
-        if model_spec.is_none() && Self::has_unsupported_unknown_model_content(request) {
-            return Err(ProviderError::not_supported(
-                "anthropic",
-                format!(
-                    "Unknown model {} only supports text and image content",
-                    request.model
-                ),
-            ));
-        }
-        if model_spec.is_none()
-            && Self::has_image_content(request)
-            && !self.config.allows_unknown_model_image_input(&request.model)
-        {
-            return Err(ProviderError::not_supported(
-                "anthropic",
-                format!(
-                    "Unknown model {} does not support image input",
-                    request.model
-                ),
-            ));
-        }
-
-        // The Messages API only returns a single candidate; any n other than 1
-        // (including 0) cannot be honored, so reject it instead of silently
-        // returning the wrong number of choices.
-        if let Some(n) = request.n
-            && n != 1
-        {
-            return Err(ProviderError::invalid_request(
-                "anthropic",
-                format!("anthropic only supports n=1 (got n={})", n),
-            ));
-        }
-
-        // Warn once about OpenAI-style parameters Anthropic has no equivalent for.
-        let mut ignored_params = Vec::new();
-        if request.frequency_penalty.is_some() {
-            ignored_params.push("frequency_penalty");
-        }
-        if request.presence_penalty.is_some() {
-            ignored_params.push("presence_penalty");
-        }
-        if request.seed.is_some() {
-            ignored_params.push("seed");
-        }
-        if request.logit_bias.is_some() {
-            ignored_params.push("logit_bias");
-        }
-        if !ignored_params.is_empty() {
-            tracing::warn!(
-                "Anthropic request ignores unsupported parameters: {}",
-                ignored_params.join(", ")
-            );
-        }
-
-        // Separate system messages from user messages
-        let (system_message, messages) = self.separate_system_messages(&request.messages)?;
-        let tool_name_map = self.anthropic_tool_name_map_for_request(request)?;
-
-        let anthropic_messages = self.transform_messages(messages, model_spec, &tool_name_map)?;
-
-        // Request
-        let mut anthropic_request = json!({
-            "model": request.model,
-            "max_tokens": request.max_tokens.unwrap_or(4096),
-            "messages": anthropic_messages,
-        });
-
-        // Add system message
-        if let Some(system) = system_message {
-            anthropic_request["system"] = json!(system);
-        }
-
-        // Add optional parameters
-        if let Some(temperature) = request.temperature {
-            anthropic_request["temperature"] = json!(temperature);
-        }
-
-        if let Some(top_p) = request.top_p {
-            anthropic_request["top_p"] = json!(top_p);
-        }
-
-        if let Some(stop) = &request.stop {
-            anthropic_request["stop_sequences"] = json!(stop);
-        }
-
-        // Add tool support
-        if let Some(tools) = &request.tools
-            && !tools.is_empty()
-        {
-            let Some(model_spec) = model_spec else {
-                return Err(ProviderError::not_supported(
-                    "anthropic",
-                    format!(
-                        "Unknown model {} cannot declare tool calling support",
-                        request.model
-                    ),
-                ));
-            };
-            if !model_spec.features.contains(&ModelFeature::ToolCalling) {
-                return Err(ProviderError::not_supported(
-                    "anthropic",
-                    format!("Model {} does not support tool calling", request.model),
-                ));
-            }
-            let anthropic_tools = self.transform_tools(tools)?;
-            anthropic_request["tools"] = json!(anthropic_tools);
-
-            if let Some(tool_choice) = &request.tool_choice {
-                anthropic_request["tool_choice"] =
-                    self.transform_tool_choice(tool_choice, &tool_name_map)?;
-            }
-        }
-
-        // Add thinking configuration
-        if let Some(thinking) = &request.thinking
-            && thinking.enabled
-        {
-            let Some(model_spec) = model_spec else {
-                return Err(ProviderError::not_supported(
-                    "anthropic",
-                    format!(
-                        "Unknown model {} cannot declare thinking support",
-                        request.model
-                    ),
-                ));
-            };
-            if !model_spec.features.contains(&ModelFeature::ThinkingMode) {
-                return Err(ProviderError::not_supported(
-                    "anthropic",
-                    format!("Model {} does not support thinking", request.model),
-                ));
-            }
-            let budget = thinking.budget_tokens.unwrap_or(10_000);
-            // Anthropic requires max_tokens > budget_tokens. If the default (4096)
-            // is not greater than budget_tokens, raise max_tokens to budget + 1.
-            let current_max = request.max_tokens.unwrap_or(4096);
-            if current_max <= budget {
-                anthropic_request["max_tokens"] = json!(budget + 1);
-            }
-            anthropic_request["thinking"] = json!({
-                "type": "enabled",
-                "budget_tokens": budget
-            });
-        }
-
-        // Structured outputs: pass json_schema response_format to Anthropic.
-        if let Some(rf) = &request.response_format
-            && rf.format_type == "json_schema"
-            && let Some(schema) = &rf.json_schema
-        {
-            anthropic_request["response_format"] = json!({
-                "type": "json_schema",
-                "json_schema": schema
-            });
-        }
-
-        // Anthropic built-in (server-side) tools passed via extra_params.
-        // These are appended after any user-defined function tools.
-        if let Some(arr) = request
-            .extra_params
-            .get("anthropic_tools")
-            .and_then(|v| v.as_array())
-            .filter(|a| !a.is_empty())
-        {
-            let mut merged: Vec<Value> = anthropic_request
-                .get("tools")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            merged.extend(arr.iter().cloned());
-            anthropic_request["tools"] = json!(merged);
-        }
-
-        Ok(anthropic_request)
-    }
-
     /// Separate system messages from user messages
-    fn separate_system_messages(
+    pub(super) fn separate_system_messages(
         &self,
         messages: &[ChatMessage],
     ) -> Result<(Option<String>, Vec<ChatMessage>), ProviderError> {
@@ -483,13 +299,20 @@ impl AnthropicClient {
                 MessageRole::System | MessageRole::Developer => {
                     if let Some(content) = &message.content {
                         match content {
-                            crate::core::types::message::MessageContent::Text(text) => {
+                            MessageContent::Text(text) => {
                                 system_parts.push(text.clone());
                             }
-                            crate::core::types::message::MessageContent::Parts(parts) => {
+                            MessageContent::Parts(parts) => {
                                 for part in parts {
-                                    if let ContentPart::Text { text } = part {
-                                        system_parts.push(text.clone());
+                                    match part {
+                                        ContentPart::Text { text } => {
+                                            system_parts.push(text.clone());
+                                        }
+                                        other => {
+                                            return Err(request_utils::unsupported_content_part(
+                                                other,
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -512,10 +335,11 @@ impl AnthropicClient {
     }
 
     /// Transform messages to Anthropic format
-    fn transform_messages(
+    pub(super) fn transform_messages(
         &self,
         messages: Vec<ChatMessage>,
-        model_spec: Option<&super::models::ModelSpec>,
+        model: &str,
+        model_spec: Option<&ModelSpec>,
         tool_name_map: &request_utils::ToolNameMap,
     ) -> Result<Vec<Value>, ProviderError> {
         let mut anthropic_messages = Vec::new();
@@ -525,12 +349,14 @@ impl AnthropicClient {
                 let tool_use_id = message.tool_call_id.clone().ok_or_else(|| {
                     anthropic_parse_error("Tool/function message missing tool_call_id")
                 })?;
+                let content =
+                    self.tool_result_content(message.content.clone(), model, model_spec)?;
                 anthropic_messages.push(json!({
                     "role": "user",
                     "content": [{
                         "type": "tool_result",
                         "tool_use_id": tool_use_id,
-                        "content": Self::tool_result_content(message.content.clone())
+                        "content": content
                     }]
                 }));
                 continue;
@@ -545,10 +371,8 @@ impl AnthropicClient {
 
             let content = if let Some(content) = message.content {
                 match content {
-                    crate::core::types::message::MessageContent::Text(text) => {
-                        json!(text)
-                    }
-                    crate::core::types::message::MessageContent::Parts(parts) => {
+                    MessageContent::Text(text) => json!(text),
+                    MessageContent::Parts(parts) => {
                         let mut anthropic_parts = Vec::new();
 
                         for part in parts {
@@ -556,72 +380,43 @@ impl AnthropicClient {
                                 ContentPart::Text { text } => {
                                     anthropic_parts.push(json!({
                                         "type": "text",
-                                        "text": text
+                                            "text": text
                                     }));
                                 }
-                                ContentPart::ImageUrl { image_url }
-                                    if model_spec.is_none_or(|spec| {
-                                        spec.features.contains(&ModelFeature::MultimodalSupport)
-                                    }) =>
-                                {
-                                    // Handle
-                                    if image_url.url.starts_with("data:") {
-                                        // Base64 format image
-                                        let parts: Vec<&str> = image_url.url.split(',').collect();
-                                        if parts.len() == 2 {
-                                            let media_type = parts[0]
-                                                .strip_prefix("data:")
-                                                .and_then(|s| s.split(';').next())
-                                                .unwrap_or("image/jpeg");
-
-                                            anthropic_parts.push(json!({
-                                                "type": "image",
-                                                "source": {
-                                                    "type": "base64",
-                                                    "media_type": media_type,
-                                                    "data": parts[1]
-                                                }
-                                            }));
-                                        }
-                                    } else {
-                                        // URL format image - requires download and conversion
-                                        // NOTE: URL image download and conversion not yet implemented
-                                        return Err(anthropic_api_error(
-                                            400,
-                                            "URL images not yet supported, use base64 format",
-                                        ));
+                                ContentPart::ImageUrl { .. }
+                                | ContentPart::Image { .. }
+                                | ContentPart::Document { .. } => {
+                                    anthropic_parts.push(self.content_part_to_anthropic_block(
+                                        part, model, model_spec,
+                                    )?);
+                                }
+                                ContentPart::ToolUse { id, name, input } if role == "assistant" => {
+                                    anthropic_parts.push(json!({
+                                        "type": "tool_use",
+                                        "id": id,
+                                        "name": request_utils::declared_tool_name(
+                                            &name, tool_name_map, "Tool use"
+                                        )?,
+                                        "input": input
+                                    }));
+                                }
+                                ContentPart::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                    is_error,
+                                } if role == "user" => {
+                                    let mut tool_result = json!({
+                                        "type": "tool_result",
+                                        "tool_use_id": tool_use_id,
+                                        "content": content
+                                    });
+                                    if let Some(is_error) = is_error {
+                                        tool_result["is_error"] = json!(is_error);
                                     }
+                                    anthropic_parts.push(tool_result);
                                 }
-                                ContentPart::Image { source, .. }
-                                    if model_spec.is_none_or(|spec| {
-                                        spec.features.contains(&ModelFeature::MultimodalSupport)
-                                    }) =>
-                                {
-                                    anthropic_parts.push(json!({
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": source.media_type,
-                                            "data": source.data
-                                        }
-                                    }));
-                                }
-                                ContentPart::Document { source, .. }
-                                    if model_spec.is_some_and(|spec| {
-                                        spec.features.contains(&ModelFeature::MultimodalSupport)
-                                    }) =>
-                                {
-                                    anthropic_parts.push(json!({
-                                        "type": "document",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": source.media_type,
-                                            "data": source.data
-                                        }
-                                    }));
-                                }
-                                _ => {
-                                    // Other content types not yet supported
+                                other => {
+                                    return Err(request_utils::unsupported_content_part(&other));
                                 }
                             }
                         }
@@ -643,14 +438,23 @@ impl AnthropicClient {
                 let mut anthropic_content =
                     Self::content_value_to_blocks(&anthropic_message["content"]);
                 for tool_call in tool_calls {
+                    let input = serde_json::from_str::<Value>(&tool_call.function.arguments)
+                        .map_err(|error| {
+                            ProviderError::invalid_request(
+                                "anthropic",
+                                format!(
+                                    "Tool call '{}' arguments must be valid JSON: {}",
+                                    tool_call.id, error
+                                ),
+                            )
+                        })?;
                     anthropic_content.push(json!({
                         "type": "tool_use",
                         "id": tool_call.id,
                         "name": request_utils::declared_tool_name(
                             &tool_call.function.name, tool_name_map, "Tool call"
                         )?,
-                        "input": serde_json::from_str::<Value>(&tool_call.function.arguments)
-                            .unwrap_or(json!({}))
+                        "input": input
                     }));
                 }
                 anthropic_message["content"] = json!(anthropic_content);
@@ -660,6 +464,120 @@ impl AnthropicClient {
         }
 
         Ok(anthropic_messages)
+    }
+
+    fn content_part_to_anthropic_block(
+        &self,
+        part: ContentPart,
+        model: &str,
+        model_spec: Option<&ModelSpec>,
+    ) -> Result<Value, ProviderError> {
+        match part {
+            ContentPart::Text { text } => Ok(json!({
+                "type": "text",
+                "text": text
+            })),
+            ContentPart::ImageUrl { image_url } => {
+                if !Self::supports_multimodal_content(model_spec) {
+                    return Err(ProviderError::not_supported(
+                        "anthropic",
+                        format!("Model {} does not support image content", model),
+                    ));
+                }
+                if !image_url.url.starts_with("data:") {
+                    return Err(anthropic_api_error(
+                        400,
+                        "URL images not yet supported, use base64 format",
+                    ));
+                }
+
+                let (metadata, data) = image_url.url.split_once(',').ok_or_else(|| {
+                    ProviderError::invalid_request("anthropic", "Invalid data URL image content")
+                })?;
+                let media_type = metadata
+                    .strip_prefix("data:")
+                    .and_then(|s| s.split(';').next())
+                    .unwrap_or("image/jpeg");
+
+                Ok(json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data
+                    }
+                }))
+            }
+            ContentPart::Image { source, .. } => {
+                if !Self::supports_multimodal_content(model_spec) {
+                    return Err(ProviderError::not_supported(
+                        "anthropic",
+                        format!("Model {} does not support image content", model),
+                    ));
+                }
+                Ok(json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": source.media_type,
+                        "data": source.data
+                    }
+                }))
+            }
+            ContentPart::Document {
+                source,
+                cache_control,
+            } => {
+                if !Self::supports_multimodal_content(model_spec) {
+                    return Err(ProviderError::not_supported(
+                        "anthropic",
+                        format!("Model {} does not support document content", model),
+                    ));
+                }
+                let mut document = json!({
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": source.media_type,
+                        "data": source.data
+                    }
+                });
+                if self.config.enable_cache_control
+                    && let Some(cache_control) = cache_control
+                {
+                    Self::ensure_cache_control_supported(model, model_spec)?;
+                    document["cache_control"] = json!(cache_control);
+                }
+                Ok(document)
+            }
+            other => Err(request_utils::unsupported_content_part(&other)),
+        }
+    }
+
+    fn supports_multimodal_content(model_spec: Option<&ModelSpec>) -> bool {
+        model_spec.is_none_or(|spec| spec.features.contains(&ModelFeature::MultimodalSupport))
+    }
+
+    pub(super) fn ensure_cache_control_supported(
+        model: &str,
+        model_spec: Option<&ModelSpec>,
+    ) -> Result<(), ProviderError> {
+        let Some(model_spec) = model_spec else {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Unknown model {} cannot declare cache control support",
+                    model
+                ),
+            ));
+        };
+        if model_spec.features.contains(&ModelFeature::CacheControl) {
+            return Ok(());
+        }
+        Err(ProviderError::not_supported(
+            "anthropic",
+            format!("Model {} does not support cache control", model),
+        ))
     }
 
     pub(crate) fn has_multimodal_content(request: &ChatRequest) -> bool {
@@ -732,46 +650,52 @@ impl AnthropicClient {
         }
     }
 
-    fn tool_result_content(content: Option<crate::core::types::message::MessageContent>) -> Value {
+    fn tool_result_content(
+        &self,
+        content: Option<MessageContent>,
+        model: &str,
+        model_spec: Option<&ModelSpec>,
+    ) -> Result<Value, ProviderError> {
         match content {
-            Some(crate::core::types::message::MessageContent::Text(text)) => json!(text),
-            Some(crate::core::types::message::MessageContent::Parts(parts)) => {
-                let text = parts
+            Some(MessageContent::Text(text)) => Ok(json!(text)),
+            Some(MessageContent::Parts(parts)) => {
+                let blocks = parts
                     .into_iter()
-                    .filter_map(|part| match part {
-                        ContentPart::Text { text } => Some(text),
-                        _ => None,
+                    .map(|part| match part {
+                        ContentPart::Text { .. }
+                        | ContentPart::ImageUrl { .. }
+                        | ContentPart::Image { .. }
+                        | ContentPart::Document { .. } => {
+                            self.content_part_to_anthropic_block(part, model, model_spec)
+                        }
+                        other => Err(request_utils::unsupported_content_part(&other)),
                     })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                json!(text)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(json!(blocks))
             }
-            None => json!(""),
+            None => Ok(json!("")),
         }
     }
 
     /// Transform tool definitions
-    fn transform_tools(
-        &self,
-        tools: &[crate::core::types::tools::Tool],
-    ) -> Result<Vec<Value>, ProviderError> {
+    pub(super) fn transform_tools(&self, tools: &[Tool]) -> Result<Vec<Value>, ProviderError> {
         request_utils::anthropic_tools(tools)
     }
 
     /// Transform tool choice
-    fn transform_tool_choice(
+    pub(super) fn transform_tool_choice(
         &self,
-        tool_choice: &crate::core::types::tools::ToolChoice,
+        tool_choice: &ToolChoice,
         tool_name_map: &request_utils::ToolNameMap,
     ) -> Result<Value, ProviderError> {
         match tool_choice {
-            crate::core::types::tools::ToolChoice::String(choice) => match choice.as_str() {
+            ToolChoice::String(choice) => match choice.as_str() {
                 "auto" => Ok(json!({"type": "auto"})),
                 "none" => Ok(json!({"type": "none"})),
                 "required" => Ok(json!({"type": "any"})),
                 _ => Ok(json!({"type": "auto"})),
             },
-            crate::core::types::tools::ToolChoice::Specific { function, .. } => {
+            ToolChoice::Specific { function, .. } => {
                 if let Some(func) = function {
                     Ok(json!({
                         "type": "tool",
@@ -787,6 +711,7 @@ impl AnthropicClient {
     }
 }
 
+mod request;
 mod request_utils;
 mod response;
 mod usage;

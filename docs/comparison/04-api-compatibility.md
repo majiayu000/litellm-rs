@@ -250,7 +250,7 @@ pub struct Model {
 | `/v1/audio/translations` | Yes | Yes | Audio translation |
 | `/v1/moderations` | No | Yes | Content moderation |
 | `/v1/files` | No | Yes | File management |
-| `/v1/batches` | No | Yes | Batch processing |
+| `/v1/batches` | Partial | Yes | Provider-backed OpenAI-compatible create/list/get/cancel proxy; no durable local batch execution |
 | `/v1/fine_tuning/jobs` | No | Yes | Fine-tuning |
 | `/v1/assistants` | No | Yes | Assistants API |
 | `/v1/threads` | No | Yes | Threads API |

@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
+use crate::core::types::content::ContentPart;
 use crate::core::types::tools::Tool;
 
 use super::AnthropicClient;
@@ -98,6 +99,28 @@ pub(super) fn declared_tool_name(
             "anthropic",
             format!("{} '{}' does not match a declared tool", field, name),
         )),
+    }
+}
+
+pub(super) fn unsupported_content_part(part: &ContentPart) -> ProviderError {
+    ProviderError::invalid_request(
+        "anthropic",
+        format!(
+            "Anthropic request transformation does not support {} content parts in this position",
+            content_part_type(part)
+        ),
+    )
+}
+
+fn content_part_type(part: &ContentPart) -> &'static str {
+    match part {
+        ContentPart::Text { .. } => "text",
+        ContentPart::ImageUrl { .. } => "image_url",
+        ContentPart::Audio { .. } => "audio",
+        ContentPart::Image { .. } => "image",
+        ContentPart::Document { .. } => "document",
+        ContentPart::ToolResult { .. } => "tool_result",
+        ContentPart::ToolUse { .. } => "tool_use",
     }
 }
 

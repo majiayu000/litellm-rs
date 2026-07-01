@@ -52,7 +52,7 @@
 | acompletion() | ✅ | ✅ | 完整 |
 | completion_stream() | ✅ | ✅ | 完整 |
 | rerank() | ✅ | ✅ | 完整 |
-| batch operations | ✅ | ✅ | 完整 |
+| batch operations | ✅ | ⚠️ | OpenAI-compatible provider proxy; no durable local batch execution |
 
 ### 部分实现 API
 

@@ -296,7 +296,13 @@ mod tests {
         };
 
         let result = OpenAIRequestTransformer::transform(request).unwrap();
-        assert!(result.messages.first().unwrap().content.is_some());
+        assert!(
+            result
+                .messages
+                .first()
+                .and_then(|message| message.content.as_ref())
+                .is_some()
+        );
     }
 
     #[test]
@@ -322,7 +328,13 @@ mod tests {
         };
 
         let result = OpenAIRequestTransformer::transform(request).unwrap();
-        assert!(result.messages.first().unwrap().content.is_some());
+        assert!(
+            result
+                .messages
+                .first()
+                .and_then(|message| message.content.as_ref())
+                .is_some()
+        );
     }
 
     #[test]
@@ -343,7 +355,13 @@ mod tests {
         };
 
         let result = OpenAIRequestTransformer::transform(request).unwrap();
-        assert!(result.messages.first().unwrap().content.is_some());
+        let body = serde_json::to_value(&result).expect("OpenAI request should serialize");
+        let audio_part = &body["messages"][0]["content"][0];
+
+        assert_eq!(audio_part["type"], "input_audio");
+        assert_eq!(audio_part["input_audio"]["data"], "base64data");
+        assert_eq!(audio_part["input_audio"]["format"], "mp3");
+        assert!(audio_part.get("audio").is_none());
     }
 
     #[test]
