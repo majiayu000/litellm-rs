@@ -90,6 +90,10 @@ async fn handle_embedding_internal(
     if request.model.trim().is_empty() {
         return Err(GatewayError::validation("Model is required"));
     }
+    if let Some(cached) = super::response_cache::lookup_embedding(state, &request).await? {
+        return Ok(cached);
+    }
+    let request_for_cache = request.clone();
 
     let requested_model = request.model.clone();
     let core_request = CoreEmbeddingRequest {
@@ -219,6 +223,7 @@ async fn handle_embedding_internal(
         },
     };
 
+    super::response_cache::store_embedding(state, &request_for_cache, &response).await?;
     Ok(response)
 }
 

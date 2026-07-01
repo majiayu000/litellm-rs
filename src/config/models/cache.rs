@@ -38,15 +38,10 @@ impl Default for CacheConfig {
 
 impl CacheConfig {
     /// Warnings for cache options that are parsed but not consumed by any
-    /// runtime path yet (the response cache is never constructed at startup),
-    /// so dead configuration is surfaced instead of silently ignored.
+    /// runtime path yet, so dead configuration is surfaced instead of silently
+    /// ignored.
     pub fn not_yet_implemented_warnings(&self) -> Vec<String> {
         let mut warnings = Vec::new();
-        if self.enabled {
-            warnings.push(
-                "cache.enabled is set but the response cache is not wired into the request path yet; this setting currently has no effect".to_string(),
-            );
-        }
         if self.semantic_cache {
             warnings.push(
                 "cache.semantic_cache is set but semantic caching is not implemented yet; this setting currently has no effect".to_string(),
@@ -215,15 +210,13 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_config_not_yet_implemented_warnings_enabled() {
+    fn test_cache_config_not_yet_implemented_warnings_enabled_is_wired() {
         let config = CacheConfig {
             enabled: true,
             ..CacheConfig::default()
         };
         let warnings = config.not_yet_implemented_warnings();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("cache.enabled"));
-        assert!(warnings[0].contains("no effect"));
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -234,8 +227,8 @@ mod tests {
             ..CacheConfig::default()
         };
         let warnings = config.not_yet_implemented_warnings();
-        assert_eq!(warnings.len(), 2);
-        assert!(warnings[1].contains("cache.semantic_cache"));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("cache.semantic_cache"));
     }
 
     #[test]

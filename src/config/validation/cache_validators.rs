@@ -9,13 +9,6 @@ use crate::config::models::rate_limit::RateLimitConfig;
 
 impl Validate for CacheConfig {
     fn validate(&self) -> Result<(), String> {
-        if self.enabled {
-            return Err(
-                "Gateway cache is not wired into runtime request handling; leave cache.enabled=false until support lands"
-                    .to_string(),
-            );
-        }
-
         if self.semantic_cache {
             return Err(
                 "Semantic cache is not wired into runtime request handling; leave cache.semantic_cache=false until support lands"

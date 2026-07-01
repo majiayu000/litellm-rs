@@ -21,6 +21,7 @@ mod provider_config;
 #[cfg(test)]
 mod provider_selection;
 mod rerank;
+mod response_cache;
 mod responses;
 mod responses_stream;
 mod spend;

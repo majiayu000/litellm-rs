@@ -401,7 +401,13 @@ async fn handle_chat_completion_internal(
     let unified_router = &state.unified_router;
     let requested_model = request.model.clone();
     let request_for_budget = request.clone();
+    let request_for_cache = request.clone();
     let core_request = build_core_chat_request(request, requested_model, false)?;
+    if let Some(cached) =
+        super::response_cache::lookup_chat(state, &request_for_cache, &context).await?
+    {
+        return Ok(cached);
+    }
     let requested_model = core_request.model.clone();
     let context_for_execution = context.clone();
 
@@ -476,7 +482,9 @@ async fn handle_chat_completion_internal(
     )
     .await?;
 
-    Ok(convert_core_chat_response(core_response))
+    let response = convert_core_chat_response(core_response);
+    super::response_cache::store_chat(state, &request_for_cache, &response, &context).await?;
+    Ok(response)
 }
 
 pub(crate) fn build_core_chat_request(

@@ -4,12 +4,14 @@
 
 use crate::config::Config;
 use crate::core::budget::{BudgetManager, UnifiedBudgetLimits};
+use crate::core::cache::{DualCacheConfig, LLMCache, LLMCacheConfig};
 use crate::core::keys::{DatabaseKeyRepository, KeyManager};
 use crate::core::pricing_service::PricingService;
 use crate::core::teams::TeamManager;
 use crate::storage::database::SeaOrmTeamRepository;
 use crate::utils::sync::AtomicValue;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// HTTP server state shared across handlers
 ///
@@ -40,6 +42,8 @@ pub struct AppState {
     pub team_manager: Arc<TeamManager>,
     /// API key manager for `/v1/keys` route handlers (shared across requests)
     pub key_manager: KeyManager,
+    /// Optional deterministic response cache for non-streaming chat and embeddings
+    pub response_cache: Option<Arc<LLMCache>>,
 }
 
 impl AppState {
@@ -53,6 +57,7 @@ impl AppState {
         budget_limits: Arc<UnifiedBudgetLimits>,
     ) -> Self {
         let storage = Arc::new(storage);
+        let response_cache = build_response_cache(&config);
         let key_manager = KeyManager::new(DatabaseKeyRepository::new(storage.clone()))
             .with_hmac_secret(config.gateway.auth.api_key_hmac_secret.clone());
         let team_manager = Arc::new(TeamManager::new(Arc::new(SeaOrmTeamRepository::new(
@@ -68,6 +73,7 @@ impl AppState {
             budget_manager: Arc::new(BudgetManager::new()),
             team_manager,
             key_manager,
+            response_cache,
         }
     }
 
@@ -79,4 +85,26 @@ impl AppState {
     pub fn config(&self) -> Arc<Config> {
         self.config.load()
     }
+}
+
+fn build_response_cache(config: &Config) -> Option<Arc<LLMCache>> {
+    if !config.gateway.cache.enabled {
+        return None;
+    }
+
+    let ttl = Duration::from_secs(config.gateway.cache.ttl);
+    let cache_config = DualCacheConfig::memory_only()
+        .with_max_size(config.gateway.cache.max_size)
+        .with_ttl(ttl);
+    let llm_config = LLMCacheConfig {
+        cache_config,
+        chat_ttl: ttl,
+        embedding_ttl: ttl,
+        user_specific: true,
+        semantic_cache_enabled: false,
+        similarity_threshold: config.gateway.cache.similarity_threshold,
+    };
+    let cache = Arc::new(LLMCache::new(llm_config, None));
+    cache.start_cleanup_tasks();
+    Some(cache)
 }

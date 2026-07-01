@@ -165,6 +165,19 @@ mod tests {
         build_test_app_state_with_idle_timeout(base_url, None).await
     }
 
+    async fn build_test_app_state_with_cache(base_url: &str) -> AppState {
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.cache.enabled = true;
+        config.gateway.providers = vec![build_provider_config(base_url)];
+
+        let server = GatewayHttpServer::new(&config)
+            .await
+            .expect("gateway server should initialize for cache tests");
+        server.state().clone()
+    }
+
     async fn build_test_app_state_with_idle_timeout(
         base_url: &str,
         stream_idle_timeout: Option<u64>,
@@ -233,6 +246,39 @@ mod tests {
         assert_eq!(requests[0]["messages"][0]["content"], "Hello");
         assert!(requests[0].get("stream").is_none());
         assert!(requests[0].get("stream_options").is_none());
+
+        mock_server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_completions_non_stream_uses_response_cache() {
+        let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
+        let state = build_test_app_state_with_cache(&mock_server.base_url).await;
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        for _ in 0..2 {
+            let req = test::TestRequest::post()
+                .uri("/v1/completions")
+                .set_json(completion_request(None))
+                .to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body: Value = test::read_body_json(resp).await;
+            assert_eq!(body["choices"][0]["text"], "mocked response");
+        }
+
+        let requests = mock_server.requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "second identical request should hit cache"
+        );
 
         mock_server.shutdown().await;
     }

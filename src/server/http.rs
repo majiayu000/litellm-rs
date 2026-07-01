@@ -472,25 +472,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_rejects_unwired_cache_config() {
+    async fn new_wires_enabled_cache_config() {
         let mut config = Config::default();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = None;
         config.gateway.cache.enabled = true;
 
-        let error = match HttpServer::new(&config).await {
-            Ok(_) => panic!("expected unwired cache configuration to fail startup"),
-            Err(error) => error,
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("enabled cache should wire runtime cache: {error}"),
         };
 
-        match error {
-            GatewayError::Config(message) => {
-                assert!(message.contains("Invalid cache configuration"));
-                assert!(message.contains("not wired into runtime"));
-            }
-            other => panic!("expected config error, got: {other:?}"),
-        }
+        assert!(server.state().response_cache.is_some());
     }
 
     /// In-memory budget snapshots load succeeds (returns empty) on sqlite, so
