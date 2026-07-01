@@ -9,6 +9,7 @@ use crate::core::keys::{DatabaseKeyRepository, KeyManager};
 use crate::core::pricing_service::PricingService;
 use crate::core::teams::TeamManager;
 use crate::storage::database::SeaOrmTeamRepository;
+use crate::storage::redis::RedisPool;
 use crate::utils::sync::AtomicValue;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,7 +58,7 @@ impl AppState {
         budget_limits: Arc<UnifiedBudgetLimits>,
     ) -> Self {
         let storage = Arc::new(storage);
-        let response_cache = build_response_cache(&config);
+        let response_cache = build_response_cache(&config, storage.redis.clone());
         let key_manager = KeyManager::new(DatabaseKeyRepository::new(storage.clone()))
             .with_hmac_secret(config.gateway.auth.api_key_hmac_secret.clone());
         let team_manager = Arc::new(TeamManager::new(Arc::new(SeaOrmTeamRepository::new(
@@ -87,15 +88,20 @@ impl AppState {
     }
 }
 
-fn build_response_cache(config: &Config) -> Option<Arc<LLMCache>> {
+fn build_response_cache(config: &Config, redis: Arc<RedisPool>) -> Option<Arc<LLMCache>> {
     if !config.gateway.cache.enabled {
         return None;
     }
 
     let ttl = Duration::from_secs(config.gateway.cache.ttl);
-    let cache_config = DualCacheConfig::memory_only()
-        .with_max_size(config.gateway.cache.max_size)
-        .with_ttl(ttl);
+    let redis_pool = (!redis.is_noop()).then_some(redis);
+    let cache_config = if redis_pool.is_some() {
+        DualCacheConfig::default()
+    } else {
+        DualCacheConfig::memory_only()
+    }
+    .with_max_size(config.gateway.cache.max_size)
+    .with_ttl(ttl);
     let llm_config = LLMCacheConfig {
         cache_config,
         chat_ttl: ttl,
@@ -104,7 +110,7 @@ fn build_response_cache(config: &Config) -> Option<Arc<LLMCache>> {
         semantic_cache_enabled: false,
         similarity_threshold: config.gateway.cache.similarity_threshold,
     };
-    let cache = Arc::new(LLMCache::new(llm_config, None));
+    let cache = Arc::new(LLMCache::new(llm_config, redis_pool));
     cache.start_cleanup_tasks();
     Some(cache)
 }
