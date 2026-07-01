@@ -22,23 +22,27 @@ GH-727 / #727
 - [x] `SP727-T9` Owner: coordinator. Done when: `src/core/providers/azure/batches/mod.rs` delegates tests with `#[path = "batches_tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/azure/batches/mod.rs`.
 - [x] `SP727-T10` Owner: coordinator. Done when: original inline Azure Batch tests are moved to `src/core/providers/azure/batches/batches_tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/azure/batches/batches_tests.rs`.
 - [x] `SP727-T11` Owner: verification owner. Done when: both Azure Batch files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/azure/batches/mod.rs src/core/providers/azure/batches/batches_tests.rs`; `cargo test core::providers::azure::batches --lib --all-features`.
-- [ ] `SP727-T12` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Azure Batch tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [x] `SP727-T12` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Azure Batch tranche. Verify: #805 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T13` Owner: coordinator. Done when: `src/core/providers/jina/mod.rs` delegates tests with `#[path = "tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/jina/mod.rs`.
+- [x] `SP727-T14` Owner: coordinator. Done when: original inline Jina tests are moved to `src/core/providers/jina/tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/jina/tests.rs`.
+- [x] `SP727-T15` Owner: verification owner. Done when: both Jina files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/jina/mod.rs src/core/providers/jina/tests.rs`; `cargo test core::providers::jina --lib --all-features`.
+- [ ] `SP727-T16` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Jina tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for one Azure Batch test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for one Jina test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/providers/azure/batches/mod.rs`
-- `src/core/providers/azure/batches/batches_tests.rs`
+- `src/core/providers/jina/mod.rs`
+- `src/core/providers/jina/tests.rs`
 
 ## 验证
 
 - SpecRail packet validation.
 - `cargo fmt --all -- --check`
-- `cargo test core::providers::azure::batches --lib --all-features`
+- `cargo test core::providers::jina --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 
