@@ -11,33 +11,33 @@ GH-727 / #727
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/providers/bedrock/utils/cost.rs`，它当前 882 行，是 #727 当前 top offenders 之一。
-- 按现有 `#[path = "..._tests.rs"] mod tests;` 模式，把 inline tests 移动到 `cost_tests.rs`。
-- 保持 Bedrock cost runtime 代码、测试断言、fixtures 和 public API 不变。
+- 拆分 `src/core/providers/cloudflare/provider.rs`，它当前 907 行，是 #727 当前 top offenders 之一。
+- 按现有 `#[path = "..._tests.rs"] mod tests;` 模式，把 inline tests 移动到 `provider_tests.rs`。
+- 保持 Cloudflare provider runtime 代码、测试断言、fixtures 和 public API 不变。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 Bedrock cost runtime 行为。
-- 不重构 model pricing lookup、currency handling、cost calculation 或 detailed cost breakdown rules。
+- 不修改 Cloudflare provider runtime 行为。
+- 不重构 request transformation、response transformation、provider capabilities、model listing、cost calculation 或 unimplemented operation behavior。
 - 不在本 PR 中处理其余大文件。
 - 不关闭 #727，除非 issue owner 决定一个 tranche PR 足以满足 tracker。
 
 ## Behavior Invariants
 
-1. 所有原有 Bedrock cost tests 仍由 `core::providers::bedrock::utils::cost::tests::*` 测试树运行。
+1. 所有原有 Cloudflare provider tests 仍由 `core::providers::cloudflare::provider::tests::*` 测试树运行。
 2. 测试移动只能改变 module file location，不改变断言、fixtures 或 production code。
-3. `src/core/providers/bedrock/utils/cost.rs` 和 `src/core/providers/bedrock/utils/cost_tests.rs` 必须低于 800 行。
-4. `cargo test core::providers::bedrock::utils::cost --lib --all-features` 必须通过。
+3. `src/core/providers/cloudflare/provider.rs` 和 `src/core/providers/cloudflare/provider_tests.rs` 必须低于 800 行。
+4. `cargo test core::providers::cloudflare::provider --lib --all-features` 必须通过。
 
 ## 验收标准
 
-- [ ] `src/core/providers/bedrock/utils/cost.rs` 使用 `#[path = "cost_tests.rs"] mod tests;` 引入测试。
-- [ ] `src/core/providers/bedrock/utils/cost_tests.rs` 包含原 inline test module body，且低于 800 行。
-- [ ] Focused Bedrock cost tests 通过。
+- [ ] `src/core/providers/cloudflare/provider.rs` 使用 `#[path = "provider_tests.rs"] mod tests;` 引入测试。
+- [ ] `src/core/providers/cloudflare/provider_tests.rs` 包含原 inline test module body，且低于 800 行。
+- [ ] Focused Cloudflare provider tests 通过。
 - [ ] `cargo fmt --all -- --check` 和 `cargo check --all-features --locked` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 next tranche，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a Bedrock cost test layout maintenance split for U-16 compliance.
+No runtime behavior change. This is a Cloudflare provider test layout maintenance split for U-16 compliance.

@@ -46,23 +46,27 @@ GH-727 / #727
 - [x] `SP727-T33` Owner: coordinator. Done when: `src/core/providers/bedrock/utils/cost.rs` delegates tests with `#[path = "cost_tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/bedrock/utils/cost.rs`.
 - [x] `SP727-T34` Owner: coordinator. Done when: original inline Bedrock cost tests are moved to `src/core/providers/bedrock/utils/cost_tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/bedrock/utils/cost_tests.rs`.
 - [x] `SP727-T35` Owner: verification owner. Done when: both Bedrock cost files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/bedrock/utils/cost.rs src/core/providers/bedrock/utils/cost_tests.rs`; `cargo test core::providers::bedrock::utils::cost --lib --all-features`.
-- [ ] `SP727-T36` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Bedrock cost tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [x] `SP727-T36` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Bedrock cost tranche. Verify: #811 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T37` Owner: coordinator. Done when: `src/core/providers/cloudflare/provider.rs` delegates tests with `#[path = "provider_tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/cloudflare/provider.rs`.
+- [x] `SP727-T38` Owner: coordinator. Done when: original inline Cloudflare provider tests are moved to `src/core/providers/cloudflare/provider_tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/cloudflare/provider_tests.rs`.
+- [x] `SP727-T39` Owner: verification owner. Done when: both Cloudflare provider files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/cloudflare/provider.rs src/core/providers/cloudflare/provider_tests.rs`; `cargo test core::providers::cloudflare::provider --lib --all-features`.
+- [ ] `SP727-T40` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Cloudflare provider tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for one Bedrock cost test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for one Cloudflare provider test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/providers/bedrock/utils/cost.rs`
-- `src/core/providers/bedrock/utils/cost_tests.rs`
+- `src/core/providers/cloudflare/provider.rs`
+- `src/core/providers/cloudflare/provider_tests.rs`
 
 ## 验证
 
 - SpecRail packet validation.
 - `cargo fmt --all -- --check`
-- `cargo test core::providers::bedrock::utils::cost --lib --all-features`
+- `cargo test core::providers::cloudflare::provider --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 
