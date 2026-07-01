@@ -305,7 +305,12 @@ fn test_anthropic_transform_messages_preserves_assistant_text_with_tool_use() {
     }];
 
     let transformed = client
-        .transform_messages(messages, Some(model_spec), &Default::default())
+        .transform_messages(
+            messages,
+            "claude-3-opus-20240229",
+            Some(model_spec),
+            &Default::default(),
+        )
         .unwrap();
     assert_eq!(transformed[0]["role"], "assistant");
     let content = transformed[0]["content"].as_array().unwrap();
@@ -337,7 +342,12 @@ fn test_anthropic_transform_messages_tool_role_to_tool_result() {
     }];
 
     let transformed = client
-        .transform_messages(messages, Some(model_spec), &Default::default())
+        .transform_messages(
+            messages,
+            "claude-3-opus-20240229",
+            Some(model_spec),
+            &Default::default(),
+        )
         .unwrap();
     assert_eq!(transformed[0]["role"], "user");
     let content = transformed[0]["content"].as_array().unwrap();

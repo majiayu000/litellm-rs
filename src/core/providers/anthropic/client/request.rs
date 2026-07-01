@@ -111,7 +111,8 @@ impl AnthropicClient {
         let (system_message, messages) = self.separate_system_messages(&request.messages)?;
         let tool_name_map = self.anthropic_tool_name_map_for_request(request)?;
 
-        let anthropic_messages = self.transform_messages(messages, model_spec, &tool_name_map)?;
+        let anthropic_messages =
+            self.transform_messages(messages, &request.model, model_spec, &tool_name_map)?;
 
         let mut anthropic_request = json!({
             "model": request.model,
@@ -139,6 +140,7 @@ impl AnthropicClient {
         if self.config.enable_cache_control
             && let Some(cache_control) = request.extra_params.get("cache_control")
         {
+            Self::ensure_cache_control_supported(&request.model, model_spec)?;
             anthropic_request["cache_control"] = cache_control.clone();
         }
 
