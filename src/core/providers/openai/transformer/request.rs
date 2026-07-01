@@ -355,10 +355,7 @@ mod tests {
         };
 
         let result = OpenAIRequestTransformer::transform(request).unwrap();
-        let body = match serde_json::to_value(&result) {
-            Ok(body) => body,
-            Err(error) => panic!("OpenAI request should serialize: {error}"),
-        };
+        let body = serde_json::to_value(&result).expect("OpenAI request should serialize");
         let audio_part = &body["messages"][0]["content"][0];
 
         assert_eq!(audio_part["type"], "input_audio");
