@@ -267,7 +267,7 @@ class BaseConfig(ABC):
 | **Tool Calling** | Full support in types | Full support |
 | **Vision/Multimodal** | Types defined (ContentPart) | Full implementation |
 | **Audio (TTS/STT)** | Groq STT only | 10+ providers |
-| **Batches** | Azure batches | Anthropic, Azure, Vertex AI |
+| **Batches** | OpenAI-compatible provider proxy routes | Anthropic, Azure, Vertex AI |
 | **Fine-tuning** | OpenAI module exists | OpenAI, Azure |
 | **Assistants** | Azure assistants | OpenAI, Azure |
 | **Realtime** | OpenAI module exists | OpenAI, Azure |
