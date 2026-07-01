@@ -54,54 +54,134 @@ pub struct HttpErrorMapper;
 impl HttpErrorMapper {
     /// Map HTTP status code to provider error.
     pub fn map_status_code(provider: &'static str, status: u16, body: &str) -> ProviderError {
+        let message = extract_error_message(body).unwrap_or_else(|| body.to_string());
+
         match status {
-            400 => ProviderError::invalid_request(provider, body.to_string()),
-            401 => ProviderError::authentication(
-                provider,
-                "Invalid API key or authentication failed".to_string(),
-            ),
-            403 => ProviderError::authentication(
-                provider,
-                "Forbidden: insufficient permissions".to_string(),
-            ),
-            404 => ProviderError::model_not_found(provider, body.to_string()),
-            429 => ProviderError::rate_limit(provider, None),
-            402 => ProviderError::quota_exceeded(provider, "Quota exceeded".to_string()),
-            500..=599 => {
-                ProviderError::api_error(provider, status, format!("Server error: {}", body))
+            400 => {
+                if is_context_length_error(body) {
+                    ProviderError::context_length_exceeded(provider, 0, 0)
+                } else if is_content_filter_error(body) {
+                    ProviderError::content_filtered(provider, message, None, Some(false))
+                } else {
+                    ProviderError::invalid_request(provider, message)
+                }
             }
-            _ => ProviderError::api_error(provider, status, body.to_string()),
+            401 => ProviderError::authentication(provider, message),
+            402 => ProviderError::quota_exceeded(provider, message),
+            403 => {
+                if is_quota_error(body) {
+                    ProviderError::quota_exceeded(provider, message)
+                } else {
+                    ProviderError::authentication(provider, message)
+                }
+            }
+            404 => ProviderError::model_not_found(provider, message),
+            408 | 504 => ProviderError::timeout(provider, message),
+            413 => ProviderError::context_length_exceeded(provider, 0, 0),
+            429 => ProviderError::rate_limit(
+                provider,
+                crate::core::providers::shared::parse_retry_after_from_body(body),
+            ),
+            502 | 503 => ProviderError::provider_unavailable(provider, message),
+            500..=599 => ProviderError::api_error(provider, status, message),
+            _ => ProviderError::api_error(provider, status, message),
         }
     }
 
     /// Parse JSON error response.
     pub fn parse_json_error(provider: &'static str, json: &Value) -> ProviderError {
-        let message = json
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.as_str())
-            .or_else(|| json.get("message").and_then(|m| m.as_str()))
-            .or_else(|| json.get("error").and_then(|e| e.as_str()))
-            .unwrap_or("Unknown error");
+        let message = extract_error_message_from_json(json).unwrap_or("Unknown error");
 
         let error_type = json
             .get("error")
             .and_then(|e| e.get("type"))
             .and_then(|t| t.as_str())
             .or_else(|| json.get("type").and_then(|t| t.as_str()));
+        let error_code = json
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_str())
+            .or_else(|| json.get("code").and_then(|c| c.as_str()));
 
-        match error_type {
-            Some("invalid_request_error") => {
-                ProviderError::invalid_request(provider, message.to_string())
-            }
-            Some("authentication_error") => {
+        match (error_type, error_code) {
+            (Some("authentication_error" | "permission_error"), _)
+            | (_, Some("invalid_api_key" | "authentication_failed")) => {
                 ProviderError::authentication(provider, message.to_string())
             }
-            Some("rate_limit_error") => ProviderError::rate_limit(provider, None),
-            Some("quota_exceeded") => ProviderError::quota_exceeded(provider, message.to_string()),
+            (Some("rate_limit_error"), _) | (_, Some("rate_limit_exceeded")) => {
+                ProviderError::rate_limit(
+                    provider,
+                    json.get("retry_after")
+                        .and_then(|v| v.as_u64())
+                        .or_else(|| {
+                            json.get("error")
+                                .and_then(|e| e.get("retry_after"))
+                                .and_then(|v| v.as_u64())
+                        }),
+                )
+            }
+            (Some("insufficient_quota"), _)
+            | (_, Some("insufficient_quota" | "quota_exceeded")) => {
+                ProviderError::quota_exceeded(provider, message.to_string())
+            }
+            (_, Some("model_not_found")) => ProviderError::model_not_found(provider, message),
+            (Some("invalid_request_error" | "validation_error"), _) => {
+                ProviderError::invalid_request(provider, message.to_string())
+            }
+            (Some("context_length_exceeded"), _) => {
+                ProviderError::context_length_exceeded(provider, 0, 0)
+            }
+            (Some("content_filter" | "content_filter_error"), _) => {
+                ProviderError::content_filtered(provider, message.to_string(), None, Some(false))
+            }
+            (Some("overloaded_error"), _) => {
+                ProviderError::provider_unavailable(provider, message.to_string())
+            }
+            (Some("api_error" | "server_error"), _) => {
+                ProviderError::api_error(provider, 500, message.to_string())
+            }
             _ => ProviderError::api_error(provider, 500, message.to_string()),
         }
     }
+}
+
+fn extract_error_message(body: &str) -> Option<String> {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|json| extract_error_message_from_json(&json).map(str::to_string))
+}
+
+fn extract_error_message_from_json(json: &Value) -> Option<&str> {
+    json.get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .or_else(|| json.get("message").and_then(|m| m.as_str()))
+        .or_else(|| json.get("detail").and_then(|m| m.as_str()))
+        .or_else(|| json.get("error").and_then(|e| e.as_str()))
+}
+
+fn is_context_length_error(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("context_length")
+        || lower.contains("context length")
+        || lower.contains("maximum context")
+        || lower.contains("too many tokens")
+}
+
+fn is_content_filter_error(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("content_filter")
+        || lower.contains("content filter")
+        || lower.contains("safety")
+        || lower.contains("policy")
+}
+
+fn is_quota_error(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("insufficient_quota")
+        || lower.contains("quota")
+        || lower.contains("billing")
+        || lower.contains("credits")
 }
 
 /// Common URL builder.
@@ -232,4 +312,97 @@ pub fn validate_chat_request_common(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn http_mapper_extracts_json_message_for_invalid_request() {
+        let err = HttpErrorMapper::map_status_code(
+            "openai_like",
+            400,
+            r#"{"error":{"message":"bad prompt","type":"invalid_request_error"}}"#,
+        );
+
+        match err {
+            ProviderError::InvalidRequest { provider, message } => {
+                assert_eq!(provider, "openai_like");
+                assert_eq!(message, "bad prompt");
+            }
+            other => panic!("expected invalid request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_mapper_preserves_retry_after_for_rate_limits() {
+        let err = HttpErrorMapper::map_status_code(
+            "openai_like",
+            429,
+            r#"{"error":{"message":"slow down","retry_after":42}}"#,
+        );
+
+        match err {
+            ProviderError::RateLimit {
+                provider,
+                retry_after,
+                ..
+            } => {
+                assert_eq!(provider, "openai_like");
+                assert_eq!(retry_after, Some(42));
+            }
+            other => panic!("expected rate limit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_mapper_maps_special_statuses_to_specific_variants() {
+        assert!(matches!(
+            HttpErrorMapper::map_status_code("p", 408, "timeout"),
+            ProviderError::Timeout { .. }
+        ));
+        assert!(matches!(
+            HttpErrorMapper::map_status_code("p", 413, "too many tokens"),
+            ProviderError::ContextLengthExceeded { .. }
+        ));
+        assert!(matches!(
+            HttpErrorMapper::map_status_code("p", 503, "overloaded"),
+            ProviderError::ProviderUnavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn json_error_mapper_uses_type_and_code() {
+        let rate = HttpErrorMapper::parse_json_error(
+            "openai_like",
+            &json!({
+                "error": {
+                    "type": "rate_limit_error",
+                    "message": "slow down",
+                    "retry_after": 17
+                }
+            }),
+        );
+        assert!(matches!(
+            rate,
+            ProviderError::RateLimit {
+                retry_after: Some(17),
+                ..
+            }
+        ));
+
+        let not_found = HttpErrorMapper::parse_json_error(
+            "openai_like",
+            &json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "model_not_found",
+                    "message": "missing model"
+                }
+            }),
+        );
+        assert!(matches!(not_found, ProviderError::ModelNotFound { .. }));
+    }
 }

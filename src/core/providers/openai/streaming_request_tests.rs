@@ -96,13 +96,16 @@ async fn test_openai_streaming_maps_non_success_status_before_sse()
     };
 
     match err {
-        ProviderError::RateLimit {
-            provider, message, ..
+        ProviderError::ApiError {
+            provider,
+            status,
+            message,
         } => {
             assert_eq!(provider, "openai");
+            assert_eq!(status, 429);
             assert!(message.contains("rate_limit_error"));
         }
-        other => panic!("expected OpenAI rate limit error, got {other:?}"),
+        other => panic!("expected OpenAI API error envelope, got {other:?}"),
     }
 
     Ok(())

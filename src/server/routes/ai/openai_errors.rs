@@ -4,7 +4,7 @@ use crate::core::providers::ProviderError;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, http::header};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 struct OpenAiErrorResponse {
@@ -15,34 +15,49 @@ struct OpenAiErrorResponse {
 struct OpenAiErrorDetail {
     message: String,
     #[serde(rename = "type")]
-    error_type: &'static str,
+    error_type: String,
     param: Option<String>,
-    code: Option<&'static str>,
+    code: Option<String>,
 }
 
 struct OpenAiErrorSpec {
     status: StatusCode,
     message: String,
-    error_type: &'static str,
-    code: Option<&'static str>,
+    error_type: String,
+    param: Option<String>,
+    code: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpstreamErrorEnvelope {
+    error: UpstreamErrorDetail,
+}
+
+#[derive(Deserialize)]
+struct UpstreamErrorDetail {
+    message: Option<String>,
+    #[serde(rename = "type")]
+    error_type: Option<String>,
+    param: Option<String>,
+    code: Option<serde_json::Value>,
 }
 
 pub(crate) fn validation_error(message: impl Into<String>) -> HttpResponse {
-    build_response(OpenAiErrorSpec {
-        status: StatusCode::BAD_REQUEST,
-        message: message.into(),
-        error_type: "invalid_request_error",
-        code: Some("invalid_request"),
-    })
+    build_response(spec(
+        StatusCode::BAD_REQUEST,
+        message.into(),
+        "invalid_request_error",
+        "invalid_request",
+    ))
 }
 
 pub(crate) fn unauthorized_error(message: impl Into<String>) -> HttpResponse {
-    build_response(OpenAiErrorSpec {
-        status: StatusCode::UNAUTHORIZED,
-        message: message.into(),
-        error_type: "authentication_error",
-        code: Some("authentication_error"),
-    })
+    build_response(spec(
+        StatusCode::UNAUTHORIZED,
+        message.into(),
+        "authentication_error",
+        "authentication_error",
+    ))
 }
 
 pub(crate) fn gateway_error_response(error: &GatewayError) -> HttpResponse {
@@ -75,23 +90,34 @@ pub(crate) fn gateway_error_response(error: &GatewayError) -> HttpResponse {
         _ => {}
     }
 
-    builder.json(response_body(spec.message, spec.error_type, spec.code))
+    builder.json(response_body(
+        spec.message,
+        spec.error_type,
+        spec.param,
+        spec.code,
+    ))
 }
 
 fn build_response(spec: OpenAiErrorSpec) -> HttpResponse {
-    HttpResponse::build(spec.status).json(response_body(spec.message, spec.error_type, spec.code))
+    HttpResponse::build(spec.status).json(response_body(
+        spec.message,
+        spec.error_type,
+        spec.param,
+        spec.code,
+    ))
 }
 
 fn response_body(
     message: String,
-    error_type: &'static str,
-    code: Option<&'static str>,
+    error_type: String,
+    param: Option<String>,
+    code: Option<String>,
 ) -> OpenAiErrorResponse {
     OpenAiErrorResponse {
         error: OpenAiErrorDetail {
             message,
             error_type,
-            param: None,
+            param,
             code,
         },
     }
@@ -255,7 +281,9 @@ fn provider_error_spec(error: &ProviderError) -> OpenAiErrorSpec {
             "invalid_request_error",
             "content_filter",
         ),
-        ProviderError::ApiError { status, .. } => api_error_spec(*status, error.to_string()),
+        ProviderError::ApiError {
+            status, message, ..
+        } => api_error_spec(*status, message.clone()),
         ProviderError::TokenLimitExceeded { .. } => spec(
             StatusCode::BAD_REQUEST,
             error.to_string(),
@@ -297,7 +325,7 @@ fn provider_error_spec(error: &ProviderError) -> OpenAiErrorSpec {
 
 fn api_error_spec(status: u16, message: String) -> OpenAiErrorSpec {
     let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-    match status {
+    let mut spec = match status {
         400 => spec(
             status_code,
             message,
@@ -327,6 +355,37 @@ fn api_error_spec(status: u16, message: String) -> OpenAiErrorSpec {
         ),
         500..=599 => spec(status_code, message, "server_error", "provider_api_error"),
         _ => spec(status_code, message, "server_error", "provider_api_error"),
+    };
+
+    if let Some(upstream) = parse_upstream_error_detail(&spec.message) {
+        if let Some(message) = upstream.message {
+            spec.message = message;
+        }
+        if let Some(error_type) = upstream.error_type {
+            spec.error_type = error_type;
+        }
+        if let Some(param) = upstream.param {
+            spec.param = Some(param);
+        }
+        if let Some(code) = upstream.code.and_then(error_code_to_string) {
+            spec.code = Some(code);
+        }
+    }
+
+    spec
+}
+
+fn parse_upstream_error_detail(message: &str) -> Option<UpstreamErrorDetail> {
+    serde_json::from_str::<UpstreamErrorEnvelope>(message)
+        .ok()
+        .map(|envelope| envelope.error)
+}
+
+fn error_code_to_string(value: serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) if !value.is_empty() => Some(value),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
     }
 }
 
@@ -339,8 +398,9 @@ fn spec(
     OpenAiErrorSpec {
         status,
         message,
-        error_type,
-        code: Some(code),
+        error_type: error_type.to_string(),
+        param: None,
+        code: Some(code.to_string()),
     }
 }
 
@@ -400,6 +460,32 @@ mod tests {
         let body = to_json(response).await;
         assert_eq!(body["error"]["type"], "server_error");
         assert_eq!(body["error"]["code"], "timeout");
+    }
+
+    #[actix_web::test]
+    async fn provider_api_error_preserves_upstream_openai_error_fields() {
+        let upstream = serde_json::json!({
+            "error": {
+                "message": "context window exceeded",
+                "type": "invalid_request_error",
+                "param": "messages",
+                "code": "context_length_exceeded"
+            }
+        });
+        let error = GatewayError::Provider(ProviderError::api_error(
+            "openai",
+            400,
+            upstream.to_string(),
+        ));
+
+        let response = gateway_error_response(&error);
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_json(response).await;
+        assert_eq!(body["error"]["message"], "context window exceeded");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["param"], "messages");
+        assert_eq!(body["error"]["code"], "context_length_exceeded");
     }
 
     async fn to_json(response: HttpResponse) -> Value {
