@@ -150,16 +150,15 @@ async fn test_provider_models_have_cloudflare_prefix() {
 
 // ==================== Transform Request Tests ====================
 
-#[test]
-fn test_transform_request() {
+#[tokio::test]
+async fn test_transform_request() {
     let config = CloudflareConfig {
         account_id: Some("test".to_string()),
         api_token: Some("test".to_string()),
         ..Default::default()
     };
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let provider = runtime.block_on(CloudflareProvider::new(config)).unwrap();
+    let provider = CloudflareProvider::new(config).await.unwrap();
 
     let request = ChatRequest {
         model: "@cf/meta/llama-3-8b-instruct".to_string(),
