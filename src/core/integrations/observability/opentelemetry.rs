@@ -10,6 +10,6 @@ mod span;
 #[cfg(test)]
 mod tests;
 
-pub use config::OpenTelemetryConfig;
-pub use integration_impl::OpenTelemetryIntegration;
-pub use span::{AttributeValue, Span, SpanEvent, SpanKind, SpanStatus};
+pub use self::config::OpenTelemetryConfig;
+pub use self::integration_impl::OpenTelemetryIntegration;
+pub use self::span::{AttributeValue, Span, SpanEvent, SpanKind, SpanStatus};

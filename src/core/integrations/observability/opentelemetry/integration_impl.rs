@@ -93,7 +93,7 @@ impl OpenTelemetryIntegration {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let random = (now as f64) % 1.0;
+        let random = ((now % 1_000_000) as f64) / 1_000_000.0;
         random < self.config.sampling_ratio
     }
 
@@ -245,7 +245,7 @@ impl Integration for OpenTelemetryIntegration {
         if let Some(active) = active_spans.get_mut(&event.request_id)
             && event.is_final
         {
-            active.span = active.span.clone().event("stream.complete");
+            active.span.add_event("stream.complete");
         }
         Ok(())
     }

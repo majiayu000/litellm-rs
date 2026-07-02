@@ -140,6 +140,12 @@ impl Span {
 
     /// Add an event
     pub fn event(mut self, name: impl Into<String>) -> Self {
+        self.add_event(name);
+        self
+    }
+
+    /// Add an event in-place
+    pub fn add_event(&mut self, name: impl Into<String>) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -150,7 +156,6 @@ impl Span {
             timestamp_ns: now,
             attributes: HashMap::new(),
         });
-        self
     }
 
     /// End the span successfully
