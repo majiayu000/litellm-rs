@@ -222,24 +222,30 @@ GH-727 / #727
 - [x] `SP727-T209` Owner: coordinator. Done when: `tests/integration/auth_middleware_tests.rs` delegates to `tests/integration/auth_middleware_tests_parts/mod.rs`. Verify: `cat tests/integration/auth_middleware_tests.rs`.
 - [x] `SP727-T210` Owner: coordinator. Done when: shared auth middleware fixtures/helpers remain in `tests/integration/auth_middleware_tests_parts/mod.rs` and original behavior tests move to child modules without assertion changes. Verify: `rg -n "auth_probe|build_test_state|seed_valid_principal|test_auth_middleware_rejects_missing_auth|test_auth_middleware_accepts_valid_auth_and_propagates_principal_context|test_auth_middleware_bypasses_auth_when_disabled_but_sets_context" tests/integration/auth_middleware_tests.rs tests/integration/auth_middleware_tests_parts/*.rs`.
 - [x] `SP727-T211` Owner: verification owner. Done when: all touched auth middleware test files are below U-16's 800-line ceiling and focused auth middleware tests pass. Verify: `wc -l tests/integration/auth_middleware_tests.rs tests/integration/auth_middleware_tests_parts/*.rs`; `cargo test --all-features auth_middleware_tests`.
-- [ ] `SP727-T212` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the auth middleware integration tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T212` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the auth middleware integration tranche. Verify: #860 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `f53702c68ee1`, #727 reopened, and #727 update comment.
+- [x] `SP727-T213` Owner: coordinator. Done when: after the auth middleware integration tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@f53702c6`, `src/core/audio/types.rs` is 839 lines and 16 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T214` Owner: coordinator. Done when: the audio types tranche documents why this slice is a test extraction rather than a production type facade split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T215` Owner: coordinator. Done when: `src/core/audio/types.rs` keeps production audio type definitions and helpers, then delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/audio/types.rs`.
+- [x] `SP727-T216` Owner: coordinator. Done when: original inline audio type tests move to `src/core/audio/types_tests.rs` without assertion changes. Verify: `rg -n "test_transcription_request_basic|test_speech_request_serialization|test_supported_audio_formats_all|test_tts_workflow" src/core/audio/types_tests.rs`.
+- [x] `SP727-T217` Owner: verification owner. Done when: both touched audio type files are below U-16's 800-line ceiling and focused audio type tests pass. Verify: `wc -l src/core/audio/types.rs src/core/audio/types_tests.rs`; `cargo test core::audio::types --lib --all-features` passed 41 tests.
+- [ ] `SP727-T218` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the audio types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the auth middleware integration test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the audio types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `tests/integration/auth_middleware_tests.rs`
-- `tests/integration/auth_middleware_tests_parts/`
+- `src/core/audio/types.rs`
+- `src/core/audio/types_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test --all-features auth_middleware_tests`
+- `cargo test core::audio::types --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -247,5 +253,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 auth middleware integration test-suite tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 audio types unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

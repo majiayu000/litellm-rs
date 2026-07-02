@@ -10,11 +10,10 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@e98c0357`, 17 tracked Rust files remain over the U-16
-800-line ceiling. The current largest file is
-`tests/integration/auth_middleware_tests.rs` at 844 lines. It is a test-only
-auth middleware integration suite where shared fixtures/helpers are below the
-ceiling and the oversized portion is behavior tests.
+At `origin/main@f53702c6`, 16 tracked Rust files remain over the U-16
+800-line ceiling. The current largest file is `src/core/audio/types.rs` at
+839 lines. It is a public audio type/helper module where production definitions
+end at line 192 and the oversized portion is inline unit tests.
 
 ## Architecture Principles
 
@@ -41,58 +40,55 @@ ceiling and the oversized portion is behavior tests.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Auth Middleware Integration Test Split
+## Current Tranche: Audio Types Test Extraction
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Suite entry | `tests/integration/auth_middleware_tests.rs` | Current single file declares a `#[cfg(test)] mod tests` with imports, shared fixtures, and all behavior tests. | The entry point should stay discoverable from `tests/integration/mod.rs` while delegating the large suite. |
-| Shared fixtures | `tests/integration/auth_middleware_tests_parts/mod.rs` | New suite module keeps imports, seeded principal setup, auth probe route, state builders, and helper functions. | Child modules need these helpers through `super::*` without duplicating setup. |
-| Rejected/rate-limit tests | `tests/integration/auth_middleware_tests_parts/rejection_rate_limit.rs` | Missing/invalid auth, gateway rate limit, requests_per_minute alias, valid-auth reservation release, and API-key rpm behavior. | These tests share rate-limit setup and status-code expectations. |
-| Authenticated permission/context tests | `tests/integration/auth_middleware_tests_parts/permissions_context.rs` | Valid auth context propagation, legacy permission, denied operation/endpoint policy, admin-owned key restriction, and budget id context. | These tests share seeded principal setup and auth probe assertions. |
-| Disabled-auth tests | `tests/integration/auth_middleware_tests_parts/disabled_auth.rs` | Auth-disabled fail-closed and allow-anonymous context behavior. | These tests cover the disabled-auth mode boundary. |
+| Public audio types | `src/core/audio/types.rs` | Defines transcription, translation, and speech request/response DTOs plus audio format helpers. | Public module path must remain unchanged for route/provider callers. |
+| Inline tests | `src/core/audio/types.rs` | `#[cfg(test)] mod tests` starts at line 193 and contains serialization, helper, and workflow unit tests. | Moving these tests removes the U-16 violation without introducing facade churn. |
+| Extracted tests | `src/core/audio/types_tests.rs` | New path-backed test module keeps the original tests under `super::*`. | Assertions and fixture payloads remain centralized against the same production module. |
 
 ### Design
 
-1. Replace the oversized root file body with `#[cfg(test)] #[path = "auth_middleware_tests_parts/mod.rs"] mod tests;`.
-2. Move shared imports, structs, constants, route handler, state builders, and seed helpers into `tests/integration/auth_middleware_tests_parts/mod.rs`.
-3. Declare behavior child modules from `mod.rs`: `rejection_rate_limit`, `permissions_context`, and `disabled_auth`.
-4. Move original tests into the child modules without changing assertions, request setup, seeded metadata, route paths, peer addresses, or expected status codes.
-5. Use `use super::*;` in child modules so helper ownership remains centralized in `mod.rs`.
-6. Do not edit auth/rate-limit/storage/server production code in this tranche.
+1. Keep `src/core/audio/types.rs` as the production owner for all current public audio DTOs and helper functions.
+2. Replace the inline test module with `#[cfg(test)] #[path = "types_tests.rs"] mod tests;`.
+3. Move the original inline test body into `src/core/audio/types_tests.rs` without assertion, fixture, or expected-value changes.
+4. Keep `use super::*;` in the extracted test module so tests validate the same parent module API.
+5. Do not create a `types/` facade tree in this tranche because the production definitions are already below the ceiling.
+6. Do not edit audio routes, providers, request handlers, or serialization attributes beyond the mechanical test move.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `tests/integration/auth_middleware_tests.rs` | Root delegates to `auth_middleware_tests_parts/mod.rs`. |
-| P2 | `tests/integration/auth_middleware_tests_parts/mod.rs` | Shared fixtures/helpers remain centralized and child modules are declared. |
-| P3 | `tests/integration/auth_middleware_tests_parts/*.rs` | Original behavior tests move by domain without assertion changes. |
-| P4 | file size | `wc -l tests/integration/auth_middleware_tests.rs tests/integration/auth_middleware_tests_parts/*.rs` shows all files below 800. |
-| P5 | focused test suite | `cargo test --all-features auth_middleware_tests` runs the moved tests from `tests/lib.rs`. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `tests/integration/auth_middleware_tests.rs`. |
+| P1 | `src/core/audio/types.rs` | Root keeps production DTO/helper definitions and delegates tests to `types_tests.rs`. |
+| P2 | `src/core/audio/types_tests.rs` | Original test names and assertions remain present. |
+| P3 | audio public API | No public type, field, serde attribute, or helper signature changes. |
+| P4 | file size | `wc -l src/core/audio/types.rs src/core/audio/types_tests.rs` shows both files below 800. |
+| P5 | focused test suite | `cargo test core::audio::types --lib --all-features` runs the moved tests. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/audio/types.rs`. |
 
 ## Risks
 
-- Child modules change the exact per-test module path, but the focused suite filter `integration::auth_middleware_tests` remains stable.
-- Helper functions and imports must stay in `mod.rs`; duplicating AppState/seed setup across child modules would increase drift risk.
-- Rate-limit tests depend on per-test state and fixed peer addresses; move them without reordering assertions or changing addresses.
-- Disabled-auth tests must remain behavior-only and not weaken fail-closed assertions.
+- Extracting tests changes the exact test module path from inline `types::tests` to path-backed `types::tests`, but the focused module filter remains `core::audio::types`.
+- Public audio DTOs are used by routes/providers, so this tranche must not change fields, serde annotations, or helper signatures.
+- Format helper expectations must move unchanged because downstream response content types depend on those mappings.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l tests/integration/auth_middleware_tests.rs tests/integration/auth_middleware_tests_parts/*.rs`
-- [ ] `cargo test --all-features auth_middleware_tests`
+- [ ] `wc -l src/core/audio/types.rs src/core/audio/types_tests.rs`
+- [ ] `cargo test core::audio::types --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the auth middleware integration tests back into `tests/integration/auth_middleware_tests.rs` and revert
+Move the audio unit tests back into `src/core/audio/types.rs` and revert
 the `specs/GH727` edits. No schema, persistence, or runtime behavior changes
 are involved.

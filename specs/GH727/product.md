@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@e98c0357` 仍有 17 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`tests/integration/auth_middleware_tests.rs`，它是一个 844 行 auth middleware integration test suite，其中
-shared fixtures/helpers 约 190 行，其余是 behavior tests。
+`origin/main@f53702c6` 仍有 16 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/core/audio/types.rs`，它是一个 839 行 audio public type file；生产定义和 helpers 只到第 192 行，
+超标来源是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ shared fixtures/helpers 约 190 行，其余是 behavior tests。
 
 ## 本 tranche 目标
 
-- 拆分 `tests/integration/auth_middleware_tests.rs`，它当前 844 行，是 #727 当前最大的 tracked Rust 文件。
-- 将 root `auth_middleware_tests.rs` 保持为 test-suite entry point，并用 `#[path = "auth_middleware_tests_parts/mod.rs"] mod tests;` 委托 suite module。
-- 将 shared fixtures/helpers 保留在 `tests/integration/auth_middleware_tests_parts/mod.rs`。
-- 将原 auth middleware integration tests 按行为域移动到 child modules：rejected/rate-limit paths、authenticated permission/context paths、disabled-auth paths。
-- 不改变断言、fixtures、seeded principal setup、route paths、status-code expectations、rate-limit configuration 或 request context checks。
+- 拆分 `src/core/audio/types.rs`，它当前 839 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `src/core/audio/types.rs` 作为 audio request/response DTO 和 helper function 的原始模块路径。
+- 将原 inline unit tests 移动到 `src/core/audio/types_tests.rs`，并从 root 用 `#[path = "types_tests.rs"] mod tests;` 委托。
+- 不改变 audio DTO 字段、serde attributes、helper function signatures、supported formats、content-type mapping 或测试断言。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 AuthMiddleware、RateLimitMiddleware、HttpServer、AppState、storage, auth, permission, rate-limit, or request-context production code。
-- 不改变 integration test assertions, seeded API key/user setup, fixture routes, request headers, peer addresses, or status-code expectations。
-- 不在本 PR 中处理其余 16 个大文件。
+- 不拆分 audio production DTO 到 facade 子模块；本文件超标不是生产定义造成的。
+- 不修改 audio routes, providers, transcription/translation/speech runtime behavior, pricing, storage, or request handling。
+- 不改变 unit test assertions, fake audio payloads, expected serialized fields, supported format list, or content-type expectations。
+- 不在本 PR 中处理其余 15 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `tests/integration/auth_middleware_tests.rs` remains the integration test-suite entry point referenced by `tests/integration/mod.rs`.
-2. Shared fixtures and helpers remain available to all moved child test modules through `super::*`.
-3. Rejected auth/rate-limit tests, authenticated permission/context tests, and disabled-auth tests keep their original assertions and setup.
-4. No auth, rate-limit, storage, HTTP server, or request context production behavior is changed.
-5. Test files are split only by behavior domain.
+1. `src/core/audio/types.rs` keeps all existing public audio type and helper names at the same module path.
+2. Serialization behavior for skipped file/filename fields and optional fields stays unchanged.
+3. Supported audio formats and `format_to_content_type` mappings stay unchanged.
+4. Inline tests move without assertion or fixture changes and continue to use `super::*`.
+5. No audio runtime route, provider, or request handling behavior is changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test --all-features auth_middleware_tests` must pass.
+7. `cargo test core::audio::types --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `tests/integration/auth_middleware_tests.rs` delegates to `tests/integration/auth_middleware_tests_parts/mod.rs`。
-- [ ] Shared auth middleware fixtures/helpers remain in `tests/integration/auth_middleware_tests_parts/mod.rs`。
-- [ ] Original auth middleware integration tests move into behavior-domain child modules without assertion changes。
-- [ ] All touched auth middleware test files are below U-16's 800-line ceiling。
-- [ ] Focused auth middleware integration test suite 通过。
+- [ ] `src/core/audio/types.rs` delegates tests to `src/core/audio/types_tests.rs`。
+- [ ] Original audio type tests move without assertion changes。
+- [ ] Audio DTO definitions and helper functions stay in the original module path。
+- [ ] All touched audio type files are below U-16's 800-line ceiling。
+- [ ] Focused audio type test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is an auth middleware integration test-suite split for U-16 compliance.
+No runtime behavior change. This is an audio type unit-test extraction for U-16 compliance.
