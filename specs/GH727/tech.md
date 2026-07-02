@@ -10,11 +10,10 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@e7fd7a121a69`, 29 tracked Rust files remain over the U-16 800-line ceiling.
-The current largest file is `src/core/router/tests/strategy_impl_tests.rs` at
-880 lines. It is a test-only suite that mixes routing context construction,
-weighted random, least busy, lowest usage, lowest latency, lowest priority,
-rate-limit-aware, round-robin, and consistency coverage in one module.
+At `origin/main@38b3140aeeca`, 28 tracked Rust files remain over the U-16 800-line ceiling.
+The current largest file is `src/auth/oauth/session.rs` at 869 lines. It is a
+runtime module that mixes OAuth session model code, store trait/error contracts,
+in-memory storage, Redis storage, and inline tests in one module.
 
 ## Architecture Principles
 
@@ -39,53 +38,56 @@ rate-limit-aware, round-robin, and consistency coverage in one module.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Router Strategy Test-Suite Split
+## Current Tranche: OAuth Session Runtime Split
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Test root | `src/core/router/tests/strategy_impl_tests.rs` | Contains all strategy implementation tests inline. | It is 880 lines and mixes unrelated strategy domains. |
-| Production strategy implementation | `src/core/router/strategy_impl.rs` | Implements routing strategy helpers. | Production selection code must remain untouched in this tranche. |
-| Deployment model | `src/core/router/deployment.rs` | Provides deployment config/state used by test fixtures. | Fixtures remain test-only helpers in the root. |
-| Module mount | `src/core/router/tests/mod.rs` | Mounts `mod strategy_impl_tests;`. | The focused test path must remain `core::router::tests::strategy_impl_tests`. |
+| Facade root | `src/auth/oauth/session.rs` | Exposes all OAuth session public types today. | It must keep the original public import surface. |
+| Session model | `src/auth/oauth/session/model.rs` | New child module for `OAuthSession`. | Keeps serde fields and builder methods isolated from storage code. |
+| Store contract | `src/auth/oauth/session/store.rs` | New child module for `SessionStore` and `SessionError`. | Keeps trait and error contracts central and re-exported. |
+| In-memory storage | `src/auth/oauth/session/memory_store.rs` | New child module for DashMap-backed storage. | Separates runtime cleanup/state logic from Redis code. |
+| Redis storage | `src/auth/oauth/session/redis_store.rs` | New feature-gated child module. | Preserves Redis-only dependency usage and key/TTL behavior. |
+| Tests | `src/auth/oauth/session/tests.rs` | New child test module. | Keeps existing focused session coverage under the same module path. |
 
 ### Design
 
-1. Keep `src/core/router/tests/strategy_impl_tests.rs` as the shared test root with common imports, provider/deployment fixture helpers, and child module declarations only.
-2. Add `context_tests.rs` for `build_routing_contexts` coverage.
-3. Add `weighted_random_tests.rs`, `least_busy_tests.rs`, `lowest_usage_tests.rs`, `lowest_latency_tests.rs`, and `lowest_priority_tests.rs` for per-strategy scoring and empty-candidate coverage.
-4. Add `rate_limit_aware_tests.rs` for TPM/RPM headroom and no-limit behavior.
-5. Add `round_robin_tests.rs` for candidate cycling, model-scoped counters, wraparound, and context cycling.
-6. Add `integration_tests.rs` for deterministic strategy consistency coverage.
-7. Do not edit production router modules.
+1. Keep `src/auth/oauth/session.rs` as a facade with child module declarations and `pub use` re-exports for the original public names.
+2. Move `OAuthSession` and its impl to `model.rs` without changing fields, serde attributes, or method signatures.
+3. Move `SessionStore` and `SessionError` to `store.rs` without changing async trait method signatures or error variants.
+4. Move `InMemorySessionStore`, its `Debug`, constructors, cleanup task, and trait implementation to `memory_store.rs`.
+5. Move feature-gated `RedisSessionStore`, Redis key helpers, `Debug`, and trait implementation to `redis_store.rs`.
+6. Move inline tests to `tests.rs` under the same parent module.
+7. Do not edit OAuth handlers, middleware, client, provider discovery, or `src/auth/oauth/types.rs`.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `strategy_impl_tests.rs` | Root keeps shared helpers and child module declarations only. |
-| P2 | `strategy_impl_tests/*.rs` | Original test functions remain discoverable by name under strategy-domain modules. |
-| P3 | file size | `wc -l src/core/router/tests/strategy_impl_tests.rs src/core/router/tests/strategy_impl_tests/*.rs` shows every touched file below 800. |
-| P4 | focused test suite | `cargo test core::router::tests::strategy_impl_tests --lib --all-features` runs the moved tests. |
-| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/router/tests/strategy_impl_tests.rs`. |
+| P1 | `session.rs` | Root facade re-exports the same public OAuth session names. |
+| P2 | `session/*.rs` | Runtime responsibilities are separated by model, contract, memory storage, Redis storage, and tests. |
+| P3 | file size | `wc -l src/auth/oauth/session.rs src/auth/oauth/session/*.rs` shows every touched file below 800. |
+| P4 | focused test suite | `cargo test auth::oauth::session --lib --all-features` runs the moved tests. |
+| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/auth/oauth/session.rs`. |
 
 ## Risks
 
-- Child modules must import shared parent helpers correctly; losing fixture helpers or `DashMap`/`AtomicUsize` imports breaks discovery.
-- Round-robin tests rely on the same model-keyed counters; assertions and counter setup must remain unchanged.
-- Splitting test modules must not change the router tests module mount path.
+- Root re-exports must preserve the original public paths used by `auth::oauth::mod.rs`.
+- Redis code must stay behind the existing `redis` feature gate.
+- State deletion must remain atomic in Redis through `get_del`.
+- In-memory cleanup must continue removing expired sessions and expired OAuth states.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test core::router::tests::strategy_impl_tests --lib --all-features`
+- [ ] `cargo test auth::oauth::session --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
-- [ ] Line-count proof for `src/core/router/tests/strategy_impl_tests.rs` and `src/core/router/tests/strategy_impl_tests/*.rs`
+- [ ] Line-count proof for `src/auth/oauth/session.rs` and `src/auth/oauth/session/*.rs`
 
 ## Rollback
 
-Revert the Router strategy test-suite split and `specs/GH727` edits. No
-production code, schema changes, or runtime behavior changes are involved.
+Revert the OAuth session module split and `specs/GH727` edits. No schema changes
+or runtime behavior changes are involved.

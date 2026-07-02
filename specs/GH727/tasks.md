@@ -148,24 +148,31 @@ GH-727 / #727
 - [x] `SP727-T135` Owner: coordinator. Done when: `src/core/router/tests/strategy_impl_tests.rs` keeps only shared imports, provider/deployment helpers, and child module declarations. Verify: `sed -n '1,80p' src/core/router/tests/strategy_impl_tests.rs`.
 - [x] `SP727-T136` Owner: coordinator. Done when: original Router strategy implementation tests move into strategy-domain child modules without assertion changes. Verify: `rg -n "test_build_routing_contexts_skips_missing_deployments|test_weighted_random_respects_weights|test_least_busy_selects_lowest_active|test_lowest_usage_selects_lowest_percentage|test_lowest_latency_selects_fastest|test_lowest_priority_selects_lowest_priority|test_rate_limit_aware_selects_most_headroom|test_round_robin_cycles_through_candidates|test_strategy_consistency" src/core/router/tests/strategy_impl_tests.rs src/core/router/tests/strategy_impl_tests/*.rs`.
 - [x] `SP727-T137` Owner: verification owner. Done when: all touched Router strategy test files are below U-16's 800-line ceiling and focused Router strategy tests pass. Verify: `wc -l src/core/router/tests/strategy_impl_tests.rs src/core/router/tests/strategy_impl_tests/*.rs`; `cargo test core::router::tests::strategy_impl_tests --lib --all-features`.
-- [ ] `SP727-T138` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Router strategy tests tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T138` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Router strategy tests tranche. Verify: #830 PR body, green PR CI, resolved GraphQL reviewThreads, merge commit `38b3140aeeca`, and #727 update comment.
+- [x] `SP727-T139` Owner: coordinator. Done when: after the Router strategy tests tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@38b3140aeeca`, `src/auth/oauth/session.rs` is 869 lines and 28 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T140` Owner: coordinator. Done when: the OAuth session tranche documents runtime ownership boundaries for the facade, session model, store contract, in-memory store, Redis store, and tests. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T141` Owner: coordinator. Done when: `src/auth/oauth/session.rs` becomes a small facade that declares focused child modules and re-exports the original public names. Verify: `sed -n '1,80p' src/auth/oauth/session.rs`.
+- [x] `SP727-T142` Owner: coordinator. Done when: `OAuthSession`, `SessionStore`, and `SessionError` move into focused child modules without changing public fields, serde attributes, trait signatures, or error variants. Verify: `rg -n "pub struct OAuthSession|pub trait SessionStore|pub enum SessionError" src/auth/oauth/session.rs src/auth/oauth/session/*.rs`.
+- [x] `SP727-T143` Owner: coordinator. Done when: in-memory and Redis session stores move into focused child modules while preserving cleanup, state deletion, user-session indexing, Redis key, TTL, and serialization behavior. Verify: `rg -n "pub struct InMemorySessionStore|impl SessionStore for InMemorySessionStore|pub struct RedisSessionStore|impl SessionStore for RedisSessionStore|get_del|user_sessions_key" src/auth/oauth/session.rs src/auth/oauth/session/*.rs`.
+- [x] `SP727-T144` Owner: verification owner. Done when: all touched OAuth session files are below U-16's 800-line ceiling and focused OAuth session tests pass. Verify: `wc -l src/auth/oauth/session.rs src/auth/oauth/session/*.rs`; `cargo test auth::oauth::session --lib --all-features`.
+- [ ] `SP727-T145` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the OAuth session tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the Router strategy test-suite file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the OAuth session file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/router/tests/strategy_impl_tests.rs`
-- `src/core/router/tests/strategy_impl_tests/*.rs`
+- `src/auth/oauth/session.rs`
+- `src/auth/oauth/session/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::router::tests::strategy_impl_tests --lib --all-features`
+- `cargo test auth::oauth::session --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -173,5 +180,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 test-suite split tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 runtime module split tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
