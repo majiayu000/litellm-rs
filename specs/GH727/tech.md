@@ -10,10 +10,11 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@720c2532`, 13 tracked Rust files remain over the U-16
-800-line ceiling. One current largest file is `src/core/models/user/types.rs`
-at 828 lines. It is a public user type/helper module where production
-definitions end at line 274 and the oversized portion is inline unit tests.
+At `origin/main@620c7a07`, 12 tracked Rust files remain over the U-16
+800-line ceiling. The current largest file is `src/core/budget/alerts.rs`
+at 828 lines. It is a budget alert manager module where production alert,
+storage, webhook, and stats code stays under the ceiling and the oversized
+portion is inline async unit tests starting at line 530.
 
 ## Architecture Principles
 
@@ -40,55 +41,55 @@ definitions end at line 274 and the oversized portion is inline unit tests.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: User Types Test Extraction
+## Current Tranche: Budget Alerts Test Extraction
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| User type production | `src/core/models/user/types.rs` | Defines `User`, roles, status, rate limits, profile, and user helper methods. | Public user model path and serde behavior must remain unchanged for callers. |
-| Inline tests | `src/core/models/user/types.rs` | `#[cfg(test)] mod tests` starts at line 275 and contains role/status/profile/user behavior unit tests. | Moving these tests removes the U-16 violation without changing public types. |
-| Extracted tests | `src/core/models/user/types_tests.rs` | New path-backed test module keeps the original tests under `super::*`. | Assertions and fixtures remain centralized against the same production module. |
+| Alert production | `src/core/budget/alerts.rs` | Defines `BudgetAlertManager`, in-memory alert storage, webhook config, alert config, and stats DTOs. | Public budget alert paths and runtime behavior must remain unchanged for callers. |
+| Inline tests | `src/core/budget/alerts.rs` | `#[cfg(test)] mod tests` starts at line 530 and contains async alert creation, acknowledgement, stats, webhook, config, and history tests. | Moving these tests removes the U-16 violation without changing runtime alert code. |
+| Extracted tests | `src/core/budget/alerts_tests.rs` | New path-backed test module keeps the original tests under `super::*`. | Assertions and fixtures remain centralized against the same production module. |
 
 ### Design
 
-1. Keep `src/core/models/user/types.rs` as the production owner for all current public user types, enums, serde attributes, and helper methods.
-2. Replace the inline test module with `#[cfg(test)] #[path = "types_tests.rs"] mod tests;`.
-3. Move the original inline test body into `src/core/models/user/types_tests.rs` without assertion, fixture, UUID setup, or expected-value changes.
-4. Keep `use super::*;` in the extracted test module so tests validate the same parent module API.
-5. Do not create a user type facade tree in this tranche because the production definitions are already below the ceiling.
-6. Do not edit user preferences/session/activity modules, storage, auth, team, billing, or API behavior beyond the mechanical test move.
+1. Keep `src/core/budget/alerts.rs` as the production owner for the alert manager, storage helper, webhook config, alert config, and stats DTO.
+2. Replace the inline test module with `#[cfg(test)] #[path = "alerts_tests.rs"] mod tests;`.
+3. Move the original inline test body into `src/core/budget/alerts_tests.rs` without assertion, fixture, spend result, or expected-value changes.
+4. Keep `use super::*;` in the extracted test module so tests validate the same parent module API and private fields where the original tests already did.
+5. Do not create a budget alert production subtree in this tranche because the production implementation is already below the ceiling.
+6. Do not edit budget tracker, manager, middleware, provider limits, persistence, or API behavior beyond the mechanical test move.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `src/core/models/user/types.rs` | Root keeps production user type definitions and delegates tests to `types_tests.rs`. |
-| P2 | `src/core/models/user/types_tests.rs` | Original test names and assertions remain present. |
-| P3 | user public API | No public type, field, serde attribute, method signature, role string, or password redaction behavior changes. |
-| P4 | file size | `wc -l src/core/models/user/types.rs src/core/models/user/types_tests.rs` shows both files below 800. |
-| P5 | focused test suite | `cargo test core::models::user::types --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/models/user/types.rs`. |
+| P1 | `src/core/budget/alerts.rs` | Root keeps production alert manager implementation and delegates tests to `alerts_tests.rs`. |
+| P2 | `src/core/budget/alerts_tests.rs` | Original test names and assertions remain present. |
+| P3 | budget alert API | No public type, field, method signature, alert state, or webhook config behavior changes. |
+| P4 | file size | `wc -l src/core/budget/alerts.rs src/core/budget/alerts_tests.rs` shows both files below 800. |
+| P5 | focused test suite | `cargo test core::budget::alerts --lib --all-features` runs the moved tests. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/budget/alerts.rs`. |
 
 ## Risks
 
-- Extracting tests changes the exact test module path from inline `types::tests` to path-backed `types::tests`, but the focused module filter remains `core::models::user::types`.
-- Public user model types are consumed broadly, so this tranche must not change serde names, field visibility, password redaction, helper signatures, or role hierarchy behavior.
-- Metadata touch and usage accumulation expectations must move unchanged because they affect persistence and billing-adjacent state.
+- Extracting tests changes the exact test source file while preserving the module path as `alerts::tests`, so the focused module filter remains `core::budget::alerts`.
+- Tests currently read private `webhooks`, so the extracted path-backed module must remain a child module of `alerts.rs` rather than a sibling declared from `budget/mod.rs`.
+- Alert thresholds, severity mapping, acknowledgement, history limits, and stats aggregation must move unchanged because they are billing-adjacent controls.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l src/core/models/user/types.rs src/core/models/user/types_tests.rs`
-- [ ] `cargo test core::models::user::types --lib --all-features`
+- [ ] `wc -l src/core/budget/alerts.rs src/core/budget/alerts_tests.rs`
+- [ ] `cargo test core::budget::alerts --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the user type unit tests back into `src/core/models/user/types.rs` and revert
+Move the budget alert unit tests back into `src/core/budget/alerts.rs` and revert
 the `specs/GH727` edits. No schema, persistence, or runtime behavior changes
 are involved.

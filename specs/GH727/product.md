@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@720c2532` 仍有 13 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件之一是
-`src/core/models/user/types.rs`，它是一个 828 行 public user type file；生产类型和方法到第 274 行，
-超标来源是 inline unit tests。
+`origin/main@620c7a07` 仍有 12 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/core/budget/alerts.rs`，它是一个 828 行 budget alert manager module；生产 alert/storage/webhook/stat
+逻辑保持在 530 行以内，超标来源是 inline async unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ GH-727 / #727
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/models/user/types.rs`，它当前 828 行，是 #727 当前最大的 tracked Rust 文件之一。
-- 保留 `src/core/models/user/types.rs` 作为 `User`、`UserRole`、`UserStatus`、`UserRateLimits`、`UserProfile` 和 user helper methods 的原始模块路径。
-- 将原 inline unit tests 移动到 `src/core/models/user/types_tests.rs`，并从 root 用 `#[path = "types_tests.rs"] mod tests;` 委托。
-- 不改变 user serde names、password serialization skip、role hierarchy、team membership mutations、email/two-factor state changes、usage accumulation 或测试断言。
+- 拆分 `src/core/budget/alerts.rs`，它当前 828 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `src/core/budget/alerts.rs` 作为 `BudgetAlertManager`、`AlertConfig`、`WebhookConfig`、`AlertStats` 和 alert storage/webhook logic 的原始模块路径。
+- 将原 inline async unit tests 移动到 `src/core/budget/alerts_tests.rs`，并从 root 用 `#[path = "alerts_tests.rs"] mod tests;` 委托。
+- 不改变 budget threshold detection、alert severity mapping、acknowledgement, history/stat aggregation, webhook registration, or alerting enabled/disabled semantics。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不拆分 user production types 到 facade 子模块；本文件超标不是生产定义造成的。
-- 不修改 user preferences/session/activity modules, auth, storage, team, billing, or API runtime behavior。
-- 不改变 unit test assertions, role strings, serialized JSON expectations, UUID/team setup, password redaction check, or usage stats expectations。
-- 不在本 PR 中处理其余 12 个大文件。
+- 不拆分 alert production logic 到 runtime 子模块；本文件超标不是生产实现造成的。
+- 不修改 budget tracker, budget manager, middleware, provider limits, persistence, or spend calculation behavior。
+- 不改变 unit test assertions, spend fixtures, budget status transitions, alert counts, severity expectations, webhook fixture URL, or config expectations。
+- 不在本 PR 中处理其余 11 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/core/models/user/types.rs` keeps all existing public user type, enum, field, and method names at the same module path.
-2. User role serialization, display, parsing, and hierarchy semantics stay unchanged.
-3. Password redaction, email verification, two-factor flags, team membership, metadata touch behavior, and usage accumulation stay unchanged.
+1. `src/core/budget/alerts.rs` keeps all existing public alert manager, config, webhook, and stats names at the same module path.
+2. Budget soft-limit, exceeded, reset, approaching-limit, severity, acknowledgement, history, and stats semantics stay unchanged.
+3. Webhook registration, filtering by severity, retry behavior, and enabled/disabled alerting gates stay unchanged.
 4. Inline tests move without assertion or fixture changes and continue to use `super::*`.
-5. No user runtime, storage, auth, team, billing, or API behavior is changed.
+5. No budget runtime, tracker, manager, middleware, provider limit, persistence, or API behavior is changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::models::user::types --lib --all-features` must pass.
+7. `cargo test core::budget::alerts --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/models/user/types.rs` delegates tests to `src/core/models/user/types_tests.rs`。
-- [ ] Original user type tests move without assertion changes。
-- [ ] User type definitions, enums, serde attributes, and helper methods stay in the original module path。
-- [ ] All touched user type files are below U-16's 800-line ceiling。
-- [ ] Focused user type test suite 通过。
+- [ ] `src/core/budget/alerts.rs` delegates tests to `src/core/budget/alerts_tests.rs`。
+- [ ] Original budget alert tests move without assertion changes。
+- [ ] Budget alert manager, storage, webhook config, and stats behavior stay in the original module path。
+- [ ] All touched budget alert files are below U-16's 800-line ceiling。
+- [ ] Focused budget alert test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a user type unit-test extraction for U-16 compliance.
+No runtime behavior change. This is a budget alert unit-test extraction for U-16 compliance.
