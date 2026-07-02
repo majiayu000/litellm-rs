@@ -10,9 +10,10 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@2a20ad60fd7d`, 32 Rust files remain over the U-16 800-line ceiling.
-The current largest file is `src/utils/data/utils/tests.rs` at 931 lines. It is a pure
-test suite for an already-split `DataUtils` production module.
+At `origin/main@5a4c42c15b86`, 31 tracked Rust files remain over the U-16 800-line ceiling.
+The current largest file is `src/core/integrations/observability/opentelemetry.rs` at
+921 lines. It combines configuration DTOs, span data types, OTLP export helpers,
+`OpenTelemetryIntegration`, and its unit tests in one module.
 
 ## Architecture Principles
 
@@ -37,54 +38,56 @@ test suite for an already-split `DataUtils` production module.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: DataUtils Test-Suite Split
+## Current Tranche: OpenTelemetry Runtime Split
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Test root | `src/utils/data/utils/tests.rs` | Contains all DataUtils tests inline. | It is 931 lines and mixes unrelated behavior domains. |
-| Production facade | `src/utils/data/utils/mod.rs` | Exposes `DataUtils` and mounts `#[cfg(test)] mod tests;`. | The mount path should remain unchanged. |
-| Production helpers | `base64_ops.rs`, `json_ops.rs`, `serialization.rs`, `string_ops.rs`, `uuid_ops.rs` | Already split by utility responsibility. | No production split is needed in this tranche. |
+| Facade | `src/core/integrations/observability/opentelemetry.rs` | Exposes config, integration, span/event/status/kind, and attribute value names. | Public import paths must remain compatible. |
+| Config | `opentelemetry/config.rs` | Owns serde defaults and `OpenTelemetryConfig::default`. | Config defaults are a stable API surface. |
+| Span model | `opentelemetry/span.rs` | Owns span/event/status/kind/attribute values and ID generation. | Span lifecycle and tests depend on these helpers. |
+| Exporter | `opentelemetry/exporter.rs` | Owns OTLP payload mapping and HTTP export. | Export semantics and error propagation must not silently degrade. |
+| Integration | `opentelemetry/integration_impl.rs` | Owns active span state, pending span batch, and `Integration` trait implementation. | Runtime state transitions need to remain local and testable. |
+| Tests | `opentelemetry/tests.rs` | Contains the moved OpenTelemetry unit tests. | Focused tests should remain under the original module path. |
 
 ### Design
 
-1. Keep `src/utils/data/utils/tests.rs` as the test root with child module declarations only.
-2. Add `src/utils/data/utils/tests/base64_tests.rs` for base64 encode/decode and detection cases.
-3. Add `json_conversion_tests.rs` for object/list conversion and `jsonify_tools`.
-4. Add `json_cleanup_tests.rs` for shallow/deep cleanup of null values.
-5. Add `uuid_tests.rs` for UUID and short-id coverage.
-6. Add `json_merge_nested_tests.rs` for merge, nested extract, and nested set coverage.
-7. Add `json_flatten_schema_tests.rs` for flattening and schema validation coverage.
-8. Add `string_tests.rs` and `string_json_extraction_tests.rs` for string utilities, URL extraction, and JSON extraction.
-9. Add `serialization_tests.rs` for pretty/compact/hash/size/clone coverage.
-10. Do not edit production utility modules.
+1. Keep `opentelemetry.rs` as a root facade with only child module declarations and `pub use` exports.
+2. Move `OpenTelemetryConfig` and its default helper functions into `config.rs` without changing serde attributes or defaults.
+3. Move `SpanStatus`, `SpanKind`, `Span`, `SpanEvent`, `AttributeValue`, conversions, and ID generation into `span.rs`.
+4. Move `export_spans` and `build_otlp_payload` into `exporter.rs`; keep them module-internal because only the integration and tests need them.
+5. Move `ActiveSpan`, `SpanBatch`, `OpenTelemetryIntegration`, and `impl Integration for OpenTelemetryIntegration` into `integration_impl.rs`.
+6. Move the existing unit tests into `tests.rs` and import internal helpers through sibling modules only for test coverage.
+7. Do not change endpoint defaults, payload field names, span attributes, sampling, batch flush conditions, or shutdown behavior.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `tests.rs` | Root declares child modules only. |
-| P2 | `tests/*.rs` | Original test functions remain discoverable by name. |
-| P3 | file size | `wc -l src/utils/data/utils/tests.rs src/utils/data/utils/tests/*.rs` shows every touched file below 800. |
-| P4 | focused test suite | `cargo test utils::data::utils::tests --lib --all-features` runs the moved tests. |
-| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/utils/data/utils/tests.rs`. |
+| P1 | `opentelemetry.rs` | Root facade declares focused modules and re-exports the original public names. |
+| P2 | `config.rs`, `span.rs`, `exporter.rs`, `integration_impl.rs` | Responsibilities are separated without changing public DTO fields or trait method signatures. |
+| P3 | file size | `wc -l src/core/integrations/observability/opentelemetry.rs src/core/integrations/observability/opentelemetry/*.rs` shows every touched file below 800. |
+| P4 | focused test suite | `cargo test core::integrations::observability::opentelemetry --lib --all-features` runs the moved tests. |
+| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/integrations/observability/opentelemetry.rs`. |
 
 ## Risks
 
-- Test module discovery can change when moving from a file module into child modules; the focused test command must prove discovery.
-- Child modules need local imports to avoid relying on a broad parent prelude and to keep clippy/lint output clean.
-- The split must not alter sample values, including Unicode and JSON edge cases.
+- `#[async_trait]` and derive attributes must stay attached to the moved impl/types; losing them changes compilation and trait compatibility.
+- Internal exporter/span helpers need narrow visibility for sibling tests without expanding the public API.
+- Export failures must continue returning errors from `flush`; background batch export may still log failures as before.
+- Root facade re-exports must keep downstream imports compiling.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test utils::data::utils::tests --lib --all-features`
+- [ ] `cargo test core::integrations::observability::opentelemetry --lib --all-features`
+- [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
-- [ ] Line-count proof for `src/utils/data/utils/tests.rs` and `src/utils/data/utils/tests/*.rs`
+- [ ] Line-count proof for `src/core/integrations/observability/opentelemetry.rs` and `src/core/integrations/observability/opentelemetry/*.rs`
 
 ## Rollback
 
-Revert the DataUtils test-suite split and `specs/GH727` edits. No production code,
-schema changes, or runtime behavior changes are involved.
+Revert the OpenTelemetry module split and `specs/GH727` edits. No schema changes or
+intended runtime behavior changes are involved.

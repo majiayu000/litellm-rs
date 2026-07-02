@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@2a20ad60fd7d` 仍有 32 个 Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/utils/data/utils/tests.rs`，它是一个纯测试 suite，把 base64、JSON conversion、cleanup、
-merge/path/schema、string 和 serialization 行为都放在同一个文件里，维护时难以定位相关断言。
+`origin/main@5a4c42c15b86` 仍有 31 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/core/integrations/observability/opentelemetry.rs`，它把配置、span 数据模型、OTLP payload/export、
+`Integration` trait 实现和单元测试全部放在一个 921 行文件里。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,39 +34,42 @@ merge/path/schema、string 和 serialization 行为都放在同一个文件里�
 
 ## 本 tranche 目标
 
-- 拆分 `src/utils/data/utils/tests.rs`，它当前 931 行，是 #727 当前最大的 test-only suite。
-- 保留 `src/utils/data/utils/mod.rs` 的 `#[cfg(test)] mod tests;` 挂载方式不变。
-- 将 root `tests.rs` 缩小为 child module declarations。
-- 按行为域移动原测试断言到 `src/utils/data/utils/tests/*.rs`：
-  base64、JSON conversion/tools、JSON cleanup、UUID、JSON merge/path、JSON flatten/schema、string utilities、string JSON extraction、serialization。
-- 保持所有 test names、assertions、sample values 和 focused test command 覆盖不变。
+- 拆分 `src/core/integrations/observability/opentelemetry.rs`，它当前 921 行，是 #727 当前最大的 runtime orchestrator。
+- 保留原模块路径作为 facade：`opentelemetry.rs` 继续导出 `OpenTelemetryConfig`、
+  `OpenTelemetryIntegration`、`Span`、`SpanKind`、`SpanStatus`、`SpanEvent` 和 `AttributeValue`。
+- 按职责拆为 `config.rs`、`span.rs`、`exporter.rs`、`integration_impl.rs` 和 `tests.rs`。
+- `integration_impl.rs` 继续拥有 `Integration for OpenTelemetryIntegration`，不得改变 trait surface、采样逻辑、
+  active/pending span 状态流转或 flush/shutdown 行为。
+- `exporter.rs` 只负责 OTLP payload 构造和 HTTP export；`span.rs` 只负责 span 数据模型、attribute conversion
+  和 ID generation；`config.rs` 只负责 serde/default 配置。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 `DataUtils` production implementation。
-- 不修改 `base64_ops.rs`、`json_ops.rs`、`serialization.rs`、`string_ops.rs` 或 `uuid_ops.rs`。
-- 不改变任何 tested behavior 或 error expectation。
-- 不在本 PR 中处理其余 31 个大文件。
+- 不改变 OpenTelemetry endpoint、headers、resource/service payload shape 或 export error propagation。
+- 不引入新的 observability abstraction、global prelude、dynamic `Any` API 或 warning-only fallback。
+- 不在本 PR 中处理其余 30 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/utils/data/utils/mod.rs` continues to mount the test suite as `utils::data::utils::tests`.
-2. Existing `DataUtils` tests keep their original test names and assertions after moving to child modules.
-3. Base64, JSON conversion/tools, cleanup, UUID, merge/path, flatten/schema, string, URL extraction, JSON extraction, and serialization coverage all remain present.
-4. Every touched test file must be below U-16's 800-line ceiling.
-5. `cargo test utils::data::utils::tests --lib --all-features` must pass.
+1. Existing public imports through `crate::core::integrations::observability::opentelemetry::*` remain available.
+2. `OpenTelemetryIntegration` continues to implement `Integration` with the same async handlers and return types.
+3. Span lifecycle behavior remains unchanged: start stores active spans, end/error moves them to pending spans, cache hits create short completed spans, flush exports pending spans.
+4. OTLP payload construction remains test-covered through the moved `build_otlp_payload` test.
+5. Every touched Rust file must be below U-16's 800-line ceiling.
+6. `cargo test core::integrations::observability::opentelemetry --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/utils/data/utils/tests.rs` keeps only behavior-domain child module declarations。
-- [ ] Original DataUtils tests move under `src/utils/data/utils/tests/*.rs` without assertion changes。
-- [ ] All touched DataUtils test files are below U-16's 800-line ceiling。
-- [ ] Focused DataUtils test suite 通过。
-- [ ] `cargo fmt --all -- --check` 和 `cargo check --all-features --locked` 通过。
+- [ ] `src/core/integrations/observability/opentelemetry.rs` is a small facade with focused child modules。
+- [ ] Public OpenTelemetry config, integration, span, event, status, kind, and attribute names remain re-exported from the original module path。
+- [ ] Config, span data model, OTLP exporter, integration implementation, and tests are separated by responsibility。
+- [ ] All touched OpenTelemetry files are below U-16's 800-line ceiling。
+- [ ] Focused OpenTelemetry test suite 通过。
+- [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a DataUtils test-suite split for U-16 compliance.
+No intended runtime behavior change. This is an OpenTelemetry integration module split for U-16 compliance.

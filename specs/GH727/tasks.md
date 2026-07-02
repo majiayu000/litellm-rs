@@ -130,28 +130,36 @@ GH-727 / #727
 - [x] `SP727-T117` Owner: coordinator. Done when: `src/utils/data/utils/tests.rs` keeps only child module declarations. Verify: `sed -n '1,80p' src/utils/data/utils/tests.rs`.
 - [x] `SP727-T118` Owner: coordinator. Done when: original DataUtils tests move into behavior-domain child modules without assertion changes. Verify: `rg -n "test_base64_operations|test_convert_to_dict_non_object|test_cleanup_none_values|test_json_merging|test_json_schema_validation|test_string_utilities|test_json_extraction_from_string|test_hash_json_consistent" src/utils/data/utils/tests.rs src/utils/data/utils/tests/*.rs`.
 - [x] `SP727-T119` Owner: verification owner. Done when: all touched DataUtils test files are below U-16's 800-line ceiling and focused DataUtils tests pass. Verify: `wc -l src/utils/data/utils/tests.rs src/utils/data/utils/tests/*.rs`; `cargo test utils::data::utils::tests --lib --all-features`.
-- [ ] `SP727-T120` Owner: verification owner. Done when: formatting, all-features check, default check, PR CI, and review-thread gate pass for the DataUtils tests tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T120` Owner: verification owner. Done when: formatting, all-features check, default check, PR CI, and review-thread gate pass for the DataUtils tests tranche. Verify: #824 PR body, green PR CI, GraphQL review-thread query, and merge commit `5a4c42c15b86`.
+- [x] `SP727-T121` Owner: coordinator. Done when: after the DataUtils tests tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@5a4c42c15b86`, `src/core/integrations/observability/opentelemetry.rs` is 921 lines and 31 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T122` Owner: coordinator. Done when: the OpenTelemetry tranche documents runtime ownership boundaries for facade exports, config defaults, span model, OTLP export, integration state, and tests. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T123` Owner: coordinator. Done when: `src/core/integrations/observability/opentelemetry.rs` becomes a small root facade that declares focused child modules and re-exports the original public names. Verify: `sed -n '1,80p' src/core/integrations/observability/opentelemetry.rs`.
+- [x] `SP727-T124` Owner: coordinator. Done when: `OpenTelemetryConfig`, span data types, OTLP exporter helpers, and `OpenTelemetryIntegration` move into focused child modules without changing public fields, derive attributes, serde defaults, or trait method signatures. Verify: `rg -n "pub struct OpenTelemetryConfig|pub enum SpanStatus|async fn export_spans|impl Integration for OpenTelemetryIntegration" src/core/integrations/observability/opentelemetry.rs src/core/integrations/observability/opentelemetry/*.rs`.
+- [x] `SP727-T125` Owner: verification owner. Done when: all touched OpenTelemetry files are below U-16's 800-line ceiling and focused OpenTelemetry tests pass. Verify: `wc -l src/core/integrations/observability/opentelemetry.rs src/core/integrations/observability/opentelemetry/*.rs`; `cargo test core::integrations::observability::opentelemetry --lib --all-features`.
+- [ ] `SP727-T126` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the OpenTelemetry tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the DataUtils test-suite file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the OpenTelemetry integration file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/utils/data/utils/tests.rs`
-- `src/utils/data/utils/tests/*.rs`
+- `src/core/integrations/observability/opentelemetry.rs`
+- `src/core/integrations/observability/opentelemetry/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test utils::data::utils::tests --lib --all-features`
+- `git diff --check`
+- `cargo test core::integrations::observability::opentelemetry --lib --all-features`
+- `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
 - PR CI and GraphQL review-thread gate before merge.
 
 ## Handoff Notes
 
-This PR is the next #727 test-suite maintenance tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 runtime integration split tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
