@@ -10,11 +10,11 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@bcdf7245`, 10 tracked Rust files remain over the U-16
-800-line ceiling. One current largest file is `src/core/providers/gemini/provider.rs`
-at 821 lines. It is a Gemini provider module where production provider,
-validation, trait implementation, health, and unsupported-feature behavior end
-at line 398 and the oversized portion is inline unit tests starting at line 399.
+At `origin/main@e2d7495e`, 9 tracked Rust files remain over the U-16
+800-line ceiling. The current largest file is `src/core/integrations/manager.rs`
+at 821 lines. It is an integration manager module where production registration,
+event dispatch, parallel/sequential handling, shutdown, and error aggregation end
+at line 545 and the oversized portion is inline async unit tests starting at line 546.
 
 ## Architecture Principles
 
@@ -41,55 +41,55 @@ at line 398 and the oversized portion is inline unit tests starting at line 399.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Gemini Provider Test Extraction
+## Current Tranche: Integration Manager Test Extraction
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Gemini provider production | `src/core/providers/gemini/provider.rs` | Defines `GeminiProvider`, constructor, validation, `LLMProvider` methods, health, cost, and unsupported feature behavior. | Public provider path and trait behavior must remain unchanged for callers. |
-| Inline tests | `src/core/providers/gemini/provider.rs` | `#[cfg(test)] mod tests` starts at line 399 and contains provider creation, capability, model, validation, param mapping, cost, and unsupported feature tests. | Moving these tests removes the U-16 violation without changing provider runtime code. |
-| Extracted tests | `src/core/providers/gemini/provider_tests.rs` | New path-backed test module keeps the original tests under `super::*`. | Assertions and fixtures remain centralized against the same production module. |
+| Integration manager production | `src/core/integrations/manager.rs` | Defines manager config, registration APIs, event dispatch APIs, flush, shutdown, and dispatch helpers. | Integration runtime dispatch behavior must remain unchanged for callers. |
+| Inline tests | `src/core/integrations/manager.rs` | `#[cfg(test)] mod tests` starts at line 546 and contains mock integration, registration, dispatch, fail-fast, sequential, and empty-manager tests. | Moving these tests removes the U-16 violation without changing runtime manager code. |
+| Extracted tests | `src/core/integrations/manager_tests.rs` | New path-backed test module keeps the original tests under `super::*`. | Assertions and fixtures remain centralized against the same production module. |
 
 ### Design
 
-1. Keep `src/core/providers/gemini/provider.rs` as the production owner for `GeminiProvider`, request validation, trait methods, health check, cost helper, and unsupported feature behavior.
-2. Replace the inline test module with `#[cfg(test)] #[path = "provider_tests.rs"] mod tests;`.
-3. Move the original inline test body into `src/core/providers/gemini/provider_tests.rs` without assertion, fixture API key, model name, validation range, or expected-value changes.
+1. Keep `src/core/integrations/manager.rs` as the production owner for config builders, registration methods, event notification methods, flush/shutdown, and dispatch helpers.
+2. Replace the inline test module with `#[cfg(test)] #[path = "manager_tests.rs"] mod tests;`.
+3. Move the original inline test body into `src/core/integrations/manager_tests.rs` without assertion, mock integration, counter, event fixture, or expected-value changes.
 4. Keep `use super::*;` in the extracted test module so tests validate the same parent module API.
-5. Do not create a Gemini provider runtime helper tree in this tranche because the production implementation is already below the ceiling.
-6. Do not edit Gemini client, config, error mapping, model registry, streaming, factory, or API behavior beyond the mechanical test move.
+5. Do not create an integration manager production helper tree in this tranche because the production implementation is already below the ceiling.
+6. Do not edit integration trait contracts, event definitions, Langfuse/OpenTelemetry adapters, or API behavior beyond the mechanical test move.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `src/core/providers/gemini/provider.rs` | Root keeps production Gemini provider implementation and delegates tests to `provider_tests.rs`. |
-| P2 | `src/core/providers/gemini/provider_tests.rs` | Original test names and assertions remain present. |
-| P3 | Gemini provider API | No constructor, trait method, validation, param mapping, unsupported feature, error mapper, or cost behavior changes. |
-| P4 | file size | `wc -l src/core/providers/gemini/provider.rs src/core/providers/gemini/provider_tests.rs` shows both files below 800. |
-| P5 | focused test suite | `cargo test core::providers::gemini::provider --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/providers/gemini/provider.rs`. |
+| P1 | `src/core/integrations/manager.rs` | Root keeps production integration manager implementation and delegates tests to `manager_tests.rs`. |
+| P2 | `src/core/integrations/manager_tests.rs` | Original test names and assertions remain present. |
+| P3 | integration manager API | No config builder, registration, dispatch, fail-fast, log-errors, timeout, flush, or shutdown behavior changes. |
+| P4 | file size | `wc -l src/core/integrations/manager.rs src/core/integrations/manager_tests.rs` shows both files below 800. |
+| P5 | focused test suite | `cargo test core::integrations::manager --lib --all-features` runs the moved tests. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/integrations/manager.rs`. |
 
 ## Risks
 
-- Extracting tests changes the exact test source file while preserving the module path as `provider::tests`, so the focused module filter remains `core::providers::gemini::provider`.
-- Tests call private `validate_request`, so the extracted path-backed module must remain a child module of `provider.rs` rather than a sibling declared from `gemini/mod.rs`.
-- Gemini provider runtime is customer-facing provider behavior, so this tranche must not alter client calls, error mapping, model registry lookup, streaming, or unsupported feature semantics.
+- Extracting tests changes the exact test source file while preserving the module path as `manager::tests`, so the focused module filter remains `core::integrations::manager`.
+- Tests define a mock integration and inspect dispatch side effects through counters, so the extracted path-backed module must remain a child module of `manager.rs`.
+- Integration dispatch is cross-cutting observability/runtime behavior, so this tranche must not alter trait contracts, concrete adapters, event types, or error propagation semantics.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l src/core/providers/gemini/provider.rs src/core/providers/gemini/provider_tests.rs`
-- [ ] `cargo test core::providers::gemini::provider --lib --all-features`
+- [ ] `wc -l src/core/integrations/manager.rs src/core/integrations/manager_tests.rs`
+- [ ] `cargo test core::integrations::manager --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the Gemini provider unit tests back into `src/core/providers/gemini/provider.rs` and revert
+Move the integration manager unit tests back into `src/core/integrations/manager.rs` and revert
 the `specs/GH727` edits. No schema, persistence, or runtime behavior changes
 are involved.

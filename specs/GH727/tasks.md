@@ -264,24 +264,30 @@ GH-727 / #727
 - [x] `SP727-T251` Owner: coordinator. Done when: `src/core/providers/gemini/provider.rs` keeps production `GeminiProvider`, validation, trait implementation, health, cost, and unsupported feature behavior, then delegates tests with `#[path = "provider_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/providers/gemini/provider.rs`.
 - [x] `SP727-T252` Owner: coordinator. Done when: original inline Gemini provider tests move to `src/core/providers/gemini/provider_tests.rs` without assertion changes. Verify: `rg -n "test_provider_creation|test_provider_capabilities|test_request_validation_empty_messages|test_map_openai_params_max_tokens|test_embeddings_not_supported|test_image_generation_not_supported|test_error_mapper" src/core/providers/gemini/provider_tests.rs`.
 - [x] `SP727-T253` Owner: verification owner. Done when: both touched Gemini provider files are below U-16's 800-line ceiling and focused Gemini provider tests pass. Verify: `wc -l src/core/providers/gemini/provider.rs src/core/providers/gemini/provider_tests.rs`; `cargo test core::providers::gemini::provider --lib --all-features` passed 31 tests.
-- [ ] `SP727-T254` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Gemini provider tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T254` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Gemini provider tranche. Verify: #867 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `e2d7495eb317`, #727 reopened, and #727 update comment.
+- [x] `SP727-T255` Owner: coordinator. Done when: after the Gemini provider tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@e2d7495e`, `src/core/integrations/manager.rs` is 821 lines and 9 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T256` Owner: coordinator. Done when: the integration manager tranche documents why this slice is a test extraction rather than a production dispatch split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T257` Owner: coordinator. Done when: `src/core/integrations/manager.rs` keeps production manager config, registration, event dispatch, flush, shutdown, and dispatch helpers, then delegates tests with `#[path = "manager_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/integrations/manager.rs`.
+- [x] `SP727-T258` Owner: coordinator. Done when: original inline integration manager tests move to `src/core/integrations/manager_tests.rs` without assertion changes. Verify: `rg -n "test_register_integration|test_register_disabled_integration|test_on_llm_start|test_fail_fast_disabled|test_fail_fast_enabled|test_sequential_dispatch|test_empty_manager" src/core/integrations/manager_tests.rs`.
+- [x] `SP727-T259` Owner: verification owner. Done when: both touched integration manager files are below U-16's 800-line ceiling and focused integration manager tests pass. Verify: `wc -l src/core/integrations/manager.rs src/core/integrations/manager_tests.rs`; `cargo test core::integrations::manager --lib --all-features` passed 13 tests.
+- [ ] `SP727-T260` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the integration manager tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the Gemini provider file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the integration manager file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/providers/gemini/provider.rs`
-- `src/core/providers/gemini/provider_tests.rs`
+- `src/core/integrations/manager.rs`
+- `src/core/integrations/manager_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::providers::gemini::provider --lib --all-features`
+- `cargo test core::integrations::manager --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -289,5 +295,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 Gemini provider unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 integration manager unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
