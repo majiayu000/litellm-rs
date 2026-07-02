@@ -104,23 +104,29 @@ GH-727 / #727
 - [x] `SP727-T91` Owner: coordinator. Done when: `src/core/security/types.rs` keeps production type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 30 src/core/security/types.rs`.
 - [x] `SP727-T92` Owner: coordinator. Done when: original inline security type tests move to `src/core/security/types_tests.rs` without assertion changes. Verify: `rg -n "test_pii_pattern_creation|test_moderation_rule_creation|test_filter_result_blocked|test_user_consent_creation|test_anonymization_method_clone" src/core/security/types_tests.rs`.
 - [x] `SP727-T93` Owner: verification owner. Done when: both touched security type files are below U-16's 800-line ceiling and focused security type tests pass. Verify: `wc -l src/core/security/types.rs src/core/security/types_tests.rs`; `cargo test core::security::types --lib --all-features`.
-- [ ] `SP727-T94` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the security types tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [x] `SP727-T94` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the security types tranche. Verify: #820 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T95` Owner: coordinator. Done when: after the security types tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@ee283a3cb683`, `src/server/routes/teams.rs` is 934 lines and 35 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T96` Owner: coordinator. Done when: the teams route tranche documents why this slice is a test extraction rather than a production route-handler split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T97` Owner: coordinator. Done when: `src/server/routes/teams.rs` keeps production route code and delegates tests with `#[path = "teams_tests.rs"] mod tests;`. Verify: `tail -n 30 src/server/routes/teams.rs`.
+- [x] `SP727-T98` Owner: coordinator. Done when: original inline teams route tests move to `src/server/routes/teams_tests.rs` without assertion changes. Verify: `rg -n "test_create_team_body_deserialize|test_get_request_caller_prefers_user|test_has_team_access_team_scoped_caller_member_only" src/server/routes/teams_tests.rs`.
+- [x] `SP727-T99` Owner: verification owner. Done when: both touched teams route files are below U-16's 800-line ceiling and focused teams route tests pass. Verify: `wc -l src/server/routes/teams.rs src/server/routes/teams_tests.rs`; `cargo test server::routes::teams --lib --all-features`.
+- [ ] `SP727-T100` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the teams route tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the security types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the teams route file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/security/types.rs`
-- `src/core/security/types_tests.rs`
+- `src/server/routes/teams.rs`
+- `src/server/routes/teams_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test core::security::types --lib --all-features`
+- `cargo test server::routes::teams --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 

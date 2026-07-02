@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@d7b1d26c0797` 仍有 36 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
+`origin/main@ee283a3cb683` 仍有 35 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
 tranche 已经证明“小 PR、单文件族、保持行为不变”的方式可行，但 spec packet 仍按上一轮
-unified provider tranche 书写，需要继续滚动到当前最大文件的系统性解耦。
+security types tranche 书写，需要继续滚动到当前最大文件的系统性解耦。
 
 本轮目标是把 #727 升级为完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须
 服从同一套架构边界，避免为了降行数而制造新的耦合、重导出混乱或行为漂移。
@@ -34,39 +34,39 @@ unified provider tranche 书写，需要继续滚动到当前最大文件的系�
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/security/types.rs`，它当前 948 行，是 #727 当前最大的文件。
-- 保留 `src/core/security/types.rs` 作为 security type 定义模块；生产类型本身只有约 220 行，不新增
-  public `types/` facade 子树。
-- 将原 inline tests 整体移动到 `src/core/security/types_tests.rs`，并通过
-  `#[cfg(test)] #[path = "types_tests.rs"] mod tests;` 保持测试模块挂载路径。
-- 保持所有 security type names、fields、visibility、derive 和 test assertions 不变。
+- 拆分 `src/server/routes/teams.rs`，它当前 934 行，是 #727 当前最大的 runtime route 文件。
+- 保留 teams route handlers、auth helpers、request/response DTOs 和 `configure_routes` 在
+  `src/server/routes/teams.rs` 中；生产 route 文件抽出测试后约 650 行，低于 U-16。
+- 将原 inline tests 整体移动到 `src/server/routes/teams_tests.rs`，并通过
+  `#[cfg(test)] #[path = "teams_tests.rs"] mod tests;` 保持测试模块挂载路径。
+- 保持所有 route handler names、route wiring、auth behavior、request/response DTO fields 和 test assertions 不变。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不拆分或重命名 security production types。
-- 不修改 `src/core/security/mod.rs` 的 public re-exports。
-- 不修改 filter、GDPR、patterns、profanity runtime behavior。
-- 不在本 PR 中处理其余 35 个大文件。
+- 不拆分 teams route handlers 到新的 production modules。
+- 不修改 `src/server/http.rs` route registration 或 `src/server/routes/mod.rs` exports。
+- 不修改 team manager/repository behavior。
+- 不在本 PR 中处理其余 34 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. Existing `crate::core::security::*` re-exports continue to compile unchanged.
-2. `src/core/security/types.rs` keeps every production type definition and visibility unchanged.
-3. Original inline tests keep the same assertions after moving to `types_tests.rs`.
-4. `src/core/security/types.rs` and `src/core/security/types_tests.rs` must be below 800 lines.
-5. `cargo test core::security::types --lib --all-features` must pass.
+1. Existing `crate::server::routes::teams::*` handler and DTO names remain in the same module.
+2. `configure_routes` keeps the same `/v1/teams` route paths and handler bindings.
+3. Original inline tests keep the same assertions after moving to `teams_tests.rs`.
+4. `src/server/routes/teams.rs` and `src/server/routes/teams_tests.rs` must be below 800 lines.
+5. `cargo test server::routes::teams --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/security/types.rs` keeps production type definitions and declares path-backed `types_tests.rs`。
-- [ ] Original inline security type tests move to `src/core/security/types_tests.rs` without assertion changes。
-- [ ] Both security type files are below U-16's 800-line ceiling。
-- [ ] Focused security type tests 通过。
+- [ ] `src/server/routes/teams.rs` keeps production route handlers and declares path-backed `teams_tests.rs`。
+- [ ] Original inline teams route tests move to `src/server/routes/teams_tests.rs` without assertion changes。
+- [ ] Both teams route files are below U-16's 800-line ceiling。
+- [ ] Focused teams route tests 通过。
 - [ ] `cargo fmt --all -- --check` 和 `cargo check --all-features --locked` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a security type test extraction tranche for U-16 compliance.
+No runtime behavior change. This is a teams route test extraction tranche for U-16 compliance.
