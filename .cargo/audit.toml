@@ -6,6 +6,10 @@
 # only appears in Cargo.lock but not in the actual build tree.
 # See: https://github.com/SeaQL/sea-orm/discussions/2172
 # The vulnerability cannot be fixed until sqlx updates their RSA dependency.
+# Ignore quick-xml duplicate-attribute quadratic parsing via object_store.
+# object_store 0.13/0.14 constrain quick-xml below the fixed 0.41.0 release,
+# so this cannot be fixed until object_store publishes a compatible update.
 ignore = [
     "RUSTSEC-2023-0071", # RSA Marvin Attack in sqlx-mysql (not actually used)
+    "RUSTSEC-2026-0194", # quick-xml via object_store; awaiting object_store quick-xml >=0.41.0
 ]
