@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@a42b908a3e26` 仍有 37 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
+`origin/main@d7b1d26c0797` 仍有 36 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
 tranche 已经证明“小 PR、单文件族、保持行为不变”的方式可行，但 spec packet 仍按上一轮
-analytics types tranche 书写，需要继续滚动到当前最大文件的系统性解耦。
+unified provider tranche 书写，需要继续滚动到当前最大文件的系统性解耦。
 
 本轮目标是把 #727 升级为完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须
 服从同一套架构边界，避免为了降行数而制造新的耦合、重导出混乱或行为漂移。
@@ -34,47 +34,39 @@ analytics types tranche 书写，需要继续滚动到当前最大文件的系�
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/providers/unified_provider.rs`，它当前 1014 行，是 #727 当前最大的 runtime/provider error facade 文件。
-- 将 unified provider error handling 按职责拆成 child modules：
-  - `error.rs`: `ProviderError` enum and variant definitions
-  - `methods.rs`: factory methods, retryability, retry delay, context attachment, HTTP status mapping
-  - `http_mapping.rs`: shared default/extended status-code mappers and response-body parsing
-  - `macros.rs`: exported provider error helper and mapper macros
-- root `unified_provider.rs` 保持文档 facade，继续导出 `ProviderError`、`ContextualError`、
-  `default_http_error_mapper`、`extended_http_error_mapper` 和 `parse_error_message_from_body`。
-- 保持所有 error variants、factory method signatures、HTTP status/retry semantics 和 macro names 不变。
+- 拆分 `src/core/security/types.rs`，它当前 948 行，是 #727 当前最大的文件。
+- 保留 `src/core/security/types.rs` 作为 security type 定义模块；生产类型本身只有约 220 行，不新增
+  public `types/` facade 子树。
+- 将原 inline tests 整体移动到 `src/core/security/types_tests.rs`，并通过
+  `#[cfg(test)] #[path = "types_tests.rs"] mod tests;` 保持测试模块挂载路径。
+- 保持所有 security type names、fields、visibility、derive 和 test assertions 不变。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 provider runtime dispatch、factory wiring、provider implementations 或 error conversion traits。
-- 不重命名 `ProviderError` variants、methods、macros 或 mapper function paths。
-- 不在本 PR 中处理其余 36 个大文件。
+- 不拆分或重命名 security production types。
+- 不修改 `src/core/security/mod.rs` 的 public re-exports。
+- 不修改 filter、GDPR、patterns、profanity runtime behavior。
+- 不在本 PR 中处理其余 35 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `crate::core::providers::unified_provider::ProviderError` remains the canonical type path.
-2. Existing provider imports of `default_http_error_mapper`, `extended_http_error_mapper`, and
-   `parse_error_message_from_body` continue to compile unchanged.
-3. Exported macros `define_provider_error_helpers!`, `impl_provider_error_helpers!`,
-   `define_standard_error_mapper!`, and `define_extended_error_mapper!` keep the same names and expansions.
-4. Provider error factory, retryability, retry delay, HTTP status, and contextual error behavior remain unchanged.
-5. `src/core/providers/unified_provider.rs` and `src/core/providers/unified_provider_*.rs` must be below 800 lines.
-6. The split must not add a top-level `src/core/providers/unified_provider/` directory, because provider lifecycle coverage treats providers-root directories as provider modules.
-6. `cargo test core::providers::unified_provider_tests --lib --all-features` must pass.
+1. Existing `crate::core::security::*` re-exports continue to compile unchanged.
+2. `src/core/security/types.rs` keeps every production type definition and visibility unchanged.
+3. Original inline tests keep the same assertions after moving to `types_tests.rs`.
+4. `src/core/security/types.rs` and `src/core/security/types_tests.rs` must be below 800 lines.
+5. `cargo test core::security::types --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/providers/unified_provider.rs` declares focused child modules and re-exports the original public unified-provider surface。
-- [ ] `ProviderError` moves to `src/core/providers/unified_provider_error.rs` without variant, derive, or error-display changes。
-- [ ] ProviderError factory/status/retry/context methods move to `methods.rs` without signature or behavior changes。
-- [ ] Default and extended HTTP mapper helpers move to `http_mapping.rs` without mapping semantic changes。
-- [ ] Exported unified provider macros move to `macros.rs` without macro name or expansion changes。
-- [ ] Focused unified provider error tests 通过。
+- [ ] `src/core/security/types.rs` keeps production type definitions and declares path-backed `types_tests.rs`。
+- [ ] Original inline security type tests move to `src/core/security/types_tests.rs` without assertion changes。
+- [ ] Both security type files are below U-16's 800-line ceiling。
+- [ ] Focused security type tests 通过。
 - [ ] `cargo fmt --all -- --check` 和 `cargo check --all-features --locked` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a unified provider error facade decomposition tranche for U-16 compliance.
+No runtime behavior change. This is a security type test extraction tranche for U-16 compliance.

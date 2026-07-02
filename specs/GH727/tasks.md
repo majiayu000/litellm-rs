@@ -98,24 +98,29 @@ GH-727 / #727
 - [x] `SP727-T85` Owner: coordinator. Done when: shared status-code mapping helpers move into `unified_provider_http_mapping.rs` and remain re-exported from the root. Verify: `rg -n "default_http_error_mapper|extended_http_error_mapper|parse_error_message_from_body" src/core/providers/unified_provider.rs src/core/providers/unified_provider_http_mapping.rs`.
 - [x] `SP727-T86` Owner: coordinator. Done when: exported provider error helper macros move into `unified_provider_macros.rs` without name changes and no top-level `src/core/providers/unified_provider/` directory is added. Verify: `rg -n "macro_rules! define_provider_error_helpers|macro_rules! impl_provider_error_helpers|macro_rules! define_standard_error_mapper|macro_rules! define_extended_error_mapper" src/core/providers/unified_provider_macros.rs`; `test ! -d src/core/providers/unified_provider`.
 - [x] `SP727-T87` Owner: verification owner. Done when: all touched unified provider files are below U-16's 800-line ceiling, focused unified provider tests pass, and provider lifecycle coverage does not discover a helper directory as a provider. Verify: `wc -l src/core/providers/unified_provider.rs src/core/providers/unified_provider_*.rs`; `cargo test core::providers::unified_provider_tests --lib --all-features`; `cargo test lifecycle_covers_every_provider_directory --lib --all-features`.
-- [ ] `SP727-T88` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the unified provider tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [x] `SP727-T88` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the unified provider tranche. Verify: #819 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T89` Owner: coordinator. Done when: after the unified provider tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@d7b1d26c0797`, `src/core/security/types.rs` is 948 lines and 36 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T90` Owner: coordinator. Done when: the security types tranche documents why this slice is a test extraction rather than a production facade split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T91` Owner: coordinator. Done when: `src/core/security/types.rs` keeps production type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 30 src/core/security/types.rs`.
+- [x] `SP727-T92` Owner: coordinator. Done when: original inline security type tests move to `src/core/security/types_tests.rs` without assertion changes. Verify: `rg -n "test_pii_pattern_creation|test_moderation_rule_creation|test_filter_result_blocked|test_user_consent_creation|test_anonymization_method_clone" src/core/security/types_tests.rs`.
+- [x] `SP727-T93` Owner: verification owner. Done when: both touched security type files are below U-16's 800-line ceiling and focused security type tests pass. Verify: `wc -l src/core/security/types.rs src/core/security/types_tests.rs`; `cargo test core::security::types --lib --all-features`.
+- [ ] `SP727-T94` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the security types tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the unified provider error facade file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the security types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/providers/unified_provider.rs`
-- `src/core/providers/unified_provider_*.rs`
+- `src/core/security/types.rs`
+- `src/core/security/types_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test core::providers::unified_provider_tests --lib --all-features`
-- `cargo test lifecycle_covers_every_provider_directory --lib --all-features`
+- `cargo test core::security::types --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 
