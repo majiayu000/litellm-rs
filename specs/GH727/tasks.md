@@ -270,24 +270,30 @@ GH-727 / #727
 - [x] `SP727-T257` Owner: coordinator. Done when: `src/core/integrations/manager.rs` keeps production manager config, registration, event dispatch, flush, shutdown, and dispatch helpers, then delegates tests with `#[path = "manager_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/integrations/manager.rs`.
 - [x] `SP727-T258` Owner: coordinator. Done when: original inline integration manager tests move to `src/core/integrations/manager_tests.rs` without assertion changes. Verify: `rg -n "test_register_integration|test_register_disabled_integration|test_on_llm_start|test_fail_fast_disabled|test_fail_fast_enabled|test_sequential_dispatch|test_empty_manager" src/core/integrations/manager_tests.rs`.
 - [x] `SP727-T259` Owner: verification owner. Done when: both touched integration manager files are below U-16's 800-line ceiling and focused integration manager tests pass. Verify: `wc -l src/core/integrations/manager.rs src/core/integrations/manager_tests.rs`; `cargo test core::integrations::manager --lib --all-features` passed 13 tests.
-- [ ] `SP727-T260` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the integration manager tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T260` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the integration manager tranche. Verify: #868 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `c3acd9adac9e`, #727 reopened, and #727 update comment.
+- [x] `SP727-T261` Owner: coordinator. Done when: after the integration manager tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@c3acd9ad`, `src/core/integrations/langfuse/types.rs` is 818 lines and 8 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T262` Owner: coordinator. Done when: the Langfuse types tranche documents why this slice is a test extraction rather than a public DTO facade split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T263` Owner: coordinator. Done when: `src/core/integrations/langfuse/types.rs` keeps production Trace, Usage, Generation, Span, IngestionEvent, batch, and response DTOs, then delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/integrations/langfuse/types.rs`.
+- [x] `SP727-T264` Owner: coordinator. Done when: original inline Langfuse type tests move to `src/core/integrations/langfuse/types_tests.rs` without assertion changes. Verify: `rg -n "test_trace_creation|test_trace_with_id|test_generation_creation|test_generation_error|test_span_creation|test_span_error|test_usage_from_tokens|test_usage_with_costs|test_ingestion_event_trace|test_ingestion_event_generation|test_ingestion_batch|test_level_serialization|test_trace_serialization|test_generation_serialization|test_ingestion_event_serialization" src/core/integrations/langfuse/types_tests.rs`.
+- [x] `SP727-T265` Owner: verification owner. Done when: both touched Langfuse types files are below U-16's 800-line ceiling and focused Langfuse types tests pass. Verify: `wc -l src/core/integrations/langfuse/types.rs src/core/integrations/langfuse/types_tests.rs`; `cargo test core::integrations::langfuse::types --lib --all-features` passed 15 tests.
+- [ ] `SP727-T266` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Langfuse types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the integration manager file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the Langfuse types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/integrations/manager.rs`
-- `src/core/integrations/manager_tests.rs`
+- `src/core/integrations/langfuse/types.rs`
+- `src/core/integrations/langfuse/types_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::integrations::manager --lib --all-features`
+- `cargo test core::integrations::langfuse::types --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -295,5 +301,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 integration manager unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 Langfuse types unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

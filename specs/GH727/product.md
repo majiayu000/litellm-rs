@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@e2d7495e` 仍有 9 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/integrations/manager.rs`，它是一个 821 行 integration manager module；生产 registration、
-event dispatch、parallel/sequential handling、shutdown 和 error aggregation 到第 545 行，超标来源是 inline async unit tests。
+`origin/main@c3acd9ad` 仍有 8 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/core/integrations/langfuse/types.rs`，它是一个 818 行 Langfuse API type module；生产 Trace、
+Generation、Span、IngestionEvent、batch 和 response DTO 到第 642 行，超标来源是 inline type/serialization unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ event dispatch、parallel/sequential handling、shutdown 和 error aggregation �
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/integrations/manager.rs`，它当前 821 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `src/core/integrations/manager.rs` 作为 `IntegrationManagerConfig`、`IntegrationManager` 和 dispatch helper methods 的原始模块路径。
-- 将原 inline async manager tests 移动到 `src/core/integrations/manager_tests.rs`，并从 root 用 `#[path = "manager_tests.rs"] mod tests;` 委托。
-- 不改变 integration registration, disabled-skip, unregister/list/count, event dispatch, fail-fast, sequential/parallel handling, flush, shutdown, or test expectations。
+- 拆分 `src/core/integrations/langfuse/types.rs`，它当前 818 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `src/core/integrations/langfuse/types.rs` 作为 Langfuse public DTO、builder helper 和 ingestion event factory 的原始模块路径。
+- 将原 inline type/serialization tests 移动到 `src/core/integrations/langfuse/types_tests.rs`，并从 root 用 `#[path = "types_tests.rs"] mod tests;` 委托。
+- 不改变 Trace、Usage、Generation、Span、IngestionEvent、IngestionBatch、response DTO, serde casing, builder defaults, event factory, or test expectations。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不拆分 integration manager runtime dispatch helpers 到 production 子模块；本文件超标不是生产实现造成的。
-- 不修改 integration trait contracts, concrete integrations, Langfuse/OpenTelemetry adapters, event type definitions, or API behavior。
-- 不改变 unit test assertions, mock integration behavior, counter expectations, fail-fast semantics, sequential/parallel expectations, or empty-manager behavior。
-- 不在本 PR 中处理其余 8 个大文件。
+- 不拆分 Langfuse public DTO 到 facade 子模块；本文件超标不是生产类型实现造成的。
+- 不修改 Langfuse client, integration adapter, API auth, batching runtime, or HTTP behavior。
+- 不改变 unit test assertions, generated-id expectations, serde casing expectations, builder defaults, ingestion event shape, or batch behavior。
+- 不在本 PR 中处理其余 7 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/core/integrations/manager.rs` keeps `IntegrationManagerConfig`, `IntegrationManager`, registration APIs, event dispatch APIs, and dispatch helpers at the same module path.
-2. Registration, disabled integration skip, unregister/list/count, fail-fast, log-errors, sequential and parallel dispatch semantics stay unchanged.
-3. Flush, shutdown, timeout, error aggregation, and no-integration behavior stay unchanged.
+1. `src/core/integrations/langfuse/types.rs` keeps Trace, Level, Usage, Generation, Span, IngestionEvent, IngestionBatch, and ingestion response DTOs at the same module path.
+2. Builder helper defaults, generated IDs, timestamps, model parameters, metadata insertion, error marking, and batch operations stay unchanged.
+3. Serde casing, tagged ingestion event shape, skip-serializing behavior, and response DTO fields stay unchanged.
 4. Inline tests move without assertion or fixture changes and continue to use `super::*`.
-5. No integration trait, concrete integration adapter, event type, Langfuse/OpenTelemetry, or API behavior is changed.
+5. No Langfuse client, integration adapter, auth, batching runtime, or HTTP behavior is changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::integrations::manager --lib --all-features` must pass.
+7. `cargo test core::integrations::langfuse::types --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/integrations/manager.rs` delegates tests to `src/core/integrations/manager_tests.rs`。
-- [ ] Original integration manager tests move without assertion changes。
-- [ ] Integration manager config, registration, dispatch, flush, shutdown, and error handling stay in the original module path。
-- [ ] All touched integration manager files are below U-16's 800-line ceiling。
-- [ ] Focused integration manager test suite 通过。
+- [ ] `src/core/integrations/langfuse/types.rs` delegates tests to `src/core/integrations/langfuse/types_tests.rs`。
+- [ ] Original Langfuse type and serialization tests move without assertion changes。
+- [ ] Langfuse public DTOs, builders, ingestion event factories, and response types stay in the original module path。
+- [ ] All touched Langfuse types files are below U-16's 800-line ceiling。
+- [ ] Focused Langfuse types test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is an integration manager unit-test extraction for U-16 compliance.
+No runtime behavior change. This is a Langfuse types unit-test extraction for U-16 compliance.
