@@ -125,6 +125,11 @@ fn test_url_extraction_empty_text() {
 fn test_url_extraction_multiple_same() {
     let text = "Visit https://example.com and https://example.com again";
     let urls = DataUtils::extract_urls_from_text(text);
-    // May contain duplicates depending on implementation
-    assert!(urls.contains(&"https://example.com".to_string()));
+    assert_eq!(
+        urls,
+        vec![
+            "https://example.com".to_string(),
+            "https://example.com".to_string()
+        ]
+    );
 }

@@ -34,8 +34,7 @@ fn test_base64_special_characters() {
 fn test_get_base64_string() {
     let plain = "Hello";
     let result = DataUtils::get_base64_string(plain);
-    // Returns empty if not base64
-    assert!(result.is_empty() || DataUtils::is_base64_encoded(&result));
+    assert_eq!(result, "SGVsbG8=");
 }
 
 #[test]
