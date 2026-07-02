@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@33028f3d` 仍有 11 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/virtual_keys/types.rs`，它是一个 825 行 virtual key DTO/type module；生产 DTO、permission、
-rate-limit state 和 key generation settings 只到第 147 行，超标来源是 inline unit tests。
+`origin/main@bcdf7245` 仍有 10 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件之一是
+`src/core/providers/gemini/provider.rs`，它是一个 821 行 Gemini provider module；生产 provider、
+request validation、trait implementation 和 unsupported-feature stubs 到第 398 行，超标来源是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ rate-limit state 和 key generation settings 只到第 147 行，超标来源是
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/virtual_keys/types.rs`，它当前 825 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `src/core/virtual_keys/types.rs` 作为 `VirtualKey`、`RateLimits`、`Permission`、`RateLimitState` 和 `KeyGenerationSettings` 的原始模块路径。
-- 将原 inline unit tests 移动到 `src/core/virtual_keys/types_tests.rs`，并从 root 用 `#[path = "types_tests.rs"] mod tests;` 委托。
-- 不改变 virtual key serde shape, permission variants/equality, rate limit field semantics, key generation defaults, budget/rate-limit validity simulations, or test expectations。
+- 拆分 `src/core/providers/gemini/provider.rs`，它当前 821 行，是 #727 当前最大的 tracked Rust 文件之一。
+- 保留 `src/core/providers/gemini/provider.rs` 作为 `GeminiProvider` 和 `LLMProvider` implementation 的原始模块路径。
+- 将原 inline provider unit tests 移动到 `src/core/providers/gemini/provider_tests.rs`，并从 root 用 `#[path = "provider_tests.rs"] mod tests;` 委托。
+- 不改变 provider creation, capabilities, model support, request validation, OpenAI param mapping, cost calculation, unsupported feature errors, error mapper, or test expectations。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不拆分 virtual key production types 到 facade 子模块；本文件超标不是生产定义造成的。
-- 不修改 virtual key manager, create/update request DTOs, auth, storage, budget runtime, or API behavior。
-- 不改变 unit test assertions, fixture key IDs, serialized JSON expectations, permission variants, default rate limits, or validity simulation logic。
-- 不在本 PR 中处理其余 10 个大文件。
+- 不拆分 Gemini production provider runtime 到 helper 子模块；本文件超标不是生产实现造成的。
+- 不修改 Gemini client, config, error mapper, model registry, streaming, factory, or other provider behavior。
+- 不改变 unit test assertions, fixture API key strings, supported model expectations, validation ranges, mapping output keys, or unsupported feature expectations。
+- 不在本 PR 中处理其余 9 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/core/virtual_keys/types.rs` keeps all existing public virtual key type, enum, field, and default names at the same module path.
-2. Virtual key serialization, clone/debug expectations, metadata, budget, expiration, active-state, tag, and model-access semantics stay unchanged.
-3. Permission variants/equality, rate-limit fields/state, and key generation defaults stay unchanged.
+1. `src/core/providers/gemini/provider.rs` keeps `GeminiProvider`, constructor, validation helper, cost helper, and `LLMProvider` implementation at the same module path.
+2. Provider capability, model support, tool/streaming/vision support, request validation, and param mapping semantics stay unchanged.
+3. Unsupported embeddings/image-generation behavior, health check classification, error mapper, and cost calculation stay unchanged.
 4. Inline tests move without assertion or fixture changes and continue to use `super::*`.
-5. No virtual key manager, request DTO, auth, storage, budget runtime, or API behavior is changed.
+5. No Gemini client, config, error, model registry, streaming, factory, or API behavior is changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::virtual_keys::types --lib --all-features` must pass.
+7. `cargo test core::providers::gemini::provider --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/virtual_keys/types.rs` delegates tests to `src/core/virtual_keys/types_tests.rs`。
-- [ ] Original virtual key type tests move without assertion changes。
-- [ ] Virtual key DTOs, permissions, rate-limit state, and key generation defaults stay in the original module path。
-- [ ] All touched virtual key type files are below U-16's 800-line ceiling。
-- [ ] Focused virtual key type test suite 通过。
+- [ ] `src/core/providers/gemini/provider.rs` delegates tests to `src/core/providers/gemini/provider_tests.rs`。
+- [ ] Original Gemini provider tests move without assertion changes。
+- [ ] Gemini provider constructor, validation, trait methods, cost, and unsupported feature behavior stay in the original module path。
+- [ ] All touched Gemini provider files are below U-16's 800-line ceiling。
+- [ ] Focused Gemini provider test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a virtual key type unit-test extraction for U-16 compliance.
+No runtime behavior change. This is a Gemini provider unit-test extraction for U-16 compliance.
