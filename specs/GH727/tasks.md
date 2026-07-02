@@ -180,24 +180,30 @@ GH-727 / #727
 - [x] `SP727-T167` Owner: coordinator. Done when: `src/core/cache/types.rs` keeps production cache type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/cache/types.rs`.
 - [x] `SP727-T168` Owner: coordinator. Done when: original inline cache type tests move to `src/core/cache/types_tests.rs` without assertion changes. Verify: `rg -n "test_cache_key_new|test_dual_cache_config_default|test_atomic_cache_stats_concurrent|test_cache_stats_snapshot_combined" src/core/cache/types_tests.rs`.
 - [x] `SP727-T169` Owner: verification owner. Done when: both touched cache type files are below U-16's 800-line ceiling and focused cache type tests pass. Verify: `wc -l src/core/cache/types.rs src/core/cache/types_tests.rs`; `cargo test core::cache::types --lib --all-features`.
-- [ ] `SP727-T170` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the cache types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T170` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the cache types tranche. Verify: #853 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `13ff2d1d8b02`, and #727 update comment.
+- [x] `SP727-T171` Owner: coordinator. Done when: after the cache types tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@13ff2d1d8b02`, `src/core/analytics/reports.rs` is 860 lines and 23 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T172` Owner: coordinator. Done when: the analytics reports tranche documents why this slice is a test extraction rather than a production facade split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T173` Owner: coordinator. Done when: `src/core/analytics/reports.rs` keeps production analytics report definitions and delegates tests with `#[path = "reports_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/analytics/reports.rs`.
+- [x] `SP727-T174` Owner: coordinator. Done when: original inline analytics report tests move to `src/core/analytics/reports_tests.rs` without assertion changes. Verify: `rg -n "test_report_template_creation|test_generated_report_serialization|test_chart_data_creation|test_data_point_creation|test_report_summary_creation|test_full_report_workflow" src/core/analytics/reports_tests.rs`.
+- [x] `SP727-T175` Owner: verification owner. Done when: both touched analytics report files are below U-16's 800-line ceiling and focused analytics report tests pass. Verify: `wc -l src/core/analytics/reports.rs src/core/analytics/reports_tests.rs`; `cargo test core::analytics::reports --lib --all-features`.
+- [ ] `SP727-T176` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the analytics reports tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the cache types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the analytics reports file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/cache/types.rs`
-- `src/core/cache/types_tests.rs`
+- `src/core/analytics/reports.rs`
+- `src/core/analytics/reports_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::cache::types --lib --all-features`
+- `cargo test core::analytics::reports --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -205,5 +211,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 cache types test-extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 analytics reports test-extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

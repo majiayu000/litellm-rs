@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@4c278e8ab25e` 仍有 24 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/cache/types.rs`，它是一个 861 行 cache type module，其中 production cache key/entry/config/stats
-definitions 约 550 行，其余是 inline unit tests。
+`origin/main@13ff2d1d` 仍有 23 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/core/analytics/reports.rs`，它是一个 860 行 analytics report module，其中 production report
+template/data/generator definitions 约 225 行，其余是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ definitions 约 550 行，其余是 inline unit tests。
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/cache/types.rs`，它当前 861 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `core::cache::types::*` public cache type paths 不变。
-- 将 root `types.rs` 保持为 production cache type definition file，并用 `#[path = "types_tests.rs"] mod tests;` 委托测试。
-- 将原 inline tests 移动到 `src/core/cache/types_tests.rs`，不改变断言或 fixtures。
-- 因 production definitions 本身低于 800 行，本 tranche 不拆 public cache type surface，避免无意义 facade churn。
+- 拆分 `src/core/analytics/reports.rs`，它当前 860 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `core::analytics` 对 report 相关 public type 的 re-export 不变。
+- 将 root `reports.rs` 保持为 production report definition/generator file，并用 `#[path = "reports_tests.rs"] mod tests;` 委托测试。
+- 将原 inline tests 移动到 `src/core/analytics/reports_tests.rs`，不改变断言或 fixtures。
+- 因 production definitions 本身低于 800 行，本 tranche 不拆 analytics report public surface，避免无意义 facade churn。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 cache runtime behavior、storage backends、Redis integration、eviction behavior 或 public cache type fields。
-- 不改变 `CacheKey` hash/Redis key behavior、`CacheEntry` TTL/access behavior、`SerializableCacheEntry` conversion behavior、`EvictionPolicy`/`CacheMode` serde behavior、`DualCacheConfig` defaults/builders、`AtomicCacheStats` counters 或 `CacheStatsSnapshot` hit-rate calculations。
-- 不在本 PR 中处理其余 23 个大文件。
+- 不修改 analytics report runtime behavior、template defaults、report ID generation、summary defaults、serialization fields 或 `core::analytics` re-export surface。
+- 不改变 `ReportTemplate`、`ReportSection`、`GeneratedReport`、`ReportSectionData`、`ChartData`、`DataPoint`、`ReportSummary` 的字段、derive、serde 行为或 test assertions。
+- 不在本 PR 中处理其余 22 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `core::cache::types::*` public type names remain available from the original module path.
-2. Cache type fields, derives, defaults, serde attributes, and display strings remain unchanged.
-3. The root `types.rs` remains the production cache type definition file; tests are delegated only through `#[path = "types_tests.rs"]`.
-4. Original inline tests remain under `core::cache::types::tests`.
-5. No cache runtime modules are changed.
+1. `core::analytics::{ReportGenerator, ReportTemplate, ReportSection, ReportSectionType, ReportFormat, GeneratedReport, ReportSectionData, ChartData, DataPoint, ReportSummary}` remain available through the original analytics re-export path.
+2. Analytics report type fields, derives, defaults, serde attributes, and generator template behavior remain unchanged.
+3. The root `reports.rs` remains the production analytics report definition/generator file; tests are delegated only through `#[path = "reports_tests.rs"]`.
+4. Original inline tests remain under `core::analytics::reports::tests`.
+5. No analytics runtime, collector, engine, optimizer, or types modules are changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::cache::types --lib --all-features` must pass.
+7. `cargo test core::analytics::reports --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/cache/types.rs` keeps production cache type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`。
-- [ ] Original inline cache type tests move to `src/core/cache/types_tests.rs` without assertion changes。
-- [ ] Public cache type definitions and behavior remain unchanged。
-- [ ] Both touched cache type files are below U-16's 800-line ceiling。
-- [ ] Focused cache types test suite 通过。
+- [ ] `src/core/analytics/reports.rs` keeps production analytics report definitions and delegates tests with `#[path = "reports_tests.rs"] mod tests;`。
+- [ ] Original inline analytics report tests move to `src/core/analytics/reports_tests.rs` without assertion changes。
+- [ ] Public analytics report exports and behavior remain unchanged。
+- [ ] Both touched analytics report files are below U-16's 800-line ceiling。
+- [ ] Focused analytics report test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a cache types test extraction for U-16 compliance.
+No runtime behavior change. This is an analytics reports test extraction for U-16 compliance.
