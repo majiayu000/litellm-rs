@@ -216,24 +216,30 @@ GH-727 / #727
 - [x] `SP727-T203` Owner: coordinator. Done when: `src/utils/net/client/utils.rs` keeps production net client helper definitions and delegates tests with `#[path = "utils_tests.rs"] mod tests;`. Verify: `tail -n 20 src/utils/net/client/utils.rs`.
 - [x] `SP727-T204` Owner: coordinator. Done when: original inline net client helper tests move to `src/utils/net/client/utils_tests.rs` without assertion changes. Verify: `rg -n "test_should_retry_rate_limited|test_calculate_retry_delay_exponential_backoff|test_get_timeout_openai|test_supports_httpx_timeout_openai|test_user_agent_openai|test_add_path_basic|test_validate_url_https|test_parse_content_type_simple|test_default_headers_has_content_type|test_extract_retry_after_seconds|test_create_http_client_default_config|test_get_environment_proxies_empty" src/utils/net/client/utils_tests.rs`.
 - [x] `SP727-T205` Owner: verification owner. Done when: both touched net client helper files are below U-16's 800-line ceiling and focused net client helper tests pass. Verify: `wc -l src/utils/net/client/utils.rs src/utils/net/client/utils_tests.rs`; `cargo test utils::net::client::utils --lib --all-features`.
-- [ ] `SP727-T206` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the net client utils tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T206` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the net client utils tranche. Verify: #859 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `e98c035755f0`, #727 reopened, and #727 update comment.
+- [x] `SP727-T207` Owner: coordinator. Done when: after the net client utils tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@e98c0357`, `tests/integration/auth_middleware_tests.rs` is 844 lines and 17 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T208` Owner: coordinator. Done when: the auth middleware integration tranche documents behavior-domain test-suite splitting and the no-production-change boundary. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T209` Owner: coordinator. Done when: `tests/integration/auth_middleware_tests.rs` delegates to `tests/integration/auth_middleware_tests_parts/mod.rs`. Verify: `cat tests/integration/auth_middleware_tests.rs`.
+- [x] `SP727-T210` Owner: coordinator. Done when: shared auth middleware fixtures/helpers remain in `tests/integration/auth_middleware_tests_parts/mod.rs` and original behavior tests move to child modules without assertion changes. Verify: `rg -n "auth_probe|build_test_state|seed_valid_principal|test_auth_middleware_rejects_missing_auth|test_auth_middleware_accepts_valid_auth_and_propagates_principal_context|test_auth_middleware_bypasses_auth_when_disabled_but_sets_context" tests/integration/auth_middleware_tests.rs tests/integration/auth_middleware_tests_parts/*.rs`.
+- [x] `SP727-T211` Owner: verification owner. Done when: all touched auth middleware test files are below U-16's 800-line ceiling and focused auth middleware tests pass. Verify: `wc -l tests/integration/auth_middleware_tests.rs tests/integration/auth_middleware_tests_parts/*.rs`; `cargo test --all-features auth_middleware_tests`.
+- [ ] `SP727-T212` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the auth middleware integration tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the net client utils file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the auth middleware integration test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/utils/net/client/utils.rs`
-- `src/utils/net/client/utils_tests.rs`
+- `tests/integration/auth_middleware_tests.rs`
+- `tests/integration/auth_middleware_tests_parts/`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test utils::net::client::utils --lib --all-features`
+- `cargo test --all-features auth_middleware_tests`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -241,5 +247,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 net client utils test-extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 auth middleware integration test-suite tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

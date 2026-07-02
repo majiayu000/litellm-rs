@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@8078679f` 仍有 18 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/utils/net/client/utils.rs`，它是一个 846 行 shared HTTP client helper module，其中 production
-ClientUtils definitions 约 333 行，其余是 inline unit tests。
+`origin/main@e98c0357` 仍有 17 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`tests/integration/auth_middleware_tests.rs`，它是一个 844 行 auth middleware integration test suite，其中
+shared fixtures/helpers 约 190 行，其余是 behavior tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ ClientUtils definitions 约 333 行，其余是 inline unit tests。
 
 ## 本 tranche 目标
 
-- 拆分 `src/utils/net/client/utils.rs`，它当前 846 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `utils::net::client::utils::ClientUtils` public helper path 不变。
-- 将 root `utils.rs` 保持为 production HTTP client helper module，并用 `#[path = "utils_tests.rs"] mod tests;` 委托测试。
-- 将原 inline tests 移动到 `src/utils/net/client/utils_tests.rs`，不改变断言、fixtures、header construction 或 env proxy smoke test。
-- 因 production helper definitions 本身低于 800 行，本 tranche 不拆 production helper surface，避免无意义 facade churn。
+- 拆分 `tests/integration/auth_middleware_tests.rs`，它当前 844 行，是 #727 当前最大的 tracked Rust 文件。
+- 将 root `auth_middleware_tests.rs` 保持为 test-suite entry point，并用 `#[path = "auth_middleware_tests_parts/mod.rs"] mod tests;` 委托 suite module。
+- 将 shared fixtures/helpers 保留在 `tests/integration/auth_middleware_tests_parts/mod.rs`。
+- 将原 auth middleware integration tests 按行为域移动到 child modules：rejected/rate-limit paths、authenticated permission/context paths、disabled-auth paths。
+- 不改变断言、fixtures、seeded principal setup、route paths、status-code expectations、rate-limit configuration 或 request context checks。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 retry/backoff semantics、timeout defaults、provider user agent strings、default headers、URL validation、retry-after parsing、HTTP client creation、proxy discovery 或 test assertions。
-- 不改变 `ClientUtils` 的 public type path 或 method signatures。
-- 不在本 PR 中处理其余 17 个大文件。
+- 不修改 AuthMiddleware、RateLimitMiddleware、HttpServer、AppState、storage, auth, permission, rate-limit, or request-context production code。
+- 不改变 integration test assertions, seeded API key/user setup, fixture routes, request headers, peer addresses, or status-code expectations。
+- 不在本 PR 中处理其余 16 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `utils::net::client::utils::ClientUtils` remains available from the original module path.
-2. Retry/backoff behavior, provider timeout defaults, provider-specific headers, URL/content-type parsing, retry-after extraction, and HTTP client construction errors remain unchanged.
-3. The root `utils.rs` remains the production HTTP client helper module; tests are delegated only through `#[path = "utils_tests.rs"]`.
-4. Original inline tests remain under `utils::net::client::utils::tests`.
-5. No net client helper facade or runtime behavior split is introduced in this tranche.
+1. `tests/integration/auth_middleware_tests.rs` remains the integration test-suite entry point referenced by `tests/integration/mod.rs`.
+2. Shared fixtures and helpers remain available to all moved child test modules through `super::*`.
+3. Rejected auth/rate-limit tests, authenticated permission/context tests, and disabled-auth tests keep their original assertions and setup.
+4. No auth, rate-limit, storage, HTTP server, or request context production behavior is changed.
+5. Test files are split only by behavior domain.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test utils::net::client::utils --lib --all-features` must pass.
+7. `cargo test --all-features auth_middleware_tests` must pass.
 
 ## 验收标准
 
-- [ ] `src/utils/net/client/utils.rs` keeps production net client helper definitions and delegates tests with `#[path = "utils_tests.rs"] mod tests;`。
-- [ ] Original inline net client helper tests move to `src/utils/net/client/utils_tests.rs` without assertion changes。
-- [ ] Public net client helper methods and retry/header/client behavior remain unchanged。
-- [ ] Both touched net client helper files are below U-16's 800-line ceiling。
-- [ ] Focused net client helper test suite 通过。
+- [ ] `tests/integration/auth_middleware_tests.rs` delegates to `tests/integration/auth_middleware_tests_parts/mod.rs`。
+- [ ] Shared auth middleware fixtures/helpers remain in `tests/integration/auth_middleware_tests_parts/mod.rs`。
+- [ ] Original auth middleware integration tests move into behavior-domain child modules without assertion changes。
+- [ ] All touched auth middleware test files are below U-16's 800-line ceiling。
+- [ ] Focused auth middleware integration test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a net client helper test extraction for U-16 compliance.
+No runtime behavior change. This is an auth middleware integration test-suite split for U-16 compliance.

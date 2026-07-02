@@ -10,11 +10,11 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@8078679f`, 18 tracked Rust files remain over the U-16
-800-line ceiling. The current largest file is `src/utils/net/client/utils.rs`
-at 846 lines. It is a shared HTTP client helper module where production
-ClientUtils definitions are below the ceiling and the oversized portion is the
-inline unit test suite.
+At `origin/main@e98c0357`, 17 tracked Rust files remain over the U-16
+800-line ceiling. The current largest file is
+`tests/integration/auth_middleware_tests.rs` at 844 lines. It is a test-only
+auth middleware integration suite where shared fixtures/helpers are below the
+ceiling and the oversized portion is behavior tests.
 
 ## Architecture Principles
 
@@ -41,57 +41,58 @@ inline unit test suite.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Net Client Utils Test Extraction
+## Current Tranche: Auth Middleware Integration Test Split
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Net client helper definitions | `src/utils/net/client/utils.rs` | Defines ClientUtils helper methods for HTTP client creation, proxy discovery, retry/backoff, provider defaults, URL validation, retry-after parsing, provider headers, connection testing, and content-type parsing. | Production helper surface must keep the same names, signatures, error messages, provider defaults, and module path. |
-| Inline tests | `src/utils/net/client/utils.rs` | Contains retry, delay, provider timeout, httpx timeout, user agent, path, URL, content-type, default header, retry-after, HTTP client creation, provider client, and proxy smoke tests inline. | The test suite is what pushes the file over 800 lines. |
-| Extracted tests | `src/utils/net/client/utils_tests.rs` | New path-backed test module loaded from `utils.rs`. | Removes the oversized inline test block without changing production architecture. |
+| Suite entry | `tests/integration/auth_middleware_tests.rs` | Current single file declares a `#[cfg(test)] mod tests` with imports, shared fixtures, and all behavior tests. | The entry point should stay discoverable from `tests/integration/mod.rs` while delegating the large suite. |
+| Shared fixtures | `tests/integration/auth_middleware_tests_parts/mod.rs` | New suite module keeps imports, seeded principal setup, auth probe route, state builders, and helper functions. | Child modules need these helpers through `super::*` without duplicating setup. |
+| Rejected/rate-limit tests | `tests/integration/auth_middleware_tests_parts/rejection_rate_limit.rs` | Missing/invalid auth, gateway rate limit, requests_per_minute alias, valid-auth reservation release, and API-key rpm behavior. | These tests share rate-limit setup and status-code expectations. |
+| Authenticated permission/context tests | `tests/integration/auth_middleware_tests_parts/permissions_context.rs` | Valid auth context propagation, legacy permission, denied operation/endpoint policy, admin-owned key restriction, and budget id context. | These tests share seeded principal setup and auth probe assertions. |
+| Disabled-auth tests | `tests/integration/auth_middleware_tests_parts/disabled_auth.rs` | Auth-disabled fail-closed and allow-anonymous context behavior. | These tests cover the disabled-auth mode boundary. |
 
 ### Design
 
-1. Keep `src/utils/net/client/utils.rs` as the production HTTP client helper module.
-2. Preserve all public helper definitions in place, including method signatures, provider defaults,
-   retry/backoff logic, URL validation, retry-after parsing, header maps, proxy discovery, and error strings.
-3. Add only a `#[cfg(test)] #[path = "utils_tests.rs"] mod tests;` declaration at the end of `utils.rs`.
-4. Move the original inline tests into `src/utils/net/client/utils_tests.rs`.
-5. Keep the test module name as `utils::net::client::utils::tests` so focused test filters and historical paths continue to work.
-6. Do not introduce a production facade or split the net client helper surface in this tranche.
+1. Replace the oversized root file body with `#[cfg(test)] #[path = "auth_middleware_tests_parts/mod.rs"] mod tests;`.
+2. Move shared imports, structs, constants, route handler, state builders, and seed helpers into `tests/integration/auth_middleware_tests_parts/mod.rs`.
+3. Declare behavior child modules from `mod.rs`: `rejection_rate_limit`, `permissions_context`, and `disabled_auth`.
+4. Move original tests into the child modules without changing assertions, request setup, seeded metadata, route paths, peer addresses, or expected status codes.
+5. Use `use super::*;` in child modules so helper ownership remains centralized in `mod.rs`.
+6. Do not edit auth/rate-limit/storage/server production code in this tranche.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `src/utils/net/client/utils.rs` | Public net client helper definitions stay in the original module path. |
-| P2 | `src/utils/net/client/utils.rs` | Root delegates tests with `#[path = "utils_tests.rs"] mod tests;`. |
-| P3 | `src/utils/net/client/utils_tests.rs` | Original inline net client helper tests move without assertion changes. |
-| P4 | file size | `wc -l src/utils/net/client/utils.rs src/utils/net/client/utils_tests.rs` shows both files below 800. |
-| P5 | focused test suite | `cargo test utils::net::client::utils --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/utils/net/client/utils.rs`. |
+| P1 | `tests/integration/auth_middleware_tests.rs` | Root delegates to `auth_middleware_tests_parts/mod.rs`. |
+| P2 | `tests/integration/auth_middleware_tests_parts/mod.rs` | Shared fixtures/helpers remain centralized and child modules are declared. |
+| P3 | `tests/integration/auth_middleware_tests_parts/*.rs` | Original behavior tests move by domain without assertion changes. |
+| P4 | file size | `wc -l tests/integration/auth_middleware_tests.rs tests/integration/auth_middleware_tests_parts/*.rs` shows all files below 800. |
+| P5 | focused test suite | `cargo test --all-features auth_middleware_tests` runs the moved tests from `tests/lib.rs`. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `tests/integration/auth_middleware_tests.rs`. |
 
 ## Risks
 
-- Test extraction must not rename the module to a path that changes focused filters from `utils::net::client::utils::tests`.
-- The extracted test file relies on `use super::*` to keep access to ClientUtils plus `HttpClientConfig` and `RetryConfig` imports already visible in the parent module.
-- The proxy smoke test reads process env; this tranche must preserve its no-panic behavior rather than asserting machine-specific proxy state.
-- Production net client helper definitions should not be split in this tranche because they are already below 800 lines.
+- Child modules change the exact per-test module path, but the focused suite filter `integration::auth_middleware_tests` remains stable.
+- Helper functions and imports must stay in `mod.rs`; duplicating AppState/seed setup across child modules would increase drift risk.
+- Rate-limit tests depend on per-test state and fixed peer addresses; move them without reordering assertions or changing addresses.
+- Disabled-auth tests must remain behavior-only and not weaken fail-closed assertions.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l src/utils/net/client/utils.rs src/utils/net/client/utils_tests.rs`
-- [ ] `cargo test utils::net::client::utils --lib --all-features`
+- [ ] `wc -l tests/integration/auth_middleware_tests.rs tests/integration/auth_middleware_tests_parts/*.rs`
+- [ ] `cargo test --all-features auth_middleware_tests`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the net client helper tests back into `src/utils/net/client/utils.rs` and revert
+Move the auth middleware integration tests back into `tests/integration/auth_middleware_tests.rs` and revert
 the `specs/GH727` edits. No schema, persistence, or runtime behavior changes
 are involved.
