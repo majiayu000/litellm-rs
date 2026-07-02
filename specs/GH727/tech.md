@@ -50,14 +50,17 @@ type facades, and some are runtime orchestrators. They need different split patt
 ### Design
 
 1. Keep `src/core/providers/unified_provider.rs` as the root documentation facade.
-2. Move the `ProviderError` enum into `src/core/providers/unified_provider/error.rs`.
-3. Move the `impl ProviderError` block into `methods.rs`, importing the root facade's
+2. Move the `ProviderError` enum into sibling file `src/core/providers/unified_provider_error.rs`
+   and load it through a private `#[path = "unified_provider_error.rs"] mod error;` child module.
+3. Move the `impl ProviderError` block into sibling file `unified_provider_methods.rs`, importing the root facade's
    `ContextualError` and `ProviderError` so method behavior remains attached to the canonical type.
 4. Move `default_http_error_mapper`, `parse_error_message_from_body`, and
-   `extended_http_error_mapper` into `http_mapping.rs`, then re-export those helpers from the root.
+   `extended_http_error_mapper` into sibling file `unified_provider_http_mapping.rs`, then re-export those helpers from the root.
 5. Move `define_provider_error_helpers!`, `impl_provider_error_helpers!`,
-   `define_standard_error_mapper!`, and `define_extended_error_mapper!` into `macros.rs`.
-6. Do not edit provider implementations, `provider_error_conversions.rs`, or provider dispatch/factory code.
+   `define_standard_error_mapper!`, and `define_extended_error_mapper!` into sibling file `unified_provider_macros.rs`.
+6. Do not add a top-level `src/core/providers/unified_provider/` directory, because provider lifecycle
+   coverage treats every providers-root directory as a provider module.
+7. Do not edit provider implementations, `provider_error_conversions.rs`, or provider dispatch/factory code.
 
 ## Product-to-Test Mapping
 
@@ -67,7 +70,7 @@ type facades, and some are runtime orchestrators. They need different split patt
 | P2 | `error.rs` and `methods.rs` | `cargo test core::providers::unified_provider_tests --lib --all-features` preserves factories, retry/status, display, and context behavior. |
 | P3 | `http_mapping.rs` | All-features check proves downstream mapper macro/caller imports still compile. |
 | P4 | `macros.rs` | All-features check proves exported macro definitions remain available to provider modules. |
-| P5 | file size | `wc -l src/core/providers/unified_provider.rs src/core/providers/unified_provider/*.rs` shows all touched files below 800. |
+| P5 | file size | `wc -l src/core/providers/unified_provider.rs src/core/providers/unified_provider_*.rs` shows all touched files below 800. |
 | P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/providers/unified_provider.rs`. |
 
 ## Risks
@@ -81,8 +84,9 @@ type facades, and some are runtime orchestrators. They need different split patt
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo test core::providers::unified_provider_tests --lib --all-features`
+- [ ] `cargo test lifecycle_covers_every_provider_directory --lib --all-features`
 - [ ] `cargo check --all-features --locked`
-- [ ] Line-count proof for `src/core/providers/unified_provider.rs` and child files
+- [ ] Line-count proof for `src/core/providers/unified_provider.rs` and sibling child files
 
 ## Rollback
 

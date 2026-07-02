@@ -60,13 +60,14 @@ analytics types tranche 书写，需要继续滚动到当前最大文件的系�
 3. Exported macros `define_provider_error_helpers!`, `impl_provider_error_helpers!`,
    `define_standard_error_mapper!`, and `define_extended_error_mapper!` keep the same names and expansions.
 4. Provider error factory, retryability, retry delay, HTTP status, and contextual error behavior remain unchanged.
-5. `src/core/providers/unified_provider.rs` and `src/core/providers/unified_provider/*.rs` must be below 800 lines.
+5. `src/core/providers/unified_provider.rs` and `src/core/providers/unified_provider_*.rs` must be below 800 lines.
+6. The split must not add a top-level `src/core/providers/unified_provider/` directory, because provider lifecycle coverage treats providers-root directories as provider modules.
 6. `cargo test core::providers::unified_provider_tests --lib --all-features` must pass.
 
 ## 验收标准
 
 - [ ] `src/core/providers/unified_provider.rs` declares focused child modules and re-exports the original public unified-provider surface。
-- [ ] `ProviderError` moves to `src/core/providers/unified_provider/error.rs` without variant, derive, or error-display changes。
+- [ ] `ProviderError` moves to `src/core/providers/unified_provider_error.rs` without variant, derive, or error-display changes。
 - [ ] ProviderError factory/status/retry/context methods move to `methods.rs` without signature or behavior changes。
 - [ ] Default and extended HTTP mapper helpers move to `http_mapping.rs` without mapping semantic changes。
 - [ ] Exported unified provider macros move to `macros.rs` without macro name or expansion changes。

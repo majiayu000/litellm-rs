@@ -93,11 +93,11 @@ GH-727 / #727
 - [x] `SP727-T80` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@a42b908a3e26`, `src/core/providers/unified_provider.rs` is 1014 lines and 37 tracked Rust files remain over the U-16 ceiling.
 - [x] `SP727-T81` Owner: coordinator. Done when: the unified provider tranche documents a facade-compatible split for error enum, methods, HTTP mapping, and exported macros. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
 - [x] `SP727-T82` Owner: coordinator. Done when: `src/core/providers/unified_provider.rs` becomes a root facade that declares focused child modules and re-exports the original public unified-provider surface. Verify: `sed -n '1,120p' src/core/providers/unified_provider.rs`.
-- [x] `SP727-T83` Owner: coordinator. Done when: `ProviderError` moves into `src/core/providers/unified_provider/error.rs` without variant, derive, or error-display changes. Verify: `rg -n "pub enum ProviderError|#\\[error" src/core/providers/unified_provider/error.rs`.
-- [x] `SP727-T84` Owner: coordinator. Done when: ProviderError factory, retry, context, and HTTP status methods move into `methods.rs` without signature changes. Verify: `rg -n "impl ProviderError|pub fn authentication|pub fn retry_delay|pub fn http_status|pub fn with_context" src/core/providers/unified_provider/methods.rs`.
-- [x] `SP727-T85` Owner: coordinator. Done when: shared status-code mapping helpers move into `http_mapping.rs` and remain re-exported from the root. Verify: `rg -n "default_http_error_mapper|extended_http_error_mapper|parse_error_message_from_body" src/core/providers/unified_provider.rs src/core/providers/unified_provider/http_mapping.rs`.
-- [x] `SP727-T86` Owner: coordinator. Done when: exported provider error helper macros move into `macros.rs` without name changes. Verify: `rg -n "macro_rules! define_provider_error_helpers|macro_rules! impl_provider_error_helpers|macro_rules! define_standard_error_mapper|macro_rules! define_extended_error_mapper" src/core/providers/unified_provider/macros.rs`.
-- [x] `SP727-T87` Owner: verification owner. Done when: all touched unified provider files are below U-16's 800-line ceiling and focused unified provider tests pass. Verify: `wc -l src/core/providers/unified_provider.rs src/core/providers/unified_provider/*.rs`; `cargo test core::providers::unified_provider_tests --lib --all-features`.
+- [x] `SP727-T83` Owner: coordinator. Done when: `ProviderError` moves into sibling file `src/core/providers/unified_provider_error.rs` without variant, derive, or error-display changes. Verify: `rg -n "pub enum ProviderError|#\\[error" src/core/providers/unified_provider_error.rs`.
+- [x] `SP727-T84` Owner: coordinator. Done when: ProviderError factory, retry, context, and HTTP status methods move into `unified_provider_methods.rs` without signature changes. Verify: `rg -n "impl ProviderError|pub fn authentication|pub fn retry_delay|pub fn http_status|pub fn with_context" src/core/providers/unified_provider_methods.rs`.
+- [x] `SP727-T85` Owner: coordinator. Done when: shared status-code mapping helpers move into `unified_provider_http_mapping.rs` and remain re-exported from the root. Verify: `rg -n "default_http_error_mapper|extended_http_error_mapper|parse_error_message_from_body" src/core/providers/unified_provider.rs src/core/providers/unified_provider_http_mapping.rs`.
+- [x] `SP727-T86` Owner: coordinator. Done when: exported provider error helper macros move into `unified_provider_macros.rs` without name changes and no top-level `src/core/providers/unified_provider/` directory is added. Verify: `rg -n "macro_rules! define_provider_error_helpers|macro_rules! impl_provider_error_helpers|macro_rules! define_standard_error_mapper|macro_rules! define_extended_error_mapper" src/core/providers/unified_provider_macros.rs`; `test ! -d src/core/providers/unified_provider`.
+- [x] `SP727-T87` Owner: verification owner. Done when: all touched unified provider files are below U-16's 800-line ceiling, focused unified provider tests pass, and provider lifecycle coverage does not discover a helper directory as a provider. Verify: `wc -l src/core/providers/unified_provider.rs src/core/providers/unified_provider_*.rs`; `cargo test core::providers::unified_provider_tests --lib --all-features`; `cargo test lifecycle_covers_every_provider_directory --lib --all-features`.
 - [ ] `SP727-T88` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the unified provider tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
@@ -108,13 +108,14 @@ Writable ownership for this lane:
 
 - `specs/GH727/`
 - `src/core/providers/unified_provider.rs`
-- `src/core/providers/unified_provider/*.rs`
+- `src/core/providers/unified_provider_*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `cargo test core::providers::unified_provider_tests --lib --all-features`
+- `cargo test lifecycle_covers_every_provider_directory --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 
