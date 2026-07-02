@@ -16,10 +16,11 @@
 //! * Cross-reference tests guarantee that no pricing ID lacks capability
 //!   metadata and no metadata ID lacks an explicit pricing state.
 //!
-//! The catalog deliberately does not delete the existing `MODEL_CONFIGS` and
-//! `MODEL_PRICING` lazy maps yet — those remain the runtime surface that callers
-//! depend on. The catalog seeds drive validation today and become the single
-//! generator for those maps in a follow-up PR.
+//! The catalog drives the existing `model_config` public facade: `MODEL_CONFIGS`
+//! is projected from these entries so callers keep their existing lookup API
+//! without duplicating capability metadata. `MODEL_PRICING` remains a separate
+//! lazy map in the cost utility module and is cross-checked against catalog
+//! pricing below.
 
 use crate::core::cost::types::ModelPricing;
 
@@ -331,8 +332,8 @@ pub struct BedrockCatalogEntry {
 }
 
 impl BedrockCatalogEntry {
-    /// Project to the legacy [`ModelConfig`] shape consumed by
-    /// `get_model_config()` and friends.
+    /// Project to the public [`ModelConfig`] shape consumed by
+    /// `get_model_config()` and related facade helpers.
     pub fn to_model_config(&self) -> ModelConfig {
         let (input, output) = match &self.pricing {
             Some(p) => (p.input_cost_per_1k_tokens, p.output_cost_per_1k_tokens),

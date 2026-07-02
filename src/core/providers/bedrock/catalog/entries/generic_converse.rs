@@ -186,9 +186,9 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             id,
             name,
             *vendor,
-            // Legacy `MODEL_CONFIGS` uses BedrockModelFamily::Nova as the
+            // The former hard-coded MODEL_CONFIGS map used Nova as the
             // catch-all for these generic converse models. Preserve that
-            // mapping so the projection stays bit-identical.
+            // mapping so the public projection stays bit-identical.
             BedrockModelFamily::Nova,
             BedrockApiType::Converse,
             ModelLifecycle::Live,
@@ -222,9 +222,9 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             id,
             name,
             BedrockVendor::Moonshot,
-            // Legacy `MODEL_CONFIGS` uses BedrockModelFamily::Nova as the
+            // The former hard-coded MODEL_CONFIGS map used Nova as the
             // catch-all for these generic converse models. Preserve that
-            // mapping so the projection stays bit-identical.
+            // mapping so the public projection stays bit-identical.
             BedrockModelFamily::Nova,
             BedrockApiType::Converse,
             ModelLifecycle::Live,

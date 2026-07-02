@@ -5,9 +5,9 @@
 //! * No pricing ID exists without matching capability metadata.
 //! * No metadata ID exists without an explicit pricing state (either
 //!   `Some(pricing)` or a documented `NoPricingReason`).
-//! * Catalog projections match the legacy [`ModelConfig`] and [`ModelPricing`]
-//!   maps bit-for-bit (numerically), so existing Bedrock `model_config` and
-//!   `cost` tests continue to pass.
+//! * Catalog projections match the public [`ModelConfig`] facade and
+//!   [`ModelPricing`] map bit-for-bit (numerically), so existing Bedrock
+//!   `model_config` and `cost` tests continue to pass.
 
 use std::collections::HashSet;
 
@@ -19,7 +19,7 @@ fn catalog_ids() -> HashSet<&'static str> {
     all_entries().iter().map(|e| e.model_id).collect()
 }
 
-fn legacy_model_config_ids() -> HashSet<&'static str> {
+fn public_model_config_ids() -> HashSet<&'static str> {
     get_all_model_ids().into_iter().collect()
 }
 
@@ -62,13 +62,13 @@ fn no_pricing_id_without_capability_metadata() {
     );
 }
 
-/// Acceptance: every ID with metadata in the legacy `MODEL_CONFIGS` map must
-/// have a catalog entry, and that entry must carry an explicit pricing state
-/// (either pricing or a documented no-pricing reason).
+/// Acceptance: every ID exposed by the public `model_config` facade must have
+/// a catalog entry, and that entry must carry an explicit pricing state (either
+/// pricing or a documented no-pricing reason).
 #[test]
 fn no_metadata_id_without_pricing_state() {
     let catalog = catalog_ids();
-    let metadata = legacy_model_config_ids();
+    let metadata = public_model_config_ids();
     let missing: Vec<&&str> = metadata.difference(&catalog).collect();
     assert!(
         missing.is_empty(),
@@ -133,9 +133,9 @@ fn catalog_pricing_matches_legacy_pricing_map() {
     }
 }
 
-/// Acceptance: catalog seeds round-trip into the existing model-config surface.
+/// Acceptance: catalog seeds round-trip into the existing model-config facade.
 #[test]
-fn catalog_model_config_matches_legacy_config_map() {
+fn catalog_model_config_matches_public_config_facade() {
     use super::super::model_config::get_model_config;
 
     for entry in all_entries() {
@@ -143,7 +143,7 @@ fn catalog_model_config_matches_legacy_config_map() {
         let actual = match get_model_config(entry.model_id) {
             Ok(cfg) => cfg,
             Err(_) => panic!(
-                "catalog seeds {} but the legacy model_config map does not",
+                "catalog seeds {} but the public model_config facade does not",
                 entry.model_id
             ),
         };

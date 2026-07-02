@@ -6,7 +6,7 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@6e81da76d9a4` 仍有 41 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
+`origin/main@27ac684370e1` 仍有 40 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
 tranche 已经证明“小 PR、单文件族、保持行为不变”的方式可行，但 spec packet 仍按上一轮
 Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦。
 
@@ -15,7 +15,7 @@ Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦
 
 ## 全量目标
 
-- 把当前 41 个 over-800 Rust 文件逐步拆到 U-16 范围内。
+- 把当前 40 个 over-800 Rust 文件逐步拆到 U-16 范围内。
 - 每个 tranche 只拥有一个文件或一个紧密文件家族。
 - 拆分必须沿现有架构边界进行：测试按行为域拆、类型按领域 DTO/状态/配置拆、运行时代码按
   provider/route/repository/validator/adapter 职责拆。
@@ -34,42 +34,39 @@ Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦
 
 ## 本 tranche 目标
 
-- 拆分 `src/sdk/types.rs`，它当前 1163 行，是 #727 当前最大的 public type facade。
-- 将 SDK type DTO 拆出为 focused child modules：
-  - `types/message.rs`
-  - `types/tool.rs`
-  - `types/chat.rs`
-  - `types/usage.rs`
-  - `types_tests/*.rs`
-- `types.rs` 保留为 root facade，并继续 `pub use` 原有所有 public type names。
-- 保持原字段名、枚举 variant、derive、serde attributes、测试断言和 `crate::sdk::types::*` 导入路径不变。
+- 拆分 `src/core/providers/bedrock/model_config.rs`，它当前 1118 行，是 #727 当前最大的 tracked Rust 文件。
+- 将重复的 legacy `MODEL_CONFIGS` map 改为从现有 `bedrock/catalog` entries 投影生成。
+- `model_config.rs` 保留 Bedrock family/API/config 类型和 public lookup facade：
+  - `get_model_config`
+  - `model_supports_capability`
+  - `get_all_model_ids`
+- 保持 Bedrock model routing public API、model IDs、capability flags、limits、pricing fields 和错误语义不变。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 SDK client routing、provider payloads、request execution 或 cost calculation 行为。
-- 不重命名 SDK public fields、variants、aliases 或 serde names。
-- 不在本 PR 中处理其余 40 个大文件。
+- 不添加、删除或重命名 Bedrock model IDs。
+- 不修改 Bedrock request transformation、routing, pricing calculation, region validation, or model-id parsing behavior。
+- 不在本 PR 中处理其余 39 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `Role`, `Content`, `ContentPart`, `ImageUrl`, `AudioData`, `Message`, `MessageDelta`, `ToolCall`, `Function`, `Tool`, `ToolChoice`, `SdkChatRequest`, `ChatOptions`, `ChatResponse`, `ChatChoice`, `ChatChunk`, `ChunkChoice`, `Usage`, `Cost`, and `CostBreakdown` remain importable from `crate::sdk::types::*`.
-2. SDK type fields, enum variants, derives, and serde attributes remain unchanged.
-3. `types.rs` acts as a facade and does not introduce broad prelude-style coupling.
-4. Original inline tests continue under `sdk::types::tests::*`, split by DTO domain.
-5. `src/sdk/types.rs`, `src/sdk/types/*.rs`, and `src/sdk/types_tests/*.rs` must be below 800 lines.
-6. `cargo test sdk::types --lib --all-features` must pass.
+1. `BedrockModelFamily`, `BedrockApiType`, `ModelConfig`, `get_model_config`, `model_supports_capability`, and `get_all_model_ids` remain exported from `crate::core::providers::bedrock`.
+2. `get_model_config` still returns `ProviderError::model_not_found("bedrock", ...)` for unknown model IDs.
+3. Catalog projections must preserve model family, API type, streaming/tool/multimodal flags, context limits, output limits, and cost fields for every existing entry.
+4. Existing Bedrock catalog cross-reference tests and model_config tests must pass.
+5. `src/core/providers/bedrock/model_config.rs` and touched Bedrock catalog files must be below 800 lines.
+6. `cargo test core::providers::bedrock::model_config --lib --all-features` and `cargo test core::providers::bedrock::catalog --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/sdk/types.rs` 声明 focused child modules 并 re-export 原 public type names。
-- [ ] message/tool/chat/usage DTOs 移动到对应 child modules，字段、derive、serde attributes 不变。
-- [ ] 原 inline tests 拆到 `src/sdk/types_tests/*.rs`，断言不变。
-- [ ] Focused SDK type tests 通过。
+- [ ] `src/core/providers/bedrock/model_config.rs` 使用 catalog projection 构建 `MODEL_CONFIGS`，不再内联重复 model table。
+- [ ] `bedrock/catalog` 文档从“legacy map 仍保留”更新为“legacy public facade projects from catalog”。
+- [ ] Existing Bedrock model_config and catalog tests 通过。
 - [ ] `cargo fmt --all -- --check` 和 `cargo check --all-features --locked` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is an SDK type facade decomposition tranche for U-16 compliance.
+No intended runtime behavior change. This is a Bedrock model-config catalog projection tranche for U-16 compliance.

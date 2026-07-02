@@ -70,25 +70,33 @@ GH-727 / #727
 - [x] `SP727-T57` Owner: coordinator. Done when: SDK production types are moved into `src/sdk/types/message.rs`, `tool.rs`, `chat.rs`, and `usage.rs` without field, enum, serde, or derive changes. Verify: `rg -n "pub (struct|enum)" src/sdk/types.rs src/sdk/types/*.rs`.
 - [x] `SP727-T58` Owner: coordinator. Done when: original inline SDK type tests are split by domain under `src/sdk/types_tests/` without changing assertions. Verify: `rg -n "test_role_variants|test_tool_call_creation|test_chat_request_creation|test_usage_default" src/sdk/types_tests/*.rs`.
 - [x] `SP727-T59` Owner: verification owner. Done when: all touched SDK type files are below U-16's 800-line ceiling and focused SDK type tests pass. Verify: `wc -l src/sdk/types.rs src/sdk/types/*.rs src/sdk/types_tests/*.rs`; `cargo test sdk::types --lib --all-features`.
-- [ ] `SP727-T60` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the SDK types tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
-- [ ] `SP727-T61` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh line-count evidence. Verify: `git ls-files '*.rs' | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
+- [x] `SP727-T60` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the SDK types tranche. Verify: #815 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T61` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh line-count evidence. Verify: at `origin/main@27ac684370e1`, `src/core/providers/bedrock/model_config.rs` is 1118 lines and 40 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T62` Owner: coordinator. Done when: the Bedrock model_config tranche documents catalog-projection ownership and public facade invariants. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T63` Owner: coordinator. Done when: `src/core/providers/bedrock/model_config.rs` builds `MODEL_CONFIGS` from `super::catalog::all_entries()` and preserves public helper signatures. Verify: `rg -n "all_entries|MODEL_CONFIGS|get_model_config|model_supports_capability|get_all_model_ids" src/core/providers/bedrock/model_config.rs`.
+- [x] `SP727-T64` Owner: coordinator. Done when: `bedrock/catalog` docs/tests/comments no longer describe the catalog as only a mirror of the legacy map. Verify: `git diff -- src/core/providers/bedrock/catalog/mod.rs src/core/providers/bedrock/catalog/tests.rs src/core/providers/bedrock/catalog/entries/generic_converse.rs`.
+- [x] `SP727-T65` Owner: verification owner. Done when: all touched Bedrock model config/catalog files are below U-16's 800-line ceiling and focused Bedrock tests pass. Verify: `wc -l src/core/providers/bedrock/model_config.rs src/core/providers/bedrock/catalog/*.rs src/core/providers/bedrock/catalog/entries/*.rs`; `cargo test core::providers::bedrock::model_config --lib --all-features`; `cargo test core::providers::bedrock::catalog --lib --all-features`.
+- [ ] `SP727-T66` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the Bedrock model_config tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [ ] `SP727-T67` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: `git ls-files '*.rs' | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
 
 ## 并行拆分
 
-This is a serial writable lane for the SDK types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the Bedrock model_config/catalog file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/sdk/types.rs`
-- `src/sdk/types/*.rs`
-- `src/sdk/types_tests/*.rs`
+- `src/core/providers/bedrock/model_config.rs`
+- `src/core/providers/bedrock/catalog/mod.rs`
+- `src/core/providers/bedrock/catalog/tests.rs`
+- `src/core/providers/bedrock/catalog/entries/generic_converse.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test sdk::types --lib --all-features`
+- `cargo test core::providers::bedrock::model_config --lib --all-features`
+- `cargo test core::providers::bedrock::catalog --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 

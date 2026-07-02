@@ -10,7 +10,7 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@6e81da76d9a4`, 41 Rust files remain over the U-16 800-line ceiling.
+At `origin/main@27ac684370e1`, 40 Rust files remain over the U-16 800-line ceiling.
 The highest-risk files are not all equivalent: some are pure test suites, some are public
 type facades, and some are runtime orchestrators. They need different split patterns.
 
@@ -37,72 +37,54 @@ type facades, and some are runtime orchestrators. They need different split patt
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: SDK Types Facade
+## Current Tranche: Bedrock Model Config Projection
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| SDK types facade | `src/sdk/types.rs` | Contains all SDK chat/message/tool/usage DTOs plus a large inline test suite. | The file is 1163 lines and combines multiple DTO domains with test coverage. |
-| SDK client imports | `src/sdk/client/*.rs` | Imports SDK types from `crate::sdk::types::{...}` and `super::types` for client-internal types. | Root re-exports must preserve the existing `crate::sdk::types::*` API. |
-| Existing Rust module pattern | `src/core/types/*.rs`, `src/core/cost/calculator/tests/*.rs` | Uses focused child modules plus root re-exports or test submodules. | SDK types can use the same facade-compatible split without changing runtime behavior. |
+| Bedrock model config facade | `src/core/providers/bedrock/model_config.rs` | Defines Bedrock model family/API/config types, a large legacy `MODEL_CONFIGS` map, lookup helpers, and focused tests. | The file is 1118 lines and duplicates data already represented in `bedrock/catalog`. |
+| Bedrock catalog | `src/core/providers/bedrock/catalog/` | Stores typed catalog entries split by vendor/family and already projects each entry to `ModelConfig`. | This is the existing architectural boundary for Bedrock model metadata. |
+| Bedrock callers | `chat`, `provider`, `transformation`, `model_id`, route spend/token policy | Call `get_model_config` / `get_model_config_for_model_id` or use exported config types. | Public lookup paths and error behavior must remain unchanged. |
 
 ### Design
 
-1. Keep `src/sdk/types.rs` as the public root facade.
-2. Move message and multimodal DTOs into `src/sdk/types/message.rs`:
-   - `Role`
-   - `Content`
-   - `ContentPart`
-   - `ImageUrl`
-   - `AudioData`
-   - `Message`
-   - `MessageDelta`
-3. Move tool DTOs into `src/sdk/types/tool.rs`:
-   - `ToolCall`
-   - `Function`
-   - `Tool`
-   - `ToolChoice`
-4. Move chat request/response DTOs into `src/sdk/types/chat.rs`:
-   - `SdkChatRequest`
-   - `ChatOptions`
-   - `ChatResponse`
-   - `ChatChoice`
-   - `ChatChunk`
-   - `ChunkChoice`
-5. Move usage and cost DTOs into `src/sdk/types/usage.rs`:
-   - `Usage`
-   - `Cost`
-   - `CostBreakdown`
-6. Re-export every original public type from `types.rs` with `pub use` so `crate::sdk::types::*` remains compatible.
-7. Split the inline `#[cfg(test)] mod tests` body into `src/sdk/types_tests/{message_tests.rs,tool_tests.rs,chat_tests.rs,streaming_usage_tests.rs}` and keep the test tree rooted under `sdk::types::tests`.
-8. Do not change fields, derives, serde attributes, enum variants, assertions, or SDK client behavior.
+1. Keep `src/core/providers/bedrock/model_config.rs` as the public facade for `BedrockModelFamily`, `BedrockApiType`, `ModelConfig`, and lookup helpers.
+2. Replace the hand-written 900+ line `MODEL_CONFIGS` initializer with a projection from `super::catalog::all_entries()`:
+   - key: `entry.model_id`
+   - value: `entry.to_model_config()`
+3. Preserve `get_model_config`, `model_supports_capability`, and `get_all_model_ids` signatures and error behavior.
+4. Update catalog module docs to reflect the new data ownership: the catalog drives the legacy `model_config` facade instead of being only a validation mirror.
+5. Keep existing model_config tests in place; they now verify the public facade behavior.
+6. Keep existing catalog cross-reference tests in place; they continue to verify catalog integrity and projection shape.
+7. Do not edit Bedrock model IDs, pricing values, capabilities, limits, request transformation, provider routing, or model ID parsing.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `types.rs` root facade and child module declarations | `cargo test sdk::types --lib --all-features` discovers moved tests under the same root test tree. |
-| P2 | `types/message.rs`, `types/tool.rs`, `types/chat.rs`, `types/usage.rs` | `cargo check --all-features --locked` compiles existing SDK imports through root re-exports. |
-| P3 | `types_tests/*.rs` | Focused SDK type tests pass with unchanged assertions. |
-| P4 | file size | `wc -l src/sdk/types.rs src/sdk/types/*.rs src/sdk/types_tests/*.rs` shows all touched files below 800. |
-| P5 | public surface | `rg -n "pub use .*Role|pub use .*SdkChatRequest|pub use .*Usage" src/sdk/types.rs` confirms original root exports. |
+| P1 | `model_config.rs` projection initializer | Focused Bedrock model_config tests pass through the unchanged public helpers. |
+| P2 | `catalog/mod.rs` and existing entries | Catalog tests still pass, including projection and pricing-state invariants. |
+| P3 | Bedrock callers | `cargo check --all-features --locked` compiles existing imports and public re-exports. |
+| P4 | file size | `wc -l src/core/providers/bedrock/model_config.rs src/core/providers/bedrock/catalog/*.rs src/core/providers/bedrock/catalog/entries/*.rs` shows all touched files below 800. |
+| P5 | queue count | `git ls-files '*.rs' | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr` shows the remaining queue no longer includes `model_config.rs`. |
 
 ## Risks
 
-- Type dependencies cross domains: message DTOs depend on `ToolCall`, and chat DTOs depend on message, tool, and usage DTOs. Child modules should use explicit `super::{...}` imports rather than a broad prelude.
-- Private child modules plus root `pub use` preserve the existing public API without committing new module paths such as `sdk::types::chat`.
-- Test modules must import through the root facade to exercise the preserved public path.
-- This tranche reduces one of the remaining 41 files; the issue remains a tracker after merge.
+- `model_config.rs` and `catalog` reference each other by design: the catalog imports the public config types, while the facade imports `all_entries()` for data projection. Avoid adding runtime calls from catalog entry construction back into `get_model_config`.
+- Catalog tests that previously compared catalog entries to the legacy map become facade-behavior checks after this change; keep model_config unit tests as the direct public surface smoke test.
+- `get_all_model_ids()` order is not specified today because it reads `HashMap` keys; this tranche must not add any order guarantee.
+- This tranche reduces one of the remaining 40 files; the issue remains a tracker after merge.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test sdk::types --lib --all-features`
+- [ ] `cargo test core::providers::bedrock::model_config --lib --all-features`
+- [ ] `cargo test core::providers::bedrock::catalog --lib --all-features`
 - [ ] `cargo check --all-features --locked`
-- [ ] Line-count proof for `src/sdk/types.rs`, `src/sdk/types/*.rs`, and `src/sdk/types_tests/*.rs`
+- [ ] Line-count proof for `src/core/providers/bedrock/model_config.rs` and touched catalog files
 
 ## Rollback
 
-Revert the SDK types module split and `specs/GH727` edits. No migrations,
-runtime config changes, or public API changes are involved.
+Revert the Bedrock model-config projection and `specs/GH727` edits. No migrations
+or runtime config changes are involved.
