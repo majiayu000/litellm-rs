@@ -116,27 +116,36 @@ GH-727 / #727
 - [x] `SP727-T103` Owner: coordinator. Done when: `src/core/cost/types.rs` keeps production cost types and delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 30 src/core/cost/types.rs`.
 - [x] `SP727-T104` Owner: coordinator. Done when: original inline cost type tests move to `src/core/cost/types_tests.rs` without assertion changes. Verify: `rg -n "test_usage_to_usage_tokens_basic|test_cost_breakdown_calculate_total|test_cost_tracker_get_summary|test_cost_error_config_error|test_cost_summary_serialization" src/core/cost/types_tests.rs`.
 - [x] `SP727-T105` Owner: verification owner. Done when: both touched cost type files are below U-16's 800-line ceiling and focused cost type tests pass. Verify: `wc -l src/core/cost/types.rs src/core/cost/types_tests.rs`; `cargo test core::cost::types --lib --all-features`.
-- [ ] `SP727-T106` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the cost types tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [x] `SP727-T106` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the cost types tranche. Verify: #822 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T107` Owner: coordinator. Done when: after the cost types tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@5ef936c47c57`, `src/storage/database/seaorm_db/team_repository.rs` is 932 lines and 33 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T108` Owner: coordinator. Done when: the SeaORM team repository tranche documents runtime repository ownership boundaries for conversions, canonical SQL, legacy sync, and trait implementation. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T109` Owner: coordinator. Done when: `src/storage/database/seaorm_db/team_repository.rs` becomes a small root module that declares focused child modules while keeping `SeaOrmTeamRepository::new`. Verify: `sed -n '1,80p' src/storage/database/seaorm_db/team_repository.rs`.
+- [x] `SP727-T110` Owner: coordinator. Done when: legacy/core conversion helpers move to `src/storage/database/seaorm_db/team_repository/conversions.rs` without changing role, metadata, or budget mapping logic. Verify: `rg -n "legacy_team_to_core|core_team_to_legacy|legacy_role_to_core|legacy_budget_reset_at" src/storage/database/seaorm_db/team_repository/conversions.rs`.
+- [x] `SP727-T111` Owner: coordinator. Done when: canonical `teams` / `team_members` SQL helpers move to `src/storage/database/seaorm_db/team_repository/canonical.rs` and legacy synchronization helpers move to `legacy_sync.rs`. Verify: `rg -n "insert_canonical_team|get_canonical_member|non_deleted_team_predicate" src/storage/database/seaorm_db/team_repository/canonical.rs`; `rg -n "sync_legacy_um_teams|persist_legacy_team|sync_legacy_team_from_canonical|add_legacy_user_team" src/storage/database/seaorm_db/team_repository/legacy_sync.rs`.
+- [x] `SP727-T112` Owner: coordinator. Done when: `TeamRepository for SeaOrmTeamRepository` moves to `src/storage/database/seaorm_db/team_repository/repository_impl.rs` without changing trait method signatures. Verify: `rg -n "impl TeamRepository for SeaOrmTeamRepository|async fn create|async fn get_by_name|async fn update_member_role" src/storage/database/seaorm_db/team_repository/repository_impl.rs`.
+- [x] `SP727-T113` Owner: verification owner. Done when: all touched SeaORM team repository files are below U-16's 800-line ceiling and focused repository tests pass. Verify: `wc -l src/storage/database/seaorm_db/team_repository.rs src/storage/database/seaorm_db/team_repository/*.rs`; `cargo test storage::database::seaorm_db::team_repository_tests --lib --all-features`.
+- [ ] `SP727-T114` Owner: verification owner. Done when: formatting, all-features check, default check, PR CI, and review-thread gate pass for the SeaORM team repository tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the cost types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the SeaORM team repository file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/cost/types.rs`
-- `src/core/cost/types_tests.rs`
+- `src/storage/database/seaorm_db/team_repository.rs`
+- `src/storage/database/seaorm_db/team_repository/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test core::cost::types --lib --all-features`
+- `cargo test storage::database::seaorm_db::team_repository_tests --lib --all-features`
 - `cargo check --all-features --locked`
+- `cargo check`
 - PR CI and GraphQL review-thread gate before merge.
 
 ## Handoff Notes
 
-This PR is the next #727 maintenance tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 runtime repository maintenance tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
