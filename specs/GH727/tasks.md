@@ -204,24 +204,30 @@ GH-727 / #727
 - [x] `SP727-T191` Owner: coordinator. Done when: `src/core/models/metrics/aggregates.rs` keeps production metrics aggregate type definitions and delegates tests with `#[path = "aggregates_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/models/metrics/aggregates.rs`.
 - [x] `SP727-T192` Owner: coordinator. Done when: original inline metrics aggregate tests move to `src/core/models/metrics/aggregates_tests.rs` without assertion changes. Verify: `rg -n "test_model_metrics_structure|test_network_io_default|test_period_type_serialization|test_daily_usage_serialization|test_alert_condition_variants|test_provider_metrics_with_model_breakdown|test_system_metrics_structure|test_usage_analytics_with_breakdowns|test_alert_condition_deserialization" src/core/models/metrics/aggregates_tests.rs`.
 - [x] `SP727-T193` Owner: verification owner. Done when: both touched metrics aggregate files are below U-16's 800-line ceiling and focused metrics aggregate tests pass. Verify: `wc -l src/core/models/metrics/aggregates.rs src/core/models/metrics/aggregates_tests.rs`; `cargo test core::models::metrics::aggregates --lib --all-features`.
-- [ ] `SP727-T194` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the metrics aggregates tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T194` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the metrics aggregates tranche. Verify: #857 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `06d0e699c462`, #727 reopened, and #727 update comment.
+- [x] `SP727-T195` Owner: coordinator. Done when: after the metrics aggregates tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@06d0e699`, `src/utils/config/helpers.rs` is 847 lines and 19 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T196` Owner: coordinator. Done when: the config helpers tranche documents why this slice is a test extraction rather than a production helper split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T197` Owner: coordinator. Done when: `src/utils/config/helpers.rs` keeps production config helper definitions and delegates tests with `#[path = "helpers_tests.rs"] mod tests;`. Verify: `tail -n 20 src/utils/config/helpers.rs`.
+- [x] `SP727-T198` Owner: coordinator. Done when: original inline config helper tests move to `src/utils/config/helpers_tests.rs` without assertion changes. Verify: `rg -n "test_env_utils_get_or_default|test_env_utils_get_as_bool|test_file_exists|test_find_config_file|test_validate_url|test_validate_duration_string_days|test_read_file|test_parse_yaml_file|test_write_yaml_file" src/utils/config/helpers_tests.rs`.
+- [x] `SP727-T199` Owner: verification owner. Done when: both touched config helper files are below U-16's 800-line ceiling and focused config helper tests pass. Verify: `wc -l src/utils/config/helpers.rs src/utils/config/helpers_tests.rs`; `cargo test utils::config::helpers --lib --all-features`.
+- [ ] `SP727-T200` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the config helpers tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the metrics aggregates file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the config helpers file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/models/metrics/aggregates.rs`
-- `src/core/models/metrics/aggregates_tests.rs`
+- `src/utils/config/helpers.rs`
+- `src/utils/config/helpers_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::models::metrics::aggregates --lib --all-features`
+- `cargo test utils::config::helpers --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -229,5 +235,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 metrics aggregates test-extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 config helpers test-extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

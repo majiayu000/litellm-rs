@@ -10,10 +10,10 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@f91e3cbd4feb`, 20 tracked Rust files remain over the U-16
-800-line ceiling. The current largest file is
-`src/core/models/metrics/aggregates.rs` at 850 lines. It is a metrics aggregate
-type module where production DTO definitions are below the ceiling and the
+At `origin/main@06d0e699`, 19 tracked Rust files remain over the U-16
+800-line ceiling. The current largest file is `src/utils/config/helpers.rs` at
+847 lines. It is a shared config helper module where production EnvUtils,
+ConfigFileUtils, and ConfigValidator definitions are below the ceiling and the
 oversized portion is the inline unit test suite.
 
 ## Architecture Principles
@@ -41,56 +41,57 @@ oversized portion is the inline unit test suite.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Metrics Aggregates Test Extraction
+## Current Tranche: Config Helpers Test Extraction
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Metrics aggregate definitions | `src/core/models/metrics/aggregates.rs` | Defines provider, model, system, usage, daily, endpoint, alert condition, and alert config aggregate DTOs. | Production type surface must keep the same names, fields, derives, serde attributes, and module path. |
-| Inline tests | `src/core/models/metrics/aggregates.rs` | Contains DTO structure, clone, serialization, deserialization, default, and breakdown tests inline. | The test suite is what pushes the file over 800 lines. |
-| Extracted tests | `src/core/models/metrics/aggregates_tests.rs` | New path-backed test module loaded from `aggregates.rs`. | Removes the oversized inline test block without changing production architecture. |
+| Config helper definitions | `src/utils/config/helpers.rs` | Defines EnvUtils, ConfigFileUtils, and ConfigValidator helper methods for environment parsing, file IO, YAML/JSON parsing, and value validation. | Production helper surface must keep the same names, signatures, error messages, regex constants, and module path. |
+| Inline tests | `src/utils/config/helpers.rs` | Contains env parsing, file utility, validator, duration, async file IO, JSON, and YAML tests inline. | The test suite is what pushes the file over 800 lines. |
+| Extracted tests | `src/utils/config/helpers_tests.rs` | New path-backed test module loaded from `helpers.rs`. | Removes the oversized inline test block without changing production architecture. |
 
 ### Design
 
-1. Keep `src/core/models/metrics/aggregates.rs` as the production metrics aggregate model module.
-2. Preserve all public struct and enum definitions in place, including fields, derives, serde attributes,
-   metadata flattening, chrono field types, Uuid fields, and enum variants.
-3. Add only a `#[cfg(test)] #[path = "aggregates_tests.rs"] mod tests;` declaration at the end of `aggregates.rs`.
-4. Move the original inline tests into `src/core/models/metrics/aggregates_tests.rs`.
-5. Keep the test module name as `core::models::metrics::aggregates::tests` so focused test filters and historical paths continue to work.
-6. Do not introduce a production facade or split the metrics aggregate DTO surface in this tranche.
+1. Keep `src/utils/config/helpers.rs` as the production config helper module.
+2. Preserve all public helper definitions in place, including method signatures, regex constants,
+   validation order, duration parsing multipliers, file IO behavior, and error strings.
+3. Add only a `#[cfg(test)] #[path = "helpers_tests.rs"] mod tests;` declaration at the end of `helpers.rs`.
+4. Move the original inline tests into `src/utils/config/helpers_tests.rs`.
+5. Keep the test module name as `utils::config::helpers::tests` so focused test filters and historical paths continue to work.
+6. Do not introduce a production facade or split the config helper surface in this tranche.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `src/core/models/metrics/aggregates.rs` | Public metrics aggregate DTO definitions stay in the original module path. |
-| P2 | `src/core/models/metrics/aggregates.rs` | Root delegates tests with `#[path = "aggregates_tests.rs"] mod tests;`. |
-| P3 | `src/core/models/metrics/aggregates_tests.rs` | Original inline metrics aggregate tests move without assertion changes. |
-| P4 | file size | `wc -l src/core/models/metrics/aggregates.rs src/core/models/metrics/aggregates_tests.rs` shows both files below 800. |
-| P5 | focused test suite | `cargo test core::models::metrics::aggregates --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/models/metrics/aggregates.rs`. |
+| P1 | `src/utils/config/helpers.rs` | Public config helper definitions stay in the original module path. |
+| P2 | `src/utils/config/helpers.rs` | Root delegates tests with `#[path = "helpers_tests.rs"] mod tests;`. |
+| P3 | `src/utils/config/helpers_tests.rs` | Original inline config helper tests move without assertion changes. |
+| P4 | file size | `wc -l src/utils/config/helpers.rs src/utils/config/helpers_tests.rs` shows both files below 800. |
+| P5 | focused test suite | `cargo test utils::config::helpers --lib --all-features` runs the moved tests. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/utils/config/helpers.rs`. |
 
 ## Risks
 
-- Test extraction must not rename the module to a path that changes focused filters from `core::models::metrics::aggregates::tests`.
-- The extracted test file relies on `use super::*` to keep access to the production DTO definitions and imported `Metadata` path.
-- Production metrics aggregate definitions should not be split in this tranche because they are already below 800 lines.
+- Test extraction must not rename the module to a path that changes focused filters from `utils::config::helpers::tests`.
+- The extracted test file relies on `use super::*` to keep access to EnvUtils, ConfigFileUtils, ConfigValidator, and the local Result alias.
+- Environment-variable tests mutate process env; this tranche must preserve the original set/remove assertions and cleanup calls rather than reordering test behavior.
+- Production config helper definitions should not be split in this tranche because they are already below 800 lines.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l src/core/models/metrics/aggregates.rs src/core/models/metrics/aggregates_tests.rs`
-- [ ] `cargo test core::models::metrics::aggregates --lib --all-features`
+- [ ] `wc -l src/utils/config/helpers.rs src/utils/config/helpers_tests.rs`
+- [ ] `cargo test utils::config::helpers --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the metrics aggregate tests back into `src/core/models/metrics/aggregates.rs` and revert
+Move the config helper tests back into `src/utils/config/helpers.rs` and revert
 the `specs/GH727` edits. No schema, persistence, or runtime behavior changes
 are involved.

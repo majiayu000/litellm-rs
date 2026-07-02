@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@f91e3cbd4feb` 仍有 20 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/models/metrics/aggregates.rs`，它是一个 850 行 metrics aggregate type module，其中 production
-metrics DTO definitions 约 293 行，其余是 inline unit tests。
+`origin/main@06d0e699` 仍有 19 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/utils/config/helpers.rs`，它是一个 847 行 shared config helper module，其中 production
+EnvUtils / ConfigFileUtils / ConfigValidator definitions 约 356 行，其余是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ metrics DTO definitions 约 293 行，其余是 inline unit tests。
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/models/metrics/aggregates.rs`，它当前 850 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `core::models::metrics::aggregates` public metrics aggregate type paths 不变。
-- 将 root `aggregates.rs` 保持为 production metrics aggregate model module，并用 `#[path = "aggregates_tests.rs"] mod tests;` 委托测试。
-- 将原 inline tests 移动到 `src/core/models/metrics/aggregates_tests.rs`，不改变断言或 fixtures。
-- 因 production DTO definitions 本身低于 800 行，本 tranche 不拆 production type surface，避免无意义 facade churn。
+- 拆分 `src/utils/config/helpers.rs`，它当前 847 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `utils::config::helpers::{EnvUtils, ConfigFileUtils, ConfigValidator}` public helper paths 不变。
+- 将 root `helpers.rs` 保持为 production config helper module，并用 `#[path = "helpers_tests.rs"] mod tests;` 委托测试。
+- 将原 inline tests 移动到 `src/utils/config/helpers_tests.rs`，不改变断言、fixtures、temp file paths 或 env var cleanup。
+- 因 production helper definitions 本身低于 800 行，本 tranche 不拆 production helper surface，避免无意义 facade churn。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 metrics aggregate DTO fields、serde attributes、derive sets、enum variants、metadata flattening、Uuid/chrono field types 或 test assertions。
-- 不改变 `ProviderMetrics`、`ModelMetrics`、`SystemMetrics`、`UsageAnalytics`、`AlertConfig` 等 public type paths。
-- 不在本 PR 中处理其余 19 个大文件。
+- 不修改 env parsing semantics、required-env error text、config file read/write behavior、YAML/JSON parse behavior、validation regexes、duration parsing rules 或 test assertions。
+- 不改变 `EnvUtils`、`ConfigFileUtils`、`ConfigValidator` 的 public type paths 或 method signatures。
+- 不在本 PR 中处理其余 18 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `core::models::metrics::aggregates::*` public DTOs remain available from the original module path.
-2. Metrics aggregate fields, derives, serde names, metadata flattening, chrono/Uuid types, and enum variants remain unchanged.
-3. The root `aggregates.rs` remains the production metrics aggregate model module; tests are delegated only through `#[path = "aggregates_tests.rs"]`.
-4. Original inline tests remain under `core::models::metrics::aggregates::tests`.
-5. No metrics aggregation runtime behavior or public type facade is introduced in this tranche.
+1. `utils::config::helpers::{EnvUtils, ConfigFileUtils, ConfigValidator}` remain available from the original module path.
+2. Environment parsing, file IO helpers, JSON/YAML helpers, validation rules, regex constants, and error strings remain unchanged.
+3. The root `helpers.rs` remains the production config helper module; tests are delegated only through `#[path = "helpers_tests.rs"]`.
+4. Original inline tests remain under `utils::config::helpers::tests`.
+5. No config helper facade or runtime behavior split is introduced in this tranche.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::models::metrics::aggregates --lib --all-features` must pass.
+7. `cargo test utils::config::helpers --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/models/metrics/aggregates.rs` keeps production metrics aggregate definitions and delegates tests with `#[path = "aggregates_tests.rs"] mod tests;`。
-- [ ] Original inline metrics aggregate tests move to `src/core/models/metrics/aggregates_tests.rs` without assertion changes。
-- [ ] Public metrics aggregate exports and serialization behavior remain unchanged。
-- [ ] Both touched metrics aggregate files are below U-16's 800-line ceiling。
-- [ ] Focused metrics aggregate test suite 通过。
+- [ ] `src/utils/config/helpers.rs` keeps production config helper definitions and delegates tests with `#[path = "helpers_tests.rs"] mod tests;`。
+- [ ] Original inline config helper tests move to `src/utils/config/helpers_tests.rs` without assertion changes。
+- [ ] Public config helper methods and validation behavior remain unchanged。
+- [ ] Both touched config helper files are below U-16's 800-line ceiling。
+- [ ] Focused config helper test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a metrics aggregate test extraction for U-16 compliance.
+No runtime behavior change. This is a config helper test extraction for U-16 compliance.
