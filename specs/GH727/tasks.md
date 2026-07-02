@@ -50,27 +50,34 @@ GH-727 / #727
 - [x] `SP727-T37` Owner: coordinator. Done when: `src/core/providers/cloudflare/provider.rs` delegates tests with `#[path = "provider_tests.rs"] mod tests;`. Verify: `git diff -- src/core/providers/cloudflare/provider.rs`.
 - [x] `SP727-T38` Owner: coordinator. Done when: original inline Cloudflare provider tests are moved to `src/core/providers/cloudflare/provider_tests.rs` without changing assertions. Verify: `rg -n "fn test_" src/core/providers/cloudflare/provider_tests.rs`.
 - [x] `SP727-T39` Owner: verification owner. Done when: both Cloudflare provider files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/cloudflare/provider.rs src/core/providers/cloudflare/provider_tests.rs`; `cargo test core::providers::cloudflare::provider --lib --all-features`.
-- [ ] `SP727-T40` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Cloudflare provider tranche. Verify: `SPEC_RAIL=/path/to/specrail; python3 "$SPEC_RAIL/checks/check_workflow.py" --repo "$SPEC_RAIL" --spec-dir "$PWD/specs/GH727"`; `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [x] `SP727-T40` Owner: verification owner. Done when: SpecRail, formatting, all-features check, PR CI, and review-thread gate pass for the Cloudflare provider tranche. Verify: #812 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T41` Owner: coordinator. Done when: #727 has a full remaining-file decoupling design covering test suites, public type facades, runtime orchestrators, and shared utilities. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T42` Owner: coordinator. Done when: `src/core/cost/calculator/tests.rs` keeps only shared helpers plus child module declarations. Verify: `sed -n '1,120p' src/core/cost/calculator/tests.rs`.
+- [x] `SP727-T43` Owner: coordinator. Done when: pricing lookup, provider alias, and shared catalog lookup tests move to `src/core/cost/calculator/tests/pricing_lookup_tests.rs` without changing assertions. Verify: `rg -n "test_generic_cost_per_token|test_get_.*pricing|provider_variants|shared" src/core/cost/calculator/tests/pricing_lookup_tests.rs`.
+- [x] `SP727-T44` Owner: coordinator. Done when: component cost tests move to `component_cost_tests.rs`, estimate/compare tests move to `estimation_comparison_tests.rs`, edge-case tests move to `edge_case_tests.rs`, and workflow tests move to `workflow_tests.rs`. Verify: `rg -n "test_calculate_|test_estimate_|test_compare_|test_large_|test_cost_calculation_workflow" src/core/cost/calculator/tests/*.rs`.
+- [x] `SP727-T45` Owner: verification owner. Done when: all cost calculator test files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/cost/calculator/tests.rs src/core/cost/calculator/tests/*.rs`; `cargo test core::cost::calculator --lib --all-features`.
+- [ ] `SP727-T46` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the cost calculator test-suite tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [ ] `SP727-T47` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh line-count evidence. Verify: `rg --files -g '*.rs' src tests | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
 
 ## 并行拆分
 
-This is a serial writable lane for one Cloudflare provider test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the cost calculator test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/providers/cloudflare/provider.rs`
-- `src/core/providers/cloudflare/provider_tests.rs`
+- `src/core/cost/calculator/tests.rs`
+- `src/core/cost/calculator/tests/*.rs`
 
 ## 验证
 
-- SpecRail packet validation.
+- SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test core::providers::cloudflare::provider --lib --all-features`
+- `cargo test core::cost::calculator --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 
 ## Handoff Notes
 
-This PR is the next #727 maintenance tranche and should not use `Closes #727`.
-The issue should remain open until enough large-file tranches are completed or the tracker is explicitly closed.
+This PR is the next #727 maintenance tranche and should use `Refs #727`, not `Closes #727`.
+The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
