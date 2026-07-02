@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@c3acd9ad` 仍有 8 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/integrations/langfuse/types.rs`，它是一个 818 行 Langfuse API type module；生产 Trace、
-Generation、Span、IngestionEvent、batch 和 response DTO 到第 642 行，超标来源是 inline type/serialization unit tests。
+`origin/main@f98985e1` 仍有 7 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/core/providers/anthropic/client/tests.rs`，它是一个 812 行 Anthropic client test suite；文件本身只承载
+client creation、headers、error mapping、message/tool transforms、response transforms 和 request edge tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ Generation、Span、IngestionEvent、batch 和 response DTO 到第 642 行，超
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/integrations/langfuse/types.rs`，它当前 818 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `src/core/integrations/langfuse/types.rs` 作为 Langfuse public DTO、builder helper 和 ingestion event factory 的原始模块路径。
-- 将原 inline type/serialization tests 移动到 `src/core/integrations/langfuse/types_tests.rs`，并从 root 用 `#[path = "types_tests.rs"] mod tests;` 委托。
-- 不改变 Trace、Usage、Generation、Span、IngestionEvent、IngestionBatch、response DTO, serde casing, builder defaults, event factory, or test expectations。
+- 拆分 `src/core/providers/anthropic/client/tests.rs`，它当前 812 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `src/core/providers/anthropic/client/tests.rs` 作为 Anthropic client test facade 和 shared imports/helper scope。
+- 将原测试按行为域移动到 `src/core/providers/anthropic/client/tests/*.rs` 子模块：setup/error/retry、message/tool transform、response transform、request edge behavior。
+- 不改变 client creation、headers、HTTP error mapping、retry-after parsing、system message separation、tool transforms、response transforms、unknown-model policy, unsupported parameter, cache accounting, or test expectations。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不拆分 Langfuse public DTO 到 facade 子模块；本文件超标不是生产类型实现造成的。
-- 不修改 Langfuse client, integration adapter, API auth, batching runtime, or HTTP behavior。
-- 不改变 unit test assertions, generated-id expectations, serde casing expectations, builder defaults, ingestion event shape, or batch behavior。
-- 不在本 PR 中处理其余 7 个大文件。
+- 不修改 Anthropic production client, request, response, usage, config, registry, or provider behavior。
+- 不合并或移动已有 `request_tests.rs`、`compatible_tests.rs`；本 tranche 只拆当前 oversized `tests.rs`。
+- 不改变 unit test assertions, fixture models, fixture headers, error text checks, JSON shape checks, cache accounting expectations, or unknown-model policy expectations。
+- 不在本 PR 中处理其余 6 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/core/integrations/langfuse/types.rs` keeps Trace, Level, Usage, Generation, Span, IngestionEvent, IngestionBatch, and ingestion response DTOs at the same module path.
-2. Builder helper defaults, generated IDs, timestamps, model parameters, metadata insertion, error marking, and batch operations stay unchanged.
-3. Serde casing, tagged ingestion event shape, skip-serializing behavior, and response DTO fields stay unchanged.
-4. Inline tests move without assertion or fixture changes and continue to use `super::*`.
-5. No Langfuse client, integration adapter, auth, batching runtime, or HTTP behavior is changed.
+1. `src/core/providers/anthropic/client/tests.rs` keeps the original `client.rs` test module entrypoint and delegates to child test modules.
+2. Child modules continue to access Anthropic client internals through the same `super::*` test-module scope.
+3. Client creation, header construction, error mapping, retry-after parsing, message/tool transforms, response transforms, and request edge semantics stay unchanged.
+4. Tests move without assertion or fixture changes.
+5. No Anthropic production client, request, response, usage, config, registry, or provider behavior is changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::integrations::langfuse::types --lib --all-features` must pass.
+7. `cargo test core::providers::anthropic::client::tests --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/integrations/langfuse/types.rs` delegates tests to `src/core/integrations/langfuse/types_tests.rs`。
-- [ ] Original Langfuse type and serialization tests move without assertion changes。
-- [ ] Langfuse public DTOs, builders, ingestion event factories, and response types stay in the original module path。
-- [ ] All touched Langfuse types files are below U-16's 800-line ceiling。
-- [ ] Focused Langfuse types test suite 通过。
+- [ ] `src/core/providers/anthropic/client/tests.rs` delegates to behavior-domain child test modules。
+- [ ] Original Anthropic client tests move without assertion changes。
+- [ ] Existing `client.rs` test module entrypoint and sibling test modules stay intact。
+- [ ] All touched Anthropic client test files are below U-16's 800-line ceiling。
+- [ ] Focused Anthropic client test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a Langfuse types unit-test extraction for U-16 compliance.
+No runtime behavior change. This is an Anthropic client test-suite split for U-16 compliance.

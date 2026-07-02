@@ -276,24 +276,30 @@ GH-727 / #727
 - [x] `SP727-T263` Owner: coordinator. Done when: `src/core/integrations/langfuse/types.rs` keeps production Trace, Usage, Generation, Span, IngestionEvent, batch, and response DTOs, then delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/integrations/langfuse/types.rs`.
 - [x] `SP727-T264` Owner: coordinator. Done when: original inline Langfuse type tests move to `src/core/integrations/langfuse/types_tests.rs` without assertion changes. Verify: `rg -n "test_trace_creation|test_trace_with_id|test_generation_creation|test_generation_error|test_span_creation|test_span_error|test_usage_from_tokens|test_usage_with_costs|test_ingestion_event_trace|test_ingestion_event_generation|test_ingestion_batch|test_level_serialization|test_trace_serialization|test_generation_serialization|test_ingestion_event_serialization" src/core/integrations/langfuse/types_tests.rs`.
 - [x] `SP727-T265` Owner: verification owner. Done when: both touched Langfuse types files are below U-16's 800-line ceiling and focused Langfuse types tests pass. Verify: `wc -l src/core/integrations/langfuse/types.rs src/core/integrations/langfuse/types_tests.rs`; `cargo test core::integrations::langfuse::types --lib --all-features` passed 15 tests.
-- [ ] `SP727-T266` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Langfuse types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T266` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Langfuse types tranche. Verify: #869 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `f98985e1ee1d`, #727 reopened, and #727 update comment.
+- [x] `SP727-T267` Owner: coordinator. Done when: after the Langfuse types tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@f98985e1`, `src/core/providers/anthropic/client/tests.rs` is 812 lines and 7 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T268` Owner: coordinator. Done when: the Anthropic client tests tranche documents why this slice is a test-suite split rather than a production client/request/response split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T269` Owner: coordinator. Done when: `src/core/providers/anthropic/client/tests.rs` becomes a small test facade with shared imports and child module declarations for setup/error, message/tool, response, and request edge tests. Verify: `cat src/core/providers/anthropic/client/tests.rs`.
+- [x] `SP727-T270` Owner: coordinator. Done when: original Anthropic client tests move into `src/core/providers/anthropic/client/tests/*.rs` by behavior domain without assertion changes. Verify: `rg -n "test_client_creation|test_header_building|test_map_http_error_400|test_extract_retry_after_from_root|test_separate_system_messages_no_system|test_anthropic_transform_messages_preserves_assistant_text_with_tool_use|test_transform_tool_choice_auto|test_transform_chat_response_text|test_anthropic_usage_cache_details|test_anthropic_client_preserves_thinking_blocks|test_transform_chat_request_rejects_n_greater_than_one|test_transform_chat_request_allows_unknown_model_when_configured|test_transform_chat_response_preserves_cache_details_without_double_counting" src/core/providers/anthropic/client/tests`.
+- [x] `SP727-T271` Owner: verification owner. Done when: all touched Anthropic client test files are below U-16's 800-line ceiling and focused Anthropic client tests pass. Verify: `wc -l src/core/providers/anthropic/client/tests.rs src/core/providers/anthropic/client/tests/*.rs`; `cargo test core::providers::anthropic::client::tests --lib --all-features` passed 39 tests.
+- [ ] `SP727-T272` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Anthropic client tests tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the Langfuse types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the Anthropic client tests file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/integrations/langfuse/types.rs`
-- `src/core/integrations/langfuse/types_tests.rs`
+- `src/core/providers/anthropic/client/tests.rs`
+- `src/core/providers/anthropic/client/tests/`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::integrations::langfuse::types --lib --all-features`
+- `cargo test core::providers::anthropic::client::tests --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -301,5 +307,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 Langfuse types unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 Anthropic client test-suite split tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

@@ -10,11 +10,11 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@c3acd9ad`, 8 tracked Rust files remain over the U-16
-800-line ceiling. The current largest file is `src/core/integrations/langfuse/types.rs`
-at 818 lines. It is a Langfuse API type module where production DTOs, builders,
-ingestion event factories, batch helpers, and response DTOs end at line 642 and
-the oversized portion is inline type/serialization tests starting at line 643.
+At `origin/main@f98985e1`, 7 tracked Rust files remain over the U-16
+800-line ceiling. The current largest file is `src/core/providers/anthropic/client/tests.rs`
+at 812 lines. It is a test-only Anthropic client suite covering client creation,
+headers, error mapping, retry-after parsing, message/tool transforms, response
+transforms, and request edge behavior.
 
 ## Architecture Principles
 
@@ -41,55 +41,58 @@ the oversized portion is inline type/serialization tests starting at line 643.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Langfuse Types Test Extraction
+## Current Tranche: Anthropic Client Test-Suite Split
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Langfuse type production | `src/core/integrations/langfuse/types.rs` | Defines Trace, Level, Usage, Generation, Span, IngestionEvent, IngestionBatch, and ingestion response DTOs. | Public Langfuse DTO paths and serde contracts must remain unchanged for callers. |
-| Inline tests | `src/core/integrations/langfuse/types.rs` | `#[cfg(test)] mod tests` starts at line 643 and contains type builder, error marking, batch, and serde serialization tests. | Moving these tests removes the U-16 violation without changing public DTO code. |
-| Extracted tests | `src/core/integrations/langfuse/types_tests.rs` | New path-backed test module keeps the original tests under `super::*`. | Assertions and fixtures remain centralized against the same production module. |
+| Test facade | `src/core/providers/anthropic/client/tests.rs` | Currently contains all legacy Anthropic client tests directly. | This file can become a small facade while preserving the `client.rs` `mod tests;` entrypoint. |
+| Extracted child tests | `src/core/providers/anthropic/client/tests/*.rs` | New behavior-domain test modules under the existing test facade. | Splitting by behavior domain reduces file size without changing production code. |
+| Existing siblings | `request_tests.rs`, `compatible_tests.rs` | Existing focused sibling test modules declared directly from `client.rs`. | They remain untouched to keep ownership boundaries clear. |
 
 ### Design
 
-1. Keep `src/core/integrations/langfuse/types.rs` as the production owner for Langfuse DTOs, builder helpers, ingestion event factories, batch helpers, and response DTOs.
-2. Replace the inline test module with `#[cfg(test)] #[path = "types_tests.rs"] mod tests;`.
-3. Move the original inline test body into `src/core/integrations/langfuse/types_tests.rs` without assertion, fixture, serde expected-value, or batch behavior changes.
-4. Keep `use super::*;` in the extracted test module so tests validate the same parent module API.
-5. Do not create a Langfuse public-type facade hierarchy in this tranche because the production type implementation is already below the ceiling.
-6. Do not edit Langfuse client, integration adapter, auth, batching runtime, or HTTP behavior beyond the mechanical test move.
+1. Keep `src/core/providers/anthropic/client/tests.rs` as the test facade with the original shared imports and helper scope.
+2. Split the original tests into child modules under `src/core/providers/anthropic/client/tests/`:
+   - `setup_error_tests.rs` for client creation, headers, HTTP error mapping, and retry-after parsing.
+   - `message_tool_tests.rs` for system message separation, Anthropic message conversion, tool choice, and tool transforms.
+   - `response_tests.rs` for chat response conversion, usage/cache details, thinking blocks, tool use, and finish reasons.
+   - `request_edge_tests.rs` for unsupported `n`, ignored unsupported params, configured unknown-model behavior, and default unknown-model rejection.
+3. Each child module uses `use super::*;` to retain the same test-module access to Anthropic client internals.
+4. Move tests without assertion, fixture model, fixture header, JSON expected-value, or error-message expectation changes.
+5. Do not edit production `client.rs`, `request.rs`, `response.rs`, `usage.rs`, `config.rs`, registry, provider, `request_tests.rs`, or `compatible_tests.rs`.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `src/core/integrations/langfuse/types.rs` | Root keeps production Langfuse DTOs/builders/event factories and delegates tests to `types_tests.rs`. |
-| P2 | `src/core/integrations/langfuse/types_tests.rs` | Original test names and assertions remain present. |
-| P3 | Langfuse type API | No public DTO, serde casing, generated ID, timestamp default, builder, error, event factory, or batch behavior changes. |
-| P4 | file size | `wc -l src/core/integrations/langfuse/types.rs src/core/integrations/langfuse/types_tests.rs` shows both files below 800. |
-| P5 | focused test suite | `cargo test core::integrations::langfuse::types --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/integrations/langfuse/types.rs`. |
+| P1 | `src/core/providers/anthropic/client/tests.rs` | Root test facade keeps shared imports and delegates to child modules. |
+| P2 | `src/core/providers/anthropic/client/tests/*.rs` | Original test names and assertions remain present under behavior-domain modules. |
+| P3 | Anthropic client behavior | No client creation, header, error mapping, retry-after, message/tool transform, response transform, cache accounting, or request edge behavior changes. |
+| P4 | file size | `wc -l src/core/providers/anthropic/client/tests.rs src/core/providers/anthropic/client/tests/*.rs` shows every touched file below 800. |
+| P5 | focused test suite | `cargo test core::providers::anthropic::client::tests --lib --all-features` runs the moved tests. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/providers/anthropic/client/tests.rs`. |
 
 ## Risks
 
-- Extracting tests changes the exact test source file while preserving the module path as `types::tests`, so the focused module filter remains `core::integrations::langfuse::types`.
-- Tests cover private/public builder behavior through the parent module, so the extracted path-backed module must remain a child module of `types.rs`.
-- Langfuse DTOs are integration API contract types, so this tranche must not alter serde attributes, event tags, field names, or response DTO shape.
+- Splitting a test-only file changes test module paths below `client::tests`, so focused filtering should use `core::providers::anthropic::client::tests`.
+- Child modules must remain under the `tests.rs` facade so they keep access to the same private Anthropic client helpers through `super::*`.
+- Anthropic request/response conversion is provider-critical; this tranche must not modify production transform code or weaken assertions.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l src/core/integrations/langfuse/types.rs src/core/integrations/langfuse/types_tests.rs`
-- [ ] `cargo test core::integrations::langfuse::types --lib --all-features`
+- [ ] `wc -l src/core/providers/anthropic/client/tests.rs src/core/providers/anthropic/client/tests/*.rs`
+- [ ] `cargo test core::providers::anthropic::client::tests --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the Langfuse type unit tests back into `src/core/integrations/langfuse/types.rs` and revert
-the `specs/GH727` edits. No schema, persistence, or runtime behavior changes
-are involved.
+Move the Anthropic client test modules back into `src/core/providers/anthropic/client/tests.rs`
+and revert the `specs/GH727` edits. No schema, persistence, or runtime behavior
+changes are involved.
