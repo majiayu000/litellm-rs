@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@f98985e1` 仍有 7 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/providers/anthropic/client/tests.rs`，它是一个 812 行 Anthropic client test suite；文件本身只承载
-client creation、headers、error mapping、message/tool transforms、response transforms 和 request edge tests。
+`origin/main@68a17074` 仍有 6 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件之一是
+`tests/moderations_routes.rs`，它是一个 809 行 moderation route integration test suite；文件本身只承载
+mock moderation upstream、gateway app-state builders、provider/auth helpers 和 route behavior tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ client creation、headers、error mapping、message/tool transforms、response t
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/providers/anthropic/client/tests.rs`，它当前 812 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `src/core/providers/anthropic/client/tests.rs` 作为 Anthropic client test facade 和 shared imports/helper scope。
-- 将原测试按行为域移动到 `src/core/providers/anthropic/client/tests/*.rs` 子模块：setup/error/retry、message/tool transform、response transform、request edge behavior。
-- 不改变 client creation、headers、HTTP error mapping、retry-after parsing、system message separation、tool transforms、response transforms、unknown-model policy, unsupported parameter, cache accounting, or test expectations。
+- 拆分 `tests/moderations_routes.rs`，它当前 809 行，是 #727 当前最大的 tracked Rust 文件之一。
+- 保留 `tests/moderations_routes.rs` 作为 gated integration-test facade、mock moderation upstream、app-state builders、provider helpers 和 auth helper owner。
+- 将原 route behavior tests 按行为域移动到 `tests/tests/moderations_routes_*.rs` 子模块：proxy/default selection、auth/validation、budget/fallback。
+- 不改变 route URIs、request bodies、mock upstream capture, provider header assertions, auth rejection, validation rejection, budget rejection/fallback, wildcard/default-model behavior, or test expectations。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 Anthropic production client, request, response, usage, config, registry, or provider behavior。
-- 不合并或移动已有 `request_tests.rs`、`compatible_tests.rs`；本 tranche 只拆当前 oversized `tests.rs`。
-- 不改变 unit test assertions, fixture models, fixture headers, error text checks, JSON shape checks, cache accounting expectations, or unknown-model policy expectations。
-- 不在本 PR 中处理其余 6 个大文件。
+- 不修改 moderation route runtime, gateway server state, provider router, auth middleware, budget limits, or upstream client behavior。
+- 不改变 mock server response shape、captured header/body fields、fixture provider names、fixture model names、or expected status codes。
+- 不在本 PR 中处理其余 5 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/core/providers/anthropic/client/tests.rs` keeps the original `client.rs` test module entrypoint and delegates to child test modules.
-2. Child modules continue to access Anthropic client internals through the same `super::*` test-module scope.
-3. Client creation, header construction, error mapping, retry-after parsing, message/tool transforms, response transforms, and request edge semantics stay unchanged.
-4. Tests move without assertion or fixture changes.
-5. No Anthropic production client, request, response, usage, config, registry, or provider behavior is changed.
-6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::providers::anthropic::client::tests --lib --all-features` must pass.
+1. `tests/moderations_routes.rs` keeps the original `#[cfg(all(test, feature = "gateway", feature = "storage"))]` integration-test gate.
+2. Parent module keeps mock upstream/server helpers, app-state builders, provider helpers, and authenticated API key helper.
+3. Child modules continue to access shared helpers through `super::*`.
+4. Proxy behavior, auth/validation behavior, budget rejection/fallback behavior, wildcard/default-model behavior, and upstream request capture semantics stay unchanged.
+5. Tests move without assertion or fixture changes.
+6. No moderation runtime route, router, auth, budget, storage, or upstream client behavior is changed.
+7. Every touched Rust file must be below U-16's 800-line ceiling.
+8. `cargo test --test moderations_routes --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/providers/anthropic/client/tests.rs` delegates to behavior-domain child test modules。
-- [ ] Original Anthropic client tests move without assertion changes。
-- [ ] Existing `client.rs` test module entrypoint and sibling test modules stay intact。
-- [ ] All touched Anthropic client test files are below U-16's 800-line ceiling。
-- [ ] Focused Anthropic client test suite 通过。
+- [ ] `tests/moderations_routes.rs` delegates route behavior tests to child modules。
+- [ ] Original moderation route tests move without assertion changes。
+- [ ] Shared mock server, app-state, provider, and auth helpers stay in the original gated test facade。
+- [ ] All touched moderation route test files are below U-16's 800-line ceiling。
+- [ ] Focused moderation route integration test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is an Anthropic client test-suite split for U-16 compliance.
+No runtime behavior change. This is a moderation route integration-test suite split for U-16 compliance.

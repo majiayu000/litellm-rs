@@ -10,11 +10,11 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@f98985e1`, 7 tracked Rust files remain over the U-16
-800-line ceiling. The current largest file is `src/core/providers/anthropic/client/tests.rs`
-at 812 lines. It is a test-only Anthropic client suite covering client creation,
-headers, error mapping, retry-after parsing, message/tool transforms, response
-transforms, and request edge behavior.
+At `origin/main@68a17074`, 6 tracked Rust files remain over the U-16
+800-line ceiling. One current largest file is `tests/moderations_routes.rs`
+at 809 lines. It is a gated moderation route integration-test suite covering
+mock upstream capture, provider selection, auth/validation, budget rejection,
+fallback routing, wildcard/default-model behavior, and upstream proxy assertions.
 
 ## Architecture Principles
 
@@ -41,58 +41,57 @@ transforms, and request edge behavior.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Anthropic Client Test-Suite Split
+## Current Tranche: Moderation Routes Test-Suite Split
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Test facade | `src/core/providers/anthropic/client/tests.rs` | Currently contains all legacy Anthropic client tests directly. | This file can become a small facade while preserving the `client.rs` `mod tests;` entrypoint. |
-| Extracted child tests | `src/core/providers/anthropic/client/tests/*.rs` | New behavior-domain test modules under the existing test facade. | Splitting by behavior domain reduces file size without changing production code. |
-| Existing siblings | `request_tests.rs`, `compatible_tests.rs` | Existing focused sibling test modules declared directly from `client.rs`. | They remain untouched to keep ownership boundaries clear. |
+| Test facade | `tests/moderations_routes.rs` | Currently contains the feature gate, shared mock upstream/app-state helpers, and all moderation route behavior tests directly. | This file can keep shared integration-test setup while delegating behavior tests. |
+| Extracted child tests | `tests/tests/moderations_routes_*.rs` | New behavior-domain test modules under the existing gated test facade. | Splitting by route behavior reduces file size without changing runtime code. |
+| Runtime routes | `src/server/routes/**`, provider router, auth, budget state | Production moderation route behavior. | Must not be edited in this tranche. |
 
 ### Design
 
-1. Keep `src/core/providers/anthropic/client/tests.rs` as the test facade with the original shared imports and helper scope.
-2. Split the original tests into child modules under `src/core/providers/anthropic/client/tests/`:
-   - `setup_error_tests.rs` for client creation, headers, HTTP error mapping, and retry-after parsing.
-   - `message_tool_tests.rs` for system message separation, Anthropic message conversion, tool choice, and tool transforms.
-   - `response_tests.rs` for chat response conversion, usage/cache details, thinking blocks, tool use, and finish reasons.
-   - `request_edge_tests.rs` for unsupported `n`, ignored unsupported params, configured unknown-model behavior, and default unknown-model rejection.
-3. Each child module uses `use super::*;` to retain the same test-module access to Anthropic client internals.
-4. Move tests without assertion, fixture model, fixture header, JSON expected-value, or error-message expectation changes.
-5. Do not edit production `client.rs`, `request.rs`, `response.rs`, `usage.rs`, `config.rs`, registry, provider, `request_tests.rs`, or `compatible_tests.rs`.
+1. Keep `tests/moderations_routes.rs` as the gated integration-test facade with the original imports, mock upstream structs, server lifecycle helpers, app-state builders, provider factory helpers, and auth fixture helper.
+2. Split the original tests into child modules under `tests/tests/` with `moderations_routes_` filename prefixes:
+   - `moderations_routes_proxy_selection_tests.rs` for fail-closed/no-provider, upstream proxy/header capture, root alias, and default-model provider selection.
+   - `moderations_routes_auth_validation_tests.rs` for anonymous/authenticated API key behavior plus invalid request and unconfigured-model rejection.
+   - `moderations_routes_budget_fallback_tests.rs` for provider/model budget rejection, router budget fallback, native OpenAI default-model fallback, provider-name wildcard fallback, and wildcard provider fallback.
+3. Each child module uses `use super::*;` to retain the same access to shared mock/app/provider helpers.
+4. Move tests without assertion, fixture provider/model/header, JSON body, route URI, status code, or error-message expectation changes.
+5. Do not edit production route, router, auth, budget, storage, provider, or upstream client code.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `src/core/providers/anthropic/client/tests.rs` | Root test facade keeps shared imports and delegates to child modules. |
-| P2 | `src/core/providers/anthropic/client/tests/*.rs` | Original test names and assertions remain present under behavior-domain modules. |
-| P3 | Anthropic client behavior | No client creation, header, error mapping, retry-after, message/tool transform, response transform, cache accounting, or request edge behavior changes. |
-| P4 | file size | `wc -l src/core/providers/anthropic/client/tests.rs src/core/providers/anthropic/client/tests/*.rs` shows every touched file below 800. |
-| P5 | focused test suite | `cargo test core::providers::anthropic::client::tests --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/providers/anthropic/client/tests.rs`. |
+| P1 | `tests/moderations_routes.rs` | Root gated test facade keeps shared mock/app/provider helpers and delegates route tests to child modules. |
+| P2 | `tests/tests/moderations_routes_*.rs` | Original test names and assertions remain present under behavior-domain modules. |
+| P3 | moderation route behavior | No route URI, auth, validation, upstream proxy/header/body capture, budget rejection, fallback, wildcard, or default-model behavior changes. |
+| P4 | file size | `wc -l tests/moderations_routes.rs tests/tests/moderations_routes_*.rs` shows every touched file below 800. |
+| P5 | focused test suite | `cargo test --test moderations_routes --all-features` runs the moved tests. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `tests/moderations_routes.rs`. |
 
 ## Risks
 
-- Splitting a test-only file changes test module paths below `client::tests`, so focused filtering should use `core::providers::anthropic::client::tests`.
-- Child modules must remain under the `tests.rs` facade so they keep access to the same private Anthropic client helpers through `super::*`.
-- Anthropic request/response conversion is provider-critical; this tranche must not modify production transform code or weaken assertions.
+- Splitting a gated integration-test file changes internal module paths, so the focused command should target the integration test crate: `cargo test --test moderations_routes --all-features`.
+- Child modules must remain under the gated parent `mod tests` so they share mock upstream and app-state helpers through `super::*`.
+- Moderation routing is externally visible API behavior; this tranche must not modify production routes or weaken status/header/body/error assertions.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l src/core/providers/anthropic/client/tests.rs src/core/providers/anthropic/client/tests/*.rs`
-- [ ] `cargo test core::providers::anthropic::client::tests --lib --all-features`
+- [ ] `wc -l tests/moderations_routes.rs tests/tests/moderations_routes_*.rs`
+- [ ] `cargo test --test moderations_routes --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the Anthropic client test modules back into `src/core/providers/anthropic/client/tests.rs`
+Move the moderation route test modules back into `tests/moderations_routes.rs`
 and revert the `specs/GH727` edits. No schema, persistence, or runtime behavior
 changes are involved.
