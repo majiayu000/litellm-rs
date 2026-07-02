@@ -6,10 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@2d35b72e1031` 仍有 27 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/utils/data/validation/request_validator.rs`，它是一个 868 行 runtime validator module，把
-chat request validation、message/content-part validation、name/media helper validation 和 inline tests
-全部放在一个文件里。
+`origin/main@ea1a47c3286b` 仍有 26 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/monitoring/types.rs`，它是一个 867 行 public monitoring type module，其中 production type
+definitions 约 170 行，其余主要是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -35,42 +34,40 @@ chat request validation、message/content-part validation、name/media helper va
 
 ## 本 tranche 目标
 
-- 拆分 `src/utils/data/validation/request_validator.rs`，它当前 868 行，是 #727 当前最大的 runtime validator module。
-- 保留 `src/utils/data/validation/mod.rs` 的 `pub use request_validator::RequestValidator;` 和公开导入路径不变。
-- 将 root `request_validator.rs` 缩小为 facade，只声明 child modules 并保留 public `RequestValidator` 类型。
-- 按职责移动实现到 `src/utils/data/validation/request_validator/*.rs`：
-  `chat.rs`、`names.rs`、`media.rs`、`tests.rs`。
-- 保持 chat request、message role、message content、content part、model/function name、image URL/base64 和 audio validation 的错误语义不变。
+- 拆分 `src/monitoring/types.rs`，它当前 867 行，是 #727 当前最大的 public type module。
+- 保留 `src/monitoring/mod.rs` 的 `pub mod types;` 和全部 public monitoring type paths 不变。
+- 将 root `types.rs` 保持为 production type definitions 文件，并用 `#[path = "types_tests.rs"] mod tests;` 委托测试。
+- 将原 inline tests 移动到 `src/monitoring/types_tests.rs`，不改变断言或 fixtures。
+- 因 production type definitions 本身低于 800 行，本 tranche 不拆 production type surface，避免无意义 facade churn。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 OpenAI request/response model definitions、route handlers 或 caller-facing validation contracts。
-- 不改变 validator error strings、regex patterns、base64 decoding、URL parsing 或 supported audio formats。
-- 不在本 PR 中处理其余 26 个大文件。
+- 不修改 monitoring metrics collection、alert processing、system monitoring runtime 或 public type fields。
+- 不改变 `SystemMetrics`、`MonitoringRequestMetrics`、`ProviderMetrics`、`SystemResourceMetrics`、`ErrorMetrics`、`PerformanceMetrics`、`LatencyPercentiles`、`AlertSeverity` 或 `Alert` 的 derives、fields、serialization behavior。
+- 不在本 PR 中处理其余 25 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `utils::data::validation::RequestValidator` remains available from the original public module path.
-2. `validate_chat_completion_request` keeps the same public signature and validates model, messages, max tokens, and temperature in the same order.
-3. Message role, content, content-part, model-name, function-name, image URL/base64, and audio validation errors remain `GatewayError::Validation` with unchanged messages.
-4. Regex compilation failures remain `GatewayError::Internal`.
-5. The moved inline tests remain under `utils::data::validation::request_validator::tests`.
+1. `monitoring::types::*` public type names remain available from the original module path.
+2. Monitoring type fields, derives, serde attributes, and `AlertSeverity` display strings remain unchanged.
+3. The root `types.rs` remains the production type definition file; tests are delegated only through `#[path = "types_tests.rs"]`.
+4. Original inline tests remain under `monitoring::types::tests`.
+5. No monitoring runtime modules are changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test utils::data::validation::request_validator --lib --all-features` must pass.
+7. `cargo test monitoring::types --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/utils/data/validation/request_validator.rs` is a small facade with module declarations and the original public `RequestValidator` type。
-- [ ] Chat request/message/content-part validation moves to `request_validator/chat.rs` without signature or error-message changes。
-- [ ] Model/function name and media/base64/audio validation move to focused child modules without behavior changes。
-- [ ] Original inline request validator tests move to `request_validator/tests.rs` without assertion changes。
-- [ ] All touched request validator files are below U-16's 800-line ceiling。
-- [ ] Focused request validator test suite 通过。
+- [ ] `src/monitoring/types.rs` keeps production type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`。
+- [ ] Original inline monitoring type tests move to `src/monitoring/types_tests.rs` without assertion changes。
+- [ ] Public monitoring type definitions and `AlertSeverity` display behavior remain unchanged。
+- [ ] Both touched monitoring type files are below U-16's 800-line ceiling。
+- [ ] Focused monitoring types test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a request validator module split for U-16 compliance.
+No runtime behavior change. This is a monitoring types test extraction for U-16 compliance.
