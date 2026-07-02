@@ -67,9 +67,13 @@
 //! - **HTTP Mapping**: Automatic HTTP status code mapping for web APIs
 //! - **Performance**: Zero-cost abstractions with compile-time optimization
 
+#[path = "unified_provider_error.rs"]
 mod error;
+#[path = "unified_provider_http_mapping.rs"]
 mod http_mapping;
+#[path = "unified_provider_macros.rs"]
 mod macros;
+#[path = "unified_provider_methods.rs"]
 mod methods;
 
 // Re-export ContextualError from the dedicated module.
