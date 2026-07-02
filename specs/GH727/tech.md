@@ -10,7 +10,7 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@750bbe437884`, 38 Rust files remain over the U-16 800-line ceiling.
+At `origin/main@a42b908a3e26`, 37 Rust files remain over the U-16 800-line ceiling.
 The highest-risk files are not all equivalent: some are pure test suites, some are public
 type facades, and some are runtime orchestrators. They need different split patterns.
 
@@ -37,58 +37,54 @@ type facades, and some are runtime orchestrators. They need different split patt
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Analytics Types Facade
+## Current Tranche: Unified Provider Error Facade
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Analytics type facade | `src/core/analytics/types.rs` | Defines request/provider, user usage, cost, and budget DTOs plus inline tests. | The file is 1071 lines and is a Lane B public type facade. |
-| Analytics module exports | `src/core/analytics/mod.rs` | Re-exports all analytics DTOs from `types`. | Root `types.rs` must keep the original public names so downstream imports remain compatible. |
-| Analytics consumers | `collector.rs`, `engine.rs`, `optimizer.rs` | Import DTOs through `super::types`. | The split can be private child modules with facade re-exports; no runtime modules should need edits. |
+| Unified provider facade | `src/core/providers/unified_provider.rs` | Defines `ProviderError`, its methods, shared HTTP mappers, and exported helper macros. | The file is 1014 lines and mixes error schema, behavior, mapper helpers, and macro definitions. |
+| Provider module exports | `src/core/providers/mod.rs` | Re-exports `ProviderError` from `unified_provider`. | Root `unified_provider.rs` must preserve the canonical path for broad provider callers. |
+| Error tests | `src/core/providers/unified_provider_tests.rs` | Covers factories, retry behavior, HTTP status mapping, contextual errors, display, clone, and conversions. | This is the focused verification surface for behavior-preserving decomposition. |
 
 ### Design
 
-1. Keep `src/core/analytics/types.rs` as the root facade.
-2. Move public DTOs into private child modules under `src/core/analytics/types/`:
-   - `request.rs`: `AnalyticsRequestMetrics`, `ProviderMetrics`
-   - `usage.rs`: `UserMetrics`, `TokenUsage`, `ModelUsage`, `UsagePatterns`,
-     `RequestSizeDistribution`, `SeasonalTrend`
-   - `cost.rs`: `CostBreakdown`, `DailyCost`, `CostMetrics`, `CostTrend`,
-     `BudgetUtilization`
-3. Root facade declares the child modules and `pub use`s every original public type name.
-4. Move original inline tests into `src/core/analytics/types_tests/`:
-   - `request_tests.rs`
-   - `usage_tests.rs`
-   - `cost_tests.rs`
-   - `workflow_tests.rs`
-5. Do not edit analytics runtime modules or `src/core/analytics/mod.rs` unless compilation proves a facade compatibility gap.
+1. Keep `src/core/providers/unified_provider.rs` as the root documentation facade.
+2. Move the `ProviderError` enum into `src/core/providers/unified_provider/error.rs`.
+3. Move the `impl ProviderError` block into `methods.rs`, importing the root facade's
+   `ContextualError` and `ProviderError` so method behavior remains attached to the canonical type.
+4. Move `default_http_error_mapper`, `parse_error_message_from_body`, and
+   `extended_http_error_mapper` into `http_mapping.rs`, then re-export those helpers from the root.
+5. Move `define_provider_error_helpers!`, `impl_provider_error_helpers!`,
+   `define_standard_error_mapper!`, and `define_extended_error_mapper!` into `macros.rs`.
+6. Do not edit provider implementations, `provider_error_conversions.rs`, or provider dispatch/factory code.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | root `types.rs` | Re-exports every original analytics public type name. |
-| P2 | child type modules | `cargo check --all-features --locked` proves downstream imports still compile. |
-| P3 | child test modules | `cargo test core::analytics::types --lib --all-features` runs the moved tests. |
-| P4 | file size | `wc -l src/core/analytics/types.rs src/core/analytics/types/*.rs src/core/analytics/types_tests.rs src/core/analytics/types_tests/*.rs` shows all touched files below 800. |
-| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/analytics/types.rs`. |
+| P1 | root `unified_provider.rs` | Re-exports `ProviderError` and mapper helpers from child modules. |
+| P2 | `error.rs` and `methods.rs` | `cargo test core::providers::unified_provider_tests --lib --all-features` preserves factories, retry/status, display, and context behavior. |
+| P3 | `http_mapping.rs` | All-features check proves downstream mapper macro/caller imports still compile. |
+| P4 | `macros.rs` | All-features check proves exported macro definitions remain available to provider modules. |
+| P5 | file size | `wc -l src/core/providers/unified_provider.rs src/core/providers/unified_provider/*.rs` shows all touched files below 800. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/providers/unified_provider.rs`. |
 
 ## Risks
 
-- Facade re-export omissions would break callers that import from `core::analytics::types::*`.
-- Multiple modules contain similarly named DTOs in other domains; this tranche must only move analytics DTOs.
-- Inline tests move one module deeper, but the root filter remains stable.
-- This tranche reduces one of the remaining 38 files; the issue remains a tracker after merge.
+- Missing root re-exports would break the broad existing `core::providers::unified_provider::*` import surface.
+- `#[macro_export]` macro definitions must still compile after moving to a child module.
+- HTTP mapper helpers reference sibling provider utilities; path updates must preserve the same retry-after parsing.
+- This tranche reduces one of the remaining 37 files; the issue remains a tracker after merge.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test core::analytics::types --lib --all-features`
+- [ ] `cargo test core::providers::unified_provider_tests --lib --all-features`
 - [ ] `cargo check --all-features --locked`
-- [ ] Line-count proof for `src/core/analytics/types.rs`, `types/*.rs`, and `types_tests/*.rs`
+- [ ] Line-count proof for `src/core/providers/unified_provider.rs` and child files
 
 ## Rollback
 
-Revert the analytics type/test split and `specs/GH727` edits. No migrations or
-runtime code changes are involved.
+Revert the unified provider facade split and `specs/GH727` edits. No migrations or
+provider runtime behavior changes are involved.
