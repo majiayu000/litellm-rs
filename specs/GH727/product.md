@@ -6,10 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@0cd9ccd2fb6f` 仍有 25 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/providers/bedrock/provider_tests.rs`，它是一个 864 行 Bedrock provider unit test suite，
-把 provider creation/capability、prompt conversion、OpenAI param mapping、request transform、
-response transform、cost calculation、client accessor 和 debug/clone coverage 放在一个文件里。
+`origin/main@4c278e8ab25e` 仍有 24 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/core/cache/types.rs`，它是一个 861 行 cache type module，其中 production cache key/entry/config/stats
+definitions 约 550 行，其余是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -29,46 +28,46 @@ response transform、cost calculation、client accessor 和 debug/clone coverage
 | Lane | 文件类型 | 代表文件 | 拆分策略 |
 | --- | --- | --- | --- |
 | A | Test-only suites | `src/utils/data/utils/tests.rs`, router tests, utils/event tests, provider test files, integration route tests | 保持原测试断言和 focused test coverage，按行为域拆成 child test modules。 |
-| B | Public type facades | SDK, analytics, monitoring, observability, audio, config, user/key/cache types | 建立 `types/` 子模块，root 继续 `pub use` 原有类型，禁止字段/别名重命名。 |
+| B | Public type facades | SDK, analytics, monitoring, observability, audio, config, user/key/cache types | 建立 `types/` 子模块或外置 tests；root 继续保留原有 public type paths。 |
 | C | Runtime orchestrators | OpenTelemetry, OAuth session, request validator, provider modules | 抽出 request mapping、response mapping、operation handlers、storage helpers 或 error mapper，保留外层入口和 trait surface。 |
 | D | Shared utilities | config/net/sync helpers | 按功能域拆 util module，避免新增全局 prelude 或 Any-like public API。 |
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/providers/bedrock/provider_tests.rs`，它当前 864 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `src/core/providers/bedrock/mod.rs` 的 `#[cfg(test)] mod provider_tests;` 不变。
-- 将 root `provider_tests.rs` 缩小为 shared test helpers 和 child module declarations。
-- 按行为域移动测试到 `src/core/providers/bedrock/provider_tests/*.rs`：
-  `creation_capability_tests.rs`、`prompt_param_tests.rs`、`request_transform_tests.rs`、
-  `response_transform_tests.rs`、`cost_and_access_tests.rs`。
-- 不改变任何测试断言、fixtures、model ids、request/response JSON 或 cost expectations。
+- 拆分 `src/core/cache/types.rs`，它当前 861 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `core::cache::types::*` public cache type paths 不变。
+- 将 root `types.rs` 保持为 production cache type definition file，并用 `#[path = "types_tests.rs"] mod tests;` 委托测试。
+- 将原 inline tests 移动到 `src/core/cache/types_tests.rs`，不改变断言或 fixtures。
+- 因 production definitions 本身低于 800 行，本 tranche 不拆 public cache type surface，避免无意义 facade churn。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 Bedrock provider runtime、client、config、model catalog、transformation logic、cost calculator 或 SigV4 behavior。
-- 不改变 `BedrockProvider` public API、`BEDROCK_CAPABILITIES`、`BedrockConfig` validation、message prompt conversion、OpenAI param mapping、request/response transform semantics 或 cost calculation behavior。
-- 不在本 PR 中处理其余 24 个大文件。
+- 不修改 cache runtime behavior、storage backends、Redis integration、eviction behavior 或 public cache type fields。
+- 不改变 `CacheKey` hash/Redis key behavior、`CacheEntry` TTL/access behavior、`SerializableCacheEntry` conversion behavior、`EvictionPolicy`/`CacheMode` serde behavior、`DualCacheConfig` defaults/builders、`AtomicCacheStats` counters 或 `CacheStatsSnapshot` hit-rate calculations。
+- 不在本 PR 中处理其余 23 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/core/providers/bedrock/mod.rs` continues to load the test suite as `provider_tests`.
-2. Root `provider_tests.rs` keeps only shared helpers and child test module declarations.
-3. Existing Bedrock provider test assertions remain unchanged and still run under `core::providers::bedrock::provider_tests::*`.
-4. No Bedrock production module is changed.
-5. Every touched Rust file must be below U-16's 800-line ceiling.
-6. `cargo test core::providers::bedrock::provider_tests --lib --all-features` must pass.
+1. `core::cache::types::*` public type names remain available from the original module path.
+2. Cache type fields, derives, defaults, serde attributes, and display strings remain unchanged.
+3. The root `types.rs` remains the production cache type definition file; tests are delegated only through `#[path = "types_tests.rs"]`.
+4. Original inline tests remain under `core::cache::types::tests`.
+5. No cache runtime modules are changed.
+6. Every touched Rust file must be below U-16's 800-line ceiling.
+7. `cargo test core::cache::types --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/providers/bedrock/provider_tests.rs` keeps shared helpers and child module declarations only。
-- [ ] Original Bedrock provider tests move to behavior-domain child modules without assertion changes。
-- [ ] All touched Bedrock provider test files are below U-16's 800-line ceiling。
-- [ ] Focused Bedrock provider test suite 通过。
+- [ ] `src/core/cache/types.rs` keeps production cache type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`。
+- [ ] Original inline cache type tests move to `src/core/cache/types_tests.rs` without assertion changes。
+- [ ] Public cache type definitions and behavior remain unchanged。
+- [ ] Both touched cache type files are below U-16's 800-line ceiling。
+- [ ] Focused cache types test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a Bedrock provider test-suite split for U-16 compliance.
+No runtime behavior change. This is a cache types test extraction for U-16 compliance.
