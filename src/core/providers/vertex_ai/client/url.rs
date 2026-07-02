@@ -1,5 +1,5 @@
 use super::VertexAIProvider;
-use crate::core::providers::vertex_ai::models::VertexAIModel;
+use crate::core::providers::vertex_ai::VertexAIModel;
 
 impl VertexAIProvider {
     /// Build the API URL for a given model and endpoint

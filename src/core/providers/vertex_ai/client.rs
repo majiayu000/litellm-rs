@@ -34,7 +34,7 @@ mod error_mapper;
 mod health;
 mod url;
 
-use self::error_mapper::VertexAIErrorMapper;
+pub use self::error_mapper::VertexAIErrorMapper;
 
 // Cost calculation removed - integrated in provider implementation
 
