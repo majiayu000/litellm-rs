@@ -56,24 +56,32 @@ GH-727 / #727
 - [x] `SP727-T43` Owner: coordinator. Done when: pricing lookup, provider alias, and shared catalog lookup tests move to `src/core/cost/calculator/tests/pricing_lookup_tests.rs` without changing assertions. Verify: `rg -n "test_generic_cost_per_token|test_get_.*pricing|provider_variants|shared" src/core/cost/calculator/tests/pricing_lookup_tests.rs`.
 - [x] `SP727-T44` Owner: coordinator. Done when: component cost tests move to `component_cost_tests.rs`, estimate/compare tests move to `estimation_comparison_tests.rs`, edge-case tests move to `edge_case_tests.rs`, and workflow tests move to `workflow_tests.rs`. Verify: `rg -n "test_calculate_|test_estimate_|test_compare_|test_large_|test_cost_calculation_workflow" src/core/cost/calculator/tests/*.rs`.
 - [x] `SP727-T45` Owner: verification owner. Done when: all cost calculator test files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/cost/calculator/tests.rs src/core/cost/calculator/tests/*.rs`; `cargo test core::cost::calculator --lib --all-features`.
-- [ ] `SP727-T46` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the cost calculator test-suite tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
-- [ ] `SP727-T47` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh line-count evidence. Verify: `rg --files -g '*.rs' src tests | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
+- [x] `SP727-T46` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the cost calculator test-suite tranche. Verify: #813 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T47` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh line-count evidence. Verify: `rg --files -g '*.rs' src tests | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
+- [x] `SP727-T48` Owner: coordinator. Done when: `src/core/providers/vertex_ai/client.rs` declares focused `error_mapper`, `url`, `health`, and path-backed `tests` modules. Verify: `sed -n '1,80p' src/core/providers/vertex_ai/client.rs`.
+- [x] `SP727-T49` Owner: coordinator. Done when: `VertexAIErrorMapper` moves to `src/core/providers/vertex_ai/client/error_mapper.rs` with unchanged mapping arms. Verify: `rg -n "VertexAIErrorMapper|INVALID_ARGUMENT|RESOURCE_EXHAUSTED|map_network_error" src/core/providers/vertex_ai/client/error_mapper.rs`.
+- [x] `SP727-T50` Owner: coordinator. Done when: URL construction moves to `src/core/providers/vertex_ai/client/url.rs` and health check moves to `src/core/providers/vertex_ai/client/health.rs`. Verify: `rg -n "build_url|get_publisher_for_model|check_health" src/core/providers/vertex_ai/client/*.rs`.
+- [x] `SP727-T51` Owner: coordinator. Done when: original inline Vertex AI client tests move to `src/core/providers/vertex_ai/client_tests.rs` without changing assertions. Verify: `rg -n "test_error_mapper_http_400|test_url_format_standard_location|test_vertex_ai_error_api_error" src/core/providers/vertex_ai/client_tests.rs`.
+- [x] `SP727-T52` Owner: verification owner. Done when: touched Vertex AI client files are below U-16's 800-line ceiling and focused tests pass. Verify: `wc -l src/core/providers/vertex_ai/client.rs src/core/providers/vertex_ai/client/*.rs src/core/providers/vertex_ai/client_tests.rs`; `cargo test core::providers::vertex_ai::client --lib --all-features`.
+- [ ] `SP727-T53` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the Vertex AI client tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [ ] `SP727-T54` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh line-count evidence. Verify: `rg --files -g '*.rs' src tests | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
 
 ## 并行拆分
 
-This is a serial writable lane for the cost calculator test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the Vertex AI client file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/cost/calculator/tests.rs`
-- `src/core/cost/calculator/tests/*.rs`
+- `src/core/providers/vertex_ai/client.rs`
+- `src/core/providers/vertex_ai/client/*.rs`
+- `src/core/providers/vertex_ai/client_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test core::cost::calculator --lib --all-features`
+- `cargo test core::providers::vertex_ai::client --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 

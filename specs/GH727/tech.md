@@ -10,7 +10,7 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@c58aa820fead`, 43 Rust files remain over the U-16 800-line ceiling.
+At `origin/main@63b6bf4e29bb`, 41 Rust files remain over the U-16 800-line ceiling.
 The highest-risk files are not all equivalent: some are pure test suites, some are public
 type facades, and some are runtime orchestrators. They need different split patterns.
 
@@ -37,54 +37,52 @@ type facades, and some are runtime orchestrators. They need different split patt
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Cost Calculator Test Suite
+## Current Tranche: Vertex AI Client
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Cost calculator runtime | `src/core/cost/calculator.rs` | Provides `generic_cost_per_token`, pricing lookup, cost components, estimate, comparison, and fallback pricing behavior. | Runtime file is already below 800 lines; this tranche must not change it. |
-| Cost calculator tests | `src/core/cost/calculator/tests.rs` | A single 1025-line test module covers pricing lookup, provider aliases, component costs, estimate/compare behavior, edge cases, and workflow consistency. | The file exceeds U-16 and mixes unrelated test domains. |
-| Existing sibling test pattern | `src/core/cost/calculator/openai_current_tests.rs`, `gpt55_tests.rs`, `pricing_regression_tests.rs` | Calculator test files already live beside calculator submodules. | New child test modules should follow this local file layout instead of inventing a new harness. |
+| Vertex AI client | `src/core/providers/vertex_ai/client.rs` | Contains error mapping, provider construction, URL building, HTTP request execution, chat/embedding/image operations, OpenAI param mapping, response transformation, health check, and inline tests. | The file is 1456 lines and mixes independent responsibilities. |
+| Vertex AI module tree | `src/core/providers/vertex_ai/` | Already has focused modules for auth, models, transformers, embeddings, count tokens, files, image generation, text-to-speech, and other operations. | Client child modules should fit this existing decomposition instead of changing public provider exports. |
+| Existing test split pattern | `src/core/providers/vertex_ai/embeddings/mod.rs`, `src/core/providers/vertex_ai/mod.rs` | Uses path-backed test modules for large Vertex AI tests. | `client.rs` can use the same pattern with `#[path = "client_tests.rs"] mod tests;`. |
 
 ### Design
 
-1. Keep `src/core/cost/calculator/tests.rs` as the parent test module.
-2. Move shared helpers into the parent module:
-   - `create_usage`
-   - `assert_cost_eq`
-3. Split tests into child modules under `src/core/cost/calculator/tests/`:
-   - `pricing_lookup_tests.rs`: `generic_cost_per_token`, `get_model_pricing`, provider alias, and shared catalog lookup behavior.
-   - `component_cost_tests.rs`: input, output, cache, audio, image, and reasoning component cost helpers.
-   - `estimation_comparison_tests.rs`: `estimate_cost` and `compare_model_costs`.
-   - `edge_case_tests.rs`: all-feature totals, large counts, case-insensitivity, new-model pricing, provider variants, cached-token saturation.
-   - `workflow_tests.rs`: end-to-end cost workflow and estimate-vs-actual consistency.
-4. Each child module imports from its parent module and `crate::core::cost::calculator::*`;
-   no production code or public API changes are allowed.
+1. Keep `src/core/providers/vertex_ai/client.rs` as the public `VertexAIProvider` module.
+2. Move `VertexAIErrorMapper` into `src/core/providers/vertex_ai/client/error_mapper.rs` and import it from `client.rs`.
+3. Move URL construction helpers into `src/core/providers/vertex_ai/client/url.rs`:
+   - `build_url`
+   - `get_publisher_for_model`
+4. Move `check_health` into `src/core/providers/vertex_ai/client/health.rs` as a `pub(super)` inherent method.
+5. Move the inline `#[cfg(test)] mod tests` body into `src/core/providers/vertex_ai/client_tests.rs` and keep `client.rs` declaring `#[path = "client_tests.rs"] mod tests;`.
+6. Do not change `VertexAIProvider` fields, trait methods, request/response transforms, URL strings, or error mapping match arms.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `tests.rs` coordinator plus child modules | `cargo test core::cost::calculator --lib --all-features` discovers moved tests. |
-| P2 | unchanged assertions | Focused tests pass without production changes. |
-| P3 | file size | `wc -l src/core/cost/calculator/tests.rs src/core/cost/calculator/tests/*.rs` shows all touched files below 800. |
-| P4 | no runtime behavior change | `git diff -- src/core/cost/calculator.rs` is empty. |
+| P1 | `client.rs` module declarations and `client_tests.rs` | `cargo test core::providers::vertex_ai::client --lib --all-features` discovers moved tests. |
+| P2 | `client/error_mapper.rs` | Existing error mapper tests pass with unchanged assertions. |
+| P3 | `client/url.rs` and `client/health.rs` | Focused client tests and all-features check compile the moved inherent methods. |
+| P4 | file size | `wc -l src/core/providers/vertex_ai/client.rs src/core/providers/vertex_ai/client/*.rs src/core/providers/vertex_ai/client_tests.rs` shows all touched files below 800. |
+| P5 | public surface | `git diff -- src/core/providers/vertex_ai/mod.rs` is empty. |
 
 ## Risks
 
-- Child modules do not inherit parent imports automatically; each file must import the calculator API it uses.
-- Shared helpers must stay in the parent module so every child can reuse the same token fixture and float assertion behavior.
-- This tranche reduces only one of 43 files; the issue remains a tracker after merge.
+- Inherent methods defined in child modules must use `pub(super)` when called from the parent `client.rs`.
+- `VertexAIErrorMapper` must remain visible to `get_error_mapper` and moved tests without becoming a new public API commitment.
+- Moving URL helpers must not change custom API base, global Imagen, partner publisher, custom endpoint, or streaming `alt=sse` behavior.
+- This tranche reduces one of the remaining 41 files; the issue remains a tracker after merge.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test core::cost::calculator --lib --all-features`
+- [ ] `cargo test core::providers::vertex_ai::client --lib --all-features`
 - [ ] `cargo check --all-features --locked`
-- [ ] Line-count proof for `src/core/cost/calculator/tests.rs` and child modules
+- [ ] Line-count proof for `src/core/providers/vertex_ai/client.rs`, `client/*.rs`, and `client_tests.rs`
 
 ## Rollback
 
-Revert the cost calculator test module split and `specs/GH727` edits. No migrations,
+Revert the Vertex AI client module split and `specs/GH727` edits. No migrations,
 runtime config changes, or public API changes are involved.
