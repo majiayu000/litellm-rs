@@ -10,7 +10,7 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@63b6bf4e29bb`, 41 Rust files remain over the U-16 800-line ceiling.
+At `origin/main@6e81da76d9a4`, 41 Rust files remain over the U-16 800-line ceiling.
 The highest-risk files are not all equivalent: some are pure test suites, some are public
 type facades, and some are runtime orchestrators. They need different split patterns.
 
@@ -37,52 +37,72 @@ type facades, and some are runtime orchestrators. They need different split patt
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Vertex AI Client
+## Current Tranche: SDK Types Facade
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Vertex AI client | `src/core/providers/vertex_ai/client.rs` | Contains error mapping, provider construction, URL building, HTTP request execution, chat/embedding/image operations, OpenAI param mapping, response transformation, health check, and inline tests. | The file is 1456 lines and mixes independent responsibilities. |
-| Vertex AI module tree | `src/core/providers/vertex_ai/` | Already has focused modules for auth, models, transformers, embeddings, count tokens, files, image generation, text-to-speech, and other operations. | Client child modules should fit this existing decomposition instead of changing public provider exports. |
-| Existing test split pattern | `src/core/providers/vertex_ai/embeddings/mod.rs`, `src/core/providers/vertex_ai/mod.rs` | Uses path-backed test modules for large Vertex AI tests. | `client.rs` can use the same pattern with `#[path = "client_tests.rs"] mod tests;`. |
+| SDK types facade | `src/sdk/types.rs` | Contains all SDK chat/message/tool/usage DTOs plus a large inline test suite. | The file is 1163 lines and combines multiple DTO domains with test coverage. |
+| SDK client imports | `src/sdk/client/*.rs` | Imports SDK types from `crate::sdk::types::{...}` and `super::types` for client-internal types. | Root re-exports must preserve the existing `crate::sdk::types::*` API. |
+| Existing Rust module pattern | `src/core/types/*.rs`, `src/core/cost/calculator/tests/*.rs` | Uses focused child modules plus root re-exports or test submodules. | SDK types can use the same facade-compatible split without changing runtime behavior. |
 
 ### Design
 
-1. Keep `src/core/providers/vertex_ai/client.rs` as the public `VertexAIProvider` module.
-2. Move `VertexAIErrorMapper` into `src/core/providers/vertex_ai/client/error_mapper.rs` and import it from `client.rs`.
-3. Move URL construction helpers into `src/core/providers/vertex_ai/client/url.rs`:
-   - `build_url`
-   - `get_publisher_for_model`
-4. Move `check_health` into `src/core/providers/vertex_ai/client/health.rs` as a `pub(super)` inherent method.
-5. Move the inline `#[cfg(test)] mod tests` body into `src/core/providers/vertex_ai/client_tests.rs` and keep `client.rs` declaring `#[path = "client_tests.rs"] mod tests;`.
-6. Do not change `VertexAIProvider` fields, trait methods, request/response transforms, URL strings, or error mapping match arms.
+1. Keep `src/sdk/types.rs` as the public root facade.
+2. Move message and multimodal DTOs into `src/sdk/types/message.rs`:
+   - `Role`
+   - `Content`
+   - `ContentPart`
+   - `ImageUrl`
+   - `AudioData`
+   - `Message`
+   - `MessageDelta`
+3. Move tool DTOs into `src/sdk/types/tool.rs`:
+   - `ToolCall`
+   - `Function`
+   - `Tool`
+   - `ToolChoice`
+4. Move chat request/response DTOs into `src/sdk/types/chat.rs`:
+   - `SdkChatRequest`
+   - `ChatOptions`
+   - `ChatResponse`
+   - `ChatChoice`
+   - `ChatChunk`
+   - `ChunkChoice`
+5. Move usage and cost DTOs into `src/sdk/types/usage.rs`:
+   - `Usage`
+   - `Cost`
+   - `CostBreakdown`
+6. Re-export every original public type from `types.rs` with `pub use` so `crate::sdk::types::*` remains compatible.
+7. Split the inline `#[cfg(test)] mod tests` body into `src/sdk/types_tests/{message_tests.rs,tool_tests.rs,chat_tests.rs,streaming_usage_tests.rs}` and keep the test tree rooted under `sdk::types::tests`.
+8. Do not change fields, derives, serde attributes, enum variants, assertions, or SDK client behavior.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `client.rs` module declarations and `client_tests.rs` | `cargo test core::providers::vertex_ai::client --lib --all-features` discovers moved tests. |
-| P2 | `client/error_mapper.rs` | Existing error mapper tests pass with unchanged assertions. |
-| P3 | `client/url.rs` and `client/health.rs` | Focused client tests and all-features check compile the moved inherent methods. |
-| P4 | file size | `wc -l src/core/providers/vertex_ai/client.rs src/core/providers/vertex_ai/client/*.rs src/core/providers/vertex_ai/client_tests.rs` shows all touched files below 800. |
-| P5 | public surface | `git diff -- src/core/providers/vertex_ai/mod.rs` is empty. |
+| P1 | `types.rs` root facade and child module declarations | `cargo test sdk::types --lib --all-features` discovers moved tests under the same root test tree. |
+| P2 | `types/message.rs`, `types/tool.rs`, `types/chat.rs`, `types/usage.rs` | `cargo check --all-features --locked` compiles existing SDK imports through root re-exports. |
+| P3 | `types_tests/*.rs` | Focused SDK type tests pass with unchanged assertions. |
+| P4 | file size | `wc -l src/sdk/types.rs src/sdk/types/*.rs src/sdk/types_tests/*.rs` shows all touched files below 800. |
+| P5 | public surface | `rg -n "pub use .*Role|pub use .*SdkChatRequest|pub use .*Usage" src/sdk/types.rs` confirms original root exports. |
 
 ## Risks
 
-- Inherent methods defined in child modules must use `pub(super)` when called from the parent `client.rs`.
-- `VertexAIErrorMapper` must remain visible to `get_error_mapper` and moved tests without becoming a new public API commitment.
-- Moving URL helpers must not change custom API base, global Imagen, partner publisher, custom endpoint, or streaming `alt=sse` behavior.
+- Type dependencies cross domains: message DTOs depend on `ToolCall`, and chat DTOs depend on message, tool, and usage DTOs. Child modules should use explicit `super::{...}` imports rather than a broad prelude.
+- Private child modules plus root `pub use` preserve the existing public API without committing new module paths such as `sdk::types::chat`.
+- Test modules must import through the root facade to exercise the preserved public path.
 - This tranche reduces one of the remaining 41 files; the issue remains a tracker after merge.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test core::providers::vertex_ai::client --lib --all-features`
+- [ ] `cargo test sdk::types --lib --all-features`
 - [ ] `cargo check --all-features --locked`
-- [ ] Line-count proof for `src/core/providers/vertex_ai/client.rs`, `client/*.rs`, and `client_tests.rs`
+- [ ] Line-count proof for `src/sdk/types.rs`, `src/sdk/types/*.rs`, and `src/sdk/types_tests/*.rs`
 
 ## Rollback
 
-Revert the Vertex AI client module split and `specs/GH727` edits. No migrations,
+Revert the SDK types module split and `specs/GH727` edits. No migrations,
 runtime config changes, or public API changes are involved.

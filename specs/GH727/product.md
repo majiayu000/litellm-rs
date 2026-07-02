@@ -6,7 +6,7 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@63b6bf4e29bb` 仍有 41 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
+`origin/main@6e81da76d9a4` 仍有 41 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
 tranche 已经证明“小 PR、单文件族、保持行为不变”的方式可行，但 spec packet 仍按上一轮
 Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦。
 
@@ -34,42 +34,42 @@ Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/providers/vertex_ai/client.rs`，它当前 1456 行，是 #727 当前 top offender。
-- 将 Vertex AI client 的内部职责拆出为 focused child modules：
-  - `client/error_mapper.rs`
-  - `client/url.rs`
-  - `client/health.rs`
-  - `client_tests.rs`
-- `client.rs` 保留 `VertexAIProvider` 主体、provider trait 实现和 request/response orchestration。
-- 保持 `VertexAIProvider` public API、trait surface、错误语义、URL 字符串格式和测试断言不变。
+- 拆分 `src/sdk/types.rs`，它当前 1163 行，是 #727 当前最大的 public type facade。
+- 将 SDK type DTO 拆出为 focused child modules：
+  - `types/message.rs`
+  - `types/tool.rs`
+  - `types/chat.rs`
+  - `types/usage.rs`
+  - `types_tests/*.rs`
+- `types.rs` 保留为 root facade，并继续 `pub use` 原有所有 public type names。
+- 保持原字段名、枚举 variant、derive、serde attributes、测试断言和 `crate::sdk::types::*` 导入路径不变。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 Vertex AI request/response transformation 行为。
-- 不重构 auth、model parsing、Gemini/partner transformers、pricing 或 provider registry。
+- 不修改 SDK client routing、provider payloads、request execution 或 cost calculation 行为。
+- 不重命名 SDK public fields、variants、aliases 或 serde names。
 - 不在本 PR 中处理其余 40 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `VertexAIProvider` 仍从 `crate::core::providers::vertex_ai::client::VertexAIProvider` 导出。
-2. `get_error_mapper` 仍返回 Vertex AI-specific mapper，HTTP/JSON/network error mapping 保持一致。
-3. `build_url` 对 Gemini、partner、custom、global、streaming 和 custom API base 的输出保持一致。
-4. 原 inline tests 继续由 `core::providers::vertex_ai::client::tests::*` 测试树运行。
-5. `src/core/providers/vertex_ai/client.rs` 及新增 child files 必须低于 800 行。
-6. `cargo test core::providers::vertex_ai::client --lib --all-features` 必须通过。
+1. `Role`, `Content`, `ContentPart`, `ImageUrl`, `AudioData`, `Message`, `MessageDelta`, `ToolCall`, `Function`, `Tool`, `ToolChoice`, `SdkChatRequest`, `ChatOptions`, `ChatResponse`, `ChatChoice`, `ChatChunk`, `ChunkChoice`, `Usage`, `Cost`, and `CostBreakdown` remain importable from `crate::sdk::types::*`.
+2. SDK type fields, enum variants, derives, and serde attributes remain unchanged.
+3. `types.rs` acts as a facade and does not introduce broad prelude-style coupling.
+4. Original inline tests continue under `sdk::types::tests::*`, split by DTO domain.
+5. `src/sdk/types.rs`, `src/sdk/types/*.rs`, and `src/sdk/types_tests/*.rs` must be below 800 lines.
+6. `cargo test sdk::types --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/providers/vertex_ai/client.rs` 声明 `error_mapper`、`url`、`health` 和 path-backed `tests` modules。
-- [ ] `VertexAIErrorMapper` 移动到 `client/error_mapper.rs`，映射逻辑不变。
-- [ ] URL builder 和 health check 移动到 child modules，调用点不变。
-- [ ] 原 inline tests 移动到 `client_tests.rs`，断言不变。
-- [ ] Focused Vertex AI client tests 通过。
+- [ ] `src/sdk/types.rs` 声明 focused child modules 并 re-export 原 public type names。
+- [ ] message/tool/chat/usage DTOs 移动到对应 child modules，字段、derive、serde attributes 不变。
+- [ ] 原 inline tests 拆到 `src/sdk/types_tests/*.rs`，断言不变。
+- [ ] Focused SDK type tests 通过。
 - [ ] `cargo fmt --all -- --check` 和 `cargo check --all-features --locked` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a Vertex AI client module decomposition tranche for U-16 compliance.
+No runtime behavior change. This is an SDK type facade decomposition tranche for U-16 compliance.
