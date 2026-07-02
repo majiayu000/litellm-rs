@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@b1e5b85f` 仍有 22 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/observability/types.rs`，它是一个 856 行 observability type module，其中 production metric/log/span
-definitions 约 246 行，其余是 inline unit tests。
+`origin/main@a26d350c` 仍有 21 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/core/providers/v0/mod.rs`，它是一个 852 行 V0 provider module，其中 production provider config/model/runtime
+definitions 约 443 行，其余是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ definitions 约 246 行，其余是 inline unit tests。
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/observability/types.rs`，它当前 856 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `core::observability` 对 observability type 的 re-export 不变。
-- 将 root `types.rs` 保持为 production metric/log/span type definition file，并用 `#[path = "types_tests.rs"] mod tests;` 委托测试。
-- 将原 inline tests 移动到 `src/core/observability/types_tests.rs`，不改变断言或 fixtures。
-- 因 production definitions 本身低于 800 行，本 tranche 不拆 observability type public surface，避免无意义 facade churn。
+- 拆分 `src/core/providers/v0/mod.rs`，它当前 852 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `core::providers::v0` public provider config/model/provider paths 不变。
+- 将 root `mod.rs` 保持为 production V0 provider module，并用 `#[path = "tests.rs"] mod tests;` 委托测试。
+- 将原 inline tests 移动到 `src/core/providers/v0/tests.rs`，不改变断言或 fixtures。
+- 因 production definitions 本身低于 800 行，本 tranche 不拆 V0 provider production surface，避免无意义 facade churn。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 observability runtime behavior、logging/tracing/metrics modules、log-entry conversion behavior、serde fields 或 `core::observability` re-export surface。
-- 不改变 `MetricValue`、`ObservabilityLogRecord`、`LogLevel`、`TokenUsage`、`ErrorDetails`、`AlertCondition`、`AlertSeverity`、`AlertState`、`TraceSpan`、`SpanLog` 的字段、derive、serde 行为或 test assertions。
-- 不在本 PR 中处理其余 21 个大文件。
+- 不修改 V0 provider runtime behavior、chat handler、request/response transformation、health check、pricing、supported params、error mapping 或 public provider type fields。
+- 不改变 `V0Config`、`V0Model`、`V0Provider`、`parse_v0_model` 的 fields, derives, trait implementations, helper behavior, or test assertions。
+- 不在本 PR 中处理其余 20 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `core::observability::{MetricValue, ObservabilityLogRecord, LogEntry, LogLevel, TokenUsage, ErrorDetails, AlertCondition, AlertSeverity, AlertState, TraceSpan, SpanLog}` remain available through the original observability re-export path.
-2. Observability type fields, derives, serde attributes, and `LogEntry` conversion behavior remain unchanged.
-3. The root `types.rs` remains the production observability type definition file; tests are delegated only through `#[path = "types_tests.rs"]`.
-4. Original inline tests remain under `core::observability::types::tests`.
-5. No observability runtime, logging, metrics, redaction, destinations, histogram, or tracing modules are changed.
+1. `core::providers::v0::{V0Config, V0Model, V0Provider, parse_v0_model}` remain available from the original module path.
+2. V0 provider config fields, defaults, serialization, provider capabilities, parameter mapping, transformation, cost calculation, and error mapper behavior remain unchanged.
+3. The root `mod.rs` remains the production V0 provider module; tests are delegated only through `#[path = "tests.rs"]`.
+4. Original inline tests remain under `core::providers::v0::tests`.
+5. No V0 chat handler or provider runtime behavior is changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::observability::types --lib --all-features` must pass.
+7. `cargo test core::providers::v0 --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/observability/types.rs` keeps production observability type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`。
-- [ ] Original inline observability type tests move to `src/core/observability/types_tests.rs` without assertion changes。
-- [ ] Public observability type exports and behavior remain unchanged。
-- [ ] Both touched observability type files are below U-16's 800-line ceiling。
-- [ ] Focused observability type test suite 通过。
+- [ ] `src/core/providers/v0/mod.rs` keeps production V0 provider definitions and delegates tests with `#[path = "tests.rs"] mod tests;`。
+- [ ] Original inline V0 provider tests move to `src/core/providers/v0/tests.rs` without assertion changes。
+- [ ] Public V0 provider exports and behavior remain unchanged。
+- [ ] Both touched V0 provider files are below U-16's 800-line ceiling。
+- [ ] Focused V0 provider test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is an observability types test extraction for U-16 compliance.
+No runtime behavior change. This is a V0 provider test extraction for U-16 compliance.
