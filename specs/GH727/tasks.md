@@ -252,24 +252,30 @@ GH-727 / #727
 - [x] `SP727-T239` Owner: coordinator. Done when: `src/core/budget/alerts.rs` keeps production alert manager, storage, webhook config, alert config, and stats definitions, then delegates tests with `#[path = "alerts_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/budget/alerts.rs`.
 - [x] `SP727-T240` Owner: coordinator. Done when: original inline budget alert async tests move to `src/core/budget/alerts_tests.rs` without assertion changes. Verify: `rg -n "test_alert_manager_creation|test_create_soft_limit_alert|test_create_exceeded_alert|test_acknowledge_alerts_for_budget|test_clear_acknowledged_alerts|test_config_management|test_disabled_alerting" src/core/budget/alerts_tests.rs`.
 - [x] `SP727-T241` Owner: verification owner. Done when: both touched budget alert files are below U-16's 800-line ceiling and focused budget alert tests pass. Verify: `wc -l src/core/budget/alerts.rs src/core/budget/alerts_tests.rs`; `cargo test core::budget::alerts --lib --all-features` passed 14 tests.
-- [ ] `SP727-T242` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the budget alerts tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T242` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the budget alerts tranche. Verify: #865 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `33028f3d6f99`, #727 reopened, and #727 update comment.
+- [x] `SP727-T243` Owner: coordinator. Done when: after the budget alerts tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@33028f3d`, `src/core/virtual_keys/types.rs` is 825 lines and 11 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T244` Owner: coordinator. Done when: the virtual key types tranche documents why this slice is a test extraction rather than a production type facade split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T245` Owner: coordinator. Done when: `src/core/virtual_keys/types.rs` keeps production virtual key DTOs, permissions, rate-limit state, and key generation settings, then delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/virtual_keys/types.rs`.
+- [x] `SP727-T246` Owner: coordinator. Done when: original inline virtual key type tests move to `src/core/virtual_keys/types_tests.rs` without assertion changes. Verify: `rg -n "test_virtual_key_creation|test_permission_model_access_serialization|test_rate_limit_state_window_check|test_rate_limit_enforcement_simulation|test_budget_exceeded_simulation|test_key_with_all_permissions|test_key_tags_filtering" src/core/virtual_keys/types_tests.rs`.
+- [x] `SP727-T247` Owner: verification owner. Done when: both touched virtual key type files are below U-16's 800-line ceiling and focused virtual key type tests pass. Verify: `wc -l src/core/virtual_keys/types.rs src/core/virtual_keys/types_tests.rs`; `cargo test core::virtual_keys::types --lib --all-features` passed 44 tests.
+- [ ] `SP727-T248` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the virtual key types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the budget alerts file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the virtual key types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/budget/alerts.rs`
-- `src/core/budget/alerts_tests.rs`
+- `src/core/virtual_keys/types.rs`
+- `src/core/virtual_keys/types_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::budget::alerts --lib --all-features`
+- `cargo test core::virtual_keys::types --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -277,5 +283,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 budget alerts unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 virtual key types unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
