@@ -142,24 +142,30 @@ GH-727 / #727
 - [x] `SP727-T129` Owner: coordinator. Done when: `src/utils/event/tests.rs` keeps only shared imports, `TestData`, and child module declarations. Verify: `sed -n '1,80p' src/utils/event/tests.rs`.
 - [x] `SP727-T130` Owner: coordinator. Done when: original Event tests move into behavior-domain child modules without assertion changes. Verify: `rg -n "test_event_type_created|test_event_new|test_subscription_handle_new|test_broker_publish_single_subscriber|test_broker_concurrent_publish|test_subscriber_trait_counting|test_broker_config_default" src/utils/event/tests.rs src/utils/event/tests/*.rs`.
 - [x] `SP727-T131` Owner: verification owner. Done when: all touched Event test files are below U-16's 800-line ceiling and focused Event tests pass. Verify: `wc -l src/utils/event/tests.rs src/utils/event/tests/*.rs`; `cargo test utils::event::tests --lib --all-features`.
-- [ ] `SP727-T132` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Event tests tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T132` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Event tests tranche. Verify: #828 PR body, green PR CI, resolved GraphQL reviewThreads, merge commit `e7fd7a121a69`, and #727 update comment.
+- [x] `SP727-T133` Owner: coordinator. Done when: after the Event tests tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@e7fd7a121a69`, `src/core/router/tests/strategy_impl_tests.rs` is 880 lines and 29 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T134` Owner: coordinator. Done when: the Router strategy tests tranche documents behavior-domain test-suite splitting and the no-production-change boundary. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T135` Owner: coordinator. Done when: `src/core/router/tests/strategy_impl_tests.rs` keeps only shared imports, provider/deployment helpers, and child module declarations. Verify: `sed -n '1,80p' src/core/router/tests/strategy_impl_tests.rs`.
+- [x] `SP727-T136` Owner: coordinator. Done when: original Router strategy implementation tests move into strategy-domain child modules without assertion changes. Verify: `rg -n "test_build_routing_contexts_skips_missing_deployments|test_weighted_random_respects_weights|test_least_busy_selects_lowest_active|test_lowest_usage_selects_lowest_percentage|test_lowest_latency_selects_fastest|test_lowest_priority_selects_lowest_priority|test_rate_limit_aware_selects_most_headroom|test_round_robin_cycles_through_candidates|test_strategy_consistency" src/core/router/tests/strategy_impl_tests.rs src/core/router/tests/strategy_impl_tests/*.rs`.
+- [x] `SP727-T137` Owner: verification owner. Done when: all touched Router strategy test files are below U-16's 800-line ceiling and focused Router strategy tests pass. Verify: `wc -l src/core/router/tests/strategy_impl_tests.rs src/core/router/tests/strategy_impl_tests/*.rs`; `cargo test core::router::tests::strategy_impl_tests --lib --all-features`.
+- [ ] `SP727-T138` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Router strategy tests tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the Event test-suite file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the Router strategy test-suite file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/utils/event/tests.rs`
-- `src/utils/event/tests/*.rs`
+- `src/core/router/tests/strategy_impl_tests.rs`
+- `src/core/router/tests/strategy_impl_tests/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test utils::event::tests --lib --all-features`
+- `cargo test core::router::tests::strategy_impl_tests --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
