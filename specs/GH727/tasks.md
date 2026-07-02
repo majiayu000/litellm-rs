@@ -76,27 +76,30 @@ GH-727 / #727
 - [x] `SP727-T63` Owner: coordinator. Done when: `src/core/providers/bedrock/model_config.rs` builds `MODEL_CONFIGS` from `super::catalog::all_entries()` and preserves public helper signatures. Verify: `rg -n "all_entries|MODEL_CONFIGS|get_model_config|model_supports_capability|get_all_model_ids" src/core/providers/bedrock/model_config.rs`.
 - [x] `SP727-T64` Owner: coordinator. Done when: `bedrock/catalog` docs/tests/comments no longer describe the catalog as only a mirror of the legacy map. Verify: `git diff -- src/core/providers/bedrock/catalog/mod.rs src/core/providers/bedrock/catalog/tests.rs src/core/providers/bedrock/catalog/entries/generic_converse.rs`.
 - [x] `SP727-T65` Owner: verification owner. Done when: all touched Bedrock model config/catalog files are below U-16's 800-line ceiling and focused Bedrock tests pass. Verify: `wc -l src/core/providers/bedrock/model_config.rs src/core/providers/bedrock/catalog/*.rs src/core/providers/bedrock/catalog/entries/*.rs`; `cargo test core::providers::bedrock::model_config --lib --all-features`; `cargo test core::providers::bedrock::catalog --lib --all-features`.
-- [ ] `SP727-T66` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the Bedrock model_config tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
-- [ ] `SP727-T67` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: `git ls-files '*.rs' | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
+- [x] `SP727-T66` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the Bedrock model_config tranche. Verify: #816 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T67` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@d45b427dfb7c`, `src/core/router/tests/concurrency_edge_case_tests.rs` is 1079 lines and 39 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T68` Owner: coordinator. Done when: the router concurrency tranche documents behavior-domain test module splitting. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T69` Owner: coordinator. Done when: `src/core/router/tests/concurrency_edge_case_tests.rs` keeps only shared imports plus child module declarations. Verify: `sed -n '1,80p' src/core/router/tests/concurrency_edge_case_tests.rs`.
+- [x] `SP727-T70` Owner: coordinator. Done when: concurrent selection/recording, model-list swap, weighted random, EMA latency, cooldown expiry, and additional concurrency tests are moved to child modules without assertion changes. Verify: `rg -n "test_concurrent_select_deployment_simple_shuffle|test_set_model_list_with_concurrent_readers|test_weighted_random_statistical_distribution|test_ema_latency_first_measurement|test_cooldown_expiry_transitions_to_degraded|test_add_and_remove_deployment_concurrently" src/core/router/tests/concurrency_edge_case_tests/*.rs`.
+- [x] `SP727-T71` Owner: verification owner. Done when: all touched router concurrency test files are below U-16's 800-line ceiling and focused router concurrency tests pass. Verify: `wc -l src/core/router/tests/concurrency_edge_case_tests.rs src/core/router/tests/concurrency_edge_case_tests/*.rs`; `cargo test core::router::tests::concurrency_edge_case_tests --lib --all-features`.
+- [ ] `SP727-T72` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the router concurrency test tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
+- [ ] `SP727-T73` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: `git ls-files '*.rs' | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
 
 ## 并行拆分
 
-This is a serial writable lane for the Bedrock model_config/catalog file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the router concurrency test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/providers/bedrock/model_config.rs`
-- `src/core/providers/bedrock/catalog/mod.rs`
-- `src/core/providers/bedrock/catalog/tests.rs`
-- `src/core/providers/bedrock/catalog/entries/generic_converse.rs`
+- `src/core/router/tests/concurrency_edge_case_tests.rs`
+- `src/core/router/tests/concurrency_edge_case_tests/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test core::providers::bedrock::model_config --lib --all-features`
-- `cargo test core::providers::bedrock::catalog --lib --all-features`
+- `cargo test core::router::tests::concurrency_edge_case_tests --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 

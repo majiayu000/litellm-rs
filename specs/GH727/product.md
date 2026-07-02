@@ -6,7 +6,7 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@27ac684370e1` 仍有 40 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
+`origin/main@d45b427dfb7c` 仍有 39 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
 tranche 已经证明“小 PR、单文件族、保持行为不变”的方式可行，但 spec packet 仍按上一轮
 Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦。
 
@@ -15,7 +15,7 @@ Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦
 
 ## 全量目标
 
-- 把当前 40 个 over-800 Rust 文件逐步拆到 U-16 范围内。
+- 把当前 39 个 over-800 Rust 文件逐步拆到 U-16 范围内。
 - 每个 tranche 只拥有一个文件或一个紧密文件家族。
 - 拆分必须沿现有架构边界进行：测试按行为域拆、类型按领域 DTO/状态/配置拆、运行时代码按
   provider/route/repository/validator/adapter 职责拆。
@@ -34,39 +34,41 @@ Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/providers/bedrock/model_config.rs`，它当前 1118 行，是 #727 当前最大的 tracked Rust 文件。
-- 将重复的 legacy `MODEL_CONFIGS` map 改为从现有 `bedrock/catalog` entries 投影生成。
-- `model_config.rs` 保留 Bedrock family/API/config 类型和 public lookup facade：
-  - `get_model_config`
-  - `model_supports_capability`
-  - `get_all_model_ids`
-- 保持 Bedrock model routing public API、model IDs、capability flags、limits、pricing fields 和错误语义不变。
+- 拆分 `src/core/router/tests/concurrency_edge_case_tests.rs`，它当前 1079 行，是 #727 当前最大的 test-only suite。
+- 将 router concurrency/edge tests 按行为域拆成 child modules：
+  - concurrent selection and recording
+  - model-list swap atomicity
+  - weighted random distribution
+  - EMA latency edge cases
+  - cooldown expiry races
+  - additional concurrency edge cases
+- root test file 保留共享 imports 和 child `mod` declarations。
+- 保持原测试断言、helper 使用、routing behavior coverage 和 focused test path 不变。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不添加、删除或重命名 Bedrock model IDs。
-- 不修改 Bedrock request transformation、routing, pricing calculation, region validation, or model-id parsing behavior。
-- 不在本 PR 中处理其余 39 个大文件。
+- 不修改 router runtime logic、routing algorithms、deployment state handling 或测试断言。
+- 不在本 PR 中处理其余 38 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `BedrockModelFamily`, `BedrockApiType`, `ModelConfig`, `get_model_config`, `model_supports_capability`, and `get_all_model_ids` remain exported from `crate::core::providers::bedrock`.
-2. `get_model_config` still returns `ProviderError::model_not_found("bedrock", ...)` for unknown model IDs.
-3. Catalog projections must preserve model family, API type, streaming/tool/multimodal flags, context limits, output limits, and cost fields for every existing entry.
-4. Existing Bedrock catalog cross-reference tests and model_config tests must pass.
-5. `src/core/providers/bedrock/model_config.rs` and touched Bedrock catalog files must be below 800 lines.
-6. `cargo test core::providers::bedrock::model_config --lib --all-features` and `cargo test core::providers::bedrock::catalog --lib --all-features` must pass.
+1. Existing test functions continue to run under `core::router::tests::concurrency_edge_case_tests::*`.
+2. The split preserves all assertions and helper usage from the original file.
+3. Shared imports stay centralized in the root module and child modules import through `use super::*`.
+4. No router runtime code changes are included.
+5. `src/core/router/tests/concurrency_edge_case_tests.rs` and its child files must be below 800 lines.
+6. `cargo test core::router::tests::concurrency_edge_case_tests --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/providers/bedrock/model_config.rs` 使用 catalog projection 构建 `MODEL_CONFIGS`，不再内联重复 model table。
-- [ ] `bedrock/catalog` 文档从“legacy map 仍保留”更新为“legacy public facade projects from catalog”。
-- [ ] Existing Bedrock model_config and catalog tests 通过。
+- [ ] `src/core/router/tests/concurrency_edge_case_tests.rs` 声明 behavior-domain child modules。
+- [ ] 原测试按 concurrent selection、model-list swap、weighted random、EMA、cooldown、additional edge cases 拆入 child files，断言不变。
+- [ ] Focused router concurrency tests 通过。
 - [ ] `cargo fmt --all -- --check` 和 `cargo check --all-features --locked` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No intended runtime behavior change. This is a Bedrock model-config catalog projection tranche for U-16 compliance.
+No runtime behavior change. This is a router concurrency test-suite decomposition tranche for U-16 compliance.
