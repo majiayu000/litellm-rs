@@ -10,10 +10,11 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@5a4c42c15b86`, 31 tracked Rust files remain over the U-16 800-line ceiling.
-The current largest file is `src/core/integrations/observability/opentelemetry.rs` at
-921 lines. It combines configuration DTOs, span data types, OTLP export helpers,
-`OpenTelemetryIntegration`, and its unit tests in one module.
+At `origin/main@edec83d71bdd`, 30 tracked Rust files remain over the U-16 800-line ceiling.
+The current largest file is `src/utils/event/tests.rs` at 889 lines. It is a
+test-only suite that mixes event type, event builder, subscription handle,
+broker lifecycle, publish/drop, concurrency, subscriber trait, edge-case, and
+config coverage in one module.
 
 ## Architecture Principles
 
@@ -38,58 +39,55 @@ The current largest file is `src/core/integrations/observability/opentelemetry.r
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: OpenTelemetry Runtime Split
+## Current Tranche: Event Test-Suite Split
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Facade | `src/core/integrations/observability/opentelemetry.rs` | Exposes config, integration, span/event/status/kind, and attribute value names. | Public import paths must remain compatible. |
-| Config | `opentelemetry/config.rs` | Owns serde defaults and `OpenTelemetryConfig::default`. | Config defaults are a stable API surface. |
-| Span model | `opentelemetry/span.rs` | Owns span/event/status/kind/attribute values and ID generation. | Span lifecycle and tests depend on these helpers. |
-| Exporter | `opentelemetry/exporter.rs` | Owns OTLP payload mapping and HTTP export. | Export semantics and error propagation must not silently degrade. |
-| Integration | `opentelemetry/integration_impl.rs` | Owns active span state, pending span batch, and `Integration` trait implementation. | Runtime state transitions need to remain local and testable. |
-| Tests | `opentelemetry/tests.rs` | Contains the moved OpenTelemetry unit tests. | Focused tests should remain under the original module path. |
+| Test root | `src/utils/event/tests.rs` | Contains all event tests inline. | It is 889 lines and mixes unrelated behavior domains. |
+| Production broker | `src/utils/event/broker.rs` | Implements EventBroker and stats behavior. | Production code must remain untouched in this tranche. |
+| Production types | `src/utils/event/types.rs` | Implements EventType, Event, Subscriber, and SubscriptionHandle. | Type behavior is covered by moved tests only. |
+| Module mount | `src/utils/event/mod.rs` | Mounts `#[cfg(test)] mod tests;`. | The focused test path must remain `utils::event::tests`. |
 
 ### Design
 
-1. Keep `opentelemetry.rs` as a root facade with only child module declarations and `pub use` exports.
-2. Move `OpenTelemetryConfig` and its default helper functions into `config.rs` without changing serde attributes or defaults.
-3. Move `SpanStatus`, `SpanKind`, `Span`, `SpanEvent`, `AttributeValue`, conversions, and ID generation into `span.rs`.
-4. Move `export_spans` and `build_otlp_payload` into `exporter.rs`; keep them module-internal because only the integration and tests need them.
-5. Move `ActiveSpan`, `SpanBatch`, `OpenTelemetryIntegration`, and `impl Integration for OpenTelemetryIntegration` into `integration_impl.rs`.
-6. Move the existing unit tests into `tests.rs` and import internal helpers through sibling modules only for test coverage.
-7. Do not change endpoint defaults, payload field names, span attributes, batch flush conditions, or shutdown behavior.
-8. Fix the review-identified partial-sampling bug by deriving a deterministic fraction from nanoseconds modulo `1_000_000`; cover that helper with focused unit tests.
+1. Keep `src/utils/event/tests.rs` as the shared test root with common imports, `TestData`, and child module declarations only.
+2. Add `event_type_tests.rs` for EventType predicates, display, equality, and clone coverage.
+3. Add `event_tests.rs` for Event constructors, builder methods, type checks, IDs, and clone coverage.
+4. Add `subscription_handle_tests.rs` for handle creation, cancellation, default, and unique IDs.
+5. Add `broker_creation_tests.rs` and `broker_subscription_tests.rs` for broker construction, subscribe, unsubscribe, and clear behavior.
+6. Add `broker_publish_tests.rs` for publish, non-blocking delivery, closed-channel cleanup, and stats behavior.
+7. Add `broker_concurrency_tests.rs` for concurrent subscribe, publish, subscribe/unsubscribe, and clear behavior.
+8. Add `subscriber_trait_tests.rs`, `broker_edge_case_tests.rs`, and `broker_config_tests.rs` for trait, edge-case, and config coverage.
+9. Do not edit production event modules.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `opentelemetry.rs` | Root facade declares focused modules and re-exports the original public names. |
-| P2 | `config.rs`, `span.rs`, `exporter.rs`, `integration_impl.rs` | Responsibilities are separated without changing public DTO fields or trait method signatures. |
-| P3 | file size | `wc -l src/core/integrations/observability/opentelemetry.rs src/core/integrations/observability/opentelemetry/*.rs` shows every touched file below 800. |
-| P4 | sampling bug fix | `test_sampling_fraction_from_nanos` proves partial sampling can produce fractions other than zero. |
-| P5 | focused test suite | `cargo test core::integrations::observability::opentelemetry --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/integrations/observability/opentelemetry.rs`. |
+| P1 | `tests.rs` | Root keeps shared helpers and child module declarations only. |
+| P2 | `tests/*.rs` | Original test functions remain discoverable by name under behavior-domain modules. |
+| P3 | file size | `wc -l src/utils/event/tests.rs src/utils/event/tests/*.rs` shows every touched file below 800. |
+| P4 | focused test suite | `cargo test utils::event::tests --lib --all-features` runs the moved tests. |
+| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/utils/event/tests.rs`. |
 
 ## Risks
 
-- `#[async_trait]` and derive attributes must stay attached to the moved impl/types; losing them changes compilation and trait compatibility.
-- Internal exporter/span helpers need narrow visibility for sibling tests without expanding the public API.
-- Export failures must continue returning errors from `flush`; background batch export may still log failures as before.
-- Root facade re-exports must keep downstream imports compiling.
+- Child modules must import the shared parent helpers correctly; losing `TestData` or async imports breaks discovery.
+- Concurrent tests rely on the same timing windows, barriers, and atomic counters; assertions and sleeps should remain unchanged.
+- Splitting test modules must not change the public event module mount path.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test core::integrations::observability::opentelemetry --lib --all-features`
+- [ ] `cargo test utils::event::tests --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
-- [ ] Line-count proof for `src/core/integrations/observability/opentelemetry.rs` and `src/core/integrations/observability/opentelemetry/*.rs`
+- [ ] Line-count proof for `src/utils/event/tests.rs` and `src/utils/event/tests/*.rs`
 
 ## Rollback
 
-Revert the OpenTelemetry module split, the sampling fraction helper fix, and `specs/GH727`
-edits. No schema changes are involved.
+Revert the Event test-suite split and `specs/GH727` edits. No production code,
+schema changes, or runtime behavior changes are involved.

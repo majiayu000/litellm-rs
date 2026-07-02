@@ -136,24 +136,30 @@ GH-727 / #727
 - [x] `SP727-T123` Owner: coordinator. Done when: `src/core/integrations/observability/opentelemetry.rs` becomes a small root facade that declares focused child modules and re-exports the original public names. Verify: `sed -n '1,80p' src/core/integrations/observability/opentelemetry.rs`.
 - [x] `SP727-T124` Owner: coordinator. Done when: `OpenTelemetryConfig`, span data types, OTLP exporter helpers, and `OpenTelemetryIntegration` move into focused child modules without changing public fields, derive attributes, serde defaults, or trait method signatures. Verify: `rg -n "pub struct OpenTelemetryConfig|pub enum SpanStatus|async fn export_spans|impl Integration for OpenTelemetryIntegration" src/core/integrations/observability/opentelemetry.rs src/core/integrations/observability/opentelemetry/*.rs`.
 - [x] `SP727-T125` Owner: verification owner. Done when: all touched OpenTelemetry files are below U-16's 800-line ceiling and focused OpenTelemetry tests pass. Verify: `wc -l src/core/integrations/observability/opentelemetry.rs src/core/integrations/observability/opentelemetry/*.rs`; `cargo test core::integrations::observability::opentelemetry --lib --all-features`.
-- [ ] `SP727-T126` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the OpenTelemetry tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T126` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the OpenTelemetry tranche. Verify: #825 PR body, green PR CI, resolved GraphQL reviewThreads, merge commit `edec83d71bdd`, and #727 update comment.
+- [x] `SP727-T127` Owner: coordinator. Done when: after the OpenTelemetry tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@edec83d71bdd`, `src/utils/event/tests.rs` is 889 lines and 30 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T128` Owner: coordinator. Done when: the Event tests tranche documents behavior-domain test-suite splitting and the no-production-change boundary. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T129` Owner: coordinator. Done when: `src/utils/event/tests.rs` keeps only shared imports, `TestData`, and child module declarations. Verify: `sed -n '1,80p' src/utils/event/tests.rs`.
+- [x] `SP727-T130` Owner: coordinator. Done when: original Event tests move into behavior-domain child modules without assertion changes. Verify: `rg -n "test_event_type_created|test_event_new|test_subscription_handle_new|test_broker_publish_single_subscriber|test_broker_concurrent_publish|test_subscriber_trait_counting|test_broker_config_default" src/utils/event/tests.rs src/utils/event/tests/*.rs`.
+- [x] `SP727-T131` Owner: verification owner. Done when: all touched Event test files are below U-16's 800-line ceiling and focused Event tests pass. Verify: `wc -l src/utils/event/tests.rs src/utils/event/tests/*.rs`; `cargo test utils::event::tests --lib --all-features`.
+- [ ] `SP727-T132` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Event tests tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the OpenTelemetry integration file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the Event test-suite file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/integrations/observability/opentelemetry.rs`
-- `src/core/integrations/observability/opentelemetry/*.rs`
+- `src/utils/event/tests.rs`
+- `src/utils/event/tests/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::integrations::observability::opentelemetry --lib --all-features`
+- `cargo test utils::event::tests --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -161,5 +167,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 runtime integration split tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 test-suite split tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
