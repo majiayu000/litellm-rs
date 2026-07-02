@@ -240,24 +240,30 @@ GH-727 / #727
 - [x] `SP727-T227` Owner: coordinator. Done when: `src/core/teams/manager.rs` keeps production team manager DTOs, methods, and validation helper, then delegates tests with `#[path = "manager_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/teams/manager.rs`.
 - [x] `SP727-T228` Owner: coordinator. Done when: original inline team manager async tests move to `src/core/teams/manager_tests.rs` without assertion changes. Verify: `rg -n "test_create_team|test_create_duplicate_team|test_update_member_role|test_cannot_remove_last_owner|test_get_team_usage|test_is_team_admin" src/core/teams/manager_tests.rs`.
 - [x] `SP727-T229` Owner: verification owner. Done when: both touched team manager files are below U-16's 800-line ceiling and focused team manager tests pass. Verify: `wc -l src/core/teams/manager.rs src/core/teams/manager_tests.rs`; `cargo test core::teams::manager --lib --all-features` passed 16 tests.
-- [ ] `SP727-T230` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the team manager tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T230` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the team manager tranche. Verify: #863 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `720c253227c3`, #727 reopened, and #727 update comment.
+- [x] `SP727-T231` Owner: coordinator. Done when: after the team manager tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@720c2532`, `src/core/models/user/types.rs` is 828 lines and 13 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T232` Owner: coordinator. Done when: the user types tranche documents why this slice is a test extraction rather than a production type facade split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T233` Owner: coordinator. Done when: `src/core/models/user/types.rs` keeps production user type definitions, enums, serde attributes, and helper methods, then delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/models/user/types.rs`.
+- [x] `SP727-T234` Owner: coordinator. Done when: original inline user type tests move to `src/core/models/user/types_tests.rs` without assertion changes. Verify: `rg -n "test_user_role_from_str|test_user_profile_full|test_user_new|test_user_has_role_super_admin_has_all|test_user_update_usage_accumulates|test_user_serialize_skips_password" src/core/models/user/types_tests.rs`.
+- [x] `SP727-T235` Owner: verification owner. Done when: both touched user type files are below U-16's 800-line ceiling and focused user type tests pass. Verify: `wc -l src/core/models/user/types.rs src/core/models/user/types_tests.rs`; `cargo test core::models::user::types --lib --all-features` passed 49 tests.
+- [ ] `SP727-T236` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the user types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the team manager file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the user types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/teams/manager.rs`
-- `src/core/teams/manager_tests.rs`
+- `src/core/models/user/types.rs`
+- `src/core/models/user/types_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::teams::manager --lib --all-features`
+- `cargo test core::models::user::types --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -265,5 +271,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 team manager unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 user types unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

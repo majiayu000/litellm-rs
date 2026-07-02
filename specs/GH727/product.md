@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@c0aa3a6f` 仍有 14 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/teams/manager.rs`，它是一个 830 行 team business-logic manager；生产方法到第 444 行，
-超标来源是 inline async unit tests。
+`origin/main@720c2532` 仍有 13 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件之一是
+`src/core/models/user/types.rs`，它是一个 828 行 public user type file；生产类型和方法到第 274 行，
+超标来源是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ GH-727 / #727
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/teams/manager.rs`，它当前 830 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `src/core/teams/manager.rs` 作为 `TeamManager`、request DTOs、usage stats 和 validation helper 的原始模块路径。
-- 将原 inline async unit tests 移动到 `src/core/teams/manager_tests.rs`，并从 root 用 `#[path = "manager_tests.rs"] mod tests;` 委托。
-- 不改变 team creation/update/delete/member/usage/admin-check semantics、repository call order、validation error strings 或测试断言。
+- 拆分 `src/core/models/user/types.rs`，它当前 828 行，是 #727 当前最大的 tracked Rust 文件之一。
+- 保留 `src/core/models/user/types.rs` 作为 `User`、`UserRole`、`UserStatus`、`UserRateLimits`、`UserProfile` 和 user helper methods 的原始模块路径。
+- 将原 inline unit tests 移动到 `src/core/models/user/types_tests.rs`，并从 root 用 `#[path = "types_tests.rs"] mod tests;` 委托。
+- 不改变 user serde names、password serialization skip、role hierarchy、team membership mutations、email/two-factor state changes、usage accumulation 或测试断言。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不拆分 `TeamManager` production methods into operation modules；本文件超标不是生产逻辑本身造成的。
-- 不修改 team repository trait/implementation, team model types, storage, authorization, billing, or usage accounting runtime behavior。
-- 不改变 async unit test assertions, in-memory repository fixture, member roles, UUID setup, last-owner checks, or expected errors。
-- 不在本 PR 中处理其余 13 个大文件。
+- 不拆分 user production types 到 facade 子模块；本文件超标不是生产定义造成的。
+- 不修改 user preferences/session/activity modules, auth, storage, team, billing, or API runtime behavior。
+- 不改变 unit test assertions, role strings, serialized JSON expectations, UUID/team setup, password redaction check, or usage stats expectations。
+- 不在本 PR 中处理其余 12 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/core/teams/manager.rs` keeps all existing public team manager type, request DTO, and method names at the same module path.
-2. Team name validation, duplicate-name conflict detection, member role updates, last-owner protection, and usage stats stay unchanged.
-3. Repository call order and error propagation stay unchanged.
+1. `src/core/models/user/types.rs` keeps all existing public user type, enum, field, and method names at the same module path.
+2. User role serialization, display, parsing, and hierarchy semantics stay unchanged.
+3. Password redaction, email verification, two-factor flags, team membership, metadata touch behavior, and usage accumulation stay unchanged.
 4. Inline tests move without assertion or fixture changes and continue to use `super::*`.
-5. No team repository, model, storage, auth, billing, or usage runtime behavior is changed.
+5. No user runtime, storage, auth, team, billing, or API behavior is changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::teams::manager --lib --all-features` must pass.
+7. `cargo test core::models::user::types --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/teams/manager.rs` delegates tests to `src/core/teams/manager_tests.rs`。
-- [ ] Original team manager tests move without assertion changes。
-- [ ] Team manager production methods, request DTOs, and validation helper stay in the original module path。
-- [ ] All touched team manager files are below U-16's 800-line ceiling。
-- [ ] Focused team manager test suite 通过。
+- [ ] `src/core/models/user/types.rs` delegates tests to `src/core/models/user/types_tests.rs`。
+- [ ] Original user type tests move without assertion changes。
+- [ ] User type definitions, enums, serde attributes, and helper methods stay in the original module path。
+- [ ] All touched user type files are below U-16's 800-line ceiling。
+- [ ] Focused user type test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a team manager unit-test extraction for U-16 compliance.
+No runtime behavior change. This is a user type unit-test extraction for U-16 compliance.
