@@ -6,9 +6,10 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@38b3140aeeca` 仍有 28 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/auth/oauth/session.rs`，它是一个 869 行 runtime session module，把 OAuth session model、
-session store trait/error、in-memory store、Redis store 和 inline tests 全部放在一个文件里。
+`origin/main@2d35b72e1031` 仍有 27 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/utils/data/validation/request_validator.rs`，它是一个 868 行 runtime validator module，把
+chat request validation、message/content-part validation、name/media helper validation 和 inline tests
+全部放在一个文件里。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,42 +35,42 @@ session store trait/error、in-memory store、Redis store 和 inline tests 全�
 
 ## 本 tranche 目标
 
-- 拆分 `src/auth/oauth/session.rs`，它当前 869 行，是 #727 当前最大的 runtime module。
-- 保留 `src/auth/oauth/mod.rs` 的 `pub mod session;` 和公开导入路径不变。
-- 将 root `session.rs` 缩小为 facade，只声明 child modules 并 re-export `OAuthSession`、`SessionStore`、
-  `SessionError`、`InMemorySessionStore` 和 feature-gated `RedisSessionStore`。
-- 按职责移动实现到 `src/auth/oauth/session/*.rs`：
-  `model.rs`、`store.rs`、`memory_store.rs`、`redis_store.rs`、`tests.rs`。
-- 保持 session expiration、token update、state deletion、user session indexing、Redis key/TTL behavior 和 tests 覆盖不变。
+- 拆分 `src/utils/data/validation/request_validator.rs`，它当前 868 行，是 #727 当前最大的 runtime validator module。
+- 保留 `src/utils/data/validation/mod.rs` 的 `pub use request_validator::RequestValidator;` 和公开导入路径不变。
+- 将 root `request_validator.rs` 缩小为 facade，只声明 child modules 并保留 public `RequestValidator` 类型。
+- 按职责移动实现到 `src/utils/data/validation/request_validator/*.rs`：
+  `chat.rs`、`names.rs`、`media.rs`、`tests.rs`。
+- 保持 chat request、message role、message content、content part、model/function name、image URL/base64 和 audio validation 的错误语义不变。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 OAuth handlers、middleware、client、provider discovery 或 user creation logic。
-- 不改变 session serialization、expiration cleanup、state CSRF deletion、Redis key prefix 或 TTL semantics。
-- 不在本 PR 中处理其余 27 个大文件。
+- 不修改 OpenAI request/response model definitions、route handlers 或 caller-facing validation contracts。
+- 不改变 validator error strings、regex patterns、base64 decoding、URL parsing 或 supported audio formats。
+- 不在本 PR 中处理其余 26 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `auth::oauth::session::OAuthSession`, `SessionStore`, `SessionError`, `InMemorySessionStore`, and Redis-gated `RedisSessionStore` remain available from the original module path.
-2. `OAuthSession` fields, serde attributes, builder methods, expiration checks, `touch`, `extend`, and `update_token` semantics remain unchanged.
-3. `SessionStore` trait method signatures remain unchanged.
-4. In-memory store session/state cleanup semantics remain unchanged.
-5. Redis store key format, set membership, TTL, serialization, and `get_del` state behavior remain unchanged.
+1. `utils::data::validation::RequestValidator` remains available from the original public module path.
+2. `validate_chat_completion_request` keeps the same public signature and validates model, messages, max tokens, and temperature in the same order.
+3. Message role, content, content-part, model-name, function-name, image URL/base64, and audio validation errors remain `GatewayError::Validation` with unchanged messages.
+4. Regex compilation failures remain `GatewayError::Internal`.
+5. The moved inline tests remain under `utils::data::validation::request_validator::tests`.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test auth::oauth::session --lib --all-features` must pass.
+7. `cargo test utils::data::validation::request_validator --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/auth/oauth/session.rs` is a small facade with module declarations and public re-exports。
-- [ ] Session model, store trait/error, in-memory store, Redis store, and tests move under `src/auth/oauth/session/*.rs` without API path changes。
-- [ ] OAuth session expiration, state, cleanup, user-session, Redis, and serialization coverage remains present。
-- [ ] All touched OAuth session files are below U-16's 800-line ceiling。
-- [ ] Focused OAuth session test suite 通过。
+- [ ] `src/utils/data/validation/request_validator.rs` is a small facade with module declarations and the original public `RequestValidator` type。
+- [ ] Chat request/message/content-part validation moves to `request_validator/chat.rs` without signature or error-message changes。
+- [ ] Model/function name and media/base64/audio validation move to focused child modules without behavior changes。
+- [ ] Original inline request validator tests move to `request_validator/tests.rs` without assertion changes。
+- [ ] All touched request validator files are below U-16's 800-line ceiling。
+- [ ] Focused request validator test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is an OAuth session module split for U-16 compliance.
+No runtime behavior change. This is a request validator module split for U-16 compliance.

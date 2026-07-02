@@ -155,24 +155,31 @@ GH-727 / #727
 - [x] `SP727-T142` Owner: coordinator. Done when: `OAuthSession`, `SessionStore`, and `SessionError` move into focused child modules without changing public fields, serde attributes, trait signatures, or error variants. Verify: `rg -n "pub struct OAuthSession|pub trait SessionStore|pub enum SessionError" src/auth/oauth/session.rs src/auth/oauth/session/*.rs`.
 - [x] `SP727-T143` Owner: coordinator. Done when: in-memory and Redis session stores move into focused child modules while preserving cleanup, state deletion, user-session indexing, Redis key, TTL, and serialization behavior. Verify: `rg -n "pub struct InMemorySessionStore|impl SessionStore for InMemorySessionStore|pub struct RedisSessionStore|impl SessionStore for RedisSessionStore|get_del|user_sessions_key" src/auth/oauth/session.rs src/auth/oauth/session/*.rs`.
 - [x] `SP727-T144` Owner: verification owner. Done when: all touched OAuth session files are below U-16's 800-line ceiling and focused OAuth session tests pass. Verify: `wc -l src/auth/oauth/session.rs src/auth/oauth/session/*.rs`; `cargo test auth::oauth::session --lib --all-features`.
-- [ ] `SP727-T145` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the OAuth session tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T145` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the OAuth session tranche. Verify: #849 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `2d35b72e1031`, and #727 update comment.
+- [x] `SP727-T146` Owner: coordinator. Done when: after the OAuth session tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@2d35b72e1031`, `src/utils/data/validation/request_validator.rs` is 868 lines and 27 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T147` Owner: coordinator. Done when: the request validator tranche documents runtime ownership boundaries for the facade, chat/message validation, name validation, media validation, and tests. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T148` Owner: coordinator. Done when: `src/utils/data/validation/request_validator.rs` becomes a small facade that declares focused child modules and keeps the original public `RequestValidator` type. Verify: `sed -n '1,80p' src/utils/data/validation/request_validator.rs`.
+- [x] `SP727-T149` Owner: coordinator. Done when: chat/message/content-part, model/function name, and image/base64/audio validation logic move into focused child modules while preserving public signature, regex patterns, error strings, and validation order. Verify: `rg -n "validate_chat_completion_request|validate_chat_message|validate_content_part|validate_model_name|validate_function_name|validate_image_url|validate_audio_format" src/utils/data/validation/request_validator.rs src/utils/data/validation/request_validator/*.rs`.
+- [x] `SP727-T150` Owner: coordinator. Done when: original inline request validator tests move to `src/utils/data/validation/request_validator/tests.rs` without assertion changes. Verify: `rg -n "test_validate_chat_completion_valid|test_validate_model_name_valid|test_validate_image_url_valid_base64|test_validate_content_part_image_valid_details|test_validate_tool_message_valid" src/utils/data/validation/request_validator/tests.rs`.
+- [x] `SP727-T151` Owner: verification owner. Done when: all touched request validator files are below U-16's 800-line ceiling and focused request validator tests pass. Verify: `wc -l src/utils/data/validation/request_validator.rs src/utils/data/validation/request_validator/*.rs`; `cargo test utils::data::validation::request_validator --lib --all-features`.
+- [ ] `SP727-T152` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the request validator tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the OAuth session file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the request validator file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/auth/oauth/session.rs`
-- `src/auth/oauth/session/*.rs`
+- `src/utils/data/validation/request_validator.rs`
+- `src/utils/data/validation/request_validator/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test auth::oauth::session --lib --all-features`
+- `cargo test utils::data::validation::request_validator --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -180,5 +187,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 runtime module split tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 runtime validator module split tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
