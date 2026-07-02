@@ -186,24 +186,30 @@ GH-727 / #727
 - [x] `SP727-T173` Owner: coordinator. Done when: `src/core/analytics/reports.rs` keeps production analytics report definitions and delegates tests with `#[path = "reports_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/analytics/reports.rs`.
 - [x] `SP727-T174` Owner: coordinator. Done when: original inline analytics report tests move to `src/core/analytics/reports_tests.rs` without assertion changes. Verify: `rg -n "test_report_template_creation|test_generated_report_serialization|test_chart_data_creation|test_data_point_creation|test_report_summary_creation|test_full_report_workflow" src/core/analytics/reports_tests.rs`.
 - [x] `SP727-T175` Owner: verification owner. Done when: both touched analytics report files are below U-16's 800-line ceiling and focused analytics report tests pass. Verify: `wc -l src/core/analytics/reports.rs src/core/analytics/reports_tests.rs`; `cargo test core::analytics::reports --lib --all-features`.
-- [ ] `SP727-T176` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the analytics reports tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T176` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the analytics reports tranche. Verify: #854 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `b1e5b85f463f`, and #727 update comment.
+- [x] `SP727-T177` Owner: coordinator. Done when: after the analytics reports tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@b1e5b85f463f`, `src/core/observability/types.rs` is 856 lines and 22 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T178` Owner: coordinator. Done when: the observability types tranche documents why this slice is a test extraction rather than a production facade split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T179` Owner: coordinator. Done when: `src/core/observability/types.rs` keeps production observability type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/observability/types.rs`.
+- [x] `SP727-T180` Owner: coordinator. Done when: original inline observability type tests move to `src/core/observability/types_tests.rs` without assertion changes. Verify: `rg -n "test_metric_value_counter|test_log_level_variants|test_token_usage_creation|test_error_details_creation|test_alert_state_firing|test_log_entry_full|test_trace_span_creation|test_span_log_creation|test_complete_trace_scenario" src/core/observability/types_tests.rs`.
+- [x] `SP727-T181` Owner: verification owner. Done when: both touched observability type files are below U-16's 800-line ceiling and focused observability type tests pass. Verify: `wc -l src/core/observability/types.rs src/core/observability/types_tests.rs`; `cargo test core::observability::types --lib --all-features`.
+- [ ] `SP727-T182` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the observability types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the analytics reports file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the observability types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/analytics/reports.rs`
-- `src/core/analytics/reports_tests.rs`
+- `src/core/observability/types.rs`
+- `src/core/observability/types_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::analytics::reports --lib --all-features`
+- `cargo test core::observability::types --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -211,5 +217,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 analytics reports test-extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 observability types test-extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
