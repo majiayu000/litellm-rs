@@ -82,24 +82,32 @@ GH-727 / #727
 - [x] `SP727-T69` Owner: coordinator. Done when: `src/core/router/tests/concurrency_edge_case_tests.rs` keeps only shared imports plus child module declarations. Verify: `sed -n '1,80p' src/core/router/tests/concurrency_edge_case_tests.rs`.
 - [x] `SP727-T70` Owner: coordinator. Done when: concurrent selection/recording, model-list swap, weighted random, EMA latency, cooldown expiry, and additional concurrency tests are moved to child modules without assertion changes. Verify: `rg -n "test_concurrent_select_deployment_simple_shuffle|test_set_model_list_with_concurrent_readers|test_weighted_random_statistical_distribution|test_ema_latency_first_measurement|test_cooldown_expiry_transitions_to_degraded|test_add_and_remove_deployment_concurrently" src/core/router/tests/concurrency_edge_case_tests/*.rs`.
 - [x] `SP727-T71` Owner: verification owner. Done when: all touched router concurrency test files are below U-16's 800-line ceiling and focused router concurrency tests pass. Verify: `wc -l src/core/router/tests/concurrency_edge_case_tests.rs src/core/router/tests/concurrency_edge_case_tests/*.rs`; `cargo test core::router::tests::concurrency_edge_case_tests --lib --all-features`.
-- [ ] `SP727-T72` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the router concurrency test tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
-- [ ] `SP727-T73` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: `git ls-files '*.rs' | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr`.
+- [x] `SP727-T72` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the router concurrency test tranche. Verify: #817 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T73` Owner: coordinator. Done when: after this tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@750bbe437884`, `src/core/analytics/types.rs` is 1071 lines and 38 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T74` Owner: coordinator. Done when: the analytics types tranche documents a facade-compatible split for request/provider metrics, usage DTOs, and cost/budget DTOs. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T75` Owner: coordinator. Done when: `src/core/analytics/types.rs` becomes a root facade that declares focused child modules and re-exports every original public type name. Verify: `sed -n '1,80p' src/core/analytics/types.rs`.
+- [x] `SP727-T76` Owner: coordinator. Done when: analytics production DTOs move into `src/core/analytics/types/request.rs`, `usage.rs`, and `cost.rs` without field, derive, or serde changes. Verify: `rg -n "pub struct" src/core/analytics/types.rs src/core/analytics/types/*.rs`.
+- [x] `SP727-T77` Owner: coordinator. Done when: original inline analytics type tests move under `src/core/analytics/types_tests/` without assertion changes. Verify: `rg -n "test_request_metrics_creation|test_user_metrics_creation|test_cost_metrics_creation|test_full_analytics_workflow" src/core/analytics/types_tests/*.rs`.
+- [x] `SP727-T78` Owner: verification owner. Done when: all touched analytics type/test files are below U-16's 800-line ceiling and focused analytics type tests pass. Verify: `wc -l src/core/analytics/types.rs src/core/analytics/types/*.rs src/core/analytics/types_tests.rs src/core/analytics/types_tests/*.rs`; `cargo test core::analytics::types --lib --all-features`.
+- [ ] `SP727-T79` Owner: verification owner. Done when: formatting, all-features check, PR CI, and review-thread gate pass for the analytics types tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the router concurrency test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the analytics types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/router/tests/concurrency_edge_case_tests.rs`
-- `src/core/router/tests/concurrency_edge_case_tests/*.rs`
+- `src/core/analytics/types.rs`
+- `src/core/analytics/types/*.rs`
+- `src/core/analytics/types_tests.rs`
+- `src/core/analytics/types_tests/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test core::router::tests::concurrency_edge_case_tests --lib --all-features`
+- `cargo test core::analytics::types --lib --all-features`
 - `cargo check --all-features --locked`
 - PR CI and GraphQL review-thread gate before merge.
 

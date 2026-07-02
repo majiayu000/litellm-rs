@@ -10,7 +10,7 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@d45b427dfb7c`, 39 Rust files remain over the U-16 800-line ceiling.
+At `origin/main@750bbe437884`, 38 Rust files remain over the U-16 800-line ceiling.
 The highest-risk files are not all equivalent: some are pure test suites, some are public
 type facades, and some are runtime orchestrators. They need different split patterns.
 
@@ -37,54 +37,58 @@ type facades, and some are runtime orchestrators. They need different split patt
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Router Concurrency Test Suite
+## Current Tranche: Analytics Types Facade
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Router concurrency suite | `src/core/router/tests/concurrency_edge_case_tests.rs` | Contains concurrent selection, model-list swapping, weighted random, EMA, cooldown, and additional edge-case tests. | The file is 1079 lines and already has clear behavior-section boundaries. |
-| Router test module | `src/core/router/tests/mod.rs` | Includes `mod concurrency_edge_case_tests;`. | The root module path should remain stable; the split can happen under a child directory. |
-| Shared helpers | `router_tests::create_test_deployment`, router config/deployment/strategy imports | Shared by multiple test groups. | Keep shared imports in the root test module and have child modules import `super::*`. |
+| Analytics type facade | `src/core/analytics/types.rs` | Defines request/provider, user usage, cost, and budget DTOs plus inline tests. | The file is 1071 lines and is a Lane B public type facade. |
+| Analytics module exports | `src/core/analytics/mod.rs` | Re-exports all analytics DTOs from `types`. | Root `types.rs` must keep the original public names so downstream imports remain compatible. |
+| Analytics consumers | `collector.rs`, `engine.rs`, `optimizer.rs` | Import DTOs through `super::types`. | The split can be private child modules with facade re-exports; no runtime modules should need edits. |
 
 ### Design
 
-1. Keep `src/core/router/tests/concurrency_edge_case_tests.rs` as the root test module.
-2. Move each existing behavior section into a child file under `src/core/router/tests/concurrency_edge_case_tests/`:
-   - `concurrent_selection_tests.rs`
-   - `model_list_swap_tests.rs`
-   - `weighted_random_tests.rs`
-   - `ema_latency_tests.rs`
-   - `cooldown_expiry_tests.rs`
-   - `additional_edge_case_tests.rs`
-3. Root module keeps the doc comment, `#![allow(deprecated)]`, shared imports, and `mod` declarations.
-4. Child modules use `use super::*;` and keep original assertions unchanged.
-5. Do not edit router runtime code or `src/core/router/tests/mod.rs`.
+1. Keep `src/core/analytics/types.rs` as the root facade.
+2. Move public DTOs into private child modules under `src/core/analytics/types/`:
+   - `request.rs`: `AnalyticsRequestMetrics`, `ProviderMetrics`
+   - `usage.rs`: `UserMetrics`, `TokenUsage`, `ModelUsage`, `UsagePatterns`,
+     `RequestSizeDistribution`, `SeasonalTrend`
+   - `cost.rs`: `CostBreakdown`, `DailyCost`, `CostMetrics`, `CostTrend`,
+     `BudgetUtilization`
+3. Root facade declares the child modules and `pub use`s every original public type name.
+4. Move original inline tests into `src/core/analytics/types_tests/`:
+   - `request_tests.rs`
+   - `usage_tests.rs`
+   - `cost_tests.rs`
+   - `workflow_tests.rs`
+5. Do not edit analytics runtime modules or `src/core/analytics/mod.rs` unless compilation proves a facade compatibility gap.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | root `concurrency_edge_case_tests.rs` | Keeps shared imports and discovers all child modules. |
-| P2 | child test modules | `cargo test core::router::tests::concurrency_edge_case_tests --lib --all-features` runs the moved tests. |
-| P3 | file size | `wc -l src/core/router/tests/concurrency_edge_case_tests.rs src/core/router/tests/concurrency_edge_case_tests/*.rs` shows all touched files below 800. |
-| P4 | queue count | `git ls-files '*.rs' | xargs wc -l | awk '$1 > 800 && $2 != "total" { print $1 " " $2 }' | sort -nr` shows the remaining queue no longer includes `concurrency_edge_case_tests.rs`. |
+| P1 | root `types.rs` | Re-exports every original analytics public type name. |
+| P2 | child type modules | `cargo check --all-features --locked` proves downstream imports still compile. |
+| P3 | child test modules | `cargo test core::analytics::types --lib --all-features` runs the moved tests. |
+| P4 | file size | `wc -l src/core/analytics/types.rs src/core/analytics/types/*.rs src/core/analytics/types_tests.rs src/core/analytics/types_tests/*.rs` shows all touched files below 800. |
+| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/analytics/types.rs`. |
 
 ## Risks
 
-- Test names move one module deeper, but the root filter remains stable. PR body should call out the path change.
-- Shared imports must stay available to child modules without introducing a broad test prelude outside this file family.
-- Weighted-random tests are statistical; assertions must not be weakened in this layout-only tranche.
-- This tranche reduces one of the remaining 39 files; the issue remains a tracker after merge.
+- Facade re-export omissions would break callers that import from `core::analytics::types::*`.
+- Multiple modules contain similarly named DTOs in other domains; this tranche must only move analytics DTOs.
+- Inline tests move one module deeper, but the root filter remains stable.
+- This tranche reduces one of the remaining 38 files; the issue remains a tracker after merge.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test core::router::tests::concurrency_edge_case_tests --lib --all-features`
+- [ ] `cargo test core::analytics::types --lib --all-features`
 - [ ] `cargo check --all-features --locked`
-- [ ] Line-count proof for `src/core/router/tests/concurrency_edge_case_tests.rs` and child files
+- [ ] Line-count proof for `src/core/analytics/types.rs`, `types/*.rs`, and `types_tests/*.rs`
 
 ## Rollback
 
-Revert the router concurrency test split and `specs/GH727` edits. No migrations
-or runtime code changes are involved.
+Revert the analytics type/test split and `specs/GH727` edits. No migrations or
+runtime code changes are involved.

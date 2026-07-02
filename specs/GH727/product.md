@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@d45b427dfb7c` 仍有 39 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
+`origin/main@750bbe437884` 仍有 38 个 Rust 文件超过 U-16 的 800 行硬上限。前几个
 tranche 已经证明“小 PR、单文件族、保持行为不变”的方式可行，但 spec packet 仍按上一轮
-Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦。
+router concurrency tranche 书写，需要继续滚动到当前最大文件的系统性解耦。
 
 本轮目标是把 #727 升级为完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须
 服从同一套架构边界，避免为了降行数而制造新的耦合、重导出混乱或行为漂移。
@@ -34,41 +34,43 @@ Cloudflare 单文件 tranche 书写，不能指导剩余队列的系统性解耦
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/router/tests/concurrency_edge_case_tests.rs`，它当前 1079 行，是 #727 当前最大的 test-only suite。
-- 将 router concurrency/edge tests 按行为域拆成 child modules：
-  - concurrent selection and recording
-  - model-list swap atomicity
-  - weighted random distribution
-  - EMA latency edge cases
-  - cooldown expiry races
-  - additional concurrency edge cases
-- root test file 保留共享 imports 和 child `mod` declarations。
-- 保持原测试断言、helper 使用、routing behavior coverage 和 focused test path 不变。
+- 拆分 `src/core/analytics/types.rs`，它当前 1071 行，是 #727 当前最大的 public type facade 文件。
+- 将 analytics DTO 按领域拆成 child modules：
+  - request/provider metrics
+  - user usage and usage-pattern DTOs
+  - cost/budget DTOs
+- root `types.rs` 保持瘦 facade，继续 `pub use` 所有原 public 类型名，维护
+  `crate::core::analytics::types::*` 和 `crate::core::analytics::*` 导入兼容。
+- 将原 inline tests 按 request/provider、usage、cost、workflow 拆入 `types_tests/` child modules。
+- 保持所有字段名、derive、serde 行为、测试断言和 analytics runtime behavior 不变。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不修改 router runtime logic、routing algorithms、deployment state handling 或测试断言。
-- 不在本 PR 中处理其余 38 个大文件。
+- 不修改 analytics collector、engine、optimizer、reports 或任何运行时逻辑。
+- 不重命名 public DTO 字段、类型或导出路径。
+- 不在本 PR 中处理其余 37 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. Existing test functions continue to run under `core::router::tests::concurrency_edge_case_tests::*`.
-2. The split preserves all assertions and helper usage from the original file.
-3. Shared imports stay centralized in the root module and child modules import through `use super::*`.
-4. No router runtime code changes are included.
-5. `src/core/router/tests/concurrency_edge_case_tests.rs` and its child files must be below 800 lines.
-6. `cargo test core::router::tests::concurrency_edge_case_tests --lib --all-features` must pass.
+1. Existing analytics DTO names remain available from `crate::core::analytics::types::*`.
+2. Existing top-level analytics re-exports in `src/core/analytics/mod.rs` continue to compile unchanged.
+3. Struct fields, derives, serde names, and JSON round-trip behavior remain unchanged.
+4. Original inline tests keep the same assertions after moving to child test modules.
+5. `src/core/analytics/types.rs`, `src/core/analytics/types/*.rs`, and `src/core/analytics/types_tests/*.rs`
+   must be below 800 lines.
+6. `cargo test core::analytics::types --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/router/tests/concurrency_edge_case_tests.rs` 声明 behavior-domain child modules。
-- [ ] 原测试按 concurrent selection、model-list swap、weighted random、EMA、cooldown、additional edge cases 拆入 child files，断言不变。
-- [ ] Focused router concurrency tests 通过。
+- [ ] `src/core/analytics/types.rs` 声明 request、usage、cost child modules and re-exports all original public type names。
+- [ ] Analytics DTOs move into `src/core/analytics/types/{request,usage,cost}.rs` without field, derive, or serde changes。
+- [ ] Original analytics type tests move into `src/core/analytics/types_tests/` child modules without assertion changes。
+- [ ] Focused analytics type tests 通过。
 - [ ] `cargo fmt --all -- --check` 和 `cargo check --all-features --locked` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is a router concurrency test-suite decomposition tranche for U-16 compliance.
+No runtime behavior change. This is an analytics public-type facade decomposition tranche for U-16 compliance.
