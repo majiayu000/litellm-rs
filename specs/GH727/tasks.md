@@ -168,24 +168,30 @@ GH-727 / #727
 - [x] `SP727-T155` Owner: coordinator. Done when: `src/monitoring/types.rs` keeps production monitoring type definitions and delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/monitoring/types.rs`.
 - [x] `SP727-T156` Owner: coordinator. Done when: original inline monitoring type tests move to `src/monitoring/types_tests.rs` without assertion changes. Verify: `rg -n "test_request_metrics_creation|test_alert_severity_variants|test_system_metrics_serialization" src/monitoring/types_tests.rs`.
 - [x] `SP727-T157` Owner: verification owner. Done when: both touched monitoring type files are below U-16's 800-line ceiling and focused monitoring type tests pass. Verify: `wc -l src/monitoring/types.rs src/monitoring/types_tests.rs`; `cargo test monitoring::types --lib --all-features`.
-- [ ] `SP727-T158` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the monitoring types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T158` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the monitoring types tranche. Verify: #851 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `0cd9ccd2fb6f`, and #727 update comment.
+- [x] `SP727-T159` Owner: coordinator. Done when: after the monitoring types tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@0cd9ccd2fb6f`, `src/core/providers/bedrock/provider_tests.rs` is 864 lines and 25 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T160` Owner: coordinator. Done when: the Bedrock provider tests tranche documents behavior-domain test-suite splitting and the no-production-change boundary. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T161` Owner: coordinator. Done when: `src/core/providers/bedrock/provider_tests.rs` keeps only shared helpers and child module declarations. Verify: `sed -n '1,80p' src/core/providers/bedrock/provider_tests.rs`.
+- [x] `SP727-T162` Owner: coordinator. Done when: original Bedrock provider tests move into behavior-domain child modules without assertion changes. Verify: `rg -n "test_bedrock_provider_creation|test_messages_to_prompt_simple_user_message|test_transform_request_claude|test_transform_response_claude|test_calculate_cost_known_model" src/core/providers/bedrock/provider_tests.rs src/core/providers/bedrock/provider_tests/*.rs`.
+- [x] `SP727-T163` Owner: verification owner. Done when: all touched Bedrock provider test files are below U-16's 800-line ceiling and focused Bedrock provider tests pass. Verify: `wc -l src/core/providers/bedrock/provider_tests.rs src/core/providers/bedrock/provider_tests/*.rs`; `cargo test core::providers::bedrock::provider_tests --lib --all-features`.
+- [ ] `SP727-T164` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the Bedrock provider tests tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the monitoring types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the Bedrock provider test file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/monitoring/types.rs`
-- `src/monitoring/types_tests.rs`
+- `src/core/providers/bedrock/provider_tests.rs`
+- `src/core/providers/bedrock/provider_tests/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test monitoring::types --lib --all-features`
+- `cargo test core::providers::bedrock::provider_tests --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -193,5 +199,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 monitoring types test-extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 Bedrock provider test-suite split tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

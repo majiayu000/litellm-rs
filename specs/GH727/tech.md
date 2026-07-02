@@ -10,10 +10,10 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@ea1a47c3286b`, 26 tracked Rust files remain over the U-16
-800-line ceiling. The current largest file is `src/monitoring/types.rs` at 867
-lines. It is a public monitoring type module where the production definitions
-are already compact and the oversized portion is the inline unit test suite.
+At `origin/main@0cd9ccd2fb6f`, 25 tracked Rust files remain over the U-16
+800-line ceiling. The current largest file is
+`src/core/providers/bedrock/provider_tests.rs` at 864 lines. It is a test-only
+Bedrock provider module whose sections already define clean behavior domains.
 
 ## Architecture Principles
 
@@ -40,64 +40,63 @@ are already compact and the oversized portion is the inline unit test suite.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Monitoring Types Test Extraction
+## Current Tranche: Bedrock Provider Test-Suite Split
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Type definitions | `src/monitoring/types.rs` | Defines public monitoring metric and alert DTOs. | Production surface must keep the same names, fields, derives, serde behavior, and module path. |
-| Inline tests | `src/monitoring/types.rs` | Contains the monitoring type serialization/display/clone test suite inline. | The test suite is what pushes the file over 800 lines. |
-| Extracted tests | `src/monitoring/types_tests.rs` | New path-backed test module loaded from `types.rs`. | Removes the oversized inline test block without changing runtime architecture. |
+| Test root | `src/core/providers/bedrock/provider_tests.rs` | Loaded by `src/core/providers/bedrock/mod.rs` as `#[cfg(test)] mod provider_tests;`. | Must keep the parent test suite entry point stable. |
+| Creation/capability tests | `provider_tests/creation_capability_tests.rs` | Provider construction, capabilities, supported params, model list, embedding detection. | Groups provider identity and capability surface checks. |
+| Prompt/param tests | `provider_tests/prompt_param_tests.rs` | Message prompt conversion and OpenAI parameter mapping tests. | Keeps prompt/input mapping behavior together. |
+| Request transform tests | `provider_tests/request_transform_tests.rs` | Claude/Titan/Nova/Llama/Mistral/AI21/Cohere request transform and error tests. | Groups model-family request body transformation behavior. |
+| Response transform tests | `provider_tests/response_transform_tests.rs` | Model-family response parse tests and invalid/unknown response errors. | Groups response conversion behavior. |
+| Cost/access tests | `provider_tests/cost_and_access_tests.rs` | Cost calculation, error mapper, feature client accessors, capability constant, clone/debug. | Keeps miscellaneous provider surface checks out of transform modules. |
 
 ### Design
 
-1. Keep `src/monitoring/types.rs` as the production monitoring type definition file.
-2. Preserve all public struct and enum definitions in place, including fields, derives,
-   serde attributes, and the `AlertSeverity` `Display` implementation.
-3. Add only a `#[cfg(test)] #[path = "types_tests.rs"] mod tests;` declaration at the end
-   of `types.rs`.
-4. Move the original inline tests into `src/monitoring/types_tests.rs`, adding the imports
-   they previously inherited from the parent module.
-5. Keep the test module name as `monitoring::types::tests` so focused test filters and
-   historical paths continue to work.
-6. Do not edit monitoring runtime modules, metric collectors, alert processors, or
-   observability integration code.
+1. Keep `src/core/providers/bedrock/provider_tests.rs` as the test root with shared helper
+   functions `create_test_config` and `create_test_provider`.
+2. Declare behavior-domain child modules from the root test module.
+3. Move each existing test block under the matching child module without changing assertions,
+   fixtures, model ids, JSON payloads, or expected errors.
+4. Add imports inside child modules for only the symbols they need, avoiding a new shared
+   prelude or broad public test helper surface.
+5. Do not edit Bedrock production modules such as `provider.rs`, `client.rs`, `config.rs`,
+   `transformation.rs`, `model_config.rs`, `utils`, or `sigv4.rs`.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `src/monitoring/types.rs` | Public monitoring type definitions stay in the original module path. |
-| P2 | `src/monitoring/types.rs` | Root delegates tests with `#[path = "types_tests.rs"] mod tests;`. |
-| P3 | `src/monitoring/types_tests.rs` | Original inline monitoring type tests move without assertion changes. |
-| P4 | file size | `wc -l src/monitoring/types.rs src/monitoring/types_tests.rs` shows both files below 800. |
-| P5 | focused test suite | `cargo test monitoring::types --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/monitoring/types.rs`. |
+| P1 | `provider_tests.rs` | Root contains shared helpers and `mod *_tests;` declarations. |
+| P2 | `provider_tests/*.rs` | Original tests are grouped by provider creation/capability, prompt/params, request transform, response transform, and cost/access. |
+| P3 | file size | `wc -l src/core/providers/bedrock/provider_tests.rs src/core/providers/bedrock/provider_tests/*.rs` shows every touched file below 800. |
+| P4 | focused test suite | `cargo test core::providers::bedrock::provider_tests --lib --all-features` runs the moved tests. |
+| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/providers/bedrock/provider_tests.rs`. |
 
 ## Risks
 
-- Test extraction must not rename the module to a path that changes focused filters from
-  `monitoring::types::tests`.
-- The test file needs explicit imports for `Utc` and `HashMap` that were previously in
-  scope only because the tests were inline.
-- Production type definitions should not be split in this tranche because they are already
-  compact; splitting them now would add compatibility risk without reducing meaningful
-  complexity.
+- Child modules need explicit imports for trait methods such as `LLMProvider`; otherwise the
+  tests may compile differently from the original monolithic module.
+- Capability constant tests must import `BEDROCK_CAPABILITIES` from the provider module while
+  keeping it private to tests.
+- Request transform tests should not change model ids or JSON assertions while removing the
+  oversized root file.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l src/monitoring/types.rs src/monitoring/types_tests.rs`
-- [ ] `cargo test monitoring::types --lib --all-features`
+- [ ] `wc -l src/core/providers/bedrock/provider_tests.rs src/core/providers/bedrock/provider_tests/*.rs`
+- [ ] `cargo test core::providers::bedrock::provider_tests --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the monitoring type tests back into `src/monitoring/types.rs` and revert
-the `specs/GH727` edits. No schema, persistence, or runtime behavior changes are
-involved.
+Move the Bedrock provider tests back into `src/core/providers/bedrock/provider_tests.rs`
+and revert the `specs/GH727` edits. No schema, persistence, or runtime behavior
+changes are involved.
