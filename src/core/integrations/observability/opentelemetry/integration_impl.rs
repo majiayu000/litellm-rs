@@ -93,7 +93,7 @@ impl OpenTelemetryIntegration {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let random = ((now % 1_000_000) as f64) / 1_000_000.0;
+        let random = sampling_fraction_from_nanos(now);
         random < self.config.sampling_ratio
     }
 
@@ -135,6 +135,10 @@ impl OpenTelemetryIntegration {
     pub fn pending_span_count(&self) -> usize {
         self.pending_spans.read().len()
     }
+}
+
+pub(super) fn sampling_fraction_from_nanos(nanos: u128) -> f64 {
+    ((nanos % 1_000_000) as f64) / 1_000_000.0
 }
 
 #[async_trait]

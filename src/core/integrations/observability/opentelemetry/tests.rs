@@ -1,4 +1,5 @@
 use super::exporter::build_otlp_payload;
+use super::integration_impl::sampling_fraction_from_nanos;
 use super::span::{generate_span_id, generate_trace_id};
 use super::*;
 use crate::core::traits::integration::{Integration, LlmEndEvent, LlmErrorEvent, LlmStartEvent};
@@ -110,6 +111,14 @@ async fn test_sampling() {
 
     // With 0% sampling, no spans should be created
     assert_eq!(integration.active_span_count(), 0);
+}
+
+#[test]
+fn test_sampling_fraction_from_nanos() {
+    assert_eq!(sampling_fraction_from_nanos(0), 0.0);
+    assert_eq!(sampling_fraction_from_nanos(500_000), 0.5);
+    assert_eq!(sampling_fraction_from_nanos(1_250_000), 0.25);
+    assert!(sampling_fraction_from_nanos(999_999) < 1.0);
 }
 
 #[test]

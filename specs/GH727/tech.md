@@ -59,7 +59,8 @@ The current largest file is `src/core/integrations/observability/opentelemetry.r
 4. Move `export_spans` and `build_otlp_payload` into `exporter.rs`; keep them module-internal because only the integration and tests need them.
 5. Move `ActiveSpan`, `SpanBatch`, `OpenTelemetryIntegration`, and `impl Integration for OpenTelemetryIntegration` into `integration_impl.rs`.
 6. Move the existing unit tests into `tests.rs` and import internal helpers through sibling modules only for test coverage.
-7. Do not change endpoint defaults, payload field names, span attributes, sampling, batch flush conditions, or shutdown behavior.
+7. Do not change endpoint defaults, payload field names, span attributes, batch flush conditions, or shutdown behavior.
+8. Fix the review-identified partial-sampling bug by deriving a deterministic fraction from nanoseconds modulo `1_000_000`; cover that helper with focused unit tests.
 
 ## Product-to-Test Mapping
 
@@ -68,8 +69,9 @@ The current largest file is `src/core/integrations/observability/opentelemetry.r
 | P1 | `opentelemetry.rs` | Root facade declares focused modules and re-exports the original public names. |
 | P2 | `config.rs`, `span.rs`, `exporter.rs`, `integration_impl.rs` | Responsibilities are separated without changing public DTO fields or trait method signatures. |
 | P3 | file size | `wc -l src/core/integrations/observability/opentelemetry.rs src/core/integrations/observability/opentelemetry/*.rs` shows every touched file below 800. |
-| P4 | focused test suite | `cargo test core::integrations::observability::opentelemetry --lib --all-features` runs the moved tests. |
-| P5 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/integrations/observability/opentelemetry.rs`. |
+| P4 | sampling bug fix | `test_sampling_fraction_from_nanos` proves partial sampling can produce fractions other than zero. |
+| P5 | focused test suite | `cargo test core::integrations::observability::opentelemetry --lib --all-features` runs the moved tests. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/integrations/observability/opentelemetry.rs`. |
 
 ## Risks
 
@@ -89,5 +91,5 @@ The current largest file is `src/core/integrations/observability/opentelemetry.r
 
 ## Rollback
 
-Revert the OpenTelemetry module split and `specs/GH727` edits. No schema changes or
-intended runtime behavior changes are involved.
+Revert the OpenTelemetry module split, the sampling fraction helper fix, and `specs/GH727`
+edits. No schema changes are involved.

@@ -38,8 +38,10 @@ GH-727 / #727
 - 保留原模块路径作为 facade：`opentelemetry.rs` 继续导出 `OpenTelemetryConfig`、
   `OpenTelemetryIntegration`、`Span`、`SpanKind`、`SpanStatus`、`SpanEvent` 和 `AttributeValue`。
 - 按职责拆为 `config.rs`、`span.rs`、`exporter.rs`、`integration_impl.rs` 和 `tests.rs`。
-- `integration_impl.rs` 继续拥有 `Integration for OpenTelemetryIntegration`，不得改变 trait surface、采样逻辑、
+- `integration_impl.rs` 继续拥有 `Integration for OpenTelemetryIntegration`，不得改变 trait surface、
   active/pending span 状态流转或 flush/shutdown 行为。
+- 本 tranche 接受 review-driven sampling bug fix：`0.0 < sampling_ratio < 1.0` 不再因为
+  `(now as f64) % 1.0` 永远为 `0.0` 而退化成 100% 采样。
 - `exporter.rs` 只负责 OTLP payload 构造和 HTTP export；`span.rs` 只负责 span 数据模型、attribute conversion
   和 ID generation；`config.rs` 只负责 serde/default 配置。
 - 所有新增或修改后的 Rust 文件低于 800 行。
@@ -56,15 +58,17 @@ GH-727 / #727
 1. Existing public imports through `crate::core::integrations::observability::opentelemetry::*` remain available.
 2. `OpenTelemetryIntegration` continues to implement `Integration` with the same async handlers and return types.
 3. Span lifecycle behavior remains unchanged: start stores active spans, end/error moves them to pending spans, cache hits create short completed spans, flush exports pending spans.
-4. OTLP payload construction remains test-covered through the moved `build_otlp_payload` test.
-5. Every touched Rust file must be below U-16's 800-line ceiling.
-6. `cargo test core::integrations::observability::opentelemetry --lib --all-features` must pass.
+4. Partial sampling now uses a clock-derived fraction in `[0.0, 1.0)` instead of always sampling for any positive ratio.
+5. OTLP payload construction remains test-covered through the moved `build_otlp_payload` test.
+6. Every touched Rust file must be below U-16's 800-line ceiling.
+7. `cargo test core::integrations::observability::opentelemetry --lib --all-features` must pass.
 
 ## 验收标准
 
 - [ ] `src/core/integrations/observability/opentelemetry.rs` is a small facade with focused child modules。
 - [ ] Public OpenTelemetry config, integration, span, event, status, kind, and attribute names remain re-exported from the original module path。
 - [ ] Config, span data model, OTLP exporter, integration implementation, and tests are separated by responsibility。
+- [ ] Partial sampling fraction has focused test coverage。
 - [ ] All touched OpenTelemetry files are below U-16's 800-line ceiling。
 - [ ] Focused OpenTelemetry test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
@@ -72,4 +76,5 @@ GH-727 / #727
 
 ## 发布说明
 
-No intended runtime behavior change. This is an OpenTelemetry integration module split for U-16 compliance.
+This is an OpenTelemetry integration module split for U-16 compliance. It also fixes a review-identified
+partial-sampling bug where any positive `sampling_ratio` sampled 100% of requests.
