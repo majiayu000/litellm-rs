@@ -228,24 +228,30 @@ GH-727 / #727
 - [x] `SP727-T215` Owner: coordinator. Done when: `src/core/audio/types.rs` keeps production audio type definitions and helpers, then delegates tests with `#[path = "types_tests.rs"] mod tests;`. Verify: `tail -n 20 src/core/audio/types.rs`.
 - [x] `SP727-T216` Owner: coordinator. Done when: original inline audio type tests move to `src/core/audio/types_tests.rs` without assertion changes. Verify: `rg -n "test_transcription_request_basic|test_speech_request_serialization|test_supported_audio_formats_all|test_tts_workflow" src/core/audio/types_tests.rs`.
 - [x] `SP727-T217` Owner: verification owner. Done when: both touched audio type files are below U-16's 800-line ceiling and focused audio type tests pass. Verify: `wc -l src/core/audio/types.rs src/core/audio/types_tests.rs`; `cargo test core::audio::types --lib --all-features` passed 41 tests.
-- [ ] `SP727-T218` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the audio types tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T218` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the audio types tranche. Verify: #861 PR body, green PR CI, GraphQL reviewThreads totalCount 0, merge commit `464a1be413d5`, #727 reopened, and #727 update comment.
+- [x] `SP727-T219` Owner: coordinator. Done when: after the audio types tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@464a1be4`, `src/config/models/server.rs` is 839 lines and 15 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T220` Owner: coordinator. Done when: the server config tranche documents why this slice is a test extraction rather than a production model facade split. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T221` Owner: coordinator. Done when: `src/config/models/server.rs` keeps production server config model definitions and helpers, then delegates tests with `#[path = "server_tests.rs"] mod tests;`. Verify: `tail -n 20 src/config/models/server.rs`.
+- [x] `SP727-T222` Owner: coordinator. Done when: original inline server config tests move to `src/config/models/server_tests.rs` without assertion changes. Verify: `rg -n "test_server_config_default|test_server_config_deserialize_rejects_port_above_65535|test_tls_config_validate_empty_cert|test_cors_config_validate_all_origins_with_credentials|test_server_config_trusted_proxies_merge_non_empty" src/config/models/server_tests.rs`.
+- [x] `SP727-T223` Owner: verification owner. Done when: both touched server config files are below U-16's 800-line ceiling and focused server config tests pass. Verify: `wc -l src/config/models/server.rs src/config/models/server_tests.rs`; `cargo test config::models::server --lib --all-features` passed 45 tests.
+- [ ] `SP727-T224` Owner: verification owner. Done when: formatting, SpecRail, diff check, lib all-features check, locked all-features check, default check, PR CI, and review-thread gate pass for the server config tranche. Verify: `cargo fmt --all -- --check`; `git diff --check`; `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`; `cargo check --lib --all-features`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the audio types file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the server config file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/core/audio/types.rs`
-- `src/core/audio/types_tests.rs`
+- `src/config/models/server.rs`
+- `src/config/models/server_tests.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
 - `git diff --check`
-- `cargo test core::audio::types --lib --all-features`
+- `cargo test config::models::server --lib --all-features`
 - `cargo check --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
@@ -253,5 +259,5 @@ Writable ownership for this lane:
 
 ## Handoff Notes
 
-This PR is the next #727 audio types unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 server config unit-test extraction tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.

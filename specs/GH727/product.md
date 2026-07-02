@@ -6,9 +6,9 @@ GH-727 / #727
 
 ## 用户问题
 
-`origin/main@f53702c6` 仍有 16 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
-`src/core/audio/types.rs`，它是一个 839 行 audio public type file；生产定义和 helpers 只到第 192 行，
-超标来源是 inline unit tests。
+`origin/main@464a1be4` 仍有 15 个 tracked Rust 文件超过 U-16 的 800 行硬上限。当前最大文件是
+`src/config/models/server.rs`，它是一个 839 行 server configuration model file；生产定义和 helpers
+只到第 305 行，超标来源是 inline unit tests。
 
 本轮目标继续执行完整的大文件解耦计划：每个 PR 仍然小而可审，但所有 tranche 都必须服从同一套
 架构边界，避免制造新的耦合、重导出混乱或行为漂移。
@@ -34,40 +34,40 @@ GH-727 / #727
 
 ## 本 tranche 目标
 
-- 拆分 `src/core/audio/types.rs`，它当前 839 行，是 #727 当前最大的 tracked Rust 文件。
-- 保留 `src/core/audio/types.rs` 作为 audio request/response DTO 和 helper function 的原始模块路径。
-- 将原 inline unit tests 移动到 `src/core/audio/types_tests.rs`，并从 root 用 `#[path = "types_tests.rs"] mod tests;` 委托。
-- 不改变 audio DTO 字段、serde attributes、helper function signatures、supported formats、content-type mapping 或测试断言。
+- 拆分 `src/config/models/server.rs`，它当前 839 行，是 #727 当前最大的 tracked Rust 文件。
+- 保留 `src/config/models/server.rs` 作为 `ServerConfig`、`TlsConfig`、`CorsConfig` 和 default helper 的原始模块路径。
+- 将原 inline unit tests 移动到 `src/config/models/server_tests.rs`，并从 root 用 `#[path = "server_tests.rs"] mod tests;` 委托。
+- 不改变配置字段、serde attributes、default values、merge semantics、validation error strings、CORS credential safety checks 或测试断言。
 - 所有新增或修改后的 Rust 文件低于 800 行。
 
 ## 非目标
 
-- 不拆分 audio production DTO 到 facade 子模块；本文件超标不是生产定义造成的。
-- 不修改 audio routes, providers, transcription/translation/speech runtime behavior, pricing, storage, or request handling。
-- 不改变 unit test assertions, fake audio payloads, expected serialized fields, supported format list, or content-type expectations。
-- 不在本 PR 中处理其余 15 个大文件。
+- 不拆分 server config production models 到 facade 子模块；本文件超标不是生产定义造成的。
+- 不修改 config loading, validation callers, HTTP server startup, TLS file checks, CORS runtime behavior, or trusted proxy handling。
+- 不改变 unit test assertions, serialized JSON samples, default values, merge precedence, or validation expected errors。
+- 不在本 PR 中处理其余 14 个大文件。
 - 不关闭 #727。
 
 ## Behavior Invariants
 
-1. `src/core/audio/types.rs` keeps all existing public audio type and helper names at the same module path.
-2. Serialization behavior for skipped file/filename fields and optional fields stays unchanged.
-3. Supported audio formats and `format_to_content_type` mappings stay unchanged.
+1. `src/config/models/server.rs` keeps all existing public server config type and helper names at the same module path.
+2. Default values for host, port, timeout, body size, stream idle timeout, and CORS settings stay unchanged.
+3. Merge and validation behavior for server, TLS, CORS, and trusted proxies stays unchanged.
 4. Inline tests move without assertion or fixture changes and continue to use `super::*`.
-5. No audio runtime route, provider, or request handling behavior is changed.
+5. No config loading, HTTP startup, TLS, CORS, or proxy runtime behavior is changed.
 6. Every touched Rust file must be below U-16's 800-line ceiling.
-7. `cargo test core::audio::types --lib --all-features` must pass.
+7. `cargo test config::models::server --lib --all-features` must pass.
 
 ## 验收标准
 
-- [ ] `src/core/audio/types.rs` delegates tests to `src/core/audio/types_tests.rs`。
-- [ ] Original audio type tests move without assertion changes。
-- [ ] Audio DTO definitions and helper functions stay in the original module path。
-- [ ] All touched audio type files are below U-16's 800-line ceiling。
-- [ ] Focused audio type test suite 通过。
+- [ ] `src/config/models/server.rs` delegates tests to `src/config/models/server_tests.rs`。
+- [ ] Original server config tests move without assertion changes。
+- [ ] Server config model definitions and helper functions stay in the original module path。
+- [ ] All touched server config files are below U-16's 800-line ceiling。
+- [ ] Focused server config test suite 通过。
 - [ ] `cargo fmt --all -- --check`、`cargo check --lib --all-features`、`cargo check --all-features --locked` 和 `cargo check` 通过。
 - [ ] PR body 明确该 PR 是 #727 的 partial tranche，使用 `Refs #727`，不自动关闭 tracker issue。
 
 ## 发布说明
 
-No runtime behavior change. This is an audio type unit-test extraction for U-16 compliance.
+No runtime behavior change. This is a server configuration unit-test extraction for U-16 compliance.

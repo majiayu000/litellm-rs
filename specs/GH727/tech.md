@@ -10,10 +10,10 @@ Link to `product.md`.
 
 ## Current Evidence
 
-At `origin/main@f53702c6`, 16 tracked Rust files remain over the U-16
-800-line ceiling. The current largest file is `src/core/audio/types.rs` at
-839 lines. It is a public audio type/helper module where production definitions
-end at line 192 and the oversized portion is inline unit tests.
+At `origin/main@464a1be4`, 15 tracked Rust files remain over the U-16
+800-line ceiling. The current largest file is `src/config/models/server.rs` at
+839 lines. It is a server configuration model/helper module where production
+definitions end at line 305 and the oversized portion is inline unit tests.
 
 ## Architecture Principles
 
@@ -40,55 +40,55 @@ end at line 192 and the oversized portion is inline unit tests.
 | P4 | Utility modules | config helpers, net client utils, sync containers | focused utility tests plus concurrency/behavior checks where relevant |
 | P5 | Closure scan | all Rust files | full over-800 scan, final SpecRail update, final PR may close #727 |
 
-## Current Tranche: Audio Types Test Extraction
+## Current Tranche: Server Config Test Extraction
 
 ### Codebase Context
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Public audio types | `src/core/audio/types.rs` | Defines transcription, translation, and speech request/response DTOs plus audio format helpers. | Public module path must remain unchanged for route/provider callers. |
-| Inline tests | `src/core/audio/types.rs` | `#[cfg(test)] mod tests` starts at line 193 and contains serialization, helper, and workflow unit tests. | Moving these tests removes the U-16 violation without introducing facade churn. |
-| Extracted tests | `src/core/audio/types_tests.rs` | New path-backed test module keeps the original tests under `super::*`. | Assertions and fixture payloads remain centralized against the same production module. |
+| Server config models | `src/config/models/server.rs` | Defines `ServerConfig`, `TlsConfig`, `CorsConfig`, defaults, merge helpers, and validation logic. | Public module path must remain unchanged for config loading and server startup callers. |
+| Inline tests | `src/config/models/server.rs` | `#[cfg(test)] mod tests` starts at line 306 and contains default, merge, validation, serde, and trusted proxy unit tests. | Moving these tests removes the U-16 violation without introducing facade churn. |
+| Extracted tests | `src/config/models/server_tests.rs` | New path-backed test module keeps the original tests under `super::*`. | Assertions and JSON samples remain centralized against the same production module. |
 
 ### Design
 
-1. Keep `src/core/audio/types.rs` as the production owner for all current public audio DTOs and helper functions.
-2. Replace the inline test module with `#[cfg(test)] #[path = "types_tests.rs"] mod tests;`.
-3. Move the original inline test body into `src/core/audio/types_tests.rs` without assertion, fixture, or expected-value changes.
+1. Keep `src/config/models/server.rs` as the production owner for all current public server config types and helper functions.
+2. Replace the inline test module with `#[cfg(test)] #[path = "server_tests.rs"] mod tests;`.
+3. Move the original inline test body into `src/config/models/server_tests.rs` without assertion, fixture, JSON sample, or expected-value changes.
 4. Keep `use super::*;` in the extracted test module so tests validate the same parent module API.
 5. Do not create a `types/` facade tree in this tranche because the production definitions are already below the ceiling.
-6. Do not edit audio routes, providers, request handlers, or serialization attributes beyond the mechanical test move.
+6. Do not edit config loading, HTTP startup, TLS, CORS, trusted proxy runtime behavior, or serialization attributes beyond the mechanical test move.
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| P1 | `src/core/audio/types.rs` | Root keeps production DTO/helper definitions and delegates tests to `types_tests.rs`. |
-| P2 | `src/core/audio/types_tests.rs` | Original test names and assertions remain present. |
-| P3 | audio public API | No public type, field, serde attribute, or helper signature changes. |
-| P4 | file size | `wc -l src/core/audio/types.rs src/core/audio/types_tests.rs` shows both files below 800. |
-| P5 | focused test suite | `cargo test core::audio::types --lib --all-features` runs the moved tests. |
-| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/core/audio/types.rs`. |
+| P1 | `src/config/models/server.rs` | Root keeps production model/helper definitions and delegates tests to `server_tests.rs`. |
+| P2 | `src/config/models/server_tests.rs` | Original test names and assertions remain present. |
+| P3 | server config public API | No public type, field, serde attribute, helper signature, merge rule, or validation error string changes. |
+| P4 | file size | `wc -l src/config/models/server.rs src/config/models/server_tests.rs` shows both files below 800. |
+| P5 | focused test suite | `cargo test config::models::server --lib --all-features` runs the moved tests. |
+| P6 | queue count | tracked-file scan shows the remaining queue no longer includes `src/config/models/server.rs`. |
 
 ## Risks
 
-- Extracting tests changes the exact test module path from inline `types::tests` to path-backed `types::tests`, but the focused module filter remains `core::audio::types`.
-- Public audio DTOs are used by routes/providers, so this tranche must not change fields, serde annotations, or helper signatures.
-- Format helper expectations must move unchanged because downstream response content types depend on those mappings.
+- Extracting tests changes the exact test module path from inline `server::tests` to path-backed `server::tests`, but the focused module filter remains `config::models::server`.
+- Public server config models are used by config loading and server startup, so this tranche must not change fields, serde annotations, defaults, merge behavior, or helper signatures.
+- CORS credential validation and TLS file validation error strings must move unchanged because callers and tests rely on those semantics.
 
 ## Test Plan
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `git diff --check`
 - [ ] `python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/check_workflow.py --repo /Users/apple/Desktop/code/AI/tool/specrail --spec-dir "$PWD/specs/GH727"`
-- [ ] `wc -l src/core/audio/types.rs src/core/audio/types_tests.rs`
-- [ ] `cargo test core::audio::types --lib --all-features`
+- [ ] `wc -l src/config/models/server.rs src/config/models/server_tests.rs`
+- [ ] `cargo test config::models::server --lib --all-features`
 - [ ] `cargo check --lib --all-features`
 - [ ] `cargo check --all-features --locked`
 - [ ] `cargo check`
 
 ## Rollback
 
-Move the audio unit tests back into `src/core/audio/types.rs` and revert
+Move the server config unit tests back into `src/config/models/server.rs` and revert
 the `specs/GH727` edits. No schema, persistence, or runtime behavior changes
 are involved.
