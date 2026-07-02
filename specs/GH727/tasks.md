@@ -124,28 +124,34 @@ GH-727 / #727
 - [x] `SP727-T111` Owner: coordinator. Done when: canonical `teams` / `team_members` SQL helpers move to `src/storage/database/seaorm_db/team_repository/canonical.rs` and legacy synchronization helpers move to `legacy_sync.rs`. Verify: `rg -n "insert_canonical_team|get_canonical_member|non_deleted_team_predicate" src/storage/database/seaorm_db/team_repository/canonical.rs`; `rg -n "sync_legacy_um_teams|persist_legacy_team|sync_legacy_team_from_canonical|add_legacy_user_team" src/storage/database/seaorm_db/team_repository/legacy_sync.rs`.
 - [x] `SP727-T112` Owner: coordinator. Done when: `TeamRepository for SeaOrmTeamRepository` moves to `src/storage/database/seaorm_db/team_repository/repository_impl.rs` without changing trait method signatures. Verify: `rg -n "impl TeamRepository for SeaOrmTeamRepository|async fn create|async fn get_by_name|async fn update_member_role" src/storage/database/seaorm_db/team_repository/repository_impl.rs`.
 - [x] `SP727-T113` Owner: verification owner. Done when: all touched SeaORM team repository files are below U-16's 800-line ceiling and focused repository tests pass. Verify: `wc -l src/storage/database/seaorm_db/team_repository.rs src/storage/database/seaorm_db/team_repository/*.rs`; `cargo test storage::database::seaorm_db::team_repository_tests --lib --all-features`.
-- [ ] `SP727-T114` Owner: verification owner. Done when: formatting, all-features check, default check, PR CI, and review-thread gate pass for the SeaORM team repository tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
+- [x] `SP727-T114` Owner: verification owner. Done when: formatting, all-features check, default check, PR CI, and review-thread gate pass for the SeaORM team repository tranche. Verify: #823 PR body, green PR CI, and GraphQL review-thread query.
+- [x] `SP727-T115` Owner: coordinator. Done when: after the SeaORM team repository tranche merges, the next #727 tranche is selected from the remaining queue with fresh tracked-file line-count evidence. Verify: at `origin/main@2a20ad60fd7d`, `src/utils/data/utils/tests.rs` is 931 lines and 32 tracked Rust files remain over the U-16 ceiling.
+- [x] `SP727-T116` Owner: coordinator. Done when: the DataUtils tests tranche documents behavior-domain test-suite splitting and the no-production-change boundary. Verify: `git diff -- specs/GH727/product.md specs/GH727/tech.md`.
+- [x] `SP727-T117` Owner: coordinator. Done when: `src/utils/data/utils/tests.rs` keeps only child module declarations. Verify: `sed -n '1,80p' src/utils/data/utils/tests.rs`.
+- [x] `SP727-T118` Owner: coordinator. Done when: original DataUtils tests move into behavior-domain child modules without assertion changes. Verify: `rg -n "test_base64_operations|test_convert_to_dict_non_object|test_cleanup_none_values|test_json_merging|test_json_schema_validation|test_string_utilities|test_json_extraction_from_string|test_hash_json_consistent" src/utils/data/utils/tests.rs src/utils/data/utils/tests/*.rs`.
+- [x] `SP727-T119` Owner: verification owner. Done when: all touched DataUtils test files are below U-16's 800-line ceiling and focused DataUtils tests pass. Verify: `wc -l src/utils/data/utils/tests.rs src/utils/data/utils/tests/*.rs`; `cargo test utils::data::utils::tests --lib --all-features`.
+- [ ] `SP727-T120` Owner: verification owner. Done when: formatting, all-features check, default check, PR CI, and review-thread gate pass for the DataUtils tests tranche. Verify: `cargo fmt --all -- --check`; `cargo check --all-features --locked`; `cargo check`; GitHub PR CI and review-thread query.
 
 ## 并行拆分
 
-This is a serial writable lane for the SeaORM team repository file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
+This is a serial writable lane for the DataUtils test-suite file family. Other #727 large-file tranches may be planned read-only in parallel, but they must not edit this branch.
 
 Writable ownership for this lane:
 
 - `specs/GH727/`
-- `src/storage/database/seaorm_db/team_repository.rs`
-- `src/storage/database/seaorm_db/team_repository/*.rs`
+- `src/utils/data/utils/tests.rs`
+- `src/utils/data/utils/tests/*.rs`
 
 ## 验证
 
 - SpecRail packet review.
 - `cargo fmt --all -- --check`
-- `cargo test storage::database::seaorm_db::team_repository_tests --lib --all-features`
+- `cargo test utils::data::utils::tests --lib --all-features`
 - `cargo check --all-features --locked`
 - `cargo check`
 - PR CI and GraphQL review-thread gate before merge.
 
 ## Handoff Notes
 
-This PR is the next #727 runtime repository maintenance tranche and should use `Refs #727`, not `Closes #727`.
+This PR is the next #727 test-suite maintenance tranche and should use `Refs #727`, not `Closes #727`.
 The issue should remain open until the final scan shows no Rust files over the U-16 ceiling.
