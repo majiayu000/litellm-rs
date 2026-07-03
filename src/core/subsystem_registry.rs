@@ -325,7 +325,7 @@ mod tests {
             .collect()
     }
 
-    fn append_rust_sources(dir: &Path, buffer: &mut String) {
+    fn append_runtime_rust_sources(dir: &Path, buffer: &mut String) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -335,7 +335,7 @@ mod tests {
             };
             let path = entry.path();
             if path.is_dir() {
-                append_rust_sources(&path, buffer);
+                append_runtime_rust_sources(&path, buffer);
                 continue;
             }
 
@@ -362,20 +362,24 @@ mod tests {
         let mut source =
             std::fs::read_to_string(manifest_path("src/main.rs")).expect("read src/main.rs");
         source.push('\n');
-        append_rust_sources(&manifest_path("src/server"), &mut source);
-        append_rust_sources(&manifest_path("src/bin"), &mut source);
+        append_runtime_rust_sources(&manifest_path("src/server"), &mut source);
+        append_runtime_rust_sources(&manifest_path("src/bin"), &mut source);
         source
     }
 
-    fn runtime_source_references_module(source: &str, module: &str) -> bool {
+    fn runtime_source_has_core_module_reference(source: &str, module: &str) -> bool {
         let pattern = format!("core::{module}");
         source.match_indices(&pattern).any(|(index, _)| {
             let after_match = index + pattern.len();
             source[after_match..]
                 .chars()
                 .next()
-                .is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
+                .is_none_or(|ch| !is_rust_identifier_char(ch))
         })
+    }
+
+    fn is_rust_identifier_char(ch: char) -> bool {
+        ch == '_' || ch.is_ascii_alphanumeric()
     }
 
     #[test]
@@ -400,7 +404,7 @@ mod tests {
         let runtime_source = gateway_runtime_source();
         for module in exported_core_modules() {
             let subsystem = subsystem_for(&module).expect("registry is exhaustive");
-            if runtime_source_references_module(&runtime_source, &module) {
+            if runtime_source_has_core_module_reference(&runtime_source, &module) {
                 continue;
             }
 
