@@ -290,7 +290,7 @@ fn lifecycle_entries_have_reasons() {
     }
 }
 
-fn lifecycle_needs_orphan_baseline(lifecycle: ProviderModuleLifecycle) -> bool {
+fn lifecycle_requires_orphan_baseline(lifecycle: ProviderModuleLifecycle) -> bool {
     matches!(
         lifecycle,
         ProviderModuleLifecycle::Stub | ProviderModuleLifecycle::CatalogOnly
@@ -304,7 +304,7 @@ fn lifecycle_blocks_unapproved_orphan_provider_modules() {
     let mut unapproved = Vec::new();
 
     for entry in PROVIDER_MODULE_LIFECYCLE {
-        if !lifecycle_needs_orphan_baseline(entry.lifecycle) {
+        if !lifecycle_requires_orphan_baseline(entry.lifecycle) {
             continue;
         }
         let module_name = entry.module_name;
@@ -327,18 +327,21 @@ fn lifecycle_blocks_unapproved_orphan_provider_modules() {
 }
 
 #[test]
-fn internal_lifecycle_entries_do_not_contain_provider_impl_markers() {
-    let mut internal_provider_impls = Vec::new();
+fn internal_lifecycle_entries_are_fixed_infrastructure_modules() {
+    let actual = PROVIDER_MODULE_LIFECYCLE
+        .iter()
+        .filter(|entry| entry.lifecycle == ProviderModuleLifecycle::Internal)
+        .map(|entry| entry.module_name)
+        .collect::<BTreeSet<_>>();
 
-    for entry in PROVIDER_MODULE_LIFECYCLE {
-        if entry.lifecycle != ProviderModuleLifecycle::Internal {
-            continue;
-        }
-        if directory_contains_provider_impl_marker(entry.module_name) {
-            internal_provider_impls.push(entry.module_name);
-        }
-    }
-
+    assert_eq!(
+        actual,
+        BTreeSet::from(["base", "factory", "macros", "registry", "thinking"])
+    );
+    let internal_provider_impls = actual
+        .iter()
+        .filter(|module_name| directory_contains_provider_impl_marker(module_name))
+        .collect::<Vec<_>>();
     assert!(
         internal_provider_impls.is_empty(),
         "internal lifecycle entries must not contain provider implementation markers: {internal_provider_impls:?}"
@@ -362,7 +365,7 @@ fn orphan_baseline_entries_are_live_and_bounded() {
             entry.module_name
         );
         assert!(
-            lifecycle_needs_orphan_baseline(lifecycle_for(entry.module_name)),
+            lifecycle_requires_orphan_baseline(lifecycle_for(entry.module_name)),
             "{} baseline entry must reference a Stub/CatalogOnly provider module",
             entry.module_name
         );
@@ -380,7 +383,6 @@ fn orphan_baseline_entries_are_live_and_bounded() {
         }
         assert!(
             !(entry.lane == "non-llm-lane"
-                && directory_contains_provider_impl_marker(entry.module_name)
                 && directory_declares_chat_capability(entry.module_name)),
             "{} declares ChatCompletion and cannot use the non-LLM lane",
             entry.module_name
