@@ -20,8 +20,9 @@ mod support_matrix_tests;
 pub use catalog::{PROVIDER_CATALOG, canonical_catalog_name, get_definition, is_tier1_provider};
 pub use definition::{AuthType, ProviderDefinition};
 pub use lifecycle::{
-    PROVIDER_MODULE_LIFECYCLE, ProviderModuleLifecycle, ProviderModuleLifecycleEntry,
-    provider_module_lifecycle,
+    PROVIDER_MODULE_LIFECYCLE, PROVIDER_ORPHAN_BASELINE, ProviderModuleLifecycle,
+    ProviderModuleLifecycleEntry, ProviderOrphanBaselineEntry, provider_module_lifecycle,
+    provider_orphan_baseline,
 };
 pub use support_matrix::{
     ProviderRouteSurface, ProviderSurfaceSupport, SurfaceSupport, canonical_selector,
