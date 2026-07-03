@@ -338,7 +338,7 @@ impl<'de> Deserialize<'de> for GatewayPricingConfig {
                 merge_fields.unpriced_model_policy = true;
                 policy
             }
-            ConfigField::Missing => UnpricedModelPolicy::Reject,
+            ConfigField::Missing => UnpricedModelPolicy::default(),
         };
 
         let unpriced_fallback_cost_per_1k_tokens = match wire.unpriced_fallback_cost_per_1k_tokens {
@@ -374,7 +374,7 @@ impl Default for GatewayPricingConfig {
         Self {
             source: default_pricing_source(),
             allow_degraded: false,
-            unpriced_model_policy: UnpricedModelPolicy::Reject,
+            unpriced_model_policy: UnpricedModelPolicy::default(),
             unpriced_fallback_cost_per_1k_tokens: None,
             merge_fields: GatewayPricingMergeFields::default(),
         }
@@ -396,7 +396,7 @@ impl GatewayPricingConfig {
         }
 
         let unpriced_model_policy_overridden = other.merge_fields.unpriced_model_policy
-            || other.unpriced_model_policy != UnpricedModelPolicy::Reject;
+            || other.unpriced_model_policy != UnpricedModelPolicy::default();
         if unpriced_model_policy_overridden {
             self.unpriced_model_policy = other.unpriced_model_policy;
         }

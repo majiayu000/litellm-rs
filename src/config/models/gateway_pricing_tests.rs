@@ -84,6 +84,15 @@ fn pricing_merge_uses_explicit_reject_policy_and_null_fallback() {
 fn env_applies_unpriced_policy() {
     let _guard = GATEWAY_ENV_LOCK.blocking_lock();
     clear_pricing_test_env();
+
+    struct EnvGuard;
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            clear_pricing_test_env();
+        }
+    }
+    let _env_guard = EnvGuard;
+
     unsafe {
         env::set_var(ENV_ENABLE_JWT, "false");
         env::set_var(ENV_PROVIDERS, "vllm");
@@ -105,5 +114,4 @@ fn env_applies_unpriced_policy() {
         config.pricing.unpriced_fallback_cost_per_1k_tokens,
         Some(0.15)
     );
-    clear_pricing_test_env();
 }
