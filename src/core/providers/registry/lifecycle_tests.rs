@@ -79,6 +79,20 @@ fn is_registry_runtime_module(module_name: &str) -> bool {
     registry_runtime_module_names().contains(module_name)
 }
 
+fn disabled_feature_gated_runtime_module_names() -> BTreeSet<&'static str> {
+    PROVIDER_MODULE_LIFECYCLE
+        .iter()
+        .filter(|entry| entry.lifecycle == ProviderModuleLifecycle::Stub)
+        .filter(|entry| {
+            (!cfg!(feature = "providers-extra")
+                && entry.reason.contains("when providers-extra is enabled"))
+                || (!cfg!(feature = "providers-extended")
+                    && entry.reason.contains("when providers-extended is enabled"))
+        })
+        .map(|entry| entry.module_name)
+        .collect()
+}
+
 fn directory_contains_provider_impl_marker(module_name: &str) -> bool {
     if matches!(module_name, "macros" | "registry") {
         return false;
@@ -231,6 +245,7 @@ fn lifecycle_entries_have_reasons() {
 #[test]
 fn lifecycle_blocks_unapproved_stub_provider_modules() {
     let baseline = orphan_baseline_module_names();
+    let disabled_feature_gated_runtime_modules = disabled_feature_gated_runtime_module_names();
     let mut unapproved = Vec::new();
 
     for entry in PROVIDER_MODULE_LIFECYCLE {
@@ -239,6 +254,9 @@ fn lifecycle_blocks_unapproved_stub_provider_modules() {
         }
         let module_name = entry.module_name;
         if is_registry_runtime_module(module_name) {
+            continue;
+        }
+        if disabled_feature_gated_runtime_modules.contains(module_name) {
             continue;
         }
         if baseline.contains(module_name) {
