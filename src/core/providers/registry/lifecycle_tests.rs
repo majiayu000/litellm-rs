@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::types::{ProviderDispatchKind, provider_type_registry};
 use std::collections::BTreeSet;
 use std::fs;
@@ -80,17 +81,86 @@ fn is_registry_runtime_module(module_name: &str) -> bool {
 }
 
 fn disabled_feature_gated_runtime_module_names() -> BTreeSet<&'static str> {
-    PROVIDER_MODULE_LIFECYCLE
+    let mut modules = BTreeSet::new();
+
+    insert_disabled_feature_gated_module(
+        &mut modules,
+        ProviderType::Azure,
+        ProviderDispatchKind::ExplicitOpenAiLike,
+        cfg!(feature = "providers-extra"),
+    );
+    insert_disabled_feature_gated_module(
+        &mut modules,
+        ProviderType::AzureAI,
+        ProviderDispatchKind::ExplicitOpenAiLike,
+        cfg!(feature = "providers-extra"),
+    );
+    insert_disabled_feature_gated_module(
+        &mut modules,
+        ProviderType::VertexAI,
+        ProviderDispatchKind::UnsupportedEnum,
+        cfg!(feature = "providers-extra"),
+    );
+    insert_disabled_feature_gated_module(
+        &mut modules,
+        ProviderType::Cohere,
+        ProviderDispatchKind::UnsupportedEnum,
+        cfg!(feature = "providers-extended"),
+    );
+    insert_disabled_feature_gated_module(
+        &mut modules,
+        ProviderType::FalAI,
+        ProviderDispatchKind::UnsupportedEnum,
+        cfg!(feature = "providers-extended"),
+    );
+    insert_disabled_feature_gated_module(
+        &mut modules,
+        ProviderType::Gemini,
+        ProviderDispatchKind::UnsupportedEnum,
+        cfg!(feature = "providers-extended"),
+    );
+    insert_disabled_feature_gated_module(
+        &mut modules,
+        ProviderType::GitHubCopilot,
+        ProviderDispatchKind::UnsupportedEnum,
+        cfg!(feature = "providers-extended"),
+    );
+    insert_disabled_feature_gated_module(
+        &mut modules,
+        ProviderType::Replicate,
+        ProviderDispatchKind::UnsupportedEnum,
+        cfg!(feature = "providers-extended"),
+    );
+
+    modules
+}
+
+fn insert_disabled_feature_gated_module(
+    modules: &mut BTreeSet<&'static str>,
+    provider_type: ProviderType,
+    expected_disabled_dispatch_kind: ProviderDispatchKind,
+    feature_enabled: bool,
+) {
+    if feature_enabled {
+        return;
+    }
+
+    let entry = provider_type_registry()
         .iter()
-        .filter(|entry| entry.lifecycle == ProviderModuleLifecycle::Stub)
-        .filter(|entry| {
-            (!cfg!(feature = "providers-extra")
-                && entry.reason.contains("when providers-extra is enabled"))
-                || (!cfg!(feature = "providers-extended")
-                    && entry.reason.contains("when providers-extended is enabled"))
-        })
-        .map(|entry| entry.module_name)
-        .collect()
+        .find(|entry| entry.provider_type == provider_type)
+        .unwrap_or_else(|| panic!("missing provider registry entry for {provider_type:?}"));
+    assert_eq!(
+        entry.dispatch_kind, expected_disabled_dispatch_kind,
+        "{} disabled feature-gated runtime dispatch should come from the registry",
+        entry.canonical_name
+    );
+    assert_eq!(
+        lifecycle_for(entry.canonical_name),
+        ProviderModuleLifecycle::Stub,
+        "{} disabled feature-gated runtime module should be a lifecycle Stub",
+        entry.canonical_name
+    );
+    modules.insert(entry.canonical_name);
 }
 
 fn directory_contains_provider_impl_marker(module_name: &str) -> bool {
@@ -120,6 +190,50 @@ fn directory_contains_provider_impl_marker(module_name: &str) -> bool {
                     .iter()
                     .any(|marker| source.contains(marker))
                 {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn directory_declares_chat_capability(module_name: &str) -> bool {
+    directory_source_contains(module_name, |source| {
+        source.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.contains("ProviderCapability::ChatCompletion")
+                && !trimmed.starts_with("//")
+                && !trimmed.contains("assert")
+        })
+    })
+}
+
+fn directory_source_contains(module_name: &str, contains_marker: impl Fn(&str) -> bool) -> bool {
+    if matches!(module_name, "macros" | "registry") {
+        return false;
+    }
+
+    let mut pending_dirs = vec![providers_dir().join(module_name)];
+    while let Some(dir) = pending_dirs.pop() {
+        for entry in fs::read_dir(&dir)
+            .unwrap_or_else(|err| panic!("provider directory {dir:?} should be readable: {err}"))
+        {
+            let entry = entry.expect("provider directory entry should be readable");
+            let path = entry.path();
+            let file_type = entry.file_type().expect("file type should be readable");
+
+            if file_type.is_dir() {
+                pending_dirs.push(path);
+                continue;
+            }
+
+            if path.extension().is_some_and(|extension| extension == "rs") {
+                let source = fs::read_to_string(&path).unwrap_or_else(|err| {
+                    panic!("provider source {path:?} should be readable: {err}")
+                });
+                if contains_marker(&source) {
                     return true;
                 }
             }
@@ -249,7 +363,10 @@ fn lifecycle_blocks_unapproved_stub_provider_modules() {
     let mut unapproved = Vec::new();
 
     for entry in PROVIDER_MODULE_LIFECYCLE {
-        if entry.lifecycle != ProviderModuleLifecycle::Stub {
+        if !matches!(
+            entry.lifecycle,
+            ProviderModuleLifecycle::Stub | ProviderModuleLifecycle::CatalogOnly
+        ) {
             continue;
         }
         let module_name = entry.module_name;
@@ -272,6 +389,25 @@ fn lifecycle_blocks_unapproved_stub_provider_modules() {
 }
 
 #[test]
+fn internal_lifecycle_entries_do_not_contain_provider_impl_markers() {
+    let mut internal_provider_impls = Vec::new();
+
+    for entry in PROVIDER_MODULE_LIFECYCLE {
+        if entry.lifecycle != ProviderModuleLifecycle::Internal {
+            continue;
+        }
+        if directory_contains_provider_impl_marker(entry.module_name) {
+            internal_provider_impls.push(entry.module_name);
+        }
+    }
+
+    assert!(
+        internal_provider_impls.is_empty(),
+        "internal lifecycle entries must not contain provider implementation markers: {internal_provider_impls:?}"
+    );
+}
+
+#[test]
 fn orphan_baseline_entries_are_live_and_bounded() {
     let provider_dirs = provider_directories();
     let mut seen = BTreeSet::new();
@@ -290,7 +426,7 @@ fn orphan_baseline_entries_are_live_and_bounded() {
         assert!(
             matches!(
                 lifecycle_for(entry.module_name),
-                ProviderModuleLifecycle::Stub | ProviderModuleLifecycle::Internal
+                ProviderModuleLifecycle::Stub | ProviderModuleLifecycle::CatalogOnly
             ),
             "{} baseline entry must reference a non-runtime provider module",
             entry.module_name
@@ -307,6 +443,13 @@ fn orphan_baseline_entries_are_live_and_bounded() {
                 entry.module_name
             );
         }
+        assert!(
+            !(entry.lane == "non-llm-lane"
+                && directory_contains_provider_impl_marker(entry.module_name)
+                && directory_declares_chat_capability(entry.module_name)),
+            "{} declares ChatCompletion and cannot use the non-LLM lane",
+            entry.module_name
+        );
         assert!(
             matches!(
                 entry.lane,

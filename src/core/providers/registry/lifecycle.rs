@@ -164,7 +164,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "meta_llama",
         "native Meta Llama module retained; ProviderType::MetaLlama currently uses a generic OpenAI-compatible adapter",
     ),
-    internal(
+    stub(
         "milvus",
         "vector-store provider module, outside LLM factory dispatch",
     ),
@@ -191,7 +191,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "petals",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    internal(
+    stub(
         "pg_vector",
         "vector-store provider module, outside LLM factory dispatch",
     ),
@@ -311,8 +311,8 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
     ),
     baseline(
         "deepl",
-        "non-llm-lane",
-        "translation provider uses macro-generated LLMProvider surface",
+        "delete-native",
+        "translation provider declares ChatCompletion and awaits GH837 disposition approval",
     ),
     baseline(
         "elevenlabs",
@@ -338,8 +338,8 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
     ),
     baseline(
         "google_pse",
-        "non-llm-lane",
-        "search provider exposes LLMProvider",
+        "delete-native",
+        "search provider declares ChatCompletion and awaits GH837 disposition approval",
     ),
     baseline(
         "gradient_ai",
@@ -377,6 +377,11 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "local OpenAI-compatible candidate",
     ),
     baseline("petals", "delete-native", "unwired native chat provider"),
+    baseline(
+        "pg_vector",
+        "non-llm-lane",
+        "vector provider module without a gateway LLM factory path",
+    ),
     baseline("predibase", "delete-native", "unwired native chat provider"),
     baseline("ragflow", "delete-native", "unwired native chat provider"),
     baseline(

@@ -17,7 +17,7 @@ Link to `product.md`.
 | Tier-1 catalog | `src/core/providers/registry/catalog.rs` | 数据驱动 OpenAI 兼容 provider → `Provider::OpenAILike`；catalog path 不等于同名 native module 可达 | demote 目标位置，但不能掩盖重复 native 实现 |
 | Public exports | `src/core/providers/mod.rs` | 多个孤儿目录仍以 `pub mod` 导出，feature gate 后下游 crate 可能直接 import | 删除前必须评估 public API / semver |
 | Macro providers | `src/core/providers/*/provider.rs` + `src/core/providers/macros/` | `custom_api`、`deepl` 等通过 `define_http_provider_with_hooks!` 生成 `LLMProvider` impl | 守护测试不能只搜 literal `impl LLMProvider` |
-| Non-LLM surfaces | `runwayml`、`recraft`、`stability`、`deepl`、search/vector/embedding-only 目录 | 可能暴露 image/video/translation/search/vector/embedding capability，而非 chat LLM | 进入 non-llm-lane，不走 LLM delete lane |
+| Non-LLM surfaces | `runwayml`、`recraft`、`stability`、audio/vector/embedding-only 目录 | 可能暴露 image/video/audio/vector/embedding capability，而非 chat LLM；声明 `ProviderCapability::ChatCompletion` 的 translation/search adapter 必须回到 LLM lane | 进入 non-llm-lane 前必须用 capability 证据排除 chat surface |
 | Orphan dirs | `src/core/providers/{custom_api,deepgram,ollama,elevenlabs,huggingface,sagemaker,watsonx,voyage,databricks,triton,jina,...}` | `pub mod` 声明 + 完整实现，但无 native factory/dispatch 构造点 | 处置对象（~41 个） |
 | Registry types | `src/core/providers/registry/{types.rs,lifecycle.rs,support_matrix.rs}` | `PROVIDER_TYPE_REGISTRY` 等元数据 | 守护测试挂载点 |
 | Prior art | #137 / #140 / #714（均 CLOSED） | 清理过一轮后回归 | 说明需要守护测试 |
@@ -116,7 +116,7 @@ This matrix covers every directory currently under `src/core/providers`. The lan
 | `databricks` | `delete-native` | `providers-extended` public module with literal `LLMProvider` impl; no native dispatch. | Delete or reclassify after T3. |
 | `datarobot` | `delete-native` | `providers-extended` public module with `define_pooled_http_provider_with_hooks!`; no native dispatch. | Delete or reclassify after T3. |
 | `deepgram` | `non-llm-lane` | Audio transcription provider; public module but no `LLMProvider` marker in the guard scan. | Decide non-LLM product support separately. |
-| `deepl` | `non-llm-lane` | Translation provider using `define_http_provider_with_hooks!` and chat-shaped adapter surface. | Product decision before delete/wire; keep in orphan baseline while unresolved. |
+| `deepl` | `delete-native` | Translation provider uses `define_http_provider_with_hooks!` and declares `ProviderCapability::ChatCompletion`, so it cannot use the non-LLM lane. | Delete or reclassify after T3. |
 | `elevenlabs` | `non-llm-lane` | Text-to-speech/audio transcription provider; public module but no `LLMProvider` marker in the guard scan. | Decide non-LLM product support separately. |
 | `empower` | `delete-native` | `providers-extended` public module with `define_pooled_http_provider_with_hooks!`; no native dispatch. | Delete or reclassify after T3. |
 | `exa_ai` | `delete-native` | `providers-extended` public module with literal `LLMProvider` impl; no native dispatch. | Delete or reclassify after T3. |
@@ -127,7 +127,7 @@ This matrix covers every directory currently under `src/core/providers`. The lan
 | `gigachat` | `delete-native` | `providers-extended` public module with literal `LLMProvider` impl; no native dispatch. | Delete or reclassify after T3. |
 | `github` | `demote-to-catalog` | Catalog-backed `ProviderType::GitHub`; native provider still exported. | Prove catalog equivalence, then delete native directory and shrink baseline. |
 | `github_copilot` | `wired-native` | `providers-extended` native dispatch and literal `LLMProvider` impl. | Keep gated native module. |
-| `google_pse` | `non-llm-lane` | Search provider exposes `LLMProvider` surface but has no native LLM dispatch. | Decide search product lane before delete/wire. |
+| `google_pse` | `delete-native` | Search provider declares `ProviderCapability::ChatCompletion` through an `LLMProvider` surface but has no native LLM dispatch. | Delete or reclassify after T3. |
 | `gradient_ai` | `delete-native` | `providers-extended` public module with literal `LLMProvider` impl; no native dispatch. | Delete or reclassify after T3. |
 | `huggingface` | `delete-native` | `providers-extended` public module with literal `LLMProvider` impl; no native dispatch. | Delete or reclassify after T3. |
 | `jina` | `non-llm-lane` | Embeddings provider exposes literal `LLMProvider` impl. | Decide embedding product lane before delete/wire. |
