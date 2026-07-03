@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::models::gateway::{GatewayPricingConfig, UnpricedModelPolicy};
 use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
 use crate::core::keys::InMemoryKeyRepository;
 use crate::core::pricing_service::LiteLLMModelInfo;
@@ -322,7 +323,7 @@ fn reserve_completion_budget_rejects_missing_pricing_when_budget_requires_cost()
 }
 
 #[test]
-fn reserve_completion_budget_allows_missing_pricing_when_limits_are_disabled() {
+fn reserve_completion_budget_rejects_missing_pricing_when_limits_are_disabled() {
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
     let mut provider_config = ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly);
@@ -336,7 +337,7 @@ fn reserve_completion_budget_allows_missing_pricing_when_limits_are_disabled() {
         .models
         .set_model_limit("missing-priced-model", model_config);
 
-    let reservation = match reserve_completion_budget_with_pricing(
+    let error = match reserve_completion_budget_with_pricing(
         &pricing,
         &budget,
         "runtime_provider",
@@ -344,15 +345,15 @@ fn reserve_completion_budget_allows_missing_pricing_when_limits_are_disabled() {
         1000,
         Some(500),
     ) {
-        Ok(reservation) => reservation,
-        Err(error) => panic!("disabled budget limits should not require pricing: {error}"),
+        Ok(_) => panic!("unpriced requests should fail closed by default"),
+        Err(error) => error,
     };
 
-    assert!(reservation.is_none());
+    assert!(super::is_model_not_priced_error(&error));
 }
 
 #[test]
-fn reserve_completion_budget_allows_missing_pricing_when_budget_manager_disabled() {
+fn reserve_completion_budget_rejects_missing_pricing_when_budget_manager_disabled() {
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
@@ -361,7 +362,7 @@ fn reserve_completion_budget_allows_missing_pricing_when_budget_manager_disabled
     );
     budget.providers.set_enabled(false);
 
-    let reservation = match reserve_completion_budget_with_pricing(
+    let error = match reserve_completion_budget_with_pricing(
         &pricing,
         &budget,
         "runtime_provider",
@@ -369,9 +370,37 @@ fn reserve_completion_budget_allows_missing_pricing_when_budget_manager_disabled
         1000,
         Some(500),
     ) {
-        Ok(reservation) => reservation,
-        Err(error) => panic!("disabled budget manager should not require pricing: {error}"),
+        Ok(_) => panic!("unpriced requests should fail closed by default"),
+        Err(error) => error,
     };
 
-    assert!(reservation.is_none());
+    assert!(super::is_model_not_priced_error(&error));
+}
+
+#[test]
+fn reserve_completion_budget_allow_unpriced_uses_fallback_per_1k_units() {
+    let pricing = PricingService::new(None);
+    let budget = UnifiedBudgetLimits::new();
+    budget.providers.set_provider_limit(
+        "runtime_provider",
+        ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
+    );
+    let mut pricing_config = GatewayPricingConfig::default();
+    pricing_config.unpriced_model_policy = UnpricedModelPolicy::AllowUnpriced;
+    pricing_config.unpriced_fallback_cost_per_1k_tokens = Some(0.5);
+
+    let reservation = reserve_completion_budget_with_policy(
+        &pricing,
+        &pricing_config,
+        &budget,
+        "runtime_provider",
+        "missing-priced-model",
+        1000,
+        Some(500),
+    )
+    .expect("allow_unpriced should use fallback")
+    .expect("non-zero fallback should reserve");
+
+    assert_eq!(reservation.reserved_amount(), 0.75);
+    reservation.cancel();
 }

@@ -1,5 +1,6 @@
 use uuid::Uuid;
 
+use crate::config::models::gateway::GatewayPricingConfig;
 use crate::core::budget::{BudgetReservation, UnifiedBudgetLimits, UnifiedBudgetReservation};
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
@@ -59,8 +60,10 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     (provider_name.to_string(), model.to_string())
 }
 
-pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_pricing(
+#[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_policy(
     pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
@@ -71,6 +74,7 @@ pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_pricing(
     let prompt_tokens = estimate_embedding_input_tokens(pricing_model, input);
     reserve_completion_budget_with_split_pricing(
         pricing_service,
+        pricing_config,
         budget_limits,
         budget_provider,
         budget_model,
@@ -81,8 +85,10 @@ pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_pricing(
     )
 }
 
-pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_pricing(
+#[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_policy(
     pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
@@ -99,20 +105,16 @@ pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_pricing(
         Err(error) => {
             tracing::error!(
                 "cost estimation failed for pricing provider '{pricing_provider}' budget provider \
-                 '{budget_provider}' model '{budget_model}': {error}; checking exhausted status without \
-                 reservation"
+                 '{budget_provider}' model '{budget_model}': {error}; applying unpriced model policy"
             );
-            if super::pricing_required_for_budget(budget_limits, budget_provider, budget_model) {
-                return Err(ProviderError::invalid_request(
-                    "pricing",
-                    format!(
-                        "pricing is required for budget reservation for \
-                         '{budget_provider}'/'{budget_model}': {error}"
-                    ),
-                ));
-            }
-            super::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
-            return Ok(None);
+            return super::unpriced::reserve_unpriced_usage_budget(
+                pricing_config,
+                budget_limits,
+                budget_provider,
+                budget_model,
+                usage,
+                error,
+            );
         }
     };
 
@@ -130,8 +132,9 @@ pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_pricing(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reservation_with_pricing(
+pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reservation_with_policy(
     pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     key_manager: &KeyManager,
     api_key_id: Option<Uuid>,
@@ -148,42 +151,50 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
         pricing_model,
         usage,
     ) {
-        Ok(breakdown) => Some(breakdown.total_cost),
+        Ok(breakdown) => breakdown.total_cost,
         Err(error) => {
             tracing::error!(
                 "cost calculation failed for pricing provider '{pricing_provider}' budget provider \
-                 '{budget_provider}' model '{budget_model}': {error}; recording token usage without cost \
-                 and skipping budget spend"
+                 '{budget_provider}' model '{budget_model}': {error}; settling through unpriced \
+                 model policy"
             );
-            None
+            super::unpriced::settle_unpriced_usage(
+                pricing_config,
+                budget_limits,
+                key_manager,
+                api_key_id,
+                budget_provider,
+                budget_model,
+                usage,
+                budget_reservation,
+                key_budget_reservation,
+                "usage spend pricing unavailable",
+            )
+            .await;
+            return;
         }
     };
 
-    if let Some(cost) = cost {
-        if let Some(reservation) = budget_reservation {
-            if let Err(error) = reservation.settle(cost) {
-                tracing::error!(
-                    "failed to settle reserved budget for '{budget_provider}'/'{budget_model}': \
-                     {error:?}; spend not recorded because reservation settlement failed"
-                );
-            }
-        } else {
-            budget_limits.record_spend(budget_provider, budget_model, cost);
+    if let Some(reservation) = budget_reservation {
+        if let Err(error) = reservation.settle(cost) {
+            tracing::error!(
+                "failed to settle reserved budget for '{budget_provider}'/'{budget_model}': \
+                 {error:?}; spend not recorded because reservation settlement failed"
+            );
         }
-        super::settle_api_key_budget_reservation(
-            key_budget_reservation,
-            cost,
-            &format!("{budget_provider}/{budget_model}"),
-        );
+    } else {
+        budget_limits.record_spend(budget_provider, budget_model, cost);
     }
+    super::settle_api_key_budget_reservation(
+        key_budget_reservation,
+        cost,
+        &format!("{budget_provider}/{budget_model}"),
+    );
 
     if let Some(key_id) = api_key_id {
-        let total_tokens = usage
-            .total_tokens
-            .saturating_add(usage.audio_token_count())
-            .saturating_add(usage.image_tokens.unwrap_or(0));
+        let total_tokens = super::unpriced::usage_units(usage);
         if let Err(error) = key_manager
-            .record_usage(key_id, u64::from(total_tokens), cost.unwrap_or(0.0))
+            .record_usage(key_id, u64::from(total_tokens), cost)
             .await
         {
             tracing::error!("failed to record usage for key {key_id}: {error}");
@@ -194,6 +205,7 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
 #[allow(clippy::too_many_arguments)]
 fn reserve_completion_budget_with_split_pricing(
     pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
@@ -212,20 +224,17 @@ fn reserve_completion_budget_with_split_pricing(
         Err(error) => {
             tracing::error!(
                 "cost estimation failed for pricing provider '{pricing_provider}' budget provider \
-                 '{budget_provider}' model '{budget_model}': {error}; checking exhausted status without \
-                 reservation"
+                 '{budget_provider}' model '{budget_model}': {error}; applying unpriced model policy"
             );
-            if super::pricing_required_for_budget(budget_limits, budget_provider, budget_model) {
-                return Err(ProviderError::invalid_request(
-                    "pricing",
-                    format!(
-                        "pricing is required for budget reservation for \
-                         '{budget_provider}'/'{budget_model}': {error}"
-                    ),
-                ));
-            }
-            super::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
-            return Ok(None);
+            return super::unpriced::reserve_unpriced_completion_budget(
+                pricing_config,
+                budget_limits,
+                budget_provider,
+                budget_model,
+                estimated_prompt_tokens,
+                max_output_tokens,
+                error,
+            );
         }
     };
 

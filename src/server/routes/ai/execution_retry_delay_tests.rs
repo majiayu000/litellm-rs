@@ -122,6 +122,82 @@ async fn budget_fallback_ignores_retry_limit_and_keeps_same_provider_candidates(
 }
 
 #[tokio::test]
+async fn unpriced_model_fallback_skips_candidate_without_recording_failure() {
+    let router = build_same_provider_budget_fallback_router(0).await;
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+
+    let result = execute_with_selected_deployment(
+        &router,
+        "shared-model",
+        ProviderCapability::ChatCompletion,
+        {
+            let attempts = attempts.clone();
+            move |_provider, model, _deployment_id| {
+                let attempts = attempts.clone();
+                async move {
+                    attempts.lock().unwrap().push(model.clone());
+                    if model == "gpt-expensive" {
+                        Err(super::super::spend::model_not_priced_error(
+                            "openai",
+                            &model,
+                            "missing pricing",
+                        ))
+                    } else {
+                        Ok((model, 0))
+                    }
+                }
+            }
+        },
+    )
+    .await
+    .expect("priced fallback should be selected after unpriced candidate");
+
+    assert_eq!(result, "gpt-cheap");
+    assert_eq!(
+        attempts.lock().unwrap().as_slice(),
+        ["gpt-expensive", "gpt-cheap"]
+    );
+    let primary = router
+        .get_deployment("same-provider-expensive")
+        .expect("primary deployment should exist");
+    assert_eq!(
+        primary
+            .state
+            .fail_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+}
+
+#[tokio::test]
+async fn unpriced_model_fallback_returns_model_not_priced_when_all_candidates_fail() {
+    let router = build_same_provider_budget_fallback_router(0).await;
+
+    let error = execute_with_selected_deployment(
+        &router,
+        "shared-model",
+        ProviderCapability::ChatCompletion,
+        |_provider, model, _deployment_id| async move {
+            Err::<(String, u64), _>(super::super::spend::model_not_priced_error(
+                "openai",
+                &model,
+                "missing pricing",
+            ))
+        },
+    )
+    .await
+    .expect_err("all-unpriced candidates should fail closed");
+
+    assert!(matches!(
+        error,
+        GatewayError::Provider(ProviderError::InvalidRequest {
+            provider: "pricing",
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
 async fn stream_budget_fallback_ignores_retry_limit() {
     let router = Arc::new(build_same_provider_budget_fallback_router(0).await);
     let attempts = Arc::new(Mutex::new(Vec::new()));

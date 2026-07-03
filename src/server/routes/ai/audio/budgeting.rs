@@ -1,3 +1,4 @@
+use crate::config::models::gateway::GatewayPricingConfig;
 use crate::core::budget::{
     BudgetManager, BudgetReservation, UnifiedBudgetLimits, UnifiedBudgetReservation,
 };
@@ -31,6 +32,7 @@ pub(super) fn estimated_audio_file_seconds(file: &[u8]) -> f64 {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn reserve_audio_budget_with_pricing(
     pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
     budget_manager: &BudgetManager,
     budget_limits: &UnifiedBudgetLimits,
     api_key_budget_id: Option<Uuid>,
@@ -48,29 +50,17 @@ pub(super) fn reserve_audio_budget_with_pricing(
         pricing_model,
         total_time_seconds,
     ) {
-        let cost = pricing_service
-            .calculate_loaded_completion_cost_for_provider(
-                pricing_provider,
-                pricing_model,
-                0,
-                0,
-                None,
-                None,
-                total_time_seconds,
-            )
-            .map_err(|error| {
-                ProviderError::invalid_request(
-                    "pricing",
-                    format!(
-                        "pricing is required for audio budget reservation for \
-                         '{budget_provider}'/'{budget_model}': {error}"
-                    ),
-                )
-            })?
-            .total_cost;
-        if cost > 0.0 {
-            budget_limits
-                .reserve_spend(budget_provider, budget_model, cost)
+        match pricing_service.calculate_loaded_completion_cost_for_provider(
+            pricing_provider,
+            pricing_model,
+            0,
+            0,
+            None,
+            None,
+            total_time_seconds,
+        ) {
+            Ok(cost) if cost.total_cost > 0.0 => budget_limits
+                .reserve_spend(budget_provider, budget_model, cost.total_cost)
                 .map(Some)
                 .map_err(|error| {
                     super::super::spend::reservation_error_to_provider_error(
@@ -78,18 +68,28 @@ pub(super) fn reserve_audio_budget_with_pricing(
                         budget_provider,
                         budget_model,
                     )
-                })?
-        } else {
-            super::super::spend::ensure_budget_available(
+                })?,
+            Ok(_) => {
+                super::super::spend::ensure_budget_available(
+                    budget_limits,
+                    budget_provider,
+                    budget_model,
+                )?;
+                None
+            }
+            Err(error) => super::super::spend::reserve_unpriced_usage_budget(
+                pricing_config,
                 budget_limits,
                 budget_provider,
                 budget_model,
-            )?;
-            None
+                usage,
+                error,
+            )?,
         }
     } else {
-        super::super::spend::reserve_pricing_usage_budget_with_pricing(
+        super::super::spend::reserve_pricing_usage_budget_with_policy(
             pricing_service,
+            pricing_config,
             budget_limits,
             budget_provider,
             budget_model,
@@ -109,6 +109,7 @@ pub(super) fn reserve_audio_budget_with_pricing(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn record_audio_spend(
     pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     key_manager: &KeyManager,
     api_key_id: Option<uuid::Uuid>,
@@ -160,19 +161,27 @@ pub(super) async fn record_audio_spend(
                      '{pricing_provider}' budget provider '{budget_provider}' model \
                      '{budget_model}': {error}; skipping budget spend"
                 );
-                let reserved = settle_reserved_audio_budget_on_error(
+                super::super::spend::settle_unpriced_usage(
+                    pricing_config,
+                    budget_limits,
+                    key_manager,
+                    api_key_id,
+                    budget_provider,
+                    budget_model,
+                    usage,
                     budget_reservation,
                     key_budget_reservation,
                     "time-based audio spend calculation failed",
-                );
-                record_key_usage(key_manager, api_key_id, usage, reserved).await;
+                )
+                .await;
             }
         }
         return;
     }
 
-    super::super::spend::record_pricing_usage_spend_with_reservation_with_pricing(
+    super::super::spend::record_pricing_usage_spend_with_reservation_with_policy(
         pricing_service,
+        pricing_config,
         budget_limits,
         key_manager,
         api_key_id,
@@ -215,31 +224,6 @@ fn settle_audio_budget_or_record(
     } else {
         budget_limits.record_spend(budget_provider, budget_model, cost);
     }
-}
-
-fn settle_reserved_audio_budget_on_error(
-    budget_reservation: Option<UnifiedBudgetReservation>,
-    key_budget_reservation: Option<BudgetReservation>,
-    context: &str,
-) -> f64 {
-    let Some(budget_reservation) = budget_reservation else {
-        super::super::spend::settle_api_key_budget_reservation(
-            key_budget_reservation,
-            0.0,
-            context,
-        );
-        return 0.0;
-    };
-    let reserved = budget_reservation.reserved_amount();
-    if let Err(error) = budget_reservation.settle(reserved) {
-        tracing::error!("failed to settle {context}: {error:?}");
-    }
-    super::super::spend::settle_api_key_budget_reservation(
-        key_budget_reservation,
-        reserved,
-        context,
-    );
-    reserved
 }
 
 async fn record_key_usage(
@@ -300,6 +284,7 @@ mod tests {
 
         record_audio_spend(
             &pricing,
+            &GatewayPricingConfig::default(),
             &budget_limits,
             &key_manager,
             None,

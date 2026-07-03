@@ -73,6 +73,8 @@ async fn finished_stream_without_usage_records_reserved_key_cost_after_output() 
         api_key_id: Some(key_id),
         provider: "openai",
         model: "gpt-4o",
+        pricing_provider: "openai",
+        pricing_model: "gpt-4o",
         usage: None,
         saw_upstream_output: true,
         budget_reservation: Some(reservation),

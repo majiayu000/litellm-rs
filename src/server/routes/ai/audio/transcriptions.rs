@@ -154,6 +154,7 @@ pub async fn audio_transcriptions(
     let budget_limits = state.budget_limits.clone();
     let key_manager = state.key_manager.clone();
     let pricing_service = state.pricing.clone();
+    let pricing_config = state.config().gateway.pricing.clone();
 
     match execute_with_selected_deployment(
         &state.unified_router,
@@ -166,6 +167,7 @@ pub async fn audio_transcriptions(
             let budget_limits = budget_limits.clone();
             let key_manager = key_manager.clone();
             let pricing_service = pricing_service.clone();
+            let pricing_config = pricing_config.clone();
             async move {
                 let usage =
                     super::budgeting::audio_file_usage(&request.file, request.prompt.as_deref());
@@ -181,6 +183,7 @@ pub async fn audio_transcriptions(
                 let (budget_reservation, key_budget_reservation) =
                     super::budgeting::reserve_audio_budget_with_pricing(
                         pricing_service.as_ref(),
+                        &pricing_config,
                         &budget_manager,
                         &budget_limits,
                         api_key_budget_id,
@@ -196,6 +199,7 @@ pub async fn audio_transcriptions(
                 let tokens_used = u64::from(usage.total_tokens);
                 super::budgeting::record_audio_spend(
                     pricing_service.as_ref(),
+                    &pricing_config,
                     &budget_limits,
                     &key_manager,
                     api_key_id,

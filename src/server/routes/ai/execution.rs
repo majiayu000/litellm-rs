@@ -1,5 +1,3 @@
-//! Shared execution helpers for AI routes.
-
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::router::UnifiedRouter;
 use crate::core::router::deployment::Deployment;
@@ -15,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-/// Holds a selected deployment active for the lifetime of a streaming response.
 pub(super) struct StreamingDeploymentLease {
     router: Arc<UnifiedRouter>,
     deployment: Arc<Deployment>,
@@ -61,10 +58,6 @@ impl Drop for StreamingDeploymentLease {
     }
 }
 
-/// Execute an AI route operation against the deployment selected by `UnifiedRouter`.
-///
-/// This centralizes the repeated
-/// `execute_with_retry -> get_deployment -> provider/model clone` skeleton.
 pub(super) async fn execute_with_selected_deployment<T, F, Fut>(
     router: &UnifiedRouter,
     requested_model: &str,
@@ -132,7 +125,9 @@ where
                 return Ok(value);
             }
             Err(err) => {
-                if retryable_budget_scope(&err).is_some() {
+                if retryable_budget_scope(&err).is_some()
+                    || super::spend::is_model_not_priced_error(&err)
+                {
                     excluded_budget_deployments.insert(deployment_lease.clone_deployment_id());
                     drop(deployment_lease);
                     last_error = Some(err);
@@ -183,7 +178,7 @@ fn retry_delay_for_error(
     attempt: u32,
     error: &ProviderError,
 ) -> Option<Duration> {
-    if retryable_budget_scope(error).is_some() {
+    if retryable_budget_scope(error).is_some() || super::spend::is_model_not_priced_error(error) {
         return None;
     }
 
@@ -199,11 +194,6 @@ fn retry_delay_for_error(
 #[path = "execution_retry_delay_tests.rs"]
 mod retry_delay_tests;
 
-/// Start a streaming operation while keeping the selected deployment active.
-///
-/// The returned lease must live until the stream completes, errors, or is
-/// cancelled by client disconnect. Dropping it releases the deployment without
-/// recording success or failure; explicit finish methods record final outcome.
 pub(super) async fn execute_stream_with_selected_deployment<T, F, Fut>(
     router: Arc<UnifiedRouter>,
     requested_model: &str,
@@ -266,7 +256,9 @@ where
                 return Ok((stream, lease));
             }
             Err(err) => {
-                if retryable_budget_scope(&err).is_some() {
+                if retryable_budget_scope(&err).is_some()
+                    || super::spend::is_model_not_priced_error(&err)
+                {
                     excluded_budget_deployments.insert(deployment_lease.clone_deployment_id());
                     drop(deployment_lease);
                     last_error = Some(err);

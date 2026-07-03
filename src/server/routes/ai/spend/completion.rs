@@ -1,0 +1,470 @@
+use crate::config::models::gateway::GatewayPricingConfig;
+use crate::core::budget::{UnifiedBudgetLimits, UnifiedBudgetReservation};
+use crate::core::models::openai::requests::ChatCompletionRequest;
+use crate::core::models::openai::{
+    ChatMessage, ContentPart, Function, FunctionCall, MessageContent, ResponseFormat, Tool,
+};
+use crate::core::pricing_service::PricingService;
+use crate::core::providers::unified_provider::ProviderError;
+use crate::utils::ai::counter::token_counter::TokenCounter;
+
+const IMAGE_PROMPT_BASE_TOKENS: u32 = 85;
+pub(in crate::server::routes::ai) const IMAGE_HIGH_DETAIL_PROMPT_TOKENS: u32 = 1_105;
+const AUDIO_PROMPT_BASE_TOKENS: u32 = 100;
+const DOCUMENT_PROMPT_BASE_TOKENS: u32 = 1_000;
+const TOOL_RESULT_BASE_TOKENS: u32 = 50;
+const TOOL_USE_BASE_TOKENS: u32 = 100;
+
+#[cfg(test)]
+pub(in crate::server::routes::ai) fn reserve_completion_budget(
+    budget_limits: &UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+    estimated_prompt_tokens: u32,
+    max_output_tokens: Option<u32>,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    reserve_completion_budget_with_pricing(
+        super::default_spend_pricing_service(),
+        budget_limits,
+        provider,
+        model,
+        estimated_prompt_tokens,
+        max_output_tokens,
+    )
+}
+
+#[cfg(test)]
+pub(in crate::server::routes::ai) fn reserve_completion_budget_with_pricing(
+    pricing_service: &PricingService,
+    budget_limits: &UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+    estimated_prompt_tokens: u32,
+    max_output_tokens: Option<u32>,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    reserve_completion_budget_with_policy(
+        pricing_service,
+        &GatewayPricingConfig::default(),
+        budget_limits,
+        provider,
+        model,
+        estimated_prompt_tokens,
+        max_output_tokens,
+    )
+}
+
+#[cfg(test)]
+pub(in crate::server::routes::ai) fn reserve_completion_budget_with_policy(
+    pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+    estimated_prompt_tokens: u32,
+    max_output_tokens: Option<u32>,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    reserve_completion_budget_with_split_pricing(
+        pricing_service,
+        pricing_config,
+        budget_limits,
+        provider,
+        model,
+        provider,
+        model,
+        estimated_prompt_tokens,
+        max_output_tokens,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) fn reserve_completion_budget_with_split_pricing(
+    pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    budget_provider: &str,
+    budget_model: &str,
+    pricing_provider: &str,
+    pricing_model: &str,
+    estimated_prompt_tokens: u32,
+    max_output_tokens: Option<u32>,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    let estimate = match pricing_service.estimate_loaded_completion_cost_for_provider(
+        pricing_provider,
+        pricing_model,
+        estimated_prompt_tokens,
+        max_output_tokens,
+    ) {
+        Ok(estimate) => estimate,
+        Err(error) => {
+            tracing::error!(
+                "cost estimation failed for pricing provider '{pricing_provider}' model \
+                 '{pricing_model}' budget provider '{budget_provider}' model '{budget_model}': {error}; \
+                 applying unpriced model policy"
+            );
+            return super::unpriced::reserve_unpriced_completion_budget(
+                pricing_config,
+                budget_limits,
+                budget_provider,
+                budget_model,
+                estimated_prompt_tokens,
+                max_output_tokens,
+                error,
+            );
+        }
+    };
+
+    if estimate.max_cost <= 0.0 {
+        super::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
+        return Ok(None);
+    }
+
+    budget_limits
+        .reserve_spend(budget_provider, budget_model, estimate.max_cost)
+        .map(Some)
+        .map_err(|error| {
+            super::reservation_error_to_provider_error(error, budget_provider, budget_model)
+        })
+}
+
+#[cfg(test)]
+pub(in crate::server::routes::ai) fn reserve_chat_completion_budget(
+    budget_limits: &UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+    request: &ChatCompletionRequest,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    reserve_chat_completion_budget_with_pricing(
+        super::default_spend_pricing_service(),
+        budget_limits,
+        provider,
+        model,
+        request,
+    )
+}
+
+#[cfg(test)]
+pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_pricing(
+    pricing_service: &PricingService,
+    budget_limits: &UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+    request: &ChatCompletionRequest,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    reserve_chat_completion_budget_with_policy(
+        pricing_service,
+        &GatewayPricingConfig::default(),
+        budget_limits,
+        provider,
+        model,
+        request,
+    )
+}
+
+#[cfg(test)]
+pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_policy(
+    pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+    request: &ChatCompletionRequest,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    reserve_chat_completion_budget_with_split_pricing(
+        pricing_service,
+        pricing_config,
+        budget_limits,
+        provider,
+        model,
+        provider,
+        model,
+        request,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_pricing(
+    pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    budget_provider: &str,
+    budget_model: &str,
+    pricing_provider: &str,
+    pricing_model: &str,
+    request: &ChatCompletionRequest,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    let prompt_tokens = estimate_chat_prompt_tokens(
+        pricing_model,
+        &request.messages,
+        request.tools.as_deref(),
+        request.functions.as_deref(),
+        request.function_call.as_ref(),
+        request.response_format.as_ref(),
+    );
+    reserve_completion_budget_with_split_pricing(
+        pricing_service,
+        pricing_config,
+        budget_limits,
+        budget_provider,
+        budget_model,
+        pricing_provider,
+        pricing_model,
+        prompt_tokens,
+        reservation_output_tokens(
+            pricing_service,
+            pricing_provider,
+            pricing_model,
+            prompt_tokens,
+            provider_effective_max_output_tokens(budget_provider, budget_model, request),
+            request.n.unwrap_or(1),
+        ),
+    )
+}
+
+pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
+    model: &str,
+    messages: &[ChatMessage],
+    tools: Option<&[Tool]>,
+    functions: Option<&[Function]>,
+    function_call: Option<&FunctionCall>,
+    response_format: Option<&ResponseFormat>,
+) -> u32 {
+    let counter = TokenCounter::new();
+    let message_tokens = match counter.count_chat_tokens(model, messages) {
+        Ok(estimate) => estimate.input_tokens,
+        Err(error) => {
+            tracing::warn!(
+                "token estimation failed for model '{model}': {error}; using fallback estimate"
+            );
+            fallback_message_tokens(messages)
+        }
+    };
+    let multimodal_tokens = conservative_multimodal_prompt_extra(messages);
+
+    let tool_tokens = tools.map_or(0, |tools| {
+        let Ok(tool_json) = serde_json::to_string(tools) else {
+            return u32::try_from(tools.len().saturating_mul(256)).unwrap_or(u32::MAX);
+        };
+        counter
+            .count_completion_tokens(model, &tool_json)
+            .map(|estimate| estimate.input_tokens)
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    "tool token estimation failed for model '{model}': {error}; \
+                     using fallback estimate"
+                );
+                u32::try_from(tool_json.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
+            })
+    });
+
+    let function_tokens = serialized_prompt_tokens(
+        &counter,
+        model,
+        functions,
+        "legacy function token estimation failed",
+        |functions| functions.len().saturating_mul(256),
+    );
+    let function_call_tokens = serialized_prompt_tokens(
+        &counter,
+        model,
+        function_call,
+        "legacy function_call token estimation failed",
+        |_| 64,
+    );
+    let response_format_tokens = serialized_prompt_tokens(
+        &counter,
+        model,
+        response_format,
+        "response_format token estimation failed",
+        |_| 128,
+    );
+
+    message_tokens
+        .saturating_add(multimodal_tokens)
+        .saturating_add(tool_tokens)
+        .saturating_add(function_tokens)
+        .saturating_add(function_call_tokens)
+        .saturating_add(response_format_tokens)
+}
+
+fn reservation_output_tokens(
+    pricing_service: &PricingService,
+    provider: &str,
+    model: &str,
+    prompt_tokens: u32,
+    requested_max_output_tokens: Option<u32>,
+    choice_count: u32,
+) -> Option<u32> {
+    let counter = TokenCounter::new();
+    let choice_count = choice_count.max(1);
+    let output_tokens = if let Some(requested) = requested_max_output_tokens {
+        Some(requested)
+    } else {
+        catalog_max_output_tokens_with_pricing(pricing_service, provider, model).or_else(|| {
+            counter
+                .estimate_output_tokens(None, prompt_tokens, model)
+                .ok()
+        })
+    };
+
+    output_tokens.map(|tokens| tokens.saturating_mul(choice_count))
+}
+
+#[cfg(test)]
+pub(in crate::server::routes::ai) fn catalog_max_output_tokens(
+    provider: &str,
+    model: &str,
+) -> Option<u32> {
+    catalog_max_output_tokens_with_pricing(super::default_spend_pricing_service(), provider, model)
+}
+
+fn catalog_max_output_tokens_with_pricing(
+    pricing_service: &PricingService,
+    provider: &str,
+    model: &str,
+) -> Option<u32> {
+    pricing_service.max_output_tokens_for_provider(provider, model)
+}
+
+pub(in crate::server::routes::ai) fn provider_effective_max_output_tokens(
+    provider: &str,
+    model: &str,
+    request: &ChatCompletionRequest,
+) -> Option<u32> {
+    let provider = crate::core::pricing::normalize_pricing_provider(provider);
+    match provider.as_str() {
+        "openai" | "azure" | "azure_ai" | "openai_like" | "openrouter" | "xai" | "groq"
+        | "deepseek" | "moonshot" | "minimax" | "zhipuai" | "xiaomi_mimo" | "amazon_nova"
+        | "baseten" | "huggingface" | "zai" | "together_ai" | "fireworks_ai" | "aiml" => {
+            request.max_completion_tokens.or(request.max_tokens)
+        }
+        "anthropic" => Some(request.max_tokens.unwrap_or(4096)),
+        "bedrock" => bedrock_effective_max_output_tokens(model, request),
+        "cohere" | "replicate" => request.max_tokens.or(request.max_completion_tokens),
+        _ => request.max_tokens,
+    }
+}
+
+fn bedrock_effective_max_output_tokens(
+    model: &str,
+    request: &ChatCompletionRequest,
+) -> Option<u32> {
+    use crate::core::providers::bedrock::BedrockApiType;
+
+    let Ok(config) = crate::core::providers::bedrock::get_model_config_for_model_id(model) else {
+        return request.max_tokens;
+    };
+
+    match config.api_type {
+        BedrockApiType::Converse | BedrockApiType::ConverseStream => {
+            request.max_completion_tokens.or(request.max_tokens)
+        }
+        BedrockApiType::Invoke | BedrockApiType::InvokeStream => request.max_tokens,
+    }
+}
+
+fn conservative_multimodal_prompt_extra(messages: &[ChatMessage]) -> u32 {
+    messages
+        .iter()
+        .filter_map(|message| message.content.as_ref())
+        .flat_map(|content| match content {
+            MessageContent::Text(_) => [].as_slice(),
+            MessageContent::Parts(parts) => parts.as_slice(),
+        })
+        .fold(0u32, |total, part| {
+            total.saturating_add(conservative_content_part_extra(part))
+        })
+}
+
+fn conservative_content_part_extra(part: &ContentPart) -> u32 {
+    match part {
+        ContentPart::ImageUrl { image_url } => {
+            image_prompt_floor(image_url.detail.as_deref()).saturating_sub(IMAGE_PROMPT_BASE_TOKENS)
+        }
+        ContentPart::Image {
+            source,
+            detail,
+            image_url,
+        } => {
+            let detail = detail
+                .as_deref()
+                .or_else(|| image_url.as_ref().and_then(|url| url.detail.as_deref()));
+            image_prompt_floor(detail)
+                .max(encoded_media_tokens(&source.data))
+                .saturating_sub(IMAGE_PROMPT_BASE_TOKENS)
+        }
+        ContentPart::Audio { audio } => encoded_media_tokens(&audio.data)
+            .max(AUDIO_PROMPT_BASE_TOKENS)
+            .saturating_sub(AUDIO_PROMPT_BASE_TOKENS),
+        ContentPart::Document { source, .. } => encoded_media_tokens(&source.data)
+            .max(DOCUMENT_PROMPT_BASE_TOKENS)
+            .saturating_sub(DOCUMENT_PROMPT_BASE_TOKENS),
+        ContentPart::ToolResult { .. } => {
+            serialized_content_part_tokens(part).saturating_sub(TOOL_RESULT_BASE_TOKENS)
+        }
+        ContentPart::ToolUse { .. } => {
+            serialized_content_part_tokens(part).saturating_sub(TOOL_USE_BASE_TOKENS)
+        }
+        ContentPart::Text { .. } => 0,
+    }
+}
+
+fn serialized_content_part_tokens(part: &ContentPart) -> u32 {
+    let Ok(json) = serde_json::to_string(part) else {
+        return u32::MAX;
+    };
+    u32::try_from(json.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
+}
+
+fn image_prompt_floor(detail: Option<&str>) -> u32 {
+    if detail.is_some_and(|detail| detail.eq_ignore_ascii_case("low")) {
+        IMAGE_PROMPT_BASE_TOKENS
+    } else {
+        IMAGE_HIGH_DETAIL_PROMPT_TOKENS
+    }
+}
+
+fn encoded_media_tokens(data: &str) -> u32 {
+    u32::try_from(data.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
+}
+
+fn serialized_prompt_tokens<T, F>(
+    counter: &TokenCounter,
+    model: &str,
+    value: Option<&T>,
+    warn_message: &str,
+    fallback_units: F,
+) -> u32
+where
+    T: serde::Serialize + ?Sized,
+    F: FnOnce(&T) -> usize,
+{
+    let Some(value) = value else {
+        return 0;
+    };
+    let Ok(json) = serde_json::to_string(value) else {
+        return u32::try_from(fallback_units(value)).unwrap_or(u32::MAX);
+    };
+
+    counter
+        .count_completion_tokens(model, &json)
+        .map(|estimate| estimate.input_tokens)
+        .unwrap_or_else(|error| {
+            tracing::warn!("{warn_message} for model '{model}': {error}; using fallback estimate");
+            u32::try_from(json.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
+        })
+}
+
+fn fallback_message_tokens(messages: &[ChatMessage]) -> u32 {
+    let chars = messages
+        .iter()
+        .filter_map(|message| message.content.as_ref())
+        .map(|content| match content {
+            MessageContent::Text(text) => text.chars().count(),
+            MessageContent::Parts(parts) => serde_json::to_string(parts)
+                .map(|text| text.chars().count())
+                .unwrap_or_default(),
+        })
+        .sum::<usize>();
+    let overhead = messages.len().saturating_mul(4).saturating_add(8);
+    u32::try_from(chars.div_ceil(4).saturating_add(overhead)).unwrap_or(u32::MAX)
+}

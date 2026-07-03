@@ -363,8 +363,10 @@ async fn gemini_upstream_response_to_http_response(
 
     let body = response.bytes().await.map_err(gemini_http_error)?;
     if status.is_success() {
+        let config = state.config();
         let spend_state = GeminiSpendState {
             pricing: state.pricing.as_ref(),
+            pricing_config: &config.gateway.pricing,
             budget_limits: &state.budget_limits,
             key_manager: &state.key_manager,
             api_key_id: context.api_key_id(),
@@ -409,6 +411,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
     } = parts;
     let (tx, rx) = mpsc::channel::<Bytes>(8);
     let pricing = state.pricing.clone();
+    let pricing_config = state.config().gateway.pricing.clone();
     let budget_limits = state.budget_limits.clone();
     let key_manager = state.key_manager.clone();
     let api_key_id = context.api_key_id();
@@ -438,6 +441,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                     }
                     let spend_state = GeminiSpendState {
                         pricing: pricing.as_ref(),
+                        pricing_config: &pricing_config,
                         budget_limits: &budget_limits,
                         key_manager: &key_manager,
                         api_key_id,
@@ -470,6 +474,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
             if tx.send(bytes).await.is_err() {
                 let spend_state = GeminiSpendState {
                     pricing: pricing.as_ref(),
+                    pricing_config: &pricing_config,
                     budget_limits: &budget_limits,
                     key_manager: &key_manager,
                     api_key_id,
@@ -489,6 +494,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
 
         let spend_state = GeminiSpendState {
             pricing: pricing.as_ref(),
+            pricing_config: &pricing_config,
             budget_limits: &budget_limits,
             key_manager: &key_manager,
             api_key_id,

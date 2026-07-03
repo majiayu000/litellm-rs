@@ -3,9 +3,14 @@
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, EmbeddingRequest, EmbeddingResponse,
 };
+use crate::core::pricing_service::PricingUsage;
+use crate::core::providers::{Provider, ProviderError};
+use crate::core::router::execution::router_error_to_provider_error;
 use crate::core::types::context::RequestContext;
+use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
+use std::collections::HashSet;
 use tracing::warn;
 
 const BYPASS_CHAT_RESPONSE_CACHE_KEY: &str = "bypass_chat_response_cache";
@@ -123,6 +128,117 @@ pub(super) async fn store_embedding(
     cache
         .cache_embedding_response(&request, response.clone())
         .await
+}
+
+pub(super) fn ensure_chat_cache_pricing_gate(
+    state: &AppState,
+    request: &ChatCompletionRequest,
+) -> Result<(), GatewayError> {
+    let prompt_tokens = super::spend::estimate_chat_prompt_tokens(
+        &request.model,
+        &request.messages,
+        request.tools.as_deref(),
+        request.functions.as_deref(),
+        request.function_call.as_ref(),
+        request.response_format.as_ref(),
+    );
+    let output_tokens = request
+        .max_completion_tokens
+        .or(request.max_tokens)
+        .or(Some(1));
+    ensure_cache_pricing_gate(
+        state,
+        &request.model,
+        ProviderCapability::ChatCompletion,
+        |provider, selected_model| {
+            let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
+                state.pricing.as_ref(),
+                provider,
+                selected_model,
+            );
+            state
+                .pricing
+                .estimate_loaded_completion_cost_for_provider(
+                    &pricing_provider,
+                    &pricing_model,
+                    prompt_tokens,
+                    output_tokens,
+                )
+                .map(|_| ())
+                .map_err(|error| {
+                    super::spend::model_not_priced_error(provider.name(), selected_model, error)
+                })
+        },
+    )
+}
+
+pub(super) fn ensure_embedding_cache_pricing_gate(
+    state: &AppState,
+    request: &EmbeddingRequest,
+) -> Result<(), GatewayError> {
+    let usage = PricingUsage::new(1, 0);
+    ensure_cache_pricing_gate(
+        state,
+        &request.model,
+        ProviderCapability::Embeddings,
+        |provider, selected_model| {
+            let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
+                state.pricing.as_ref(),
+                provider,
+                selected_model,
+            );
+            state
+                .pricing
+                .calculate_loaded_usage_cost_for_provider(&pricing_provider, &pricing_model, &usage)
+                .map(|_| ())
+                .map_err(|error| {
+                    super::spend::model_not_priced_error(provider.name(), selected_model, error)
+                })
+        },
+    )
+}
+
+fn ensure_cache_pricing_gate<F>(
+    state: &AppState,
+    requested_model: &str,
+    capability: ProviderCapability,
+    mut check: F,
+) -> Result<(), GatewayError>
+where
+    F: FnMut(&Provider, &str) -> Result<(), ProviderError>,
+{
+    let mut excluded_deployments = HashSet::new();
+    let mut last_error = None;
+
+    loop {
+        let lease = match state
+            .unified_router
+            .select_deployment_lease_for_capability_matching(
+                requested_model,
+                &capability,
+                |deployment| !excluded_deployments.contains(deployment.id.as_str()),
+            ) {
+            Ok(lease) => lease,
+            Err(router_error) => {
+                if let Some(error) = last_error {
+                    return Err(GatewayError::Provider(error));
+                }
+                return Err(GatewayError::Provider(router_error_to_provider_error(
+                    router_error,
+                )));
+            }
+        };
+
+        let deployment = lease.deployment();
+        match check(&deployment.provider, &deployment.model) {
+            Ok(()) => return Ok(()),
+            Err(error) if super::spend::is_model_not_priced_error(&error) => {
+                excluded_deployments.insert(lease.clone_deployment_id());
+                last_error = Some(error);
+            }
+            Err(error) => return Err(GatewayError::Provider(error)),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -183,8 +183,16 @@ mod tests {
             "owner-a"
         );
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), StatusCode::OK);
-        let created: Value = test::read_body_json(create_resp).await;
+        let create_status = create_resp.status();
+        let create_body = test::read_body(create_resp).await;
+        assert_eq!(
+            create_status,
+            StatusCode::OK,
+            "create response body: {}",
+            String::from_utf8_lossy(&create_body)
+        );
+        let created: Value =
+            serde_json::from_slice(&create_body).expect("create response should be JSON");
         let response_id = created["id"].as_str().expect("response id").to_string();
         assert_eq!(created["object"], "response");
 
@@ -275,8 +283,14 @@ mod tests {
             "stream-owner"
         );
         let stream_resp = test::call_service(&app, stream_req).await;
-        assert_eq!(stream_resp.status(), StatusCode::OK);
+        let stream_status = stream_resp.status();
         let body = test::read_body(stream_resp).await;
+        assert_eq!(
+            stream_status,
+            StatusCode::OK,
+            "stream response body: {}",
+            String::from_utf8_lossy(&body)
+        );
         let response_id = response_id_from_sse(&String::from_utf8_lossy(&body));
 
         let get_req = with_user!(

@@ -40,6 +40,7 @@ pub async fn handle_image_generation_with_state(
     let budget_limits = state.budget_limits.clone();
     let key_manager = state.key_manager.clone();
     let pricing_service = state.pricing.clone();
+    let pricing_config = state.config().gateway.pricing.clone();
     let core_response = execute_with_selected_deployment(
         &state.unified_router,
         &requested_model,
@@ -51,6 +52,7 @@ pub async fn handle_image_generation_with_state(
             let budget_limits = budget_limits.clone();
             let key_manager = key_manager.clone();
             let pricing_service = pricing_service.clone();
+            let pricing_config = pricing_config.clone();
             async move {
                 super::super::spend::ensure_budget_available(
                     &budget_limits,
@@ -95,8 +97,9 @@ pub async fn handle_image_generation_with_state(
                     &usage_pricing_model,
                 );
                 let budget_reservation =
-                    super::super::spend::reserve_pricing_usage_budget_with_pricing(
+                    super::super::spend::reserve_pricing_usage_budget_with_policy(
                         pricing_service.as_ref(),
+                        &pricing_config,
                         &budget_limits,
                         &budget_provider,
                         &selected_model,
@@ -120,8 +123,9 @@ pub async fn handle_image_generation_with_state(
                         .total_tokens
                         .saturating_add(usage.image_tokens.unwrap_or(0)),
                 );
-                super::super::spend::record_pricing_usage_spend_with_reservation_with_pricing(
+                super::super::spend::record_pricing_usage_spend_with_reservation_with_policy(
                     pricing_service.as_ref(),
+                    &pricing_config,
                     &budget_limits,
                     &key_manager,
                     api_key_id,

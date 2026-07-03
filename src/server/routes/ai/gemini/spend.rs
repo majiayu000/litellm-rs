@@ -2,6 +2,7 @@ use bytes::Bytes;
 use serde_json::Value;
 use tracing::error;
 
+use crate::config::models::gateway::GatewayPricingConfig;
 use crate::core::budget::{
     BudgetReservation, BudgetReservationError, UnifiedBudgetLimits, UnifiedBudgetReservation,
 };
@@ -15,6 +16,7 @@ use super::provider::GeminiRouteProvider;
 
 pub(super) struct GeminiSpendState<'a> {
     pub(super) pricing: &'a PricingService,
+    pub(super) pricing_config: &'a GatewayPricingConfig,
     pub(super) budget_limits: &'a UnifiedBudgetLimits,
     pub(super) key_manager: &'a KeyManager,
     pub(super) api_key_id: Option<uuid::Uuid>,
@@ -120,12 +122,26 @@ pub(super) fn reserve_gemini_budget(
     request: &Value,
 ) -> Result<Option<UnifiedBudgetReservation>, GatewayError> {
     let usage = estimated_gemini_request_usage(request);
-    let estimate = state.pricing.estimate_loaded_completion_cost_for_provider(
+    let pricing_config = &state.config().gateway.pricing;
+    let estimate = match state.pricing.estimate_loaded_completion_cost_for_provider(
         &provider.pricing_provider,
         &provider.model,
         usage.prompt_tokens,
         Some(usage.completion_tokens),
-    )?;
+    ) {
+        Ok(estimate) => estimate,
+        Err(error) => {
+            return super::super::spend::reserve_unpriced_usage_budget(
+                pricing_config,
+                &state.budget_limits,
+                &provider.provider_name,
+                &provider.model,
+                &usage,
+                error,
+            )
+            .map_err(GatewayError::Provider);
+        }
+    };
     if estimate.max_cost <= 0.0 {
         super::super::spend::ensure_budget_available(
             &state.budget_limits,
@@ -157,9 +173,14 @@ async fn record_gemini_usage(
         ) {
         Ok(breakdown) => breakdown.total_cost,
         Err(error) => {
-            settle_gemini_reserved_spend_without_usage(
-                spend_state,
-                provider,
+            super::super::spend::settle_unpriced_usage(
+                spend_state.pricing_config,
+                spend_state.budget_limits,
+                spend_state.key_manager,
+                spend_state.api_key_id,
+                &provider.provider_name,
+                &provider.model,
+                &usage,
                 budget_reservation,
                 key_budget_reservation,
                 &format!("Gemini SDK cost calculation failed: {error}"),
@@ -397,8 +418,10 @@ mod tests {
             .reserve_spend(&scope, 0.5)
             .unwrap_or_else(|error| panic!("API key budget should reserve: {error:?}"));
         let provider = test_gemini_route_provider("openai", "openai", "gpt-4o");
+        let pricing_config = GatewayPricingConfig::default();
         let spend_state = GeminiSpendState {
             pricing: &pricing,
+            pricing_config: &pricing_config,
             budget_limits: &budget_limits,
             key_manager: &key_manager,
             api_key_id: None,

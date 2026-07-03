@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::models::gateway::GatewayPricingConfig;
 use crate::core::budget::{
     ModelLimitConfig, ProviderLimitConfig, ResetPeriod, UnifiedBudgetLimits,
 };
@@ -160,11 +161,14 @@ async fn disconnect_after_upstream_output_settles_reserved_budget() {
     let reserved = reservation.reserved_amount();
     let mut settlement = StreamBudgetSettlement {
         pricing_service: test_pricing_service(),
+        pricing_config: GatewayPricingConfig::default(),
         budget_limits: Arc::clone(&budget),
         key_manager: KeyManager::new(InMemoryKeyRepository::new()),
         api_key_id: None,
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
+        pricing_provider: "openai".to_string(),
+        pricing_model: "gpt-4o".to_string(),
         reservation: Some(reservation),
         key_budget_reservation: None,
     };
@@ -207,11 +211,14 @@ async fn completed_stream_without_usage_after_output_settles_reserved_budget() {
     let reserved = reservation.reserved_amount();
     let settlement = StreamBudgetSettlement {
         pricing_service: test_pricing_service(),
+        pricing_config: GatewayPricingConfig::default(),
         budget_limits: Arc::clone(&budget),
         key_manager: KeyManager::new(InMemoryKeyRepository::new()),
         api_key_id: None,
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
+        pricing_provider: "openai".to_string(),
+        pricing_model: "gpt-4o".to_string(),
         reservation: Some(reservation),
         key_budget_reservation: None,
     };

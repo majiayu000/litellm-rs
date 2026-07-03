@@ -239,6 +239,16 @@ fn provider_error_spec(error: &ProviderError) -> OpenAiErrorSpec {
             "invalid_request_error",
             "model_not_found",
         ),
+        ProviderError::InvalidRequest { message, .. }
+            if super::spend::is_model_not_priced_message(message) =>
+        {
+            spec(
+                StatusCode::BAD_REQUEST,
+                error.to_string(),
+                "invalid_request_error",
+                "model_not_priced",
+            )
+        }
         ProviderError::InvalidRequest { .. } => spec(
             StatusCode::BAD_REQUEST,
             error.to_string(),
@@ -524,6 +534,22 @@ mod tests {
         let body = to_json(response).await;
         assert_eq!(body["error"]["type"], "server_error");
         assert_eq!(body["error"]["code"], "timeout");
+    }
+
+    #[actix_web::test]
+    async fn model_not_priced_uses_specific_openai_error_code() {
+        let error = GatewayError::Provider(super::super::spend::model_not_priced_error(
+            "openai",
+            "missing-model",
+            "missing pricing",
+        ));
+
+        let response = gateway_error_response(&error);
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_json(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "model_not_priced");
     }
 
     #[actix_web::test]

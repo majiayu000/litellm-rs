@@ -1,5 +1,7 @@
 //! Chat completions endpoint
-
+use super::context::get_request_context;
+use super::execution::{execute_stream_with_selected_deployment, execute_with_selected_deployment};
+use super::openai_errors;
 use crate::core::models::openai::{
     ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ContentLogprob, Logprobs,
     StreamOptions, Tool, ToolChoice, TopLogprob, Usage,
@@ -22,10 +24,6 @@ use serde_json::json;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
-
-use super::context::get_request_context;
-use super::execution::{execute_stream_with_selected_deployment, execute_with_selected_deployment};
-use super::openai_errors;
 #[path = "chat_delta.rs"]
 mod chat_delta;
 use chat_delta::{convert_function_call_delta, convert_tool_call_delta};
@@ -33,20 +31,14 @@ use chat_delta::{convert_function_call_delta, convert_tool_call_delta};
 pub(super) mod chat_sse;
 use chat_sse::format_sse_error;
 pub(super) use chat_sse::sse_error_classification;
-
-/// Chat completions endpoint
-///
-/// OpenAI-compatible chat completions API that supports streaming and non-streaming responses.
 pub async fn chat_completions(
     state: web::Data<AppState>,
     req: HttpRequest,
     request: web::Json<ChatCompletionRequest>,
 ) -> ActixResult<HttpResponse> {
     info!("Chat completion request for model: {}", request.model);
-
     let mut context = get_request_context(&req)?;
     super::token_policy::attach_api_key_token_limit(&req, &mut context)?;
-
     if let Err(e) = RequestValidator::validate_chat_completion_request(
         &request.model,
         &request.messages,
@@ -63,7 +55,6 @@ pub async fn chat_completions(
     ) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
-
     if request.stream.unwrap_or(false) {
         handle_streaming_chat_completion(state.get_ref(), request.into_inner(), context).await
     } else {
@@ -78,8 +69,6 @@ pub async fn chat_completions(
         }
     }
 }
-
-/// Handle streaming chat completion
 async fn handle_streaming_chat_completion(
     state: &AppState,
     mut request: ChatCompletionRequest,
@@ -89,7 +78,6 @@ async fn handle_streaming_chat_completion(
         "Handling streaming chat completion for model: {}",
         request.model
     );
-
     let requested_model = request.model.clone();
     let request_for_budget = request.clone();
     let client_requested_usage = request
@@ -107,13 +95,14 @@ async fn handle_streaming_chat_completion(
         Ok(req) => req,
         Err(e) => return Ok(openai_errors::gateway_error_response(&e)),
     };
-
     let requested_model = core_request.model.clone();
     let context_for_execution = context.clone();
     let (budget_limits, pricing_service) = (state.budget_limits.clone(), state.pricing.clone());
+    let pricing_config = state.config().gateway.pricing.clone();
     let api_key_id = context.api_key_id();
     let api_key_budget_id = context.api_key_budget_id();
     let budget_manager = state.budget_manager.clone();
+    let pricing_config_for_execution = pricing_config.clone();
     match execute_stream_with_selected_deployment(
         state.unified_router.clone(),
         &requested_model,
@@ -124,6 +113,7 @@ async fn handle_streaming_chat_completion(
             let (budget_limits, pricing_service) = (budget_limits.clone(), pricing_service.clone());
             let budget_manager = budget_manager.clone();
             let request_for_budget = request_for_budget.clone();
+            let pricing_config = pricing_config_for_execution.clone();
             async move {
                 super::spend::ensure_budget_available(
                     &budget_limits,
@@ -131,6 +121,11 @@ async fn handle_streaming_chat_completion(
                     &selected_model,
                 )?;
                 let provider_name = provider.name().to_string();
+                let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
+                    pricing_service.as_ref(),
+                    &provider,
+                    &selected_model,
+                );
                 let (request_for_provider, request_for_budget) =
                     super::token_policy::prepare_chat_request_for_provider(
                         context.api_key_max_tokens_per_request(),
@@ -139,13 +134,17 @@ async fn handle_streaming_chat_completion(
                         core_request.clone(),
                         request_for_budget,
                     )?;
-                let budget_reservation = super::spend::reserve_chat_completion_budget_with_pricing(
-                    pricing_service.as_ref(),
-                    &budget_limits,
-                    provider.name(),
-                    &selected_model,
-                    &request_for_budget,
-                )?;
+                let budget_reservation =
+                    super::spend::reserve_chat_completion_budget_with_split_pricing(
+                        pricing_service.as_ref(),
+                        &pricing_config,
+                        &budget_limits,
+                        &provider_name,
+                        &selected_model,
+                        &pricing_provider,
+                        &pricing_model,
+                        &request_for_budget,
+                    )?;
                 let key_budget_reservation = super::spend::reserve_api_key_budget_for_reservation(
                     &budget_manager,
                     api_key_budget_id,
@@ -158,6 +157,8 @@ async fn handle_streaming_chat_completion(
                     stream,
                     provider_name,
                     selected_model,
+                    pricing_provider,
+                    pricing_model,
                     budget_reservation,
                     key_budget_reservation,
                 ))
@@ -171,21 +172,18 @@ async fn handle_streaming_chat_completion(
                 mut stream,
                 served_provider,
                 served_model,
+                pricing_provider,
+                pricing_model,
                 mut budget_reservation,
                 mut key_budget_reservation,
             ),
             lease,
         )) => {
-            // Use a channel so that when the client disconnects and actix-web
-            // drops the response stream, the receiver is dropped, which causes
-            // the sender to fail. This breaks the upstream read loop and drops
-            // the provider stream, cancelling any in-flight HTTP request.
             let (tx, rx) = mpsc::channel::<Bytes>(8);
-
             let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
             let budget_limits = state.budget_limits.clone();
             let (key_manager, pricing_service) = (state.key_manager.clone(), state.pricing.clone());
-
+            let pricing_config = pricing_config.clone();
             tokio::spawn(async move {
                 let mut lease = Some(lease);
                 let mut tokens_used = 0_u64;
@@ -194,11 +192,13 @@ async fn handle_streaming_chat_completion(
                 macro_rules! settle_after_upstream_output {
                     () => {
                         if final_usage.is_some() || saw_upstream_output {
-                            super::spend::record_stream_disconnect_spend_with_reservation_with_pricing(
+                            super::spend::record_stream_disconnect_spend_with_reservation_with_policy(
                                 pricing_service.as_ref(),
-                                super::spend::usage_spend_settlement(
+                                &pricing_config,
+                                super::spend::usage_spend_settlement_with_pricing(
                                     (&budget_limits, &key_manager, api_key_id),
                                     (&served_provider, &served_model, final_usage.as_ref()),
+                                    (&pricing_provider, &pricing_model),
                                     budget_reservation.take(),
                                     key_budget_reservation.take(),
                                 ),
@@ -207,7 +207,6 @@ async fn handle_streaming_chat_completion(
                         }
                     };
                 }
-
                 loop {
                     let chunk_result = if idle_timeout_secs == 0 {
                         stream.next().await
@@ -243,11 +242,9 @@ async fn handle_streaming_chat_completion(
                             }
                         }
                     };
-
                     let Some(chunk_result) = chunk_result else {
                         break;
                     };
-
                     let bytes = match chunk_result {
                         Ok(chunk) => {
                             saw_upstream_output = true;
@@ -325,14 +322,15 @@ async fn handle_streaming_chat_completion(
                             return;
                         }
                     };
-
                     if tx.send(bytes).await.is_err() {
                         info!("Client disconnected during streaming, cancelling upstream");
-                        super::spend::record_stream_disconnect_spend_with_reservation_with_pricing(
+                        super::spend::record_stream_disconnect_spend_with_reservation_with_policy(
                             pricing_service.as_ref(),
-                            super::spend::usage_spend_settlement(
+                            &pricing_config,
+                            super::spend::usage_spend_settlement_with_pricing(
                                 (&budget_limits, &key_manager, api_key_id),
                                 (&served_provider, &served_model, final_usage.as_ref()),
+                                (&pricing_provider, &pricing_model),
                                 budget_reservation.take(),
                                 key_budget_reservation.take(),
                             ),
@@ -341,20 +339,21 @@ async fn handle_streaming_chat_completion(
                         return;
                     }
                 }
-
-                // Send the final [DONE] event; ignore error if client is gone.
                 let done_event = Event::default().data("[DONE]");
                 if tx.send(done_event.to_bytes()).await.is_err() {
                     info!("Client disconnected before [DONE] event could be sent");
                 }
-                super::spend::record_finished_stream_spend_with_reservation_with_pricing(
+                super::spend::record_finished_stream_spend_with_reservation_with_policy(
                     pricing_service.as_ref(),
+                    &pricing_config,
                     super::spend::StreamSpendSettlement {
                         budget_limits: &budget_limits,
                         key_manager: &key_manager,
                         api_key_id,
                         provider: &served_provider,
                         model: &served_model,
+                        pricing_provider: &pricing_provider,
+                        pricing_model: &pricing_model,
                         usage: final_usage.as_ref(),
                         saw_upstream_output,
                         budget_reservation: budget_reservation.take(),
@@ -366,10 +365,8 @@ async fn handle_streaming_chat_completion(
                     lease.finish_success(tokens_used);
                 }
             });
-
             let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx)
                 .map(Ok::<_, actix_web::error::Error>);
-
             Ok(HttpResponse::Ok()
                 .insert_header((CONTENT_TYPE, "text/event-stream"))
                 .insert_header((CACHE_CONTROL, "no-cache"))
@@ -383,8 +380,6 @@ async fn handle_streaming_chat_completion(
         }
     }
 }
-
-/// Handle chat completion with app state (UnifiedRouter only)
 pub async fn handle_chat_completion_with_state(
     state: &AppState,
     request: ChatCompletionRequest,
@@ -392,7 +387,6 @@ pub async fn handle_chat_completion_with_state(
 ) -> Result<ChatCompletionResponse, GatewayError> {
     handle_chat_completion_internal(state, request, context).await
 }
-
 async fn handle_chat_completion_internal(
     state: &AppState,
     request: ChatCompletionRequest,
@@ -406,19 +400,17 @@ async fn handle_chat_completion_internal(
     if let Some(cached) =
         super::response_cache::lookup_chat(state, &request_for_cache, &context).await?
     {
+        super::response_cache::ensure_chat_cache_pricing_gate(state, &request_for_cache)?;
         return Ok(cached);
     }
     let requested_model = core_request.model.clone();
     let context_for_execution = context.clone();
-
-    // Owned handles captured into the (retryable) execution closure so that the
-    // successful attempt records budget spend and per-key usage.
     let (budget_limits, pricing_service) = (state.budget_limits.clone(), state.pricing.clone());
+    let pricing_config = state.config().gateway.pricing.clone();
     let key_manager = state.key_manager.clone();
     let api_key_id = context.api_key_id();
     let api_key_budget_id = context.api_key_budget_id();
     let budget_manager = state.budget_manager.clone();
-
     let core_response = execute_with_selected_deployment(
         unified_router,
         &requested_model,
@@ -430,29 +422,38 @@ async fn handle_chat_completion_internal(
             let key_manager = key_manager.clone();
             let budget_manager = budget_manager.clone();
             let request_for_budget = request_for_budget.clone();
+            let pricing_config = pricing_config.clone();
             async move {
-                // Reject before spending upstream tokens when the selected
-                // provider/model budget is already exhausted.
                 super::spend::ensure_budget_available(
                     &budget_limits,
                     provider.name(),
                     &selected_model,
                 )?;
+                let provider_name = provider.name().to_string();
+                let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
+                    pricing_service.as_ref(),
+                    &provider,
+                    &selected_model,
+                );
                 let (request_for_provider, request_for_budget) =
                     super::token_policy::prepare_chat_request_for_provider(
                         context.api_key_max_tokens_per_request(),
-                        provider.name(),
+                        &provider_name,
                         &selected_model,
                         core_request.clone(),
                         request_for_budget,
                     )?;
-                let budget_reservation = super::spend::reserve_chat_completion_budget_with_pricing(
-                    pricing_service.as_ref(),
-                    &budget_limits,
-                    provider.name(),
-                    &selected_model,
-                    &request_for_budget,
-                )?;
+                let budget_reservation =
+                    super::spend::reserve_chat_completion_budget_with_split_pricing(
+                        pricing_service.as_ref(),
+                        &pricing_config,
+                        &budget_limits,
+                        &provider_name,
+                        &selected_model,
+                        &pricing_provider,
+                        &pricing_model,
+                        &request_for_budget,
+                    )?;
                 let key_budget_reservation = super::spend::reserve_api_key_budget_for_reservation(
                     &budget_manager,
                     api_key_budget_id,
@@ -466,11 +467,13 @@ async fn handle_chat_completion_internal(
                     .as_ref()
                     .map(|usage| u64::from(usage.total_tokens))
                     .unwrap_or_default();
-                super::spend::record_completion_spend_with_reservation_with_pricing(
+                super::spend::record_completion_spend_with_reservation_with_policy(
                     pricing_service.as_ref(),
-                    super::spend::usage_spend_settlement(
+                    &pricing_config,
+                    super::spend::usage_spend_settlement_with_pricing(
                         (&budget_limits, &key_manager, api_key_id),
-                        (provider.name(), &selected_model, response.usage.as_ref()),
+                        (&provider_name, &selected_model, response.usage.as_ref()),
+                        (&pricing_provider, &pricing_model),
                         budget_reservation,
                         key_budget_reservation,
                     ),
@@ -481,20 +484,15 @@ async fn handle_chat_completion_internal(
         },
     )
     .await?;
-
     let response = convert_core_chat_response(core_response);
     super::response_cache::store_chat(state, &request_for_cache, &response, &context).await?;
     Ok(response)
 }
-
 pub(crate) fn build_core_chat_request(
     request: ChatCompletionRequest,
     model: String,
     stream: bool,
 ) -> Result<CoreChatRequest, GatewayError> {
-    // This is the OpenAI transport DTO -> internal provider request boundary.
-    // Keep field forwarding explicit so new OpenAI-compatible parameters cannot
-    // disappear silently while routing through the canonical ChatRequest tree.
     let tools = match request.tools {
         Some(tools) => {
             let mut converted = Vec::with_capacity(tools.len());
@@ -505,9 +503,7 @@ pub(crate) fn build_core_chat_request(
         }
         None => None,
     };
-
     let tool_choice = request.tool_choice.map(convert_tool_choice);
-
     let functions = match request.functions {
         Some(funcs) => {
             let mut values = Vec::with_capacity(funcs.len());
@@ -520,14 +516,12 @@ pub(crate) fn build_core_chat_request(
         }
         None => None,
     };
-
     let function_call = match request.function_call {
         Some(call) => Some(serde_json::to_value(call).map_err(|e| {
             GatewayError::internal(format!("Failed to serialize function call: {}", e))
         })?),
         None => None,
     };
-
     let response_format = request
         .response_format
         .map(|format| types::tools::ResponseFormat {
@@ -535,7 +529,6 @@ pub(crate) fn build_core_chat_request(
             json_schema: format.json_schema,
             response_type: format.response_type,
         });
-
     let seed = request
         .seed
         .map(|seed| {
@@ -548,7 +541,6 @@ pub(crate) fn build_core_chat_request(
             })
         })
         .transpose()?;
-
     let mut extra_params = request.extra_body;
     if let Some(modalities) = request.modalities {
         extra_params.insert("modalities".to_string(), json!(modalities));
@@ -565,13 +557,11 @@ pub(crate) fn build_core_chat_request(
     if let Some(cache_control) = request.cache_control {
         extra_params.insert("cache_control".to_string(), cache_control);
     }
-
     let stream_options = request
         .stream_options
         .map(|so| crate::core::types::chat::StreamOptions {
             include_usage: so.include_usage,
         });
-
     Ok(CoreChatRequest {
         model,
         messages: request.messages.into_iter().map(Into::into).collect(),
@@ -604,7 +594,6 @@ pub(crate) fn build_core_chat_request(
         extra_params,
     })
 }
-
 fn convert_core_chat_response(response: types::responses::ChatResponse) -> ChatCompletionResponse {
     ChatCompletionResponse {
         id: response.id,
@@ -625,12 +614,10 @@ fn convert_core_chat_response(response: types::responses::ChatResponse) -> ChatC
         usage: response.usage.map(convert_usage),
     }
 }
-
 fn convert_tool(tool: Tool) -> Result<types::tools::Tool, GatewayError> {
     if tool.tool_type.to_lowercase() != "function" {
         return Err(GatewayError::validation("Unsupported tool type"));
     }
-
     Ok(types::tools::Tool {
         tool_type: types::tools::ToolType::Function,
         function: types::tools::FunctionDefinition {
@@ -640,7 +627,6 @@ fn convert_tool(tool: Tool) -> Result<types::tools::Tool, GatewayError> {
         },
     })
 }
-
 fn convert_tool_choice(choice: ToolChoice) -> types::tools::ToolChoice {
     match choice {
         ToolChoice::None(value) => types::tools::ToolChoice::String(value),
@@ -654,7 +640,6 @@ fn convert_tool_choice(choice: ToolChoice) -> types::tools::ToolChoice {
         },
     }
 }
-
 fn convert_logprobs(logprobs: types::responses::LogProbs) -> Logprobs {
     let content = if logprobs.content.is_empty() {
         None
@@ -680,10 +665,8 @@ fn convert_logprobs(logprobs: types::responses::LogProbs) -> Logprobs {
                 .collect(),
         )
     };
-
     Logprobs { content }
 }
-
 fn convert_finish_reason(reason: types::responses::FinishReason) -> String {
     match reason {
         types::responses::FinishReason::Stop => "stop",
@@ -697,7 +680,6 @@ fn convert_finish_reason(reason: types::responses::FinishReason) -> String {
     }
     .to_string()
 }
-
 fn convert_usage(usage: types::responses::Usage) -> Usage {
     let thinking_tokens = usage.thinking_tokens();
     let completion_tokens_details = usage
@@ -716,7 +698,6 @@ fn convert_usage(usage: types::responses::Usage) -> Usage {
                 },
             )
         });
-
     Usage {
         prompt_tokens: usage.prompt_tokens,
         completion_tokens: usage.completion_tokens,
@@ -733,7 +714,6 @@ fn convert_usage(usage: types::responses::Usage) -> Usage {
         thinking_usage: usage.thinking_usage,
     }
 }
-
 fn convert_core_chunk_to_streaming(
     chunk: types::responses::ChatChunk,
 ) -> Result<ChatCompletionChunk, ProviderError> {
@@ -752,7 +732,6 @@ fn convert_core_chunk_to_streaming(
                     })
                 })
                 .transpose()?;
-
             Ok(ChatCompletionChunkChoice {
                 index: choice.index,
                 delta: {
@@ -780,7 +759,6 @@ fn convert_core_chunk_to_streaming(
             })
         })
         .collect::<Result<Vec<_>, ProviderError>>()?;
-
     Ok(ChatCompletionChunk {
         id: chunk.id,
         object: chunk.object,
@@ -791,7 +769,6 @@ fn convert_core_chunk_to_streaming(
         usage: chunk.usage.map(convert_usage),
     })
 }
-
 #[cfg(test)]
 #[path = "chat_tests.rs"]
 mod chat_tests;

@@ -3,10 +3,10 @@
 use crate::config::models::provider::ProviderConfig;
 mod generation;
 mod pricing_keys;
+mod proxy_spend;
 
-use crate::core::budget::BudgetReservation;
 use crate::core::models::openai::ImageGenerationRequest;
-use crate::core::pricing_service::{PricingService, PricingUsage};
+use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::types::context::RequestContext;
 use crate::core::types::model::ProviderCapability;
@@ -26,6 +26,7 @@ use tracing::{error, info};
 use super::context::handle_ai_request;
 use super::execution::execute_with_selected_deployment;
 use super::{openai_errors, provider_config};
+use proxy_spend::{image_proxy_cost, record_image_proxy_spend};
 
 const OPENAI_IMAGE_BASE_URL: &str = "https://api.openai.com/v1";
 const MAX_IMAGE_MULTIPART_BYTES: usize = 64 * 1024 * 1024;
@@ -54,9 +55,6 @@ struct ImageProxyFormFields {
     n: u32,
 }
 
-/// Image generation endpoint
-///
-/// OpenAI-compatible image generation API.
 pub async fn image_generations(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -153,9 +151,15 @@ async fn proxy_image_multipart_endpoint(
     )
     .unwrap_or_else(|| requested_model.to_string());
     let usage = estimated_image_proxy_usage(&form_fields, "openai", &pricing_model);
-    let estimated_cost =
-        image_proxy_cost(state.pricing.as_ref(), "openai", &pricing_model, &usage)?;
-    if estimated_cost <= 0.0 {
+    let pricing_config = state.config().gateway.pricing.clone();
+    let (estimated_cost, unpriced) = image_proxy_cost(
+        state.pricing.as_ref(),
+        &pricing_config,
+        "openai",
+        &pricing_model,
+        &usage,
+    )?;
+    if estimated_cost <= 0.0 && !unpriced {
         return Err(GatewayError::Config(format!(
             "Image model '{requested_model}' has non-positive pricing"
         )));
@@ -184,16 +188,36 @@ async fn proxy_image_multipart_endpoint(
                             &selected_model,
                             requested_model,
                         )?;
-                        super::spend::ensure_budget_available(
-                            &state.budget_limits,
-                            &provider.provider_name,
-                            requested_model,
-                        )?;
-                        let mut key_budget_reservation = super::spend::reserve_api_key_budget(
-                            &state.budget_manager,
-                            api_key_budget_id,
-                            Some(estimated_cost),
-                        )?;
+                        let mut budget_reservation = if estimated_cost > 0.0 {
+                            state
+                                .budget_limits
+                                .reserve_spend(
+                                    &provider.provider_name,
+                                    requested_model,
+                                    estimated_cost,
+                                )
+                                .map(Some)
+                                .map_err(|error| {
+                                    super::spend::reservation_error_to_provider_error(
+                                        error,
+                                        &provider.provider_name,
+                                        requested_model,
+                                    )
+                                })?
+                        } else {
+                            super::spend::ensure_budget_available(
+                                &state.budget_limits,
+                                &provider.provider_name,
+                                requested_model,
+                            )?;
+                            None
+                        };
+                        let mut key_budget_reservation =
+                            super::spend::reserve_api_key_budget_for_reservation(
+                                &state.budget_manager,
+                                api_key_budget_id,
+                                budget_reservation.as_ref(),
+                            )?;
                         let url = image_proxy_url(&provider, endpoint)
                             .map_err(image_proxy_gateway_error_to_provider_error)?;
                         let response_result =
@@ -206,6 +230,9 @@ async fn proxy_image_multipart_endpoint(
                         let response = match response_result {
                             Ok(response) => response,
                             Err(error) => {
+                                if let Some(reservation) = budget_reservation.take() {
+                                    reservation.cancel();
+                                }
                                 if let Some(reservation) = key_budget_reservation.take() {
                                     reservation.cancel();
                                 }
@@ -217,6 +244,9 @@ async fn proxy_image_multipart_endpoint(
                         };
 
                         if !response.status().is_success() {
+                            if let Some(reservation) = budget_reservation.take() {
+                                reservation.cancel();
+                            }
                             if let Some(reservation) = key_budget_reservation.take() {
                                 reservation.cancel();
                             }
@@ -229,6 +259,8 @@ async fn proxy_image_multipart_endpoint(
                             requested_model,
                             &usage,
                             estimated_cost,
+                            unpriced,
+                            budget_reservation.take(),
                             api_key_id,
                             key_budget_reservation.take(),
                         )
@@ -261,35 +293,6 @@ async fn proxy_image_multipart_endpoint(
     Err(last_router_error.unwrap_or_else(missing_image_proxy_provider_error))
 }
 
-async fn record_image_proxy_spend(
-    state: &AppState,
-    provider: &ImageProxyProvider,
-    model: &str,
-    usage: &PricingUsage,
-    cost: f64,
-    api_key_id: Option<uuid::Uuid>,
-    key_budget_reservation: Option<BudgetReservation>,
-) {
-    state
-        .budget_limits
-        .record_spend(&provider.provider_name, model, cost);
-    if let Some(api_key_id) = api_key_id {
-        let total_tokens = u64::from(
-            usage
-                .total_tokens
-                .saturating_add(usage.image_tokens.unwrap_or(0)),
-        );
-        if let Err(error) = state
-            .key_manager
-            .record_usage(api_key_id, total_tokens, cost)
-            .await
-        {
-            error!("failed to record image proxy usage for key {api_key_id}: {error}");
-        }
-    }
-    super::spend::settle_api_key_budget_reservation(key_budget_reservation, cost, "image proxy");
-}
-
 fn required_image_proxy_model(form_fields: &ImageProxyFormFields) -> Result<&str, GatewayError> {
     let model = form_fields
         .model
@@ -298,17 +301,6 @@ fn required_image_proxy_model(form_fields: &ImageProxyFormFields) -> Result<&str
         .filter(|model| !model.is_empty())
         .ok_or_else(|| GatewayError::validation("model is required"))?;
     Ok(model)
-}
-
-fn image_proxy_cost(
-    pricing_service: &PricingService,
-    provider: &str,
-    model: &str,
-    usage: &PricingUsage,
-) -> Result<f64, GatewayError> {
-    pricing_service
-        .calculate_loaded_usage_cost_for_provider(provider, model, usage)
-        .map(|breakdown| breakdown.total_cost)
 }
 
 fn estimated_image_proxy_usage(

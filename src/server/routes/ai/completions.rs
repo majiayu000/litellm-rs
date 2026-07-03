@@ -1,16 +1,7 @@
 //! Legacy OpenAI text completions compatibility route.
-
-use actix_web::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
-use bytes::Bytes;
-use futures::StreamExt;
-use serde::Serialize;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
-
+use super::context::get_request_context;
+use super::execution::execute_stream_with_selected_deployment;
+use super::openai_errors;
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatMessage, CompletionChoice, CompletionResponse, MessageContent,
     MessageRole, StreamOptions, Usage,
@@ -21,17 +12,22 @@ use crate::core::types::{self, context::RequestContext, model::ProviderCapabilit
 use crate::server::state::AppState;
 use crate::utils::data::validation::RequestValidator;
 use crate::utils::error::gateway_error::GatewayError;
-
-use super::context::get_request_context;
-use super::execution::execute_stream_with_selected_deployment;
-use super::openai_errors;
+use actix_web::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
+use bytes::Bytes;
+use futures::StreamExt;
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tracing::{error, info, warn};
 #[path = "completions_spend.rs"]
 mod completions_spend;
 use completions_spend::settle_stream_spend_if_chargeable;
 #[path = "completions_sse.rs"]
 mod completions_sse;
 use completions_sse::send_stream_error;
-
 #[derive(Debug, Clone)]
 struct CompletionAdapterRequest {
     chat_request: ChatCompletionRequest,
@@ -40,7 +36,6 @@ struct CompletionAdapterRequest {
     stream: bool,
     include_usage: bool,
 }
-
 #[derive(Debug, Serialize)]
 struct CompletionSseChunk {
     id: String,
@@ -51,7 +46,6 @@ struct CompletionSseChunk {
     #[serde(skip_serializing_if = "Option::is_none")]
     usage: Option<Usage>,
 }
-
 pub async fn completions(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -59,7 +53,6 @@ pub async fn completions(
 ) -> ActixResult<HttpResponse> {
     completions_inner(state, req, None, request.into_inner()).await
 }
-
 pub async fn engine_completions(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -68,7 +61,6 @@ pub async fn engine_completions(
 ) -> ActixResult<HttpResponse> {
     completions_inner(state, req, Some(model.into_inner()), request.into_inner()).await
 }
-
 async fn completions_inner(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -81,7 +73,6 @@ async fn completions_inner(
         Ok(request) => request,
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
-
     if let Err(error) = RequestValidator::validate_chat_completion_request(
         &adapter_request.chat_request.model,
         &adapter_request.chat_request.messages,
@@ -98,11 +89,9 @@ async fn completions_inner(
     ) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
-
     if adapter_request.stream {
         return handle_streaming_completion(state.get_ref(), adapter_request, context).await;
     }
-
     match super::chat::handle_chat_completion_with_state(
         state.get_ref(),
         adapter_request.chat_request,
@@ -121,7 +110,6 @@ async fn completions_inner(
         }
     }
 }
-
 async fn handle_streaming_completion(
     state: &AppState,
     adapter_request: CompletionAdapterRequest,
@@ -131,7 +119,6 @@ async fn handle_streaming_completion(
         "Handling streaming text completion for model: {}",
         adapter_request.chat_request.model
     );
-
     let mut request = adapter_request.chat_request;
     let requested_model = request.model.clone();
     let request_for_budget = request.clone();
@@ -141,19 +128,18 @@ async fn handle_streaming_completion(
             include_usage: None,
         })
         .include_usage = Some(true);
-
     let core_request =
         match super::chat::build_core_chat_request(request, requested_model.clone(), true) {
             Ok(request) => request,
             Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
         };
-
     let context_for_execution = context.clone();
     let (budget_limits, pricing_service) = (state.budget_limits.clone(), state.pricing.clone());
+    let pricing_config = state.config().gateway.pricing.clone();
     let api_key_id = context.api_key_id();
     let api_key_budget_id = context.api_key_budget_id();
     let budget_manager = state.budget_manager.clone();
-
+    let pricing_config_for_execution = pricing_config.clone();
     match execute_stream_with_selected_deployment(
         state.unified_router.clone(),
         &requested_model,
@@ -164,8 +150,14 @@ async fn handle_streaming_completion(
             let (budget_limits, pricing_service) = (budget_limits.clone(), pricing_service.clone());
             let budget_manager = budget_manager.clone();
             let request_for_budget = request_for_budget.clone();
+            let pricing_config = pricing_config_for_execution.clone();
             async move {
                 let provider_name = provider.name().to_string();
+                let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
+                    pricing_service.as_ref(),
+                    &provider,
+                    &selected_model,
+                );
                 let (request_for_provider, request_for_budget) =
                     super::token_policy::prepare_chat_request_for_provider(
                         context.api_key_max_tokens_per_request(),
@@ -179,13 +171,17 @@ async fn handle_streaming_completion(
                     &provider_name,
                     &selected_model,
                 )?;
-                let budget_reservation = super::spend::reserve_chat_completion_budget_with_pricing(
-                    pricing_service.as_ref(),
-                    &budget_limits,
-                    &provider_name,
-                    &selected_model,
-                    &request_for_budget,
-                )?;
+                let budget_reservation =
+                    super::spend::reserve_chat_completion_budget_with_split_pricing(
+                        pricing_service.as_ref(),
+                        &pricing_config,
+                        &budget_limits,
+                        &provider_name,
+                        &selected_model,
+                        &pricing_provider,
+                        &pricing_model,
+                        &request_for_budget,
+                    )?;
                 let key_budget_reservation = super::spend::reserve_api_key_budget_for_reservation(
                     &budget_manager,
                     api_key_budget_id,
@@ -198,6 +194,8 @@ async fn handle_streaming_completion(
                     stream,
                     provider_name,
                     selected_model,
+                    pricing_provider,
+                    pricing_model,
                     budget_reservation,
                     key_budget_reservation,
                 ))
@@ -211,6 +209,8 @@ async fn handle_streaming_completion(
                 mut stream,
                 served_provider,
                 served_model,
+                pricing_provider,
+                pricing_model,
                 mut budget_reservation,
                 mut key_budget_reservation,
             ),
@@ -221,15 +221,14 @@ async fn handle_streaming_completion(
             let budget_limits = state.budget_limits.clone();
             let key_manager = state.key_manager.clone();
             let pricing_service = state.pricing.clone();
+            let pricing_config = pricing_config.clone();
             let include_usage = adapter_request.include_usage;
             let mut echo_prefix = adapter_request.echo.then_some(adapter_request.prompt);
-
             tokio::spawn(async move {
                 let mut lease = Some(lease);
                 let mut tokens_used = 0_u64;
                 let mut final_usage = None;
                 let mut saw_upstream_output = false;
-
                 loop {
                     let chunk_result = if idle_timeout_secs == 0 {
                         stream.next().await
@@ -262,11 +261,14 @@ async fn handle_streaming_completion(
                                 }
                                 settle_stream_spend_if_chargeable(
                                     pricing_service.as_ref(),
+                                    &pricing_config,
                                     &budget_limits,
                                     &key_manager,
                                     api_key_id,
                                     &served_provider,
                                     &served_model,
+                                    &pricing_provider,
+                                    &pricing_model,
                                     final_usage.as_ref(),
                                     budget_reservation.take(),
                                     key_budget_reservation.take(),
@@ -277,11 +279,9 @@ async fn handle_streaming_completion(
                             }
                         }
                     };
-
                     let Some(chunk_result) = chunk_result else {
                         break;
                     };
-
                     let bytes = match chunk_result {
                         Ok(chunk) => {
                             saw_upstream_output = true;
@@ -322,11 +322,14 @@ async fn handle_streaming_completion(
                                     }
                                     settle_stream_spend_if_chargeable(
                                         pricing_service.as_ref(),
+                                        &pricing_config,
                                         &budget_limits,
                                         &key_manager,
                                         api_key_id,
                                         &served_provider,
                                         &served_model,
+                                        &pricing_provider,
+                                        &pricing_model,
                                         final_usage.as_ref(),
                                         budget_reservation.take(),
                                         key_budget_reservation.take(),
@@ -348,11 +351,14 @@ async fn handle_streaming_completion(
                             }
                             settle_stream_spend_if_chargeable(
                                 pricing_service.as_ref(),
+                                &pricing_config,
                                 &budget_limits,
                                 &key_manager,
                                 api_key_id,
                                 &served_provider,
                                 &served_model,
+                                &pricing_provider,
+                                &pricing_model,
                                 final_usage.as_ref(),
                                 budget_reservation.take(),
                                 key_budget_reservation.take(),
@@ -362,15 +368,17 @@ async fn handle_streaming_completion(
                             return;
                         }
                     };
-
                     if tx.send(bytes).await.is_err() {
                         settle_stream_spend_if_chargeable(
                             pricing_service.as_ref(),
+                            &pricing_config,
                             &budget_limits,
                             &key_manager,
                             api_key_id,
                             &served_provider,
                             &served_model,
+                            &pricing_provider,
+                            &pricing_model,
                             final_usage.as_ref(),
                             budget_reservation.take(),
                             key_budget_reservation.take(),
@@ -380,16 +388,18 @@ async fn handle_streaming_completion(
                         return;
                     }
                 }
-
                 let _ = tx.send(Event::default().data("[DONE]").to_bytes()).await;
-                super::spend::record_finished_stream_spend_with_reservation_with_pricing(
+                super::spend::record_finished_stream_spend_with_reservation_with_policy(
                     pricing_service.as_ref(),
+                    &pricing_config,
                     super::spend::StreamSpendSettlement {
                         budget_limits: &budget_limits,
                         key_manager: &key_manager,
                         api_key_id,
                         provider: &served_provider,
                         model: &served_model,
+                        pricing_provider: &pricing_provider,
+                        pricing_model: &pricing_model,
                         usage: final_usage.as_ref(),
                         saw_upstream_output,
                         budget_reservation: budget_reservation.take(),
@@ -401,7 +411,6 @@ async fn handle_streaming_completion(
                     lease.finish_success(tokens_used);
                 }
             });
-
             let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx)
                 .map(Ok::<_, actix_web::error::Error>);
             Ok(HttpResponse::Ok()
@@ -417,7 +426,6 @@ async fn handle_streaming_completion(
         }
     }
 }
-
 fn completion_request_from_value(
     body: Value,
     path_model: Option<String>,
@@ -426,7 +434,6 @@ fn completion_request_from_value(
         .as_object()
         .ok_or_else(|| GatewayError::validation("request body must be a JSON object"))?;
     reject_unsupported_fields(object)?;
-
     let model = match path_model {
         Some(model) => model,
         None => required_string_field(object, "model", "Model is required")?,
@@ -447,7 +454,6 @@ fn completion_request_from_value(
             "logprobs is not supported for /v1/completions compatibility",
         ));
     }
-
     Ok(CompletionAdapterRequest {
         prompt: prompt.clone(),
         echo,
@@ -481,7 +487,6 @@ fn completion_request_from_value(
         },
     })
 }
-
 fn reject_unsupported_fields(object: &serde_json::Map<String, Value>) -> Result<(), GatewayError> {
     const ALLOWED: &[&str] = &[
         "model",
@@ -516,7 +521,6 @@ fn reject_unsupported_fields(object: &serde_json::Map<String, Value>) -> Result<
     }
     Ok(())
 }
-
 fn prompt_field(value: Option<&Value>) -> Result<String, GatewayError> {
     match value {
         Some(Value::String(prompt)) => Ok(prompt.clone()),
@@ -531,7 +535,6 @@ fn prompt_field(value: Option<&Value>) -> Result<String, GatewayError> {
         None => Err(GatewayError::validation("prompt is required")),
     }
 }
-
 fn stop_field(value: Option<&Value>) -> Result<Option<Vec<String>>, GatewayError> {
     match value {
         None | Some(Value::Null) => Ok(None),
@@ -550,7 +553,6 @@ fn stop_field(value: Option<&Value>) -> Result<Option<Vec<String>>, GatewayError
         )),
     }
 }
-
 fn logit_bias_field(value: Option<&Value>) -> Result<Option<HashMap<String, f32>>, GatewayError> {
     let Some(value) = value else {
         return Ok(None);
@@ -572,7 +574,6 @@ fn logit_bias_field(value: Option<&Value>) -> Result<Option<HashMap<String, f32>
     }
     Ok(Some(result))
 }
-
 fn required_string_field(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -584,7 +585,6 @@ fn required_string_field(
         None => Err(GatewayError::validation(missing_message)),
     }
 }
-
 fn optional_string_field(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -595,7 +595,6 @@ fn optional_string_field(
         Some(_) => Err(GatewayError::validation(format!("{key} must be a string"))),
     }
 }
-
 fn bool_field(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -606,7 +605,6 @@ fn bool_field(
         Some(_) => Err(GatewayError::validation(format!("{key} must be a boolean"))),
     }
 }
-
 fn u32_field(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -628,7 +626,6 @@ fn u32_field(
         ))),
     }
 }
-
 fn include_usage_field(value: Option<&Value>) -> Result<Option<bool>, GatewayError> {
     match value {
         None | Some(Value::Null) => Ok(None),
@@ -642,7 +639,6 @@ fn include_usage_field(value: Option<&Value>) -> Result<Option<bool>, GatewayErr
         Some(_) => Err(GatewayError::validation("stream_options must be an object")),
     }
 }
-
 fn f32_field(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -658,7 +654,6 @@ fn f32_field(
     }
     Ok(Some(value as f32))
 }
-
 fn completion_response_from_chat(
     response: crate::core::models::openai::ChatCompletionResponse,
     prompt: &str,
@@ -684,7 +679,6 @@ fn completion_response_from_chat(
         usage: response.usage,
     }
 }
-
 fn completion_chunk_from_core(
     chunk: types::responses::ChatChunk,
     echo_prefix: Option<&str>,
@@ -710,7 +704,6 @@ fn completion_chunk_from_core(
         usage: include_usage.then_some(chunk.usage).flatten(),
     }
 }
-
 fn chunk_has_text_delta(chunk: &types::responses::ChatChunk) -> bool {
     chunk.choices.iter().any(|choice| {
         choice
@@ -720,7 +713,6 @@ fn chunk_has_text_delta(chunk: &types::responses::ChatChunk) -> bool {
             .is_some_and(|text| !text.is_empty())
     })
 }
-
 fn completion_text_from_message(
     content: Option<&MessageContent>,
     prompt: &str,
@@ -744,7 +736,6 @@ fn completion_text_from_message(
         completion
     }
 }
-
 fn completion_text_from_delta(content: Option<String>, echo_prefix: Option<&str>) -> String {
     let content = content.unwrap_or_default();
     match echo_prefix {
@@ -752,7 +743,6 @@ fn completion_text_from_delta(content: Option<String>, echo_prefix: Option<&str>
         None => content,
     }
 }
-
 fn finish_reason_to_string(reason: types::responses::FinishReason) -> String {
     match reason {
         types::responses::FinishReason::Stop => "stop",

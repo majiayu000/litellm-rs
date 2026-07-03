@@ -716,9 +716,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body: Value = test::read_body_json(resp).await;
         assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "model_not_priced");
         assert!(
             body["error"]["message"]
                 .as_str()
