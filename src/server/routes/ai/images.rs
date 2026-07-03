@@ -62,35 +62,31 @@ pub async fn image_generations(
     req: HttpRequest,
     request: web::Json<ImageGenerationRequest>,
 ) -> ActixResult<HttpResponse> {
+    let mut request = request.into_inner();
     info!("Image generation request for model: {:?}", request.model);
 
     let model = match required_image_generation_model(&request) {
-        Ok(model) => model,
+        Ok(model) => model.to_string(),
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
-    if let Err(error) = super::context::enforce_api_key_model_and_token_limits(&req, model, None) {
+    request.model = Some(model.clone());
+    if let Err(error) = super::context::enforce_api_key_model_and_token_limits(&req, &model, None) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
-    handle_ai_request(
-        &req,
-        request.into_inner(),
-        "Image generation",
-        |request, context| {
-            generation::handle_image_generation_with_state(state.get_ref(), request, context)
-        },
-    )
+    handle_ai_request(&req, request, "Image generation", |request, context| {
+        generation::handle_image_generation_with_state(state.get_ref(), request, context)
+    })
     .await
 }
 
 fn required_image_generation_model(request: &ImageGenerationRequest) -> Result<&str, GatewayError> {
-    let Some(model) = request.model.as_deref() else {
-        return Err(GatewayError::validation("Model is required"));
-    };
-    if model.trim().is_empty() {
-        return Err(GatewayError::validation("Model is required"));
-    }
-    Ok(model)
+    request
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .ok_or_else(|| GatewayError::validation("model is required"))
 }
 
 pub async fn image_edits(
