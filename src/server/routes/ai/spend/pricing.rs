@@ -143,7 +143,7 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
-    let cost = match pricing_service.calculate_loaded_usage_cost_for_provider(
+    let cost = match pricing_service.calculate_loaded_settlement_cost_for_provider(
         pricing_provider,
         pricing_model,
         usage,
@@ -180,7 +180,7 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
     if let Some(key_id) = api_key_id {
         let total_tokens = usage
             .total_tokens
-            .saturating_add(usage.audio_tokens.unwrap_or(0))
+            .saturating_add(usage.audio_token_count())
             .saturating_add(usage.image_tokens.unwrap_or(0));
         if let Err(error) = key_manager
             .record_usage(key_id, u64::from(total_tokens), cost.unwrap_or(0.0))

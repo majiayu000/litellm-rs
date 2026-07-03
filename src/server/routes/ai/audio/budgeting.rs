@@ -249,9 +249,7 @@ async fn record_key_usage(
     cost: f64,
 ) {
     if let Some(key_id) = api_key_id {
-        let total_tokens = usage
-            .total_tokens
-            .saturating_add(usage.audio_tokens.unwrap_or(0));
+        let total_tokens = usage.total_tokens.saturating_add(usage.audio_token_count());
         if let Err(error) = key_manager
             .record_usage(key_id, u64::from(total_tokens), cost)
             .await

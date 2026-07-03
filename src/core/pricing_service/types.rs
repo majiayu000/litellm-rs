@@ -81,6 +81,7 @@ pub struct PricingUsage {
     pub cache_creation_tokens: Option<u32>,
     pub cache_read_tokens: Option<u32>,
     pub audio_tokens: Option<u32>,
+    pub output_audio_tokens: Option<u32>,
     pub image_tokens: Option<u32>,
     pub reasoning_tokens: Option<u32>,
     pub output_image_count: Option<u32>,
@@ -97,6 +98,7 @@ impl PricingUsage {
             cache_creation_tokens: None,
             cache_read_tokens: None,
             audio_tokens: None,
+            output_audio_tokens: None,
             image_tokens: None,
             reasoning_tokens: None,
             output_image_count: None,
@@ -118,11 +120,18 @@ impl PricingUsage {
                 .saturating_add(self.cache_read_token_count()),
         )
     }
+
+    pub fn audio_token_count(&self) -> u32 {
+        self.audio_tokens
+            .unwrap_or(0)
+            .saturating_add(self.output_audio_tokens.unwrap_or(0))
+    }
 }
 
 impl From<&crate::core::types::responses::Usage> for PricingUsage {
     fn from(usage: &crate::core::types::responses::Usage) -> Self {
         let prompt_details = usage.prompt_tokens_details.as_ref();
+        let completion_details = usage.completion_tokens_details.as_ref();
         Self {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
@@ -131,6 +140,7 @@ impl From<&crate::core::types::responses::Usage> for PricingUsage {
             cache_creation_tokens: prompt_details.and_then(|details| details.cache_creation_tokens),
             cache_read_tokens: prompt_details.and_then(|details| details.cache_read_tokens),
             audio_tokens: prompt_details.and_then(|details| details.audio_tokens),
+            output_audio_tokens: completion_details.and_then(|details| details.audio_tokens),
             image_tokens: None,
             reasoning_tokens: usage
                 .completion_tokens_details

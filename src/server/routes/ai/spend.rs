@@ -529,7 +529,7 @@ pub(super) async fn record_completion_spend_with_reservation_with_pricing(
     let total_tokens = u64::from(usage.total_tokens);
     let usage_tokens = PricingUsage::from(usage);
 
-    let cost = match pricing_service.calculate_loaded_usage_cost_for_provider(
+    let cost = match pricing_service.calculate_loaded_settlement_cost_for_provider(
         provider,
         model,
         &usage_tokens,

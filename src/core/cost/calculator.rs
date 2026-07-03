@@ -194,6 +194,7 @@ fn pricing_usage_from_cost_usage(usage: &UsageTokens) -> PricingUsage {
         cache_creation_tokens: None,
         cache_read_tokens: None,
         audio_tokens: usage.audio_tokens,
+        output_audio_tokens: None,
         image_tokens: usage.image_tokens,
         reasoning_tokens: usage.reasoning_tokens,
         output_image_count: None,

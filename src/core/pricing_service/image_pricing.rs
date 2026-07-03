@@ -40,7 +40,7 @@ pub(super) fn output_image_cost(
     if image_tokens == 0 && usage.output_image_count.unwrap_or(0) == 0 {
         return Ok(0.0);
     }
-    if image_tokens > 0 && image_token_unit_price(model_info).is_some() {
+    if image_tokens > 0 && image_token_unit_price(model_info, usage).is_some() {
         return Ok(0.0);
     }
 
@@ -96,17 +96,23 @@ pub(super) fn output_image_cost(
     Ok(count as f64 * price)
 }
 
-pub(super) fn image_token_unit_price(model_info: &LiteLLMModelInfo) -> Option<f64> {
-    [
-        "image_cost_per_token",
-        "input_cost_per_image_token",
-        "output_cost_per_image_token",
-    ]
-    .into_iter()
-    .find_map(|key| {
+pub(super) fn image_token_unit_price(
+    model_info: &LiteLLMModelInfo,
+    usage: &PricingUsage,
+) -> Option<f64> {
+    let keys: &[&str] = if usage.output_image_count.unwrap_or(0) > 0 {
+        &["image_cost_per_token", "output_cost_per_image_token"]
+    } else {
+        &[
+            "image_cost_per_token",
+            "input_cost_per_image_token",
+            "output_cost_per_image_token",
+        ]
+    };
+    keys.iter().find_map(|key| {
         model_info
             .extra
-            .get(key)
+            .get(*key)
             .and_then(serde_json::Value::as_f64)
     })
 }

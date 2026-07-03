@@ -2,7 +2,7 @@ use super::*;
 use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
 use crate::core::keys::InMemoryKeyRepository;
 use crate::core::pricing_service::LiteLLMModelInfo;
-use crate::core::types::responses::Usage;
+use crate::core::types::responses::{PromptTokensDetails, Usage};
 use std::collections::HashMap;
 
 fn response_usage(prompt: u32, completion: u32) -> Usage {
@@ -169,6 +169,58 @@ async fn record_completion_spend_uses_runtime_pricing_service() {
                 "runtime_provider",
                 "runtime-only-priced-model",
                 Some(&response_usage(1000, 500)),
+            ),
+            None,
+            None,
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        budget
+            .providers
+            .get_provider_usage("runtime_provider")
+            .map(|usage| usage.current_spend),
+        Some(0.025)
+    );
+    assert_eq!(
+        budget
+            .models
+            .get_model_usage("runtime-only-priced-model")
+            .map(|usage| usage.current_spend),
+        Some(0.025)
+    );
+}
+
+#[tokio::test]
+async fn record_completion_spend_settles_text_cost_when_modal_price_is_missing() {
+    let pricing = runtime_test_pricing_service("runtime_provider");
+    let budget = UnifiedBudgetLimits::new();
+    budget.providers.set_provider_limit(
+        "runtime_provider",
+        ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
+    );
+    budget.models.set_model_limit(
+        "runtime-only-priced-model",
+        ModelLimitConfig::new(1000.0, ResetPeriod::Monthly),
+    );
+    let keys = KeyManager::new(InMemoryKeyRepository::new());
+    let mut usage = response_usage(1000, 500);
+    usage.prompt_tokens_details = Some(PromptTokensDetails {
+        cached_tokens: None,
+        cache_creation_tokens: None,
+        cache_read_tokens: None,
+        audio_tokens: Some(250),
+    });
+
+    record_completion_spend_with_reservation_with_pricing(
+        &pricing,
+        usage_spend_settlement(
+            (&budget, &keys, None),
+            (
+                "runtime_provider",
+                "runtime-only-priced-model",
+                Some(&usage),
             ),
             None,
             None,

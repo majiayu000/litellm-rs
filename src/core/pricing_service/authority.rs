@@ -112,6 +112,38 @@ impl PricingService {
         calculate_usage_cost_with_pricing(provider, &resolved_model, &model_info, usage)
     }
 
+    /// Calculate settlement cost for an already-successful request.
+    ///
+    /// Request-time dry runs fail closed on missing modality-specific pricing.
+    /// Settlement must not convert that error into free spend when text tokens
+    /// are still priced, so it falls back to the text/cache/reasoning portion.
+    pub fn calculate_loaded_settlement_cost_for_provider(
+        &self,
+        provider: &str,
+        model: &str,
+        usage: &PricingUsage,
+    ) -> Result<PricingCostBreakdown> {
+        match self.calculate_loaded_usage_cost_for_provider(provider, model, usage) {
+            Ok(breakdown) => Ok(breakdown),
+            Err(error) => {
+                let Some(text_usage) = text_only_usage_for_modal_settlement(usage) else {
+                    return Err(error);
+                };
+                match self.calculate_loaded_usage_cost_for_provider(provider, model, &text_usage) {
+                    Ok(mut breakdown) => {
+                        tracing::error!(
+                            "modal cost calculation failed for '{provider}'/'{model}': {error}; \
+                             settling text/token cost only"
+                        );
+                        breakdown.usage = usage.clone();
+                        Ok(breakdown)
+                    }
+                    Err(_) => Err(error),
+                }
+            }
+        }
+    }
+
     /// Validate and estimate an arbitrary usage shape without mutating spend
     /// or budget state.
     ///
@@ -488,6 +520,23 @@ fn alias_suffix_matches(suffix: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
+fn text_only_usage_for_modal_settlement(usage: &PricingUsage) -> Option<PricingUsage> {
+    let has_modal_usage = usage.audio_token_count() > 0
+        || usage.image_tokens.unwrap_or(0) > 0
+        || usage.output_image_count.unwrap_or(0) > 0;
+    if !has_modal_usage {
+        return None;
+    }
+
+    let mut text_usage = usage.clone();
+    text_usage.audio_tokens = None;
+    text_usage.output_audio_tokens = None;
+    text_usage.image_tokens = None;
+    text_usage.output_image_count = None;
+    text_usage.output_image_pricing_keys.clear();
+    Some(text_usage)
+}
+
 fn calculate_usage_cost_with_pricing(
     requested_provider: &str,
     model: &str,
@@ -540,11 +589,17 @@ fn calculate_usage_cost_with_pricing(
         model_info,
         model,
         usage.audio_tokens,
-        &["input_cost_per_audio_token", "output_cost_per_audio_token"],
+        &["input_cost_per_audio_token"],
         "audio pricing",
+    )? + priced_extra_units(
+        model_info,
+        model,
+        usage.output_audio_tokens,
+        &["output_cost_per_audio_token"],
+        "output audio pricing",
     )?;
     let image_cost_per_token =
-        super::image_pricing::image_token_unit_price(model_info).unwrap_or(0.0);
+        super::image_pricing::image_token_unit_price(model_info, usage).unwrap_or(0.0);
     let image_cost = usage.image_tokens.unwrap_or(0) as f64 * image_cost_per_token
         + super::image_pricing::output_image_cost(model, model_info, usage)?;
     let reasoning_cost = usage.reasoning_tokens.unwrap_or(0) as f64
