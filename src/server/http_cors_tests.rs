@@ -14,6 +14,12 @@ fn cors_auth_test_config() -> Config {
     config
 }
 
+fn disabled_cors_auth_test_config() -> Config {
+    let mut config = cors_auth_test_config();
+    config.gateway.server.cors.enabled = false;
+    config
+}
+
 #[tokio::test]
 async fn app_factory_cors_preflight_runs_before_auth() {
     let server = match HttpServer::new(&cors_auth_test_config()).await {
@@ -118,5 +124,33 @@ async fn app_factory_non_preflight_options_still_requires_auth() {
         .insert_header((header::ACCESS_CONTROL_REQUEST_METHOD, "POST"))
         .to_request();
     let resp = actix_test::call_service(&app, missing_origin).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn app_factory_disabled_cors_preflight_still_requires_auth() {
+    let server = match HttpServer::new(&disabled_cors_auth_test_config()).await {
+        Ok(server) => server,
+        Err(error) => panic!("server startup failed: {error}"),
+    };
+
+    let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+        server.state().clone(),
+    )))
+    .await;
+
+    let req = actix_test::TestRequest::default()
+        .method(actix_web::http::Method::OPTIONS)
+        .uri("/v1/chat/completions")
+        .insert_header((header::ORIGIN, "https://app.example"))
+        .insert_header((header::ACCESS_CONTROL_REQUEST_METHOD, "POST"))
+        .to_request();
+    let resp = actix_test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        resp.headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none()
+    );
 }

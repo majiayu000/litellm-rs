@@ -17,7 +17,10 @@ use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_cors::Cors;
 use actix_web::{
     App, HttpServer as ActixHttpServer,
-    middleware::{Condition, DefaultHeaders, Logger},
+    body::MessageBody,
+    dev::{ServiceRequest, ServiceResponse},
+    http::{Method, header},
+    middleware::{Condition, DefaultHeaders, Logger, Next, from_fn},
     web,
 };
 use std::sync::Arc;
@@ -211,10 +214,10 @@ impl HttpServer {
             .wrap(AuthMiddleware)
             .wrap(RequestIdMiddleware)
             .wrap(Condition::new(metrics_enabled, MetricsMiddleware))
-            // Register CORS last so Actix runs it first. That lets standard
-            // browser preflight requests complete before auth/rate-limit and
-            // lets CORS decorate downstream auth/rate-limit failures.
-            .wrap(cors)
+            // CORS must run outside auth/rate-limit, but only standard browser
+            // preflight may be short-circuited before those layers.
+            .wrap(Condition::new(cors_config.enabled, cors))
+            .wrap(from_fn(normalize_non_cors_options_before_cors))
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)
             .configure(routes::keys::configure_routes)
@@ -377,6 +380,23 @@ impl HttpServer {
     pub fn state(&self) -> &AppState {
         &self.state
     }
+}
+
+async fn normalize_non_cors_options_before_cors(
+    mut req: ServiceRequest,
+    next: Next<impl MessageBody>,
+) -> std::result::Result<ServiceResponse<impl MessageBody>, actix_web::Error> {
+    if req.method() == Method::OPTIONS
+        && req
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
+        && !req.headers().contains_key(header::ORIGIN)
+    {
+        req.headers_mut()
+            .remove(header::ACCESS_CONTROL_REQUEST_METHOD);
+    }
+
+    next.call(req).await
 }
 
 #[cfg(test)]
