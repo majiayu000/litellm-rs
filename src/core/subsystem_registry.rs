@@ -20,6 +20,8 @@ pub enum SubsystemDecision {
     /// temporary exemption baseline. It is not a feature gate or runtime
     /// capability.
     TemporaryExemption,
+    /// Module is hidden from the default build behind a default-off feature.
+    FeatureGated,
     /// Parsed configuration exists but validation rejects enabling it until the
     /// runtime path lands.
     ConfigRejected,
@@ -32,14 +34,12 @@ pub const GH838_TEMPORARY_EXEMPTION_ISSUE: u32 = 838;
 /// later wire/gate/remove tranche.
 pub const GH838_TEMPORARY_EXEMPTIONS: &[&str] = &[
     "a2a",
-    "analytics",
     "batch",
     "guardrails",
     "integrations",
     "ip_access",
     "mcp",
     "observability",
-    "realtime",
     "user_management",
     "virtual_keys",
     "webhooks",
@@ -53,6 +53,7 @@ impl CoreSubsystem {
             SubsystemDecision::Wired => false,
             SubsystemDecision::LibraryOnly
             | SubsystemDecision::InternalDependency
+            | SubsystemDecision::FeatureGated
             | SubsystemDecision::ConfigRejected => true,
             SubsystemDecision::TemporaryExemption => {
                 GH838_TEMPORARY_EXEMPTIONS.contains(&self.name)
@@ -80,9 +81,9 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "analytics",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: None,
-        note: "Analytics types and engine are feature-gated; no runtime collector or route is wired.",
+        decision: SubsystemDecision::FeatureGated,
+        runtime_path: Some("Cargo feature: analytics"),
+        note: "Analytics module is excluded from the default build behind the analytics feature.",
     },
     CoreSubsystem {
         name: "audio",
@@ -230,9 +231,9 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "realtime",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: None,
-        note: "Realtime WebSocket types exist but no gateway route is mounted.",
+        decision: SubsystemDecision::FeatureGated,
+        runtime_path: Some("Cargo feature: websockets"),
+        note: "Realtime module is excluded from the default build behind the websockets feature.",
     },
     CoreSubsystem {
         name: "rerank",
@@ -475,7 +476,7 @@ mod tests {
     fn issue_838_subsystems_have_explicit_non_silent_decisions() {
         let expected = [
             ("a2a", SubsystemDecision::TemporaryExemption),
-            ("analytics", SubsystemDecision::TemporaryExemption),
+            ("analytics", SubsystemDecision::FeatureGated),
             ("audit", SubsystemDecision::ConfigRejected),
             ("batch", SubsystemDecision::TemporaryExemption),
             ("guardrails", SubsystemDecision::TemporaryExemption),
@@ -483,7 +484,7 @@ mod tests {
             ("ip_access", SubsystemDecision::TemporaryExemption),
             ("mcp", SubsystemDecision::TemporaryExemption),
             ("observability", SubsystemDecision::TemporaryExemption),
-            ("realtime", SubsystemDecision::TemporaryExemption),
+            ("realtime", SubsystemDecision::FeatureGated),
             ("semantic_cache", SubsystemDecision::ConfigRejected),
             ("virtual_keys", SubsystemDecision::TemporaryExemption),
             ("webhooks", SubsystemDecision::TemporaryExemption),
