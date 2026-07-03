@@ -326,8 +326,13 @@ mod tests {
     }
 
     fn append_rust_sources(dir: &Path, buffer: &mut String) {
-        for entry in std::fs::read_dir(dir).expect("read runtime source directory") {
-            let entry = entry.expect("read runtime source entry");
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
             let path = entry.path();
             if path.is_dir() {
                 append_rust_sources(&path, buffer);
@@ -346,8 +351,10 @@ mod tests {
                 continue;
             }
 
-            buffer.push_str(&std::fs::read_to_string(path).expect("read runtime source file"));
-            buffer.push('\n');
+            if let Ok(content) = std::fs::read_to_string(path) {
+                buffer.push_str(&content);
+                buffer.push('\n');
+            }
         }
     }
 
@@ -361,7 +368,14 @@ mod tests {
     }
 
     fn runtime_source_references_module(source: &str, module: &str) -> bool {
-        source.contains(&format!("core::{module}"))
+        let pattern = format!("core::{module}");
+        source.match_indices(&pattern).any(|(index, _)| {
+            let after_match = index + pattern.len();
+            source[after_match..]
+                .chars()
+                .next()
+                .is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
+        })
     }
 
     #[test]
