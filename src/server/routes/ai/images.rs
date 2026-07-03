@@ -64,10 +64,11 @@ pub async fn image_generations(
 ) -> ActixResult<HttpResponse> {
     info!("Image generation request for model: {:?}", request.model);
 
-    if let Some(model) = request.model.as_deref()
-        && let Err(error) =
-            super::context::enforce_api_key_model_and_token_limits(&req, model, None)
-    {
+    let model = match required_image_generation_model(&request) {
+        Ok(model) => model,
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
+    if let Err(error) = super::context::enforce_api_key_model_and_token_limits(&req, model, None) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
@@ -80,6 +81,16 @@ pub async fn image_generations(
         },
     )
     .await
+}
+
+fn required_image_generation_model(request: &ImageGenerationRequest) -> Result<&str, GatewayError> {
+    let Some(model) = request.model.as_deref() else {
+        return Err(GatewayError::validation("Model is required"));
+    };
+    if model.trim().is_empty() {
+        return Err(GatewayError::validation("Model is required"));
+    }
+    Ok(model)
 }
 
 pub async fn image_edits(
