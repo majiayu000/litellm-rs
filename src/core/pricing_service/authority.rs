@@ -540,7 +540,7 @@ fn calculate_usage_cost_with_pricing(
         model_info,
         model,
         usage.audio_tokens,
-        "input_cost_per_audio_token",
+        &["input_cost_per_audio_token", "output_cost_per_audio_token"],
         "audio pricing",
     )?;
     let image_cost_per_token =
@@ -587,7 +587,7 @@ fn priced_extra_units(
     pricing: &LiteLLMModelInfo,
     model: &str,
     units: Option<u32>,
-    key: &str,
+    keys: &[&str],
     pricing_type: &str,
 ) -> Result<f64> {
     let units = units.unwrap_or(0);
@@ -595,12 +595,20 @@ fn priced_extra_units(
         return Ok(0.0);
     }
 
-    let unit_price = pricing
-        .extra
-        .get(key)
-        .and_then(serde_json::Value::as_f64)
+    let (key, unit_price) = keys
+        .iter()
+        .find_map(|key| {
+            pricing
+                .extra
+                .get(*key)
+                .and_then(serde_json::Value::as_f64)
+                .map(|price| (*key, price))
+        })
         .ok_or_else(|| {
-            GatewayError::Config(format!("Missing {pricing_type} for model {model}: {key}"))
+            GatewayError::Config(format!(
+                "Missing {pricing_type} for model {model}: {}",
+                keys.join(", ")
+            ))
         })?;
     if unit_price < 0.0 || unit_price.is_nan() {
         return Err(GatewayError::Config(format!(

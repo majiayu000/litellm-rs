@@ -52,7 +52,7 @@ pub(super) fn output_image_cost(
         Some(price) => price,
         None if image_tokens > 0 => {
             return Err(GatewayError::Config(format!(
-                "Missing image pricing for model {}: image_cost_per_token or output_cost_per_image",
+                "Missing image pricing for model {}: image_cost_per_token, input_cost_per_image_token, output_cost_per_image_token, or output_cost_per_image",
                 model
             )));
         }
@@ -97,14 +97,18 @@ pub(super) fn output_image_cost(
 }
 
 pub(super) fn image_token_unit_price(model_info: &LiteLLMModelInfo) -> Option<f64> {
-    ["image_cost_per_token", "output_cost_per_image_token"]
-        .into_iter()
-        .find_map(|key| {
-            model_info
-                .extra
-                .get(key)
-                .and_then(serde_json::Value::as_f64)
-        })
+    [
+        "image_cost_per_token",
+        "input_cost_per_image_token",
+        "output_cost_per_image_token",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        model_info
+            .extra
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+    })
 }
 
 fn flat_image_pricing_key_matches(model: &str, usage: &PricingUsage) -> bool {
