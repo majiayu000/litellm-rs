@@ -8,6 +8,20 @@ use crate::config::models::enterprise::{EnterpriseConfig, SsoConfig};
 
 impl Validate for EnterpriseConfig {
     fn validate(&self) -> Result<(), String> {
+        let mut unwired = Vec::new();
+        if self.audit_logging {
+            unwired.push("enterprise.audit_logging");
+        }
+        if self.advanced_analytics {
+            unwired.push("enterprise.advanced_analytics");
+        }
+        if !unwired.is_empty() {
+            return Err(format!(
+                "{} parsed but not wired into the gateway runtime; leave disabled until support lands",
+                unwired.join(", ")
+            ));
+        }
+
         if !self.enabled {
             return Ok(());
         }

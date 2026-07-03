@@ -16,8 +16,8 @@ pub enum SubsystemDecision {
     /// Shared support code used below wired modules rather than exposed as its
     /// own gateway subsystem.
     InternalDependency,
-    /// Retained module-only implementation. It must not be documented as a
-    /// gateway runtime capability until config and an end-to-end path are wired.
+    /// Retained module-only implementation recorded as a temporary GH838
+    /// baseline. It is not a production-ready gate or runtime capability.
     ExperimentalGate,
     /// Parsed configuration exists but validation rejects enabling it until the
     /// runtime path lands.
@@ -25,8 +25,9 @@ pub enum SubsystemDecision {
 }
 
 impl SubsystemDecision {
-    /// Returns true when a module can be absent from direct server/main
-    /// references without creating a declaration-execution gap.
+    /// Returns true for the current GH838 decision matrix. Experimental entries
+    /// still require later wire/gate/remove tranches before they become runtime
+    /// capabilities.
     pub const fn is_gateway_reference_exempt(self) -> bool {
         !matches!(self, Self::Wired)
     }
@@ -63,9 +64,9 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "audit",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::ConfigRejected,
         runtime_path: None,
-        note: "Audit middleware/logger are not registered by the gateway server.",
+        note: "enterprise.audit_logging is rejected until audit middleware/logger are registered by the gateway server.",
     },
     CoreSubsystem {
         name: "batch",
@@ -420,6 +421,7 @@ mod tests {
         let expected = [
             ("a2a", SubsystemDecision::ExperimentalGate),
             ("analytics", SubsystemDecision::ExperimentalGate),
+            ("audit", SubsystemDecision::ConfigRejected),
             ("batch", SubsystemDecision::ExperimentalGate),
             ("guardrails", SubsystemDecision::ExperimentalGate),
             ("integrations", SubsystemDecision::ExperimentalGate),

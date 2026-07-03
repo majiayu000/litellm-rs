@@ -8,6 +8,7 @@ use super::trait_def::Validate;
 use crate::config::models::auth::AuthConfig;
 use crate::config::models::cache::CacheConfig;
 use crate::config::models::enterprise::{EnterpriseConfig, SsoConfig};
+use crate::config::models::gateway::GatewayConfig;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::rate_limit::RateLimitConfig;
 use crate::config::models::server::ServerConfig;
@@ -234,6 +235,27 @@ fn test_cache_validation_rejects_unwired_semantic_cache() {
 }
 
 #[test]
+fn test_gateway_validation_rejects_unwired_semantic_cache() {
+    let mut config = GatewayConfig {
+        providers: vec![ProviderConfig {
+            name: "test-provider".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "test-key".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    config.storage.database.enabled = true;
+    config.storage.database.url = "postgres://localhost/test".to_string();
+    config.auth.jwt_secret = "StrongJwtSecretWithMixedCaseAndNumbers1234!".to_string();
+    config.cache.semantic_cache = true;
+
+    let error = config.validate().unwrap_err();
+    assert!(error.to_ascii_lowercase().contains("semantic cache"));
+    assert!(error.contains("not wired into runtime"));
+}
+
+#[test]
 fn test_rate_limit_validation_skips_when_disabled() {
     let config = RateLimitConfig {
         enabled: false,
@@ -361,6 +383,30 @@ fn test_enterprise_validation_skips_when_disabled() {
         advanced_analytics: false,
     };
     assert!(Validate::validate(&config).is_ok());
+}
+
+#[test]
+fn test_enterprise_validation_rejects_unwired_audit_logging() {
+    let config = EnterpriseConfig {
+        audit_logging: true,
+        ..Default::default()
+    };
+
+    let error = Validate::validate(&config).unwrap_err();
+    assert!(error.contains("enterprise.audit_logging"));
+    assert!(error.contains("not wired into the gateway runtime"));
+}
+
+#[test]
+fn test_enterprise_validation_rejects_unwired_advanced_analytics() {
+    let config = EnterpriseConfig {
+        advanced_analytics: true,
+        ..Default::default()
+    };
+
+    let error = Validate::validate(&config).unwrap_err();
+    assert!(error.contains("enterprise.advanced_analytics"));
+    assert!(error.contains("not wired into the gateway runtime"));
 }
 
 // ==================== SSRF Validation - Valid URLs ====================
