@@ -16,20 +16,48 @@ pub enum SubsystemDecision {
     /// Shared support code used below wired modules rather than exposed as its
     /// own gateway subsystem.
     InternalDependency,
-    /// Retained module-only implementation recorded as a temporary GH838
-    /// baseline. It is not a production-ready gate or runtime capability.
-    ExperimentalGate,
+    /// Retained module-only implementation recorded in the explicit GH838
+    /// temporary exemption baseline. It is not a feature gate or runtime
+    /// capability.
+    TemporaryExemption,
     /// Parsed configuration exists but validation rejects enabling it until the
     /// runtime path lands.
     ConfigRejected,
 }
 
-impl SubsystemDecision {
-    /// Returns true for the current GH838 decision matrix. Experimental entries
-    /// still require later wire/gate/remove tranches before they become runtime
-    /// capabilities.
-    pub const fn is_gateway_reference_exempt(self) -> bool {
-        !matches!(self, Self::Wired)
+/// Issue backing the temporary unwired-subsystem baseline.
+pub const GH838_TEMPORARY_EXEMPTION_ISSUE: u32 = 838;
+
+/// Gateway-facing modules that remain exported only because GH838 tracks their
+/// later wire/gate/remove tranche.
+pub const GH838_TEMPORARY_EXEMPTIONS: &[&str] = &[
+    "a2a",
+    "analytics",
+    "batch",
+    "guardrails",
+    "integrations",
+    "ip_access",
+    "mcp",
+    "observability",
+    "realtime",
+    "user_management",
+    "virtual_keys",
+    "webhooks",
+];
+
+impl CoreSubsystem {
+    /// Returns true when a module can be absent from direct server/main
+    /// references without creating a new declaration-execution gap.
+    pub fn has_gateway_reference_exemption(&self) -> bool {
+        match self.decision {
+            SubsystemDecision::Wired => false,
+            SubsystemDecision::LibraryOnly
+            | SubsystemDecision::InternalDependency
+            | SubsystemDecision::ConfigRejected => true,
+            SubsystemDecision::TemporaryExemption => {
+                GH838_TEMPORARY_EXEMPTIONS.contains(&self.name)
+            }
+        }
     }
 }
 
@@ -46,13 +74,13 @@ pub struct CoreSubsystem {
 pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     CoreSubsystem {
         name: "a2a",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "A2A gateway types compile, but no server route or AppState entry mounts them.",
     },
     CoreSubsystem {
         name: "analytics",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "Analytics types and engine are feature-gated; no runtime collector or route is wired.",
     },
@@ -70,7 +98,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "batch",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: Some("/v1/batches provider proxy only"),
         note: "The HTTP batch API is a provider proxy; core::batch::BatchProcessor is not constructed.",
     },
@@ -118,7 +146,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "guardrails",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "GuardrailEngine is not configured or executed on completion requests.",
     },
@@ -136,13 +164,13 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "integrations",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "Langfuse/OpenTelemetry integration managers are not initialized by the binary.",
     },
     CoreSubsystem {
         name: "ip_access",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "IP access middleware exists but is not registered in the Actix middleware stack.",
     },
@@ -154,7 +182,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "mcp",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "MCP gateway is not mounted; Responses API only passes MCP tool descriptors through.",
     },
@@ -172,7 +200,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "observability",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "Basic tracing/metrics are wired elsewhere; core observability exporters are not.",
     },
@@ -202,7 +230,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "realtime",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "Realtime WebSocket types exist but no gateway route is mounted.",
     },
@@ -234,7 +262,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "semantic_cache",
         decision: SubsystemDecision::ConfigRejected,
         runtime_path: None,
-        note: "cache.semantic_cache is rejected by config validation until runtime handling is wired.",
+        note: "GatewayConfig::validate rejects cache.semantic_cache until runtime handling is wired.",
     },
     CoreSubsystem {
         name: "streaming",
@@ -268,19 +296,19 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "user_management",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "User-management domain code is not constructed by the gateway server.",
     },
     CoreSubsystem {
         name: "virtual_keys",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "Gateway key routes use core::keys; VirtualKeyManager is not in AppState.",
     },
     CoreSubsystem {
         name: "webhooks",
-        decision: SubsystemDecision::ExperimentalGate,
+        decision: SubsystemDecision::TemporaryExemption,
         runtime_path: None,
         note: "WebhookManager is not configured or constructed by the gateway runtime.",
     },
@@ -410,28 +438,55 @@ mod tests {
             }
 
             assert!(
-                subsystem.decision.is_gateway_reference_exempt(),
+                subsystem.has_gateway_reference_exemption(),
                 "core::{module} is exported but not referenced by server/main/bin and has no exemption"
             );
         }
     }
 
     #[test]
+    fn gh838_temporary_exemptions_match_explicit_issue_baseline() {
+        assert_eq!(GH838_TEMPORARY_EXEMPTION_ISSUE, 838);
+
+        let baseline: BTreeSet<&str> = GH838_TEMPORARY_EXEMPTIONS.iter().copied().collect();
+        for name in &baseline {
+            let Some(subsystem) = subsystem_for(name) else {
+                panic!("temporary exemption {name} exists");
+            };
+            assert_eq!(
+                subsystem.decision,
+                SubsystemDecision::TemporaryExemption,
+                "{name} must use the GH838 temporary exemption decision"
+            );
+        }
+
+        for subsystem in CORE_SUBSYSTEMS {
+            if subsystem.decision == SubsystemDecision::TemporaryExemption {
+                assert!(
+                    baseline.contains(subsystem.name),
+                    "{} must be added to the explicit GH838 temporary exemption baseline",
+                    subsystem.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn issue_838_subsystems_have_explicit_non_silent_decisions() {
         let expected = [
-            ("a2a", SubsystemDecision::ExperimentalGate),
-            ("analytics", SubsystemDecision::ExperimentalGate),
+            ("a2a", SubsystemDecision::TemporaryExemption),
+            ("analytics", SubsystemDecision::TemporaryExemption),
             ("audit", SubsystemDecision::ConfigRejected),
-            ("batch", SubsystemDecision::ExperimentalGate),
-            ("guardrails", SubsystemDecision::ExperimentalGate),
-            ("integrations", SubsystemDecision::ExperimentalGate),
-            ("ip_access", SubsystemDecision::ExperimentalGate),
-            ("mcp", SubsystemDecision::ExperimentalGate),
-            ("observability", SubsystemDecision::ExperimentalGate),
-            ("realtime", SubsystemDecision::ExperimentalGate),
+            ("batch", SubsystemDecision::TemporaryExemption),
+            ("guardrails", SubsystemDecision::TemporaryExemption),
+            ("integrations", SubsystemDecision::TemporaryExemption),
+            ("ip_access", SubsystemDecision::TemporaryExemption),
+            ("mcp", SubsystemDecision::TemporaryExemption),
+            ("observability", SubsystemDecision::TemporaryExemption),
+            ("realtime", SubsystemDecision::TemporaryExemption),
             ("semantic_cache", SubsystemDecision::ConfigRejected),
-            ("virtual_keys", SubsystemDecision::ExperimentalGate),
-            ("webhooks", SubsystemDecision::ExperimentalGate),
+            ("virtual_keys", SubsystemDecision::TemporaryExemption),
+            ("webhooks", SubsystemDecision::TemporaryExemption),
         ];
 
         for (name, decision) in expected {
