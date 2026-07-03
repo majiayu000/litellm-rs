@@ -441,7 +441,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = to_json(response).await;
-        assert_eq!(body["error"]["message"], "Configuration error: Invalid config");
+        assert_eq!(
+            body["error"]["message"],
+            "Configuration error: Invalid config"
+        );
         assert_eq!(body["error"]["type"], "server_error");
         assert_eq!(body["error"]["code"], "internal_error");
     }
