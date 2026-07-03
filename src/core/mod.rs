@@ -3,7 +3,7 @@
 //! This module contains the core business logic and data structures.
 
 pub mod a2a; // A2A (Agent-to-Agent) Protocol Gateway
-#[cfg(feature = "storage")]
+#[cfg(feature = "analytics")]
 pub mod analytics;
 pub mod audio; // Audio API (transcription, translation, speech)
 pub mod audit; // Audit logging system
@@ -32,6 +32,7 @@ pub mod pricing; // Shared pricing data types
 pub mod pricing_service; // Runtime pricing service
 pub mod providers;
 pub mod rate_limiter; // Rate limiting system
+#[cfg(feature = "websockets")]
 pub mod realtime; // Realtime WebSocket API
 pub mod rerank; // Rerank API for RAG systems
 pub mod router;

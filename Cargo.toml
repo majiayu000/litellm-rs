@@ -193,10 +193,13 @@ tracing = ["dep:tracing-subscriber"]
 # JSON Schema validation for MCP tool parameters
 mcp-validation = ["dep:jsonschema"]
 
-# Advanced features
+# Advanced feature gates
 vector-db = ["storage"]
+# Realtime WebSocket API (`core::realtime`)
 websockets = []
-analytics = []
+# Storage-backed analytics module (`core::analytics`)
+analytics = ["storage"]
+# Enterprise-oriented bundle; enables the feature-gated analytics and vector search surfaces.
 enterprise = ["analytics", "vector-db"]
 
 # Full feature set
