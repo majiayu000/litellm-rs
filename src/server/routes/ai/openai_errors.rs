@@ -82,10 +82,20 @@ pub(crate) fn gateway_error_response(error: &GatewayError) -> HttpResponse {
             }
         }
         GatewayError::Provider(ProviderError::RateLimit {
-            retry_after: Some(secs),
+            retry_after,
+            rpm_limit,
+            tpm_limit,
             ..
         }) => {
-            builder.insert_header((header::RETRY_AFTER, secs.to_string()));
+            if let Some(secs) = retry_after {
+                builder.insert_header((header::RETRY_AFTER, secs.to_string()));
+            }
+            if let Some(rpm) = rpm_limit {
+                builder.insert_header(("X-RateLimit-Limit-Requests", rpm.to_string()));
+            }
+            if let Some(tpm) = tpm_limit {
+                builder.insert_header(("X-RateLimit-Limit-Tokens", tpm.to_string()));
+            }
         }
         _ => {}
     }
@@ -424,13 +434,29 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn config_error_remains_internal_server_error() {
+        let error = GatewayError::Config("Invalid config".to_string());
+
+        let response = gateway_error_response(&error);
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_json(response).await;
+        assert_eq!(
+            body["error"]["message"],
+            "Configuration error: Invalid config"
+        );
+        assert_eq!(body["error"]["type"], "server_error");
+        assert_eq!(body["error"]["code"], "internal_error");
+    }
+
+    #[actix_web::test]
     async fn provider_rate_limit_uses_openai_shape_and_retry_after() {
         let error = GatewayError::Provider(ProviderError::RateLimit {
             provider: "openai",
             message: "Rate limit exceeded".to_string(),
             retry_after: Some(2),
-            rpm_limit: None,
-            tpm_limit: None,
+            rpm_limit: Some(120),
+            tpm_limit: Some(60000),
             current_usage: None,
         });
 
@@ -438,6 +464,20 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "2");
+        assert_eq!(
+            response
+                .headers()
+                .get("X-RateLimit-Limit-Requests")
+                .and_then(|value| value.to_str().ok()),
+            Some("120")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("X-RateLimit-Limit-Tokens")
+                .and_then(|value| value.to_str().ok()),
+            Some("60000")
+        );
         let body = to_json(response).await;
         assert_eq!(body["error"]["type"], "rate_limit_error");
         assert_eq!(body["error"]["code"], "rate_limit_exceeded");
@@ -448,6 +488,30 @@ mod tests {
                 .contains("Rate limit exceeded")
         );
         assert!(body["error"]["retryable"].is_null());
+    }
+
+    #[actix_web::test]
+    async fn provider_rate_limit_without_metadata_does_not_fake_openai_headers() {
+        let error = GatewayError::Provider(ProviderError::RateLimit {
+            provider: "openai",
+            message: "Rate limit exceeded".to_string(),
+            retry_after: None,
+            rpm_limit: None,
+            tpm_limit: None,
+            current_usage: None,
+        });
+
+        let response = gateway_error_response(&error);
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().get(header::RETRY_AFTER).is_none());
+        assert!(
+            response
+                .headers()
+                .get("X-RateLimit-Limit-Requests")
+                .is_none()
+        );
+        assert!(response.headers().get("X-RateLimit-Limit-Tokens").is_none());
     }
 
     #[actix_web::test]

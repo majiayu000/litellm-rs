@@ -1,10 +1,12 @@
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
     use actix_web::{App, HttpRequest, HttpResponse, HttpServer, http::StatusCode, test, web};
+    use actix_web::{HttpMessage, dev::Service};
     use bytes::Bytes;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::core::pricing_service::{LiteLLMModelInfo, PricingUsage};
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use serde_json::{Value, json};
@@ -120,6 +122,35 @@ mod tests {
             .expect("gateway server should initialize")
             .state()
             .clone()
+    }
+
+    fn api_key_with_allowed_models(allowed_models: &[&str]) -> ApiKey {
+        let mut metadata = Metadata::new();
+        metadata.set_extra(
+            "__core_keys",
+            json!({
+                "permissions": {
+                    "allowed_models": allowed_models,
+                    "allowed_endpoints": [],
+                    "custom_permissions": []
+                }
+            }),
+        );
+
+        ApiKey {
+            metadata,
+            name: "image-test-key".to_string(),
+            key_hash: "hash".to_string(),
+            key_prefix: "sk-image".to_string(),
+            user_id: None,
+            team_id: None,
+            permissions: Vec::new(),
+            rate_limits: None,
+            expires_at: None,
+            is_active: true,
+            last_used_at: None,
+            usage_stats: UsageStats::default(),
+        }
     }
 
     fn image_provider(
@@ -248,6 +279,171 @@ mod tests {
         body.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
         body.extend_from_slice(content);
         body.extend_from_slice(b"\r\n");
+    }
+
+    #[tokio::test]
+    async fn image_generation_allows_api_key_permitted_model() {
+        let mock = MockImageServer::start().await;
+        let state = build_test_state(vec![openai_image_provider_with_mapping(
+            "openai-primary",
+            &mock.base_url,
+            "image-alias",
+            "gpt-image-1-mini",
+        )])
+        .await;
+        let api_key = api_key_with_allowed_models(&["image-alias"]);
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<ApiKey>(api_key.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/generations")
+                .set_json(json!({
+                    "model": "image-alias",
+                    "prompt": "make an icon",
+                    "size": "1024x1024"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(mock.paths(), vec!["/v1/images/generations".to_string()]);
+        mock.stop().await;
+    }
+
+    #[tokio::test]
+    async fn image_generation_trims_model_before_authz_and_upstream() {
+        let mock = MockImageServer::start().await;
+        let state = build_test_state(vec![openai_image_provider_with_mapping(
+            "openai-primary",
+            &mock.base_url,
+            "image-alias",
+            "gpt-image-1-mini",
+        )])
+        .await;
+        let api_key = api_key_with_allowed_models(&["image-alias"]);
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<ApiKey>(api_key.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/generations")
+                .set_json(json!({
+                    "model": " image-alias ",
+                    "prompt": "make an icon",
+                    "size": "1024x1024"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(mock.paths(), vec!["/v1/images/generations".to_string()]);
+        mock.stop().await;
+    }
+
+    #[tokio::test]
+    async fn image_generation_rejects_api_key_disallowed_model_before_upstream() {
+        let mock = MockImageServer::start().await;
+        let state = build_test_state(vec![openai_image_provider_with_mapping(
+            "openai-primary",
+            &mock.base_url,
+            "image-alias",
+            "gpt-image-1-mini",
+        )])
+        .await;
+        let api_key = api_key_with_allowed_models(&["gpt-4o"]);
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<ApiKey>(api_key.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/generations")
+                .set_json(json!({
+                    "model": "image-alias",
+                    "prompt": "make an icon",
+                    "size": "1024x1024"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(
+            mock.paths().is_empty(),
+            "image generation model authorization must happen before upstream"
+        );
+        mock.stop().await;
+    }
+
+    #[tokio::test]
+    async fn image_generation_rejects_missing_model_before_upstream() {
+        let mock = MockImageServer::start().await;
+        let state = build_test_state(vec![openai_image_provider_with_mapping(
+            "openai-primary",
+            &mock.base_url,
+            "image-alias",
+            "gpt-image-1-mini",
+        )])
+        .await;
+        let api_key = api_key_with_allowed_models(&["image-alias"]);
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<ApiKey>(api_key.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/generations")
+                .set_json(json!({
+                    "prompt": "make an icon",
+                    "size": "1024x1024"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            mock.paths().is_empty(),
+            "missing image generation model must fail before upstream"
+        );
+        mock.stop().await;
     }
 
     #[tokio::test]

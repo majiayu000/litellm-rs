@@ -245,38 +245,39 @@ fn test_a2a_unsupported_provider_conversion() {
 fn test_a2a_rate_limit_with_retry_conversion() {
     let a2a_err = A2AError::RateLimitExceeded {
         agent_name: "agent".to_string(),
-        retry_after_ms: Some(5000),
+        retry_after_ms: Some(1500),
     };
     let gateway_err: GatewayError = a2a_err.into();
     match gateway_err {
         GatewayError::RateLimit {
             message: msg,
-            retry_after: None,
+            retry_after: Some(2),
             rpm_limit: None,
             tpm_limit: None,
         } => {
             assert!(msg.contains("A2A"));
-            assert!(msg.contains("5000ms"));
+            assert!(msg.contains("1500ms"));
         }
         _ => panic!("Expected RateLimit error"),
     }
 }
 
 #[test]
-fn test_a2a_conversion_keeps_legacy_message_shape() {
+fn test_a2a_rate_limit_minimum_retry_after_is_one_second() {
     let a2a_err = A2AError::RateLimitExceeded {
         agent_name: "agent".to_string(),
-        retry_after_ms: Some(1200),
+        retry_after_ms: Some(0),
     };
     let gateway_err: GatewayError = a2a_err.into();
     match gateway_err {
         GatewayError::RateLimit {
             message: msg,
-            retry_after: None,
+            retry_after: Some(1),
             rpm_limit: None,
             tpm_limit: None,
         } => {
             assert!(msg.contains("A2A rate limit exceeded"));
+            assert!(msg.contains("0ms"));
             assert!(!msg.contains("protocol_code="));
             assert!(!msg.contains("canonical_code="));
             assert!(!msg.contains("retryable="));
@@ -561,34 +562,34 @@ fn test_mcp_invalid_url_conversion() {
 fn test_mcp_rate_limit_with_retry_conversion() {
     let mcp_err = McpError::RateLimitExceeded {
         server_name: "github".to_string(),
-        retry_after_ms: Some(5000),
+        retry_after_ms: Some(1500),
     };
     let gateway_err: GatewayError = mcp_err.into();
     match gateway_err {
         GatewayError::RateLimit {
             message: msg,
-            retry_after: None,
+            retry_after: Some(2),
             rpm_limit: None,
             tpm_limit: None,
         } => {
             assert!(msg.contains("MCP"));
-            assert!(msg.contains("5000ms"));
+            assert!(msg.contains("1500ms"));
         }
         _ => panic!("Expected RateLimit error"),
     }
 }
 
 #[test]
-fn test_mcp_conversion_keeps_legacy_message_shape() {
+fn test_mcp_rate_limit_minimum_retry_after_is_one_second() {
     let mcp_err = McpError::RateLimitExceeded {
         server_name: "github".to_string(),
-        retry_after_ms: Some(800),
+        retry_after_ms: Some(1),
     };
     let gateway_err: GatewayError = mcp_err.into();
     match gateway_err {
         GatewayError::RateLimit {
             message: msg,
-            retry_after: None,
+            retry_after: Some(1),
             rpm_limit: None,
             tpm_limit: None,
         } => {

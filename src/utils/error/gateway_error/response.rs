@@ -3,7 +3,52 @@
 use super::types::GatewayError;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::utils::error::canonical::CanonicalError;
-use actix_web::{HttpResponse, ResponseError};
+use actix_web::{HttpResponse, HttpResponseBuilder, ResponseError};
+
+#[derive(Debug, Clone, Copy, Default)]
+struct RateLimitHeaderFacts {
+    retry_after: Option<u64>,
+    rpm_limit: Option<u32>,
+    tpm_limit: Option<u32>,
+}
+
+fn rate_limit_headers(error: &GatewayError) -> Option<RateLimitHeaderFacts> {
+    match error {
+        GatewayError::RateLimit {
+            retry_after,
+            rpm_limit,
+            tpm_limit,
+            ..
+        } => Some(RateLimitHeaderFacts {
+            retry_after: *retry_after,
+            rpm_limit: *rpm_limit,
+            tpm_limit: *tpm_limit,
+        }),
+        GatewayError::Provider(ProviderError::RateLimit {
+            retry_after,
+            rpm_limit,
+            tpm_limit,
+            ..
+        }) => Some(RateLimitHeaderFacts {
+            retry_after: *retry_after,
+            rpm_limit: *rpm_limit,
+            tpm_limit: *tpm_limit,
+        }),
+        _ => None,
+    }
+}
+
+fn insert_rate_limit_headers(builder: &mut HttpResponseBuilder, facts: RateLimitHeaderFacts) {
+    if let Some(secs) = facts.retry_after {
+        builder.insert_header(("Retry-After", secs.to_string()));
+    }
+    if let Some(rpm) = facts.rpm_limit {
+        builder.insert_header(("X-RateLimit-Limit-Requests", rpm.to_string()));
+    }
+    if let Some(tpm) = facts.tpm_limit {
+        builder.insert_header(("X-RateLimit-Limit-Tokens", tpm.to_string()));
+    }
+}
 
 impl ResponseError for GatewayError {
     fn error_response(&self) -> HttpResponse {
@@ -206,23 +251,10 @@ impl ResponseError for GatewayError {
 
         let mut builder = HttpResponse::build(status_code);
 
-        // Add rate limit headers for 429 responses
-        if let GatewayError::RateLimit {
-            retry_after,
-            rpm_limit,
-            tpm_limit,
-            ..
-        } = self
-        {
-            if let Some(secs) = retry_after {
-                builder.insert_header(("Retry-After", secs.to_string()));
-            }
-            if let Some(rpm) = rpm_limit {
-                builder.insert_header(("X-RateLimit-Limit-Requests", rpm.to_string()));
-            }
-            if let Some(tpm) = tpm_limit {
-                builder.insert_header(("X-RateLimit-Limit-Tokens", tpm.to_string()));
-            }
+        // Keep 429 header facts in one helper so the future #839 HTTP facts
+        // consolidation cannot drop Retry-After / X-RateLimit metadata.
+        if let Some(facts) = rate_limit_headers(self) {
+            insert_rate_limit_headers(&mut builder, facts);
         }
 
         builder.json(error_response)

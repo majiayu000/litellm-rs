@@ -62,24 +62,31 @@ pub async fn image_generations(
     req: HttpRequest,
     request: web::Json<ImageGenerationRequest>,
 ) -> ActixResult<HttpResponse> {
+    let mut request = request.into_inner();
     info!("Image generation request for model: {:?}", request.model);
 
-    if let Some(model) = request.model.as_deref()
-        && let Err(error) =
-            super::context::enforce_api_key_model_and_token_limits(&req, model, None)
-    {
+    let model = match required_image_generation_model(&request) {
+        Ok(model) => model.to_string(),
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
+    request.model = Some(model.clone());
+    if let Err(error) = super::context::enforce_api_key_model_and_token_limits(&req, &model, None) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
-    handle_ai_request(
-        &req,
-        request.into_inner(),
-        "Image generation",
-        |request, context| {
-            generation::handle_image_generation_with_state(state.get_ref(), request, context)
-        },
-    )
+    handle_ai_request(&req, request, "Image generation", |request, context| {
+        generation::handle_image_generation_with_state(state.get_ref(), request, context)
+    })
     .await
+}
+
+fn required_image_generation_model(request: &ImageGenerationRequest) -> Result<&str, GatewayError> {
+    request
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .ok_or_else(|| GatewayError::validation("model is required"))
 }
 
 pub async fn image_edits(
@@ -442,8 +449,9 @@ fn ensure_image_proxy_candidate_configured(
     {
         Ok(())
     } else {
-        Err(GatewayError::Config(format!(
-            "Image provider for model '{requested_model}' is not configured"
+        Err(GatewayError::Provider(ProviderError::model_not_found(
+            "image_proxy",
+            requested_model,
         )))
     }
 }
@@ -694,7 +702,7 @@ fn multipart_part_has_field_name(headers: &str, field_name: &str) -> bool {
 }
 
 fn missing_image_proxy_provider_error() -> GatewayError {
-    GatewayError::Config(
+    GatewayError::BadRequest(
         "Image edits and variations API requires an enabled openai or openai_compatible provider"
             .to_string(),
     )

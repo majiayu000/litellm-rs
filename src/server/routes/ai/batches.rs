@@ -366,7 +366,7 @@ fn batch_url(
 }
 
 fn missing_batch_provider_error() -> GatewayError {
-    GatewayError::Config(
+    GatewayError::BadRequest(
         "Batch API requires an enabled openai or openai_compatible provider".to_string(),
     )
 }

@@ -1,5 +1,16 @@
 use super::*;
+use crate::core::providers::unified_provider::ProviderError;
 use actix_web::http::StatusCode;
+
+fn assert_header(response: &actix_web::HttpResponse, name: &str, expected: &str) {
+    assert_eq!(
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok()),
+        Some(expected)
+    );
+}
 
 // ==================== ErrorDetail Tests ====================
 
@@ -169,33 +180,52 @@ fn test_gateway_error_rate_limit_response() {
     };
     let response = error.error_response();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        response
-            .headers()
-            .get("Retry-After")
-            .unwrap()
-            .to_str()
-            .unwrap(),
-        "60"
-    );
-    assert_eq!(
+    assert_header(&response, "Retry-After", "60");
+    assert_header(&response, "X-RateLimit-Limit-Requests", "100");
+    assert_header(&response, "X-RateLimit-Limit-Tokens", "50000");
+}
+
+#[test]
+fn test_provider_rate_limit_response_preserves_headers() {
+    let error = GatewayError::Provider(ProviderError::RateLimit {
+        provider: "openai",
+        message: "Upstream rate limited".to_string(),
+        retry_after: Some(42),
+        rpm_limit: Some(120),
+        tpm_limit: Some(60000),
+        current_usage: None,
+    });
+
+    let response = error.error_response();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_header(&response, "Retry-After", "42");
+    assert_header(&response, "X-RateLimit-Limit-Requests", "120");
+    assert_header(&response, "X-RateLimit-Limit-Tokens", "60000");
+}
+
+#[test]
+fn test_provider_rate_limit_without_metadata_does_not_fake_headers() {
+    let error = GatewayError::Provider(ProviderError::RateLimit {
+        provider: "openai",
+        message: "Upstream rate limited".to_string(),
+        retry_after: None,
+        rpm_limit: None,
+        tpm_limit: None,
+        current_usage: None,
+    });
+
+    let response = error.error_response();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(response.headers().get("Retry-After").is_none());
+    assert!(
         response
             .headers()
             .get("X-RateLimit-Limit-Requests")
-            .unwrap()
-            .to_str()
-            .unwrap(),
-        "100"
+            .is_none()
     );
-    assert_eq!(
-        response
-            .headers()
-            .get("X-RateLimit-Limit-Tokens")
-            .unwrap()
-            .to_str()
-            .unwrap(),
-        "50000"
-    );
+    assert!(response.headers().get("X-RateLimit-Limit-Tokens").is_none());
 }
 
 #[test]
