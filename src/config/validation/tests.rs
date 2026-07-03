@@ -8,7 +8,7 @@ use super::trait_def::Validate;
 use crate::config::models::auth::AuthConfig;
 use crate::config::models::cache::CacheConfig;
 use crate::config::models::enterprise::{EnterpriseConfig, SsoConfig};
-use crate::config::models::gateway::GatewayConfig;
+use crate::config::models::gateway::{GatewayConfig, GatewayPricingConfig, UnpricedModelPolicy};
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::rate_limit::RateLimitConfig;
 use crate::config::models::server::ServerConfig;
@@ -366,6 +366,37 @@ fn test_redis_validation_skips_when_disabled() {
         allow_degraded: false,
     };
     assert!(Validate::validate(&config).is_ok());
+}
+
+#[test]
+fn test_pricing_validation_defaults_to_reject_unpriced_models() {
+    let config = GatewayPricingConfig::default();
+
+    assert_eq!(config.unpriced_model_policy, UnpricedModelPolicy::Reject);
+    assert!(config.unpriced_fallback_cost_per_1k_tokens.is_none());
+    assert!(Validate::validate(&config).is_ok());
+}
+
+#[test]
+fn test_pricing_validation_accepts_finite_unpriced_fallback() {
+    for cost in [0.0, 0.25] {
+        let mut config = GatewayPricingConfig::default();
+        config.unpriced_fallback_cost_per_1k_tokens = Some(cost);
+
+        assert!(Validate::validate(&config).is_ok());
+    }
+}
+
+#[test]
+fn test_pricing_validation_rejects_invalid_unpriced_fallback() {
+    for cost in [-0.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut config = GatewayPricingConfig::default();
+        config.unpriced_fallback_cost_per_1k_tokens = Some(cost);
+
+        let error = Validate::validate(&config).unwrap_err();
+        assert!(error.contains("unpriced_fallback_cost_per_1k_tokens"));
+        assert!(error.contains("finite"));
+    }
 }
 
 #[test]

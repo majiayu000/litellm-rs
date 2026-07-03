@@ -14,6 +14,7 @@ use super::storage::StorageConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
+use std::str::FromStr;
 
 const ENV_HOST: &str = "LITELLM_HOST";
 const ENV_PORT: &str = "LITELLM_PORT";
@@ -37,6 +38,9 @@ const ENV_JWT_EXPIRATION: &str = "LITELLM_JWT_EXPIRATION";
 const ENV_API_KEY_HEADER: &str = "LITELLM_API_KEY_HEADER";
 const ENV_PROVIDERS: &str = "LITELLM_PROVIDERS";
 const ENV_PRICING_SOURCE: &str = "LITELLM_PRICING_SOURCE";
+const ENV_UNPRICED_MODEL_POLICY: &str = "LITELLM_UNPRICED_MODEL_POLICY";
+const ENV_UNPRICED_FALLBACK_COST_PER_1K_TOKENS: &str =
+    "LITELLM_UNPRICED_FALLBACK_COST_PER_1K_TOKENS";
 const ENV_CACHE_ENABLED: &str = "LITELLM_CACHE_ENABLED";
 const ENV_RATE_LIMIT_ENABLED: &str = "LITELLM_RATE_LIMIT_ENABLED";
 const ENV_ENTERPRISE_ENABLED: &str = "LITELLM_ENTERPRISE_ENABLED";
@@ -213,6 +217,32 @@ fn load_providers_from_env() -> crate::utils::error::gateway_error::Result<Vec<P
     Ok(providers)
 }
 
+/// Request-time behavior when provider/model pricing is unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UnpricedModelPolicy {
+    /// Reject requests before provider execution when pricing cannot be proven.
+    #[default]
+    Reject,
+    /// Allow requests and require settlement paths to mark unpriced usage.
+    AllowUnpriced,
+}
+
+impl FromStr for UnpricedModelPolicy {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "reject" => Ok(Self::Reject),
+            "allow_unpriced" => Ok(Self::AllowUnpriced),
+            other => Err(format!(
+                "unsupported unpriced model policy '{}'; expected reject or allow_unpriced",
+                other
+            )),
+        }
+    }
+}
+
 /// Pricing source configuration
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayPricingConfig {
@@ -226,6 +256,15 @@ pub struct GatewayPricingConfig {
     /// surfaced at startup. A `true` value documents that the gateway may
     /// serve traffic without cost accounting until pricing data is refreshed.
     pub allow_degraded: bool,
+    /// Request-time policy for provider/model combinations missing pricing.
+    ///
+    /// Defaults to `reject`. `allow_degraded` only controls initial pricing
+    /// source load failures; it does not allow unpriced requests by itself.
+    pub unpriced_model_policy: UnpricedModelPolicy,
+    /// Optional fallback price used by `allow_unpriced` request-time policy.
+    ///
+    /// This is a per-1k usage unit price, not a fixed per-request amount.
+    pub unpriced_fallback_cost_per_1k_tokens: Option<f64>,
     #[serde(skip)]
     merge_fields: GatewayPricingMergeFields,
 }
@@ -234,6 +273,8 @@ pub struct GatewayPricingConfig {
 struct GatewayPricingMergeFields {
     source: bool,
     allow_degraded: bool,
+    unpriced_model_policy: bool,
+    unpriced_fallback_cost_per_1k_tokens: bool,
 }
 
 #[derive(Default)]
@@ -262,6 +303,10 @@ struct GatewayPricingConfigWire {
     source: ConfigField<Option<String>>,
     #[serde(default)]
     allow_degraded: ConfigField<bool>,
+    #[serde(default)]
+    unpriced_model_policy: ConfigField<UnpricedModelPolicy>,
+    #[serde(default)]
+    unpriced_fallback_cost_per_1k_tokens: ConfigField<Option<f64>>,
 }
 
 impl<'de> Deserialize<'de> for GatewayPricingConfig {
@@ -288,9 +333,27 @@ impl<'de> Deserialize<'de> for GatewayPricingConfig {
             ConfigField::Missing => false,
         };
 
+        let unpriced_model_policy = match wire.unpriced_model_policy {
+            ConfigField::Present(policy) => {
+                merge_fields.unpriced_model_policy = true;
+                policy
+            }
+            ConfigField::Missing => UnpricedModelPolicy::Reject,
+        };
+
+        let unpriced_fallback_cost_per_1k_tokens = match wire.unpriced_fallback_cost_per_1k_tokens {
+            ConfigField::Present(cost) => {
+                merge_fields.unpriced_fallback_cost_per_1k_tokens = true;
+                cost
+            }
+            ConfigField::Missing => None,
+        };
+
         Ok(Self {
             source,
             allow_degraded,
+            unpriced_model_policy,
+            unpriced_fallback_cost_per_1k_tokens,
             merge_fields,
         })
     }
@@ -298,7 +361,11 @@ impl<'de> Deserialize<'de> for GatewayPricingConfig {
 
 impl PartialEq for GatewayPricingConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source && self.allow_degraded == other.allow_degraded
+        self.source == other.source
+            && self.allow_degraded == other.allow_degraded
+            && self.unpriced_model_policy == other.unpriced_model_policy
+            && self.unpriced_fallback_cost_per_1k_tokens
+                == other.unpriced_fallback_cost_per_1k_tokens
     }
 }
 
@@ -307,6 +374,8 @@ impl Default for GatewayPricingConfig {
         Self {
             source: default_pricing_source(),
             allow_degraded: false,
+            unpriced_model_policy: UnpricedModelPolicy::Reject,
+            unpriced_fallback_cost_per_1k_tokens: None,
             merge_fields: GatewayPricingMergeFields::default(),
         }
     }
@@ -326,13 +395,35 @@ impl GatewayPricingConfig {
             self.allow_degraded = other.allow_degraded;
         }
 
+        let unpriced_model_policy_overridden = other.merge_fields.unpriced_model_policy
+            || other.unpriced_model_policy != UnpricedModelPolicy::Reject;
+        if unpriced_model_policy_overridden {
+            self.unpriced_model_policy = other.unpriced_model_policy;
+        }
+
+        let unpriced_fallback_overridden = other.merge_fields.unpriced_fallback_cost_per_1k_tokens
+            || other.unpriced_fallback_cost_per_1k_tokens.is_some();
+        if unpriced_fallback_overridden {
+            self.unpriced_fallback_cost_per_1k_tokens = other.unpriced_fallback_cost_per_1k_tokens;
+        }
+
         self.merge_fields.source |= source_overridden;
         self.merge_fields.allow_degraded |= allow_degraded_overridden;
+        self.merge_fields.unpriced_model_policy |= unpriced_model_policy_overridden;
+        self.merge_fields.unpriced_fallback_cost_per_1k_tokens |= unpriced_fallback_overridden;
         self
     }
 
     fn mark_source_explicit_for_merge(&mut self) {
         self.merge_fields.source = true;
+    }
+
+    fn mark_unpriced_model_policy_explicit_for_merge(&mut self) {
+        self.merge_fields.unpriced_model_policy = true;
+    }
+
+    fn mark_unpriced_fallback_explicit_for_merge(&mut self) {
+        self.merge_fields.unpriced_fallback_cost_per_1k_tokens = true;
     }
 }
 
@@ -479,6 +570,16 @@ impl GatewayConfig {
             config.pricing.source = Some(pricing_source);
             config.pricing.mark_source_explicit_for_merge();
         }
+        if let Some(policy) = parse_env::<UnpricedModelPolicy>(ENV_UNPRICED_MODEL_POLICY)? {
+            config.pricing.unpriced_model_policy = policy;
+            config
+                .pricing
+                .mark_unpriced_model_policy_explicit_for_merge();
+        }
+        if let Some(cost) = parse_env::<f64>(ENV_UNPRICED_FALLBACK_COST_PER_1K_TOKENS)? {
+            config.pricing.unpriced_fallback_cost_per_1k_tokens = Some(cost);
+            config.pricing.mark_unpriced_fallback_explicit_for_merge();
+        }
 
         if let Some(enabled) = parse_env_bool(ENV_CACHE_ENABLED)? {
             config.cache.enabled = enabled;
@@ -604,3 +705,7 @@ impl GatewayConfig {
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "gateway_pricing_tests.rs"]
+mod pricing_tests;

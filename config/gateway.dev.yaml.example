@@ -101,6 +101,9 @@ cache:
 
 pricing:
   source: null
+  allow_degraded: false
+  unpriced_model_policy: reject
+  unpriced_fallback_cost_per_1k_tokens: null
 
 rate_limit:
   enabled: false

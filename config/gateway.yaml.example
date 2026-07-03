@@ -149,6 +149,15 @@ pricing:
   # PricingService source path/URL. The embedded default is cwd-independent;
   # user-provided relative paths are resolved by the process working directory.
   source: "embedded://model_prices_extended"
+  # Startup-only degradation control for initial pricing source load failures.
+  # Request-time unpriced model behavior is governed by unpriced_model_policy.
+  allow_degraded: false
+  # Default fail-closed policy for provider/model pairs missing pricing.
+  # Set allow_unpriced only when later #831 settlement enforcement is enabled.
+  unpriced_model_policy: reject
+  # Optional per-1k usage fallback price for allow_unpriced settlement.
+  # This is not a fixed per-request amount.
+  unpriced_fallback_cost_per_1k_tokens: null
 
 rate_limit:
   enabled: true

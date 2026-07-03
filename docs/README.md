@@ -65,6 +65,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **MCP Gateway**: Model Context Protocol for external tool integration
 - **A2A Protocol**: Agent-to-Agent communication with multi-provider support
 
+## Pricing Configuration
+
+`pricing.allow_degraded` only controls startup behavior when the pricing source
+cannot be loaded. Request-time behavior for provider/model pairs without pricing
+is configured separately with `pricing.unpriced_model_policy`, which defaults to
+`reject`; `allow_unpriced` must be paired with the #831 settlement enforcement
+tranche before it is used in production.
+
 ## 📊 Performance Benchmarks
 
 Real benchmark results from our unified router (run with `cargo bench`):

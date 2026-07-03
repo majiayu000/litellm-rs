@@ -69,6 +69,15 @@ impl Validate for GatewayPricingConfig {
             return Err("Pricing source cannot be empty when provided".to_string());
         }
 
+        if let Some(cost) = self.unpriced_fallback_cost_per_1k_tokens
+            && (!cost.is_finite() || cost < 0.0)
+        {
+            return Err(
+                "pricing.unpriced_fallback_cost_per_1k_tokens must be finite and >= 0.0"
+                    .to_string(),
+            );
+        }
+
         Ok(())
     }
 }
