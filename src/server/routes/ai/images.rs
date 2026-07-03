@@ -449,8 +449,9 @@ fn ensure_image_proxy_candidate_configured(
     {
         Ok(())
     } else {
-        Err(GatewayError::Config(format!(
-            "Image provider for model '{requested_model}' is not configured"
+        Err(GatewayError::Provider(ProviderError::model_not_found(
+            "image_proxy",
+            requested_model,
         )))
     }
 }
@@ -701,7 +702,7 @@ fn multipart_part_has_field_name(headers: &str, field_name: &str) -> bool {
 }
 
 fn missing_image_proxy_provider_error() -> GatewayError {
-    GatewayError::Config(
+    GatewayError::BadRequest(
         "Image edits and variations API requires an enabled openai or openai_compatible provider"
             .to_string(),
     )

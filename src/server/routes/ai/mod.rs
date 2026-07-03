@@ -255,7 +255,7 @@ mod tests {
             }))
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(create_resp.status(), StatusCode::BAD_REQUEST);
         let create_body: Value = test::read_body_json(create_resp).await;
         assert!(
             create_body["error"]["message"]
@@ -263,22 +263,24 @@ mod tests {
                 .expect("error message")
                 .contains("Batch API requires")
         );
+        assert_eq!(create_body["error"]["type"], "invalid_request_error");
+        assert_eq!(create_body["error"]["code"], "invalid_request");
 
         let list_req = test::TestRequest::get().uri("/v1/batches").to_request();
         let list_resp = test::call_service(&app, list_req).await;
-        assert_eq!(list_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(list_resp.status(), StatusCode::BAD_REQUEST);
 
         let get_req = test::TestRequest::get()
             .uri("/v1/batches/batch_test")
             .to_request();
         let get_resp = test::call_service(&app, get_req).await;
-        assert_eq!(get_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(get_resp.status(), StatusCode::BAD_REQUEST);
 
         let cancel_req = test::TestRequest::post()
             .uri("/v1/batches/batch_test/cancel")
             .to_request();
         let cancel_resp = test::call_service(&app, cancel_req).await;
-        assert_eq!(cancel_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(cancel_resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[actix_web::test]

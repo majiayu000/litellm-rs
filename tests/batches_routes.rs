@@ -282,7 +282,7 @@ mod tests {
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
 
-        assert_eq!(create_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(create_resp.status(), StatusCode::BAD_REQUEST);
         let body: Value = test::read_body_json(create_resp).await;
         assert!(
             body["error"]["message"]
@@ -290,7 +290,8 @@ mod tests {
                 .expect("error message")
                 .contains("Batch API requires")
         );
-        assert_eq!(body["error"]["type"], "server_error");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "invalid_request");
     }
 
     #[tokio::test]

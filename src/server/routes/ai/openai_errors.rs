@@ -434,6 +434,19 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn config_error_remains_internal_server_error() {
+        let error = GatewayError::Config("Invalid config".to_string());
+
+        let response = gateway_error_response(&error);
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_json(response).await;
+        assert_eq!(body["error"]["message"], "Configuration error: Invalid config");
+        assert_eq!(body["error"]["type"], "server_error");
+        assert_eq!(body["error"]["code"], "internal_error");
+    }
+
+    #[actix_web::test]
     async fn provider_rate_limit_uses_openai_shape_and_retry_after() {
         let error = GatewayError::Provider(ProviderError::RateLimit {
             provider: "openai",

@@ -322,7 +322,7 @@ mod tests {
                 .to_request(),
         )
         .await;
-        assert_eq!(edit_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(edit_resp.status(), StatusCode::BAD_REQUEST);
         let edit_body: Value = test::read_body_json(edit_resp).await;
         assert!(
             edit_body["error"]["message"]
@@ -330,7 +330,8 @@ mod tests {
                 .expect("error message")
                 .contains("Image edits and variations API requires")
         );
-        assert_eq!(edit_body["error"]["type"], "server_error");
+        assert_eq!(edit_body["error"]["type"], "invalid_request_error");
+        assert_eq!(edit_body["error"]["code"], "invalid_request");
 
         let variation_resp = test::call_service(
             &app,
@@ -344,7 +345,7 @@ mod tests {
                 .to_request(),
         )
         .await;
-        assert_eq!(variation_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(variation_resp.status(), StatusCode::BAD_REQUEST);
         let variation_body: Value = test::read_body_json(variation_resp).await;
         assert!(
             variation_body["error"]["message"]
@@ -352,6 +353,52 @@ mod tests {
                 .expect("error message")
                 .contains("Image edits and variations API requires")
         );
+        assert_eq!(variation_body["error"]["type"], "invalid_request_error");
+        assert_eq!(variation_body["error"]["code"], "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn image_edit_rejects_unconfigured_model_before_upstream() {
+        let mock = MockImageServer::start_image_mock().await;
+        let state = build_test_state(vec![image_route_provider_with_name_and_models(
+            "wrong-model-provider",
+            &mock.base_url,
+            vec!["other-image-model".to_string()],
+        )])
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let boundary = "litellm-rs-image-boundary";
+
+        let edit_resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/edits")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(image_edit_multipart_body(boundary))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(edit_resp.status(), StatusCode::NOT_FOUND);
+        let edit_body: Value = test::read_body_json(edit_resp).await;
+        assert_eq!(edit_body["error"]["type"], "invalid_request_error");
+        assert_eq!(edit_body["error"]["code"], "model_not_found");
+        assert!(
+            edit_body["error"]["message"]
+                .as_str()
+                .expect("error message")
+                .contains("gpt-image-1-mini")
+        );
+        assert!(mock.requests().is_empty());
+        mock.stop_image_mock().await;
     }
 
     #[tokio::test]
