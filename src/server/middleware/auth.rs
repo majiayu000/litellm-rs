@@ -13,6 +13,7 @@ use crate::server::middleware::rate_limit::{
 };
 use crate::server::routes::ai::{api_key_allows_endpoint, check_permission};
 use crate::server::state::AppState;
+use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::{HttpMessage, HttpRequest, web};
 use futures::future::{Ready, ready};
@@ -32,7 +33,7 @@ where
     S::Future: 'static,
     B: 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
     type InitError = ();
     type Transform = AuthMiddlewareService<S>;
@@ -56,7 +57,7 @@ where
     S::Future: 'static,
     B: 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
@@ -94,7 +95,10 @@ where
 
             if is_public {
                 req.extensions_mut().insert(context);
-                return service.call(req).await;
+                return service
+                    .call(req)
+                    .await
+                    .map(ServiceResponse::map_into_left_body);
             }
 
             let auth_enabled = enable_jwt || enable_api_key;
@@ -110,82 +114,111 @@ where
                          rejecting request to non-public route. Enable JWT or API key auth, or \
                          set allow_anonymous: true (development only)."
                     );
-                    return Err(actix_web::error::ErrorUnauthorized(
-                        "Authentication is not configured",
-                    ));
+                    return Ok(req
+                        .error_response(actix_web::error::ErrorUnauthorized(
+                            "Authentication is not configured",
+                        ))
+                        .map_into_right_body());
                 }
                 req.extensions_mut().insert(context);
-                return service.call(req).await;
+                return service
+                    .call(req)
+                    .await
+                    .map(ServiceResponse::map_into_left_body);
             }
 
             if let Err(wait_seconds) = rate_limiter.check_allowed(&client_id) {
-                enforce_gateway_rate_limit_for_auth_rejection(
+                if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                     &req,
                     rate_limit_enabled,
                     rate_limit_rpm,
                     &trusted_proxies,
                 )
-                .await?;
-                return Err(actix_web::error::ErrorTooManyRequests(format!(
-                    "Too many failed attempts. Try again in {} seconds",
-                    wait_seconds
-                )));
+                .await
+                {
+                    return Ok(req.error_response(error).map_into_right_body());
+                }
+                return Ok(req
+                    .error_response(actix_web::error::ErrorTooManyRequests(format!(
+                        "Too many failed attempts. Try again in {} seconds",
+                        wait_seconds
+                    )))
+                    .map_into_right_body());
             }
 
             let auth_method = match auth_method {
                 AuthMethod::Jwt(_) if !enable_jwt => {
                     rate_limiter.record_failure(&client_id);
-                    enforce_gateway_rate_limit_for_auth_rejection(
+                    if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                         &req,
                         rate_limit_enabled,
                         rate_limit_rpm,
                         &trusted_proxies,
                     )
-                    .await?;
-                    return Err(actix_web::error::ErrorUnauthorized(
-                        "JWT authentication disabled",
-                    ));
+                    .await
+                    {
+                        return Ok(req.error_response(error).map_into_right_body());
+                    }
+                    return Ok(req
+                        .error_response(actix_web::error::ErrorUnauthorized(
+                            "JWT authentication disabled",
+                        ))
+                        .map_into_right_body());
                 }
                 AuthMethod::ApiKey(_) if !enable_api_key => {
                     rate_limiter.record_failure(&client_id);
-                    enforce_gateway_rate_limit_for_auth_rejection(
+                    if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                         &req,
                         rate_limit_enabled,
                         rate_limit_rpm,
                         &trusted_proxies,
                     )
-                    .await?;
-                    return Err(actix_web::error::ErrorUnauthorized(
-                        "API key authentication disabled",
-                    ));
+                    .await
+                    {
+                        return Ok(req.error_response(error).map_into_right_body());
+                    }
+                    return Ok(req
+                        .error_response(actix_web::error::ErrorUnauthorized(
+                            "API key authentication disabled",
+                        ))
+                        .map_into_right_body());
                 }
                 other => other,
             };
 
             if matches!(auth_method, AuthMethod::None) {
                 rate_limiter.record_failure(&client_id);
-                enforce_gateway_rate_limit_for_auth_rejection(
+                if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                     &req,
                     rate_limit_enabled,
                     rate_limit_rpm,
                     &trusted_proxies,
                 )
-                .await?;
-                return Err(actix_web::error::ErrorUnauthorized(
-                    "Missing authentication",
-                ));
+                .await
+                {
+                    return Ok(req.error_response(error).map_into_right_body());
+                }
+                return Ok(req
+                    .error_response(actix_web::error::ErrorUnauthorized(
+                        "Missing authentication",
+                    ))
+                    .map_into_right_body());
             }
 
             let mut auth_rate_limit_reservation = if requires_auth_verification(&auth_method) {
-                Some(
-                    reserve_gateway_rate_limit_before_auth(
-                        &req,
-                        rate_limit_enabled,
-                        rate_limit_rpm,
-                        &trusted_proxies,
-                    )
-                    .await?,
+                match reserve_gateway_rate_limit_before_auth(
+                    &req,
+                    rate_limit_enabled,
+                    rate_limit_rpm,
+                    &trusted_proxies,
                 )
+                .await
+                {
+                    Ok(reservation) => Some(reservation),
+                    Err(error) => {
+                        return Ok(req.error_response(error).map_into_right_body());
+                    }
+                }
             } else {
                 None
             };
@@ -209,21 +242,27 @@ where
                             "Authenticated caller is not permitted to access AI operation '{}'",
                             operation
                         );
-                        return Err(actix_web::error::ErrorForbidden(
-                            "API key is not permitted for this operation",
-                        ));
+                        return Ok(req
+                            .error_response(actix_web::error::ErrorForbidden(
+                                "API key is not permitted for this operation",
+                            ))
+                            .map_into_right_body());
                     }
                     match api_key_allows_endpoint(result.api_key.as_ref(), req.path()) {
                         Ok(true) => {}
                         Ok(false) => {
                             warn!("Authenticated API key is not permitted to access this endpoint");
-                            return Err(actix_web::error::ErrorForbidden(
-                                "API key is not permitted for this endpoint",
-                            ));
+                            return Ok(req
+                                .error_response(actix_web::error::ErrorForbidden(
+                                    "API key is not permitted for this endpoint",
+                                ))
+                                .map_into_right_body());
                         }
                         Err(error) => {
                             warn!("Authenticated API key policy is invalid: {}", error);
-                            return Err(actix_web::error::ErrorForbidden(error.to_string()));
+                            return Ok(req
+                                .error_response(actix_web::error::ErrorForbidden(error.to_string()))
+                                .map_into_right_body());
                         }
                     }
 
@@ -235,7 +274,10 @@ where
                         req.extensions_mut().insert::<ApiKey>(api_key);
                     }
 
-                    service.call(req).await
+                    service
+                        .call(req)
+                        .await
+                        .map(ServiceResponse::map_into_left_body)
                 }
                 Ok(result) => {
                     rate_limiter.record_failure(&client_id);
@@ -246,18 +288,22 @@ where
                             .clone()
                             .unwrap_or_else(|| "unauthorized".to_string())
                     );
-                    if auth_rate_limit_reservation.is_none() {
-                        enforce_gateway_rate_limit_for_auth_rejection(
+                    if auth_rate_limit_reservation.is_none()
+                        && let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                             &req,
                             rate_limit_enabled,
                             rate_limit_rpm,
                             &trusted_proxies,
                         )
-                        .await?;
+                        .await
+                    {
+                        return Ok(req.error_response(error).map_into_right_body());
                     }
-                    Err(actix_web::error::ErrorUnauthorized(
-                        result.error.unwrap_or_else(|| "Unauthorized".to_string()),
-                    ))
+                    Ok(req
+                        .error_response(actix_web::error::ErrorUnauthorized(
+                            result.error.unwrap_or_else(|| "Unauthorized".to_string()),
+                        ))
+                        .map_into_right_body())
                 }
                 Err(err) => {
                     if let Some(reservation) = auth_rate_limit_reservation.take() {

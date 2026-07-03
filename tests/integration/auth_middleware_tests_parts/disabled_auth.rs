@@ -14,21 +14,17 @@ async fn test_auth_middleware_fails_closed_when_disabled_without_anonymous_opt_i
     )
     .await;
 
-    let request = test::TestRequest::get().uri(AUTH_PROBE_PATH).to_request();
-    let error = test::try_call_service(&app, request)
-        .await
-        .expect_err("disabled auth without allow_anonymous should fail closed");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get().uri(AUTH_PROBE_PATH).to_request(),
+    )
+    .await;
 
-    assert_eq!(
-        error.as_response_error().status_code(),
-        StatusCode::UNAUTHORIZED
-    );
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
-    assert!(
-        error
-            .to_string()
-            .contains("Authentication is not configured")
-    );
+    let body = test::read_body(response).await;
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("Authentication is not configured"));
 }
 
 #[tokio::test]

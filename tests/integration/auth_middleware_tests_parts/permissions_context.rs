@@ -90,20 +90,20 @@ async fn test_auth_middleware_denies_ai_route_for_disallowed_api_permission() {
     )
     .await;
 
-    let request = test::TestRequest::post()
-        .uri("/v1/chat/completions")
-        .insert_header(("x-api-key", principal.raw_api_key.clone()))
-        .to_request();
-    let error = test::try_call_service(&app, request)
-        .await
-        .expect_err("disallowed operation should fail in auth middleware");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request(),
+    )
+    .await;
 
-    assert_eq!(
-        error.as_response_error().status_code(),
-        StatusCode::FORBIDDEN
-    );
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
-    assert!(error.to_string().contains("operation"));
+    let body = test::read_body(response).await;
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("operation"));
 }
 
 #[tokio::test]
@@ -127,18 +127,16 @@ async fn test_auth_middleware_keeps_admin_owned_api_key_permission_restricted() 
     )
     .await;
 
-    let request = test::TestRequest::post()
-        .uri("/v1/chat/completions")
-        .insert_header(("x-api-key", principal.raw_api_key.clone()))
-        .to_request();
-    let error = test::try_call_service(&app, request)
-        .await
-        .expect_err("admin-owned limited key should stay limited");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request(),
+    )
+    .await;
 
-    assert_eq!(
-        error.as_response_error().status_code(),
-        StatusCode::FORBIDDEN
-    );
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
 }
 
@@ -159,18 +157,16 @@ async fn test_auth_middleware_denies_root_engine_completion_alias_for_disallowed
     )
     .await;
 
-    let request = test::TestRequest::post()
-        .uri("/engines/gpt-4o/completions")
-        .insert_header(("x-api-key", principal.raw_api_key.clone()))
-        .to_request();
-    let error = test::try_call_service(&app, request)
-        .await
-        .expect_err("root engine completions alias should map to completions operation");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/engines/gpt-4o/completions")
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request(),
+    )
+    .await;
 
-    assert_eq!(
-        error.as_response_error().status_code(),
-        StatusCode::FORBIDDEN
-    );
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
 }
 
@@ -199,20 +195,20 @@ async fn test_auth_middleware_denies_ai_route_for_disallowed_endpoint_policy() {
     )
     .await;
 
-    let request = test::TestRequest::post()
-        .uri("/v1/chat/completions")
-        .insert_header(("x-api-key", principal.raw_api_key.clone()))
-        .to_request();
-    let error = test::try_call_service(&app, request)
-        .await
-        .expect_err("disallowed endpoint should fail in auth middleware");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("x-api-key", principal.raw_api_key.clone()))
+            .to_request(),
+    )
+    .await;
 
-    assert_eq!(
-        error.as_response_error().status_code(),
-        StatusCode::FORBIDDEN
-    );
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
-    assert!(error.to_string().contains("endpoint"));
+    let body = test::read_body(response).await;
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("endpoint"));
 }
 
 #[tokio::test]

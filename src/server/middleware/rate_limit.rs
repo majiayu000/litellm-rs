@@ -4,6 +4,7 @@ use super::rate_limit_key_policy::effective_requests_per_minute;
 use crate::core::rate_limiter::{RateLimitReservation, get_global_rate_limiter};
 use crate::core::types::context::RequestContext;
 use crate::server::state::AppState;
+use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::http::StatusCode;
 use actix_web::web;
@@ -14,6 +15,7 @@ use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -379,11 +381,11 @@ impl Default for RateLimitMiddleware {
 
 impl<S, B> Transform<S, ServiceRequest> for RateLimitMiddleware
 where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
     S::Future: 'static,
     B: 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
     type InitError = ();
     type Transform = RateLimitMiddlewareService<S>;
@@ -391,7 +393,7 @@ where
 
     fn new_transform(&self, service: S) -> Self::Future {
         ready(Ok(RateLimitMiddlewareService {
-            service,
+            service: Rc::new(service),
             requests_per_minute: self.requests_per_minute,
             fallback_store: gateway_fallback_store(),
         }))
@@ -400,7 +402,7 @@ where
 
 /// Service implementation for rate limit middleware
 pub struct RateLimitMiddlewareService<S> {
-    service: S,
+    service: Rc<S>,
     requests_per_minute: Option<u32>,
     /// Fallback in-process store used when the global rate limiter is not initialized
     fallback_store: Arc<DashMap<String, KeyTracker>>,
@@ -464,17 +466,18 @@ fn network_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> Strin
 
 impl<S, B> Service<ServiceRequest> for RateLimitMiddlewareService<S>
 where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
     S::Future: 'static,
     B: 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
+        let service = Rc::clone(&self.service);
         let app_state = req.app_data::<web::Data<AppState>>().cloned();
         let trusted_proxies: Vec<String> = match app_state.as_ref() {
             Some(state) => {
@@ -491,10 +494,6 @@ where
         let requests_per_minute = effective_requests_per_minute(&req, self.requests_per_minute);
 
         let fallback_store = self.fallback_store.clone();
-        // service.call() returns a lazy future; it only executes on .await.
-        // We must call it here because it consumes `req`, but we will NOT
-        // await it if the rate check fails, so no downstream work is wasted.
-        let fut = self.service.call(req);
         let key = client_key.clone();
 
         Box::pin(async move {
@@ -514,7 +513,9 @@ where
                                 retry_after: rejection.retry_after,
                                 limit: rejection.limit,
                             };
-                            return Err(actix_web::Error::from(err));
+                            return Ok(req
+                                .error_response(actix_web::Error::from(err))
+                                .map_into_right_body());
                         }
                     };
 
@@ -527,7 +528,7 @@ where
                 );
             }
 
-            let res = fut.await?;
+            let res = service.call(req).await?.map_into_left_body();
             let duration = start_time.elapsed();
             info!(
                 "{} {} completed in {:?} with status {}",

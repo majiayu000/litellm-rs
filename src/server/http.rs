@@ -198,7 +198,6 @@ impl HttpServer {
         App::new()
             .app_data(state)
             .app_data(budget_limits)
-            .wrap(cors)
             .wrap(Logger::default())
             .wrap(DefaultHeaders::new().add(("Server", "LiteLLM-RS")))
             .wrap(SecurityHeadersMiddleware)
@@ -212,6 +211,10 @@ impl HttpServer {
             .wrap(AuthMiddleware)
             .wrap(RequestIdMiddleware)
             .wrap(Condition::new(metrics_enabled, MetricsMiddleware))
+            // Register CORS last so Actix runs it first. That lets standard
+            // browser preflight requests complete before auth/rate-limit and
+            // lets CORS decorate downstream auth/rate-limit failures.
+            .wrap(cors)
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)
             .configure(routes::keys::configure_routes)
@@ -380,7 +383,10 @@ impl HttpServer {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use actix_web::{http::StatusCode, test as actix_test};
+    use actix_web::{
+        http::{StatusCode, header},
+        test as actix_test,
+    };
 
     #[test]
     fn build_cors_rejects_wildcard_with_credentials() {
@@ -597,6 +603,8 @@ mod tests {
         assert!(body.contains("gateway_http_request_errors_total 1"));
         assert!(body.contains("gateway_http_responses_total{class=\"4xx\"} 1"));
     }
+
+    include!("http_cors_tests.rs");
 
     #[tokio::test]
     async fn app_factory_does_not_collect_http_metrics_when_metrics_disabled() {
