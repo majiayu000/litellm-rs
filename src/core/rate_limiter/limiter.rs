@@ -4,10 +4,45 @@ use super::types::{RateLimitEntry, RateLimitResult};
 use crate::config::models::rate_limit::{RateLimitConfig, RateLimitStrategy};
 use dashmap::DashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tracing::error;
+
+static RATE_LIMITER_DEGRADED_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+fn record_rate_limiter_degradation() {
+    RATE_LIMITER_DEGRADED_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 #[cfg(feature = "gateway")]
-use tracing::warn;
+fn record_redis_degradation(operation: &'static str, key: &str, err: &impl std::fmt::Display) {
+    record_rate_limiter_degradation();
+    error!(
+        redis_operation = operation,
+        client = %key,
+        error = %err,
+        "Redis-backed rate limiter operation failed; rate limiting is degraded"
+    );
+}
+
+pub(crate) fn rate_limiter_degraded_total() -> u64 {
+    RATE_LIMITER_DEGRADED_TOTAL.load(Ordering::Relaxed)
+}
+
+pub fn render_rate_limiter_prometheus() -> String {
+    format!(
+        r#"# HELP gateway_rate_limiter_degraded_total Total Redis-backed rate limiter operations that degraded due to Redis errors
+# TYPE gateway_rate_limiter_degraded_total counter
+gateway_rate_limiter_degraded_total {}
+"#,
+        rate_limiter_degraded_total()
+    )
+}
+
+#[cfg(test)]
+fn reset_rate_limiter_metrics_for_tests() {
+    RATE_LIMITER_DEGRADED_TOTAL.store(0, Ordering::Relaxed);
+}
 
 /// Backend that recorded a rate-limit reservation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,10 +216,7 @@ impl RateLimiter {
             {
                 Ok(result) => return result,
                 Err(err) => {
-                    warn!(
-                        "Redis rate-limit status failed for key {}; falling back to in-process limiter: {}",
-                        key, err
-                    );
+                    record_redis_degradation("status", key, &err);
                 }
             }
         }
@@ -274,10 +306,7 @@ impl RateLimiter {
                     return (result, reservation);
                 }
                 Err(err) => {
-                    warn!(
-                        "Redis rate-limit check failed for key {}; falling back to in-process limiter: {}",
-                        key, err
-                    );
+                    record_redis_degradation("check_and_record", key, &err);
                 }
             }
         }
@@ -343,7 +372,7 @@ impl RateLimiter {
                 if let Some(redis) = &self.redis
                     && let Err(err) = redis.rate_limit_release(key, remaining_window_secs).await
                 {
-                    warn!("Redis rate-limit release failed for key {}: {}", key, err);
+                    record_redis_degradation("release", key, &err);
                 }
             }
         }
@@ -478,5 +507,18 @@ mod tests {
             RateLimiter::unimplemented_field_names(&config),
             vec!["burst_size"]
         );
+    }
+
+    #[test]
+    fn test_rate_limiter_degradation_metric_renders_prometheus_counter() {
+        reset_rate_limiter_metrics_for_tests();
+        assert_eq!(rate_limiter_degraded_total(), 0);
+
+        record_rate_limiter_degradation();
+
+        let rendered = render_rate_limiter_prometheus();
+        assert_eq!(rate_limiter_degraded_total(), 1);
+        assert!(rendered.contains("# TYPE gateway_rate_limiter_degraded_total counter"));
+        assert!(rendered.contains("gateway_rate_limiter_degraded_total 1"));
     }
 }

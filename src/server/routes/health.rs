@@ -36,6 +36,7 @@
 
 #![allow(dead_code)]
 
+use crate::core::rate_limiter::render_rate_limiter_prometheus;
 use crate::server::middleware::MetricsMiddleware;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
@@ -209,6 +210,8 @@ async fn metrics(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
 }
 
 fn render_prometheus_metrics(providers_count: usize, http_metrics: &str) -> String {
+    let rate_limiter_metrics = render_rate_limiter_prometheus();
+
     format!(
         r#"# HELP gateway_uptime_seconds Total uptime of the gateway in seconds
 # TYPE gateway_uptime_seconds counter
@@ -227,12 +230,15 @@ gateway_cpu_usage_percent {}
 gateway_providers_total {}
 
 {}
+
+{}
 "#,
         get_uptime_seconds(),
         get_memory_usage(),
         get_cpu_usage(),
         providers_count,
-        http_metrics
+        http_metrics,
+        rate_limiter_metrics
     )
 }
 
@@ -701,6 +707,7 @@ mod tests {
         assert!(body.contains("gateway_providers_total 2"));
         assert!(body.contains("gateway_http_requests_total 7"));
         assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 5"));
+        assert!(body.contains("gateway_rate_limiter_degraded_total"));
     }
 
     #[test]
