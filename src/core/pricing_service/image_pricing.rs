@@ -36,7 +36,11 @@ pub(super) fn output_image_cost(
     model_info: &LiteLLMModelInfo,
     usage: &PricingUsage,
 ) -> Result<f64> {
-    if usage.image_tokens.is_some() && image_token_unit_price(model_info).is_some() {
+    let image_tokens = usage.image_tokens.unwrap_or(0);
+    if image_tokens == 0 && usage.output_image_count.unwrap_or(0) == 0 {
+        return Ok(0.0);
+    }
+    if image_tokens > 0 && image_token_unit_price(model_info).is_some() {
         return Ok(0.0);
     }
 
@@ -46,6 +50,12 @@ pub(super) fn output_image_cost(
         .and_then(serde_json::Value::as_f64)
     {
         Some(price) => price,
+        None if image_tokens > 0 => {
+            return Err(GatewayError::Config(format!(
+                "Missing image pricing for model {}: image_cost_per_token or output_cost_per_image",
+                model
+            )));
+        }
         None if model_info.input_cost_per_token.is_some()
             || model_info.output_cost_per_token.is_some() =>
         {

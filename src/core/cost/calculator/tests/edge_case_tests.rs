@@ -1,8 +1,9 @@
 use super::*;
 
-// Tests for cost breakdown calculation with all features
+// Usage-aware pricing must fail closed when a priced text model lacks
+// modality-specific prices for requested usage.
 #[test]
-fn test_generic_cost_per_token_all_features() {
+fn test_generic_cost_per_token_fails_closed_for_unpriced_modal_usage() {
     let mut usage = create_usage(5000, 2000);
     usage.cached_tokens = Some(1000);
     usage.audio_tokens = Some(500);
@@ -10,18 +11,10 @@ fn test_generic_cost_per_token_all_features() {
     usage.reasoning_tokens = Some(200);
 
     let result = generic_cost_per_token("gpt-4o", &usage, "openai");
-    assert!(result.is_ok());
-    let breakdown = result.unwrap();
-
-    // Verify total is sum of all components
-    let calculated_total = breakdown.input_cost
-        + breakdown.output_cost
-        + breakdown.cache_cost
-        + breakdown.audio_cost
-        + breakdown.image_cost
-        + breakdown.reasoning_cost;
-
-    assert!((breakdown.total_cost - calculated_total).abs() < 1e-10);
+    assert!(matches!(
+        result,
+        Err(CostError::MissingPricing { ref model }) if model == "gpt-4o"
+    ));
 }
 
 // Edge case tests

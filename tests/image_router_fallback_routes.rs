@@ -598,7 +598,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn image_generation_allows_token_priced_image_model_without_flat_price() {
+    async fn image_generation_rejects_token_priced_image_model_without_image_price() {
         let mock = MockImageServer::start().await;
         let state = build_test_state(vec![openai_image_provider_with_mapping(
             "openai-primary",
@@ -636,14 +636,14 @@ mod tests {
         )
         .await;
 
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(mock.paths(), vec!["/v1/images/generations".to_string()]);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(mock.paths().is_empty());
         let spent = budget_limits
             .providers
             .get_provider_usage("openai-primary")
             .map(|usage| usage.current_spend)
             .unwrap_or_default();
-        assert!((spent - 0.03).abs() < f64::EPSILON);
+        assert_eq!(spent, 0.0);
         mock.stop().await;
     }
 
