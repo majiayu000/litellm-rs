@@ -10,6 +10,7 @@ use tracing::error;
 
 static RATE_LIMITER_DEGRADED_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(any(feature = "gateway", test))]
 fn record_rate_limiter_degradation() {
     RATE_LIMITER_DEGRADED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
