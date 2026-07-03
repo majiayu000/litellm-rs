@@ -144,7 +144,7 @@ This matrix covers every directory currently under `src/core/providers`. The lan
 | `openai` | `wired-native` | Native enum/factory dispatch and literal `LLMProvider` impl. | Keep wired module. |
 | `openai_like` | `keep-infra` | Shared OpenAI-compatible runtime provider used by explicit and catalog paths. | Keep shared runtime module. |
 | `petals` | `delete-native` | `providers-extended` public module with literal `LLMProvider` impl; no native dispatch. | Delete or reclassify after T3. |
-| `pg_vector` | `non-llm-lane` | Vector-store module outside LLM factory dispatch and no guard provider marker. | Decide vector product lane separately. |
+| `pg_vector` | `non-llm-lane` | Vector-store module outside LLM factory dispatch and no guard provider marker; tracked by `PROVIDER_ORPHAN_BASELINE`. | Decide vector product lane separately. |
 | `predibase` | `delete-native` | `providers-extended` public module with literal `LLMProvider` impl; no native dispatch. | Delete or reclassify after T3. |
 | `ragflow` | `delete-native` | `providers-extended` public module with literal `LLMProvider` impl; no native dispatch. | Delete or reclassify after T3. |
 | `recraft` | `non-llm-lane` | Image provider exposes literal `LLMProvider` impl. | Decide image product lane before delete/wire. |

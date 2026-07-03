@@ -83,54 +83,35 @@ fn is_registry_runtime_module(module_name: &str) -> bool {
 fn disabled_feature_gated_runtime_module_names() -> BTreeSet<&'static str> {
     let mut modules = BTreeSet::new();
 
-    insert_disabled_feature_gated_module(
-        &mut modules,
-        ProviderType::Azure,
-        ProviderDispatchKind::ExplicitOpenAiLike,
-        cfg!(feature = "providers-extra"),
-    );
-    insert_disabled_feature_gated_module(
-        &mut modules,
-        ProviderType::AzureAI,
-        ProviderDispatchKind::ExplicitOpenAiLike,
-        cfg!(feature = "providers-extra"),
-    );
+    for provider_type in [ProviderType::Azure, ProviderType::AzureAI] {
+        insert_disabled_feature_gated_module(
+            &mut modules,
+            provider_type,
+            ProviderDispatchKind::ExplicitOpenAiLike,
+            cfg!(feature = "providers-extra"),
+        );
+    }
     insert_disabled_feature_gated_module(
         &mut modules,
         ProviderType::VertexAI,
         ProviderDispatchKind::UnsupportedEnum,
         cfg!(feature = "providers-extra"),
     );
-    insert_disabled_feature_gated_module(
-        &mut modules,
+
+    for provider_type in [
         ProviderType::Cohere,
-        ProviderDispatchKind::UnsupportedEnum,
-        cfg!(feature = "providers-extended"),
-    );
-    insert_disabled_feature_gated_module(
-        &mut modules,
         ProviderType::FalAI,
-        ProviderDispatchKind::UnsupportedEnum,
-        cfg!(feature = "providers-extended"),
-    );
-    insert_disabled_feature_gated_module(
-        &mut modules,
         ProviderType::Gemini,
-        ProviderDispatchKind::UnsupportedEnum,
-        cfg!(feature = "providers-extended"),
-    );
-    insert_disabled_feature_gated_module(
-        &mut modules,
         ProviderType::GitHubCopilot,
-        ProviderDispatchKind::UnsupportedEnum,
-        cfg!(feature = "providers-extended"),
-    );
-    insert_disabled_feature_gated_module(
-        &mut modules,
         ProviderType::Replicate,
-        ProviderDispatchKind::UnsupportedEnum,
-        cfg!(feature = "providers-extended"),
-    );
+    ] {
+        insert_disabled_feature_gated_module(
+            &mut modules,
+            provider_type,
+            ProviderDispatchKind::UnsupportedEnum,
+            cfg!(feature = "providers-extended"),
+        );
+    }
 
     modules
 }
@@ -246,70 +227,23 @@ fn directory_source_contains(module_name: &str, contains_marker: impl Fn(&str) -
 #[test]
 fn lifecycle_classifies_phase0_key_provider_modules() {
     assert_eq!(lifecycle_for("bedrock"), ProviderModuleLifecycle::Wire);
-    assert_eq!(
-        lifecycle_for("vertex_ai"),
-        if cfg!(feature = "providers-extra") {
+    for (module_name, feature_enabled) in [
+        ("vertex_ai", cfg!(feature = "providers-extra")),
+        ("azure", cfg!(feature = "providers-extra")),
+        ("azure_ai", cfg!(feature = "providers-extra")),
+        ("github_copilot", cfg!(feature = "providers-extended")),
+        ("cohere", cfg!(feature = "providers-extended")),
+        ("fal_ai", cfg!(feature = "providers-extended")),
+        ("replicate", cfg!(feature = "providers-extended")),
+        ("gemini", cfg!(feature = "providers-extended")),
+    ] {
+        let expected = if feature_enabled {
             ProviderModuleLifecycle::Wire
         } else {
             ProviderModuleLifecycle::Stub
-        }
-    );
-    assert_eq!(
-        lifecycle_for("azure"),
-        if cfg!(feature = "providers-extra") {
-            ProviderModuleLifecycle::Wire
-        } else {
-            ProviderModuleLifecycle::Stub
-        }
-    );
-    assert_eq!(
-        lifecycle_for("azure_ai"),
-        if cfg!(feature = "providers-extra") {
-            ProviderModuleLifecycle::Wire
-        } else {
-            ProviderModuleLifecycle::Stub
-        }
-    );
-    assert_eq!(
-        lifecycle_for("github_copilot"),
-        if cfg!(feature = "providers-extended") {
-            ProviderModuleLifecycle::Wire
-        } else {
-            ProviderModuleLifecycle::Stub
-        }
-    );
-    assert_eq!(
-        lifecycle_for("cohere"),
-        if cfg!(feature = "providers-extended") {
-            ProviderModuleLifecycle::Wire
-        } else {
-            ProviderModuleLifecycle::Stub
-        }
-    );
-    assert_eq!(
-        lifecycle_for("fal_ai"),
-        if cfg!(feature = "providers-extended") {
-            ProviderModuleLifecycle::Wire
-        } else {
-            ProviderModuleLifecycle::Stub
-        }
-    );
-    assert_eq!(
-        lifecycle_for("replicate"),
-        if cfg!(feature = "providers-extended") {
-            ProviderModuleLifecycle::Wire
-        } else {
-            ProviderModuleLifecycle::Stub
-        }
-    );
-    assert_eq!(
-        lifecycle_for("gemini"),
-        if cfg!(feature = "providers-extended") {
-            ProviderModuleLifecycle::Wire
-        } else {
-            ProviderModuleLifecycle::Stub
-        }
-    );
+        };
+        assert_eq!(lifecycle_for(module_name), expected, "{module_name}");
+    }
 }
 
 #[test]
@@ -356,17 +290,21 @@ fn lifecycle_entries_have_reasons() {
     }
 }
 
+fn lifecycle_needs_orphan_baseline(lifecycle: ProviderModuleLifecycle) -> bool {
+    matches!(
+        lifecycle,
+        ProviderModuleLifecycle::Stub | ProviderModuleLifecycle::CatalogOnly
+    )
+}
+
 #[test]
-fn lifecycle_blocks_unapproved_stub_provider_modules() {
+fn lifecycle_blocks_unapproved_orphan_provider_modules() {
     let baseline = orphan_baseline_module_names();
     let disabled_feature_gated_runtime_modules = disabled_feature_gated_runtime_module_names();
     let mut unapproved = Vec::new();
 
     for entry in PROVIDER_MODULE_LIFECYCLE {
-        if !matches!(
-            entry.lifecycle,
-            ProviderModuleLifecycle::Stub | ProviderModuleLifecycle::CatalogOnly
-        ) {
+        if !lifecycle_needs_orphan_baseline(entry.lifecycle) {
             continue;
         }
         let module_name = entry.module_name;
@@ -384,7 +322,7 @@ fn lifecycle_blocks_unapproved_stub_provider_modules() {
 
     assert!(
         unapproved.is_empty(),
-        "unapproved stub provider modules must be wired, deleted, demoted, explicitly gated, or added to the GH837 baseline: {unapproved:?}"
+        "unapproved Stub/CatalogOnly provider modules must be wired, deleted, demoted, explicitly gated, or added to the GH837 baseline: {unapproved:?}"
     );
 }
 
@@ -424,11 +362,8 @@ fn orphan_baseline_entries_are_live_and_bounded() {
             entry.module_name
         );
         assert!(
-            matches!(
-                lifecycle_for(entry.module_name),
-                ProviderModuleLifecycle::Stub | ProviderModuleLifecycle::CatalogOnly
-            ),
-            "{} baseline entry must reference a non-runtime provider module",
+            lifecycle_needs_orphan_baseline(lifecycle_for(entry.module_name)),
+            "{} baseline entry must reference a Stub/CatalogOnly provider module",
             entry.module_name
         );
         assert!(
