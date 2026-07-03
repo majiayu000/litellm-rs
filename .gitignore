@@ -8,6 +8,7 @@
 /target/
 debug/
 **/*.rs.bk
+*.rlib
 *.pdb
 
 # Cargo lock file (keep for applications, ignore for libraries)
