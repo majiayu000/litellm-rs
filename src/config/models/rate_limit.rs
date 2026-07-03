@@ -40,6 +40,9 @@ pub struct RateLimitConfig {
     /// Burst size
     #[serde(skip_serializing_if = "Option::is_none")]
     pub burst_size: Option<u32>,
+    /// Redis failure behavior for distributed rate limiting.
+    #[serde(default)]
+    pub redis_failure_mode: RedisFailureMode,
 }
 
 impl Default for RateLimitConfig {
@@ -53,6 +56,7 @@ impl Default for RateLimitConfig {
             requests_per_minute: None,
             tokens_per_minute: None,
             burst_size: None,
+            redis_failure_mode: RedisFailureMode::default(),
         }
     }
 }
@@ -115,7 +119,30 @@ impl RateLimitConfig {
         if other.burst_size.is_some() {
             self.burst_size = other.burst_size;
         }
+        if other.redis_failure_mode != RedisFailureMode::default() {
+            self.redis_failure_mode = other.redis_failure_mode;
+        }
         self
+    }
+}
+
+/// Redis outage policy for distributed rate limiting.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RedisFailureMode {
+    /// Reject rate-limited requests when Redis enforcement is unavailable.
+    #[default]
+    FailClosed,
+    /// Explicitly fall back to process-local limits when Redis fails.
+    FailOpenLocal,
+}
+
+impl RedisFailureMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FailClosed => "fail_closed",
+            Self::FailOpenLocal => "fail_open_local",
+        }
     }
 }
 
@@ -177,6 +204,7 @@ mod tests {
         assert_eq!(config.strategy, RateLimitStrategy::TokenBucket);
         assert!(config.requests_per_second.is_none());
         assert!(config.burst_size.is_none());
+        assert_eq!(config.redis_failure_mode, RedisFailureMode::FailClosed);
     }
 
     #[test]
@@ -190,10 +218,12 @@ mod tests {
             requests_per_minute: None,
             tokens_per_minute: Some(100_000),
             burst_size: Some(20),
+            redis_failure_mode: RedisFailureMode::FailOpenLocal,
         };
         assert!(config.enabled);
         assert_eq!(config.requests_per_second, Some(10));
         assert_eq!(config.burst_size, Some(20));
+        assert_eq!(config.redis_failure_mode, RedisFailureMode::FailOpenLocal);
     }
 
     #[test]
@@ -207,12 +237,14 @@ mod tests {
             requests_per_minute: None,
             tokens_per_minute: None,
             burst_size: None,
+            redis_failure_mode: RedisFailureMode::FailClosed,
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["enabled"], true);
         assert_eq!(json["strategy"], "fixed_window");
         assert_eq!(json["default_rpm"], 600);
         assert_eq!(json["requests_per_second"], 50);
+        assert_eq!(json["redis_failure_mode"], "fail_closed");
     }
 
     #[test]
@@ -222,6 +254,14 @@ mod tests {
         assert!(!config.enabled);
         assert_eq!(config.default_rpm, 1000);
         assert_eq!(config.default_tpm, 100_000);
+        assert_eq!(config.redis_failure_mode, RedisFailureMode::FailClosed);
+    }
+
+    #[test]
+    fn test_rate_limit_config_deserialization_redis_failure_mode() {
+        let json = r#"{"redis_failure_mode": "fail_open_local"}"#;
+        let config: RateLimitConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.redis_failure_mode, RedisFailureMode::FailOpenLocal);
     }
 
     #[test]
@@ -243,6 +283,7 @@ mod tests {
             requests_per_minute: None,
             tokens_per_minute: None,
             burst_size: Some(20),
+            redis_failure_mode: RedisFailureMode::FailOpenLocal,
         };
         let merged = base.merge(other);
         assert!(merged.enabled);
@@ -250,6 +291,7 @@ mod tests {
         assert_eq!(merged.strategy, RateLimitStrategy::SlidingWindow);
         assert_eq!(merged.requests_per_second, Some(10));
         assert_eq!(merged.burst_size, Some(20));
+        assert_eq!(merged.redis_failure_mode, RedisFailureMode::FailOpenLocal);
     }
 
     #[test]
@@ -312,6 +354,7 @@ mod tests {
             requests_per_minute: Some(1000),
             tokens_per_minute: None,
             burst_size: None,
+            redis_failure_mode: RedisFailureMode::FailClosed,
         };
         let json = serde_json::to_value(&config).unwrap();
         let obj = json.as_object().unwrap();

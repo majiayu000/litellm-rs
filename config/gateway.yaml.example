@@ -159,6 +159,10 @@ rate_limit:
   requests_per_minute: null
   tokens_per_minute: null # NOT YET IMPLEMENTED: not enforced by the rate limiter
   burst_size: null # NOT YET IMPLEMENTED: not enforced by the rate limiter
+  # Redis distributed rate limiting fails closed by default when Redis commands
+  # fail. Set fail_open_local only when accepting per-process fallback limits is
+  # an explicit operational choice.
+  redis_failure_mode: fail_closed
 
 enterprise:
   enabled: false

@@ -2,10 +2,56 @@
 
 #[cfg(test)]
 use super::limiter::RateLimiter;
+#[cfg(feature = "gateway")]
+use super::limiter::{
+    RedisRateLimitBackend, degraded_metric_count_for_tests, render_degraded_metrics,
+    reset_degraded_metrics_for_tests,
+};
 use super::types::RateLimitEntry;
 use super::{RateLimitRecordSource, RateLimitReservation};
-use crate::config::models::rate_limit::{RateLimitConfig, RateLimitStrategy};
+use crate::config::models::rate_limit::{RateLimitConfig, RateLimitStrategy, RedisFailureMode};
+#[cfg(feature = "gateway")]
+use crate::utils::error::gateway_error::{GatewayError, Result};
+#[cfg(feature = "gateway")]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[cfg(feature = "gateway")]
+static REDIS_METRICS_TEST_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+#[cfg(feature = "gateway")]
+struct FailingRedisBackend;
+
+#[cfg(feature = "gateway")]
+#[async_trait::async_trait]
+impl RedisRateLimitBackend for FailingRedisBackend {
+    async fn rate_limit_status(
+        &self,
+        _key: &str,
+        _limit: u32,
+        _window_secs: u64,
+    ) -> Result<super::RateLimitResult> {
+        Err(GatewayError::Storage("redis unavailable".to_string()))
+    }
+
+    async fn rate_limit_check_and_record(
+        &self,
+        _key: &str,
+        _limit: u32,
+        _window_secs: u64,
+    ) -> Result<super::RateLimitResult> {
+        Err(GatewayError::Storage("redis unavailable".to_string()))
+    }
+
+    async fn rate_limit_release(&self, _key: &str, _reservation_ttl_secs: u64) -> Result<()> {
+        Err(GatewayError::Storage("redis unavailable".to_string()))
+    }
+
+    fn is_noop(&self) -> bool {
+        false
+    }
+}
 
 fn test_config(enabled: bool, rpm: u32) -> RateLimitConfig {
     test_config_with_strategy(enabled, rpm, RateLimitStrategy::SlidingWindow)
@@ -34,6 +80,11 @@ fn test_config_with_requests_per_minute_alias(enabled: bool, rpm: u32) -> RateLi
         strategy: RateLimitStrategy::SlidingWindow,
         ..Default::default()
     }
+}
+
+#[cfg(feature = "gateway")]
+fn limiter_with_failing_redis(config: RateLimitConfig) -> RateLimiter {
+    RateLimiter::with_redis_backend(config, Arc::new(FailingRedisBackend))
 }
 
 #[tokio::test]
@@ -199,6 +250,98 @@ async fn test_check_and_record_with_source_and_limit_uses_override_rpm() {
     assert!(first.allowed);
     assert!(!second.allowed);
     assert_eq!(second.limit, 1);
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn redis_check_failure_defaults_to_fail_closed() {
+    let _guard = REDIS_METRICS_TEST_LOCK.lock().await;
+    reset_degraded_metrics_for_tests();
+    let limiter = limiter_with_failing_redis(test_config(true, 3));
+
+    let result = limiter.check("redis-key").await;
+
+    assert!(!result.allowed);
+    assert_eq!(result.limit, 3);
+    assert_eq!(result.remaining, 0);
+    assert_eq!(degraded_metric_count_for_tests("check", "fail_closed"), 1);
+    assert!(!limiter.entries.contains_key("redis-key"));
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn redis_check_and_record_failure_defaults_to_fail_closed_without_local_reservation() {
+    let _guard = REDIS_METRICS_TEST_LOCK.lock().await;
+    reset_degraded_metrics_for_tests();
+    let limiter = limiter_with_failing_redis(test_config(true, 3));
+
+    let (result, reservation) = limiter.check_and_record_with_source("redis-key").await;
+
+    assert!(!result.allowed);
+    assert_eq!(reservation.source(), RateLimitRecordSource::Disabled);
+    assert_eq!(
+        degraded_metric_count_for_tests("check_and_record", "fail_closed"),
+        1
+    );
+    assert!(!limiter.entries.contains_key("redis-key"));
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn redis_check_and_record_failure_can_explicitly_fail_open_local() {
+    let _guard = REDIS_METRICS_TEST_LOCK.lock().await;
+    reset_degraded_metrics_for_tests();
+    let config = RateLimitConfig {
+        redis_failure_mode: RedisFailureMode::FailOpenLocal,
+        ..test_config(true, 1)
+    };
+    let limiter = limiter_with_failing_redis(config);
+
+    let (allowed, reservation) = limiter.check_and_record_with_source("redis-key").await;
+    let blocked_by_local = limiter.check_and_record("redis-key").await;
+
+    assert!(allowed.allowed);
+    assert_eq!(reservation.source(), RateLimitRecordSource::Local);
+    assert!(!blocked_by_local.allowed);
+    assert_eq!(
+        degraded_metric_count_for_tests("check_and_record", "fail_open_local"),
+        2
+    );
+    assert!(limiter.entries.contains_key("redis-key"));
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn redis_release_failure_is_observable_and_nonfatal() {
+    let _guard = REDIS_METRICS_TEST_LOCK.lock().await;
+    reset_degraded_metrics_for_tests();
+    let limiter = limiter_with_failing_redis(test_config(true, 1));
+
+    limiter
+        .release_recorded(
+            "redis-key",
+            RateLimitReservation::for_test(RateLimitRecordSource::Distributed, Instant::now(), 60),
+        )
+        .await;
+
+    assert_eq!(degraded_metric_count_for_tests("release", "fail_closed"), 1);
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn redis_degraded_metric_renders_operation_and_mode_labels() {
+    let _guard = REDIS_METRICS_TEST_LOCK.lock().await;
+    reset_degraded_metrics_for_tests();
+    let limiter = limiter_with_failing_redis(test_config(true, 1));
+
+    let _ = limiter.check("redis-key").await;
+
+    let rendered = render_degraded_metrics();
+    assert!(rendered.contains("# TYPE rate_limiter_degraded_total counter"));
+    assert!(
+        rendered
+            .contains("rate_limiter_degraded_total{operation=\"check\",mode=\"fail_closed\"} 1")
+    );
 }
 
 #[tokio::test]

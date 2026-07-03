@@ -14,7 +14,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use limiter::RateLimitRecordSource;
 pub(crate) use limiter::RateLimitReservation;
-pub use limiter::{RateLimiter, render_rate_limiter_prometheus};
+pub use limiter::{RateLimiter, render_degraded_metrics};
 pub use types::RateLimitResult;
 
 use crate::config::models::rate_limit::RateLimitConfig;

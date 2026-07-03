@@ -145,6 +145,9 @@ Sophisticated routing with multiple strategies:
 - Health-Based
 - Custom Weighted
 
+### Rate Limiting
+Redis-backed distributed rate limiting fails closed by default when Redis commands fail, preserving global limits across multi-node deployments. Operators that need the old per-process fallback behavior can set `rate_limit.redis_failure_mode: fail_open_local`; degraded Redis operations are still exported as `rate_limiter_degraded_total{operation,mode}`.
+
 ### Unified Error Handling
 All provider-specific errors are mapped to a unified error system for consistent error handling across the entire system.
 
