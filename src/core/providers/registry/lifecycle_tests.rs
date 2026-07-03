@@ -303,10 +303,10 @@ fn lifecycle_blocks_unapproved_orphan_provider_modules() {
     let disabled_feature_gated_runtime_modules = disabled_feature_gated_runtime_module_names();
     let mut unapproved = Vec::new();
 
-    for entry in PROVIDER_MODULE_LIFECYCLE {
-        if !lifecycle_requires_orphan_baseline(entry.lifecycle) {
-            continue;
-        }
+    for entry in PROVIDER_MODULE_LIFECYCLE
+        .iter()
+        .filter(|entry| lifecycle_requires_orphan_baseline(entry.lifecycle))
+    {
         let module_name = entry.module_name;
         if is_registry_runtime_module(module_name) {
             continue;
