@@ -30,7 +30,10 @@ pub use helpers::{
     extract_auth_method, extract_auth_method_with_api_key_header, is_admin_route, is_api_route,
     is_public_route,
 };
+#[cfg(test)]
+pub(crate) use metrics::reset_unpriced_metrics_for_tests;
 pub use metrics::{MetricsMiddleware, MetricsMiddlewareService, MiddlewareRequestMetrics};
+pub(crate) use metrics::{record_unpriced_event, record_unpriced_spend, unpriced_model_bucket};
 pub use rate_limit::{RateLimitMiddleware, RateLimitMiddlewareService};
 pub use request_id::{RequestIdMiddleware, RequestIdMiddlewareService};
 pub use security::{SecurityHeadersMiddleware, SecurityHeadersMiddlewareService};

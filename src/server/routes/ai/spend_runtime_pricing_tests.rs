@@ -378,6 +378,32 @@ fn reserve_completion_budget_rejects_missing_pricing_when_budget_manager_disable
 }
 
 #[test]
+fn reserve_completion_budget_reject_records_unpriced_metric() {
+    crate::server::middleware::reset_unpriced_metrics_for_tests();
+    let pricing = PricingService::new(None);
+    let budget = UnifiedBudgetLimits::new();
+
+    let error = match reserve_completion_budget_with_pricing(
+        &pricing,
+        &budget,
+        "metrics-reject-provider",
+        "tenant-private-model-831",
+        1000,
+        Some(500),
+    ) {
+        Ok(_) => panic!("unpriced requests should fail closed by default"),
+        Err(error) => error,
+    };
+
+    assert!(super::is_model_not_priced_error(&error));
+    let rendered = crate::server::middleware::MetricsMiddleware::render_prometheus();
+    assert!(rendered.contains(
+        "gateway_unpriced_events_total{provider=\"metrics-reject-provider\",model_bucket=\"other\",policy=\"reject\",outcome=\"reject_preflight\"} 1"
+    ));
+    assert!(!rendered.contains("tenant-private-model-831"));
+}
+
+#[test]
 fn reserve_completion_budget_allow_unpriced_uses_fallback_per_1k_units() {
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
@@ -403,4 +429,38 @@ fn reserve_completion_budget_allow_unpriced_uses_fallback_per_1k_units() {
 
     assert_eq!(reservation.reserved_amount(), 0.75);
     reservation.cancel();
+}
+
+#[tokio::test]
+async fn settle_unpriced_usage_records_unpriced_spend_metric() {
+    crate::server::middleware::reset_unpriced_metrics_for_tests();
+    let budget = UnifiedBudgetLimits::new();
+    let keys = KeyManager::new(InMemoryKeyRepository::new());
+    let mut pricing_config = GatewayPricingConfig::default();
+    pricing_config.unpriced_model_policy = UnpricedModelPolicy::AllowUnpriced;
+    pricing_config.unpriced_fallback_cost_per_1k_tokens = Some(1.0);
+    let usage = PricingUsage::new(10, 5);
+
+    settle_unpriced_usage(
+        &pricing_config,
+        &budget,
+        &keys,
+        None,
+        "metrics-allow-provider",
+        "tenant-private-model-832",
+        &usage,
+        None,
+        None,
+        "metrics test",
+    )
+    .await;
+
+    let rendered = crate::server::middleware::MetricsMiddleware::render_prometheus();
+    assert!(rendered.contains(
+        "gateway_unpriced_events_total{provider=\"metrics-allow-provider\",model_bucket=\"other\",policy=\"allow_unpriced\",outcome=\"fallback_settled\"} 1"
+    ));
+    assert!(rendered.contains(
+        "gateway_unpriced_spend_total{provider=\"metrics-allow-provider\",model_bucket=\"other\",policy=\"allow_unpriced\",outcome=\"fallback_settled\"} 0.015000000"
+    ));
+    assert!(!rendered.contains("tenant-private-model-832"));
 }

@@ -233,6 +233,9 @@ where
         match check(&deployment.provider, &deployment.model) {
             Ok(()) => return Ok(()),
             Err(error) if super::spend::is_model_not_priced_error(&error) => {
+                super::execution::observability::record_candidate_exclusion(
+                    deployment, &error, false,
+                );
                 excluded_deployments.insert(lease.clone_deployment_id());
                 last_error = Some(error);
             }

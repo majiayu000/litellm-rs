@@ -123,6 +123,7 @@ async fn budget_fallback_ignores_retry_limit_and_keeps_same_provider_candidates(
 
 #[tokio::test]
 async fn unpriced_model_fallback_skips_candidate_without_recording_failure() {
+    crate::server::middleware::reset_unpriced_metrics_for_tests();
     let router = build_same_provider_budget_fallback_router(0).await;
     let attempts = Arc::new(Mutex::new(Vec::new()));
 
@@ -167,6 +168,10 @@ async fn unpriced_model_fallback_skips_candidate_without_recording_failure() {
             .load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+    let rendered = crate::server::middleware::MetricsMiddleware::render_prometheus();
+    assert!(rendered.contains(
+        "gateway_unpriced_events_total{provider=\"openai\",model_bucket=\"openai_text\",policy=\"reject\",outcome=\"candidate_excluded\"}"
+    ));
 }
 
 #[tokio::test]

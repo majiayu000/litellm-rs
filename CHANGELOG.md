@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added the `pricing.unpriced_model_policy` and `pricing.unpriced_fallback_cost_per_1k_tokens` configuration surface for #831 fail-closed unpriced-model enforcement; `pricing.allow_degraded` remains startup-only.
+- Added `gateway_unpriced_events_total{provider,model_bucket,policy,outcome}` and `gateway_unpriced_spend_total{provider,model_bucket,policy,outcome}` Prometheus metrics for unpriced-model rejects, router candidate exclusions, and fallback settlements.
+
+### Changed
+- Breaking behavior: runtime requests for unpriced models now fail closed by default even when `pricing.allow_degraded=true`; deployments that intentionally allow unpriced traffic must set `pricing.unpriced_model_policy=allow_unpriced` and configure a finite `pricing.unpriced_fallback_cost_per_1k_tokens`.
 
 ### Fixed
 - Redis-backed distributed rate limiting now fails closed by default when Redis commands fail, emits `rate_limiter_degraded_total{operation,mode}`, and keeps the old local fallback only behind `rate_limit.redis_failure_mode: fail_open_local`.

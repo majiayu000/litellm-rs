@@ -4,9 +4,12 @@ use actix_web::body::{BodySize, MessageBody};
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use bytes::Bytes;
 use futures::future::{Ready, ready};
+use parking_lot::Mutex;
 use pin_project_lite::pin_project;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -43,6 +46,8 @@ gateway_http_request_duration_ms_sum {:.3}
 # HELP gateway_http_request_duration_ms_count Count of observed HTTP request durations
 # TYPE gateway_http_request_duration_ms_count counter
 gateway_http_request_duration_ms_count {}
+
+{}
 "#,
             snapshot.requests_total,
             snapshot.errors_total,
@@ -52,7 +57,8 @@ gateway_http_request_duration_ms_count {}
             snapshot.status_4xx_total,
             snapshot.status_5xx_total,
             snapshot.latency_micros_sum as f64 / 1000.0,
-            snapshot.latency_ms_count
+            snapshot.latency_ms_count,
+            render_unpriced_metrics()
         )
     }
 
@@ -66,6 +72,143 @@ gateway_http_request_duration_ms_count {}
         HTTP_METRICS_TEST_LOCK.lock().await
     }
 }
+
+/// Record an unpriced-model policy event using bounded label values.
+pub(crate) fn record_unpriced_event(provider: &str, model: &str, policy: &str, outcome: &str) {
+    record_unpriced_metric(provider, model, policy, outcome, 0.0);
+}
+
+/// Record an unpriced-model policy event and the fallback spend attached to it.
+pub(crate) fn record_unpriced_spend(
+    provider: &str,
+    model: &str,
+    policy: &str,
+    outcome: &str,
+    spend: f64,
+) {
+    record_unpriced_metric(provider, model, policy, outcome, spend);
+}
+
+pub(crate) fn unpriced_model_bucket(model: &str) -> &'static str {
+    let model = model.to_ascii_lowercase();
+    if model.contains("embedding") || model.contains("embed") {
+        "embedding"
+    } else if model.contains("image") || model.contains("dall-e") {
+        "image"
+    } else if model.contains("whisper")
+        || model.contains("tts")
+        || model.contains("audio")
+        || model.contains("transcrib")
+    {
+        "audio"
+    } else if model.contains("rerank") {
+        "rerank"
+    } else if model.contains("claude") {
+        "claude"
+    } else if model.contains("gemini") {
+        "gemini"
+    } else if model.contains("llama") {
+        "llama"
+    } else if model.contains("mistral") {
+        "mistral"
+    } else if model.contains("gpt") || model.contains("o1") || model.contains("o3") {
+        "openai_text"
+    } else {
+        "other"
+    }
+}
+
+fn record_unpriced_metric(provider: &str, model: &str, policy: &str, outcome: &str, spend: f64) {
+    let labels = UnpricedMetricLabels {
+        provider: provider.to_string(),
+        model_bucket: unpriced_model_bucket(model),
+        policy: bounded_unpriced_policy(policy),
+        outcome: bounded_unpriced_outcome(outcome),
+    };
+    let mut metrics = UNPRICED_METRICS.lock();
+    let value = metrics.entry(labels).or_default();
+    value.events_total = value.events_total.saturating_add(1);
+    if spend.is_finite() && spend > 0.0 {
+        value.spend_total += spend;
+    }
+}
+
+fn bounded_unpriced_policy(policy: &str) -> &'static str {
+    match policy {
+        "reject" => "reject",
+        "allow_unpriced" => "allow_unpriced",
+        _ => "unknown",
+    }
+}
+
+fn bounded_unpriced_outcome(outcome: &str) -> &'static str {
+    match outcome {
+        "reject_preflight" => "reject_preflight",
+        "candidate_excluded" => "candidate_excluded",
+        "fallback_settled" => "fallback_settled",
+        _ => "unknown",
+    }
+}
+
+fn render_unpriced_metrics() -> String {
+    let metrics = UNPRICED_METRICS.lock();
+    let mut rendered = String::from(
+        r#"# HELP gateway_unpriced_events_total Total unpriced-model policy events by bounded labels
+# TYPE gateway_unpriced_events_total counter
+"#,
+    );
+    for (labels, value) in metrics.iter() {
+        rendered.push_str(&format!(
+            "gateway_unpriced_events_total{{provider=\"{}\",model_bucket=\"{}\",policy=\"{}\",outcome=\"{}\"}} {}\n",
+            escape_prometheus_label(&labels.provider),
+            labels.model_bucket,
+            labels.policy,
+            labels.outcome,
+            value.events_total
+        ));
+    }
+    rendered.push_str(
+        r#"
+# HELP gateway_unpriced_spend_total Total fallback spend recorded for unpriced-model policy events in USD
+# TYPE gateway_unpriced_spend_total counter
+"#,
+    );
+    for (labels, value) in metrics.iter() {
+        rendered.push_str(&format!(
+            "gateway_unpriced_spend_total{{provider=\"{}\",model_bucket=\"{}\",policy=\"{}\",outcome=\"{}\"}} {:.9}\n",
+            escape_prometheus_label(&labels.provider),
+            labels.model_bucket,
+            labels.policy,
+            labels.outcome,
+            value.spend_total
+        ));
+    }
+    rendered
+}
+
+fn escape_prometheus_label(value: &str) -> String {
+    value
+        .replace('\\', r"\\")
+        .replace('\n', r"\n")
+        .replace('"', r#"\""#)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct UnpricedMetricLabels {
+    provider: String,
+    model_bucket: &'static str,
+    policy: &'static str,
+    outcome: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct UnpricedMetricValue {
+    events_total: u64,
+    spend_total: f64,
+}
+
+static UNPRICED_METRICS: LazyLock<Mutex<BTreeMap<UnpricedMetricLabels, UnpricedMetricValue>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 impl<S, B> Transform<S, ServiceRequest> for MetricsMiddleware
 where
@@ -290,6 +433,11 @@ pub(crate) fn reset_http_metrics_for_tests() {
     HTTP_METRICS.latency_ms_count.store(0, Ordering::Relaxed);
 }
 
+#[cfg(test)]
+pub(crate) fn reset_unpriced_metrics_for_tests() {
+    UNPRICED_METRICS.lock().clear();
+}
+
 impl<S, B> Service<ServiceRequest> for MetricsMiddlewareService<S>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
@@ -435,5 +583,51 @@ mod tests {
         assert_eq!(body, Bytes::from_static(b"metrics"));
 
         assert_eq!(http_metrics_snapshot().requests_total, 0);
+    }
+
+    #[actix_web::test]
+    async fn unpriced_metrics_use_bounded_model_bucket() {
+        reset_unpriced_metrics_for_tests();
+
+        record_unpriced_event(
+            "unit-test-provider",
+            "tenant-specific-private-model-123",
+            "reject",
+            "reject_preflight",
+        );
+
+        let rendered = MetricsMiddleware::render_prometheus();
+        assert!(rendered.contains(
+            "gateway_unpriced_events_total{provider=\"unit-test-provider\",model_bucket=\"other\",policy=\"reject\",outcome=\"reject_preflight\"} 1"
+        ));
+        assert!(!rendered.contains("tenant-specific-private-model-123"));
+    }
+
+    #[actix_web::test]
+    async fn unpriced_spend_metrics_accumulate_finite_positive_spend() {
+        reset_unpriced_metrics_for_tests();
+
+        record_unpriced_spend(
+            "unit-test-provider",
+            "gpt-private-123",
+            "allow_unpriced",
+            "fallback_settled",
+            0.125,
+        );
+        record_unpriced_spend(
+            "unit-test-provider",
+            "gpt-private-456",
+            "allow_unpriced",
+            "fallback_settled",
+            f64::NAN,
+        );
+
+        let rendered = MetricsMiddleware::render_prometheus();
+        assert!(rendered.contains(
+            "gateway_unpriced_events_total{provider=\"unit-test-provider\",model_bucket=\"openai_text\",policy=\"allow_unpriced\",outcome=\"fallback_settled\"} 2"
+        ));
+        assert!(rendered.contains(
+            "gateway_unpriced_spend_total{provider=\"unit-test-provider\",model_bucket=\"openai_text\",policy=\"allow_unpriced\",outcome=\"fallback_settled\"} 0.125000000"
+        ));
     }
 }

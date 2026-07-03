@@ -538,6 +538,13 @@ mod tests {
     async fn app_factory_metrics_endpoint_includes_recorded_http_requests() {
         let _metrics_guard = MetricsMiddleware::test_lock().await;
         MetricsMiddleware::reset_for_tests();
+        crate::server::middleware::reset_unpriced_metrics_for_tests();
+        crate::server::middleware::record_unpriced_event(
+            "metrics-http-provider",
+            "tenant-http-private-model",
+            "reject",
+            "reject_preflight",
+        );
 
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
@@ -574,6 +581,10 @@ mod tests {
 
         assert!(body.contains("gateway_http_requests_total 1"));
         assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 1"));
+        assert!(body.contains(
+            "gateway_unpriced_events_total{provider=\"metrics-http-provider\",model_bucket=\"other\",policy=\"reject\",outcome=\"reject_preflight\"} 1"
+        ));
+        assert!(!body.contains("tenant-http-private-model"));
 
         let rendered_after_scrape = MetricsMiddleware::render_prometheus();
         assert!(rendered_after_scrape.contains("gateway_http_requests_total 1"));

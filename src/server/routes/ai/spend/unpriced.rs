@@ -13,6 +13,16 @@ pub(in crate::server::routes::ai) fn model_not_priced_error(
     model: &str,
     error: impl std::fmt::Display,
 ) -> ProviderError {
+    crate::server::middleware::record_unpriced_event(provider, model, "reject", "reject_preflight");
+    tracing::error!(
+        provider = %provider,
+        model = %model,
+        model_bucket = crate::server::middleware::unpriced_model_bucket(model),
+        policy = "reject",
+        outcome = "reject_preflight",
+        error = %error,
+        "unpriced model rejected before provider call"
+    );
     ProviderError::invalid_request(
         "pricing",
         format!(
@@ -154,6 +164,23 @@ pub(in crate::server::routes::ai) async fn settle_unpriced_usage(
     context: &str,
 ) {
     let cost = fallback_cost_for_usage(pricing_config, usage);
+    crate::server::middleware::record_unpriced_spend(
+        budget_provider,
+        budget_model,
+        unpriced_policy_name(pricing_config),
+        "fallback_settled",
+        cost,
+    );
+    tracing::error!(
+        provider = %budget_provider,
+        model = %budget_model,
+        model_bucket = crate::server::middleware::unpriced_model_bucket(budget_model),
+        policy = unpriced_policy_name(pricing_config),
+        outcome = "fallback_settled",
+        cost,
+        context = %context,
+        "unpriced model settled through fallback pricing"
+    );
     if let Some(reservation) = budget_reservation {
         if let Err(error) = reservation.settle(cost) {
             tracing::error!(
