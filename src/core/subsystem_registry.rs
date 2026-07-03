@@ -260,7 +260,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "semantic_cache",
-        decision: SubsystemDecision::ConfigRejected,
+        decision: SubsystemDecision::ConfigRejected, // GatewayConfig::validate rejects cache.semantic_cache.
         runtime_path: None,
         note: "GatewayConfig::validate rejects cache.semantic_cache until runtime handling is wired.",
     },
