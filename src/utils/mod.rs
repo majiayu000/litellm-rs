@@ -24,7 +24,7 @@ pub mod error; // Error handling
 pub mod event; // Event publish-subscribe system
 pub mod logging; // Logging & monitoring
 pub mod net; // Network & client utilities
-pub mod sync; // Concurrent-safe containers
+pub mod sync; // Concurrent-safe value helpers
 pub mod sys; // System utilities // Business logic
 
 // Re-export commonly used types from each module for convenience
@@ -39,9 +39,7 @@ pub use event::{Event, EventBroker, EventType, Subscriber, SubscriptionHandle};
 pub use logging::{LogEntry, LogLevel, Logger, LoggingUtils};
 pub use net::client::types::{HttpClientConfig, ProviderRequestMetrics, RetryConfig};
 pub use net::client::utils::ClientUtils;
-pub use sync::{
-    AtomicValue, ConcurrentMap, ConcurrentVec, VersionError, VersionedEntry, VersionedMap,
-};
+pub use sync::AtomicValue;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
