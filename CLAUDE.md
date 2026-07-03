@@ -106,8 +106,8 @@ This is a **high-performance AI Gateway** written in Rust that provides OpenAI-c
 - `src/auth/` - Multi-layered authentication (JWT, API keys, RBAC)
 - `src/core/providers/` - Pluggable provider system (OpenAI, Anthropic, Azure, Google, etc.)
 - `src/core/router/` - Intelligent routing with multiple strategies
-- `src/core/mcp/` - MCP Gateway for external tool integration (90 tests)
-- `src/core/a2a/` - A2A Protocol for agent-to-agent communication (48 tests)
+- `src/core/mcp/` - Module-only experimental MCP gateway code; not mounted by the HTTP server
+- `src/core/a2a/` - Module-only experimental A2A gateway code; not mounted by the HTTP server
 - `src/storage/` - Multi-backend storage (PostgreSQL, Redis, S3, Vector DB)
 - `src/monitoring/` - Observability (Prometheus, tracing, health checks)
 
@@ -232,12 +232,15 @@ If `git status` shows `DU` (deleted-by-us, unresolved) files under `src/core/pro
 4. **Authentication**: extend auth modules in `src/auth/`
 5. **Configuration**: update models in `src/config/models/`
 6. **Monitoring**: add metrics in respective modules
-7. **MCP servers**: add server configs in `src/core/mcp/config.rs`
-8. **A2A agents**: add agent configs in `src/core/a2a/config.rs`
+7. **MCP servers**: `src/core/mcp/` is module-only today; adding runtime MCP support requires config, AppState construction, routes, and subsystem registry updates
+8. **A2A agents**: `src/core/a2a/` is module-only today; adding runtime A2A support requires config, AppState construction, routes, and subsystem registry updates
 
 ## Protocol Gateways
 
-### MCP Gateway (`src/core/mcp/`)
+### MCP Gateway (`src/core/mcp/`) - Module Only
+
+The MCP code is not mounted by the gateway runtime today. Do not document it as an HTTP/runtime capability until config, startup construction, routes, and subsystem registry status are updated.
+
 Model Context Protocol for connecting LLMs to external tools:
 - `config.rs` - Server configuration, authentication (Bearer, API Key, OAuth 2.0)
 - `transport.rs` - HTTP, SSE, WebSocket, stdio transports
@@ -247,7 +250,10 @@ Model Context Protocol for connecting LLMs to external tools:
 - `gateway.rs` - Main gateway aggregating servers
 - `permissions.rs` - Fine-grained access control
 
-### A2A Protocol (`src/core/a2a/`)
+### A2A Protocol (`src/core/a2a/`) - Module Only
+
+The A2A code is not mounted by the gateway runtime today. Do not document it as an HTTP/runtime capability until config, startup construction, routes, and subsystem registry status are updated.
+
 Agent-to-Agent communication with multi-provider support:
 - `config.rs` - Agent configuration, provider types
 - `message.rs` - JSON-RPC 2.0 message format, task states

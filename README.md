@@ -12,7 +12,7 @@ A high-performance Rust library and gateway for calling LLM APIs in an OpenAI-co
 - **OpenAI-Compatible API** - Drop-in replacement for OpenAI SDK
 - **High Performance** - 10,000+ requests/second, <10ms routing overhead
 - **Intelligent Routing** - Load balancing, failover, cost optimization
-- **Enterprise Ready** - Auth, rate limiting, caching, observability
+- **Gateway Controls** - Auth, rate limiting, deterministic caching, metrics, and health endpoints
 
 ## Quick Start (5 Minutes, API-Only Recommended)
 
@@ -86,6 +86,24 @@ The gateway router config maps these fields into the runtime router:
 - `router.load_balancer.health_check_enabled` enables pre-call deployment health checks.
 
 `router.load_balancer.sticky_sessions` and `router.load_balancer.session_timeout` are reserved for future session affinity. Non-default values fail config validation until runtime affinity is implemented.
+
+#### Core Subsystem Runtime Status
+
+Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src/core/subsystem_registry.rs), and tests assert that every module exported from `src/core/mod.rs` is either referenced by the gateway runtime or explicitly classified. The current issue-838 subsystem decisions are:
+
+| Subsystem | Decision | Runtime status |
+| --- | --- | --- |
+| `core/guardrails` | experimental-gate | Module-only. `GuardrailEngine` is not configured or executed on completion requests. |
+| `core/ip_access` | experimental-gate | Middleware exists but is not registered in the Actix stack. |
+| `core/mcp` | experimental-gate | MCP gateway is not mounted; Responses API only passes MCP tool descriptors through to providers. |
+| `core/a2a` | experimental-gate | A2A gateway types compile, but no route or `AppState` entry mounts them. |
+| `core/realtime` | experimental-gate | Realtime WebSocket types exist, but no gateway route is mounted. |
+| `core/observability` and `core/integrations` | experimental-gate | Basic tracing, metrics middleware, and health endpoints are wired elsewhere; Langfuse/OpenTelemetry managers and exporters are not initialized by the binary. |
+| `core/batch` | experimental-gate | `/v1/batches` is wired as a provider proxy; `core::batch::BatchProcessor` is not constructed. |
+| `core/webhooks` | experimental-gate | `WebhookManager` is not configured or constructed by the gateway runtime. |
+| `core/semantic_cache` | config-rejected | `cache.semantic_cache=true` fails validation until runtime semantic cache handling is wired. |
+| `core/analytics` | experimental-gate | Analytics types and engine are feature-gated, with no runtime collector or route. |
+| `core/virtual_keys` | experimental-gate | Gateway key routes use `core::keys`; `VirtualKeyManager` is not in `AppState`. |
 
 ## Installation
 
