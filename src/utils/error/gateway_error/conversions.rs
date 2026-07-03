@@ -16,6 +16,10 @@ impl From<ProviderError> for GatewayError {
     }
 }
 
+fn retry_after_ms_to_secs(retry_after_ms: Option<u64>) -> Option<u64> {
+    retry_after_ms.map(|ms| (ms.saturating_add(999) / 1000).max(1))
+}
+
 // Conversion from A2AError to GatewayError
 impl From<A2AError> for GatewayError {
     fn from(err: A2AError) -> Self {
@@ -95,7 +99,7 @@ impl From<A2AError> for GatewayError {
                 };
                 GatewayError::RateLimit {
                     message: msg,
-                    retry_after: None,
+                    retry_after: retry_after_ms_to_secs(retry_after_ms),
                     rpm_limit: None,
                     tpm_limit: None,
                 }
@@ -221,7 +225,7 @@ impl From<McpError> for GatewayError {
                 };
                 GatewayError::RateLimit {
                     message: msg,
-                    retry_after: None,
+                    retry_after: retry_after_ms_to_secs(retry_after_ms),
                     rpm_limit: None,
                     tpm_limit: None,
                 }
