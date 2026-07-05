@@ -111,10 +111,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "fal_ai",
         "ProviderType::FalAI dispatches to native image-generation endpoints when providers-extended is enabled",
     ),
-    stub(
-        "firecrawl",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
     providers_extended_wire(
         "gemini",
         "ProviderType::Gemini dispatches to native Google AI Studio Gemini auth when providers-extended is enabled",
@@ -304,11 +300,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "audio provider module without a gateway LLM factory path",
     ),
     baseline("exa_ai", "delete-native", "unwired native chat provider"),
-    baseline(
-        "firecrawl",
-        "delete-native",
-        "macro-generated chat provider awaiting GH837 disposition approval",
-    ),
     baseline("gigachat", "delete-native", "unwired native chat provider"),
     baseline(
         "github",

@@ -10,7 +10,7 @@ provider registry/catalog wiring plus normal Rust modules.
   - Used by `custom_api` and `deepl`.
   - Keep until those providers are converted to explicit modules.
 - `define_pooled_http_provider_with_hooks!`
-  - Used by `ai21`, `amazon_nova`, `datarobot`, and `firecrawl`.
+  - Used by `ai21`, `amazon_nova`, and `datarobot`.
   - Keep until those providers are converted to explicit modules.
 
 ## Compatibility-Only Macros

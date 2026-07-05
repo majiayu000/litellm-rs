@@ -100,7 +100,6 @@ impl BaseConfig {
             "cohere" => "https://api.cohere.ai/v1",
             "datarobot" => "https://app.datarobot.com/api/v2",
             "exa_ai" => "https://api.exa.ai/v1",
-            "firecrawl" => "https://api.firecrawl.dev/v1",
             "deepl" => "https://api-free.deepl.com/v2",
             "fal_ai" => "https://fal.run",
             _ => "https://api.openai.com/v1",

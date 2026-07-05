@@ -194,7 +194,7 @@ All entries below route through `OpenAILikeProvider`. Chat and streaming work fo
 
 The following modules exist under `src/core/providers/` (gated on `providers-extra` or `providers-extended`) but are **not wired into the unified `Provider` enum or the factory** today. They compile but cannot be selected through `create_provider`/`from_config_async`. Treat them as experimental scaffolding subject to change:
 
-`ai21`, `baseten`, `clarifai`, `codestral`, `custom_api`, `databricks`, `datarobot`, `deepgram`, `deepl`, `elevenlabs`, `exa_ai`, `firecrawl`, `gigachat`, `google_pse`, `gradient_ai`, `huggingface`, `jina`, `langgraph`, `manus`, `milvus`, `morph`, `nlp_cloud`, `oci`, `ollama`, `petals`, `pg_vector`, `predibase`, `ragflow`, `recraft`, `runwayml`, `sagemaker`, `searxng`, `snowflake`, `spark`, `stability`, `tavily`, `triton`, `voyage`, `watsonx`
+`ai21`, `baseten`, `clarifai`, `codestral`, `custom_api`, `databricks`, `datarobot`, `deepgram`, `deepl`, `elevenlabs`, `exa_ai`, `gigachat`, `google_pse`, `gradient_ai`, `huggingface`, `jina`, `langgraph`, `manus`, `milvus`, `morph`, `nlp_cloud`, `oci`, `ollama`, `petals`, `pg_vector`, `predibase`, `ragflow`, `recraft`, `runwayml`, `sagemaker`, `searxng`, `snowflake`, `spark`, `stability`, `tavily`, `triton`, `voyage`, `watsonx`
 
 For self-hosted or unlisted OpenAI-compatible endpoints, prefer the generic `openai_compatible` provider type instead.
 

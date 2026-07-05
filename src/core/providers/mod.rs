@@ -58,8 +58,6 @@ pub mod exa_ai;
 #[cfg(feature = "providers-extended")]
 pub mod fal_ai;
 // featherless: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod firecrawl;
 // fireworks: Tier 1 -> registry/catalog.rs
 // friendliai: Tier 1 -> registry/catalog.rs
 // galadriel: Tier 1 -> registry/catalog.rs
