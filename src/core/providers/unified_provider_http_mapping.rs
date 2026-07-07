@@ -172,7 +172,7 @@ pub fn provider_http_error_facts(error: &ProviderError) -> ProviderHttpErrorFact
 
 /// Default HTTP status-code → `ProviderError` mapping shared by most providers.
 ///
-/// Providers with custom handling (e.g. Gemini, Databricks, Snowflake) should
+/// Providers with custom handling (e.g. Gemini, Databricks, Anthropic) should
 /// implement `map_http_error` manually and call this for the status codes they
 /// don't need to override.
 pub fn default_http_error_mapper(
