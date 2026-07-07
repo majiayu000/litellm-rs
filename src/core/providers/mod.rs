@@ -63,8 +63,6 @@ pub mod huggingface;
 #[cfg(feature = "providers-extended")]
 pub mod jina;
 // lambda_ai: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod langgraph;
 // lemonade: Tier 1 -> registry/catalog.rs
 // linkup: Tier 1 -> registry/catalog.rs
 // llamafile: Tier 1 -> registry/catalog.rs

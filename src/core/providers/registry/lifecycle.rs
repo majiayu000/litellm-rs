@@ -103,10 +103,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "jina",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    stub(
-        "langgraph",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
     internal("macros", "provider macro infrastructure"),
     stub(
         "meta_llama",
@@ -220,7 +216,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "non-llm-lane",
         "embedding/rerank provider exposes LLMProvider",
     ),
-    baseline("langgraph", "delete-native", "unwired native chat provider"),
     baseline(
         "meta_llama",
         "demote-to-catalog",
