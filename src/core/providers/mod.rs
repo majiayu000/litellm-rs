@@ -56,8 +56,6 @@ pub mod github_copilot;
 // groq: Tier 1 -> registry/catalog.rs
 // heroku: Tier 1 -> registry/catalog.rs
 // hosted_vllm: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod huggingface;
 // hyperbolic: Tier 1 -> registry/catalog.rs
 // infinity: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]

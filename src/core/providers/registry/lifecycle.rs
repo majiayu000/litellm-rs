@@ -96,10 +96,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "ProviderType::GitHubCopilot dispatches to native GitHub Copilot auth when providers-extended is enabled",
     ),
     stub(
-        "huggingface",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
-    stub(
         "jina",
         "specialized provider module; not wired through the LLM factory yet",
     ),
@@ -205,11 +201,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "github",
         "demote-to-catalog",
         "catalog-backed duplicate with native provider retained until demote tranche",
-    ),
-    baseline(
-        "huggingface",
-        "delete-native",
-        "unwired native chat provider",
     ),
     baseline(
         "jina",
