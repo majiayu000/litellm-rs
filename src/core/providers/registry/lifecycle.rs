@@ -110,10 +110,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
     wire("mistral", "native Provider enum variant"),
     stub(
-        "oci",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
-    stub(
         "ollama",
         "specialized provider module; not wired through the LLM factory yet",
     ),
@@ -217,7 +213,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "non-llm-lane",
         "vector provider exposes LLMProvider",
     ),
-    baseline("oci", "delete-native", "unwired native chat provider"),
     baseline(
         "ollama",
         "demote-to-catalog",

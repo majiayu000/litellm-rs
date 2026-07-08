@@ -79,8 +79,6 @@ pub mod mistral;
 // nscale: Tier 1 -> registry/catalog.rs
 // nvidia_nim: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
-pub mod oci;
-#[cfg(feature = "providers-extended")]
 pub mod ollama;
 // oobabooga: Tier 1 -> registry/catalog.rs
 pub mod openai;

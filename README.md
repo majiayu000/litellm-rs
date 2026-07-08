@@ -194,7 +194,7 @@ All entries below route through `OpenAILikeProvider`. Chat and streaming work fo
 
 The following modules exist under `src/core/providers/` (gated on `providers-extra` or `providers-extended`) but are **not wired into the unified `Provider` enum or the factory** today. They compile but cannot be selected through `create_provider`/`from_config_async`. Treat them as experimental scaffolding subject to change:
 
-`codestral`, `custom_api`, `deepgram`, `elevenlabs`, `jina`, `milvus`, `oci`, `ollama`, `pg_vector`, `recraft`, `runwayml`, `sagemaker`, `searxng`, `snowflake`, `stability`, `tavily`, `voyage`, `watsonx`
+`codestral`, `custom_api`, `deepgram`, `elevenlabs`, `jina`, `milvus`, `ollama`, `pg_vector`, `recraft`, `runwayml`, `sagemaker`, `searxng`, `snowflake`, `stability`, `tavily`, `voyage`, `watsonx`
 
 For self-hosted or unlisted OpenAI-compatible endpoints, prefer the generic `openai_compatible` provider type instead.
 
