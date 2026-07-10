@@ -54,8 +54,6 @@ pub mod github_copilot;
 // hosted_vllm: Tier 1 -> registry/catalog.rs
 // hyperbolic: Tier 1 -> registry/catalog.rs
 // infinity: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod jina;
 // lambda_ai: Tier 1 -> registry/catalog.rs
 // lemonade: Tier 1 -> registry/catalog.rs
 // linkup: Tier 1 -> registry/catalog.rs
@@ -80,8 +78,6 @@ pub mod openai_like;
 // openrouter: Tier 1 -> registry/catalog.rs
 // ovhcloud: Tier 1 -> registry/catalog.rs
 // perplexity: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod pg_vector;
 // poe: Tier 1 -> registry/catalog.rs
 // qwen: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
@@ -92,8 +88,6 @@ pub mod sagemaker;
 // siliconflow: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod snowflake;
-#[cfg(feature = "providers-extended")]
-pub mod stability;
 // together: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extra")]
 pub mod v0;
@@ -101,8 +95,6 @@ pub mod v0;
 pub mod vertex_ai;
 // vllm: Tier 1 -> registry/catalog.rs
 // volcengine: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod voyage;
 // wandb: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod watsonx;

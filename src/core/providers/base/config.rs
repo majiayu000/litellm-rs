@@ -89,7 +89,6 @@ impl BaseConfig {
             "ai21" => "https://api.ai21.com/studio/v1",
             "cerebras" => "https://api.cerebras.ai/v1",
             "nlp_cloud" => "https://api.nlpcloud.io/v1",
-            "voyage" => "https://api.voyageai.com/v1",
             "github" => "https://models.inference.ai.azure.com",
             "clarifai" => "https://api.clarifai.com/v2",
             "replicate" => "https://api.replicate.com/v1",

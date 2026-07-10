@@ -87,10 +87,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "github_copilot",
         "ProviderType::GitHubCopilot dispatches to native GitHub Copilot auth when providers-extended is enabled",
     ),
-    stub(
-        "jina",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
     internal("macros", "provider macro infrastructure"),
     stub(
         "meta_llama",
@@ -103,10 +99,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
     wire("openai", "native Provider enum variant"),
     wire("openai_like", "shared OpenAI-compatible runtime provider"),
-    stub(
-        "pg_vector",
-        "vector-store provider module, outside LLM factory dispatch",
-    ),
     internal("registry", "provider catalog and lifecycle infrastructure"),
     providers_extended_wire(
         "replicate",
@@ -120,10 +112,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "snowflake",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    stub(
-        "stability",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
     internal("thinking", "shared thinking/reasoning support"),
     stub(
         "v0",
@@ -132,10 +120,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     provider_extra_wire(
         "vertex_ai",
         "ProviderType::VertexAI dispatches to native Vertex AI auth when providers-extra is enabled",
-    ),
-    stub(
-        "voyage",
-        "specialized provider module; not wired through the LLM factory yet",
     ),
     stub(
         "watsonx",
@@ -161,11 +145,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "catalog-backed duplicate with native provider retained until demote tranche",
     ),
     baseline(
-        "jina",
-        "non-llm-lane",
-        "embedding/rerank provider exposes LLMProvider",
-    ),
-    baseline(
         "meta_llama",
         "demote-to-catalog",
         "catalog-backed duplicate with native provider retained until demote tranche",
@@ -175,27 +154,12 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "demote-to-catalog",
         "local OpenAI-compatible candidate",
     ),
-    baseline(
-        "pg_vector",
-        "non-llm-lane",
-        "vector provider module without a gateway LLM factory path",
-    ),
     baseline("sagemaker", "delete-native", "unwired native chat provider"),
     baseline("snowflake", "delete-native", "unwired native chat provider"),
-    baseline(
-        "stability",
-        "non-llm-lane",
-        "image provider exposes LLMProvider",
-    ),
     baseline(
         "v0",
         "demote-to-catalog",
         "catalog-backed duplicate with native provider retained until demote tranche",
-    ),
-    baseline(
-        "voyage",
-        "non-llm-lane",
-        "embedding provider exposes LLMProvider",
     ),
     baseline("watsonx", "delete-native", "unwired native chat provider"),
 ];
