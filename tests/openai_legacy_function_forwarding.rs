@@ -26,9 +26,9 @@ struct MockUpstream {
 
 impl MockUpstream {
     async fn captured_body(self) -> TestResult<Value> {
-        let body = self.body.await?;
+        let body = self.body.await;
         self.task.await??;
-        Ok(body)
+        Ok(body?)
     }
 }
 
