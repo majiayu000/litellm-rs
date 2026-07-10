@@ -82,12 +82,8 @@ pub mod openai_like;
 // qwen: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod replicate;
-#[cfg(feature = "providers-extended")]
-pub mod sagemaker;
 // sambanova: Tier 1 -> registry/catalog.rs
 // siliconflow: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod snowflake;
 // together: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extra")]
 pub mod v0;
@@ -96,8 +92,6 @@ pub mod vertex_ai;
 // vllm: Tier 1 -> registry/catalog.rs
 // volcengine: Tier 1 -> registry/catalog.rs
 // wandb: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod watsonx;
 // xai: Tier 1 -> registry/catalog.rs
 // xiaomi_mimo: Tier 1 -> registry/catalog.rs
 // xinference: Tier 1 -> registry/catalog.rs

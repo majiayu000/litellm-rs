@@ -104,14 +104,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "replicate",
         "ProviderType::Replicate dispatches to native prediction lifecycle paths when providers-extended is enabled",
     ),
-    stub(
-        "sagemaker",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
-    stub(
-        "snowflake",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
     internal("thinking", "shared thinking/reasoning support"),
     stub(
         "v0",
@@ -120,10 +112,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     provider_extra_wire(
         "vertex_ai",
         "ProviderType::VertexAI dispatches to native Vertex AI auth when providers-extra is enabled",
-    ),
-    stub(
-        "watsonx",
-        "specialized provider module; not wired through the LLM factory yet",
     ),
 ];
 
@@ -154,14 +142,11 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "demote-to-catalog",
         "local OpenAI-compatible candidate",
     ),
-    baseline("sagemaker", "delete-native", "unwired native chat provider"),
-    baseline("snowflake", "delete-native", "unwired native chat provider"),
     baseline(
         "v0",
         "demote-to-catalog",
         "catalog-backed duplicate with native provider retained until demote tranche",
     ),
-    baseline("watsonx", "delete-native", "unwired native chat provider"),
 ];
 
 pub fn provider_module_lifecycle() -> &'static [ProviderModuleLifecycleEntry] {
