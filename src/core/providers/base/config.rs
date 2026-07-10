@@ -91,8 +91,6 @@ impl BaseConfig {
             "nlp_cloud" => "https://api.nlpcloud.io/v1",
             "voyage" => "https://api.voyageai.com/v1",
             "github" => "https://models.inference.ai.azure.com",
-            "deepgram" => "https://api.deepgram.com/v1",
-            "elevenlabs" => "https://api.elevenlabs.io",
             "clarifai" => "https://api.clarifai.com/v2",
             "replicate" => "https://api.replicate.com/v1",
             "huggingface" => "https://api-inference.huggingface.co",

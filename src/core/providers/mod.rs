@@ -34,13 +34,9 @@ pub mod cohere;
 #[cfg(feature = "providers-extended")]
 pub mod custom_api;
 // dashscope: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod deepgram;
 // deepinfra: Tier 1 -> registry/catalog.rs
 // deepseek: Tier 1 -> registry/catalog.rs
 // docker_model_runner: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod elevenlabs;
 #[cfg(feature = "providers-extended")]
 pub mod fal_ai;
 // featherless: Tier 1 -> registry/catalog.rs
@@ -68,8 +64,6 @@ pub mod jina;
 // maritalk: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extra")]
 pub mod meta_llama;
-#[cfg(feature = "providers-extended")]
-pub mod milvus;
 // minimax: Tier 1 -> registry/catalog.rs
 pub mod mistral;
 // moonshot: Tier 1 -> registry/catalog.rs
@@ -91,23 +85,15 @@ pub mod pg_vector;
 // poe: Tier 1 -> registry/catalog.rs
 // qwen: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
-pub mod recraft;
-#[cfg(feature = "providers-extended")]
 pub mod replicate;
-#[cfg(feature = "providers-extended")]
-pub mod runwayml;
 #[cfg(feature = "providers-extended")]
 pub mod sagemaker;
 // sambanova: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod searxng;
 // siliconflow: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod snowflake;
 #[cfg(feature = "providers-extended")]
 pub mod stability;
-#[cfg(feature = "providers-extended")]
-pub mod tavily;
 // together: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extra")]
 pub mod v0;

@@ -70,14 +70,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "custom_api",
         "specialized provider module; not wired through the LLM factory yet",
     ),
-    stub(
-        "deepgram",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
-    stub(
-        "elevenlabs",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
     internal("factory", "provider construction infrastructure"),
     providers_extended_wire(
         "fal_ai",
@@ -104,10 +96,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "meta_llama",
         "native Meta Llama module retained; ProviderType::MetaLlama currently uses a generic OpenAI-compatible adapter",
     ),
-    stub(
-        "milvus",
-        "vector-store provider module, outside LLM factory dispatch",
-    ),
     wire("mistral", "native Provider enum variant"),
     stub(
         "ollama",
@@ -119,25 +107,13 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "pg_vector",
         "vector-store provider module, outside LLM factory dispatch",
     ),
-    stub(
-        "recraft",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
     internal("registry", "provider catalog and lifecycle infrastructure"),
     providers_extended_wire(
         "replicate",
         "ProviderType::Replicate dispatches to native prediction lifecycle paths when providers-extended is enabled",
     ),
     stub(
-        "runwayml",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
-    stub(
         "sagemaker",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
-    stub(
-        "searxng",
         "specialized provider module; not wired through the LLM factory yet",
     ),
     stub(
@@ -146,10 +122,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
     stub(
         "stability",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
-    stub(
-        "tavily",
         "specialized provider module; not wired through the LLM factory yet",
     ),
     internal("thinking", "shared thinking/reasoning support"),
@@ -184,16 +156,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "macro-generated custom provider needs explicit product/architecture decision",
     ),
     baseline(
-        "deepgram",
-        "non-llm-lane",
-        "audio provider module without a gateway LLM factory path",
-    ),
-    baseline(
-        "elevenlabs",
-        "non-llm-lane",
-        "audio provider module without a gateway LLM factory path",
-    ),
-    baseline(
         "github",
         "demote-to-catalog",
         "catalog-backed duplicate with native provider retained until demote tranche",
@@ -209,11 +171,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "catalog-backed duplicate with native provider retained until demote tranche",
     ),
     baseline(
-        "milvus",
-        "non-llm-lane",
-        "vector provider exposes LLMProvider",
-    ),
-    baseline(
         "ollama",
         "demote-to-catalog",
         "local OpenAI-compatible candidate",
@@ -223,32 +180,12 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "non-llm-lane",
         "vector provider module without a gateway LLM factory path",
     ),
-    baseline(
-        "recraft",
-        "non-llm-lane",
-        "image provider exposes LLMProvider",
-    ),
-    baseline(
-        "runwayml",
-        "non-llm-lane",
-        "video/image provider exposes LLMProvider",
-    ),
     baseline("sagemaker", "delete-native", "unwired native chat provider"),
-    baseline(
-        "searxng",
-        "non-llm-lane",
-        "search provider exposes LLMProvider",
-    ),
     baseline("snowflake", "delete-native", "unwired native chat provider"),
     baseline(
         "stability",
         "non-llm-lane",
         "image provider exposes LLMProvider",
-    ),
-    baseline(
-        "tavily",
-        "non-llm-lane",
-        "search provider exposes LLMProvider",
     ),
     baseline(
         "v0",
