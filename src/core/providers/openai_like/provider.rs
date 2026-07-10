@@ -284,6 +284,8 @@ impl OpenAILikeProvider {
         insert_optional_param!(metadata);
         insert_optional_param!(service_tier);
         insert_optional_param!(parallel_tool_calls);
+        insert_optional_param!(functions);
+        insert_optional_param!(function_call);
 
         if let Some(effort) = reasoning_effort {
             self.insert_reasoning_effort(&mut openai_request, &model, effort)?;
