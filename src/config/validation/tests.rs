@@ -149,6 +149,99 @@ fn test_provider_config_empty_name() {
     assert!(config.validate().is_err());
 }
 
+#[test]
+fn test_provider_health_check_resolves_relative_endpoint() {
+    let config = ProviderConfig {
+        name: "test".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "test-key".to_string(),
+        base_url: Some("https://8.8.8.8/v1/".to_string()),
+        health_check: crate::config::models::provider::ProviderHealthCheckConfig {
+            endpoint: Some("health".to_string()),
+            expected_codes: vec![200, 204],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    assert!(config.validate().is_ok());
+    assert_eq!(
+        config
+            .resolved_health_check_endpoint()
+            .expect("endpoint should resolve")
+            .expect("endpoint should be present")
+            .as_str(),
+        "https://8.8.8.8/v1/health"
+    );
+}
+
+#[test]
+fn test_provider_health_check_rejects_unsupported_combinations() {
+    let mut config = ProviderConfig {
+        name: "test".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "test-key".to_string(),
+        ..Default::default()
+    };
+
+    config.health_check.endpoint = Some("/health".to_string());
+    assert!(config.validate().unwrap_err().contains("requires base_url"));
+
+    config.health_check.endpoint = None;
+    config.health_check.expected_codes = vec![204];
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .contains("requires a custom endpoint")
+    );
+
+    config.health_check.endpoint = Some("https://8.8.8.8/health".to_string());
+    config.health_check.expected_codes = vec![200, 200];
+    assert!(config.validate().unwrap_err().contains("duplicated"));
+
+    config.health_check.expected_codes = vec![99];
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .contains("between 100 and 599")
+    );
+
+    config.health_check.expected_codes = vec![600];
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .contains("between 100 and 599")
+    );
+
+    config.health_check.endpoint = Some("https://user:secret@8.8.8.8/health".to_string());
+    config.health_check.expected_codes = vec![200];
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .contains("cannot contain URL credentials")
+    );
+}
+
+#[test]
+fn test_provider_health_check_endpoint_uses_ssrf_validation() {
+    let config = ProviderConfig {
+        name: "test".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "test-key".to_string(),
+        health_check: crate::config::models::provider::ProviderHealthCheckConfig {
+            endpoint: Some("http://127.0.0.1/health".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    assert!(config.validate().unwrap_err().contains("SSRF protection"));
+}
+
 // ==================== Auth Config Validation ====================
 
 #[test]

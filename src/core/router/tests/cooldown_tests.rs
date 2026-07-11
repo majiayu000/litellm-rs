@@ -43,6 +43,36 @@ async fn test_record_failure_triggers_cooldown() {
 }
 
 #[tokio::test]
+async fn test_request_cooldown_does_not_override_probe_unhealthy() {
+    let config = RouterConfig {
+        cooldown_time_secs: 60,
+        ..Default::default()
+    };
+    let router = Router::new(config);
+    let deployment = create_test_deployment("test-1", "gpt-4").await;
+    deployment
+        .state
+        .probe_unhealthy
+        .store(true, Ordering::Relaxed);
+    deployment
+        .state
+        .health
+        .store(HealthStatus::Unhealthy as u8, Ordering::Relaxed);
+    router.add_deployment(deployment);
+
+    router.record_failure_with_reason("test-1", CooldownReason::RateLimit);
+
+    let deployment = router
+        .get_deployment("test-1")
+        .expect("deployment should remain registered");
+    assert!(deployment.is_in_cooldown());
+    assert_eq!(deployment.state.health_status(), HealthStatus::Cooldown);
+    deployment.state.cooldown_until.store(1, Ordering::Relaxed);
+    assert!(!deployment.is_in_cooldown());
+    assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
+}
+
+#[tokio::test]
 async fn test_cooldown_on_rate_limit() {
     let config = RouterConfig {
         allowed_fails: 3,

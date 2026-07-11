@@ -219,8 +219,28 @@ impl Validate for ProviderConfig {
         // Validate retry configuration
         self.retry.validate()?;
 
-        // Validate health check configuration
+        self.validate_health_check_runtime()?;
+
+        Ok(())
+    }
+}
+
+impl ProviderConfig {
+    /// Validate health settings at every runtime construction boundary.
+    pub(crate) fn validate_health_check_runtime(&self) -> Result<(), String> {
         self.health_check.validate()?;
+        if let Some(endpoint) = self.resolved_health_check_endpoint()? {
+            if !endpoint.username().is_empty() || endpoint.password().is_some() {
+                return Err(format!(
+                    "Provider {} health check endpoint cannot contain URL credentials",
+                    self.name
+                ));
+            }
+            validate_url_against_ssrf(
+                endpoint.as_str(),
+                &format!("Provider {} health check endpoint", self.name),
+            )?;
+        }
 
         Ok(())
     }
@@ -276,6 +296,37 @@ impl Validate for ProviderHealthCheckConfig {
 
         if self.expected_codes.is_empty() {
             return Err("Health check expected codes cannot be empty".to_string());
+        }
+
+        let mut unique_codes = HashSet::with_capacity(self.expected_codes.len());
+        for code in &self.expected_codes {
+            if !(100..=599).contains(code) {
+                return Err(format!(
+                    "Health check expected status code {code} must be between 100 and 599"
+                ));
+            }
+            if !unique_codes.insert(*code) {
+                return Err(format!(
+                    "Health check expected status code {code} cannot be duplicated"
+                ));
+            }
+        }
+
+        if self.endpoint.is_none()
+            && self.expected_codes != crate::config::models::default_health_expected_codes()
+        {
+            return Err(
+                "Health check expected_codes requires a custom endpoint; provider-native checks do not expose HTTP status codes"
+                    .to_string(),
+            );
+        }
+
+        if self
+            .endpoint
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("Health check endpoint cannot be empty".to_string());
         }
 
         Ok(())

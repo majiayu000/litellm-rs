@@ -30,6 +30,10 @@ pub enum CooldownReason {
 /// Defines errors that can occur during routing operations.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RouterError {
+    /// Gateway configuration cannot be represented safely by the runtime router.
+    #[error("Invalid router configuration: {0}")]
+    InvalidConfiguration(String),
+
     /// Model not found in router configuration
     #[error("Model not found: {0}")]
     ModelNotFound(String),
@@ -170,6 +174,15 @@ mod tests {
     }
 
     #[test]
+    fn test_router_error_invalid_configuration() {
+        let error = RouterError::InvalidConfiguration("bad health endpoint".to_string());
+        assert_eq!(
+            error.to_string(),
+            "Invalid router configuration: bad health endpoint"
+        );
+    }
+
+    #[test]
     fn test_router_error_no_available_deployment() {
         let error = RouterError::NoAvailableDeployment("gpt-4".to_string());
         assert_eq!(
@@ -259,6 +272,7 @@ mod tests {
     #[test]
     fn test_router_error_all_variants() {
         let errors = vec![
+            RouterError::InvalidConfiguration("config".to_string()),
             RouterError::ModelNotFound("a".to_string()),
             RouterError::NoAvailableDeployment("b".to_string()),
             RouterError::UnsupportedCapability {
@@ -272,7 +286,7 @@ mod tests {
             RouterError::FallbackCycle("g".to_string()),
         ];
 
-        assert_eq!(errors.len(), 8);
+        assert_eq!(errors.len(), 9);
         for error in errors {
             assert!(!error.to_string().is_empty());
         }

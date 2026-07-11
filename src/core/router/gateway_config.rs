@@ -4,7 +4,7 @@
 //! a Router from gateway configuration.
 
 use super::config::RouterConfig;
-use super::deployment::{Deployment, DeploymentConfig, RetrySchedule};
+use super::deployment::{Deployment, DeploymentConfig, HealthCheckPolicy, RetrySchedule};
 use super::error::RouterError;
 use super::unified::Router;
 use crate::config::Validate;
@@ -42,6 +42,14 @@ impl Router {
         let router = Self::new(config);
 
         for provider_config in providers {
+            provider_config
+                .validate_health_check_runtime()
+                .map_err(|error| {
+                    RouterError::InvalidConfiguration(format!(
+                        "provider '{}': {error}",
+                        provider_config.name
+                    ))
+                })?;
             if !provider_config.enabled {
                 continue;
             }
@@ -75,7 +83,7 @@ impl Router {
                     provider.clone(),
                     &provider_config.name,
                     provider_config,
-                );
+                )?;
                 router.add_deployment(deployment);
             } else {
                 // Create one deployment per model
@@ -86,12 +94,13 @@ impl Router {
                         provider.clone(),
                         &model,
                         provider_config,
-                    );
+                    )?;
                     router.add_deployment(deployment);
                 }
             }
         }
 
+        router.start_configured_health_checks()?;
         Ok(router)
     }
 }
@@ -102,21 +111,27 @@ fn create_deployment_from_config(
     provider: Provider,
     model: &str,
     config: &ProviderConfig,
-) -> Deployment {
-    let deployment_config = deployment_config_from_provider(config);
+) -> Result<Deployment, RouterError> {
+    let deployment_config = deployment_config_from_provider(config)?;
 
-    Deployment::new(
+    Ok(Deployment::new(
         deployment_id.to_string(),
         provider,
         model.to_string(),
         model.to_string(),
     )
     .with_config(deployment_config)
-    .with_tags(config.tags.clone())
+    .with_tags(config.tags.clone()))
 }
 
-fn deployment_config_from_provider(config: &ProviderConfig) -> DeploymentConfig {
-    DeploymentConfig {
+fn deployment_config_from_provider(
+    config: &ProviderConfig,
+) -> Result<DeploymentConfig, RouterError> {
+    let endpoint = config.resolved_health_check_endpoint().map_err(|error| {
+        RouterError::InvalidConfiguration(format!("provider '{}': {error}", config.name))
+    })?;
+
+    Ok(DeploymentConfig {
         tpm_limit: if config.tpm > 0 {
             Some(config.tpm as u64)
         } else {
@@ -141,7 +156,17 @@ fn deployment_config_from_provider(config: &ProviderConfig) -> DeploymentConfig 
             backoff_multiplier: config.retry.backoff_multiplier,
             jitter_ratio: config.retry.jitter,
         }),
-    }
+        health_check_policy: config.health_check.has_runtime_overrides().then(|| {
+            HealthCheckPolicy {
+                provider_name: config.name.clone(),
+                interval_secs: config.health_check.interval,
+                failure_threshold: config.health_check.failure_threshold,
+                recovery_timeout_secs: config.health_check.recovery_timeout,
+                endpoint,
+                expected_codes: config.health_check.expected_codes.clone(),
+            }
+        }),
+    })
 }
 
 #[cfg(test)]
@@ -237,7 +262,7 @@ mod tests {
             ..ProviderConfig::default()
         };
 
-        let deployment = deployment_config_from_provider(&provider);
+        let deployment = deployment_config_from_provider(&provider).unwrap();
         let retry = deployment
             .retry_schedule
             .expect("gateway provider retry schedule should be preserved");
@@ -246,5 +271,64 @@ mod tests {
         assert_eq!(retry.max_delay_ms, 900);
         assert!((retry.backoff_multiplier - 2.0).abs() < f64::EPSILON);
         assert!((retry.jitter_ratio - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_provider_health_policy_maps_every_runtime_field() {
+        let provider = ProviderConfig {
+            name: "openai-primary".to_string(),
+            base_url: Some("https://8.8.8.8/v1/".to_string()),
+            health_check: crate::config::models::provider::ProviderHealthCheckConfig {
+                interval: 11,
+                failure_threshold: 3,
+                recovery_timeout: 47,
+                endpoint: Some("health".to_string()),
+                expected_codes: vec![200, 204],
+            },
+            ..ProviderConfig::default()
+        };
+
+        let deployment = deployment_config_from_provider(&provider).unwrap();
+        let policy = deployment
+            .health_check_policy
+            .expect("gateway deployment should carry health policy");
+
+        assert_eq!(policy.provider_name, "openai-primary");
+        assert_eq!(policy.interval_secs, 11);
+        assert_eq!(policy.failure_threshold, 3);
+        assert_eq!(policy.recovery_timeout_secs, 47);
+        assert_eq!(
+            policy.endpoint.expect("endpoint should resolve").as_str(),
+            "https://8.8.8.8/v1/health"
+        );
+        assert_eq!(policy.expected_codes, vec![200, 204]);
+    }
+
+    #[test]
+    fn test_default_provider_health_config_preserves_no_probe_behavior() {
+        let deployment = deployment_config_from_provider(&ProviderConfig::default()).unwrap();
+
+        assert!(deployment.health_check_policy.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_direct_factory_rejects_invalid_provider_health_config() {
+        let provider = ProviderConfig {
+            name: "disabled-invalid".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test-key".to_string(),
+            enabled: false,
+            health_check: crate::config::models::provider::ProviderHealthCheckConfig {
+                endpoint: Some("/health".to_string()),
+                ..Default::default()
+            },
+            ..ProviderConfig::default()
+        };
+
+        let error = Router::from_gateway_config(&[provider], None)
+            .await
+            .expect_err("direct factory must validate disabled providers too");
+        assert!(matches!(error, RouterError::InvalidConfiguration(_)));
+        assert!(error.to_string().contains("requires base_url"));
     }
 }

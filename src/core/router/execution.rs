@@ -149,6 +149,10 @@ pub fn infer_cooldown_reason(error: &ProviderError) -> CooldownReason {
 /// Convert RouterError to ProviderError for consistency
 pub fn router_error_to_provider_error(err: RouterError) -> ProviderError {
     match err {
+        RouterError::InvalidConfiguration(msg) => ProviderError::Configuration {
+            provider: "router",
+            message: msg,
+        },
         RouterError::ModelNotFound(msg) => ProviderError::model_not_found("router", msg),
         RouterError::NoAvailableDeployment(msg) => ProviderError::ProviderUnavailable {
             provider: "router",
