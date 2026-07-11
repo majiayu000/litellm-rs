@@ -4,6 +4,7 @@
 
 use super::router_tests::create_test_deployment;
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::router::RetrySchedule;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::error::RouterError;
 use crate::core::router::execution::is_retryable_error;
@@ -195,6 +196,89 @@ async fn test_execute_with_retry_success_second_attempt() {
     assert!(result.is_ok());
     let (_value, _deployment_id, attempts, _latency) = result.unwrap();
     assert_eq!(attempts, 2);
+}
+
+fn one_millisecond_retry_schedule() -> RetrySchedule {
+    RetrySchedule {
+        base_delay_ms: 1,
+        max_delay_ms: 1,
+        backoff_multiplier: 2.0,
+        jitter_ratio: 0.0,
+    }
+}
+
+#[tokio::test]
+async fn test_execute_with_retry_uses_selected_deployment_schedule() {
+    let router = Router::new(RouterConfig {
+        num_retries: 1,
+        retry_after_secs: 30,
+        ..Default::default()
+    });
+    let mut deployment = create_test_deployment("scheduled-retry", "gpt-4").await;
+    deployment.config.retry_schedule = Some(one_millisecond_retry_schedule());
+    router.add_deployment(deployment);
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+    let execution = router.execute_with_selected_deployment_retry("gpt-4", {
+        let attempts = attempts.clone();
+        move |_deployment| {
+            let attempts = attempts.clone();
+            async move {
+                if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                    Err(ProviderError::timeout("test", "first attempt"))
+                } else {
+                    Ok(("success", 0))
+                }
+            }
+        }
+    });
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), execution)
+        .await
+        .expect("deployment schedule should replace the 30-second router delay")
+        .expect("second attempt should succeed");
+
+    assert_eq!(result.0, "success");
+    assert_eq!(result.2, 2);
+}
+
+#[tokio::test]
+async fn test_execute_with_capability_retry_uses_selected_deployment_schedule() {
+    let router = Router::new(RouterConfig {
+        num_retries: 1,
+        retry_after_secs: 30,
+        ..Default::default()
+    });
+    let mut deployment = create_test_deployment("scheduled-capability-retry", "gpt-4").await;
+    deployment.config.retry_schedule = Some(one_millisecond_retry_schedule());
+    router.add_deployment(deployment);
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+    let execution = router.execute_with_selected_deployment_capability_retry(
+        "gpt-4",
+        &ProviderCapability::ChatCompletion,
+        {
+            let attempts = attempts.clone();
+            move |_deployment| {
+                let attempts = attempts.clone();
+                async move {
+                    if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                        Err(ProviderError::timeout("test", "first attempt"))
+                    } else {
+                        Ok(("success", 0))
+                    }
+                }
+            }
+        },
+    );
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), execution)
+        .await
+        .expect("deployment schedule should replace the 30-second router delay")
+        .expect("second attempt should succeed");
+
+    assert_eq!(result.0, "success");
+    assert_eq!(result.2, 2);
 }
 
 #[tokio::test]

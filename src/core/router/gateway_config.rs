@@ -4,7 +4,7 @@
 //! a Router from gateway configuration.
 
 use super::config::RouterConfig;
-use super::deployment::{Deployment, DeploymentConfig};
+use super::deployment::{Deployment, DeploymentConfig, RetrySchedule};
 use super::error::RouterError;
 use super::unified::Router;
 use crate::config::Validate;
@@ -103,7 +103,20 @@ fn create_deployment_from_config(
     model: &str,
     config: &ProviderConfig,
 ) -> Deployment {
-    let deployment_config = DeploymentConfig {
+    let deployment_config = deployment_config_from_provider(config);
+
+    Deployment::new(
+        deployment_id.to_string(),
+        provider,
+        model.to_string(),
+        model.to_string(),
+    )
+    .with_config(deployment_config)
+    .with_tags(config.tags.clone())
+}
+
+fn deployment_config_from_provider(config: &ProviderConfig) -> DeploymentConfig {
+    DeploymentConfig {
         tpm_limit: if config.tpm > 0 {
             Some(config.tpm as u64)
         } else {
@@ -122,21 +135,19 @@ fn create_deployment_from_config(
         weight: (config.weight.max(1.0)).round() as u32,
         timeout_secs: config.timeout,
         priority: 0,
-    };
-
-    Deployment::new(
-        deployment_id.to_string(),
-        provider,
-        model.to_string(),
-        model.to_string(),
-    )
-    .with_config(deployment_config)
-    .with_tags(config.tags.clone())
+        retry_schedule: Some(RetrySchedule {
+            base_delay_ms: config.retry.base_delay,
+            max_delay_ms: config.retry.max_delay,
+            backoff_multiplier: config.retry.backoff_multiplier,
+            jitter_ratio: config.retry.jitter,
+        }),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::models::provider::RetryConfig as ProviderRetryConfig;
     use crate::config::models::router::{
         CircuitBreakerConfig, GatewayRouterConfig, LoadBalancerConfig, RoutingStrategyConfig,
     };
@@ -212,5 +223,28 @@ mod tests {
 
         let err = runtime_router_config_from_gateway(&gateway).unwrap_err();
         assert!(err.contains("session_timeout"));
+    }
+
+    #[test]
+    fn test_provider_retry_schedule_maps_to_deployment_config() {
+        let provider = ProviderConfig {
+            retry: ProviderRetryConfig {
+                base_delay: 250,
+                max_delay: 900,
+                backoff_multiplier: 2.0,
+                jitter: 0.0,
+            },
+            ..ProviderConfig::default()
+        };
+
+        let deployment = deployment_config_from_provider(&provider);
+        let retry = deployment
+            .retry_schedule
+            .expect("gateway provider retry schedule should be preserved");
+
+        assert_eq!(retry.base_delay_ms, 250);
+        assert_eq!(retry.max_delay_ms, 900);
+        assert!((retry.backoff_multiplier - 2.0).abs() < f64::EPSILON);
+        assert!((retry.jitter_ratio - 0.0).abs() < f64::EPSILON);
     }
 }

@@ -240,12 +240,19 @@ impl Validate for RetryConfig {
             return Err("Retry base delay cannot be greater than max delay".to_string());
         }
 
+        if !self.backoff_multiplier.is_finite() {
+            return Err("Retry backoff multiplier must be finite".to_string());
+        }
+
         if self.backoff_multiplier <= 0.0 {
             return Err("Retry backoff multiplier must be greater than 0".to_string());
         }
 
-        // Validate jitter is between 0.0 and 1.0
-        if self.jitter < 0.0 || self.jitter > 1.0 {
+        if !self.jitter.is_finite() {
+            return Err("Retry jitter must be finite".to_string());
+        }
+
+        if !(0.0..=1.0).contains(&self.jitter) {
             return Err("Retry jitter must be between 0.0 and 1.0".to_string());
         }
 

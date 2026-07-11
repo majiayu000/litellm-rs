@@ -29,6 +29,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Deployment identifier (unique within router)
 pub type DeploymentId = String;
 
+/// Normalized retry timing for a gateway-configured deployment.
+///
+/// Retry eligibility and retry-after precedence remain owned by `RetryPolicy`;
+/// this value only carries the provider-specific fallback schedule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrySchedule {
+    /// Delay before the first retry, in milliseconds.
+    pub base_delay_ms: u64,
+    /// Hard upper bound for any configured retry delay, in milliseconds.
+    pub max_delay_ms: u64,
+    /// Exponential multiplier applied for each subsequent retry.
+    pub backoff_multiplier: f64,
+    /// Symmetric jitter ratio in the inclusive range `0.0..=1.0`.
+    pub jitter_ratio: f64,
+}
+
 /// Health status enumeration for deployments
 ///
 /// Maps to AtomicU8 values for lock-free updates:
@@ -88,6 +104,9 @@ pub struct DeploymentConfig {
 
     /// Priority (lower value = higher priority)
     pub priority: u32,
+
+    /// Provider-specific retry schedule, or `None` to use router defaults.
+    pub retry_schedule: Option<RetrySchedule>,
 }
 
 impl Default for DeploymentConfig {
@@ -99,6 +118,7 @@ impl Default for DeploymentConfig {
             weight: 1,
             timeout_secs: 60,
             priority: 0,
+            retry_schedule: None,
         }
     }
 }
@@ -498,6 +518,7 @@ mod tests {
             weight: 2,
             timeout_secs: 120,
             priority: 1,
+            retry_schedule: None,
         };
         assert_eq!(config.tpm_limit, Some(100_000));
         assert_eq!(config.rpm_limit, Some(500));

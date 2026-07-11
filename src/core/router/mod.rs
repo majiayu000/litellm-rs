@@ -36,7 +36,9 @@ pub mod unified;
 mod tests;
 
 // Re-exports from deployment module
-pub use deployment::{Deployment, DeploymentConfig, DeploymentId, DeploymentState, HealthStatus};
+pub use deployment::{
+    Deployment, DeploymentConfig, DeploymentId, DeploymentState, HealthStatus, RetrySchedule,
+};
 
 // Re-exports from new modular router (UnifiedRouter)
 pub use budget_routing::{BudgetAwareRouter, BudgetAwareRouting, RequestBudgetCheck};

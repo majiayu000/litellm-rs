@@ -10,10 +10,8 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::time::Duration;
 use std::time::Instant;
-
 #[path = "execution_observability.rs"]
 pub(super) mod observability;
-
 pub(super) struct StreamingDeploymentLease {
     router: Arc<UnifiedRouter>,
     deployment: Arc<Deployment>,
@@ -137,8 +135,9 @@ where
                     continue;
                 }
 
-                let retry_decision = RetryPolicy.decide(
+                let retry_decision = RetryPolicy.decide_for_deployment(
                     router.config(),
+                    &deployment_lease.deployment().config,
                     &err,
                     RetryContext::unary(attempt, max_attempts),
                 );
@@ -272,8 +271,9 @@ where
                     continue;
                 }
 
-                let retry_decision = RetryPolicy.decide(
+                let retry_decision = RetryPolicy.decide_for_deployment(
                     router.config(),
+                    &deployment_lease.deployment().config,
                     &err,
                     RetryContext::stream_pre_output(attempt, max_attempts),
                 );

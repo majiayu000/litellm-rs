@@ -2,8 +2,11 @@ use super::*;
 use crate::core::providers::Provider;
 use crate::core::providers::openai::OpenAIProvider;
 use crate::core::router::config::RouterConfig;
-use crate::core::router::{Deployment, DeploymentConfig, UnifiedRouter, UnifiedRoutingStrategy};
+use crate::core::router::{
+    Deployment, DeploymentConfig, RetrySchedule, UnifiedRouter, UnifiedRoutingStrategy,
+};
 use crate::core::types::model::ProviderCapability;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[test]
@@ -24,6 +27,106 @@ fn budget_retry_fallbacks_skip_retry_delay() {
         retry_delay_for_error(&config, 1, &rate_limit),
         Some(std::time::Duration::from_secs(60))
     );
+}
+
+async fn build_selected_retry_schedule_router() -> UnifiedRouter {
+    let router = UnifiedRouter::new(RouterConfig {
+        num_retries: 1,
+        retry_after_secs: 30,
+        ..Default::default()
+    });
+    let provider = Provider::OpenAI(
+        OpenAIProvider::with_api_key("sk-test-key")
+            .await
+            .expect("test provider should build"),
+    );
+
+    router.add_deployment(
+        Deployment::new(
+            "scheduled-retry".to_string(),
+            provider,
+            "gpt-4o-mini".to_string(),
+            "shared-model".to_string(),
+        )
+        .with_config(DeploymentConfig {
+            retry_schedule: Some(RetrySchedule {
+                base_delay_ms: 1,
+                max_delay_ms: 1,
+                backoff_multiplier: 2.0,
+                jitter_ratio: 0.0,
+            }),
+            ..Default::default()
+        }),
+    );
+
+    router
+}
+
+#[tokio::test]
+async fn selected_unary_retry_uses_deployment_schedule() {
+    let router = build_selected_retry_schedule_router().await;
+    let attempts = Arc::new(AtomicU32::new(0));
+
+    let execution = execute_with_selected_deployment(
+        &router,
+        "shared-model",
+        ProviderCapability::ChatCompletion,
+        {
+            let attempts = attempts.clone();
+            move |_provider, model, _deployment_id| {
+                let attempts = attempts.clone();
+                async move {
+                    if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                        Err(ProviderError::timeout("test", "first attempt"))
+                    } else {
+                        Ok((model, 0))
+                    }
+                }
+            }
+        },
+    );
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), execution)
+        .await
+        .expect("deployment schedule should replace the 30-second router delay")
+        .expect("second attempt should succeed");
+
+    assert_eq!(result, "gpt-4o-mini");
+    assert_eq!(attempts.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn selected_stream_retry_uses_deployment_schedule() {
+    let router = Arc::new(build_selected_retry_schedule_router().await);
+    let attempts = Arc::new(AtomicU32::new(0));
+
+    let execution = execute_stream_with_selected_deployment(
+        router,
+        "shared-model",
+        ProviderCapability::ChatCompletionStream,
+        {
+            let attempts = attempts.clone();
+            move |_provider, model, _deployment_id| {
+                let attempts = attempts.clone();
+                async move {
+                    if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                        Err(ProviderError::timeout("test", "first attempt"))
+                    } else {
+                        Ok(model)
+                    }
+                }
+            }
+        },
+    );
+
+    let (model, lease) = tokio::time::timeout(std::time::Duration::from_secs(1), execution)
+        .await
+        .expect("deployment schedule should replace the 30-second router delay")
+        .expect("second attempt should succeed");
+
+    assert_eq!(model, "gpt-4o-mini");
+    assert_eq!(attempts.load(Ordering::Relaxed), 2);
+    lease.finish_success(0);
 }
 
 async fn build_same_provider_budget_fallback_router(num_retries: u32) -> UnifiedRouter {
