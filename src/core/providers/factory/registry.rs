@@ -95,7 +95,7 @@ impl Provider {
             }
             ProviderType::OpenAICompatible => {
                 let oai_like = build_openai_like_config_from_factory(&config)?;
-                let provider = openai_like::OpenAILikeProvider::new(oai_like)
+                let provider = openai_like::OpenAILikeProvider::new_openai_compatible(oai_like)
                     .await
                     .map_err(|e| {
                         ProviderError::initialization("openai_compatible", e.to_string())
@@ -250,9 +250,10 @@ impl Provider {
                     let _ignored_settings =
                         apply_tier1_openai_like_overrides(&mut oai_config, &settings);
                 }
-                let provider = openai_like::OpenAILikeProvider::new(oai_config)
-                    .await
-                    .map_err(|e| ProviderError::initialization(name, e.to_string()))?;
+                let provider =
+                    openai_like::OpenAILikeProvider::new_for_catalog(oai_config, def.capabilities)
+                        .await
+                        .map_err(|e| ProviderError::initialization(name, e.to_string()))?;
                 Ok(Provider::OpenAILike(provider))
             }
         }
@@ -768,6 +769,10 @@ mod tests {
             ProviderType::GitHub,
             ProviderType::Custom("together".to_string()),
         ] {
+            let expected_capabilities =
+                provider_registry::catalog_definition_for_provider_type(&provider_type)
+                    .expect("catalogified provider should have a definition")
+                    .capabilities;
             let provider = Provider::from_config_async(
                 provider_type.clone(),
                 serde_json::json!({
@@ -783,6 +788,7 @@ mod tests {
 
             assert!(matches!(provider, Provider::OpenAILike(_)));
             assert_eq!(provider.name(), provider_type.to_string());
+            assert_eq!(provider.capabilities(), expected_capabilities);
         }
     }
 }

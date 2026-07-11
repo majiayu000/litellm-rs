@@ -30,6 +30,23 @@ use super::{
 };
 use crate::core::providers::unified_provider::ProviderError;
 
+pub(crate) static OPENAI_LIKE_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+];
+
+pub(crate) static OPENAI_COMPATIBLE_PROXY_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ImageEdit,
+    ProviderCapability::ImageVariation,
+    ProviderCapability::Moderation,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+];
+
 /// OpenAI-Like Provider implementation
 ///
 /// Connects to any OpenAI-compatible API endpoint.
@@ -43,14 +60,48 @@ pub struct OpenAILikeProvider {
     model_registry: &'static OpenAILikeModelRegistry,
     /// Provider name returned by the LLM provider trait.
     provider_name: String,
+    /// Catalog or instance capability profile, validated against executable methods.
+    capabilities: &'static [ProviderCapability],
 }
 
 impl OpenAILikeProvider {
     /// Create a new OpenAI-like provider
     pub async fn new(config: OpenAILikeConfig) -> Result<Self, OpenAILikeError> {
+        Self::new_with_profile(
+            config,
+            OPENAI_LIKE_CATALOG_CAPABILITIES,
+            OPENAI_LIKE_CATALOG_CAPABILITIES,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_for_catalog(
+        config: OpenAILikeConfig,
+        capabilities: &'static [ProviderCapability],
+    ) -> Result<Self, OpenAILikeError> {
+        Self::new_with_profile(config, capabilities, OPENAI_LIKE_CATALOG_CAPABILITIES).await
+    }
+
+    pub(crate) async fn new_openai_compatible(
+        config: OpenAILikeConfig,
+    ) -> Result<Self, OpenAILikeError> {
+        Self::new_with_profile(
+            config,
+            OPENAI_COMPATIBLE_PROXY_CAPABILITIES,
+            OPENAI_COMPATIBLE_PROXY_CAPABILITIES,
+        )
+        .await
+    }
+
+    async fn new_with_profile(
+        config: OpenAILikeConfig,
+        capabilities: &'static [ProviderCapability],
+        allowed_capabilities: &'static [ProviderCapability],
+    ) -> Result<Self, OpenAILikeError> {
         config
             .validate()
             .map_err(|e| OpenAILikeError::configuration(PROVIDER_NAME, e))?;
+        Self::validate_capability_profile(capabilities, allowed_capabilities)?;
 
         let pool_manager = Arc::new(
             GlobalPoolManager::new()
@@ -64,7 +115,39 @@ impl OpenAILikeProvider {
             config,
             model_registry,
             provider_name,
+            capabilities,
         })
+    }
+
+    fn validate_capability_profile(
+        capabilities: &'static [ProviderCapability],
+        allowed_capabilities: &'static [ProviderCapability],
+    ) -> Result<(), OpenAILikeError> {
+        if capabilities.is_empty() {
+            return Err(OpenAILikeError::configuration(
+                PROVIDER_NAME,
+                "capability profile cannot be empty",
+            ));
+        }
+
+        for (index, capability) in capabilities.iter().enumerate() {
+            if capabilities[..index].contains(capability) {
+                return Err(OpenAILikeError::configuration(
+                    PROVIDER_NAME,
+                    format!("capability profile contains duplicate {capability:?}"),
+                ));
+            }
+            if !allowed_capabilities.contains(capability) {
+                return Err(OpenAILikeError::configuration(
+                    PROVIDER_NAME,
+                    format!(
+                        "capability {capability:?} is not executable for this OpenAI-like profile"
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Create provider with just an API base URL (no API key required)
@@ -492,16 +575,7 @@ impl LLMProvider for OpenAILikeProvider {
     }
 
     fn capabilities(&self) -> &'static [ProviderCapability] {
-        static CAPABILITIES: &[ProviderCapability] = &[
-            ProviderCapability::ChatCompletion,
-            ProviderCapability::ChatCompletionStream,
-            ProviderCapability::ImageEdit,
-            ProviderCapability::ImageVariation,
-            ProviderCapability::Moderation,
-            ProviderCapability::ToolCalling,
-            ProviderCapability::FunctionCalling,
-        ];
-        CAPABILITIES
+        self.capabilities
     }
 
     fn models(&self) -> &[ModelInfo] {

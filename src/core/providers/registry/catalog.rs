@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use super::definition::{AuthType, ProviderDefinition};
+use crate::core::providers::openai_like::provider::OPENAI_LIKE_CATALOG_CAPABILITIES;
 
 /// Global provider catalog, keyed by provider name.
 pub static PROVIDER_CATALOG: LazyLock<HashMap<&'static str, ProviderDefinition>> =
@@ -43,7 +44,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
     let defs: Vec<ProviderDefinition> = vec![
         // ===== Group 1b: Cloud OpenAI-compatible =====
         // ===== Group 1b: Cloud OpenAI-compatible =====
-        def(
+        def_chat(
             "groq",
             "Groq",
             "https://api.groq.com/openai/v1",
@@ -55,7 +56,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
                 "TOGETHERAI_API_KEY",
                 "TOGETHER_AI_TOKEN",
             ],
-            ..def(
+            ..def_chat(
                 "together",
                 "Together AI",
                 "https://api.together.xyz/v1",
@@ -68,7 +69,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
                 "TOGETHERAI_API_KEY",
                 "TOGETHER_AI_TOKEN",
             ],
-            ..def(
+            ..def_chat(
                 "together_ai",
                 "Together AI",
                 "https://api.together.xyz/v1",
@@ -81,7 +82,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
                 "FIREWORKSAI_API_KEY",
                 "FIREWORKS_AI_TOKEN",
             ],
-            ..def(
+            ..def_chat(
                 "fireworks",
                 "Fireworks AI",
                 "https://api.fireworks.ai/inference/v1",
@@ -94,117 +95,117 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
                 "FIREWORKSAI_API_KEY",
                 "FIREWORKS_AI_TOKEN",
             ],
-            ..def(
+            ..def_chat(
                 "fireworks_ai",
                 "Fireworks AI",
                 "https://api.fireworks.ai/inference/v1",
                 "FIREWORKS_API_KEY",
             )
         },
-        def(
+        def_chat(
             "perplexity",
             "Perplexity AI",
             "https://api.perplexity.ai",
             "PERPLEXITY_API_KEY",
         ),
-        def(
+        def_chat(
             "cerebras",
             "Cerebras",
             "https://api.cerebras.ai/v1",
             "CEREBRAS_API_KEY",
         ),
-        def(
+        def_chat(
             "openrouter",
             "OpenRouter",
             "https://openrouter.ai/api/v1",
             "OPENROUTER_API_KEY",
         ),
-        def(
+        def_chat(
             "deepinfra",
             "DeepInfra",
             "https://api.deepinfra.com/v1/openai",
             "DEEPINFRA_API_KEY",
         ),
-        def(
+        def_chat(
             "deepseek",
             "DeepSeek",
             "https://api.deepseek.com",
             "DEEPSEEK_API_KEY",
         ),
-        def(
+        def_chat(
             "novita",
             "Novita AI",
             "https://api.novita.ai/v3/openai",
             "NOVITA_API_KEY",
         ),
-        def(
+        def_chat(
             "nvidia_nim",
             "NVIDIA NIM",
             "https://integrate.api.nvidia.com/v1",
             "NVIDIA_NIM_API_KEY",
         ),
-        def(
+        def_chat(
             "nebius",
             "Nebius AI",
             "https://api.studio.nebius.ai/v1",
             "NEBIUS_API_KEY",
         ),
-        def(
+        def_chat(
             "nscale",
             "Nscale",
             "https://inference.api.nscale.ai/v1",
             "NSCALE_API_KEY",
         ),
-        def(
+        def_chat(
             "hyperbolic",
             "Hyperbolic",
             "https://api.hyperbolic.xyz/v1",
             "HYPERBOLIC_API_KEY",
         ),
-        def(
+        def_chat(
             "featherless",
             "Featherless AI",
             "https://api.featherless.ai/v1",
             "FEATHERLESS_API_KEY",
         ),
-        def(
+        def_chat(
             "galadriel",
             "Galadriel",
             "https://api.galadriel.com/v1",
             "GALADRIEL_API_KEY",
         ),
-        def(
+        def_chat(
             "sambanova",
             "SambaNova",
             "https://api.sambanova.ai/v1",
             "SAMBANOVA_API_KEY",
         ),
-        def(
+        def_chat(
             "heroku",
             "Heroku",
             "https://us.inference.heroku.com/v1",
             "HEROKU_API_KEY",
         ),
-        def(
+        def_chat(
             "friendliai",
             "FriendliAI",
             "https://api.friendli.ai/v1",
             "FRIENDLIAI_API_KEY",
         ),
-        def(
+        def_chat(
             "meta_llama",
             "Meta Llama API",
             "https://api.llama.com/compat/v1",
             "META_LLAMA_API_KEY",
         ),
-        def("v0", "Vercel v0", "https://api.v0.dev/v1", "V0_API_KEY"),
-        def(
+        def_chat("v0", "Vercel v0", "https://api.v0.dev/v1", "V0_API_KEY"),
+        def_chat(
             "amazon_nova",
             "Amazon Nova",
             "https://api.nova.amazon.com/v1",
             "AMAZON_NOVA_API_KEY",
         ),
-        def(
+        def_chat(
             "github",
             "GitHub Models",
             "https://models.inference.ai.azure.com",
@@ -214,53 +215,53 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         // passed through instead of enumerated in this static provider catalog.
         ProviderDefinition {
             model_prefix: Some("xai/"),
-            ..def("xai", "xAI", "https://api.x.ai/v1", "XAI_API_KEY")
+            ..def_chat("xai", "xAI", "https://api.x.ai/v1", "XAI_API_KEY")
         },
         // ===== Group 1c: Local inference (no API key) =====
-        def_local("vllm", "vLLM", "http://localhost:8000/v1"),
-        def_local("hosted_vllm", "Hosted vLLM", "http://localhost:8000/v1"),
-        def_local("lm_studio", "LM Studio", "http://localhost:1234/v1"),
-        def_local("llamafile", "Llamafile", "http://localhost:8080/v1"),
-        def_local(
+        def_local_chat("vllm", "vLLM", "http://localhost:8000/v1"),
+        def_local_chat("hosted_vllm", "Hosted vLLM", "http://localhost:8000/v1"),
+        def_local_chat("lm_studio", "LM Studio", "http://localhost:1234/v1"),
+        def_local_chat("llamafile", "Llamafile", "http://localhost:8080/v1"),
+        def_local_chat(
             "docker_model_runner",
             "Docker Model Runner",
             "http://localhost:12434/engines/llama.cpp/v1",
         ),
-        def_local("xinference", "Xinference", "http://localhost:9997/v1"),
-        def_local("infinity", "Infinity", "http://localhost:7997/v1"),
-        def_local("oobabooga", "Oobabooga", "http://localhost:5000/v1"),
+        def_local_chat("xinference", "Xinference", "http://localhost:9997/v1"),
+        def_local_chat("infinity", "Infinity", "http://localhost:7997/v1"),
+        def_local_chat("oobabooga", "Oobabooga", "http://localhost:5000/v1"),
         // ===== Group 1d: Chinese OpenAI-compatible =====
-        def(
+        def_chat(
             "moonshot",
             "Moonshot AI",
             "https://api.moonshot.cn/v1",
             "MOONSHOT_API_KEY",
         ),
-        def(
+        def_chat(
             "dashscope",
             "Dashscope",
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "DASHSCOPE_API_KEY",
         ),
-        def(
+        def_chat(
             "qwen",
             "Qwen",
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "DASHSCOPE_API_KEY",
         ),
-        def(
+        def_chat(
             "baichuan",
             "Baichuan",
             "https://api.baichuan-ai.com/v1",
             "BAICHUAN_API_KEY",
         ),
-        def(
+        def_chat(
             "minimax",
             "MiniMax",
             "https://api.minimax.chat/v1",
             "MINIMAX_API_KEY",
         ),
-        def(
+        def_chat(
             "volcengine",
             "Volcengine",
             "https://ark.cn-beijing.volces.com/api/v3",
@@ -268,41 +269,41 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         ),
         ProviderDefinition {
             alternate_auth_env_vars: &["XIAOMI_API_KEY"],
-            ..def(
+            ..def_chat(
                 "xiaomi_mimo",
                 "Xiaomi MiMo",
                 "https://api.xiaomimimo.com/v1",
                 "MIMO_API_KEY",
             )
         },
-        def(
+        def_chat(
             "zhipu",
             "Zhipu AI",
             "https://open.bigmodel.cn/api/paas/v4",
             "ZHIPU_API_KEY",
         ),
-        def("zai", "ZAI", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY"),
+        def_chat("zai", "ZAI", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY"),
         // ===== Group 1e: Other OpenAI-compatible =====
-        def(
+        def_chat(
             "lemonade",
             "Lemonade",
             "https://api.lemonade.social/v1",
             "LEMONADE_API_KEY",
         ),
-        def(
+        def_chat(
             "linkup",
             "Linkup",
             "https://api.linkup.so/v1",
             "LINKUP_API_KEY",
         ),
-        def("poe", "Poe", "https://api.poe.com/v1", "POE_API_KEY"),
-        def(
+        def_chat("poe", "Poe", "https://api.poe.com/v1", "POE_API_KEY"),
+        def_chat(
             "wandb",
             "Weights & Biases",
             "https://api.wandb.ai/v1",
             "WANDB_API_KEY",
         ),
-        def(
+        def_chat(
             "nanogpt",
             "NanoGPT",
             "https://api.nanogpt.com/v1",
@@ -311,7 +312,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         // ===== Group 1a: Previously macro-based =====
         ProviderDefinition {
             alternate_auth_env_vars: &["AIMLAPI_KEY"],
-            ..def(
+            ..def_chat(
                 "aiml_api",
                 "AIML API",
                 "https://api.aimlapi.com/v1",
@@ -320,63 +321,63 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         },
         ProviderDefinition {
             alternate_auth_env_vars: &["AIMLAPI_KEY"],
-            ..def(
+            ..def_chat(
                 "aiml",
                 "AIML API",
                 "https://api.aimlapi.com/v1",
                 "AIML_API_KEY",
             )
         },
-        def(
+        def_chat(
             "aleph_alpha",
             "Aleph Alpha",
             "https://api.aleph-alpha.com/v1",
             "ALEPH_ALPHA_API_KEY",
         ),
-        def(
+        def_chat(
             "anyscale",
             "Anyscale",
             "https://api.endpoints.anyscale.com/v1",
             "ANYSCALE_API_KEY",
         ),
-        def(
+        def_chat(
             "bytez",
             "Bytez",
             "https://api.bytez.com/v1",
             "BYTEZ_API_KEY",
         ),
-        def(
+        def_chat(
             "comet_api",
             "Comet API",
             "https://api.comet.com/v1",
             "COMET_API_KEY",
         ),
-        def(
+        def_chat(
             "compactifai",
             "CompactifAI",
             "https://api.compactif.ai/v1",
             "COMPACTIFAI_API_KEY",
         ),
-        def(
+        def_chat(
             "maritalk",
             "MariTalk",
             "https://chat.maritaca.ai/api",
             "MARITALK_API_KEY",
         ),
-        def(
+        def_chat(
             "siliconflow",
             "SiliconFlow",
             "https://api.siliconflow.cn/v1",
             "SILICONFLOW_API_KEY",
         ),
-        def("yi", "Yi", "https://api.lingyiwanwu.com/v1", "YI_API_KEY"),
-        def(
+        def_chat("yi", "Yi", "https://api.lingyiwanwu.com/v1", "YI_API_KEY"),
+        def_chat(
             "lambda_ai",
             "Lambda AI",
             "https://api.lambdalabs.com/v1",
             "LAMBDA_API_KEY",
         ),
-        def(
+        def_chat(
             "ovhcloud",
             "OVHcloud",
             "https://api.ai.cloud.ovh.net/v1",
@@ -392,7 +393,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
 }
 
 /// Helper: standard Bearer-auth cloud provider
-fn def(
+fn def_chat(
     name: &'static str,
     display_name: &'static str,
     base_url: &'static str,
@@ -407,11 +408,12 @@ fn def(
         auth_type: AuthType::Bearer,
         skip_api_key: false,
         model_prefix: None,
+        capabilities: OPENAI_LIKE_CATALOG_CAPABILITIES,
     }
 }
 
 /// Helper: local provider (no API key required)
-fn def_local(
+fn def_local_chat(
     name: &'static str,
     display_name: &'static str,
     base_url: &'static str,
@@ -425,12 +427,36 @@ fn def_local(
         auth_type: AuthType::None,
         skip_api_key: true,
         model_prefix: None,
+        capabilities: OPENAI_LIKE_CATALOG_CAPABILITIES,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_catalog_capability_is_executable_and_unique() {
+        for definition in PROVIDER_CATALOG.values() {
+            assert!(
+                !definition.capabilities.is_empty(),
+                "{} must declare a capability profile",
+                definition.name
+            );
+            for (index, capability) in definition.capabilities.iter().enumerate() {
+                assert!(
+                    !definition.capabilities[..index].contains(capability),
+                    "{} declares duplicate capability {capability:?}",
+                    definition.name
+                );
+                assert!(
+                    OPENAI_LIKE_CATALOG_CAPABILITIES.contains(capability),
+                    "{} declares non-executable capability {capability:?}",
+                    definition.name
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_xai_openai_compatible_pass_through_definition() {
@@ -500,6 +526,9 @@ mod tests {
             assert_eq!(definition.base_url, base_url);
             assert_eq!(canonical_catalog_name(alias), Some(canonical));
             assert!(is_tier1_provider(alias));
+            let canonical_definition =
+                get_definition(canonical).expect("canonical catalog definition should exist");
+            assert_eq!(definition.capabilities, canonical_definition.capabilities);
         }
     }
 

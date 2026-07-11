@@ -24,6 +24,25 @@ pub struct DefaultRouter {
 }
 
 impl DefaultRouter {
+    async fn build_catalog_provider(
+        def: &crate::core::providers::registry::ProviderDefinition,
+        api_key: &str,
+    ) -> Result<Provider> {
+        let config = def.to_openai_like_config(Some(api_key), None);
+        let provider = crate::core::providers::openai_like::OpenAILikeProvider::new_for_catalog(
+            config,
+            def.capabilities,
+        )
+        .await
+        .map_err(|error| {
+            GatewayError::Config(format!(
+                "Failed to initialize catalog provider '{}': {error}",
+                def.name
+            ))
+        })?;
+        Ok(Provider::OpenAILike(provider))
+    }
+
     /// Helper function to find and select a provider by name with model prefix stripping
     fn select_provider_by_name<'a>(
         providers: &'a [&'a crate::core::providers::Provider],
@@ -78,30 +97,31 @@ impl DefaultRouter {
     async fn register_openai_like_provider_from_env(
         provider_registry: &mut ProviderRegistry,
         provider_name: &str,
-    ) {
-        let Some(def) = crate::core::providers::registry::get_definition(provider_name) else {
-            return;
-        };
+    ) -> Result<()> {
+        let def =
+            crate::core::providers::registry::get_definition(provider_name).ok_or_else(|| {
+                GatewayError::Config(format!(
+                    "Default catalog provider '{provider_name}' has no definition"
+                ))
+            })?;
         let Some(api_key) = def.resolve_api_key(None) else {
-            return;
+            return Ok(());
         };
 
-        let config = def.to_openai_like_config(Some(&api_key), None);
-        if let Ok(provider) =
-            crate::core::providers::openai_like::OpenAILikeProvider::new(config).await
-        {
-            provider_registry.register(Provider::OpenAILike(provider));
-        }
+        let provider = Self::build_catalog_provider(def, &api_key).await?;
+        provider_registry.register(provider);
+        Ok(())
     }
 
     async fn register_default_openai_like_providers_from_env(
         provider_registry: &mut ProviderRegistry,
-    ) {
+    ) -> Result<()> {
         for provider_name in
             crate::core::providers::registry::default_catalog_runtime_provider_names()
         {
-            Self::register_openai_like_provider_from_env(provider_registry, provider_name).await;
+            Self::register_openai_like_provider_from_env(provider_registry, provider_name).await?;
         }
+        Ok(())
     }
 
     pub async fn new() -> Result<Self> {
@@ -135,7 +155,7 @@ impl DefaultRouter {
             }
         }
 
-        Self::register_default_openai_like_providers_from_env(&mut provider_registry).await;
+        Self::register_default_openai_like_providers_from_env(&mut provider_registry).await?;
 
         // Add Anthropic provider if API key is available
         if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
@@ -259,5 +279,55 @@ fn convert_chat_chunk_to_completion_chunk(
                 finish_reason: c.finish_reason,
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::model::ProviderCapability;
+
+    #[tokio::test]
+    async fn catalog_builder_preserves_definition_capabilities() {
+        let definition = crate::core::providers::registry::get_definition("perplexity")
+            .expect("Perplexity catalog definition should exist");
+
+        let provider = DefaultRouter::build_catalog_provider(definition, "test-key")
+            .await
+            .expect("catalog provider should build");
+
+        assert_eq!(provider.capabilities(), definition.capabilities);
+    }
+
+    #[tokio::test]
+    async fn catalog_builder_propagates_invalid_profile_errors() {
+        static INVALID: &[ProviderCapability] = &[ProviderCapability::ImageEdit];
+        let mut definition = crate::core::providers::registry::get_definition("perplexity")
+            .expect("Perplexity catalog definition should exist")
+            .clone();
+        definition.capabilities = INVALID;
+
+        let error = DefaultRouter::build_catalog_provider(&definition, "test-key")
+            .await
+            .expect_err("invalid catalog profile must fail startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("not executable for this OpenAI-like profile"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_catalog_registration_rejects_missing_definition() {
+        let mut registry = ProviderRegistry::new();
+
+        let error =
+            DefaultRouter::register_openai_like_provider_from_env(&mut registry, "missing-catalog")
+                .await
+                .expect_err("missing catalog definition must fail startup");
+
+        assert!(error.to_string().contains("has no definition"));
     }
 }
