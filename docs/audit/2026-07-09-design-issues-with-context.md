@@ -4,18 +4,26 @@
 |------|-----|
 | **审计日期** | 2026-07-09 |
 | **仓库** | litellm-rs（Rust 版 AI Gateway / OpenAI-compatible multi-provider proxy） |
-| **分支** | `codex/issue-567-mistral-nova-xai-llama` |
-| **HEAD** | `8a9690ff`（`docs(audit): add phase 0 remediation spec`） |
-| **相对 main** | 分支与 `origin` 已 diverged（本地 2 ahead / 64 behind，审计时快照） |
+| **原报告分支** | `codex/issue-567-mistral-nova-xai-llama`（仅作来源记录，不代表当前远端指针） |
+| **HEAD** | `8a9690ff`（原报告记录；当前仓库与远端均无法解析该对象） |
+| **相对 main** | 原报告称分支与 `origin` 已 diverged（本地 2 ahead / 64 behind）；当前无法独立复原该快照 |
 | **代码规模** | ~1091 个 `.rs` 文件，`src/` 约 12MB 源码树，合计约 **32.8 万行** |
 | **技术栈** | Rust · Tokio · Actix-web · Sea-ORM · Redis · S3 ·（可选）Qdrant · Prometheus/tracing |
 | **方法** | 4 个只读 explore 子 agent 并行 + 主 agent 对 Critical 证据二次直读复核 |
 | **性质** | **设计 / 架构 / 契约 / 安全** 审计；**非**完整功能测试或性能基准 |
-| **关联文档** | `docs/audit/2026-06-02-codebase-audit.md`、`docs/audit/2026-06-02-phase0-spec.md`、`docs/analysis/vibe-coding-postmortem.md`、`Agents.md` Provider Tiers |
+| **可用关联文档** | `docs/analysis/vibe-coding-postmortem.md`、`CLAUDE.md` Provider Tiers；原报告引用的两份 2026-06-02 文档未归档到当前仓库 |
 
 ---
 
 ## 0. 阅读指引
+
+### 0.0 归档状态与来源限制
+
+- 本文是对一份 2026-07-09 报告的**历史归档**，不是当前 remediation 清单。
+- 原报告记录的 snapshot `8a9690ff`、`docs/audit/2026-06-02-codebase-audit.md` 和
+  `docs/audit/2026-06-02-phase0-spec.md` 在当前仓库与远端均不可解析，因此相关沿革只能作为原报告陈述保留，
+  不能作为可复现证据或链接目标。
+- 正文第 1-13 节的文件行号、数量和“当前”字样均指原报告快照。当前状态只看 §0.4 的复验表和 GitHub 实时队列。
 
 ### 0.1 这份文档解决什么问题
 
@@ -23,13 +31,13 @@
 
 1. **现状是什么**：网关真实请求路径上，什么是活的、什么只是“写在目录里”。
 2. **设计问题是什么**：不是“少个函数”，而是身份矩阵、声明–执行裂缝、契约漏斗、安全默认路径等**结构性**问题。
-3. **先修什么**：按严重度与可验证目标给出收敛顺序，并与 2026-06-02 Phase 0 对齐。
+3. **当时建议先修什么**：保留原报告的收敛顺序，用于解释历史决策，不用于直接领取当前工作。
 
 ### 0.2 如何解读“事实 / 推断 / 建议”
 
 | 标签 | 含义 |
 |------|------|
-| **事实** | 可在当前 HEAD 用文件路径/行号/符号直接复核 |
+| **事实** | 原报告声称可在其 snapshot 用文件路径/行号/符号复核；因 snapshot 不可解析，当前只能在 §0.4 的明确基线上重新验证 |
 | **推断** | 由事实推导的运行时影响；标注置信度（高/中/低） |
 | **建议** | 修复方向；默认“接线 OR 删除”，不做无主路径价值的抽象层 |
 
@@ -39,25 +47,32 @@
 - “死代码 / 未接线”类：对 factory、`AppState`、HTTP route、middleware 的引用关系置信度**高**；未对每一个 Stub provider 逐字节证明“永远不可达”。
 - 落代码修复时必须按项目纪律（W-03 / W-16）用**本会话命令输出**再声明完成。
 - 本报告侧重**设计问题**；安全细节以“影响设计决策”为准，完整漏洞利用链不在此展开。
+- 原始 snapshot 与两份上游审计文档未归档；凡依赖它们的历史断言都不得提升为当前事实。
 
 ### 0.4 ⚠️ 2026-07-11 main 复验状态（必读）
 
-本审计的快照 HEAD `8a9690ff` 落后 `origin/main` 64 个提交。2026-07-11 在 `origin/main`（`12a30d7a`）上对全部 9 条 Critical 逐条复验，**绝大部分已在 main 修复或已有 open issue 跟踪**。阅读本文时请以下表为准，正文各 CR 描述保留为历史快照证据：
+原报告称 snapshot `8a9690ff` 落后 `origin/main` 64 个提交，但该对象现已不可解析。2026-07-11 以
+`origin/main@12a30d7a` 为明确基线重新检查 9 条 Critical；后续 `fbac1a4c` 又合入了 GH837 的一个 partial
+删除 tranche。阅读本文时请以下表为准，正文各 CR 描述仅保留为历史陈述：
 
 | CR | main 状态（2026-07-11，`12a30d7a`） | 证据锚点 |
 |----|--------------------------------------|----------|
 | CR-1 / CR-2 | ✅ **已修复** — 两处 transform 均通过 `insert_optional_param!` 序列化 typed 字段（frequency_penalty / presence_penalty / logit_bias 等）；`12a30d7a` 进一步保留 legacy functions | `openai/client.rs:276-278`、`openai_like/provider.rs:278-280` |
-| CR-3 | ✅ **大部分已修复** — `Provider` enum 已扩展原生 `Bedrock` / `Azure` / `AzureAI` / `VertexAI` / `Gemini`（feature-gated）；残余不可达目录由 #837、#967 跟踪 | `providers/mod.rs:354-366` |
-| CR-4 | ✅ **已修复** — `AppState.response_cache: Option<Arc<LLMCache>>` 已接线，chat 路径消费；后续多轮 cache eviction 修复已落 | `server/state.rs:51,65,103-108` |
+| CR-3 | 🔶 **部分修复** — 原生 enum/factory 已扩展；Bedrock 本身并非 feature-gated。不可达目录由 #837 继续处置，#967 只跟踪 capability 与可执行 surface 一致性 | `providers/mod.rs`；issue #837、#967 |
+| CR-4 | 🔶 **部分修复且有未跟踪残余** — deterministic `response_cache` 已接线；`cache.semantic_cache` 仍明确无运行时效果，`semantic_cache_enabled` 仍为 `false` | `config/models/cache.rs:45-48`、`server/state.rs:127` |
 | CR-5 | ✅ **已修复** — `StorageLayer::new` 支持 `auto_migrate`，关闭时 schema 检查 fail-closed 报错 | `storage/mod.rs:178-213` |
-| CR-6 | ✅ **已修复** — 缺价改为 `require_pricing_field` 返回 `Err`，不再 `unwrap_or(0.0)` | `pricing_service/service.rs:166-179` |
+| CR-6 | 🔶 **部分修复** — 主 missing-price 路径已改为 `require_pricing_field` 返回 `Err`；原报告所述多套 pricing SSOT 与所有调用路径尚未在本次复验中证明收敛 | `pricing_service/service.rs:166-179` |
 | CR-7 | ✅ **已修复** — issue-840 战役（PR #908–#917）将 chat/embeddings/images/audio/gemini 等全部路由经 budgeted executor，记账 + 强制执行 | `server/routes/ai/chat.rs:25,120-153` |
-| CR-8 | 🔶 **部分修复/跟踪中** — `config/validation/ssrf.rs` 已有配置期校验；运行时 SSRF-safe client 强制由 open issue #968 跟踪 | `config/validation/ssrf.rs`；issue #968 |
-| CR-9 | ✅ **已修复** — `is_production_ready` 已实现并在配置校验中强制，含测试覆盖 | `config/models/auth.rs:171,235` |
+| CR-8 | ❌ **原 finding 仍未解决且未跟踪** — #968 只覆盖可配置 provider `base_url` 的运行时 SSRF-safe client；webhook 注册仍主要做 scheme 检查，投递仍使用普通 client | `webhooks/manager.rs:31-32,61-72`；issue #968（仅 provider base URL） |
+| CR-9 | 🔶 **行为已修复，机制描述需区分** — production auth fail-closed 行为已存在；`is_production_ready()` 用于 warning/readiness 路径，并非配置验证本身的强制入口 | `config/models/auth.rs`、配置验证调用点 |
 
-High 级问题的残余部分由现役 issue 队列跟踪：#838（未接线子系统清单）、#837（不可达 provider 目录）、#965（双 Router 收敛）、#519（类型双轨路线图）、#953–#969（auth/日志/SSRF 安全批次）。
+截至 2026-07-11，现役队列需按主题读取：#837/#838（provider 与子系统处置，PR #971 已合入 #837 的一个
+partial tranche）、#953 与 #957-#961/#969（auth 生命周期与日志，其中 PR #970 是 #957 的 draft spec）、
+#963-#967（retry/health/router/Gemini/capability）、#968（provider base URL SSRF）、#519（架构路线图）。
+#962 已由 PR #972 关闭。原 webhook SSRF finding 尚无对应 open issue。
 
-**结论**：本文档的价值已从"待修清单"转为**历史快照 + 根因分析 + 修复方法论**；新的修复工作应直接从 GitHub open issues 领取，不要再按本文 §11 路线图重复开工。
+**结论**：本文档只作为**历史快照 + 根因分析 + 修复方法论**归档；新的修复工作必须先刷新 GitHub
+issues/PRs，再按对应 spec 领取。不得按本文 §11 路线图或编号区间重复开工。
 
 ---
 
@@ -65,7 +80,7 @@ High 级问题的残余部分由现役 issue 队列跟踪：#838（未接线子�
 
 ### 1.1 产品定位（文档宣称）
 
-`Agents.md` / `Claude.md` 将本项目描述为：
+`CLAUDE.md` 将本项目描述为：
 
 - 高性能 **AI Gateway**（Rust 实现的 Python LiteLLM 精神续作）
 - OpenAI 兼容 HTTP API
@@ -76,9 +91,9 @@ High 级问题的残余部分由现役 issue 队列跟踪：#838（未接线子�
 
 | 原则 | 来源 | 对审计的含义 |
 |------|------|----------------|
-| Tier1 = catalog-only，零代码 | `Agents.md` Provider Tiers | catalog 条目应只走 `OpenAILikeProvider` |
+| Tier1 = catalog-only，零代码 | `CLAUDE.md` Provider Tiers | catalog 条目应只走 `OpenAILikeProvider` |
 | Tier2 = 非 OpenAI / 需签名 / 特殊流 | 同上 | 必须有专用实现且 **factory 可达** |
-| 无向后兼容 | 多处 AGENTS | 允许删半成品，禁止“兼容层堆叠” |
+| 无向后兼容 | `CLAUDE.md:119` | 允许删半成品，禁止“兼容层堆叠” |
 | 一 issue 一分支一 PR；≤10 文件 / 500 行 | Agent rules | 修复必须切片，禁止巨型“大扫除 PR” |
 | U-26 声明必须接线 | VibeGuard | 配置/模块存在却不执行 = Critical 级设计债 |
 | U-29 禁止静默降级 | VibeGuard | 配置生效失败必须 error/可观测，不能 warn 当成功 |
@@ -165,9 +180,9 @@ pub enum Provider {
 | 文档 | 日期 | 关系 |
 |------|------|------|
 | `docs/audit-2026-05-01/*` | 2026-05 | 77→72 条 remediations 战役证据 |
-| `docs/audit/2026-06-02-codebase-audit.md` | 2026-06-02 | **上一份完整 Critical 清单**（HEAD `b41c68ee`） |
-| `docs/audit/2026-06-02-phase0-spec.md` | 2026-06-02 | Phase 0 修复切片规格（CR-1…CR-6） |
-| **本文** | 2026-07-09 | 在 `8a9690ff` 上**复验 + 扩展设计语境**（安全/双轨/根因） |
+| `2026-06-02-codebase-audit.md`（未归档） | 2026-06-02 | 原报告称其为上一份 Critical 清单；当前不可独立复核 |
+| `2026-06-02-phase0-spec.md`（未归档） | 2026-06-02 | 原报告称其为 Phase 0 规格；当前不可独立复核 |
+| **本文** | 2026-07-09 | 原报告称在不可解析的 `8a9690ff` 上复验并扩展设计语境 |
 
 #### 相对 2026-06-02 的复验表
 
@@ -260,7 +275,7 @@ SSRF-safe client、redaction、`is_admin_route`、`check_permission` 等**写了
 
 ## 5. Critical 设计问题（P0）
 
-编号沿用/扩展 2026-06 Phase 0 体系，便于对照 `2026-06-02-phase0-spec.md`。
+编号沿用原报告所称的 2026-06 Phase 0 体系；该上游规格未归档，编号仅用于本文内部对照。
 
 ---
 
@@ -304,7 +319,7 @@ SSRF-safe client、redaction、`is_admin_route`、`check_permission` 等**写了
 | **事实** | lifecycle 把部分路径标为 “wire … OpenAI-compatible factory branch”——**Wire ≠ 原生协议** |
 | **推断（高）** | 对非 OpenAI 协议 provider，配置成功但协议错误 → 运行时失败或错误行为 |
 | **推断（中）** | 若某云厂商提供“OpenAI 兼容端点”，OpenAILike 可能“碰巧可用”，但仍掩盖原生实现债务 |
-| **建议** | (a) 原生协议进 enum 并接线；(b) 或删除/隔离死实现；(c) **先**做 dispatch 契约测试：每个 `ProviderType` 分类为 Native / CatalogOpenAiLike / ExplicitOpenAiLike / Unsupported |
+| **建议** | (a) 原生协议进 enum 并接线；原生 Bedrock 当前要求 AWS SigV4，未来 API-key 支持必须作为独立配置契约；记录模型支持时使用仓库当期明确支持的 exact model ID（例如 scope 中的 Claude Opus 4.7，且仅在上游 API 支持时），并在启用 live runtime 前验证账户与 region 可用性；(b) 或删除/隔离死实现；(c) **先**做 dispatch 契约测试：每个 `ProviderType` 分类为 Native / CatalogOpenAiLike / ExplicitOpenAiLike / Unsupported |
 
 > Phase 0 约束：CR-3 **先核实分类**，不要立刻开全局原生 rewrite。
 
@@ -362,7 +377,7 @@ SSRF-safe client、redaction、`is_admin_route`、`check_permission` 等**写了
 | **事实** | `BudgetMiddleware` / `BudgetAwareRouter` / `BudgetManager` 未进入 HttpServer 主链 |
 | **事实** | 内部至少两套预算模型（作用域 budget vs provider/model limits） |
 | **推断（高）** | 管理员“设了限额”，completion 仍不 pre-check / 不 record spend |
-| **建议** | 合并领域模型；selection 前 check、成功后 record；或下线预算 API 直至接线 |
+| **建议** | 合并领域模型；在 provider selection 与任何上游 I/O **之前**完成 route authorization、权限与预算检查，只在上游成功响应后记录 usage/spend；或下线预算 API 直至接线 |
 
 ---
 
@@ -563,7 +578,10 @@ SSRF-safe client、redaction、`is_admin_route`、`check_permission` 等**写了
 
 ---
 
-## 11. 修复路线图（带上下文约束）
+## 11. 历史修复路线图（不可直接执行）
+
+> 本节保留 2026-07-09 原报告的计划语境。CR-1/2、CR-5、CR-7 等已有后续实现，其他条目的范围也已拆分；
+> 这里的顺序、PR 建议和“当前缺口”均不是 2026-07-11 的实时队列。执行前必须从 GitHub issue/PR 与对应 spec 重新取证。
 
 ### 11.1 项目硬约束（修复时必须遵守）
 
@@ -573,7 +591,7 @@ SSRF-safe client、redaction、`is_admin_route`、`check_permission` 等**写了
 - **接线 OR 删除**，禁止再留 inert 配置
 - 禁止静默降级（U-29）
 
-### 11.2 Phase 0（紧急正确性）— 对齐 `2026-06-02-phase0-spec.md`
+### 11.2 历史 Phase 0（原上游规格未归档）
 
 | 顺序 | 切片 | 覆盖 |
 |------|------|------|
@@ -583,7 +601,7 @@ SSRF-safe client、redaction、`is_admin_route`、`check_permission` 等**写了
 | 4 | `fix(cache): no inert cache config` | CR-4 |
 | 5 | `test(provider): dispatch contract classification` | CR-3 前置 |
 
-### 11.3 Phase 0.5（本次新增 Critical）
+### 11.3 历史 Phase 0.5（原报告新增 Critical）
 
 | 切片 | 覆盖 |
 |------|------|
@@ -618,7 +636,7 @@ bash scripts/guards/check_pr_scope.sh
 bash scripts/guards/check_pr_overlap.sh
 ```
 
-**集成级建议补的契约测试**（当前缺口）：
+**原报告建议的集成级契约测试**（历史清单，不代表当前缺口）：
 
 1. OpenAI 全 typed 字段 round-trip 到 outbound JSON（可用 mock）
 2. `cache.enabled=true` → 第二次请求不打 mock upstream **或** 启动拒绝
@@ -660,8 +678,8 @@ bash scripts/guards/check_pr_overlap.sh
 | 启动 | `src/server/http.rs`, `src/server/builder.rs`, `src/main.rs` |
 | Chat 类型 | `src/core/types/chat.rs` |
 | 配置入口 | `src/config/models/gateway.rs` |
-| Phase 0 规格 | `docs/audit/2026-06-02-phase0-spec.md` |
-| 上份审计 | `docs/audit/2026-06-02-codebase-audit.md` |
+| Phase 0 规格 | 原报告引用 `docs/audit/2026-06-02-phase0-spec.md`；当前仓库未归档 |
+| 上份审计 | 原报告引用 `docs/audit/2026-06-02-codebase-audit.md`；当前仓库未归档 |
 
 ---
 
@@ -698,14 +716,12 @@ bash scripts/guards/check_pr_overlap.sh
 | 证伪某条 finding | 写入第 8 节，勿静默删除历史 |
 | 新开审计 | 新建 `docs/audit/YYYY-MM-DD-*.md`，在此文顶部加 “被取代/被补充” 链接 |
 
-### D. 一页纸结论（可转发）
+### D. 一页纸结论（历史快照，不可作为当前状态转发）
 
-> litellm-rs 的核心设计问题不是“缺功能”，而是 **产品面声明远大于网关接线面**。  
-> 热路径是细管道；大量 provider/cache/budget/MCP 停在库代码层。  
-> 最伤用户的是三类：**静默丢 OpenAI 参数**、**假 provider 接线**、**配置开启零效果**。  
-> 最伤安全的是：**webhook SSRF 默认弱**、**可关光鉴权**、**错误细节外泄**。  
-> 修复顺序：契约正确性 → 身份诚实 → 计费/缓存诚实 → 安全默认 → 结构收敛。  
-> 纪律：接线或删除；小 PR；主路径测试。
+> 在原报告 snapshot 中，产品声明与网关接线面存在明显差距；该判断用于解释后续修复战役。
+> 截至 2026-07-11，typed 参数、deterministic cache、migrate 与 budget 主路径已有修复，不能再称为全部未接线。
+> 仍需实时核对的残余包括 semantic cache、webhook SSRF、provider disposition、auth 生命周期和结构收敛。
+> 当前修复顺序与完成状态只以 GitHub open queue、对应 SpecRail packet 和 fresh verification 为准。
 
 ---
 
@@ -714,7 +730,8 @@ bash scripts/guards/check_pr_overlap.sh
 | 日期 | 版本 | 说明 |
 |------|------|------|
 | 2026-07-09 | v1 | 初版：4 agent 并行探索 + 主 agent 复核；对 2026-06-02 全量复验并补安全/预算/thinking 语境 |
-| 2026-07-11 | v1.1 | 在 `origin/main`（`12a30d7a`）复验全部 Critical：CR-1..7/9 已修复、CR-8 由 #968 跟踪；新增 §0.4 复验状态表，文档定位转为历史快照 + 方法论 |
+| 2026-07-11 | v1.1 | 在 `origin/main@12a30d7a` 复验 Critical，并将文档定位转为历史快照 + 方法论 |
+| 2026-07-11 | v1.2 | 补 provenance 限制；纠正 CR-3/4/6/8/9 与 live queue 状态；将 §11 和转发摘要标为不可执行历史内容 |
 
 ---
 
