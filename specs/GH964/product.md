@@ -38,7 +38,8 @@ GH-964 / #964
    启动 probe。
 4. 配置 `endpoint` 时，绝对 URL 或基于显式 `base_url` 解析出的相对 path 必须执行无认证
    HTTP GET；只有响应状态位于 `expected_codes` 时才算成功。相对 endpoint 缺少 `base_url`、
-   不安全 URL、空 endpoint 或非法 status code 必须在配置校验阶段拒绝。
+   不安全 URL、空 endpoint 或非法 status code 必须在配置校验阶段拒绝。probe 不跟随 redirect，
+   因此配置的 3xx expected code 必须按原始响应判断，且不得请求 `Location` target。
 5. 未配置 `endpoint` 时只允许默认 `expected_codes=[200]`；自定义 expected codes 必须同时
    配置 endpoint，避免接受后忽略。partial `health_check:` 配置省略 expected codes 时仍默认为
    `[200]`。
@@ -66,6 +67,7 @@ GH-964 / #964
 
 - `failure_threshold=1` 时首次失败立即标记 `Unhealthy`。
 - `expected_codes` 可以包含多个不同的合法 HTTP 状态，但不得为空、重复或超出 `100..=599`。
+- endpoint 返回 3xx 时直接按该状态判断，不跟随 redirect。
 - endpoint 返回非预期状态、连接失败或超过 deployment timeout 都按一次失败处理。
 - provider-native 返回 `Degraded`、`Unhealthy` 或 `Unknown` 都按失败处理。
 - probe 执行时间不计入 interval；下一次延迟从本次结果处理完成后开始。

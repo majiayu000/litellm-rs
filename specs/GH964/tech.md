@@ -37,8 +37,9 @@ Link to `product.md`.
 4. 新建 `src/core/router/health_probe.rs` 作为唯一 active probe engine：
    - 按 `provider_name` 分组 deployment，每个 provider 只 spawn 一个 task；
    - endpoint 缺失时调用组内 provider clone 的 native `health_check()`；
-   - endpoint 存在时用按 deployment timeout 缓存的 SSRF-safe client 发无认证 GET，并按 expected
-     codes 判定；该 client 在每次连接 DNS 解析时过滤 private/reserved IP，并校验 redirect target；
+   - endpoint 存在时用按 deployment timeout 缓存的 SSRF-safe/no-redirect client 发无认证 GET，
+     并按 expected codes 判定；该 client 在初始连接 DNS 解析时过滤 private/reserved IP，且不请求
+     redirect target，因此 3xx 状态可被直接消费；
    - 用 deployment `timeout_secs` 包裹单次 probe；
    - 首次立即执行，普通结果后 sleep interval，达到失败阈值后 sleep recovery timeout；
    - task handle 保存在 Router，`Drop` 中 abort，错误仅影响当前 provider loop。
@@ -58,7 +59,7 @@ Link to `product.md`.
 | --- | --- | --- |
 | P1/P2 one task + interval/global switch | `health_probe.rs`, `gateway_config.rs` | grouping/start tests and deterministic next-delay assertions |
 | P3 native path/programmatic compatibility | `HealthCheckPolicy::None`, native probe helper | native-provider mock HTTP test; default deployment has no task |
-| P4/P5 endpoint + expected codes | config resolver/validator, custom HTTP probe | partial YAML, URL validation, local HTTP 204/500 tests |
+| P4/P5 endpoint + expected codes | config resolver/validator, custom HTTP probe | partial YAML, URL validation, local HTTP 204/302/500 tests |
 | P6/P7 threshold + recovery | probe transition helper | table tests for Degraded/Unhealthy/Healthy and next delay |
 | P8 cooldown/request race | deployment transition helpers | tests prove Cooldown/Unhealthy are not overwritten |
 | P9 lifecycle/error isolation | Router task registry + Drop | abort/drop and failed-probe loop tests |

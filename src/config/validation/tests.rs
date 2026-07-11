@@ -155,7 +155,7 @@ fn test_provider_health_check_resolves_relative_endpoint() {
         name: "test".to_string(),
         provider_type: "openai".to_string(),
         api_key: "test-key".to_string(),
-        base_url: Some("https://8.8.8.8/v1/".to_string()),
+        base_url: Some("https://8.8.8.8/v1".to_string()),
         health_check: crate::config::models::provider::ProviderHealthCheckConfig {
             endpoint: Some("health".to_string()),
             expected_codes: vec![200, 204],
@@ -172,6 +172,28 @@ fn test_provider_health_check_resolves_relative_endpoint() {
             .expect("endpoint should be present")
             .as_str(),
         "https://8.8.8.8/v1/health"
+    );
+
+    let mut trailing_slash = config.clone();
+    trailing_slash.base_url = Some("https://8.8.8.8/v1/".to_string());
+    assert_eq!(
+        trailing_slash
+            .resolved_health_check_endpoint()
+            .expect("endpoint should resolve")
+            .expect("endpoint should be present")
+            .as_str(),
+        "https://8.8.8.8/v1/health"
+    );
+
+    let mut root_relative = config;
+    root_relative.health_check.endpoint = Some("/health".to_string());
+    assert_eq!(
+        root_relative
+            .resolved_health_check_endpoint()
+            .expect("endpoint should resolve")
+            .expect("endpoint should be present")
+            .as_str(),
+        "https://8.8.8.8/health"
     );
 }
 

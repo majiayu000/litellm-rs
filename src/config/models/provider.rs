@@ -136,12 +136,22 @@ impl ProviderConfig {
                         self.name
                     )
                 })?;
-                let base = Url::parse(base_url).map_err(|error| {
+                let mut base = Url::parse(base_url).map_err(|error| {
                     format!(
                         "Provider {} base_url cannot resolve health check endpoint: {}",
                         self.name, error
                     )
                 })?;
+                if !base.path().ends_with('/') {
+                    base.path_segments_mut()
+                        .map_err(|()| {
+                            format!(
+                                "Provider {} base_url cannot resolve a relative health check endpoint",
+                                self.name
+                            )
+                        })?
+                        .push("");
+                }
                 base.join(endpoint).map(Some).map_err(|error| {
                     format!(
                         "Provider {} has invalid health check endpoint: {}",

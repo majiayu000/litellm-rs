@@ -5,7 +5,7 @@ use super::error::RouterError;
 use super::unified::Router;
 use crate::core::providers::Provider;
 use crate::core::types::health::HealthStatus as ProviderHealthStatus;
-use crate::utils::net::http::get_ssrf_safe_client_with_timeout_fallible;
+use crate::utils::net::http::get_ssrf_safe_no_redirect_client_with_timeout_fallible;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -49,7 +49,7 @@ impl Router {
                     let timeout = Duration::from_secs(deployment.config.timeout_secs);
                     let custom_client = if policy.endpoint.is_some() {
                         Some(
-                            get_ssrf_safe_client_with_timeout_fallible(timeout).map_err(
+                            get_ssrf_safe_no_redirect_client_with_timeout_fallible(timeout).map_err(
                                 |error| {
                                     RouterError::InvalidConfiguration(format!(
                                         "provider '{}' health probe client failed to initialize: {error}",
@@ -229,6 +229,9 @@ fn update_probe_health(deployment: &Deployment, target: HealthStatus) {
             | (HealthStatus::Unhealthy, _) => target,
             (HealthStatus::Unknown | HealthStatus::Cooldown, _) => return,
         };
+        if current_status == next {
+            return;
+        }
 
         match deployment.state.health.compare_exchange_weak(
             current,
@@ -366,10 +369,79 @@ mod tests {
         (endpoint, request_rx, task)
     }
 
+    async fn redirect_server() -> (
+        Url,
+        tokio::task::JoinHandle<()>,
+        tokio::task::JoinHandle<bool>,
+    ) {
+        let target_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("redirect target should bind");
+        let target_address = target_listener
+            .local_addr()
+            .expect("redirect target address should be available");
+        let redirect_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("redirect server should bind");
+        let redirect_address = redirect_listener
+            .local_addr()
+            .expect("redirect address should be available");
+
+        let redirect_task = tokio::spawn(async move {
+            let (mut stream, _) = redirect_listener
+                .accept()
+                .await
+                .expect("redirect request should connect");
+            let mut request = [0_u8; 2048];
+            let bytes_read = stream
+                .read(&mut request)
+                .await
+                .expect("redirect request should be readable");
+            assert!(bytes_read > 0, "redirect request should not be empty");
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://{target_address}/target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("redirect response should be writable");
+        });
+
+        let target_task = tokio::spawn(async move {
+            let Ok(Ok((mut stream, _))) =
+                tokio::time::timeout(Duration::from_millis(500), target_listener.accept()).await
+            else {
+                return false;
+            };
+            let mut request = [0_u8; 2048];
+            let bytes_read = stream
+                .read(&mut request)
+                .await
+                .expect("redirected request should be readable");
+            assert!(bytes_read > 0, "redirected request should not be empty");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .expect("redirect target response should be writable");
+            true
+        });
+
+        let endpoint = Url::parse(&format!("http://{redirect_address}/health"))
+            .expect("redirect endpoint should parse");
+        (endpoint, redirect_task, target_task)
+    }
+
     fn local_probe_client() -> Client {
         Client::builder()
             .build()
             .expect("local probe client should build")
+    }
+
+    fn local_no_redirect_probe_client() -> Client {
+        Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("local no-redirect probe client should build")
     }
 
     async fn wait_for_health(deployment: &Deployment, expected: HealthStatus) {
@@ -429,6 +501,33 @@ mod tests {
             Err(ProbeFailure::UnexpectedStatus(500))
         );
         failed_server.await.expect("test server should stop");
+    }
+
+    #[tokio::test]
+    async fn custom_endpoint_observes_redirect_status_without_following_it() {
+        let provider = test_provider(None).await;
+        let client = local_no_redirect_probe_client();
+        let (endpoint, redirect_task, redirect_target) = redirect_server().await;
+        let mut policy = test_policy(Some(endpoint));
+        policy.expected_codes = vec![302];
+
+        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        redirect_task.await.expect("redirect server should stop");
+        let target_was_requested = redirect_target.await.expect("redirect target should stop");
+
+        assert_eq!(result, Ok(()));
+        assert!(!target_was_requested);
+
+        let (endpoint, redirect_task, redirect_target) = redirect_server().await;
+        policy.endpoint = Some(endpoint);
+        policy.expected_codes = vec![200];
+
+        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        redirect_task.await.expect("redirect server should stop");
+        let target_was_requested = redirect_target.await.expect("redirect target should stop");
+
+        assert_eq!(result, Err(ProbeFailure::UnexpectedStatus(302)));
+        assert!(!target_was_requested);
     }
 
     #[tokio::test]
@@ -500,6 +599,31 @@ mod tests {
         deployment.state.cooldown_until.store(1, Ordering::Relaxed);
         assert!(!deployment.is_in_cooldown());
         assert_eq!(deployment.state.health_status(), HealthStatus::Degraded);
+    }
+
+    #[tokio::test]
+    async fn same_probe_health_update_keeps_stable_states() {
+        let provider = test_provider(None).await;
+
+        for status in [
+            HealthStatus::Healthy,
+            HealthStatus::Degraded,
+            HealthStatus::Unhealthy,
+        ] {
+            let deployment = test_deployment("stable", provider.clone(), test_policy(None)).await;
+            deployment
+                .state
+                .health
+                .store(status as u8, Ordering::Relaxed);
+
+            update_probe_health(&deployment, status);
+
+            assert_eq!(deployment.state.health_status(), status);
+            assert_eq!(
+                deployment.state.probe_unhealthy.load(Ordering::Relaxed),
+                status == HealthStatus::Unhealthy
+            );
+        }
     }
 
     #[tokio::test]
