@@ -126,7 +126,7 @@ pub struct RetryConfig {
     #[serde(default = "default_backoff_multiplier")]
     pub backoff_multiplier: f64,
     /// Jitter factor (0.0 to 1.0)
-    #[serde(default)]
+    #[serde(default = "default_retry_jitter")]
     pub jitter: f64,
 }
 
@@ -136,7 +136,7 @@ impl Default for RetryConfig {
             base_delay: default_base_delay(),
             max_delay: default_max_delay(),
             backoff_multiplier: default_backoff_multiplier(),
-            jitter: 0.1,
+            jitter: default_retry_jitter(),
         }
     }
 }
@@ -220,6 +220,18 @@ mod tests {
         let config: RetryConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.base_delay, 1500);
         assert!((config.backoff_multiplier - 2.5).abs() < f64::EPSILON);
+        assert!((config.jitter - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_partial_yaml_retry_config_preserves_jitter_default() {
+        let config: RetryConfig = serde_yml::from_str("base_delay: 250\nmax_delay: 900\n")
+            .expect("partial retry YAML should deserialize");
+
+        assert_eq!(config.base_delay, 250);
+        assert_eq!(config.max_delay, 900);
+        assert!((config.backoff_multiplier - 2.0).abs() < f64::EPSILON);
+        assert!((config.jitter - 0.1).abs() < f64::EPSILON);
     }
 
     #[test]

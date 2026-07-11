@@ -87,6 +87,10 @@ pub fn default_backoff_multiplier() -> f64 {
     2.0
 }
 
+pub fn default_retry_jitter() -> f64 {
+    0.1
+}
+
 pub fn default_max_connections() -> u32 {
     10
 }
