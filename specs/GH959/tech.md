@@ -15,14 +15,14 @@ Link to `product.md`.
 | API-key lookup | `src/auth/api_key/creation.rs` | `find_api_key_cached` trusts a complete Redis snapshot before the database and writes DB hits with a five-minute TTL | replace the authentication lookup with an authoritative database read |
 | Live verification | `src/auth/api_key/creation.rs` | active/expiry/owner checks run against the cached snapshot | preserve checks but feed them only the database record |
 | Detailed verification | `src/auth/api_key/creation.rs` | same stale-cache exposure through the detailed path | use the same authoritative lookup boundary |
-| Mutation cleanup | `src/auth/api_key/management.rs` | revoke/update operations delete cache best effort and log failures | keep cleanup compatibility; correctness must not depend on it |
+| Mutation cleanup | `src/auth/api_key/management.rs` | revoke deletes only before the DB mutation, leaving a legacy refill window | invalidate before and after commit while keeping upgraded-instance correctness independent of cache |
 | Regression tests | `src/auth/api_key/tests.rs` | no test leaves a readable active snapshot after a denied cache delete | add a live Redis ACL test that denies `DEL` while allowing `GET`/`SET` |
 
 ## 设计方案
 
 1. 删除认证专用的 `API_KEY_CACHE_TTL` 和 `find_api_key_cached` cache-aside 实现，增加私有 `find_api_key_authoritative`，仅调用 `database.find_api_key_by_hash`。
 2. `verify_key` 与 `verify_key_detailed` 保持各自现有返回契约，但都通过 `find_api_key_authoritative` 获取 key；active、expiry、owner 和 last-used 的顺序不变。
-3. 保留 `api_key_cache_key`、`invalidate_api_key_cache` 和 management 中的 invalidation 调用，用于清理旧版本或并行部署留下的快照。删除失败仍可诊断，但不再位于授权可信边界。
+3. 保留 `api_key_cache_key` 与 `invalidate_api_key_cache`。`revoke_key` 在数据库 mutation 前后各执行一次 best-effort invalidation，以缩小旧 cache-first 副本的回填窗口；删除失败仍可诊断，但不再位于已升级实例的授权可信边界。
 4. 不在数据库错误时读取 Redis。`find_api_key_by_hash(...).await?` 原样传播错误，避免 silent degradation。
 5. 在现有 `src/auth/api_key/tests.rs` 中增加 Redis ACL 回归：
    - 通过 `REDIS_URL` 建立管理连接，并创建唯一的受限测试用户；
@@ -32,6 +32,7 @@ Link to `product.md`.
    - 确认 live/detailed verification 都从数据库拒绝该 key；
    - 用管理连接清理 key 与 ACL 用户。
 6. 本地 Redis 不可达时沿用仓库既有 live-Redis 测试约定跳过；CI 设置 `CI` 与 `REDIS_URL`，Redis 不可达则测试必须失败。协调器在本地隔离 Redis 实例上执行一次非跳过验证。
+7. 部署要求：在依赖即时撤销保证前，排空所有仍运行 cache-first 认证代码的旧副本。双 invalidation 不能阻止已经在 DB commit 前读到 active row 的旧请求于第二次删除后回填。
 
 ## Product-to-Test Mapping
 
@@ -51,12 +52,13 @@ Redis invalidation remains a side-effect of mutation paths only. There is no Red
 ## 受影响文件与规模
 
 - `src/auth/api_key/creation.rs`
+- `src/auth/api_key/management.rs`
 - `src/auth/api_key/tests.rs`
 - `specs/GH959/product.md`
 - `specs/GH959/tech.md`
 - `specs/GH959/tasks.md`
 
-预计 2 个 code/test 文件、少于 250 行 code diff，满足仓库 scope 限制；现有文件均保持在 800 行以内。
+预计 3 个 code/test 文件、少于 350 行 code diff，满足仓库 scope 限制；现有文件均保持在 800 行以内。
 
 ## 备选方案
 
@@ -69,8 +71,8 @@ Redis invalidation remains a side-effect of mutation paths only. There is no Red
 
 - Security: 任何后续优化都不得把完整 Redis key 快照重新引入授权路径。
 - Performance: 每次 API-key 验证增加或恢复一次数据库读取；这是即时撤销一致性的明确代价。
-- Compatibility: cache invalidation API 保留，因此滚动部署期间旧实例仍可清理快照。
-- Test isolation: Redis ACL user、key 与密码都使用唯一随机值；清理使用管理连接，不依赖受限用户的 `DEL` 权限。
+- Compatibility: pre/post invalidation 缩小滚动部署窗口，但旧 cache-first 实例必须排空；不能把双删除描述成分布式一致性保证。
+- Test isolation: Redis ACL user、key 与密码都使用唯一随机值；场景逻辑通过 finally-style 路径在断言前调用管理连接清理，不依赖受限用户的 `DEL` 权限。
 - Error handling: Redis 测试不可用在 CI 中必须失败，数据库错误在生产中必须传播。
 
 ## 测试计划

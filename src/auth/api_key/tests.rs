@@ -561,77 +561,87 @@ async fn revoked_key_is_rejected_when_cache_delete_fails() {
     let cache_key = format!("api_key:hash:{}", api_key.key_hash);
     let username = format!("gh959_{}", Uuid::new_v4().simple());
     let password = format!("gh959-{}", Uuid::new_v4().simple());
+    let restricted_config = restricted_redis_config(&redis_url, &username, &password);
 
     configure_delete_denied_user(&admin_pool, &username, &password, &cache_key).await;
-    let restricted_pool =
-        RedisPool::new(&restricted_redis_config(&redis_url, &username, &password))
+    let scenario = async {
+        let restricted_pool = RedisPool::new(&restricted_config)
             .await
-            .expect("restricted Redis user should connect");
-    let handler = handler_with_redis(&base_handler, restricted_pool).await;
-    handler
-        .storage
-        .cache_set(
-            &cache_key,
-            &serde_json::to_string(&api_key).expect("active snapshot should serialize"),
-            None,
-        )
-        .await
-        .expect("restricted user should populate the stale snapshot");
-    let delete_error = handler
-        .storage
-        .cache_delete(&cache_key)
-        .await
-        .expect_err("restricted user must not delete the cache key");
-    assert!(
-        delete_error.to_string().contains("NoPerm"),
-        "cache deletion should fail because Redis denied DEL: {delete_error}"
-    );
+            .map_err(|error| error.to_string())?;
+        let handler = handler_with_redis(&base_handler, restricted_pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        let serialized = serde_json::to_string(&api_key).map_err(|error| error.to_string())?;
+        handler
+            .storage
+            .cache_set(&cache_key, &serialized, None)
+            .await
+            .map_err(|error| error.to_string())?;
+        let delete_error = handler
+            .storage
+            .cache_delete(&cache_key)
+            .await
+            .err()
+            .ok_or_else(|| "restricted user unexpectedly deleted the cache key".to_string())?;
 
-    handler
-        .revoke_key(api_key.metadata.id)
-        .await
-        .expect("database revoke must not depend on cache deletion");
-    let stored = handler
-        .storage
-        .db()
-        .find_api_key_by_hash(&api_key.key_hash)
-        .await
-        .expect("revoked key lookup should succeed")
-        .expect("revoked key should remain stored");
-    let stale_snapshot: ApiKey = serde_json::from_str(
-        &handler
+        handler
+            .revoke_key(api_key.metadata.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let stored = handler
+            .storage
+            .db()
+            .find_api_key_by_hash(&api_key.key_hash)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "revoked key was not stored".to_string())?;
+        let cached = handler
             .storage
             .cache_get(&cache_key)
             .await
-            .expect("restricted user should still read the cache")
-            .expect("denied deletion must leave the stale snapshot"),
-    )
-    .expect("stale snapshot should deserialize");
-    let live_result = handler
-        .verify_key(&raw_key)
-        .await
-        .expect("live verification should read the database");
-    let detailed_result = handler
-        .verify_key_detailed(&raw_key)
-        .await
-        .expect("detailed verification should read the database");
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "denied deletion removed the stale snapshot".to_string())?;
+        let stale_snapshot: ApiKey =
+            serde_json::from_str(&cached).map_err(|error| error.to_string())?;
+        let live_result = handler
+            .verify_key(&raw_key)
+            .await
+            .map_err(|error| error.to_string())?;
+        let detailed_result = handler
+            .verify_key_detailed(&raw_key)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        Ok::<_, String>((
+            delete_error.to_string(),
+            stored.is_active,
+            stale_snapshot.is_active,
+            live_result.is_some(),
+            detailed_result.is_valid,
+            detailed_result.invalid_reason,
+        ))
+    }
+    .await;
 
     cleanup_delete_denied_user(&admin_pool, &username, &cache_key).await;
 
-    assert!(!stored.is_active, "database revoke must be committed");
+    let (delete_error, stored_active, stale_active, live_valid, detailed_valid, invalid_reason) =
+        scenario.expect("revocation scenario should complete before cleanup");
     assert!(
-        stale_snapshot.is_active,
+        delete_error.to_ascii_lowercase().contains("noperm"),
+        "cache deletion should fail because Redis denied DEL: {delete_error}"
+    );
+    assert!(!stored_active, "database revoke must be committed");
+    assert!(
+        stale_active,
         "the denied cache deletion must leave the old active snapshot readable"
     );
     assert!(
-        live_result.is_none(),
+        !live_valid,
         "live authentication must ignore the stale active snapshot"
     );
-    assert!(!detailed_result.is_valid);
-    assert_eq!(
-        detailed_result.invalid_reason.as_deref(),
-        Some("API key is inactive")
-    );
+    assert!(!detailed_valid);
+    assert_eq!(invalid_reason.as_deref(), Some("API key is inactive"));
 }
 
 #[cfg(test)]
@@ -648,13 +658,14 @@ async fn test_api_key_handler() -> ApiKeyHandler {
 }
 
 #[cfg(test)]
-async fn handler_with_redis(base_handler: &ApiKeyHandler, redis: RedisPool) -> ApiKeyHandler {
+async fn handler_with_redis(
+    base_handler: &ApiKeyHandler,
+    redis: RedisPool,
+) -> crate::utils::error::gateway_error::Result<ApiKeyHandler> {
     let mut storage = (*base_handler.storage).clone();
     storage.redis = Arc::new(redis);
     storage.redis_status = DependencyStatus::Healthy;
-    ApiKeyHandler::new(Arc::new(storage), None)
-        .await
-        .expect("API key handler should accept the restricted Redis pool")
+    ApiKeyHandler::new(Arc::new(storage), None).await
 }
 
 #[cfg(test)]
