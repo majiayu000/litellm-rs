@@ -59,7 +59,7 @@
 |----|--------------------------------------|----------|
 | CR-1 / CR-2 | ✅ **已修复** — 两处 transform 均通过 `insert_optional_param!` 序列化 typed 字段（frequency_penalty / presence_penalty / logit_bias 等）；`12a30d7a` 进一步保留 legacy functions | `openai/client.rs:276-278`、`openai_like/provider.rs:278-280` |
 | CR-3 | 🔶 **部分修复** — 原生 enum/factory 已扩展；Bedrock 本身并非 feature-gated。不可达目录由 #837 继续处置，#967 只跟踪 capability 与可执行 surface 一致性 | `providers/mod.rs`；issue #837、#967 |
-| CR-4 | 🔶 **部分修复且有未跟踪残余** — deterministic `response_cache` 已接线；`cache.semantic_cache` 仍明确无运行时效果，`semantic_cache_enabled` 仍为 `false` | `config/models/cache.rs:45-48`、`server/state.rs:127` |
+| CR-4 | 🔶 **部分修复，残余由 #838 跟踪** — deterministic `response_cache` 已接线；`cache.semantic_cache` 仍明确无运行时效果，`semantic_cache_enabled` 仍为 `false` | `config/models/cache.rs:45-48`、`server/state.rs:127`；issue #838 |
 | CR-5 | ✅ **已修复** — `StorageLayer::new` 支持 `auto_migrate`，关闭时 schema 检查 fail-closed 报错 | `storage/mod.rs:178-213` |
 | CR-6 | 🔶 **部分修复** — 主 missing-price 路径已改为 `require_pricing_field` 返回 `Err`；原报告所述多套 pricing SSOT 与所有调用路径尚未在本次复验中证明收敛 | `pricing_service/service.rs:166-179` |
 | CR-7 | ✅ **已修复** — issue-840 战役（PR #908–#917）将 chat/embeddings/images/audio/gemini 等全部路由经 budgeted executor，记账 + 强制执行 | `server/routes/ai/chat.rs:25,120-153` |
