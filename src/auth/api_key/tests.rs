@@ -3,9 +3,17 @@
 //! This module contains unit tests for API key management.
 
 #[cfg(test)]
+use super::creation::ApiKeyHandler;
+#[cfg(test)]
 use crate::auth::api_key::types::{ApiKeyVerification, CreateApiKeyRequest};
+#[cfg(test)]
+use crate::config::models::storage::{RedisConfig, StorageConfig};
 use crate::core::models::{ApiKey, Metadata, RateLimits, UsageStats};
+#[cfg(test)]
+use crate::storage::{DependencyStatus, StorageLayer, redis::RedisPool};
 use chrono::{Duration, Utc};
+#[cfg(test)]
+use std::sync::Arc;
 use uuid::Uuid;
 
 // ==================== CreateApiKeyRequest Tests ====================
@@ -531,4 +539,225 @@ fn test_key_prefix_different_formats() {
 
         assert_eq!(api_key.key_prefix, prefix);
     }
+}
+
+// ==================== Revocation Consistency Tests ====================
+
+#[tokio::test]
+async fn revoked_key_is_rejected_when_cache_delete_fails() {
+    let Some((admin_pool, redis_url)) = live_redis_pool().await else {
+        return;
+    };
+    let base_handler = test_api_key_handler().await;
+    let (api_key, raw_key) = base_handler
+        .create_key(
+            None,
+            None,
+            "acl-denied-cache-delete".to_string(),
+            vec!["api.chat".to_string()],
+        )
+        .await
+        .expect("test API key should be stored");
+    let cache_key = format!("api_key:hash:{}", api_key.key_hash);
+    let username = format!("gh959_{}", Uuid::new_v4().simple());
+    let password = format!("gh959-{}", Uuid::new_v4().simple());
+
+    configure_delete_denied_user(&admin_pool, &username, &password, &cache_key).await;
+    let restricted_pool =
+        RedisPool::new(&restricted_redis_config(&redis_url, &username, &password))
+            .await
+            .expect("restricted Redis user should connect");
+    let handler = handler_with_redis(&base_handler, restricted_pool).await;
+    handler
+        .storage
+        .cache_set(
+            &cache_key,
+            &serde_json::to_string(&api_key).expect("active snapshot should serialize"),
+            None,
+        )
+        .await
+        .expect("restricted user should populate the stale snapshot");
+    let delete_error = handler
+        .storage
+        .cache_delete(&cache_key)
+        .await
+        .expect_err("restricted user must not delete the cache key");
+    assert!(
+        delete_error.to_string().contains("NoPerm"),
+        "cache deletion should fail because Redis denied DEL: {delete_error}"
+    );
+
+    handler
+        .revoke_key(api_key.metadata.id)
+        .await
+        .expect("database revoke must not depend on cache deletion");
+    let stored = handler
+        .storage
+        .db()
+        .find_api_key_by_hash(&api_key.key_hash)
+        .await
+        .expect("revoked key lookup should succeed")
+        .expect("revoked key should remain stored");
+    let stale_snapshot: ApiKey = serde_json::from_str(
+        &handler
+            .storage
+            .cache_get(&cache_key)
+            .await
+            .expect("restricted user should still read the cache")
+            .expect("denied deletion must leave the stale snapshot"),
+    )
+    .expect("stale snapshot should deserialize");
+    let live_result = handler
+        .verify_key(&raw_key)
+        .await
+        .expect("live verification should read the database");
+    let detailed_result = handler
+        .verify_key_detailed(&raw_key)
+        .await
+        .expect("detailed verification should read the database");
+
+    cleanup_delete_denied_user(&admin_pool, &username, &cache_key).await;
+
+    assert!(!stored.is_active, "database revoke must be committed");
+    assert!(
+        stale_snapshot.is_active,
+        "the denied cache deletion must leave the old active snapshot readable"
+    );
+    assert!(
+        live_result.is_none(),
+        "live authentication must ignore the stale active snapshot"
+    );
+    assert!(!detailed_result.is_valid);
+    assert_eq!(
+        detailed_result.invalid_reason.as_deref(),
+        Some("API key is inactive")
+    );
+}
+
+#[cfg(test)]
+async fn test_api_key_handler() -> ApiKeyHandler {
+    let mut config = StorageConfig::default();
+    config.database.enabled = false;
+    config.redis.enabled = false;
+    let storage = StorageLayer::new(&config)
+        .await
+        .expect("test storage should initialize");
+    ApiKeyHandler::new(Arc::new(storage), None)
+        .await
+        .expect("API key handler should initialize")
+}
+
+#[cfg(test)]
+async fn handler_with_redis(base_handler: &ApiKeyHandler, redis: RedisPool) -> ApiKeyHandler {
+    let mut storage = (*base_handler.storage).clone();
+    storage.redis = Arc::new(redis);
+    storage.redis_status = DependencyStatus::Healthy;
+    ApiKeyHandler::new(Arc::new(storage), None)
+        .await
+        .expect("API key handler should accept the restricted Redis pool")
+}
+
+#[cfg(test)]
+async fn live_redis_pool() -> Option<(RedisPool, String)> {
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let config = RedisConfig {
+        url: redis_url.clone(),
+        enabled: true,
+        max_connections: 2,
+        connection_timeout: 1,
+        cluster: false,
+        allow_degraded: false,
+    };
+
+    match RedisPool::new(&config).await {
+        Ok(pool) => match pool.health_check().await {
+            Ok(()) => Some((pool, redis_url)),
+            Err(error) => unavailable_live_redis(&redis_url, error),
+        },
+        Err(error) => unavailable_live_redis(&redis_url, error),
+    }
+}
+
+#[cfg(test)]
+fn unavailable_live_redis(
+    redis_url: &str,
+    error: crate::utils::error::gateway_error::GatewayError,
+) -> Option<(RedisPool, String)> {
+    if std::env::var("CI").is_ok() {
+        panic!("Redis should be reachable in CI at {redis_url}: {error}");
+    }
+    eprintln!("Skipping API-key revocation Redis test: {error}");
+    None
+}
+
+#[cfg(test)]
+fn restricted_redis_config(redis_url: &str, username: &str, password: &str) -> RedisConfig {
+    let mut url = url::Url::parse(redis_url).expect("REDIS_URL should be valid");
+    url.set_username(username)
+        .expect("Redis ACL username should be valid");
+    url.set_password(Some(password))
+        .expect("Redis ACL password should be valid");
+    RedisConfig {
+        url: url.to_string(),
+        enabled: true,
+        max_connections: 2,
+        connection_timeout: 1,
+        cluster: false,
+        allow_degraded: false,
+    }
+}
+
+#[cfg(test)]
+async fn configure_delete_denied_user(
+    admin_pool: &RedisPool,
+    username: &str,
+    password: &str,
+    cache_key: &str,
+) {
+    let mut connection = admin_pool
+        .get_connection()
+        .await
+        .expect("admin Redis connection should be available");
+    let connection = connection
+        .conn
+        .as_mut()
+        .expect("live Redis connection should not be no-op");
+    let _: () = redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg(username)
+        .arg("reset")
+        .arg("on")
+        .arg(format!(">{password}"))
+        .arg(format!("~{cache_key}"))
+        .arg("+@connection")
+        .arg("+get")
+        .arg("+set")
+        .arg("-del")
+        .query_async(connection)
+        .await
+        .expect("test should create a Redis user that cannot delete the cache key");
+}
+
+#[cfg(test)]
+async fn cleanup_delete_denied_user(admin_pool: &RedisPool, username: &str, cache_key: &str) {
+    let mut connection = admin_pool
+        .get_connection()
+        .await
+        .expect("admin Redis cleanup connection should be available");
+    let connection = connection
+        .conn
+        .as_mut()
+        .expect("live Redis cleanup connection should not be no-op");
+    let _: i64 = redis::cmd("DEL")
+        .arg(cache_key)
+        .query_async(&mut *connection)
+        .await
+        .expect("admin should remove the stale test cache key");
+    let _: i64 = redis::cmd("ACL")
+        .arg("DELUSER")
+        .arg(username)
+        .query_async(connection)
+        .await
+        .expect("admin should remove the restricted test user");
 }

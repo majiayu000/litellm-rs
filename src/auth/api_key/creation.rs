@@ -74,9 +74,6 @@ fn validate_create_key_input(name: &str, permissions: &[String]) -> Result<()> {
 /// Minimum interval between DB writes for the same key's last_used timestamp.
 const LAST_USED_THROTTLE: Duration = Duration::from_secs(5 * 60);
 
-/// TTL for cached API keys in Redis (seconds).
-const API_KEY_CACHE_TTL: u64 = 300;
-
 const MISSING_OWNER_REASON: &str = "Associated user was not found";
 const INACTIVE_OWNER_REASON: &str = "Associated user is inactive";
 
@@ -189,54 +186,12 @@ impl ApiKeyHandler {
         Ok((stored_key, raw_key))
     }
 
-    /// Look up an API key by hash, checking Redis cache first and falling back
-    /// to PostgreSQL. On a cache miss the result is populated into Redis with a
-    /// 5-minute TTL.
-    async fn find_api_key_cached(&self, key_hash: &str) -> Result<Option<ApiKey>> {
-        let cache_key = api_key_cache_key(key_hash);
-
-        // 1. Try Redis cache
-        match self.storage.cache_get(&cache_key).await {
-            Ok(Some(cached)) => {
-                debug!("API key cache hit");
-                match serde_json::from_str::<ApiKey>(&cached) {
-                    Ok(api_key) => return Ok(Some(api_key)),
-                    Err(e) => {
-                        warn!(
-                            "Failed to deserialize cached API key, falling back to DB: {}",
-                            e
-                        );
-                        // Stale/corrupt entry – delete and continue to DB
-                        if let Err(del_err) = self.storage.cache_delete(&cache_key).await {
-                            warn!("Failed to delete corrupt API key cache entry: {}", del_err);
-                        }
-                    }
-                }
-            }
-            Ok(None) => {
-                debug!("API key cache miss");
-            }
-            Err(e) => {
-                // Redis unavailable – degrade gracefully
-                warn!("Redis cache_get failed, falling back to DB: {}", e);
-            }
-        }
-
-        // 2. Fall back to PostgreSQL
-        let api_key = self.storage.db().find_api_key_by_hash(key_hash).await?;
-
-        // 3. Populate cache on DB hit
-        if let Some(ref key) = api_key
-            && let Ok(serialized) = serde_json::to_string(key)
-            && let Err(e) = self
-                .storage
-                .cache_set(&cache_key, &serialized, Some(API_KEY_CACHE_TTL))
-                .await
-        {
-            warn!("Failed to populate API key cache: {}", e);
-        }
-
-        Ok(api_key)
+    /// Look up an API key from the authoritative lifecycle store.
+    ///
+    /// Authentication must not consume Redis snapshots because a stale active
+    /// value could otherwise outlive a committed database revoke.
+    async fn find_api_key_authoritative(&self, key_hash: &str) -> Result<Option<ApiKey>> {
+        self.storage.db().find_api_key_by_hash(key_hash).await
     }
 
     /// Invalidate the Redis cache entry for the given key hash.
@@ -257,8 +212,7 @@ impl ApiKeyHandler {
         // Hash the provided key
         let key_hash = hash_api_key(raw_key, self.hmac_secret());
 
-        // Find API key (cache-aside: Redis → PostgreSQL → populate Redis)
-        let api_key = match self.find_api_key_cached(&key_hash).await? {
+        let api_key = match self.find_api_key_authoritative(&key_hash).await? {
             Some(key) => key,
             None => {
                 debug!("API key not found");
@@ -303,7 +257,7 @@ impl ApiKeyHandler {
     pub async fn verify_key_detailed(&self, raw_key: &str) -> Result<ApiKeyVerification> {
         let key_hash = hash_api_key(raw_key, self.hmac_secret());
 
-        let api_key = match self.find_api_key_cached(&key_hash).await? {
+        let api_key = match self.find_api_key_authoritative(&key_hash).await? {
             Some(key) => key,
             None => {
                 return Ok(ApiKeyVerification {
