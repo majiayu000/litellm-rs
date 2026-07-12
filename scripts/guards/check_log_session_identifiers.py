@@ -58,13 +58,11 @@ def _raw_string_span(source: str, index: int, path: Path) -> tuple[int, str] | N
         marker_index = index + 1
     else:
         return None
-
     hash_index = marker_index
     while hash_index < len(source) and source[hash_index] == "#":
         hash_index += 1
     if hash_index >= len(source) or source[hash_index] != '"':
         return None
-
     closing = '"' + ("#" * (hash_index - marker_index))
     end = source.find(closing, hash_index + 1)
     if end < 0:
@@ -76,7 +74,6 @@ def _char_literal_end(source: str, index: int) -> int | None:
     value_index = index + 1
     if value_index >= len(source) or source[value_index] in "\r\n'":
         return None
-
     if source[value_index] != "\\":
         end = value_index + 1
     elif value_index + 1 >= len(source):
@@ -90,7 +87,6 @@ def _char_literal_end(source: str, index: int) -> int | None:
         end = closing + 1
     else:
         end = value_index + 2
-
     if end < len(source) and source[end] == "'":
         return end + 1
     return None
@@ -156,7 +152,6 @@ def tokenize(source: str, path: Path) -> list[Token]:
     tokens: list[Token] = []
     index = 0
     line = 1
-
     while index < len(source):
         char = source[index]
         if char.isspace():
@@ -242,12 +237,17 @@ def _macro_name(tokens: list[Token], index: int) -> str | None:
     if tokens[index + 2].value not in OPEN_TO_CLOSE:
         return None
     if index > 0 and tokens[index - 1].value == "::":
-        if index < 2 or tokens[index - 2].value not in {"log", "tracing"}:
+        extra_path = (
+            index >= 4
+            and tokens[index - 3].value == "::"
+            and tokens[index - 4].kind == "identifier"
+        )
+        if index < 2 or tokens[index - 2].value not in {"log", "tracing"} or extra_path:
             return None
         if token.value == "event" and tokens[index - 2].value != "tracing":
             return None
         return f"{tokens[index - 2].value}::{token.value}"
-    return token.value
+    return token.value if token.value != "event" else None
 
 
 def _matching_delimiter(tokens: list[Token], open_index: int, path: Path) -> int:
@@ -344,8 +344,8 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
     warn!("\x7bsid\x7d"); warn!("\u{7b}session_token\u{7d}");
     warn!("{session_\
         id}");
-    info!("session_id and sid are text only"); warn!("escaped {{session_id}} and {{sid:?}}"); debug!(r#"raw escaped {{session_token}}"#); warn!("{}", "{sid}"); tracing::warn!(target: "oauth::{session_id}", "event");
-    warn!("{}", format!("{sid}")); tracing::warn!(message = %format!("{session_token}")); tracing::warn!(data = %format_args!("{session_id}"), "event"); log::warn!("qualified {}", sid); tracing::event!(tracing::Level::WARN, "event {sid}");
+    info!("session_id and sid are text only"); warn!("escaped {{session_id}} and {{sid:?}}"); debug!(r#"raw escaped {{session_token}}"#); warn!("{}", "{sid}"); tracing::warn!(target: "oauth::{session_id}", "event"); foo::log::warn!("{sid}"); crate::log::error!("{session_token}"); foo::tracing::event!(tracing::Level::WARN, "{sid}"); event!(tracing::Level::WARN, "{session_id}");
+    warn!("{}", format!("{sid}")); tracing::warn!(message = %format!("{session_token}")); tracing::warn!(data = %format_args!("{session_id}"), "event"); log::warn!("qualified {}", sid); ::log::warn!("root {}", sid); tracing::event!(tracing::Level::WARN, "event {sid}");
     // error!("{}", session_id);
     let raw = r#"warn!(session_token)"#; /* warn!("{}", sid); */ audit!("{}", sid); other::warn!("{}", sid);
 }
@@ -356,7 +356,7 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
         "warn:sid tracing::trace:session_token debug:session_id error:sid "
         "tracing::error:session_token trace:session_id warn:sid warn:session_token "
         "warn:session_id warn:sid tracing::warn:session_token tracing::warn:session_id "
-        "log::warn:sid tracing::event:sid"
+        "log::warn:sid log::warn:sid tracing::event:sid"
     ).split()
     if actual != expected:
         raise ScanError(f"self-test mismatch: expected {expected}, got {actual}")
