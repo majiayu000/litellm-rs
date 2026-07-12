@@ -203,3 +203,39 @@ async fn test_session_auth_always_rejected() {
         "session auth error message must match expected value"
     );
 }
+
+#[tokio::test]
+async fn api_key_storage_error_propagates_from_auth_system() {
+    let mut config = crate::config::Config::default();
+    config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+
+    let storage = std::sync::Arc::new(
+        crate::storage::StorageLayer::new(&config.gateway.storage)
+            .await
+            .expect("storage should initialize before the failure is injected"),
+    );
+    let auth_system = super::system::AuthSystem::new(&config.gateway.auth, storage.clone())
+        .await
+        .expect("AuthSystem should initialize before the failure is injected");
+    storage
+        .db()
+        .connection()
+        .close_by_ref()
+        .await
+        .expect("test should close the database pool");
+
+    let error = auth_system
+        .authenticate(
+            AuthMethod::ApiKey("gw-infrastructure-failure".to_string()),
+            RequestContext::new(),
+        )
+        .await
+        .expect_err("database failure must not become an invalid-credential AuthResult");
+
+    assert!(matches!(
+        error,
+        crate::utils::error::gateway_error::GatewayError::Storage(_)
+    ));
+}

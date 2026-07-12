@@ -182,6 +182,49 @@ async fn test_auth_middleware_rejects_invalid_auth() {
 }
 
 #[tokio::test]
+async fn test_auth_infrastructure_failures_stay_generic_500_without_lockout() {
+    let state = build_test_state(true, true).await;
+    state
+        .storage
+        .db()
+        .connection()
+        .close_by_ref()
+        .await
+        .expect("test should close the authentication database pool");
+    let hit_counter = Arc::new(AtomicUsize::new(0));
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .app_data(web::Data::new(hit_counter.clone()))
+            .wrap(AuthMiddleware)
+            .route(AUTH_PROBE_PATH, web::get().to(auth_probe)),
+    )
+    .await;
+
+    for port in 1000..1006 {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(AUTH_PROBE_PATH)
+                .peer_addr(format!("203.0.113.196:{port}").parse().unwrap())
+                .insert_header(("x-api-key", "gw-auth-infrastructure-failure-960"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = test::read_body(response).await;
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("Authentication service temporarily unavailable"));
+        for internal_detail in ["Storage error", "Database error", "Connection closed"] {
+            assert!(!body.contains(internal_detail));
+        }
+    }
+
+    assert_eq!(hit_counter.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn test_missing_auth_hits_gateway_rate_limit_before_auth_short_circuit() {
     let state = build_test_state_with_rate_limit(true, true, false, Some(1)).await;
     let hit_counter = Arc::new(AtomicUsize::new(0));

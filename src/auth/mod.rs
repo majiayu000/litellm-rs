@@ -27,4 +27,7 @@ pub use crate::core::models::ApiKey;
 pub use system::AuthSystem;
 pub use types::{AuthMethod, AuthResult};
 
+pub(crate) const AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE: &str =
+    "Authentication service temporarily unavailable";
+
 // Re-export OAuth types for convenience

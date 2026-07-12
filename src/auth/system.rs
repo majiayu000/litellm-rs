@@ -190,14 +190,7 @@ impl AuthSystem {
                 error: Some("Invalid API key".to_string()),
                 context,
             }),
-            Err(e) => Ok(AuthResult {
-                success: false,
-                user: None,
-                api_key: None,
-                session: None,
-                error: Some(format!("API key verification failed: {}", e)),
-                context,
-            }),
+            Err(error) => Err(error),
         }
     }
 
