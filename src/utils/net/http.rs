@@ -126,6 +126,17 @@ pub enum ProviderHttpClientError {
     Request(#[from] reqwest::Error),
 }
 
+/// Request builder that cannot expose or replace its policy-bound HTTP client.
+pub struct ProviderRequestBuilder {
+    inner: RequestBuilder,
+}
+
+impl ProviderRequestBuilder {
+    pub async fn send(self) -> Result<reqwest::Response, reqwest::Error> {
+        self.inner.send().await
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderClientMode {
     Request,
@@ -221,27 +232,26 @@ impl ProviderHttpClient {
         &self,
         method: Method,
         url: U,
-    ) -> Result<RequestBuilder, ProviderHttpClientError> {
+    ) -> Result<ProviderRequestBuilder, ProviderHttpClientError> {
         let url = url.into_url()?;
         self.policy.validate_url_without_resolution(&url)?;
-        Ok(self.client.request(method, url))
+        Ok(ProviderRequestBuilder {
+            inner: self.client.request(method, url),
+        })
     }
 
-    pub fn get<U: IntoUrl>(&self, url: U) -> Result<RequestBuilder, ProviderHttpClientError> {
+    pub fn get<U: IntoUrl>(
+        &self,
+        url: U,
+    ) -> Result<ProviderRequestBuilder, ProviderHttpClientError> {
         self.request(Method::GET, url)
     }
 
-    pub fn post<U: IntoUrl>(&self, url: U) -> Result<RequestBuilder, ProviderHttpClientError> {
+    pub fn post<U: IntoUrl>(
+        &self,
+        url: U,
+    ) -> Result<ProviderRequestBuilder, ProviderHttpClientError> {
         self.request(Method::POST, url)
-    }
-
-    #[cfg(test)]
-    fn with_resolver(
-        policy: ProviderEndpointPolicy,
-        timeout: Duration,
-        resolver: Arc<dyn HostResolver>,
-    ) -> Result<Self, ProviderHttpClientError> {
-        Self::build(policy, timeout, ProviderClientMode::Request, resolver)
     }
 }
 
@@ -600,16 +610,18 @@ mod tests {
     #[tokio::test]
     async fn test_ssrf_safe_redirect_policy_rejects_private_redirect_targets()
     -> Result<(), Box<dyn std::error::Error>> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
+        let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let source_address = source.local_addr()?;
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let target_address = target.local_addr()?;
 
         let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await?;
+            let (mut stream, _) = source.accept().await?;
             let mut buffer = [0_u8; 1024];
             let bytes_read = stream.read(&mut buffer).await?;
             assert!(bytes_read > 0);
 
-            let location = format!("http://127.0.0.1:{}/private", address.port());
+            let location = format!("http://{target_address}/private");
             let body = "redirect";
             let response = format!(
                 "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -623,7 +635,7 @@ mod tests {
             .redirect(ssrf_safe_redirect_policy())
             .build()?;
         let result = client
-            .get(format!("http://127.0.0.1:{}/redirect", address.port()))
+            .get(format!("http://{source_address}/redirect"))
             .send()
             .await;
 
@@ -639,6 +651,12 @@ mod tests {
             format!("{error:?}").contains("SSRF validation"),
             "{error:?}"
         );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), target.accept())
+                .await
+                .is_err(),
+            "blocked redirect must not open the target socket"
+        );
         server.await??;
         Ok(())
     }
@@ -646,41 +664,47 @@ mod tests {
     #[tokio::test]
     async fn provider_client_rechecks_dns_at_connection_time_without_opening_socket()
     -> Result<(), Box<dyn std::error::Error>> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let url = reqwest::Url::parse(&format!("http://rebind.test:{}/v1", address.port()))?;
-        let resolver = Arc::new(SequenceResolver::new(vec![
-            vec![SocketAddr::from((
-                Ipv4Addr::new(93, 184, 216, 34),
-                address.port(),
-            ))],
-            vec![address],
-        ]));
-        let policy = ProviderEndpointPolicy::public_only();
+        for mode in [
+            ProviderClientMode::Request,
+            ProviderClientMode::Streaming,
+            ProviderClientMode::NoRedirect,
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let url = reqwest::Url::parse(&format!("http://rebind.test:{}/v1", address.port()))?;
+            let resolver = Arc::new(SequenceResolver::new(vec![
+                vec![SocketAddr::from((
+                    Ipv4Addr::new(93, 184, 216, 34),
+                    address.port(),
+                ))],
+                vec![address],
+            ]));
+            let policy = ProviderEndpointPolicy::public_only();
 
-        crate::core::net::ssrf_guard::validate_provider_endpoint_url_with_resolver(
-            &url,
-            policy.access(),
-            |host, _port| {
-                resolver
-                    .resolve(host)
-                    .map(|addresses| addresses.into_iter().map(|addr| addr.ip()).collect())
-                    .map_err(|error| SsrfError::HostResolutionFailed {
-                        host: host.to_string(),
-                        message: error.to_string(),
-                    })
-            },
-        )?;
+            crate::core::net::ssrf_guard::validate_provider_endpoint_url_with_resolver(
+                &url,
+                policy.access(),
+                |host, _port| {
+                    resolver
+                        .resolve(host)
+                        .map(|addresses| addresses.into_iter().map(|addr| addr.ip()).collect())
+                        .map_err(|error| SsrfError::HostResolutionFailed {
+                            host: host.to_string(),
+                            message: error.to_string(),
+                        })
+                },
+            )?;
 
-        let client = ProviderHttpClient::with_resolver(policy, Duration::from_secs(1), resolver)?;
-        let result = client.get(url)?.send().await;
-        assert!(result.is_err(), "request-time loopback rebind must fail");
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), listener.accept())
-                .await
-                .is_err(),
-            "blocked rebind must not open the target socket"
-        );
+            let client = ProviderHttpClient::build(policy, Duration::from_secs(1), mode, resolver)?;
+            let result = client.get(url)?.send().await;
+            assert!(result.is_err(), "{mode:?} loopback rebind must fail");
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err(),
+                "{mode:?} blocked rebind must not open the target socket"
+            );
+        }
         Ok(())
     }
 
@@ -715,6 +739,11 @@ mod tests {
             &base_url,
         )?;
         let client = ProviderHttpClient::new(policy, Duration::from_secs(1))?;
+        assert!(
+            client
+                .get("http://169.254.169.254/latest/meta-data/")
+                .is_err()
+        );
 
         let response = client.get(base_url)?.send().await?;
         assert_eq!(response.status(), reqwest::StatusCode::FOUND);
@@ -725,21 +754,6 @@ mod tests {
             "private-network mode must not follow redirects"
         );
         server.await??;
-        Ok(())
-    }
-
-    #[test]
-    fn private_provider_still_rejects_metadata_literal() -> Result<(), Box<dyn std::error::Error>> {
-        let policy = ProviderEndpointPolicy::for_base_url(
-            ProviderEndpointAccess::PrivateNetwork,
-            "http://127.0.0.1:11434",
-        )?;
-        let client = ProviderHttpClient::new(policy, Duration::from_secs(1))?;
-        assert!(
-            client
-                .get("http://169.254.169.254/latest/meta-data/")
-                .is_err()
-        );
         Ok(())
     }
 

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::str::FromStr;
 use url::Url;
 
@@ -147,7 +147,8 @@ fn endpoint_authority(url: &Url) -> Result<String, SsrfError> {
         .ok_or_else(|| SsrfError::MissingHost {
             url: url.to_string(),
         })?;
-    Ok(format!("{}:{port}", host.to_ascii_lowercase()))
+    let host = host.to_ascii_lowercase();
+    Ok(format!("{}://{host}:{port}", url.scheme()))
 }
 
 /// Parse and validate an outbound URL string.
@@ -335,8 +336,16 @@ pub fn is_private_or_reserved_host(host: &str) -> bool {
 
 /// Returns true when an address is allowed by a provider endpoint access policy.
 pub fn is_provider_endpoint_ip_allowed(access: ProviderEndpointAccess, ip: &IpAddr) -> bool {
-    !is_private_or_reserved_ip(ip)
-        || (access == ProviderEndpointAccess::PrivateNetwork && is_private_network_ip(ip))
+    !is_metadata_ip(ip)
+        && (!is_private_or_reserved_ip(ip)
+            || (access == ProviderEndpointAccess::PrivateNetwork && is_private_network_ip(ip)))
+}
+
+fn is_metadata_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.octets() == [169, 254, 169, 254],
+        IpAddr::V6(v6) => v6.segments() == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254],
+    }
 }
 
 fn is_private_network_ip(ip: &IpAddr) -> bool {
@@ -358,13 +367,28 @@ fn is_private_network_ip(ip: &IpAddr) -> bool {
     }
 }
 
+fn is_non_global_ietf_protocol_assignment(ip: &Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    if segments[0] != 0x2001 || segments[1] >= 0x0200 {
+        return false;
+    }
+
+    let raw = u128::from_be_bytes(ip.octets());
+    let anycast = raw.wrapping_sub(0x2001_0001_0000_0000_0000_0000_0000_0001) <= 2;
+    let globally_reachable = anycast
+        || segments[1] == 0x0003
+        || (segments[1] == 0x0004 && segments[2] == 0x0112)
+        || (0x0020..=0x003f).contains(&segments[1]);
+    !globally_reachable
+}
+
 /// Check whether a parsed IP address falls within private or reserved ranges.
 pub fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             let octets = v4.octets();
 
-            octets == [0, 0, 0, 0]
+            octets[0] == 0
                 || octets[0] == 10
                 || octets[0] == 127
                 || (octets[0] == 100 && (64..=127).contains(&octets[1]))
@@ -376,6 +400,7 @@ pub fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
                 || (octets[0] == 198 && (18..=19).contains(&octets[1]))
                 || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
                 || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+                || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
                 || octets[0] >= 240
                 || v4.is_broadcast()
                 || v4.is_multicast()
@@ -386,32 +411,26 @@ pub fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
             }
 
             let segments = v6.segments();
-            // fc00::/7 unique-local.
-            if (segments[0] & 0xfe00) == 0xfc00 {
-                return true;
-            }
-            // fe80::/10 link-local.
-            if (segments[0] & 0xffc0) == 0xfe80 {
-                return true;
-            }
-            // fec0::/10 deprecated site-local.
-            if (segments[0] & 0xffc0) == 0xfec0 {
-                return true;
-            }
-            // 2001:db8::/32 documentation and 2001:2::/48 benchmarking.
-            if segments[0] == 0x2001 && matches!(segments[1], 0x0db8 | 0x0002) {
-                return true;
-            }
-            // 100::/64 discard-only prefix.
-            if segments[..4] == [0x0100, 0, 0, 0] {
-                return true;
-            }
-            // ::ffff:0:0/96 IPv4-mapped.
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return is_private_or_reserved_ip(&IpAddr::V4(v4));
             }
+            if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
+                let v4 = Ipv4Addr::from((u32::from(segments[6]) << 16) | u32::from(segments[7]));
+                return is_private_or_reserved_ip(&IpAddr::V4(v4));
+            }
 
-            false
+            segments[..6] == [0, 0, 0, 0, 0, 0]
+                || (segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2] == 1)
+                || segments[..4] == [0x0100, 0, 0, 0]
+                || segments[..4] == [0x0100, 0, 0, 1]
+                || is_non_global_ietf_protocol_assignment(v6)
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || segments[0] == 0x2002
+                || (segments[0] == 0x3fff && segments[1] & 0xf000 == 0)
+                || segments[0] == 0x5f00
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] & 0xffc0) == 0xfec0
         }
     }
 }
@@ -459,6 +478,7 @@ mod tests {
     fn private_and_reserved_ipv4_addresses_are_rejected() {
         for ip in [
             Ipv4Addr::new(0, 0, 0, 0),
+            Ipv4Addr::new(0, 0, 0, 1),
             Ipv4Addr::new(10, 1, 2, 3),
             Ipv4Addr::new(100, 64, 0, 1),
             Ipv4Addr::new(127, 0, 0, 1),
@@ -484,6 +504,9 @@ mod tests {
             "2001:db8::1".parse().unwrap(),
             "2001:2::1".parse().unwrap(),
             "100::1".parse().unwrap(),
+            "64:ff9b:1::1".parse().unwrap(),
+            "3fff::1".parse().unwrap(),
+            "5f00::1".parse().unwrap(),
             "::ffff:127.0.0.1".parse().unwrap(),
         ] {
             assert!(is_private_or_reserved_ip(&IpAddr::V6(ip)), "{ip}");
@@ -623,6 +646,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
             IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1)),
             IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+            IpAddr::V6("fd00:ec2::254".parse().unwrap()),
             IpAddr::V6("fe80::1".parse().unwrap()),
         ] {
             assert!(!is_provider_endpoint_ip_allowed(private, &ip), "{ip}");
@@ -660,11 +684,14 @@ mod tests {
                 .validate_url_without_resolution(&parse_test_url("http://localhost:11434/api/chat"))
                 .is_ok()
         );
-        assert!(matches!(
-            policy.validate_url_without_resolution(&parse_test_url(
-                "http://localhost:11435/api/chat"
-            )),
-            Err(SsrfError::AuthorityMismatch { .. })
-        ));
+        for mismatched in [
+            "http://localhost:11435/api/chat",
+            "https://localhost:11434/api/chat",
+        ] {
+            assert!(matches!(
+                policy.validate_url_without_resolution(&parse_test_url(mismatched)),
+                Err(SsrfError::AuthorityMismatch { .. })
+            ));
+        }
     }
 }
