@@ -39,12 +39,17 @@ debug 环境启用，凭证一旦落盘就会扩大泄露面，并可能被具�
 - [ ] `AuthMethod::None` 仍可安全格式化并可识别。
 - [ ] 任何日志调用都不能绕过安全 formatter 观察 `AuthMethod` 的内部凭证字段。
 - [ ] 认证成功、失败、方法选择与 HTTP 行为保持不变；唯一可观察变化是 `AuthMethod` 调试文本被脱敏。
+- [ ] Issue 中“合并前取得人类审查”的 workflow 项以
+  `GH957-MAINTAINER-WAIVER-2026-07-12 / WAIVE_NON_AUTHOR_HUMAN_APPROVAL` 明确处置；该处置不构成
+  GitHub `APPROVED` review，也不替代绑定 current head 的独立安全 reviewer、CI、review threads、PR gate
+  或 runtime gate。
 
 ## 边界情况
 
 - 空字符串、Unicode、换行符与类似日志控制字符的凭证都必须得到相同固定输出。
 - 凭证内容恰好为 `[REDACTED]` 时，输出仍与所有其他输入完全相同，不能观察到输入差异。
-- 其他直接输出 session identifier 的日志已独立拆到 #969，不属于本 issue 的完成声明。
+- 其他直接输出 session identifier 的日志仅 referral 到 #969；GH957/PR #970 不实现、不验证、不
+  supersede、不关闭、也不为 #969 提供 coverage。
 
 ## 发布说明
 

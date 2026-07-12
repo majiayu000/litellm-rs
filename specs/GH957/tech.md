@@ -36,156 +36,95 @@ Link to `product.md`.
 6. 对 `src/**/*.rs` 全部 production Rust sources 做定向搜索，检查 `AuthMethod` 值、内部字段及认证入口
    是否被日志或格式化调用绕过安全 formatter。审查证据必须逐项处置每个相关命中，记录
    `path:line`、用途、是否到达输出 sink、结论与跟踪 issue；不能用“人工看过”概括。已确认的独立
-   session identifier 日志只有在逐项指向 #969 后才能保持 scope split。
+   session identifier 日志只有在逐项 referral 到 #969 后才能保持 scope split；该 referral 只是分类证据，
+   不代表 #969 已实现、验证或通过。
 
 ## Implementation Preconditions
 
-1. `product.md` 与 `tech.md` 必须获得绑定 spec PR 当前 head 的 trusted-human 安全审查。reviewer 必须与
-   PR author、agent 和 bot 身份不同，并在 `APPROVED` review body 中包含精确 marker
-   `GH957-SPEC-SECURITY-SCOPE-APPROVED`；agent 自检、agent 代交或普通评论不能替代该 gate。
-2. Draft PR #954 已修改 `src/auth/types.rs` 并包含同一实现候选。开始实现前必须将 #954 安全地拆分或
-   标记 superseded。关闭时的 supersession comment 必须明确写出 PR #954 已 superseded，链接 #957、
-   active successor PR 及其 closure-time head；关闭后不得有任何 open PR 修改同一实现文件，T4 才能
-   创建新的 implementation diff。
-3. 最终 implementation PR 在合并前必须再次取得绑定当前 head 的 trusted-human auth/security review，
-   review body 包含精确 marker `GH957-IMPLEMENTATION-SECURITY-SCOPE-APPROVED`。spec approval 不能复用为
-   implementation approval。
+1. 维护者必须明确处置本 issue 的 human gate。当前处置是维护者 `lifcc` 在 2026-07-12 当前会话中的
+   原话 `你可以merge 放开 humangate`；它授权本次 implx run 对剩余 maintainer-only authorization 和
+   disposition gates 使用保守默认值，并授权证据齐全后的 merge。该 waiver 不替代 CI、current-head
+   独立 reviewer、review threads、PR gate、merge state 或 runtime gate。
+2. `product.md`、`tech.md` 与 `tasks.md` 必须获得绑定 spec PR 最终 current head 的独立只读安全审查。
+   reviewer lane 不能是 coordinator，且必须记录 native thread ID、head SHA、verdict 和 unresolved findings；
+   spec PR gate 与 runtime ledger gate 也必须通过。
+3. Draft PR #954 已修改 `src/auth/types.rs` 并包含同一实现候选。开始实现前必须验证 #954 仍为 `CLOSED`，
+   并验证没有 open PR 修改 `src/auth/types.rs`。不得为了补造历史 marker 或 timestamp 而 reopen/close #954。
+4. 最终 implementation PR 在合并前必须再次取得绑定 implementation current head 的独立 auth/security
+   reviewer verdict；spec reviewer evidence 不能复用。该 verdict 与标准 PR gate 共同保留安全审查边界。
 
 ## Fail-closed Gate Contracts
 
-### `GH957-TRUSTED-HUMAN-LOGIN-ALLOWLIST`
+### `GH957-GATE-MAINTAINER-WAIVER`
 
-Machine-facing committed declaration: `GH957_TRUSTED_HUMAN_LOGINS_JSON='[]'`。该空数组是当前唯一允许的值；
-只有后续 spec commit 才能用真实 human GitHub login 修改它，并且该新 head 必须重新审查。canonical gate
-会在自身内部以 `readonly` 重新声明同一值，不读取 runtime reviewer allowlist。
+- waiver evidence 必须位于本次运行的本地 `.specrail/runtime/current.json`，不得提交进仓库，也不得声称
+  它是 GitHub `APPROVED` review。
+- evidence 必须精确记录 actor、source、原话、记录时间、授权 scope，以及仍保留的六类 gate。缺失、改写、
+  扩大 scope 或将 waiver 当作 independent review 都失败。
+- GH957 disposition 必须精确为 `GH957-MAINTAINER-WAIVER-2026-07-12` /
+  `WAIVE_NON_AUTHOR_HUMAN_APPROVAL`，scope 只覆盖 `SP957-T2` 与 `SP957-T8` 的 non-author human
+  `APPROVED`-review conjunct，并明确列出它不构成 human review 或 GitHub `APPROVED` review。
+- waiver 是 run-scoped maintainer decision，不绑定某个 head；spec 和 implementation 各自仍必须取得新的
+  current-head independent reviewer evidence。
 
-### `GH957-GATE-HUMAN-APPROVAL`
-
-- committed trusted-human login allowlist 的唯一权威值是 canonical command 内的
-  `GH957_TRUSTED_HUMAN_LOGINS_JSON='[]'`。当前值显式为空，因此 T2/T8 必须 fail closed。不得通过环境变量、
-  CLI 参数或其他 runtime input 增加 reviewer；维护者必须先编辑并提交该 literal，写入真实的 GitHub human
-  login，然后让更新后的 spec head 重新通过独立人类审查。当前 spec 不预设或虚构任何 trusted person。
-- reviewer login 必须同时属于上述 committed allowlist，且 GitHub `authorAssociation` 为 `OWNER`、
-  `MEMBER` 或 `COLLABORATOR`。allowlist membership 不能替代 association/User/non-author/non-bot 检查，
-  metadata 缺失也不能降级放行。
-- 使用 GraphQL 拉取 PR author、`headRefOid` 和最多 100 条 reviews，并断言没有下一页。至少一条 review
-  必须同时满足：`APPROVED`、`commit.oid == headRefOid`、精确 marker、trusted association、actor type 为
-  `User`、login 不等于 PR author 且不是 bot/agent。review 必须由该人类 reviewer 本人提交；agent review
-  或 agent 对 review 的转述不构成证据。
-- gate evidence 必须记录查询 UTC、PR number、`headRefOid`、reviewer login、association、review commit
-  与 marker；任一字段缺失或 reviews pagination 未闭合都失败。
-
-Canonical command（`PR`、`EXPECTED_HEAD`、`APPROVAL_MARKER` 由 T2/T8 固定；trusted-human allowlist 只能
-通过 committed literal 修改，不能接受 runtime override）：
+Canonical command：
 
 ```bash
 set -euo pipefail
-readonly GH957_TRUSTED_HUMAN_LOGINS_JSON='[]'
-: "${PR:?set PR to the numeric pull request number}"
-: "${EXPECTED_HEAD:?set EXPECTED_HEAD to the reviewed 40-character SHA}"
-: "${APPROVAL_MARKER:?set APPROVAL_MARKER}"
-case "$APPROVAL_MARKER" in
-  GH957-SPEC-SECURITY-SCOPE-APPROVED|GH957-IMPLEMENTATION-SECURITY-SCOPE-APPROVED) ;;
-  *) exit 1 ;;
-esac
-test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+: "${WAIVER_EVIDENCE:?set WAIVER_EVIDENCE to the current runtime checkpoint}"
 date -u +%Y-%m-%dT%H:%M:%SZ
-gh api graphql -F pr="$PR" -f query='query($pr:Int!) {
-  repository(owner:"majiayu000", name:"litellm-rs") {
-    pullRequest(number:$pr) {
-      author { __typename login }
-      headRefOid
-      reviews(first:100) {
-        pageInfo { hasNextPage }
-        nodes {
-          state
-          body
-          commit { oid }
-          authorAssociation
-          author { __typename login }
-        }
-      }
-    }
-  }
-}' | jq -e \
-  --arg head "$EXPECTED_HEAD" \
-  --arg marker "$APPROVAL_MARKER" \
-  --argjson trusted_humans "$GH957_TRUSTED_HUMAN_LOGINS_JSON" '
-  .data.repository.pullRequest as $pr
-  | ($pr != null)
-    and ($pr.headRefOid == $head)
-    and ($pr.author.__typename == "User")
-    and ($pr.reviews.pageInfo.hasNextPage == false)
-    and ($trusted_humans | type == "array" and length > 0)
+jq -e '
+  .intent_contract.maintainer_human_gate_waiver as $waiver
+  | ($waiver.issue_dispositions | map(select(.issue == 957)) | .[0]) as $gh957
+  | ($waiver.actor == "lifcc")
+    and ($waiver.source == "current conversation")
+    and ($waiver.quoted_authorization == "你可以merge 放开 humangate")
+    and ($waiver.recorded_at | test("^2026-07-12T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+    and ($waiver.scope | contains("remaining maintainer authorization"))
+    and ($gh957.waiver_id == "GH957-MAINTAINER-WAIVER-2026-07-12")
+    and ($gh957.decision == "WAIVE_NON_AUTHOR_HUMAN_APPROVAL")
+    and ($gh957.task_scope == [
+      "SP957-T2",
+      "SP957-T8 non-author human APPROVED-review conjunct only"
+    ])
+    and (["human review", "GitHub APPROVED review"] - $gh957.not_evidence_of | length == 0)
     and ([
-      $pr.reviews.nodes[]
-      | select(
-          .state == "APPROVED"
-          and .commit.oid == $head
-          and (.body | split("\n") | map(rtrimstr("\r")) | index($marker) != null)
-          and .author.__typename == "User"
-          and .author.login != $pr.author.login
-          and ((.author.login | test("\\[bot\\]$"; "i")) | not)
-          and (.author.login as $login | ($trusted_humans | index($login)) != null)
-          and (
-            .authorAssociation == "OWNER"
-            or .authorAssociation == "MEMBER"
-            or .authorAssociation == "COLLABORATOR"
-          )
-        )
-    ] | length > 0)
-'
+      "fresh CI",
+      "independent current-head reviewer lane",
+      "resolved review threads",
+      "clean merge state",
+      "offline PR gate",
+      "runtime ledger gate"
+    ] - $waiver.preserved_gates | length == 0)
+' "$WAIVER_EVIDENCE"
 ```
 
-### `GH957-GATE-SUPERSESSION`
+### `GH957-GATE-SUPERSESSION-STATE`
 
-- 关闭 #954 前，先验证 successor PR 为 `OPEN`，记录其 number、URL、40 位 `headRefOid` 与 UTC。
-- #954 的 closure-time comment 必须使用 marker `GH957-SUPERSESSION`，明确包含 “PR #954 is
-  superseded”，并给出 `https://github.com/majiayu000/litellm-rs/issues/957`、active successor 的完整 PR URL
-  和指向上述 head SHA 的完整 commit URL。comment 必须不晚于 `closedAt`；successor 必须已在
-  `closedAt` 前创建且当时为 active。
-- `PRE_CLOSE_AT` 必须在发布 exact comment 并关闭 #954 的紧邻前一步记录；GraphQL 必须证明
-  `PRE_CLOSE_AT <= comment.createdAt <= closedAt`。
-- 关闭后 GraphQL 证据必须证明 #954 为 `CLOSED`、marker/comment/timestamp 完整，并证明 open PR 中
-  `src/auth/types.rs` overlap set 为空。successor 保持 `OPEN` 且 current head 未变，但它此时不得修改该文件；
-  comments、open PRs 或 files 任一连接有下一页即失败。
+- #954 必须为 `CLOSED`，其远端文件列表必须包含 `src/auth/types.rs`，证明它确实是被处置的重叠候选。
+- 既有 OWNER disposition comment 的 database ID 必须为 `4937803331`，其时间不晚于 `closedAt`，正文必须
+  指向 #957 replacement 并明确本 PR 不合并；comments/files pagination 必须闭合。
+- 创建 implementation diff 前，所有 open PR 的 `src/auth/types.rs` overlap set 必须精确为空；API error、
+  null 或 pagination 都失败。
+- 该 gate 验证当前远端状态，不通过 reopen/close 修改历史来制造 closure-time evidence。
 
-Canonical closure oracle（comment body 必须精确等于 `EXPECTED_COMMENT`；`PRE_CLOSE_AT` 与 comment/close
-命令之间不得插入其他操作）：
+Canonical command：
 
 ```bash
 set -euo pipefail
-: "${SUCCESSOR_PR:?set SUCCESSOR_PR to the numeric active successor PR}"
-PRE_CLOSE_JSON=$(gh pr view "$SUCCESSOR_PR" --repo majiayu000/litellm-rs \
-  --json number,state,url,createdAt,headRefOid)
-SUCCESSOR_HEAD_AT_CLOSURE=$(printf '%s\n' "$PRE_CLOSE_JSON" | jq -er '
-  select(.state == "OPEN") | .headRefOid | select(test("^[0-9a-f]{40}$"))
-')
-SUCCESSOR_URL="https://github.com/majiayu000/litellm-rs/pull/$SUCCESSOR_PR"
-SUCCESSOR_HEAD_URL="$SUCCESSOR_URL/commits/$SUCCESSOR_HEAD_AT_CLOSURE"
-EXPECTED_COMMENT="GH957-SUPERSESSION: PR #954 is superseded for https://github.com/majiayu000/litellm-rs/issues/957 by active successor $SUCCESSOR_URL at head $SUCCESSOR_HEAD_URL."
-printf '%s\n%s\n' "$PRE_CLOSE_JSON" "$EXPECTED_COMMENT"
-PRE_CLOSE_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-gh pr comment 954 --repo majiayu000/litellm-rs --body "$EXPECTED_COMMENT"
-gh pr close 954 --repo majiayu000/litellm-rs
-printf '%s\n' "$PRE_CLOSE_AT"
-
-gh api graphql -F successor="$SUCCESSOR_PR" -f query='query($successor:Int!) {
+gh api graphql -f query='query {
   repository(owner:"majiayu000", name:"litellm-rs") {
     old: pullRequest(number:954) {
       state
       closedAt
+      files(first:100) {
+        pageInfo { hasNextPage }
+        nodes { path }
+      }
       comments(first:100) {
         pageInfo { hasNextPage }
-        nodes { body createdAt }
+        nodes { databaseId body createdAt authorAssociation }
       }
-    }
-    successor: pullRequest(number:$successor) {
-      number
-      state
-      url
-      createdAt
-      headRefOid
     }
     pullRequests(states:OPEN, first:100) {
       pageInfo { hasNextPage }
@@ -198,34 +137,28 @@ gh api graphql -F successor="$SUCCESSOR_PR" -f query='query($successor:Int!) {
       }
     }
   }
-}' | jq -e \
-  --argjson successor "$SUCCESSOR_PR" \
-  --arg successor_url "$SUCCESSOR_URL" \
-  --arg successor_head "$SUCCESSOR_HEAD_AT_CLOSURE" \
-  --arg pre_close_at "$PRE_CLOSE_AT" \
-  --arg expected_comment "$EXPECTED_COMMENT" '
+}' | jq -e '
   .data.repository as $repo
-  | $repo.old.closedAt as $closed_at
-  | ($repo.old != null)
-    and ($repo.successor != null)
-    and ($repo.old.state == "CLOSED")
-    and ($closed_at != null)
-    and ($repo.old.comments.pageInfo.hasNextPage == false)
-    and ($repo.pullRequests.pageInfo.hasNextPage == false)
-    and all($repo.pullRequests.nodes[]; .files.pageInfo.hasNextPage == false)
-    and ($repo.successor.number == $successor)
-    and ($repo.successor.state == "OPEN")
-    and ($repo.successor.url == $successor_url)
-    and ($repo.successor.headRefOid == $successor_head)
-    and ($repo.successor.createdAt <= $closed_at)
-    and ($pre_close_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-    and any($repo.old.comments.nodes[];
-      .body == $expected_comment
-      and (($pre_close_at | fromdateiso8601) <= (.createdAt | fromdateiso8601))
-      and ((.createdAt | fromdateiso8601) <= ($closed_at | fromdateiso8601))
+  | $repo.pullRequests as $prs
+  | $repo.old as $old
+  | ($old != null)
+    and ($old.state == "CLOSED")
+    and ($old.closedAt != null)
+    and ($old.files.pageInfo.hasNextPage == false)
+    and any($old.files.nodes[]; .path == "src/auth/types.rs")
+    and ($old.comments.pageInfo.hasNextPage == false)
+    and any($old.comments.nodes[];
+      .databaseId == 4937803331
+      and .authorAssociation == "OWNER"
+      and .createdAt <= $old.closedAt
+      and (.body | contains("#957"))
+      and (.body | contains("不合并本 PR"))
     )
+    and ($prs != null)
+    and ($prs.pageInfo.hasNextPage == false)
+    and all($prs.nodes[]; .files.pageInfo.hasNextPage == false)
     and ([
-      $repo.pullRequests.nodes[]
+      $prs.nodes[]
       | select(any(.files.nodes[]; .path == "src/auth/types.rs"))
       | .number
     ] | length == 0)
@@ -262,10 +195,12 @@ cargo test --all-features --lib \
   check 也必须处于成功终态；`statusCheckRollup.contexts(first:100)` 必须没有下一页。空集合、pending、
   skipped、neutral、cancelled、未知类型或 pagination 均失败。
 - GraphQL `reviewThreads(first:100)` 必须没有下一页且 unresolved count 精确为 0；最终 open-PR/files
-  查询也必须没有下一页，且 `src/auth/types.rs` overlap set 精确只有当前 implementation PR。随后对同一
-  `headRefOid` 执行 `GH957-GATE-HUMAN-APPROVAL`。任何 API/query/error/null 都失败，不允许降级为 warning。
+- GraphQL `reviewThreads(first:100)` 必须没有下一页且 unresolved count 精确为 0；最终 open-PR/files
+  查询也必须没有下一页，且 `src/auth/types.rs` overlap set 精确只有当前 implementation PR。随后必须对
+  同一 `headRefOid` 收集独立 reviewer verdict，并重新执行 `GH957-GATE-MAINTAINER-WAIVER`。任何
+  API/query/error/null 都失败，不允许降级为 warning。
 
-Canonical command（随后必须用同一 `HEAD_SHA` 执行 implementation approval command）：
+Canonical command（随后必须用同一 `HEAD_SHA` 收集 independent review 和 waiver evidence）：
 
 ```bash
 set -euo pipefail
@@ -377,10 +312,8 @@ gh api graphql -F pr="$PR" -f query='query($pr:Int!) {
     ] | sort == [$pr_number])
 '
 
-EXPECTED_HEAD="$HEAD_SHA"
-APPROVAL_MARKER=GH957-IMPLEMENTATION-SECURITY-SCOPE-APPROVED
-export PR EXPECTED_HEAD APPROVAL_MARKER
-# Run GH957-GATE-HUMAN-APPROVAL here without changing HEAD_SHA or PR.
+# Collect current-head independent reviewer evidence, then run
+# GH957-GATE-MAINTAINER-WAIVER without changing HEAD_SHA or PR.
 ```
 
 ## Product-to-Test Mapping
