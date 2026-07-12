@@ -75,11 +75,11 @@ impl AuthSystem {
 
         // Extract session ID from token
         if let Ok(claims) = self.jwt.verify_access_token(session_token).await
-            && let Some(session_id) = claims.session_id
+            && claims.session_id.is_some()
         {
             // Store invalidated session (in practice, you'd use Redis or similar)
             // For now, just log the session invalidation
-            info!("Invalidated session: {}", session_id);
+            info!("Session invalidated");
         }
 
         Ok(())

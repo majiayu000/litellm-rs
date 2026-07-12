@@ -518,7 +518,7 @@ pub async fn oauth_logout(
         if let Err(e) = oauth.session_store.delete(&sid).await {
             warn!("Failed to delete session during logout: {:?}", e);
         } else {
-            debug!("Session deleted: {}", sid);
+            debug!("Session deleted");
         }
     }
 

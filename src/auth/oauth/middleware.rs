@@ -206,7 +206,7 @@ where
                         }
                         Ok(None) => {
                             if require_auth {
-                                warn!("Invalid or expired session: {}", sid);
+                                warn!("Invalid or expired session");
                                 Err(actix_web::error::ErrorUnauthorized("Invalid session"))
                             } else {
                                 fut.await

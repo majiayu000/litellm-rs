@@ -54,6 +54,9 @@ jobs:
       - name: Core subsystem registry guard
         run: bash scripts/guards/check_core_subsystem_registry.sh
 
+      - name: Log PII guard
+        run: bash scripts/guards/check_log_pii.sh
+
   test:
     name: Test
     runs-on: ubuntu-latest

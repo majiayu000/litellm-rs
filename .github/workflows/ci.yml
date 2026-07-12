@@ -59,6 +59,9 @@ jobs:
       - name: Core subsystem registry guard
         run: bash scripts/guards/check_core_subsystem_registry.sh
 
+      - name: Log PII guard
+        run: bash scripts/guards/check_log_pii.sh
+
       - name: PR scope guard
         if: github.event_name == 'pull_request'
         run: |
