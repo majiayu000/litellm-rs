@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -97,36 +98,57 @@ def _char_literal_end(source: str, index: int) -> int | None:
 def _format_capture_identifiers(value: str) -> set[str]:
     captures: set[str] = set()
     index = 0
-
-    while index < len(value):
-        opening = value.find("{", index)
-        if opening < 0:
-            break
-        if opening + 1 < len(value) and value[opening + 1] == "{":
+    while (opening := value.find("{", index)) >= 0:
+        if value.startswith("{{", opening):
             index = opening + 2
             continue
-
         closing = value.find("}", opening + 1)
         if closing < 0:
             break
-        placeholder = value[opening + 1 : closing]
-        cursor = 0
-        while cursor < len(placeholder):
-            if placeholder[cursor].isalpha() or placeholder[cursor] == "_":
-                end = cursor + 1
-                while end < len(placeholder) and (
-                    placeholder[end].isalnum() or placeholder[end] == "_"
-                ):
-                    end += 1
-                name = placeholder[cursor:end]
-                if name in SESSION_IDENTIFIERS:
-                    captures.add(name)
-                cursor = end
-            else:
-                cursor += 1
+        names = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", value[opening + 1 : closing]))
+        captures.update(names & SESSION_IDENTIFIERS)
         index = closing + 1
-
     return captures
+
+
+def _decode_cooked_format(value: str, path: Path, line: int) -> str:
+    decoded: list[str] = []
+    index = 0
+    while index < len(value):
+        if value[index] != "\\":
+            decoded.append(value[index])
+            index += 1
+            continue
+        if index + 1 >= len(value):
+            raise ScanError(f"{path}:{line}: incomplete string escape")
+        escape = value[index + 1]
+        if escape == "x":
+            digits = value[index + 2 : index + 4]
+            index += 4
+        elif escape == "u" and value.startswith("\\u{", index):
+            closing = value.find("}", index + 3)
+            if closing < 0:
+                raise ScanError(f"{path}:{line}: incomplete Unicode escape")
+            digits = value[index + 3 : closing].replace("_", "")
+            index = closing + 1
+        elif escape in "\r\n":
+            index += 2
+            if escape == "\r" and index < len(value) and value[index] == "\n":
+                index += 1
+            while index < len(value) and value[index].isspace():
+                index += 1
+            continue
+        elif escape in "0tnr\"'\\":
+            decoded.append(" ")
+            index += 2
+            continue
+        else:
+            raise ScanError(f"{path}:{line}: unsupported string escape \\{escape}")
+        try:
+            decoded.append(chr(int(digits, 16)))
+        except (ValueError, OverflowError) as error:
+            raise ScanError(f"{path}:{line}: invalid string escape") from error
+    return "".join(decoded)
 
 
 def tokenize(source: str, path: Path) -> list[Token]:
@@ -170,7 +192,7 @@ def tokenize(source: str, path: Path) -> list[Token]:
         raw_span = _raw_string_span(source, index, path)
         if raw_span is not None:
             raw_end, raw_value = raw_span
-            tokens.append(Token("string", raw_value, line))
+            tokens.append(Token("raw_string", raw_value, line))
             line += source.count("\n", index, raw_end)
             index = raw_end
             continue
@@ -178,7 +200,8 @@ def tokenize(source: str, path: Path) -> list[Token]:
         if char == '"' or (char in "bc" and source.startswith('"', index + 1)):
             quote_index = index if char == '"' else index + 1
             end = _skip_quoted(source, quote_index, path)
-            tokens.append(Token("string", source[quote_index + 1 : end - 1], line))
+            value = _decode_cooked_format(source[quote_index + 1 : end - 1], path, line)
+            tokens.append(Token("cooked_string", value, line))
             line += source.count("\n", index, end)
             index = end
             continue
@@ -243,6 +266,24 @@ def _matching_delimiter(tokens: list[Token], open_index: int, path: Path) -> int
     raise ScanError(f"{path}:{token.line}: unterminated log macro invocation")
 
 
+def _format_template_token(tokens: list[Token], start: int, end: int) -> Token | None:
+    depth: list[str] = []
+    segment_start = True
+    for token in tokens[start:end]:
+        if not depth and token.kind == "punctuation" and token.value in {",", ";"}:
+            segment_start = True
+            continue
+        if not depth and segment_start:
+            segment_start = False
+            if token.kind in {"cooked_string", "raw_string"}:
+                return token
+        if token.kind == "punctuation" and token.value in OPEN_TO_CLOSE:
+            depth.append(token.value)
+        elif token.kind == "punctuation" and token.value in CLOSE_TO_OPEN and depth:
+            depth.pop()
+    return None
+
+
 def scan_source(source: str, path: Path) -> list[Finding]:
     tokens = tokenize(source, path)
     findings: list[Finding] = []
@@ -257,8 +298,9 @@ def scan_source(source: str, path: Path) -> list[Finding]:
         for token in tokens[open_index + 1 : close_index]:
             if token.kind == "identifier" and token.value in SESSION_IDENTIFIERS:
                 identifier_set.add(token.value)
-            elif token.kind == "string":
-                identifier_set.update(_format_capture_identifiers(token.value))
+        template = _format_template_token(tokens, open_index + 1, close_index)
+        if template is not None:
+            identifier_set.update(_format_capture_identifiers(template.value))
         identifiers = tuple(sorted(identifier_set))
         if identifiers:
             findings.append(Finding(path, tokens[index].line, macro, identifiers))
@@ -284,20 +326,18 @@ def run_self_test() -> None:
     source = r"""
 fn examples(sid: &str, session_token: &str, session_id: &str) {
     warn!("invalid session; {}", sid);
-    match true {
-        true => tracing::trace!("invalid {}", session_token),
-        false => info!("valid"),
-    }
-    debug!(
-        "nested {}",
-        redact(session_id.clone()),
-    );
-    error!("implicit {sid}");
-    tracing::error!(r#"raw {session_token:?}"#);
-    trace!("dynamic width {value:session_id$}");
+    match true { true => tracing::trace!("invalid {}", session_token), false => info!("valid"), }
+    debug!("nested {}", redact(session_id.clone()));
+    error!("implicit {sid}"); tracing::error!(r#"raw {session_token:?}"#); trace!("dynamic width {value:session_id$}");
+    warn!("\x7bsid\x7d");
+    warn!("\u{7b}session_token\u{7d}");
+    warn!("{session_\
+        id}");
     info!("session_id and sid are text only");
     warn!("escaped {{session_id}} and {{sid:?}}");
     debug!(r#"raw escaped {{session_token}}"#);
+    warn!("{}", "{sid}");
+    tracing::warn!(target: "oauth::{session_id}", "event");
     let raw = r#"warn!(session_token)"#;
     // error!("{}", session_id);
     /* warn!("{}", sid); */
@@ -314,6 +354,9 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
         ("error", ("sid",)),
         ("tracing::error", ("session_token",)),
         ("trace", ("session_id",)),
+        ("warn", ("sid",)),
+        ("warn", ("session_token",)),
+        ("warn", ("session_id",)),
     ]
     if actual != expected:
         raise ScanError(f"self-test mismatch: expected {expected}, got {actual}")
