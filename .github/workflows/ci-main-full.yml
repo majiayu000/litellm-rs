@@ -54,6 +54,11 @@ jobs:
       - name: Core subsystem registry guard
         run: bash scripts/guards/check_core_subsystem_registry.sh
 
+      - name: Install guard dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
       - name: Log PII guard
         run: bash scripts/guards/check_log_pii.sh
 
