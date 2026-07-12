@@ -12,8 +12,12 @@ mod tests {
     use litellm_rs::core::models::{ApiKey, Metadata, RateLimits, UsageStats};
     use litellm_rs::storage::StorageLayer;
     use litellm_rs::storage::database::{Database, DatabaseBackendType, migration::Migrator};
-    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
-    use sea_orm_migration::MigratorTrait;
+    use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, Statement, Value};
+    use sea_orm_migration::{
+        MigratorTrait, SchemaManager,
+        prelude::{Alias, Table},
+        seaql_migrations,
+    };
     use tempfile::TempDir;
     use tokio::sync::Mutex;
     use uuid::Uuid;
@@ -243,28 +247,42 @@ mod tests {
             Ok(db) => db,
             Err(err) => panic!("SQLite file database should connect: {}", err),
         };
-        let migrations = Migrator::migrations();
-        let budget_migration = migrations
-            .last()
-            .expect("budget migration should be last")
-            .name()
-            .to_string();
-        assert_eq!(
-            budget_migration, "m20240501_000001_create_budget_limit_snapshots",
-            "test setup depends on budget snapshots being the only pending migration"
-        );
-        let migrations_before_budget = match migrations.len().checked_sub(1) {
-            Some(count) => count,
-            None => panic!("migration list should not be empty"),
-        };
-        drop(migrations);
-        if let Err(err) = Migrator::up(db.connection(), Some(migrations_before_budget as u32)).await
-        {
-            panic!(
-                "core migrations should apply before budget migration: {}",
-                err
-            );
+        let budget_migration = "m20240501_000001_create_budget_limit_snapshots";
+        if let Err(err) = db.migrate().await {
+            panic!("complete schema should migrate before test setup: {}", err);
         }
+        let schema_manager = SchemaManager::new(db.connection());
+        if let Err(err) = schema_manager
+            .drop_table(
+                Table::drop()
+                    .table(Alias::new("budget_limit_snapshots"))
+                    .to_owned(),
+            )
+            .await
+        {
+            panic!("budget snapshot table should be removed for test setup: {err}");
+        }
+        let delete_result = match seaql_migrations::Entity::delete_by_id(budget_migration)
+            .exec(db.connection())
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => panic!("budget migration ledger entry should be removed: {err}"),
+        };
+        assert_eq!(
+            delete_result.rows_affected, 1,
+            "test setup should remove exactly one budget migration ledger entry"
+        );
+        let pending = match Migrator::get_pending_migrations(db.connection()).await {
+            Ok(pending) => pending,
+            Err(err) => panic!("pending migrations should remain queryable: {err}"),
+        };
+        let pending_names: Vec<&str> = pending.iter().map(|migration| migration.name()).collect();
+        assert_eq!(
+            pending_names,
+            [budget_migration],
+            "test setup should leave only the budget migration pending"
+        );
         if let Err(err) = db.close().await {
             panic!(
                 "database should close cleanly before startup check: {}",
@@ -279,7 +297,7 @@ mod tests {
             Err(err) => err,
         };
         assert!(
-            err.to_string().contains(&budget_migration),
+            err.to_string().contains(budget_migration),
             "error should identify the pending budget migration, got: {}",
             err
         );

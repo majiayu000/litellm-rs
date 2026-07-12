@@ -1,3 +1,6 @@
+use sea_orm::DatabaseConnection;
+#[cfg(feature = "sqlite")]
+use sea_orm::{ConnectionTrait, DatabaseTransaction, DbBackend, TransactionTrait};
 use sea_orm_migration::prelude::*;
 
 mod m20240101_000001_create_users_table;
@@ -10,9 +13,48 @@ mod m20240301_000001_create_user_management_tables;
 mod m20240301_000002_create_teams_table;
 mod m20240301_000003_create_virtual_keys_table;
 mod m20240501_000001_create_budget_limit_snapshots;
+mod m20260712_000001_restrict_api_key_owner_deletion;
 
 /// Database migrator for SeaORM
 pub struct Migrator;
+
+impl Migrator {
+    pub async fn up(db: &DatabaseConnection, steps: Option<u32>) -> Result<(), DbErr> {
+        #[cfg(feature = "sqlite")]
+        if db.get_database_backend() == DbBackend::Sqlite {
+            let transaction = db.begin().await?;
+            let result = <Self as MigratorTrait>::up(&transaction, steps).await;
+            return finish_sqlite_migration(transaction, result).await;
+        }
+        <Self as MigratorTrait>::up(db, steps).await
+    }
+
+    pub async fn down(db: &DatabaseConnection, steps: Option<u32>) -> Result<(), DbErr> {
+        #[cfg(feature = "sqlite")]
+        if db.get_database_backend() == DbBackend::Sqlite {
+            let transaction = db.begin().await?;
+            let result = <Self as MigratorTrait>::down(&transaction, steps).await;
+            return finish_sqlite_migration(transaction, result).await;
+        }
+        <Self as MigratorTrait>::down(db, steps).await
+    }
+}
+
+#[cfg(feature = "sqlite")]
+async fn finish_sqlite_migration(
+    transaction: DatabaseTransaction,
+    result: Result<(), DbErr>,
+) -> Result<(), DbErr> {
+    match result {
+        Ok(()) => transaction.commit().await,
+        Err(migration_error) => match transaction.rollback().await {
+            Ok(()) => Err(migration_error),
+            Err(rollback_error) => Err(DbErr::Custom(format!(
+                "migration failed: {migration_error}; rollback failed: {rollback_error}"
+            ))),
+        },
+    }
+}
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
@@ -28,6 +70,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240301_000002_create_teams_table::Migration),
             Box::new(m20240301_000003_create_virtual_keys_table::Migration),
             Box::new(m20240501_000001_create_budget_limit_snapshots::Migration),
+            Box::new(m20260712_000001_restrict_api_key_owner_deletion::Migration),
         ]
     }
 }
