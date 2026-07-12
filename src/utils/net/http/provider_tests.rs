@@ -25,6 +25,35 @@ impl HostResolver for SequenceResolver {
             .ok_or_else(|| io::Error::other("sequence resolver exhausted"))
     }
 }
+
+#[test]
+fn provider_clients_reuse_pools_for_identical_configurations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let policy = ProviderEndpointPolicy::public_only();
+    let timeout = Duration::from_secs(37);
+
+    let first = ProviderHttpClient::new(policy.clone(), timeout)?;
+    let second = ProviderHttpClient::new(policy.clone(), timeout)?;
+    assert!(Arc::ptr_eq(&first.client, &second.client));
+
+    let streaming_first = ProviderHttpClient::streaming(policy.clone())?;
+    let streaming_second = ProviderHttpClient::streaming(policy.clone())?;
+    assert!(Arc::ptr_eq(
+        &streaming_first.client,
+        &streaming_second.client
+    ));
+
+    let no_redirect_first = ProviderHttpClient::no_redirect(policy.clone(), timeout)?;
+    let no_redirect_second = ProviderHttpClient::no_redirect(policy, timeout)?;
+    assert!(Arc::ptr_eq(
+        &no_redirect_first.client,
+        &no_redirect_second.client
+    ));
+    assert!(!Arc::ptr_eq(&first.client, &streaming_first.client));
+    assert!(!Arc::ptr_eq(&first.client, &no_redirect_first.client));
+    Ok(())
+}
+
 #[test]
 fn shared_dns_filter_rejects_platform_metadata_encodings() {
     for ip in [

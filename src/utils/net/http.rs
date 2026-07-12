@@ -201,17 +201,27 @@ impl ProviderRequestBuilder {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ProviderClientMode {
     Request,
     Streaming,
     NoRedirect,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProviderClientCacheKey {
+    policy: ProviderEndpointPolicy,
+    timeout: Duration,
+    mode: ProviderClientMode,
+}
+
+static PROVIDER_CLIENT_CACHE: OnceLock<DashMap<ProviderClientCacheKey, Arc<Client>>> =
+    OnceLock::new();
+
 /// HTTP client that enforces one provider endpoint policy at every request boundary.
 #[derive(Clone)]
 pub struct ProviderHttpClient {
-    client: Client,
+    client: Arc<Client>,
     policy: ProviderEndpointPolicy,
 }
 
@@ -228,20 +238,14 @@ impl ProviderHttpClient {
         policy: ProviderEndpointPolicy,
         timeout: Duration,
     ) -> Result<Self, ProviderHttpClientError> {
-        Self::build(
-            policy,
-            timeout,
-            ProviderClientMode::Request,
-            Arc::new(SystemHostResolver),
-        )
+        Self::cached(policy, timeout, ProviderClientMode::Request)
     }
 
     pub fn streaming(policy: ProviderEndpointPolicy) -> Result<Self, ProviderHttpClientError> {
-        Self::build(
+        Self::cached(
             policy,
             Duration::from_secs(0),
             ProviderClientMode::Streaming,
-            Arc::new(SystemHostResolver),
         )
     }
 
@@ -249,20 +253,47 @@ impl ProviderHttpClient {
         policy: ProviderEndpointPolicy,
         timeout: Duration,
     ) -> Result<Self, ProviderHttpClientError> {
-        Self::build(
-            policy,
-            timeout,
-            ProviderClientMode::NoRedirect,
-            Arc::new(SystemHostResolver),
-        )
+        Self::cached(policy, timeout, ProviderClientMode::NoRedirect)
     }
 
+    fn cached(
+        policy: ProviderEndpointPolicy,
+        timeout: Duration,
+        mode: ProviderClientMode,
+    ) -> Result<Self, ProviderHttpClientError> {
+        let key = ProviderClientCacheKey {
+            policy: policy.clone(),
+            timeout,
+            mode,
+        };
+        let client = PROVIDER_CLIENT_CACHE
+            .get_or_init(DashMap::new)
+            .entry(key)
+            .or_try_insert_with(|| {
+                Self::build_client(&policy, timeout, mode, Arc::new(SystemHostResolver))
+                    .map(Arc::new)
+            })?
+            .clone();
+        Ok(Self { client, policy })
+    }
+
+    #[cfg(test)]
     fn build(
         policy: ProviderEndpointPolicy,
         timeout: Duration,
         mode: ProviderClientMode,
         resolver: Arc<dyn HostResolver>,
     ) -> Result<Self, ProviderHttpClientError> {
+        let client = Arc::new(Self::build_client(&policy, timeout, mode, resolver)?);
+        Ok(Self { client, policy })
+    }
+
+    fn build_client(
+        policy: &ProviderEndpointPolicy,
+        timeout: Duration,
+        mode: ProviderClientMode,
+        resolver: Arc<dyn HostResolver>,
+    ) -> Result<Client, ProviderHttpClientError> {
         let config = HttpClientPoolConfig::default();
         let builder = match mode {
             ProviderClientMode::Streaming => ClientBuilder::new()
@@ -289,7 +320,7 @@ impl ProviderHttpClient {
             }))
             .redirect(redirect_policy)
             .build()?;
-        Ok(Self { client, policy })
+        Ok(client)
     }
 
     pub fn request<U: IntoUrl>(
