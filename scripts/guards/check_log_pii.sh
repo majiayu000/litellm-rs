@@ -17,7 +17,7 @@ if ! command -v rg >/dev/null 2>&1; then
     exit 1
 fi
 
-log_macro='(debug!|info!|warn!|error!|tracing::debug!|tracing::info!|tracing::warn!|tracing::error!)'
+log_macro='(trace!|debug!|info!|warn!|error!|tracing::trace!|tracing::debug!|tracing::info!|tracing::warn!|tracing::error!)'
 raw_body_names='(body_str|error_body|error_text|response_text|request_body|response_body)'
 raw_body_value_names='(body|body_str|error_body|error_text|response_text|request_body|response_body)'
 raw_body_value_suffix='(\.(as_str|clone|to_string)\(\))?'
