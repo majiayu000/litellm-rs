@@ -431,6 +431,7 @@ pub fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
                 || (segments[0] & 0xfe00) == 0xfc00
                 || (segments[0] & 0xffc0) == 0xfe80
                 || (segments[0] & 0xffc0) == 0xfec0
+                || (segments[0] & 0xe000) != 0x2000
         }
     }
 }
@@ -506,11 +507,24 @@ mod tests {
             "100::1".parse().unwrap(),
             "64:ff9b:1::1".parse().unwrap(),
             "3fff::1".parse().unwrap(),
+            "1::1".parse().unwrap(),
+            "4000::1".parse().unwrap(),
             "5f00::1".parse().unwrap(),
+            "fe00::1".parse().unwrap(),
             "::ffff:127.0.0.1".parse().unwrap(),
         ] {
             assert!(is_private_or_reserved_ip(&IpAddr::V6(ip)), "{ip}");
         }
+    }
+
+    #[test]
+    fn public_ipv6_and_nat64_require_a_globally_routable_destination() {
+        for ip in ["2606:4700:4700::1111", "64:ff9b::808:808"] {
+            assert!(!is_private_or_reserved_ip(&ip.parse().unwrap()), "{ip}");
+        }
+        assert!(is_private_or_reserved_ip(
+            &"64:ff9b::a00:1".parse().unwrap()
+        ));
     }
 
     #[test]

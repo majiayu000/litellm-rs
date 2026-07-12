@@ -59,12 +59,14 @@ Link to `product.md`.
 
 ### 4. Serial implementation slices
 
-1. Foundation PR (`Refs #968`): policy/IP 分类、`ProviderHttpClient` 与 deterministic DNS/literal/redirect/private
-   tests。该 PR 不新增尚未接线的 Gateway config 字段，也不宣称清除所有调用方旁路。
-2. Shared-provider PR (`Refs #968`): Gateway config/default/env/validation、`ProviderConfig` trait、BaseConfig、
+1. Policy foundation PR (`Refs #968`): endpoint access/policy、scheme/host/effective-port 私网绑定、完整公网 IP
+   分类与 private-network 永久 metadata 拒绝。该 PR 不新增尚未接线的 Gateway config 字段或 HTTP client。
+2. HTTP client foundation PR (`Refs #968`): 不暴露裸 client 的可用 request builder、普通/streaming/no-redirect
+   policy client，以及 deterministic DNS rebinding/literal/redirect/private 未建连测试。
+3. Shared-provider PR (`Refs #968`): Gateway config/default/env/validation、`ProviderConfig` trait、BaseConfig、
    factory、GlobalPoolManager、BaseHttpClient、provider macros、OpenAI/OpenAI-like 普通/流式/health 路径改用
    policy client。
-3. Native-route PR (`Fixes #968`): Anthropic/Gemini/Azure/AzureAI/Vertex 及 Gemini/batches/images/moderations/
+4. Native-route PR (`Fixes #968`): Anthropic/Gemini/Azure/AzureAI/Vertex 及 Gemini/batches/images/moderations/
    fine-tuning/rerank route 旁路接入，拒绝不安全 proxy，并增加源码架构 guard。
 
 每个 PR 独立满足 scope hard guard、current-head reviewer、CI 和 PR gate；只有第三段在全量矩阵通过后关闭 issue。
