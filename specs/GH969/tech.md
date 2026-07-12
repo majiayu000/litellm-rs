@@ -30,7 +30,7 @@ Link to `product.md`.
      直接引用；扫描不得依赖 Rust 语句末尾分号；
    - 使用独立 `LITELLM_LOG_SESSION_IDENTIFIER_BASELINE_MAX`，默认且 CI 固定为 0；raw-body override 不得
      影响 session scan；
-   - `rg` 缺失、session count 超阈值或 raw-body count 超阈值都非零退出。
+   - `rg` 或 `python3` 缺失、scanner 自测/解析失败、session count 超阈值或 raw-body count 超阈值都非零退出。
 3. 在 `.github/workflows/ci.yml` 和 `.github/workflows/ci-main-full.yml` 的 lint job 中新增
    `Log PII guard` step，调用同一脚本；不新建 workflow/job，不改变 check names 或权限。
 4. 不修改 session store、JWT、middleware decision、handler response 或 redirect 构造。
@@ -42,7 +42,7 @@ Link to `product.md`.
 | B-001 | `src/auth/user_management.rs` static info message | base guard 红灯包含该 path；实现后 guard 为 0；diff 确认 branch/level 不变 |
 | B-002 | `src/auth/oauth/middleware.rs` static warn message | base guard 红灯包含该 path；实现后 guard 为 0；既有 middleware/full tests |
 | B-003 | `src/auth/oauth/handlers.rs` static debug message | base guard 红灯包含该 path；实现后 guard 为 0；既有 OAuth/full tests |
-| B-004 | 三个 static messages | `rg` 禁止三个 log calls 引用 `session_id|session_token|sid`，人工确认无 hash/prefix/length 替代 |
+| B-004 | 三个 static messages | token scanner 禁止三个 log calls 引用 `session_id|session_token|sid`，人工确认无 hash/prefix/length 替代 |
 | B-005 | 三个调用点的最小 diff | `git diff --unified=40 origin/main...HEAD` + `cargo test --all-features --locked -- --test-threads=1` |
 | B-006 | shell guard + token-tree scanner + two lint workflows | base red count=3；semicolon/tail/multiline self-test；post-fix count=0；两个 exact CI step；PR Lint check 成功 |
 | B-007 | guard 的独立 session baseline/pattern | 运行 body override 负例仍因 session 命中失败；实现后默认两类 count 均为 0；全日志 disposition |
@@ -73,8 +73,9 @@ credential 传给 formatter。CI 从 checkout source 运行 `check_log_pii.sh`�
 
 - [ ] Red: 只改 guard 后运行 `bash scripts/guards/check_log_pii.sh`，精确报告三个 path 并非零退出。
 - [ ] Negative isolation: 设置高 raw-body baseline 仍不能放行三个 session hits。
-- [ ] Parser regression: scanner self-test 必须捕获字符串内分号、tail/match-arm、多行嵌套调用，同时忽略
-  字符串、注释、非日志 macro 与其他模块的同名 macro。
+- [ ] Parser regression: scanner self-test 必须捕获字符串内分号、tail/match-arm、多行嵌套调用、普通/原始
+  format string 隐式捕获与 format specifier 引用，同时忽略 prose、转义 braces、注释、非日志 macro 与其他
+  模块的同名 macro。
 - [ ] Green: 三处日志改静态文本后，默认 guard 报 body=0/session=0 并成功。
 - [ ] Audit: 搜索 auth/server 全部 session/token/sid 相关 log macros，并逐项分类 credential、metadata、error 或 protocol。
 - [ ] Repository: format、all-feature check、strict Clippy、全量 serial tests、scope/overlap 和 CI checks。

@@ -49,7 +49,7 @@ def _skip_quoted(source: str, quote_index: int, path: Path) -> int:
     raise ScanError(f"{path}: unterminated string literal")
 
 
-def _raw_string_end(source: str, index: int, path: Path) -> int | None:
+def _raw_string_span(source: str, index: int, path: Path) -> tuple[int, str] | None:
     if source.startswith(("br", "cr"), index):
         marker_index = index + 2
     elif source.startswith("r", index):
@@ -67,7 +67,7 @@ def _raw_string_end(source: str, index: int, path: Path) -> int | None:
     end = source.find(closing, hash_index + 1)
     if end < 0:
         raise ScanError(f"{path}: unterminated raw string literal")
-    return end + len(closing)
+    return end + len(closing), source[hash_index + 1 : end]
 
 
 def _char_literal_end(source: str, index: int) -> int | None:
@@ -92,6 +92,41 @@ def _char_literal_end(source: str, index: int) -> int | None:
     if end < len(source) and source[end] == "'":
         return end + 1
     return None
+
+
+def _format_capture_identifiers(value: str) -> set[str]:
+    captures: set[str] = set()
+    index = 0
+
+    while index < len(value):
+        opening = value.find("{", index)
+        if opening < 0:
+            break
+        if opening + 1 < len(value) and value[opening + 1] == "{":
+            index = opening + 2
+            continue
+
+        closing = value.find("}", opening + 1)
+        if closing < 0:
+            break
+        placeholder = value[opening + 1 : closing]
+        cursor = 0
+        while cursor < len(placeholder):
+            if placeholder[cursor].isalpha() or placeholder[cursor] == "_":
+                end = cursor + 1
+                while end < len(placeholder) and (
+                    placeholder[end].isalnum() or placeholder[end] == "_"
+                ):
+                    end += 1
+                name = placeholder[cursor:end]
+                if name in SESSION_IDENTIFIERS:
+                    captures.add(name)
+                cursor = end
+            else:
+                cursor += 1
+        index = closing + 1
+
+    return captures
 
 
 def tokenize(source: str, path: Path) -> list[Token]:
@@ -132,8 +167,10 @@ def tokenize(source: str, path: Path) -> list[Token]:
             index = cursor
             continue
 
-        raw_end = _raw_string_end(source, index, path)
-        if raw_end is not None:
+        raw_span = _raw_string_span(source, index, path)
+        if raw_span is not None:
+            raw_end, raw_value = raw_span
+            tokens.append(Token("string", raw_value, line))
             line += source.count("\n", index, raw_end)
             index = raw_end
             continue
@@ -141,6 +178,7 @@ def tokenize(source: str, path: Path) -> list[Token]:
         if char == '"' or (char in "bc" and source.startswith('"', index + 1)):
             quote_index = index if char == '"' else index + 1
             end = _skip_quoted(source, quote_index, path)
+            tokens.append(Token("string", source[quote_index + 1 : end - 1], line))
             line += source.count("\n", index, end)
             index = end
             continue
@@ -191,10 +229,10 @@ def _matching_delimiter(tokens: list[Token], open_index: int, path: Path) -> int
     stack: list[Token] = []
     for index in range(open_index, len(tokens)):
         token = tokens[index]
-        if token.value in OPEN_TO_CLOSE:
+        if token.kind == "punctuation" and token.value in OPEN_TO_CLOSE:
             stack.append(token)
             continue
-        if token.value not in CLOSE_TO_OPEN:
+        if token.kind != "punctuation" or token.value not in CLOSE_TO_OPEN:
             continue
         if not stack or stack[-1].value != CLOSE_TO_OPEN[token.value]:
             raise ScanError(f"{path}:{token.line}: mismatched macro delimiter")
@@ -215,15 +253,13 @@ def scan_source(source: str, path: Path) -> list[Finding]:
             continue
         open_index = index + 2
         close_index = _matching_delimiter(tokens, open_index, path)
-        identifiers = tuple(
-            sorted(
-                {
-                    token.value
-                    for token in tokens[open_index + 1 : close_index]
-                    if token.kind == "identifier" and token.value in SESSION_IDENTIFIERS
-                }
-            )
-        )
+        identifier_set: set[str] = set()
+        for token in tokens[open_index + 1 : close_index]:
+            if token.kind == "identifier" and token.value in SESSION_IDENTIFIERS:
+                identifier_set.add(token.value)
+            elif token.kind == "string":
+                identifier_set.update(_format_capture_identifiers(token.value))
+        identifiers = tuple(sorted(identifier_set))
         if identifiers:
             findings.append(Finding(path, tokens[index].line, macro, identifiers))
 
@@ -256,7 +292,12 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
         "nested {}",
         redact(session_id.clone()),
     );
+    error!("implicit {sid}");
+    tracing::error!(r#"raw {session_token:?}"#);
+    trace!("dynamic width {value:session_id$}");
     info!("session_id and sid are text only");
+    warn!("escaped {{session_id}} and {{sid:?}}");
+    debug!(r#"raw escaped {{session_token}}"#);
     let raw = r#"warn!(session_token)"#;
     // error!("{}", session_id);
     /* warn!("{}", sid); */
@@ -270,6 +311,9 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
         ("warn", ("sid",)),
         ("tracing::trace", ("session_token",)),
         ("debug", ("session_id",)),
+        ("error", ("sid",)),
+        ("tracing::error", ("session_token",)),
+        ("trace", ("session_id",)),
     ]
     if actual != expected:
         raise ScanError(f"self-test mismatch: expected {expected}, got {actual}")
