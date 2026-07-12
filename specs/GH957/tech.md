@@ -75,27 +75,31 @@ set -euo pipefail
 date -u +%Y-%m-%dT%H:%M:%SZ
 jq -e '
   .intent_contract.maintainer_human_gate_waiver as $waiver
-  | ($waiver.issue_dispositions | map(select(.issue == 957)) | .[0]) as $gh957
-  | ($waiver.actor == "lifcc")
+  | ($waiver.issue_dispositions | map(select(.issue == 957))) as $gh957_dispositions
+  | ($gh957_dispositions[0]) as $gh957
+  | ($waiver.waiver_id == "IMPLX-MAINTAINER-WAIVER-2026-07-12")
+    and ($waiver.decision == "WAIVE_REMAINING_MAINTAINER_HUMAN_GATES")
+    and ($waiver.actor == "lifcc")
     and ($waiver.source == "current conversation")
     and ($waiver.quoted_authorization == "你可以merge 放开 humangate")
-    and ($waiver.recorded_at | test("^2026-07-12T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-    and ($waiver.scope | contains("remaining maintainer authorization"))
+    and ($waiver.recorded_at == "2026-07-12T03:23:49Z")
+    and ($waiver.scope == "remaining maintainer authorization, disposition, compatibility, architecture-selection, and branch-ownership human gates in this implx run")
+    and ($gh957_dispositions | length == 1)
     and ($gh957.waiver_id == "GH957-MAINTAINER-WAIVER-2026-07-12")
     and ($gh957.decision == "WAIVE_NON_AUTHOR_HUMAN_APPROVAL")
     and ($gh957.task_scope == [
       "SP957-T2",
       "SP957-T8 non-author human APPROVED-review conjunct only"
     ])
-    and (["human review", "GitHub APPROVED review"] - $gh957.not_evidence_of | length == 0)
-    and ([
+    and ($gh957.not_evidence_of == ["human review", "GitHub APPROVED review"])
+    and ($waiver.preserved_gates == [
       "fresh CI",
       "independent current-head reviewer lane",
       "resolved review threads",
       "clean merge state",
       "offline PR gate",
       "runtime ledger gate"
-    ] - $waiver.preserved_gates | length == 0)
+    ])
 ' "$WAIVER_EVIDENCE"
 ```
 
@@ -194,7 +198,6 @@ cargo test --all-features --lib \
   `Compile-check all features (including disabled modules)`。每个预期 check 必须出现并成功，所有额外
   check 也必须处于成功终态；`statusCheckRollup.contexts(first:100)` 必须没有下一页。空集合、pending、
   skipped、neutral、cancelled、未知类型或 pagination 均失败。
-- GraphQL `reviewThreads(first:100)` 必须没有下一页且 unresolved count 精确为 0；最终 open-PR/files
 - GraphQL `reviewThreads(first:100)` 必须没有下一页且 unresolved count 精确为 0；最终 open-PR/files
   查询也必须没有下一页，且 `src/auth/types.rs` overlap set 精确只有当前 implementation PR。随后必须对
   同一 `headRefOid` 收集独立 reviewer verdict，并重新执行 `GH957-GATE-MAINTAINER-WAIVER`。任何
