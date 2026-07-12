@@ -69,7 +69,7 @@ Link to `product.md`.
 4. Native-route PR (`Fixes #968`): Anthropic/Gemini/Azure/AzureAI/Vertex 及 Gemini/batches/images/moderations/
    fine-tuning/rerank route 旁路接入，拒绝不安全 proxy，并增加源码架构 guard。
 
-每个 PR 独立满足 scope hard guard、current-head reviewer、CI 和 PR gate；只有第三段在全量矩阵通过后关闭 issue。
+每个 PR 独立满足 scope hard guard、current-head reviewer、CI 和 PR gate；只有第四段在全量矩阵通过后关闭 issue。
 
 ### 5. Architecture guard
 
