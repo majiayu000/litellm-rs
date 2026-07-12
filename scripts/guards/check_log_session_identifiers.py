@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 LOG_MACROS = {"trace", "debug", "info", "warn", "error"}
+FORMAT_MACROS = {"format", "format_args"}
 SESSION_IDENTIFIERS = {"session_id", "session_token", "sid"}
 OPEN_TO_CLOSE = {"(": ")", "[": "]", "{": "}"}
 CLOSE_TO_OPEN = {value: key for key, value in OPEN_TO_CLOSE.items()}
@@ -301,6 +302,17 @@ def scan_source(source: str, path: Path) -> list[Finding]:
         template = _format_template_token(tokens, open_index + 1, close_index)
         if template is not None:
             identifier_set.update(_format_capture_identifiers(template.value))
+        for nested in range(open_index + 1, close_index - 2):
+            if (
+                tokens[nested].kind == "identifier"
+                and tokens[nested].value in FORMAT_MACROS
+                and tokens[nested + 1].value == "!"
+                and tokens[nested + 2].value in OPEN_TO_CLOSE
+            ):
+                nested_close = _matching_delimiter(tokens, nested + 2, path)
+                template = _format_template_token(tokens, nested + 3, nested_close)
+                if template is not None:
+                    identifier_set.update(_format_capture_identifiers(template.value))
         identifiers = tuple(sorted(identifier_set))
         if identifiers:
             findings.append(Finding(path, tokens[index].line, macro, identifiers))
@@ -325,39 +337,25 @@ def scan_tree(root: Path) -> list[Finding]:
 def run_self_test() -> None:
     source = r"""
 fn examples(sid: &str, session_token: &str, session_id: &str) {
-    warn!("invalid session; {}", sid);
-    match true { true => tracing::trace!("invalid {}", session_token), false => info!("valid"), }
+    warn!("invalid session; {}", sid); match true { true => tracing::trace!("invalid {}", session_token), false => info!("valid"), }
     debug!("nested {}", redact(session_id.clone()));
     error!("implicit {sid}"); tracing::error!(r#"raw {session_token:?}"#); trace!("dynamic width {value:session_id$}");
-    warn!("\x7bsid\x7d");
-    warn!("\u{7b}session_token\u{7d}");
+    warn!("\x7bsid\x7d"); warn!("\u{7b}session_token\u{7d}");
     warn!("{session_\
         id}");
-    info!("session_id and sid are text only");
-    warn!("escaped {{session_id}} and {{sid:?}}");
-    debug!(r#"raw escaped {{session_token}}"#);
-    warn!("{}", "{sid}");
-    tracing::warn!(target: "oauth::{session_id}", "event");
-    let raw = r#"warn!(session_token)"#;
+    info!("session_id and sid are text only"); warn!("escaped {{session_id}} and {{sid:?}}"); debug!(r#"raw escaped {{session_token}}"#); warn!("{}", "{sid}"); tracing::warn!(target: "oauth::{session_id}", "event");
+    warn!("{}", format!("{sid}")); tracing::warn!(message = %format!("{session_token}")); tracing::warn!(data = %format_args!("{session_id}"), "event");
     // error!("{}", session_id);
-    /* warn!("{}", sid); */
-    audit!("{}", sid);
-    other::warn!("{}", sid);
+    let raw = r#"warn!(session_token)"#; /* warn!("{}", sid); */ audit!("{}", sid); other::warn!("{}", sid);
 }
 """
     findings = scan_source(source, Path("self-test.rs"))
-    actual = [(finding.macro, finding.identifiers) for finding in findings]
-    expected = [
-        ("warn", ("sid",)),
-        ("tracing::trace", ("session_token",)),
-        ("debug", ("session_id",)),
-        ("error", ("sid",)),
-        ("tracing::error", ("session_token",)),
-        ("trace", ("session_id",)),
-        ("warn", ("sid",)),
-        ("warn", ("session_token",)),
-        ("warn", ("session_id",)),
-    ]
+    actual = [f"{item.macro}:{','.join(item.identifiers)}" for item in findings]
+    expected = (
+        "warn:sid tracing::trace:session_token debug:session_id error:sid "
+        "tracing::error:session_token trace:session_id warn:sid warn:session_token "
+        "warn:session_id warn:sid tracing::warn:session_token tracing::warn:session_id"
+    ).split()
     if actual != expected:
         raise ScanError(f"self-test mismatch: expected {expected}, got {actual}")
 
