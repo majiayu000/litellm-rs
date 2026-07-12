@@ -158,14 +158,12 @@ def tokenize(source: str, path: Path) -> list[Token]:
             line += char == "\n"
             index += 1
             continue
-
         if source.startswith("//", index):
             newline = source.find("\n", index + 2)
             if newline < 0:
                 break
             index = newline
             continue
-
         if source.startswith("/*", index):
             start_line = line
             depth = 1
@@ -184,7 +182,6 @@ def tokenize(source: str, path: Path) -> list[Token]:
                 raise ScanError(f"{path}:{start_line}: unterminated block comment")
             index = cursor
             continue
-
         raw_span = _raw_string_span(source, index, path)
         if raw_span is not None:
             raw_end, raw_value = raw_span
@@ -209,11 +206,14 @@ def tokenize(source: str, path: Path) -> list[Token]:
                 index = end
                 continue
 
-        if char.isalpha() or char == "_":
-            end = index + 1
+        identifier_index = index + 2 if source.startswith("r#", index) else index
+        if identifier_index < len(source) and (
+            source[identifier_index].isalpha() or source[identifier_index] == "_"
+        ):
+            end = identifier_index + 1
             while end < len(source) and (source[end].isalnum() or source[end] == "_"):
                 end += 1
-            tokens.append(Token("identifier", source[index:end], line))
+            tokens.append(Token("identifier", source[identifier_index:end], line))
             index = end
             continue
 
@@ -344,8 +344,8 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
     warn!("\x7bsid\x7d"); warn!("\u{7b}session_token\u{7d}");
     warn!("{session_\
         id}");
-    info!("session_id and sid are text only"); warn!("escaped {{session_id}} and {{sid:?}}"); debug!(r#"raw escaped {{session_token}}"#); warn!("{}", "{sid}"); tracing::warn!(target: "oauth::{session_id}", "event"); foo::log::warn!("{sid}"); crate::log::error!("{session_token}"); foo::tracing::event!(tracing::Level::WARN, "{sid}"); event!(tracing::Level::WARN, "{session_id}");
-    warn!("{}", format!("{sid}")); tracing::warn!(message = %format!("{session_token}")); tracing::warn!(data = %format_args!("{session_id}"), "event"); log::warn!("qualified {}", sid); ::log::warn!("root {}", sid); tracing::event!(tracing::Level::WARN, "event {sid}");
+    info!("session_id and sid are text only"); warn!("escaped {{session_id}} and {{sid:?}}"); debug!(r#"raw escaped {{session_token}}"#); warn!("{}", "{sid}"); tracing::warn!(target: "oauth::{session_id}", "event"); foo::log::warn!("{sid}"); crate::log::error!("{session_token}"); foo::tracing::event!(tracing::Level::WARN, "{sid}"); event!(tracing::Level::WARN, "{session_id}"); foo::r#log::warn!("{sid}"); foo::r#tracing::event!(tracing::Level::WARN, "{sid}");
+    warn!("{}", format!("{sid}")); tracing::warn!(message = %format!("{session_token}")); tracing::warn!(data = %format_args!("{session_id}"), "event"); log::warn!("qualified {}", sid); ::log::warn!("root {}", sid); ::r#log::warn!("root raw {}", sid); tracing::event!(tracing::Level::WARN, "event {sid}"); ::r#tracing::event!(tracing::Level::WARN, "root raw {sid}");
     // error!("{}", session_id);
     let raw = r#"warn!(session_token)"#; /* warn!("{}", sid); */ audit!("{}", sid); other::warn!("{}", sid);
 }
@@ -356,7 +356,7 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
         "warn:sid tracing::trace:session_token debug:session_id error:sid "
         "tracing::error:session_token trace:session_id warn:sid warn:session_token "
         "warn:session_id warn:sid tracing::warn:session_token tracing::warn:session_id "
-        "log::warn:sid log::warn:sid tracing::event:sid"
+        "log::warn:sid log::warn:sid log::warn:sid tracing::event:sid tracing::event:sid"
     ).split()
     if actual != expected:
         raise ScanError(f"self-test mismatch: expected {expected}, got {actual}")

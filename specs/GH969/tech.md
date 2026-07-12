@@ -29,6 +29,7 @@ Link to `product.md`.
      平衡的 `()`、`[]`、`{}` 确定 macro 调用边界；解析宏顶层
      实际 format-template segment 及同一调用树内 nested `format!`/`format_args!` template，cooked string 先解码
      Rust escape/续行、raw string 保持原文，再查找三个 closed identifier 的直接或隐式引用；
+   - exact namespace 比较允许可选根前缀并归一化 Rust `r#identifier`，拒绝额外 namespace component；
    - 使用独立 `LITELLM_LOG_SESSION_IDENTIFIER_BASELINE_MAX`，默认且 CI 固定为 0；raw-body override 不得
      影响 session scan；
    - `rg` 或 `python3` 缺失、scanner 自测/解析失败、session count 超阈值或 raw-body count 超阈值都非零退出。
