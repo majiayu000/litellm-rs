@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-LOG_MACROS = {"trace", "debug", "info", "warn", "error"}
+LOG_MACROS = {"trace", "debug", "info", "warn", "error", "event"}
 FORMAT_MACROS = {"format", "format_args"}
 SESSION_IDENTIFIERS = {"session_id", "session_token", "sid"}
 OPEN_TO_CLOSE = {"(": ")", "[": "]", "{": "}"}
@@ -241,11 +241,12 @@ def _macro_name(tokens: list[Token], index: int) -> str | None:
         return None
     if tokens[index + 2].value not in OPEN_TO_CLOSE:
         return None
-
     if index > 0 and tokens[index - 1].value == "::":
-        if index < 2 or tokens[index - 2].value != "tracing":
+        if index < 2 or tokens[index - 2].value not in {"log", "tracing"}:
             return None
-        return f"tracing::{token.value}"
+        if token.value == "event" and tokens[index - 2].value != "tracing":
+            return None
+        return f"{tokens[index - 2].value}::{token.value}"
     return token.value
 
 
@@ -344,7 +345,7 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
     warn!("{session_\
         id}");
     info!("session_id and sid are text only"); warn!("escaped {{session_id}} and {{sid:?}}"); debug!(r#"raw escaped {{session_token}}"#); warn!("{}", "{sid}"); tracing::warn!(target: "oauth::{session_id}", "event");
-    warn!("{}", format!("{sid}")); tracing::warn!(message = %format!("{session_token}")); tracing::warn!(data = %format_args!("{session_id}"), "event");
+    warn!("{}", format!("{sid}")); tracing::warn!(message = %format!("{session_token}")); tracing::warn!(data = %format_args!("{session_id}"), "event"); log::warn!("qualified {}", sid); tracing::event!(tracing::Level::WARN, "event {sid}");
     // error!("{}", session_id);
     let raw = r#"warn!(session_token)"#; /* warn!("{}", sid); */ audit!("{}", sid); other::warn!("{}", sid);
 }
@@ -354,7 +355,8 @@ fn examples(sid: &str, session_token: &str, session_id: &str) {
     expected = (
         "warn:sid tracing::trace:session_token debug:session_id error:sid "
         "tracing::error:session_token trace:session_id warn:sid warn:session_token "
-        "warn:session_id warn:sid tracing::warn:session_token tracing::warn:session_id"
+        "warn:session_id warn:sid tracing::warn:session_token tracing::warn:session_id "
+        "log::warn:sid tracing::event:sid"
     ).split()
     if actual != expected:
         raise ScanError(f"self-test mismatch: expected {expected}, got {actual}")

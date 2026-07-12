@@ -25,7 +25,8 @@ Link to `product.md`.
    不绑定、不 hash、不读取 session 值来生成日志字段；保留原日志级别和所在 control-flow branch。
 2. 扩展 `scripts/guards/check_log_pii.sh`：
    - 保留现有 raw-body scan 与 `LITELLM_LOG_PII_BASELINE_MAX` 行为；
-   - 新增独立 token-tree scan，忽略注释并按平衡的 `()`、`[]`、`{}` 确定 macro 调用边界；解析宏顶层
+   - 新增独立 token-tree scan，覆盖 plain level、`log::`/`tracing::` level 与 `tracing::event!`，忽略注释并按
+     平衡的 `()`、`[]`、`{}` 确定 macro 调用边界；解析宏顶层
      实际 format-template segment 及同一调用树内 nested `format!`/`format_args!` template，cooked string 先解码
      Rust escape/续行、raw string 保持原文，再查找三个 closed identifier 的直接或隐式引用；
    - 使用独立 `LITELLM_LOG_SESSION_IDENTIFIER_BASELINE_MAX`，默认且 CI 固定为 0；raw-body override 不得
@@ -74,7 +75,8 @@ credential 传给 formatter。CI 从 checkout source 运行 `check_log_pii.sh`�
 - [ ] Red: 只改 guard 后运行 `bash scripts/guards/check_log_pii.sh`，精确报告三个 path 并非零退出。
 - [ ] Negative isolation: 设置高 raw-body baseline 仍不能放行三个 session hits。
 - [ ] Parser regression: scanner self-test 必须捕获字符串内分号、tail/match-arm、多行嵌套调用、普通/原始
-  format capture、cooked escape/续行、format specifier 与 nested `format!`/`format_args!`，同时忽略 prose、
+  format capture、cooked escape/续行、qualified `log::`、`tracing::event!`、format specifier 与 nested
+  `format!`/`format_args!`，同时忽略 prose、
   转义 braces、target/data 字符串、注释、非日志 macro 与其他模块的同名 macro。
 - [ ] Green: 三处日志改静态文本后，默认 guard 报 body=0/session=0 并成功。
 - [ ] Audit: 搜索 auth/server 全部 session/token/sid 相关 log macros，并逐项分类 credential、metadata、error 或 protocol。
