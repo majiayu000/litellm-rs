@@ -36,7 +36,7 @@ pub struct AuthzResult {
 }
 
 /// Authentication method
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AuthMethod {
     /// JWT token authentication
     Jwt(String),
@@ -46,6 +46,23 @@ pub enum AuthMethod {
     Session(String),
     /// No authentication
     None,
+}
+
+impl std::fmt::Debug for AuthMethod {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Jwt(_) => formatter.debug_tuple("Jwt").field(&"[REDACTED]").finish(),
+            Self::ApiKey(_) => formatter
+                .debug_tuple("ApiKey")
+                .field(&"[REDACTED]")
+                .finish(),
+            Self::Session(_) => formatter
+                .debug_tuple("Session")
+                .field(&"[REDACTED]")
+                .finish(),
+            Self::None => formatter.write_str("None"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -353,11 +370,44 @@ mod tests {
     }
 
     #[test]
-    fn test_auth_method_debug() {
-        let method = AuthMethod::ApiKey("secret".to_string());
-        let debug_str = format!("{:?}", method);
+    fn auth_method_debug_exact_output_for_all_variants() {
+        assert_eq!(
+            format!("{:?}", AuthMethod::Jwt("jwt-secret".to_string())),
+            "Jwt(\"[REDACTED]\")"
+        );
+        assert_eq!(
+            format!("{:?}", AuthMethod::ApiKey("api-key-secret".to_string())),
+            "ApiKey(\"[REDACTED]\")"
+        );
+        assert_eq!(
+            format!("{:?}", AuthMethod::Session("session-secret".to_string())),
+            "Session(\"[REDACTED]\")"
+        );
+        assert_eq!(format!("{:?}", AuthMethod::None), "None");
+    }
 
-        assert!(debug_str.contains("ApiKey"));
+    #[test]
+    fn auth_method_debug_exact_output_for_boundary_secrets() {
+        for secret in ["", "jwt-\u{96ea}\nnext", "[REDACTED]"] {
+            assert_eq!(
+                format!("{:?}", AuthMethod::Jwt(secret.to_string())),
+                "Jwt(\"[REDACTED]\")"
+            );
+        }
+
+        for secret in ["", "api-key-\u{03c0}\nnext", "[REDACTED]"] {
+            assert_eq!(
+                format!("{:?}", AuthMethod::ApiKey(secret.to_string())),
+                "ApiKey(\"[REDACTED]\")"
+            );
+        }
+
+        for secret in ["", "session-\u{4f1a}\nnext", "[REDACTED]"] {
+            assert_eq!(
+                format!("{:?}", AuthMethod::Session(secret.to_string())),
+                "Session(\"[REDACTED]\")"
+            );
+        }
     }
 
     // ==================== Integration Tests ====================
