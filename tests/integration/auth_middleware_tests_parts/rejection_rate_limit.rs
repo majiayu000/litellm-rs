@@ -215,7 +215,7 @@ async fn test_auth_infrastructure_failures_stay_generic_500_without_lockout() {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = test::read_body(response).await;
         let body = String::from_utf8_lossy(&body);
-        assert!(body.contains("Authentication service temporarily unavailable"));
+        assert_eq!(body, "Authentication service temporarily unavailable");
         for internal_detail in ["Storage error", "Database error", "Connection closed"] {
             assert!(!body.contains(internal_detail));
         }

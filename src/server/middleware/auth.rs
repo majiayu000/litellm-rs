@@ -355,11 +355,18 @@ fn forbidden_response<B>(
 }
 
 fn authentication_unavailable_response<B>(req: ServiceRequest) -> ServiceResponse<EitherBody<B>> {
-    middleware_gateway_error_response(
-        req,
-        actix_web::error::ErrorInternalServerError(AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE),
-        GatewayError::Internal(AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE.to_string()),
-    )
+    if ai::is_openai_compatible_path(req.path()) {
+        return req
+            .into_response(ai::openai_internal_error_response(
+                AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE,
+            ))
+            .map_into_right_body();
+    }
+
+    req.error_response(actix_web::error::ErrorInternalServerError(
+        AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE,
+    ))
+    .map_into_right_body()
 }
 
 fn rate_limit_response<B>(
@@ -627,8 +634,13 @@ mod tests {
         let body = actix_web::body::to_bytes(response.into_body())
             .await
             .expect("generic authentication error body should render");
-        let body = String::from_utf8_lossy(&body);
-        assert!(body.contains(AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE));
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("generic authentication error body should be valid JSON");
+        assert_eq!(
+            body["error"]["message"],
+            AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE
+        );
+        let body = body.to_string();
         for internal_detail in [
             "Storage error",
             "Database error",

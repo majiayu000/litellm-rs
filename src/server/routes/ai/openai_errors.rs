@@ -66,6 +66,15 @@ pub(crate) fn unauthorized_error(message: impl Into<String>) -> HttpResponse {
     ))
 }
 
+pub(crate) fn internal_error(message: impl Into<String>) -> HttpResponse {
+    build_response(spec(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        message.into(),
+        "server_error",
+        "internal_error",
+    ))
+}
+
 pub(crate) fn gateway_error_response(error: &GatewayError) -> HttpResponse {
     let spec = openai_error_spec(error);
     let mut builder = HttpResponse::build(spec.status);

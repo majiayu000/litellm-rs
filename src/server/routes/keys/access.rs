@@ -277,8 +277,10 @@ mod tests {
         let body = actix_web::body::to_bytes(outage_response.into_body())
             .await
             .expect("generic key-route authentication error should render");
-        let body = String::from_utf8_lossy(&body);
-        assert!(body.contains(AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE));
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("generic key-route authentication error should be valid JSON");
+        assert_eq!(body["error"], AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE);
+        let body = body.to_string();
         for internal_detail in [
             "Storage error",
             "Database error",
