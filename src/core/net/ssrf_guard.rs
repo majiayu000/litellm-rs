@@ -299,6 +299,8 @@ fn is_permanently_blocked_hostname(host: &str) -> bool {
     normalized == "metadata"
         || normalized == "metadata.google.internal"
         || normalized.ends_with(".metadata.google.internal")
+        || normalized == "metadata.goog"
+        || normalized.ends_with(".metadata.goog")
 }
 
 fn resolve_host_addresses(host: &str, port: u16) -> Result<Vec<IpAddr>, SsrfError> {
@@ -327,8 +329,7 @@ pub fn is_private_or_reserved_host(host: &str) -> bool {
 
     if normalized == "localhost"
         || normalized.ends_with(".localhost")
-        || normalized == "metadata.google.internal"
-        || normalized == "169.254.169.254"
+        || is_permanently_blocked_hostname(&normalized)
     {
         return true;
     }
@@ -547,6 +548,9 @@ mod tests {
         assert!(is_private_or_reserved_host("my.localhost"));
         assert!(is_private_or_reserved_host("metadata.google.internal"));
         assert!(is_private_or_reserved_host("metadata.google.internal."));
+        assert!(is_private_or_reserved_host("metadata.goog"));
+        assert!(is_private_or_reserved_host("metadata.goog."));
+        assert!(is_private_or_reserved_host("api.metadata.goog"));
     }
 
     #[test]

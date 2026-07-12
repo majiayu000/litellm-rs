@@ -23,54 +23,80 @@
 //! ```
 
 use dashmap::DashMap;
-use reqwest::{Client, ClientBuilder, redirect};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::{
+    Body, Client, ClientBuilder, IntoUrl, Method, RequestBuilder, Version, multipart, redirect,
+};
+use serde::Serialize;
+use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tracing::{debug, warn};
 
-use crate::core::net::{is_private_or_reserved_ip, validate_outbound_url_without_resolution};
+use crate::core::net::{
+    ProviderEndpointAccess, ProviderEndpointPolicy, SsrfError, is_provider_endpoint_ip_allowed,
+    validate_outbound_url_without_resolution,
+};
 
 /// DNS resolver that rejects private/reserved IP addresses at resolution time.
 ///
 /// This mitigates DNS-rebinding attacks: even if a hostname resolves to a public IP
 /// at config-validation time, every actual request re-validates the resolved address,
 /// so a later rebind to an internal IP will be caught and rejected.
-struct SsrfSafeDnsResolver;
+trait HostResolver: Send + Sync {
+    fn resolve(&self, host: &str) -> io::Result<Vec<SocketAddr>>;
+}
 
-impl reqwest::dns::Resolve for SsrfSafeDnsResolver {
+struct SystemHostResolver;
+
+impl HostResolver for SystemHostResolver {
+    fn resolve(&self, host: &str) -> io::Result<Vec<SocketAddr>> {
+        (host, 0u16)
+            .to_socket_addrs()
+            .map(|addresses| addresses.collect())
+    }
+}
+
+struct PolicyDnsResolver {
+    access: ProviderEndpointAccess,
+    resolver: Arc<dyn HostResolver>,
+}
+
+impl reqwest::dns::Resolve for PolicyDnsResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_owned();
+        let resolver = Arc::clone(&self.resolver);
+        let access = self.access;
         Box::pin(async move {
-            let addrs: std::io::Result<Vec<SocketAddr>> = tokio::task::spawn_blocking(move || {
-                (host.as_str(), 0u16)
-                    .to_socket_addrs()
-                    .map(|iter| iter.collect())
-            })
-            .await
-            .map_err(std::io::Error::other)?;
-
-            let addrs = addrs?;
-            let safe = filter_ssrf_safe_addresses(addrs);
-
-            if safe.is_empty() {
-                return Err(
-                    "Host resolves to private/reserved IP address (SSRF protection)"
-                        .to_string()
-                        .into(),
-                );
-            }
+            let addrs = tokio::task::spawn_blocking(move || resolver.resolve(&host))
+                .await
+                .map_err(io::Error::other)??;
+            let safe = validate_provider_addresses(access, addrs)?;
 
             Ok(Box::new(safe.into_iter()) as reqwest::dns::Addrs)
         })
     }
 }
 
-fn filter_ssrf_safe_addresses(addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
-    addrs
-        .into_iter()
-        .filter(|addr| !is_private_or_reserved_ip(&addr.ip()))
-        .collect()
+fn validate_provider_addresses(
+    access: ProviderEndpointAccess,
+    addrs: Vec<SocketAddr>,
+) -> io::Result<Vec<SocketAddr>> {
+    if addrs.is_empty() {
+        return Err(io::Error::other(
+            "Host resolution returned no addresses (SSRF protection)",
+        ));
+    }
+    if addrs
+        .iter()
+        .any(|addr| !is_provider_endpoint_ip_allowed(access, &addr.ip()))
+    {
+        return Err(io::Error::other(
+            "Host resolves to a disallowed address (SSRF protection)",
+        ));
+    }
+    Ok(addrs)
 }
 
 fn ssrf_safe_redirect_policy() -> redirect::Policy {
@@ -81,6 +107,216 @@ fn ssrf_safe_redirect_policy() -> redirect::Policy {
 
         redirect::Policy::limited(10).redirect(attempt)
     })
+}
+
+fn provider_redirect_policy(policy: ProviderEndpointPolicy) -> redirect::Policy {
+    if policy.access() == ProviderEndpointAccess::PrivateNetwork {
+        return redirect::Policy::none();
+    }
+
+    redirect::Policy::custom(move |attempt| {
+        if let Err(error) = policy.validate_url_without_resolution(attempt.url()) {
+            return attempt.error(format!("Redirect target failed SSRF validation: {error}"));
+        }
+        redirect::Policy::limited(10).redirect(attempt)
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderHttpClientError {
+    #[error(transparent)]
+    Endpoint(#[from] SsrfError),
+    #[error(transparent)]
+    Request(#[from] reqwest::Error),
+}
+
+/// Request builder that cannot expose or replace its policy-bound HTTP client.
+pub struct ProviderRequestBuilder {
+    inner: RequestBuilder,
+}
+
+impl ProviderRequestBuilder {
+    fn map(self, transform: impl FnOnce(RequestBuilder) -> RequestBuilder) -> Self {
+        Self {
+            inner: transform(self.inner),
+        }
+    }
+
+    pub fn header<K, V>(self, key: K, value: V) -> Self
+    where
+        HeaderName: TryFrom<K>,
+        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
+    {
+        self.map(|inner| inner.header(key, value))
+    }
+
+    pub fn headers(self, headers: HeaderMap) -> Self {
+        self.map(|inner| inner.headers(headers))
+    }
+
+    pub fn basic_auth<U: std::fmt::Display, P: std::fmt::Display>(
+        self,
+        username: U,
+        password: Option<P>,
+    ) -> Self {
+        self.map(|inner| inner.basic_auth(username, password))
+    }
+
+    pub fn bearer_auth<T: std::fmt::Display>(self, token: T) -> Self {
+        self.map(|inner| inner.bearer_auth(token))
+    }
+
+    pub fn query<T: Serialize + ?Sized>(self, query: &T) -> Self {
+        self.map(|inner| inner.query(query))
+    }
+
+    pub fn body<T: Into<Body>>(self, body: T) -> Self {
+        self.map(|inner| inner.body(body))
+    }
+
+    pub fn timeout(self, timeout: Duration) -> Self {
+        self.map(|inner| inner.timeout(timeout))
+    }
+
+    pub fn version(self, version: Version) -> Self {
+        self.map(|inner| inner.version(version))
+    }
+
+    pub fn form<T: Serialize + ?Sized>(self, form: &T) -> Self {
+        self.map(|inner| inner.form(form))
+    }
+
+    pub fn json<T: Serialize + ?Sized>(self, json: &T) -> Self {
+        self.map(|inner| inner.json(json))
+    }
+
+    pub fn multipart(self, form: multipart::Form) -> Self {
+        self.map(|inner| inner.multipart(form))
+    }
+
+    pub async fn send(self) -> Result<reqwest::Response, reqwest::Error> {
+        self.inner.send().await
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderClientMode {
+    Request,
+    Streaming,
+    NoRedirect,
+}
+
+/// HTTP client that enforces one provider endpoint policy at every request boundary.
+#[derive(Clone)]
+pub struct ProviderHttpClient {
+    client: Client,
+    policy: ProviderEndpointPolicy,
+}
+
+impl std::fmt::Debug for ProviderHttpClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderHttpClient")
+            .field("policy", &self.policy)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProviderHttpClient {
+    pub fn new(
+        policy: ProviderEndpointPolicy,
+        timeout: Duration,
+    ) -> Result<Self, ProviderHttpClientError> {
+        Self::build(
+            policy,
+            timeout,
+            ProviderClientMode::Request,
+            Arc::new(SystemHostResolver),
+        )
+    }
+
+    pub fn streaming(policy: ProviderEndpointPolicy) -> Result<Self, ProviderHttpClientError> {
+        Self::build(
+            policy,
+            Duration::from_secs(0),
+            ProviderClientMode::Streaming,
+            Arc::new(SystemHostResolver),
+        )
+    }
+
+    pub fn no_redirect(
+        policy: ProviderEndpointPolicy,
+        timeout: Duration,
+    ) -> Result<Self, ProviderHttpClientError> {
+        Self::build(
+            policy,
+            timeout,
+            ProviderClientMode::NoRedirect,
+            Arc::new(SystemHostResolver),
+        )
+    }
+
+    fn build(
+        policy: ProviderEndpointPolicy,
+        timeout: Duration,
+        mode: ProviderClientMode,
+        resolver: Arc<dyn HostResolver>,
+    ) -> Result<Self, ProviderHttpClientError> {
+        let config = HttpClientPoolConfig::default();
+        let builder = match mode {
+            ProviderClientMode::Streaming => ClientBuilder::new()
+                .pool_max_idle_per_host(config.pool_max_idle_per_host)
+                .pool_idle_timeout(config.pool_idle_timeout)
+                .connect_timeout(config.connect_timeout)
+                .tcp_keepalive(config.tcp_keepalive)
+                .tcp_nodelay(true)
+                .user_agent(config.user_agent),
+            ProviderClientMode::Request | ProviderClientMode::NoRedirect => {
+                create_client_builder_with_config(timeout, &config)
+            }
+        };
+        let redirect_policy = if mode == ProviderClientMode::NoRedirect {
+            redirect::Policy::none()
+        } else {
+            provider_redirect_policy(policy.clone())
+        };
+        let client = builder
+            .no_proxy()
+            .dns_resolver(Arc::new(PolicyDnsResolver {
+                access: policy.access(),
+                resolver,
+            }))
+            .redirect(redirect_policy)
+            .build()?;
+        Ok(Self { client, policy })
+    }
+
+    pub fn request<U: IntoUrl>(
+        &self,
+        method: Method,
+        url: U,
+    ) -> Result<ProviderRequestBuilder, ProviderHttpClientError> {
+        let url = url.into_url()?;
+        self.policy.validate_url_without_resolution(&url)?;
+        Ok(ProviderRequestBuilder {
+            inner: self.client.request(method, url),
+        })
+    }
+
+    pub fn get<U: IntoUrl>(
+        &self,
+        url: U,
+    ) -> Result<ProviderRequestBuilder, ProviderHttpClientError> {
+        self.request(Method::GET, url)
+    }
+
+    pub fn post<U: IntoUrl>(
+        &self,
+        url: U,
+    ) -> Result<ProviderRequestBuilder, ProviderHttpClientError> {
+        self.request(Method::POST, url)
+    }
 }
 
 /// Configuration for the HTTP client pool
@@ -286,7 +522,10 @@ fn create_ssrf_safe_client(
 ) -> Result<Client, reqwest::Error> {
     create_client_builder_with_config(timeout, &HttpClientPoolConfig::default())
         .no_proxy()
-        .dns_resolver(Arc::new(SsrfSafeDnsResolver))
+        .dns_resolver(Arc::new(PolicyDnsResolver {
+            access: ProviderEndpointAccess::PublicOnly,
+            resolver: Arc::new(SystemHostResolver),
+        }))
         .redirect(redirect_policy)
         .build()
 }
@@ -322,7 +561,7 @@ pub struct HttpClientCacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::net::{Ipv4Addr, SocketAddr};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
@@ -368,10 +607,10 @@ mod tests {
             SocketAddr::from((Ipv4Addr::new(240, 0, 0, 1), 443)),
         ];
 
-        let safe = filter_ssrf_safe_addresses(addrs);
-
-        assert_eq!(safe.len(), 1);
-        assert_eq!(safe[0].ip(), IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)));
+        assert!(
+            validate_provider_addresses(ProviderEndpointAccess::PublicOnly, addrs).is_err(),
+            "a mixed DNS answer must fail as a whole"
+        );
     }
 
     #[test]
@@ -411,16 +650,18 @@ mod tests {
     #[tokio::test]
     async fn test_ssrf_safe_redirect_policy_rejects_private_redirect_targets()
     -> Result<(), Box<dyn std::error::Error>> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
+        let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let source_address = source.local_addr()?;
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let target_address = target.local_addr()?;
 
         let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await?;
+            let (mut stream, _) = source.accept().await?;
             let mut buffer = [0_u8; 1024];
             let bytes_read = stream.read(&mut buffer).await?;
             assert!(bytes_read > 0);
 
-            let location = format!("http://127.0.0.1:{}/private", address.port());
+            let location = format!("http://{target_address}/private");
             let body = "redirect";
             let response = format!(
                 "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -434,7 +675,7 @@ mod tests {
             .redirect(ssrf_safe_redirect_policy())
             .build()?;
         let result = client
-            .get(format!("http://127.0.0.1:{}/redirect", address.port()))
+            .get(format!("http://{source_address}/redirect"))
             .send()
             .await;
 
@@ -449,6 +690,12 @@ mod tests {
         assert!(
             format!("{error:?}").contains("SSRF validation"),
             "{error:?}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), target.accept())
+                .await
+                .is_err(),
+            "blocked redirect must not open the target socket"
         );
         server.await??;
         Ok(())
@@ -476,3 +723,6 @@ mod tests {
         assert_eq!(config.user_agent, "LiteLLM-RS/0.1.0");
     }
 }
+
+#[cfg(test)]
+mod provider_tests;

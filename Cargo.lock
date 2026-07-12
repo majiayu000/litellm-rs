@@ -3222,6 +3222,7 @@ dependencies = [
  "google-cloud-secretmanager-v1",
  "hex",
  "hmac 0.12.1",
+ "http 1.4.0",
  "jsonschema",
  "jsonwebtoken",
  "lru",
