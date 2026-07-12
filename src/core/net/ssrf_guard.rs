@@ -147,8 +147,15 @@ fn endpoint_authority(url: &Url) -> Result<String, SsrfError> {
         .ok_or_else(|| SsrfError::MissingHost {
             url: url.to_string(),
         })?;
-    let host = host.to_ascii_lowercase();
+    let host = normalize_hostname(host);
     Ok(format!("{}://{host}:{port}", url.scheme()))
+}
+
+fn normalize_hostname(host: &str) -> String {
+    host.trim()
+        .trim_matches(['[', ']'])
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
 }
 
 /// Parse and validate an outbound URL string.
@@ -288,7 +295,7 @@ fn validate_resolved_addresses(
 }
 
 fn is_permanently_blocked_hostname(host: &str) -> bool {
-    let normalized = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    let normalized = normalize_hostname(host);
     normalized == "metadata"
         || normalized == "metadata.google.internal"
         || normalized.ends_with(".metadata.google.internal")
@@ -311,13 +318,12 @@ pub fn extract_url_host(raw_url: &str) -> Option<String> {
         return None;
     }
 
-    url.host_str()
-        .map(|host| host.trim_matches(['[', ']']).to_ascii_lowercase())
+    url.host_str().map(normalize_hostname)
 }
 
 /// Returns true for private, loopback, link-local, or reserved hosts.
 pub fn is_private_or_reserved_host(host: &str) -> bool {
-    let normalized = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    let normalized = normalize_hostname(host);
 
     if normalized == "localhost"
         || normalized.ends_with(".localhost")
@@ -328,7 +334,7 @@ pub fn is_private_or_reserved_host(host: &str) -> bool {
     }
 
     if let Ok(ip) = normalized.parse::<IpAddr>() {
-        return is_private_or_reserved_ip(&ip);
+        return !is_provider_endpoint_ip_allowed(ProviderEndpointAccess::PublicOnly, &ip);
     }
 
     false
@@ -343,7 +349,7 @@ pub fn is_provider_endpoint_ip_allowed(access: ProviderEndpointAccess, ip: &IpAd
 
 fn is_metadata_ip(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => v4.octets() == [169, 254, 169, 254],
+        IpAddr::V4(v4) => matches!(v4.octets(), [169, 254, 169, 254] | [168, 63, 129, 16]),
         IpAddr::V6(v6) => v6.segments() == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254],
     }
 }
@@ -532,6 +538,7 @@ mod tests {
         assert!(is_private_or_reserved_host("localhost"));
         assert!(is_private_or_reserved_host("my.localhost"));
         assert!(is_private_or_reserved_host("metadata.google.internal"));
+        assert!(is_private_or_reserved_host("metadata.google.internal."));
     }
 
     #[test]
@@ -657,6 +664,7 @@ mod tests {
 
         for ip in [
             IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16)),
             IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
             IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1)),
             IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
@@ -696,6 +704,13 @@ mod tests {
         assert!(
             policy
                 .validate_url_without_resolution(&parse_test_url("http://localhost:11434/api/chat"))
+                .is_ok()
+        );
+        assert!(
+            policy
+                .validate_url_without_resolution(&parse_test_url(
+                    "http://localhost.:11434/api/chat"
+                ))
                 .is_ok()
         );
         for mismatched in [
