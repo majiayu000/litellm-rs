@@ -350,8 +350,20 @@ pub fn is_provider_endpoint_ip_allowed(access: ProviderEndpointAccess, ip: &IpAd
 fn is_metadata_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => matches!(v4.octets(), [169, 254, 169, 254] | [168, 63, 129, 16]),
-        IpAddr::V6(v6) => v6.segments() == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254],
+        IpAddr::V6(v6) => {
+            v6.segments() == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254]
+                || embedded_ipv4(v6).is_some_and(|v4| is_metadata_ip(&IpAddr::V4(v4)))
+        }
     }
+}
+
+fn embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return Some(v4);
+    }
+    let segments = ip.segments();
+    (segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0])
+        .then(|| Ipv4Addr::from((u32::from(segments[6]) << 16) | u32::from(segments[7])))
 }
 
 fn is_private_network_ip(ip: &IpAddr) -> bool {
@@ -417,11 +429,7 @@ pub fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
             }
 
             let segments = v6.segments();
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_private_or_reserved_ip(&IpAddr::V4(v4));
-            }
-            if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
-                let v4 = Ipv4Addr::from((u32::from(segments[6]) << 16) | u32::from(segments[7]));
+            if let Some(v4) = embedded_ipv4(v6) {
                 return is_private_or_reserved_ip(&IpAddr::V4(v4));
             }
 
@@ -669,6 +677,8 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1)),
             IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
             IpAddr::V6("fd00:ec2::254".parse().unwrap()),
+            IpAddr::V6("::ffff:168.63.129.16".parse().unwrap()),
+            IpAddr::V6("64:ff9b::a83f:8110".parse().unwrap()),
             IpAddr::V6("fe80::1".parse().unwrap()),
         ] {
             assert!(!is_provider_endpoint_ip_allowed(private, &ip), "{ip}");
