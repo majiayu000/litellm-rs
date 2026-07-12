@@ -25,8 +25,9 @@ Link to `product.md`.
    不绑定、不 hash、不读取 session 值来生成日志字段；保留原日志级别和所在 control-flow branch。
 2. 扩展 `scripts/guards/check_log_pii.sh`：
    - 保留现有 raw-body scan 与 `LITELLM_LOG_PII_BASELINE_MAX` 行为；
-   - 新增独立 multiline PCRE scan，查找 production `src/**/*.rs` 的 log macro 调用中对完整变量名
-     `session_id`、`session_token` 或 `sid` 的直接引用；
+   - 新增独立 token-tree scan，忽略字符串与注释并按平衡的 `()`、`[]`、`{}` 确定 macro 调用边界，查找
+     production `src/**/*.rs` 的 log macro 调用中对完整变量名 `session_id`、`session_token` 或 `sid` 的
+     直接引用；扫描不得依赖 Rust 语句末尾分号；
    - 使用独立 `LITELLM_LOG_SESSION_IDENTIFIER_BASELINE_MAX`，默认且 CI 固定为 0；raw-body override 不得
      影响 session scan；
    - `rg` 缺失、session count 超阈值或 raw-body count 超阈值都非零退出。
@@ -43,7 +44,7 @@ Link to `product.md`.
 | B-003 | `src/auth/oauth/handlers.rs` static debug message | base guard 红灯包含该 path；实现后 guard 为 0；既有 OAuth/full tests |
 | B-004 | 三个 static messages | `rg` 禁止三个 log calls 引用 `session_id|session_token|sid`，人工确认无 hash/prefix/length 替代 |
 | B-005 | 三个调用点的最小 diff | `git diff --unified=40 origin/main...HEAD` + `cargo test --all-features --locked -- --test-threads=1` |
-| B-006 | `check_log_pii.sh` + two lint workflows | base red count=3；post-fix count=0；workflow `rg` 显示两个 exact step；PR Lint check 成功 |
+| B-006 | shell guard + token-tree scanner + two lint workflows | base red count=3；semicolon/tail/multiline self-test；post-fix count=0；两个 exact CI step；PR Lint check 成功 |
 | B-007 | guard 的独立 session baseline/pattern | 运行 body override 负例仍因 session 命中失败；实现后默认两类 count 均为 0；全日志 disposition |
 
 ## 数据流
@@ -62,7 +63,8 @@ credential 传给 formatter。CI 从 checkout source 运行 `check_log_pii.sh`�
 
 ## 风险
 
-- Security: PCRE 必须以完整变量边界匹配，不能依赖日志 label；否则改文案可绕过。
+- Security: scanner 必须使用 identifier token 与真实 macro token-tree 边界，不能依赖日志 label、字符串分号或
+  语句末尾分号；否则改文案或表达式位置可绕过。
 - Compatibility: 日志消费者若解析旧的 identifier 字段会失去该字段，这是预期安全变化；事件文本保留。
 - Performance: 三个静态日志减少格式化；source guard 只在 CI/本地运行。
 - Maintenance: 新 credential 变量名不在闭集时需扩展 guard；全日志 disposition 用于发现此类缺口。
@@ -71,6 +73,8 @@ credential 传给 formatter。CI 从 checkout source 运行 `check_log_pii.sh`�
 
 - [ ] Red: 只改 guard 后运行 `bash scripts/guards/check_log_pii.sh`，精确报告三个 path 并非零退出。
 - [ ] Negative isolation: 设置高 raw-body baseline 仍不能放行三个 session hits。
+- [ ] Parser regression: scanner self-test 必须捕获字符串内分号、tail/match-arm、多行嵌套调用，同时忽略
+  字符串、注释、非日志 macro 与其他模块的同名 macro。
 - [ ] Green: 三处日志改静态文本后，默认 guard 报 body=0/session=0 并成功。
 - [ ] Audit: 搜索 auth/server 全部 session/token/sid 相关 log macros，并逐项分类 credential、metadata、error 或 protocol。
 - [ ] Repository: format、all-feature check、strict Clippy、全量 serial tests、scope/overlap 和 CI checks。

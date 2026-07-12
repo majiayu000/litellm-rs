@@ -17,6 +17,11 @@ if ! command -v rg >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Log PII guard failed: 'python3' is required." >&2
+    exit 1
+fi
+
 log_macro='(trace!|debug!|info!|warn!|error!|tracing::trace!|tracing::debug!|tracing::info!|tracing::warn!|tracing::error!)'
 raw_body_names='(body_str|error_body|error_text|response_text|request_body|response_body)'
 raw_body_value_names='(body|body_str|error_body|error_text|response_text|request_body|response_body)'
@@ -26,8 +31,7 @@ raw_named_arg="&?\s*${raw_body_names}\b${raw_body_value_suffix}\s*(,|\))"
 raw_body_arg=",\s*&?\s*body\b${raw_body_value_suffix}\s*(,|\))"
 raw_body_field="\b(body|request_body|response_body|error_body|error_text)\s*=\s*[%?]?\s*&?\s*${raw_body_value_names}\b${raw_body_value_suffix}\s*(,|\))"
 raw_body_pattern="(?s)${log_macro}\\s*\\([^;]{0,1200}(${raw_body_label}|${raw_named_arg}|${raw_body_arg}|${raw_body_field})[^;]{0,1200};"
-session_identifier_names='(session_id|session_token|sid)'
-session_identifier_pattern="(?s)${log_macro}\\s*\\([^;]{0,1200}\\b${session_identifier_names}\\b[^;]{0,1200};"
+session_identifier_scanner="scripts/guards/check_log_session_identifiers.py"
 
 scan_logs() {
     local pattern="$1"
@@ -54,8 +58,30 @@ count_matches() {
     printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' '
 }
 
+scan_session_identifiers() {
+    local output
+    local status
+
+    set +e
+    output="$(python3 "$session_identifier_scanner" src/)"
+    status=$?
+    set -e
+
+    if [[ "$status" -ne 0 ]]; then
+        echo "Log PII guard failed while scanning session identifiers (scanner exit $status)." >&2
+        return "$status"
+    fi
+
+    printf '%s' "$output"
+}
+
+if ! python3 "$session_identifier_scanner" --self-test; then
+    echo "Log PII guard failed: session identifier scanner self-test failed." >&2
+    exit 1
+fi
+
 body_matches="$(scan_logs "$raw_body_pattern")"
-session_identifier_matches="$(scan_logs "$session_identifier_pattern")"
+session_identifier_matches="$(scan_session_identifiers)"
 body_count="$(count_matches "$body_matches")"
 session_identifier_count="$(count_matches "$session_identifier_matches")"
 

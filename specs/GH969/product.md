@@ -38,7 +38,8 @@ complexity: small
 5. B-005 session 验证、session store 调用、logout control flow、错误映射、HTTP status/body 与 redirect
    字段保持不变；唯一运行时变化是日志文本移除输入派生数据。
 6. B-006 PR 与 main CI 必须运行 fail-closed source guard：任何生产 Rust log macro 在同一调用中直接引用
-   `session_id`、`session_token` 或 `sid` 时，guard 以非零状态退出并报告命中；缺少 `rg` 也必须失败。
+   `session_id`、`session_token` 或 `sid` 时，guard 以非零状态退出并报告命中；字符串中的分号、tail/match-arm
+   表达式、嵌套调用或多行调用都不能绕过，缺少 `rg` 或 `python3` 也必须失败。
 7. B-007 source guard 对 session identifier 使用独立的零基线；raw-body baseline override 不能放行 session
    credential 命中，正常 email/path/provider/error/protocol 字段不得被误判为该规则命中。
 
