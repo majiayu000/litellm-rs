@@ -24,6 +24,10 @@ pub fn default_recovery_timeout() -> u64 {
     60
 }
 
+pub fn default_health_expected_codes() -> Vec<u16> {
+    vec![200]
+}
+
 pub fn default_initial_delay_ms() -> u64 {
     100
 }
@@ -67,6 +71,11 @@ mod tests {
     #[test]
     fn test_default_recovery_timeout() {
         assert_eq!(default_recovery_timeout(), 60);
+    }
+
+    #[test]
+    fn test_default_health_expected_codes() {
+        assert_eq!(default_health_expected_codes(), vec![200]);
     }
 
     #[test]

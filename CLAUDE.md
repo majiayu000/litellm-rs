@@ -183,13 +183,13 @@ A provider belongs in Tier 1 when **all** of the following are true:
 - No custom streaming logic is needed (standard SSE with `data: [DONE]`)
 - No provider-specific model metadata is required at runtime
 
-**How to add a Tier 1 provider**: add a single `def()` entry in
+**How to add a Tier 1 provider**: add a single `def_chat()` entry in
 `src/core/providers/registry/catalog.rs` and a commented annotation in
 `src/core/providers/mod.rs`:
 
 ```rust
 // in catalog.rs
-def("myprovider", "My Provider", "https://api.myprovider.com/v1", "MYPROVIDER_API_KEY"),
+def_chat("myprovider", "My Provider", "https://api.myprovider.com/v1", "MYPROVIDER_API_KEY"),
 
 // in mod.rs
 // myprovider: Tier 1 -> registry/catalog.rs
@@ -226,7 +226,7 @@ If `git status` shows `DU` (deleted-by-us, unresolved) files under `src/core/pro
 
 ## Common Development Patterns
 
-1. **Adding a Tier 1 provider**: add a `def()` entry in `src/core/providers/registry/catalog.rs`
+1. **Adding a Tier 1 provider**: add a `def_chat()` entry in `src/core/providers/registry/catalog.rs`
 2. **Adding a Tier 2 provider**: create a provider directory in `src/core/providers/<name>/`
 3. **New API endpoints**: add routes in `src/server/routes/`
 4. **Authentication**: extend auth modules in `src/auth/`

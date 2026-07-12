@@ -1,6 +1,6 @@
 //! Authentication middleware
 
-use crate::auth::AuthMethod;
+use crate::auth::{AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE, AuthMethod};
 use crate::core::models::{ApiKey, user::types::User};
 use crate::core::types::context::{RequestContext, SharedRequestContext};
 use crate::server::middleware::auth_rate_limiter::get_auth_rate_limiter;
@@ -289,11 +289,8 @@ where
                     if let Some(reservation) = auth_rate_limit_reservation.take() {
                         reservation.release().await;
                     }
-                    rate_limiter.record_failure(&client_id);
-                    Err(actix_web::error::ErrorInternalServerError(format!(
-                        "Authentication error: {}",
-                        err
-                    )))
+                    error!(error = %err, "Authentication infrastructure failure");
+                    Ok(authentication_unavailable_response(req))
                 }
             }
         })
@@ -355,6 +352,21 @@ fn forbidden_response<B>(
         actix_web::error::ErrorForbidden(message.clone()),
         GatewayError::Forbidden(message),
     )
+}
+
+fn authentication_unavailable_response<B>(req: ServiceRequest) -> ServiceResponse<EitherBody<B>> {
+    if ai::is_openai_compatible_path(req.path()) {
+        return req
+            .into_response(ai::openai_internal_error_response(
+                AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE,
+            ))
+            .map_into_right_body();
+    }
+
+    req.error_response(actix_web::error::ErrorInternalServerError(
+        AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE,
+    ))
+    .map_into_right_body()
 }
 
 fn rate_limit_response<B>(
@@ -608,5 +620,34 @@ mod tests {
         );
         assert!(!context.headers.contains_key("authorization"));
         assert!(!context.headers.contains_key("x-api-key"));
+    }
+
+    #[actix_web::test]
+    async fn authentication_unavailable_response_is_generic_server_error() {
+        let req = TestRequest::with_uri("/v1/chat/completions").to_srv_request();
+        let response = authentication_unavailable_response::<actix_web::body::BoxBody>(req);
+
+        assert_eq!(
+            response.status(),
+            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .expect("generic authentication error body should render");
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("generic authentication error body should be valid JSON");
+        assert_eq!(
+            body["error"]["message"],
+            AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE
+        );
+        let body = body.to_string();
+        for internal_detail in [
+            "Storage error",
+            "Database error",
+            "Redis error",
+            "Connection closed",
+        ] {
+            assert!(!body.contains(internal_detail));
+        }
     }
 }

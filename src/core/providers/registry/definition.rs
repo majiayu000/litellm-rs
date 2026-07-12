@@ -4,6 +4,8 @@
 //! base_url, auth, and supported models. Instead of maintaining separate
 //! implementations, they are defined as static data entries.
 
+use crate::core::types::model::ProviderCapability;
+
 /// How the provider authenticates requests
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthType {
@@ -37,6 +39,8 @@ pub struct ProviderDefinition {
     pub skip_api_key: bool,
     /// Model name prefix to strip, if any (e.g. "groq/")
     pub model_prefix: Option<&'static str>,
+    /// Runtime methods this catalog provider is allowed to advertise.
+    pub capabilities: &'static [ProviderCapability],
 }
 
 impl ProviderDefinition {

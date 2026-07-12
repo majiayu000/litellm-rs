@@ -137,8 +137,9 @@ impl Router {
                         continue;
                     }
 
-                    let retry_decision = RetryPolicy.decide(
+                    let retry_decision = RetryPolicy.decide_for_deployment(
                         &self.config,
+                        &selected_deployment.config,
                         &err,
                         RetryContext::unary(attempt, max_attempts),
                     );
@@ -255,8 +256,9 @@ impl Router {
                         continue;
                     }
 
-                    let retry_decision = RetryPolicy.decide(
+                    let retry_decision = RetryPolicy.decide_for_deployment(
                         &self.config,
+                        &selected_deployment.config,
                         &err,
                         RetryContext::unary(attempt, max_attempts),
                     );

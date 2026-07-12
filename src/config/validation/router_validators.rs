@@ -257,6 +257,46 @@ mod tests {
         assert!(validate_config(&config).is_ok());
     }
 
+    #[test]
+    fn test_retry_backoff_multiplier_nan() {
+        let mut config = create_valid_retry_config();
+        config.backoff_multiplier = f64::NAN;
+
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be finite"));
+    }
+
+    #[test]
+    fn test_retry_backoff_multiplier_infinite() {
+        let mut config = create_valid_retry_config();
+        config.backoff_multiplier = f64::INFINITY;
+
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be finite"));
+    }
+
+    #[test]
+    fn test_retry_jitter_nan() {
+        let mut config = create_valid_retry_config();
+        config.jitter = f64::NAN;
+
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be finite"));
+    }
+
+    #[test]
+    fn test_retry_jitter_out_of_range() {
+        let mut config = create_valid_retry_config();
+        config.jitter = 1.1;
+
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("between 0.0 and 1.0"));
+    }
+
     // ==================== RouterConfig Validation Tests ====================
 
     #[test]

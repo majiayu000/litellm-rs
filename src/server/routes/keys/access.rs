@@ -1,5 +1,5 @@
 use super::types::{CreateKeyRequest, KeyErrorResponse, UpdateKeyRequest};
-use crate::auth::{AuthMethod, AuthResult};
+use crate::auth::{AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE, AuthMethod, AuthResult};
 use crate::core::keys::{KeyInfo, KeyPermissions, KeyRateLimits, KeyStatus};
 use crate::core::models::user::types::{User, UserRole};
 use crate::core::types::context::RequestContext;
@@ -102,12 +102,16 @@ pub(super) async fn authenticate_request(
             let error_response = KeyErrorResponse::unauthorized(msg);
             Err(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error)))
         }
-        Err(e) => {
-            error!("Authentication error: {}", e);
-            let error_response = KeyErrorResponse::unauthorized("Authentication error");
-            Err(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(error_response.error)))
+        Err(error) => {
+            error!(error = %error, "Authentication infrastructure failure");
+            Err(authentication_unavailable_response())
         }
     }
+}
+
+fn authentication_unavailable_response() -> HttpResponse {
+    let error_response = KeyErrorResponse::internal(AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE);
+    HttpResponse::InternalServerError().json(ApiResponse::<()>::error(error_response.error))
 }
 
 pub(super) fn resolve_create_key_scope(
@@ -227,6 +231,65 @@ pub(super) fn filter_and_paginate_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[actix_web::test]
+    async fn direct_auth_distinguishes_invalid_credentials_from_storage_failure() {
+        let mut config = crate::config::Config::default();
+        config.gateway.auth.enable_jwt = true;
+        config.gateway.auth.enable_api_key = true;
+        config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        let server = crate::server::http::HttpServer::new(&config)
+            .await
+            .expect("key-route test server should initialize");
+        let state = web::Data::new(server.state().clone());
+
+        let invalid_request = actix_web::test::TestRequest::default()
+            .insert_header(("x-api-key", "gw-invalid-key-route-credential"))
+            .to_http_request();
+        let invalid_response = authenticate_request(&invalid_request, &state)
+            .await
+            .expect_err("invalid credentials should return an HTTP response");
+        assert_eq!(
+            invalid_response.status(),
+            actix_web::http::StatusCode::UNAUTHORIZED
+        );
+
+        state
+            .storage
+            .db()
+            .connection()
+            .close_by_ref()
+            .await
+            .expect("test should close the authentication database pool");
+        let outage_request = actix_web::test::TestRequest::default()
+            .insert_header(("x-api-key", "gw-key-route-infrastructure-failure"))
+            .to_http_request();
+        let outage_response = authenticate_request(&outage_request, &state)
+            .await
+            .expect_err("storage failure should return a generic HTTP response");
+        assert_eq!(
+            outage_response.status(),
+            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let body = actix_web::body::to_bytes(outage_response.into_body())
+            .await
+            .expect("generic key-route authentication error should render");
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("generic key-route authentication error should be valid JSON");
+        assert_eq!(body["error"], AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE);
+        let body = body.to_string();
+        for internal_detail in [
+            "Storage error",
+            "Database error",
+            "Redis error",
+            "Connection closed",
+        ] {
+            assert!(!body.contains(internal_detail));
+        }
+    }
 
     #[test]
     fn accepts_unset_or_rpm_only_key_rate_limits() {

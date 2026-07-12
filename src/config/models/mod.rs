@@ -10,7 +10,8 @@ pub mod retry;
 // Re-export shared default functions so submodules using `use super::*` get them
 pub use self::defaults::{
     default_api_key_header, default_failure_threshold, default_health_check_interval,
-    default_jwt_expiration, default_max_retries, default_recovery_timeout, default_true,
+    default_health_expected_codes, default_jwt_expiration, default_max_retries,
+    default_recovery_timeout, default_true,
 };
 
 pub mod auth;
@@ -85,6 +86,10 @@ pub fn default_max_delay() -> u64 {
 
 pub fn default_backoff_multiplier() -> f64 {
     2.0
+}
+
+pub fn default_retry_jitter() -> f64 {
+    0.1
 }
 
 pub fn default_max_connections() -> u32 {

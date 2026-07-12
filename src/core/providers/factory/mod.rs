@@ -112,9 +112,10 @@ pub async fn create_provider(
             );
         }
 
-        let provider = openai_like::OpenAILikeProvider::new(oai_config)
-            .await
-            .map_err(|e| ProviderError::initialization(def.name, e.to_string()))?;
+        let provider =
+            openai_like::OpenAILikeProvider::new_for_catalog(oai_config, def.capabilities)
+                .await
+                .map_err(|e| ProviderError::initialization(def.name, e.to_string()))?;
         return Ok(Provider::OpenAILike(provider));
     }
 
@@ -232,10 +233,11 @@ mod tests {
             });
 
             assert!(
-                matches!(provider, Provider::OpenAILike(_)),
+                matches!(&provider, Provider::OpenAILike(_)),
                 "Catalog provider '{}' must create OpenAILike variant",
                 name
             );
+            assert_eq!(provider.capabilities(), def.capabilities);
         }
     }
 
@@ -291,7 +293,10 @@ mod tests {
         let provider = create_provider(config)
             .await
             .expect("Tier 1 provider should succeed");
-        assert!(matches!(provider, Provider::OpenAILike(_)));
+        assert!(matches!(&provider, Provider::OpenAILike(_)));
+        let definition = provider_registry::get_definition("perplexity")
+            .expect("Perplexity definition should exist");
+        assert_eq!(provider.capabilities(), definition.capabilities);
     }
 
     #[tokio::test]
@@ -528,6 +533,9 @@ mod tests {
                 let provider = create_provider(config).await.unwrap_or_else(|e| {
                     panic!("Expected '{selector}' provider to be creatable: {e}")
                 });
+                let definition = provider_registry::get_definition(selector)
+                    .expect("alias should resolve to a catalog definition");
+                assert_eq!(provider.capabilities(), definition.capabilities);
                 let Provider::OpenAILike(provider) = provider else {
                     panic!("Expected '{selector}' to create OpenAILike provider");
                 };
@@ -736,6 +744,10 @@ mod tests {
         let provider = create_provider(config)
             .await
             .expect("openai_compatible provider should be creatable");
-        assert!(matches!(provider, Provider::OpenAILike(_)));
+        assert!(matches!(&provider, Provider::OpenAILike(_)));
+        assert_eq!(
+            provider.capabilities(),
+            openai_like::provider::OPENAI_COMPATIBLE_PROXY_CAPABILITIES
+        );
     }
 }

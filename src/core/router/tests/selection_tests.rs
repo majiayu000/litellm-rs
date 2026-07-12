@@ -6,8 +6,10 @@
 #![allow(deprecated)]
 
 use super::router_tests::create_test_deployment;
+use crate::config::models::provider::ProviderConfig;
+use crate::core::providers::factory::create_provider;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
-use crate::core::router::deployment::HealthStatus;
+use crate::core::router::deployment::{Deployment, HealthStatus};
 use crate::core::router::error::RouterError;
 use crate::core::router::unified::Router;
 use crate::core::types::model::ProviderCapability;
@@ -154,6 +156,49 @@ async fn test_capability_selection_reports_unsupported_capability() {
         RouterError::UnsupportedCapability { model, capability }
             if model == "shared-model" && capability == "CodeExecution"
     ));
+}
+
+#[tokio::test]
+async fn openai_like_route_selection_rejects_unimplemented_surfaces() {
+    let provider = create_provider(ProviderConfig {
+        name: "perplexity".to_string(),
+        api_key: "sk-test".to_string(),
+        ..Default::default()
+    })
+    .await
+    .expect("Tier-1 catalog provider should build");
+    let deployment = Deployment::new(
+        "catalog-test".to_string(),
+        provider,
+        "shared-model".to_string(),
+        "shared-model".to_string(),
+    );
+    deployment
+        .state
+        .health
+        .store(HealthStatus::Healthy as u8, Relaxed);
+    let router = Router::default();
+    router.add_deployment(deployment);
+
+    let selected = router
+        .select_deployment_for_capability("shared-model", &ProviderCapability::ChatCompletion)
+        .expect("OpenAI-like provider should remain selectable for chat");
+    assert_eq!(selected, "catalog-test");
+
+    for capability in [
+        ProviderCapability::ImageEdit,
+        ProviderCapability::ImageVariation,
+        ProviderCapability::Moderation,
+    ] {
+        let err = router
+            .select_deployment_for_capability("shared-model", &capability)
+            .expect_err("OpenAI-like provider must not be selected without an executable method");
+        assert!(matches!(
+            err,
+            RouterError::UnsupportedCapability { model, capability: reported }
+                if model == "shared-model" && reported == format!("{capability:?}")
+        ));
+    }
 }
 
 #[tokio::test]

@@ -3,6 +3,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use url::Url;
 
 /// Provider configuration
 #[derive(Clone, Serialize, Deserialize)]
@@ -112,6 +113,60 @@ impl Default for ProviderConfig {
     }
 }
 
+impl ProviderConfig {
+    /// Resolve a configured custom health endpoint to an absolute URL.
+    pub(crate) fn resolved_health_check_endpoint(&self) -> Result<Option<Url>, String> {
+        let Some(endpoint) = self.health_check.endpoint.as_deref() else {
+            return Ok(None);
+        };
+        let endpoint = endpoint.trim();
+        if endpoint.is_empty() {
+            return Err(format!(
+                "Provider {} health check endpoint cannot be empty",
+                self.name
+            ));
+        }
+
+        match Url::parse(endpoint) {
+            Ok(url) => Ok(Some(url)),
+            Err(url::ParseError::RelativeUrlWithoutBase) => {
+                let base_url = self.base_url.as_deref().ok_or_else(|| {
+                    format!(
+                        "Provider {} relative health check endpoint requires base_url",
+                        self.name
+                    )
+                })?;
+                let mut base = Url::parse(base_url).map_err(|error| {
+                    format!(
+                        "Provider {} base_url cannot resolve health check endpoint: {}",
+                        self.name, error
+                    )
+                })?;
+                if !base.path().ends_with('/') {
+                    base.path_segments_mut()
+                        .map_err(|()| {
+                            format!(
+                                "Provider {} base_url cannot resolve a relative health check endpoint",
+                                self.name
+                            )
+                        })?
+                        .push("");
+                }
+                base.join(endpoint).map(Some).map_err(|error| {
+                    format!(
+                        "Provider {} has invalid health check endpoint: {}",
+                        self.name, error
+                    )
+                })
+            }
+            Err(error) => Err(format!(
+                "Provider {} has invalid health check endpoint: {}",
+                self.name, error
+            )),
+        }
+    }
+}
+
 /// Retry configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,7 +181,7 @@ pub struct RetryConfig {
     #[serde(default = "default_backoff_multiplier")]
     pub backoff_multiplier: f64,
     /// Jitter factor (0.0 to 1.0)
-    #[serde(default)]
+    #[serde(default = "default_retry_jitter")]
     pub jitter: f64,
 }
 
@@ -136,13 +191,13 @@ impl Default for RetryConfig {
             base_delay: default_base_delay(),
             max_delay: default_max_delay(),
             backoff_multiplier: default_backoff_multiplier(),
-            jitter: 0.1,
+            jitter: default_retry_jitter(),
         }
     }
 }
 
 /// Health check configuration for provider-level health monitoring
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderHealthCheckConfig {
     /// Health check interval in seconds
@@ -157,7 +212,7 @@ pub struct ProviderHealthCheckConfig {
     /// Health check endpoint path
     pub endpoint: Option<String>,
     /// Expected status codes for healthy response
-    #[serde(default)]
+    #[serde(default = "default_health_expected_codes")]
     pub expected_codes: Vec<u16>,
 }
 
@@ -168,8 +223,14 @@ impl Default for ProviderHealthCheckConfig {
             failure_threshold: default_failure_threshold(),
             recovery_timeout: default_recovery_timeout(),
             endpoint: None,
-            expected_codes: vec![200],
+            expected_codes: default_health_expected_codes(),
         }
+    }
+}
+
+impl ProviderHealthCheckConfig {
+    pub(crate) fn has_runtime_overrides(&self) -> bool {
+        self != &Self::default()
     }
 }
 
@@ -220,6 +281,18 @@ mod tests {
         let config: RetryConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.base_delay, 1500);
         assert!((config.backoff_multiplier - 2.5).abs() < f64::EPSILON);
+        assert!((config.jitter - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_partial_yaml_retry_config_preserves_jitter_default() {
+        let config: RetryConfig = serde_yml::from_str("base_delay: 250\nmax_delay: 900\n")
+            .expect("partial retry YAML should deserialize");
+
+        assert_eq!(config.base_delay, 250);
+        assert_eq!(config.max_delay, 900);
+        assert!((config.backoff_multiplier - 2.0).abs() < f64::EPSILON);
+        assert!((config.jitter - 0.1).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -276,6 +349,17 @@ mod tests {
         let config: ProviderHealthCheckConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.interval, 20);
         assert_eq!(config.failure_threshold, 2);
+    }
+
+    #[test]
+    fn test_partial_health_check_yaml_preserves_expected_code_default() {
+        let config: ProviderHealthCheckConfig =
+            serde_yml::from_str("interval: 15\nfailure_threshold: 2\n")
+                .expect("partial health check YAML should deserialize");
+
+        assert_eq!(config.interval, 15);
+        assert_eq!(config.failure_threshold, 2);
+        assert_eq!(config.expected_codes, vec![200]);
     }
 
     #[test]

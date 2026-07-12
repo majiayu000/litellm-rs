@@ -27,6 +27,7 @@ pub mod execute_impl;
 pub mod execution;
 pub mod fallback;
 pub mod gateway_config;
+mod health_probe;
 pub mod retry_policy;
 pub mod selection;
 pub mod strategy_impl;
@@ -36,7 +37,10 @@ pub mod unified;
 mod tests;
 
 // Re-exports from deployment module
-pub use deployment::{Deployment, DeploymentConfig, DeploymentId, DeploymentState, HealthStatus};
+pub use deployment::{
+    Deployment, DeploymentConfig, DeploymentId, DeploymentState, HealthCheckPolicy, HealthStatus,
+    RetrySchedule,
+};
 
 // Re-exports from new modular router (UnifiedRouter)
 pub use budget_routing::{BudgetAwareRouter, BudgetAwareRouting, RequestBudgetCheck};

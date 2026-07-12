@@ -35,6 +35,11 @@ impl ApiKeyHandler {
 
         self.storage.db().deactivate_api_key(key_id).await?;
 
+        // Narrow the refill window for cache-first replicas during a rolling
+        // deployment. Operators must still drain those older replicas because
+        // an in-flight legacy lookup can write after this best-effort delete.
+        self.invalidate_cache_for_key_id(key_id).await;
+
         info!("API key revoked successfully: {}", key_id);
         Ok(())
     }

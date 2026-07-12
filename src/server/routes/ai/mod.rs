@@ -310,6 +310,10 @@ pub(crate) fn openai_gateway_error_response(error: &GatewayError) -> HttpRespons
     openai_errors::gateway_error_response(error)
 }
 
+pub(crate) fn openai_internal_error_response(message: impl Into<String>) -> HttpResponse {
+    openai_errors::internal_error(message)
+}
+
 fn openai_json_error_config() -> web::JsonConfig {
     web::JsonConfig::default().error_handler(|error, _req| {
         let response =

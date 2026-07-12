@@ -34,13 +34,9 @@ pub mod cohere;
 #[cfg(feature = "providers-extended")]
 pub mod custom_api;
 // dashscope: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod deepgram;
 // deepinfra: Tier 1 -> registry/catalog.rs
 // deepseek: Tier 1 -> registry/catalog.rs
 // docker_model_runner: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod elevenlabs;
 #[cfg(feature = "providers-extended")]
 pub mod fal_ai;
 // featherless: Tier 1 -> registry/catalog.rs
@@ -58,8 +54,6 @@ pub mod github_copilot;
 // hosted_vllm: Tier 1 -> registry/catalog.rs
 // hyperbolic: Tier 1 -> registry/catalog.rs
 // infinity: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod jina;
 // lambda_ai: Tier 1 -> registry/catalog.rs
 // lemonade: Tier 1 -> registry/catalog.rs
 // linkup: Tier 1 -> registry/catalog.rs
@@ -68,8 +62,6 @@ pub mod jina;
 // maritalk: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extra")]
 pub mod meta_llama;
-#[cfg(feature = "providers-extended")]
-pub mod milvus;
 // minimax: Tier 1 -> registry/catalog.rs
 pub mod mistral;
 // moonshot: Tier 1 -> registry/catalog.rs
@@ -86,28 +78,12 @@ pub mod openai_like;
 // openrouter: Tier 1 -> registry/catalog.rs
 // ovhcloud: Tier 1 -> registry/catalog.rs
 // perplexity: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod pg_vector;
 // poe: Tier 1 -> registry/catalog.rs
 // qwen: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
-pub mod recraft;
-#[cfg(feature = "providers-extended")]
 pub mod replicate;
-#[cfg(feature = "providers-extended")]
-pub mod runwayml;
-#[cfg(feature = "providers-extended")]
-pub mod sagemaker;
 // sambanova: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod searxng;
 // siliconflow: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod snowflake;
-#[cfg(feature = "providers-extended")]
-pub mod stability;
-#[cfg(feature = "providers-extended")]
-pub mod tavily;
 // together: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extra")]
 pub mod v0;
@@ -115,11 +91,7 @@ pub mod v0;
 pub mod vertex_ai;
 // vllm: Tier 1 -> registry/catalog.rs
 // volcengine: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod voyage;
 // wandb: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
-pub mod watsonx;
 // xai: Tier 1 -> registry/catalog.rs
 // xiaomi_mimo: Tier 1 -> registry/catalog.rs
 // xinference: Tier 1 -> registry/catalog.rs

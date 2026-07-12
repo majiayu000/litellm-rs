@@ -23,11 +23,45 @@
 use crate::core::providers::Provider;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use url::Url;
 
 /// Deployment identifier (unique within router)
 pub type DeploymentId = String;
+
+/// Normalized retry timing for a gateway-configured deployment.
+///
+/// Retry eligibility and retry-after precedence remain owned by `RetryPolicy`;
+/// this value only carries the provider-specific fallback schedule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrySchedule {
+    /// Delay before the first retry, in milliseconds.
+    pub base_delay_ms: u64,
+    /// Hard upper bound for any configured retry delay, in milliseconds.
+    pub max_delay_ms: u64,
+    /// Exponential multiplier applied for each subsequent retry.
+    pub backoff_multiplier: f64,
+    /// Symmetric jitter ratio in the inclusive range `0.0..=1.0`.
+    pub jitter_ratio: f64,
+}
+
+/// Runtime policy for an active provider health probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HealthCheckPolicy {
+    /// Gateway provider name used to group model deployments into one probe task.
+    pub provider_name: String,
+    /// Delay between ordinary probe attempts.
+    pub interval_secs: u64,
+    /// Consecutive failures required before marking deployments unhealthy.
+    pub failure_threshold: u32,
+    /// Delay after reaching the failure threshold.
+    pub recovery_timeout_secs: u64,
+    /// Normalized custom unauthenticated GET endpoint, or native provider probe when absent.
+    pub endpoint: Option<Url>,
+    /// HTTP statuses accepted by a custom endpoint probe.
+    pub expected_codes: Vec<u16>,
+}
 
 /// Health status enumeration for deployments
 ///
@@ -88,6 +122,12 @@ pub struct DeploymentConfig {
 
     /// Priority (lower value = higher priority)
     pub priority: u32,
+
+    /// Provider-specific retry schedule, or `None` to use router defaults.
+    pub retry_schedule: Option<RetrySchedule>,
+
+    /// Active health probe policy for gateway-created deployments.
+    pub health_check_policy: Option<HealthCheckPolicy>,
 }
 
 impl Default for DeploymentConfig {
@@ -99,6 +139,8 @@ impl Default for DeploymentConfig {
             weight: 1,
             timeout_secs: 60,
             priority: 0,
+            retry_schedule: None,
+            health_check_policy: None,
         }
     }
 }
@@ -133,6 +175,9 @@ impl Deref for DeploymentState {
 pub struct DeploymentStateInner {
     /// Health status (0=unknown, 1=healthy, 2=degraded, 3=unhealthy, 4=cooldown)
     pub health: AtomicU8,
+
+    /// Whether the active probe remains unhealthy while request cooldown owns `health`.
+    pub probe_unhealthy: AtomicBool,
 
     /// Current minute TPM usage
     pub tpm_current: AtomicU64,
@@ -178,6 +223,7 @@ impl DeploymentState {
         Self {
             inner: Arc::new(DeploymentStateInner {
                 health: AtomicU8::new(HealthStatus::Healthy as u8),
+                probe_unhealthy: AtomicBool::new(false),
                 tpm_current: AtomicU64::new(0),
                 rpm_current: AtomicU64::new(0),
                 active_requests: AtomicU32::new(0),
@@ -326,14 +372,19 @@ impl Deployment {
         if cooldown_until > now {
             return true;
         }
-        // Cooldown expired: reset health from Cooldown to Degraded so
-        // `is_healthy()` returns true and the deployment is selectable.
+        // Cooldown expiry restores probe-owned Unhealthy when the provider did
+        // not recover during cooldown; otherwise it enters request half-open.
+        let next = if self.state.probe_unhealthy.load(Ordering::Relaxed) {
+            HealthStatus::Unhealthy
+        } else {
+            HealthStatus::Degraded
+        };
         // CAS failure means another thread already transitioned the state -- safe to ignore.
         self.state
             .health
             .compare_exchange(
                 HealthStatus::Cooldown as u8,
-                HealthStatus::Degraded as u8,
+                next as u8,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             )
@@ -393,10 +444,38 @@ impl Deployment {
         // Reset consecutive success counter on failure
         self.state.consecutive_successes.store(0, Ordering::Relaxed);
 
-        // Mark as degraded (caller can escalate to Unhealthy/Cooldown if needed)
-        self.state
-            .health
-            .store(HealthStatus::Degraded as u8, Ordering::Relaxed);
+        // Request failures may degrade an available deployment, but must not
+        // overwrite a stronger state owned by health probes or cooldown logic.
+        let mut current = self.state.health.load(Ordering::Relaxed);
+        while matches!(
+            HealthStatus::from(current),
+            HealthStatus::Healthy | HealthStatus::Unknown
+        ) {
+            match self.state.health.compare_exchange_weak(
+                current,
+                HealthStatus::Degraded as u8,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    pub(crate) fn promote_to_healthy_if_degraded(&self) {
+        let mut current = self.state.health.load(Ordering::Relaxed);
+        while current == HealthStatus::Degraded as u8 {
+            match self.state.health.compare_exchange_weak(
+                current,
+                HealthStatus::Healthy as u8,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     /// Enter cooldown state
@@ -411,9 +490,19 @@ impl Deployment {
         self.state
             .cooldown_until
             .store(cooldown_until, Ordering::Relaxed);
-        self.state
-            .health
-            .store(HealthStatus::Cooldown as u8, Ordering::Relaxed);
+
+        let mut current = self.state.health.load(Ordering::Relaxed);
+        while HealthStatus::from(current) != HealthStatus::Cooldown {
+            match self.state.health.compare_exchange_weak(
+                current,
+                HealthStatus::Cooldown as u8,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
     }
 }
 
@@ -487,6 +576,7 @@ mod tests {
         assert_eq!(config.weight, 1);
         assert_eq!(config.timeout_secs, 60);
         assert_eq!(config.priority, 0);
+        assert!(config.health_check_policy.is_none());
     }
 
     #[test]
@@ -498,6 +588,8 @@ mod tests {
             weight: 2,
             timeout_secs: 120,
             priority: 1,
+            retry_schedule: None,
+            health_check_policy: None,
         };
         assert_eq!(config.tpm_limit, Some(100_000));
         assert_eq!(config.rpm_limit, Some(500));

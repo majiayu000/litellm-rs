@@ -201,6 +201,9 @@ pub struct Router {
 
     /// Atomic counter: number of fallback model attempts.
     pub(crate) fallback_triggered_count: AtomicU64,
+
+    /// One active health probe task per gateway provider.
+    pub(crate) health_probe_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 }
 
 impl Router {
@@ -215,6 +218,7 @@ impl Router {
             provider_selected_count: AtomicU64::new(0),
             strategy_used_count: AtomicU64::new(0),
             fallback_triggered_count: AtomicU64::new(0),
+            health_probe_tasks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -451,10 +455,7 @@ impl Router {
         if current_health == super::deployment::HealthStatus::Degraded as u8 {
             let consec = deployment.state.consecutive_successes.load(Relaxed);
             if consec >= self.config.success_threshold {
-                deployment
-                    .state
-                    .health
-                    .store(super::deployment::HealthStatus::Healthy as u8, Relaxed);
+                deployment.promote_to_healthy_if_degraded();
             }
         }
     }
@@ -600,6 +601,14 @@ impl Router {
                 self.reset_minute_counters();
             }
         })
+    }
+}
+
+impl Drop for Router {
+    fn drop(&mut self) {
+        for (_, task) in self.health_probe_tasks.get_mut().drain() {
+            task.abort();
+        }
     }
 }
 

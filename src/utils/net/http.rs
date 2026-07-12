@@ -119,6 +119,10 @@ static TIMEOUT_CLIENT_CACHE: OnceLock<DashMap<u64, Arc<Client>>> = OnceLock::new
 /// Timeout-specific SSRF-safe client cache (keyed by milliseconds)
 static SSRF_SAFE_TIMEOUT_CLIENT_CACHE: OnceLock<DashMap<u64, Arc<Client>>> = OnceLock::new();
 
+/// Timeout-specific SSRF-safe client cache for requests that must observe redirects.
+static SSRF_SAFE_NO_REDIRECT_TIMEOUT_CLIENT_CACHE: OnceLock<DashMap<u64, Arc<Client>>> =
+    OnceLock::new();
+
 /// Create a reqwest client builder with unified pool/timeout defaults.
 pub fn create_client_builder_with_config(
     timeout: Duration,
@@ -252,15 +256,39 @@ pub fn get_ssrf_safe_client_with_timeout_fallible(
         return Ok(existing.clone());
     }
 
-    let client = Arc::new(
-        create_client_builder_with_config(timeout, &HttpClientPoolConfig::default())
-            .no_proxy()
-            .dns_resolver(Arc::new(SsrfSafeDnsResolver))
-            .redirect(ssrf_safe_redirect_policy())
-            .build()?,
-    );
+    let client = Arc::new(create_ssrf_safe_client(
+        timeout,
+        ssrf_safe_redirect_policy(),
+    )?);
     cache.insert(timeout_millis, client.clone());
     Ok(client)
+}
+
+/// Get or create an SSRF-safe HTTP client that returns redirect responses unchanged.
+pub(crate) fn get_ssrf_safe_no_redirect_client_with_timeout_fallible(
+    timeout: Duration,
+) -> Result<Arc<Client>, reqwest::Error> {
+    let cache = SSRF_SAFE_NO_REDIRECT_TIMEOUT_CLIENT_CACHE.get_or_init(DashMap::new);
+    let timeout_millis = timeout.as_millis().min(u64::MAX as u128) as u64;
+
+    if let Some(existing) = cache.get(&timeout_millis) {
+        return Ok(existing.clone());
+    }
+
+    let client = Arc::new(create_ssrf_safe_client(timeout, redirect::Policy::none())?);
+    cache.insert(timeout_millis, client.clone());
+    Ok(client)
+}
+
+fn create_ssrf_safe_client(
+    timeout: Duration,
+    redirect_policy: redirect::Policy,
+) -> Result<Client, reqwest::Error> {
+    create_client_builder_with_config(timeout, &HttpClientPoolConfig::default())
+        .no_proxy()
+        .dns_resolver(Arc::new(SsrfSafeDnsResolver))
+        .redirect(redirect_policy)
+        .build()
 }
 
 /// Create a custom HTTP client with specific timeout and default headers
@@ -357,6 +385,24 @@ mod tests {
         {
             Ok(client) => client,
             Err(error) => panic!("SSRF-safe client should build: {error}"),
+        };
+
+        assert!(Arc::ptr_eq(&client1, &client2));
+    }
+
+    #[test]
+    fn test_ssrf_safe_no_redirect_client_with_timeout_fallible_caching() {
+        let client1 = match get_ssrf_safe_no_redirect_client_with_timeout_fallible(
+            Duration::from_millis(1500),
+        ) {
+            Ok(client) => client,
+            Err(error) => panic!("SSRF-safe no-redirect client should build: {error}"),
+        };
+        let client2 = match get_ssrf_safe_no_redirect_client_with_timeout_fallible(
+            Duration::from_millis(1500),
+        ) {
+            Ok(client) => client,
+            Err(error) => panic!("SSRF-safe no-redirect client should build: {error}"),
         };
 
         assert!(Arc::ptr_eq(&client1, &client2));

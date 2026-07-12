@@ -81,6 +81,65 @@ async fn test_provider_creation_with_api_base() {
 }
 
 #[tokio::test]
+async fn generic_openai_like_declares_only_catalog_executable_capabilities() {
+    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+
+    let provider = OpenAILikeProvider::with_api_base("http://localhost:8000/v1")
+        .await
+        .expect("OpenAI-like provider should build");
+
+    assert_eq!(
+        provider.capabilities(),
+        &[
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+            ProviderCapability::ToolCalling,
+            ProviderCapability::FunctionCalling,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn openai_compatible_declares_executable_proxy_capabilities() {
+    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+
+    let config = OpenAILikeConfig::new("http://localhost:8000/v1").with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new_openai_compatible(config)
+        .await
+        .expect("OpenAI-compatible provider should build");
+
+    assert_eq!(
+        provider.capabilities(),
+        OPENAI_COMPATIBLE_PROXY_CAPABILITIES
+    );
+}
+
+#[tokio::test]
+async fn openai_like_catalog_rejects_invalid_capability_profiles() {
+    static EMPTY: &[ProviderCapability] = &[];
+    static DUPLICATE: &[ProviderCapability] = &[
+        ProviderCapability::ChatCompletion,
+        ProviderCapability::ChatCompletion,
+    ];
+    static UNIMPLEMENTED: &[ProviderCapability] = &[ProviderCapability::ImageEdit];
+
+    let config = OpenAILikeConfig::new("http://localhost:8000/v1").with_skip_api_key(true);
+    for (profile, expected) in [
+        (EMPTY, "cannot be empty"),
+        (DUPLICATE, "duplicate ChatCompletion"),
+        (UNIMPLEMENTED, "not executable for this OpenAI-like profile"),
+    ] {
+        let error = OpenAILikeProvider::new_for_catalog(config.clone(), profile)
+            .await
+            .expect_err("invalid capability profile must fail closed");
+        assert!(
+            error.to_string().contains(expected),
+            "expected {expected:?} in {error}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_openai_like_streaming_maps_non_success_status_before_sse()
 -> Result<(), Box<dyn std::error::Error>> {
     use crate::core::providers::unified_provider::ProviderError;

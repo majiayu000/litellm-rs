@@ -74,8 +74,8 @@ fn validate_create_key_input(name: &str, permissions: &[String]) -> Result<()> {
 /// Minimum interval between DB writes for the same key's last_used timestamp.
 const LAST_USED_THROTTLE: Duration = Duration::from_secs(5 * 60);
 
-/// TTL for cached API keys in Redis (seconds).
-const API_KEY_CACHE_TTL: u64 = 300;
+const MISSING_OWNER_REASON: &str = "Associated user was not found";
+const INACTIVE_OWNER_REASON: &str = "Associated user is inactive";
 
 /// Build the Redis cache key for an API key hash.
 fn api_key_cache_key(key_hash: &str) -> String {
@@ -186,54 +186,12 @@ impl ApiKeyHandler {
         Ok((stored_key, raw_key))
     }
 
-    /// Look up an API key by hash, checking Redis cache first and falling back
-    /// to PostgreSQL. On a cache miss the result is populated into Redis with a
-    /// 5-minute TTL.
-    async fn find_api_key_cached(&self, key_hash: &str) -> Result<Option<ApiKey>> {
-        let cache_key = api_key_cache_key(key_hash);
-
-        // 1. Try Redis cache
-        match self.storage.cache_get(&cache_key).await {
-            Ok(Some(cached)) => {
-                debug!("API key cache hit");
-                match serde_json::from_str::<ApiKey>(&cached) {
-                    Ok(api_key) => return Ok(Some(api_key)),
-                    Err(e) => {
-                        warn!(
-                            "Failed to deserialize cached API key, falling back to DB: {}",
-                            e
-                        );
-                        // Stale/corrupt entry – delete and continue to DB
-                        if let Err(del_err) = self.storage.cache_delete(&cache_key).await {
-                            warn!("Failed to delete corrupt API key cache entry: {}", del_err);
-                        }
-                    }
-                }
-            }
-            Ok(None) => {
-                debug!("API key cache miss");
-            }
-            Err(e) => {
-                // Redis unavailable – degrade gracefully
-                warn!("Redis cache_get failed, falling back to DB: {}", e);
-            }
-        }
-
-        // 2. Fall back to PostgreSQL
-        let api_key = self.storage.db().find_api_key_by_hash(key_hash).await?;
-
-        // 3. Populate cache on DB hit
-        if let Some(ref key) = api_key
-            && let Ok(serialized) = serde_json::to_string(key)
-            && let Err(e) = self
-                .storage
-                .cache_set(&cache_key, &serialized, Some(API_KEY_CACHE_TTL))
-                .await
-        {
-            warn!("Failed to populate API key cache: {}", e);
-        }
-
-        Ok(api_key)
+    /// Look up an API key from the authoritative lifecycle store.
+    ///
+    /// Authentication must not consume Redis snapshots because a stale active
+    /// value could otherwise outlive a committed database revoke.
+    async fn find_api_key_authoritative(&self, key_hash: &str) -> Result<Option<ApiKey>> {
+        self.storage.db().find_api_key_by_hash(key_hash).await
     }
 
     /// Invalidate the Redis cache entry for the given key hash.
@@ -254,8 +212,7 @@ impl ApiKeyHandler {
         // Hash the provided key
         let key_hash = hash_api_key(raw_key, self.hmac_secret());
 
-        // Find API key (cache-aside: Redis → PostgreSQL → populate Redis)
-        let api_key = match self.find_api_key_cached(&key_hash).await? {
+        let api_key = match self.find_api_key_authoritative(&key_hash).await? {
             Some(key) => key,
             None => {
                 debug!("API key not found");
@@ -284,6 +241,11 @@ impl ApiKeyHandler {
             None
         };
 
+        if api_key_owner_invalid_reason(&api_key, user.as_ref()).is_some() {
+            debug!("API key owner is invalid");
+            return Ok(None);
+        }
+
         // Update last used timestamp
         self.update_last_used(api_key.metadata.id).await?;
 
@@ -295,7 +257,7 @@ impl ApiKeyHandler {
     pub async fn verify_key_detailed(&self, raw_key: &str) -> Result<ApiKeyVerification> {
         let key_hash = hash_api_key(raw_key, self.hmac_secret());
 
-        let api_key = match self.find_api_key_cached(&key_hash).await? {
+        let api_key = match self.find_api_key_authoritative(&key_hash).await? {
             Some(key) => key,
             None => {
                 return Ok(ApiKeyVerification {
@@ -349,15 +311,12 @@ impl ApiKeyHandler {
             None
         };
 
-        // Check if user is active (if associated)
-        if let Some(ref user) = user
-            && !user.is_active()
-        {
+        if let Some(reason) = api_key_owner_invalid_reason(&api_key, user.as_ref()) {
             return Ok(ApiKeyVerification {
                 api_key,
-                user: Some(user.clone()),
+                user,
                 is_valid: false,
-                invalid_reason: Some("Associated user is inactive".to_string()),
+                invalid_reason: Some(reason.to_string()),
             });
         }
 
@@ -397,9 +356,56 @@ impl ApiKeyHandler {
     }
 }
 
+fn api_key_owner_invalid_reason(api_key: &ApiKey, user: Option<&User>) -> Option<&'static str> {
+    api_key.user_id?;
+    match user {
+        None => Some(MISSING_OWNER_REASON),
+        Some(user) if !user.is_active() => Some(INACTIVE_OWNER_REASON),
+        Some(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::models::storage::StorageConfig;
+    use crate::core::models::user::types::UserStatus;
+    use crate::storage::database::entities::user as user_entity;
+    use sea_orm::{ConnectionTrait, EntityTrait};
+
+    async fn test_handler() -> ApiKeyHandler {
+        let mut config = StorageConfig::default();
+        config.database.enabled = false;
+        config.redis.enabled = false;
+        let storage = StorageLayer::new(&config)
+            .await
+            .expect("test storage should initialize");
+        ApiKeyHandler::new(Arc::new(storage), None)
+            .await
+            .expect("API key handler should initialize")
+    }
+
+    async fn remove_owner_without_nulling_key(handler: &ApiKeyHandler, user_id: Uuid) {
+        handler
+            .storage
+            .db()
+            .delete_user(&user_id.to_string())
+            .await
+            .expect("legacy owner should be deleted");
+        let connection = handler.storage.db().connection();
+        connection
+            .execute_unprepared("PRAGMA foreign_keys = OFF")
+            .await
+            .expect("test fixture should disable SQLite foreign keys");
+        user_entity::Entity::delete_by_id(user_id)
+            .exec(connection)
+            .await
+            .expect("canonical owner should be deleted");
+        connection
+            .execute_unprepared("PRAGMA foreign_keys = ON")
+            .await
+            .expect("test fixture should restore SQLite foreign keys");
+    }
 
     // ==================== validate_create_key_input ====================
 
@@ -490,5 +496,175 @@ mod tests {
         let perms = vec!["api.chat".to_string(), "not.a.perm".to_string()];
         let result = validate_create_key_input("My Key", &perms);
         assert!(matches!(result, Err(GatewayError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn live_and_detailed_verification_reject_missing_owner() {
+        let handler = test_handler().await;
+        let mut user = User::new(
+            format!("missing-{}", Uuid::new_v4()),
+            format!("missing-{}@example.com", Uuid::new_v4()),
+            "unused-hash".to_string(),
+        );
+        user.status = UserStatus::Active;
+        handler
+            .storage
+            .db()
+            .create_user(&user)
+            .await
+            .expect("owner should be stored before creating the key");
+        let (api_key, raw_key) = handler
+            .create_key(
+                Some(user.id()),
+                None,
+                "missing-owner".to_string(),
+                vec!["api.chat".to_string()],
+            )
+            .await
+            .expect("owned key should be stored");
+        remove_owner_without_nulling_key(&handler, user.id()).await;
+
+        assert!(
+            handler
+                .storage
+                .db()
+                .find_user_by_id(user.id())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            handler
+                .storage
+                .db()
+                .find_api_key_by_hash(&api_key.key_hash)
+                .await
+                .unwrap()
+                .and_then(|stored| stored.user_id),
+            Some(user.id())
+        );
+        assert!(handler.verify_key(&raw_key).await.unwrap().is_none());
+        assert!(!handler.last_used_cache.contains_key(&api_key.metadata.id));
+        let detailed = handler.verify_key_detailed(&raw_key).await.unwrap();
+        assert!(!detailed.is_valid);
+        assert_eq!(
+            detailed.invalid_reason.as_deref(),
+            Some(MISSING_OWNER_REASON)
+        );
+        assert!(!handler.last_used_cache.contains_key(&api_key.metadata.id));
+        let stored = handler
+            .storage
+            .db()
+            .find_api_key_by_hash(&api_key.key_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(stored.last_used_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn live_and_detailed_verification_reject_inactive_owner() {
+        let handler = test_handler().await;
+        let mut user = User::new(
+            format!("inactive-{}", Uuid::new_v4()),
+            format!("inactive-{}@example.com", Uuid::new_v4()),
+            "unused-hash".to_string(),
+        );
+        user.status = UserStatus::Inactive;
+        handler
+            .storage
+            .db()
+            .create_user(&user)
+            .await
+            .expect("inactive user should be stored");
+        let (api_key, raw_key) = handler
+            .create_key(
+                Some(user.id()),
+                None,
+                "inactive-owner".to_string(),
+                vec!["api.chat".to_string()],
+            )
+            .await
+            .expect("key creation should succeed");
+
+        assert!(handler.verify_key(&raw_key).await.unwrap().is_none());
+        assert!(!handler.last_used_cache.contains_key(&api_key.metadata.id));
+        let detailed = handler.verify_key_detailed(&raw_key).await.unwrap();
+        assert!(!detailed.is_valid);
+        assert_eq!(
+            detailed.invalid_reason.as_deref(),
+            Some(INACTIVE_OWNER_REASON)
+        );
+        assert!(!handler.last_used_cache.contains_key(&api_key.metadata.id));
+        let stored = handler
+            .storage
+            .db()
+            .find_api_key_by_hash(&api_key.key_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(stored.last_used_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn live_and_detailed_verification_accept_ownerless_key() {
+        let handler = test_handler().await;
+        let (_, raw_key) = handler
+            .create_key(
+                None,
+                None,
+                "ownerless".to_string(),
+                vec!["api.chat".to_string()],
+            )
+            .await
+            .expect("ownerless key creation should succeed");
+
+        let (_, live_user) = handler
+            .verify_key(&raw_key)
+            .await
+            .unwrap()
+            .expect("ownerless key should remain valid");
+        assert!(live_user.is_none());
+        let detailed = handler.verify_key_detailed(&raw_key).await.unwrap();
+        assert!(detailed.is_valid);
+        assert!(detailed.user.is_none());
+        assert!(detailed.invalid_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn live_and_detailed_verification_accept_active_owner() {
+        let handler = test_handler().await;
+        let mut user = User::new(
+            format!("active-{}", Uuid::new_v4()),
+            format!("active-{}@example.com", Uuid::new_v4()),
+            "unused-hash".to_string(),
+        );
+        user.status = UserStatus::Active;
+        handler
+            .storage
+            .db()
+            .create_user(&user)
+            .await
+            .expect("active user should be stored");
+        let (_, raw_key) = handler
+            .create_key(
+                Some(user.id()),
+                None,
+                "active-owner".to_string(),
+                vec!["api.chat".to_string()],
+            )
+            .await
+            .expect("key creation should succeed");
+
+        let (_, live_user) = handler
+            .verify_key(&raw_key)
+            .await
+            .unwrap()
+            .expect("active owner key should remain valid");
+        assert_eq!(live_user.as_ref().map(User::id), Some(user.id()));
+        let detailed = handler.verify_key_detailed(&raw_key).await.unwrap();
+        assert!(detailed.is_valid);
+        assert_eq!(detailed.user.as_ref().map(User::id), Some(user.id()));
+        assert!(detailed.invalid_reason.is_none());
     }
 }

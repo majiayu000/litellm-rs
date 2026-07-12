@@ -4,10 +4,11 @@
 //! with retry and fallback support.
 
 use super::config::RouterConfig;
-use super::deployment::DeploymentId;
+use super::deployment::{DeploymentId, RetrySchedule};
 use super::error::{CooldownReason, RouterError};
 use super::fallback::{ExecutionResult, FallbackType};
 use crate::core::providers::unified_provider::ProviderError;
+use rand::Rng;
 use std::time::Duration;
 
 /// Check if an error is retryable
@@ -52,6 +53,45 @@ pub fn calculate_retry_delay(config: &RouterConfig, attempt: u32) -> Duration {
     let base = config.retry_after_secs.max(1);
     let delay = base * (2_u64.pow(attempt.saturating_sub(1)));
     Duration::from_secs(delay.min(30)) // Cap at 30 seconds
+}
+
+/// Calculate retry delay from a deployment-specific schedule.
+pub(crate) fn calculate_retry_delay_for_schedule(
+    schedule: &RetrySchedule,
+    attempt: u32,
+) -> Duration {
+    let jitter_sample = if schedule.jitter_ratio == 0.0 {
+        0.0
+    } else {
+        rand::rng().random_range(-1.0..=1.0)
+    };
+
+    calculate_retry_delay_for_schedule_with_sample(schedule, attempt, jitter_sample)
+}
+
+fn calculate_retry_delay_for_schedule_with_sample(
+    schedule: &RetrySchedule,
+    attempt: u32,
+    jitter_sample: f64,
+) -> Duration {
+    let jitter_multiplier = 1.0 + schedule.jitter_ratio * jitter_sample.clamp(-1.0, 1.0);
+    if jitter_multiplier <= 0.0 {
+        return Duration::ZERO;
+    }
+
+    let exponent = f64::from(attempt.saturating_sub(1));
+    let base_delay = schedule.base_delay_ms as f64 * schedule.backoff_multiplier.powf(exponent);
+    let delay_ms = base_delay * jitter_multiplier;
+    let max_delay = Duration::from_millis(schedule.max_delay_ms);
+
+    if !delay_ms.is_finite() || delay_ms >= schedule.max_delay_ms as f64 {
+        return max_delay;
+    }
+    if delay_ms <= 0.0 {
+        return Duration::ZERO;
+    }
+
+    Duration::from_secs_f64(delay_ms / 1_000.0).min(max_delay)
 }
 
 /// Infer fallback type from a ProviderError
@@ -109,6 +149,10 @@ pub fn infer_cooldown_reason(error: &ProviderError) -> CooldownReason {
 /// Convert RouterError to ProviderError for consistency
 pub fn router_error_to_provider_error(err: RouterError) -> ProviderError {
     match err {
+        RouterError::InvalidConfiguration(msg) => ProviderError::Configuration {
+            provider: "router",
+            message: msg,
+        },
         RouterError::ModelNotFound(msg) => ProviderError::model_not_found("router", msg),
         RouterError::NoAvailableDeployment(msg) => ProviderError::ProviderUnavailable {
             provider: "router",
@@ -164,5 +208,135 @@ pub fn build_execution_result<T>(
         model_used,
         used_fallback,
         latency_us,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn schedule(jitter_ratio: f64) -> RetrySchedule {
+        RetrySchedule {
+            base_delay_ms: 250,
+            max_delay_ms: 900,
+            backoff_multiplier: 2.0,
+            jitter_ratio,
+        }
+    }
+
+    #[test]
+    fn deployment_retry_schedule_applies_backoff_and_cap() {
+        let schedule = schedule(0.0);
+
+        assert_eq!(
+            calculate_retry_delay_for_schedule(&schedule, 1),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            calculate_retry_delay_for_schedule(&schedule, 2),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            calculate_retry_delay_for_schedule(&schedule, 3),
+            Duration::from_millis(900)
+        );
+    }
+
+    #[test]
+    fn deployment_retry_schedule_bounds_jitter_before_hard_cap() {
+        let schedule = RetrySchedule {
+            base_delay_ms: 1_000,
+            max_delay_ms: 1_100,
+            backoff_multiplier: 1.0,
+            jitter_ratio: 0.2,
+        };
+
+        assert_eq!(
+            calculate_retry_delay_for_schedule_with_sample(&schedule, 1, -1.0),
+            Duration::from_millis(800)
+        );
+        assert_eq!(
+            calculate_retry_delay_for_schedule_with_sample(&schedule, 1, 1.0),
+            Duration::from_millis(1_100)
+        );
+    }
+
+    #[test]
+    fn deployment_retry_schedule_saturates_large_attempts() {
+        let schedule = schedule(0.0);
+
+        assert_eq!(
+            calculate_retry_delay_for_schedule(&schedule, u32::MAX),
+            Duration::from_millis(900)
+        );
+    }
+
+    #[test]
+    fn deployment_retry_schedule_keeps_exact_integer_cap_after_float_conversion() {
+        let max_delay_ms = 9_007_199_254_740_995;
+        let schedule = RetrySchedule {
+            base_delay_ms: max_delay_ms,
+            max_delay_ms,
+            backoff_multiplier: 1.0,
+            jitter_ratio: 0.0,
+        };
+
+        assert_eq!(
+            calculate_retry_delay_for_schedule(&schedule, 1),
+            Duration::from_millis(max_delay_ms)
+        );
+    }
+
+    #[test]
+    fn deployment_retry_schedule_preserves_fractional_backoff() {
+        let schedule = RetrySchedule {
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+            backoff_multiplier: 0.5,
+            jitter_ratio: 0.0,
+        };
+
+        assert_eq!(
+            calculate_retry_delay_for_schedule(&schedule, 2),
+            Duration::from_micros(500)
+        );
+        assert_eq!(
+            calculate_retry_delay_for_schedule(&schedule, 3),
+            Duration::from_micros(250)
+        );
+    }
+
+    #[test]
+    fn deployment_retry_schedule_preserves_fractional_jitter_bounds() {
+        let schedule = RetrySchedule {
+            base_delay_ms: 3,
+            max_delay_ms: 10,
+            backoff_multiplier: 1.0,
+            jitter_ratio: 0.2,
+        };
+
+        assert_eq!(
+            calculate_retry_delay_for_schedule_with_sample(&schedule, 1, -1.0),
+            Duration::from_micros(2_400)
+        );
+        assert_eq!(
+            calculate_retry_delay_for_schedule_with_sample(&schedule, 1, 1.0),
+            Duration::from_micros(3_600)
+        );
+    }
+
+    #[test]
+    fn deployment_retry_schedule_zero_jitter_endpoint_wins_before_overflow() {
+        let schedule = RetrySchedule {
+            base_delay_ms: 250,
+            max_delay_ms: 900,
+            backoff_multiplier: 2.0,
+            jitter_ratio: 1.0,
+        };
+
+        assert_eq!(
+            calculate_retry_delay_for_schedule_with_sample(&schedule, u32::MAX, -1.0),
+            Duration::ZERO
+        );
     }
 }

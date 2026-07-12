@@ -283,6 +283,8 @@ impl OpenAIProvider {
         insert_optional_param!(metadata);
         insert_optional_param!(service_tier);
         insert_optional_param!(parallel_tool_calls);
+        insert_optional_param!(functions);
+        insert_optional_param!(function_call);
 
         if let Some(obj) = openai_request.as_object_mut() {
             for (key, value) in request.extra_params {
