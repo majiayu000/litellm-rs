@@ -123,3 +123,126 @@ fn invalid_operation_path(path: &str) -> ProviderError {
         format!("invalid Bedrock operation path '{path}'"),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_matrix_selects_the_matching_service_authority() {
+        let cases = [
+            (
+                "model",
+                "invoke",
+                BedrockService::Runtime,
+                "https://bedrock-runtime.us-east-1.amazonaws.com/model/model/invoke",
+            ),
+            (
+                "model",
+                "invoke-with-response-stream",
+                BedrockService::Runtime,
+                "https://bedrock-runtime.us-east-1.amazonaws.com/model/model/invoke-with-response-stream",
+            ),
+            (
+                "model",
+                "converse",
+                BedrockService::Runtime,
+                "https://bedrock-runtime.us-east-1.amazonaws.com/model/model/converse",
+            ),
+            (
+                "model",
+                "converse-stream",
+                BedrockService::Runtime,
+                "https://bedrock-runtime.us-east-1.amazonaws.com/model/model/converse-stream",
+            ),
+            (
+                "",
+                "list-foundation-models",
+                BedrockService::Control,
+                "https://bedrock.us-east-1.amazonaws.com/foundation-models",
+            ),
+            (
+                "",
+                "model-invocation-job",
+                BedrockService::Control,
+                "https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
+            ),
+            (
+                "",
+                "model-invocation-job/job-1",
+                BedrockService::Control,
+                "https://bedrock.us-east-1.amazonaws.com/model-invocation-job/job-1",
+            ),
+            (
+                "",
+                "model-invocation-job/job-1/stop",
+                BedrockService::Control,
+                "https://bedrock.us-east-1.amazonaws.com/model-invocation-job/job-1/stop",
+            ),
+            (
+                "",
+                "agents/a/agentAliases/b/sessions/c/text",
+                BedrockService::AgentRuntime,
+                "https://bedrock-agent-runtime.us-east-1.amazonaws.com/agents/a/agentAliases/b/sessions/c/text",
+            ),
+            (
+                "",
+                "knowledgebases/kb/retrieve",
+                BedrockService::AgentRuntime,
+                "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/kb/retrieve",
+            ),
+            (
+                "",
+                "guardrail/g/version/1/apply",
+                BedrockService::Runtime,
+                "https://bedrock-runtime.us-east-1.amazonaws.com/guardrail/g/version/1/apply",
+            ),
+        ];
+
+        for (model_id, operation, expected_service, expected_url) in cases {
+            let target = request_target("us-east-1", model_id, operation)
+                .unwrap_or_else(|error| panic!("target should build: {error}"));
+            assert_eq!(target.service, expected_service);
+            assert_eq!(target.url, expected_url);
+        }
+    }
+
+    #[test]
+    fn unknown_or_incomplete_operations_fail_closed() {
+        let error = request_target("us-east-1", "model", "custom-operation")
+            .err()
+            .unwrap_or_else(|| panic!("unsupported operation must fail before request building"));
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(request_target("us-east-1", "", "invoke").is_err());
+        assert!(request_target("us-east-1", "", "https://example.com/path").is_err());
+        assert!(request_target("us-east-1", "", "guardrail/g/version//apply").is_err());
+    }
+
+    #[test]
+    fn model_and_service_arn_identifiers_are_single_segments() {
+        let model_arn = "arn:aws:bedrock:us-east-1:123:inference-profile/us.model:0";
+        let model = request_target("us-east-1", model_arn, "invoke")
+            .unwrap_or_else(|error| panic!("model ARN target should build: {error}"));
+        assert!(model.url.contains("inference-profile%2Fus.model%3A0"));
+
+        let batch_arn = "arn:aws:bedrock:us-east-1:123:model-invocation-job/job-1";
+        let batch = request_target(
+            "us-east-1",
+            "",
+            &format!("model-invocation-job/{batch_arn}/stop"),
+        )
+        .unwrap_or_else(|error| panic!("batch ARN target should build: {error}"));
+        assert!(batch.url.contains("model-invocation-job/arn%3A"));
+        assert!(batch.url.contains("%2Fjob-1/stop"));
+
+        let guardrail_arn = "arn:aws:bedrock:us-east-1:123:guardrail/guard-1";
+        let guardrail = request_target(
+            "us-east-1",
+            "",
+            &format!("guardrail/{guardrail_arn}/version/DRAFT/apply"),
+        )
+        .unwrap_or_else(|error| panic!("guardrail ARN target should build: {error}"));
+        assert!(guardrail.url.contains("guardrail/arn%3A"));
+        assert!(guardrail.url.contains("%2Fguard-1/version/DRAFT/apply"));
+    }
+}

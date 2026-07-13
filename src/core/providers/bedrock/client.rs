@@ -554,16 +554,16 @@ mod tests {
     }
 
     #[test]
-    fn private_clients_reject_every_cross_service_authority() {
+    fn private_clients_isolate_all_service_authorities() {
         let client = BedrockClient::new(BedrockConfig {
             endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
             ..create_test_config()
         })
         .unwrap_or_else(|error| panic!("private Bedrock client should build: {error}"));
-        let clients = [
-            &client.runtime_client,
-            &client.control_client,
-            &client.agent_runtime_client,
+        let services = [
+            BedrockService::Runtime,
+            BedrockService::Control,
+            BedrockService::AgentRuntime,
         ];
         let urls = [
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/test/invoke",
@@ -571,13 +571,21 @@ mod tests {
             "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/kb/retrieve",
         ];
 
-        for (client_index, client) in clients.into_iter().enumerate() {
-            for (url_index, url) in urls.into_iter().enumerate() {
-                if client_index != url_index {
-                    assert!(
-                        client.get(url).is_err(),
-                        "client {client_index} allowed {url}"
-                    );
+        for (service_index, service) in services.into_iter().enumerate() {
+            let service_client = client.client_for_service(service);
+            for (url_index, url) in urls.iter().copied().enumerate() {
+                match (service_index == url_index, service_client.get(url)) {
+                    (true, Ok(_)) => {}
+                    (true, Err(error)) => {
+                        panic!("{service:?} rejected its own authority: {error}")
+                    }
+                    (false, Err(error)) => {
+                        assert!(matches!(error, ProviderError::Network { .. }));
+                        assert!(error.to_string().contains("does not match"));
+                    }
+                    (false, Ok(_)) => {
+                        panic!("{service:?} allowed cross-service authority {url}")
+                    }
                 }
             }
         }
