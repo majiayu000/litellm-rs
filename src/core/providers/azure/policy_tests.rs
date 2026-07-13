@@ -114,19 +114,20 @@ async fn azure_core_operation_matrix_uses_policy_client() {
     let batch = AzureBatchHandler::new(config.clone()).expect("batch should build");
     let assistant = AzureAssistantHandler::new(config).expect("assistant should build");
     let assistant_api = AssistantApiConfig::new(None, Some(endpoint.as_str()), None);
-    assert_errors!(assert_request_error;
-        chat.create_chat_completion(policy_chat_request(), RequestContext::default()),
-        chat.create_chat_completion_stream(policy_chat_request(), RequestContext::default()),
-        embeddings.create_embeddings(request, RequestContext::default()),
-        images.generate_image(generation, RequestContext::default()),
-        images.edit_image(edit, RequestContext::default()),
-        batch.create_batch(create_batch_request(), None, Some(endpoint.as_str()), None),
-        assistant.create_assistant(create_assistant_request(), &assistant_api),
-    );
-    let requests = tokio::time::timeout(Duration::from_secs(5), capture)
-        .await
-        .expect("all policy requests should arrive within five seconds")
-        .expect("capture task should finish");
+    let requests = tokio::time::timeout(Duration::from_secs(5), async {
+        assert_errors!(assert_request_error;
+            chat.create_chat_completion(policy_chat_request(), RequestContext::default()),
+            chat.create_chat_completion_stream(policy_chat_request(), RequestContext::default()),
+            embeddings.create_embeddings(request, RequestContext::default()),
+            images.generate_image(generation, RequestContext::default()),
+            images.edit_image(edit, RequestContext::default()),
+            batch.create_batch(create_batch_request(), None, Some(endpoint.as_str()), None),
+            assistant.create_assistant(create_assistant_request(), &assistant_api),
+        );
+        capture.await.expect("capture task should finish")
+    })
+    .await
+    .expect("policy operation matrix should finish within five seconds");
     let paths = [
         "/openai/deployments/deployment/chat/completions",
         "/openai/deployments/deployment/chat/completions",
