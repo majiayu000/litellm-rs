@@ -2,51 +2,33 @@
 //!
 //! Complete embedding functionality for Azure AI services following unified architecture
 
-use reqwest::header::HeaderMap;
+use reqwest::Method;
 use serde_json::{Value, json};
 
+use super::client::AzureAIClient;
 use super::config::{AzureAIConfig, AzureAIEndpointType};
-use crate::core::providers::base::HttpErrorMapper;
+use crate::core::providers::base::{HttpErrorMapper, read_streaming_error_body};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::{
     context::RequestContext,
     embedding::EmbeddingRequest,
     responses::{EmbeddingData, EmbeddingResponse},
 };
-use crate::utils::net::http::create_custom_client_with_headers;
 
 /// Azure AI embedding handler following unified architecture
 #[derive(Debug, Clone)]
 pub struct AzureAIEmbeddingHandler {
-    config: AzureAIConfig,
-    client: reqwest::Client,
+    client: AzureAIClient,
 }
 
 impl AzureAIEmbeddingHandler {
     /// Create a new embedding handler
     pub fn new(config: AzureAIConfig) -> Result<Self, ProviderError> {
-        // Create headers for the client
-        let mut headers = HeaderMap::new();
-        let default_headers = config
-            .create_default_headers()
-            .map_err(|e| ProviderError::configuration("azure_ai", &e))?;
+        Self::from_client(AzureAIClient::new(config)?)
+    }
 
-        for (key, value) in default_headers {
-            let header_name =
-                reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
-                    ProviderError::configuration("azure_ai", format!("Invalid header name: {}", e))
-                })?;
-            let header_value = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
-                ProviderError::configuration("azure_ai", format!("Invalid header value: {}", e))
-            })?;
-            headers.insert(header_name, header_value);
-        }
-
-        let client = create_custom_client_with_headers(config.timeout(), headers).map_err(|e| {
-            ProviderError::configuration("azure_ai", format!("Failed to create HTTP client: {}", e))
-        })?;
-
-        Ok(Self { config, client })
+    pub(crate) fn from_client(client: AzureAIClient) -> Result<Self, ProviderError> {
+        Ok(Self { client })
     }
 
     /// Handle embedding request
@@ -64,11 +46,13 @@ impl AzureAIEmbeddingHandler {
         // Build URL
         let url = if self.is_multimodal_embedding_model(&request.model) {
             // Use image embeddings endpoint for multimodal models
-            self.config
+            self.client
+                .get_config()
                 .build_endpoint_url(AzureAIEndpointType::ImageEmbeddings.as_path())
         } else {
             // Use regular embeddings endpoint
-            self.config
+            self.client
+                .get_config()
                 .build_endpoint_url(AzureAIEndpointType::Embeddings.as_path())
         }
         .map_err(|e| ProviderError::configuration("azure_ai", &e))?;
@@ -76,7 +60,7 @@ impl AzureAIEmbeddingHandler {
         // Execute request
         let response = self
             .client
-            .post(&url)
+            .request(Method::POST, &url)?
             .json(&azure_request)
             .send()
             .await
@@ -85,10 +69,9 @@ impl AzureAIEmbeddingHandler {
         // Handle error responses
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_body = response
-                .text()
+            let error_body = read_streaming_error_body(response)
                 .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+                .map_err(|err| err.into_provider_error("azure_ai"))?;
             return Err(HttpErrorMapper::map_status_code(
                 "azure_ai",
                 status,

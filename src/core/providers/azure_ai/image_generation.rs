@@ -2,11 +2,12 @@
 //!
 //! Basic image generation functionality for Azure AI using FLUX models
 
-// use reqwest::header::HeaderMap;  // Not used in simplified version
+use reqwest::Method;
 use serde_json::{Value, json};
 
+use super::client::AzureAIClient;
 use super::config::{AzureAIConfig, AzureAIEndpointType};
-use crate::core::providers::base::HttpErrorMapper;
+use crate::core::providers::base::{HttpErrorMapper, read_streaming_error_body};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::{
     context::RequestContext,
@@ -17,15 +18,17 @@ use crate::core::types::{
 /// Azure AI image generation handler
 #[derive(Debug, Clone)]
 pub struct AzureAIImageHandler {
-    config: AzureAIConfig,
-    client: reqwest::Client,
+    client: AzureAIClient,
 }
 
 impl AzureAIImageHandler {
     /// Create a new image generation handler
     pub fn new(config: AzureAIConfig) -> Result<Self, ProviderError> {
-        let client = crate::core::http::outbound::default_outbound_client().clone();
-        Ok(Self { config, client })
+        Self::from_client(AzureAIClient::new(config)?)
+    }
+
+    pub(crate) fn from_client(client: AzureAIClient) -> Result<Self, ProviderError> {
+        Ok(Self { client })
     }
 
     /// Generate image
@@ -53,24 +56,15 @@ impl AzureAIImageHandler {
 
         // Build URL
         let url = self
-            .config
+            .client
+            .get_config()
             .build_endpoint_url(AzureAIEndpointType::ImageGeneration.as_path())
             .map_err(|e| ProviderError::configuration("azure_ai", &e))?;
 
         // Execute request
         let response = self
             .client
-            .post(&url)
-            .header(
-                "Authorization",
-                format!(
-                    "Bearer {}",
-                    self.config.base.api_key.as_ref().ok_or_else(|| {
-                        ProviderError::authentication("azure_ai", "API key not set")
-                    })?
-                ),
-            )
-            .header("Content-Type", "application/json")
+            .request(Method::POST, &url)?
             .json(&azure_request)
             .send()
             .await
@@ -79,10 +73,9 @@ impl AzureAIImageHandler {
         // Handle error responses
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_body = response
-                .text()
+            let error_body = read_streaming_error_body(response)
                 .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+                .map_err(|err| err.into_provider_error("azure_ai"))?;
             return Err(HttpErrorMapper::map_status_code(
                 "azure_ai",
                 status,

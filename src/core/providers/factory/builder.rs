@@ -459,6 +459,7 @@ pub(super) fn build_azure_ai_config_from_factory(
     let mut azure_ai_config = azure_ai::AzureAIConfig::new("azure_ai");
     azure_ai_config.base.api_key = Some(api_key.to_string());
     azure_ai_config.base.api_base = Some(api_base.to_string());
+    azure_ai_config.base.endpoint_access = config_endpoint_access(config, "azure_ai")?;
 
     if let Some(api_version) = config_str(config, "api_version") {
         azure_ai_config.base.api_version = Some(api_version.to_string());

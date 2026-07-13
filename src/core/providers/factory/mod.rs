@@ -5,6 +5,8 @@
 //! - `builder`: per-provider config builders and extraction helpers
 //! - `registry`: `Provider::from_config_async` dispatch table
 
+#[cfg(all(test, feature = "providers-extra"))]
+mod azure_ai_builder_tests;
 mod builder;
 #[cfg(test)]
 mod builder_tests;

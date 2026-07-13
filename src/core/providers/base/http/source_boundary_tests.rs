@@ -12,6 +12,8 @@ const ALLOWED_BASE_SYMBOLS: &[&str] = &[
     "HttpMethod",
     "OpenAIRequestTransformer",
     "ProviderRequestBuilder",
+    "SSETransformer",
+    "UnifiedSSEStream",
     "UrlBuilder",
     "apply_provider_headers",
     "create_provider_sse_stream",
@@ -405,6 +407,31 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         assert!(
             violations.is_empty(),
             "azure/{path}: {}",
+            violations.join("; ")
+        );
+    }
+    let azure_ai_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/azure_ai");
+    let mut azure_ai_sources = Vec::new();
+    collect_provider_sources(
+        &azure_ai_root,
+        &azure_ai_root,
+        &[
+            "crate".to_string(),
+            "core".to_string(),
+            "providers".to_string(),
+            "azure_ai".to_string(),
+        ],
+        &mut azure_ai_sources,
+    )
+    .unwrap_or_else(|error| panic!("AzureAI source inventory failed: {error}"));
+    assert!(!azure_ai_sources.is_empty());
+    for (path, module_path, source) in azure_ai_sources {
+        let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
+        let violations = boundary_violations(&source, &module_path)
+            .unwrap_or_else(|error| panic!("azure_ai/{path} must parse: {error}"));
+        assert!(
+            violations.is_empty(),
+            "azure_ai/{path}: {}",
             violations.join("; ")
         );
     }

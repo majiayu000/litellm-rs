@@ -4,7 +4,9 @@
 
 // use serde::{Deserialize, Serialize};  // Not needed with the macro
 use std::collections::HashMap;
+use url::Url;
 
+use crate::core::net::{ProviderEndpointAccess, ProviderEndpointPolicy};
 use crate::core::traits::provider::ProviderConfig;
 use crate::define_provider_config;
 
@@ -119,14 +121,31 @@ impl AzureAIConfig {
 
     /// Configuration
     pub fn validate(&self) -> Result<(), String> {
-        self.base.validate("azure_ai")
+        self.validate_policy_client_settings()
+    }
+
+    pub(crate) fn validate_policy_client_settings(&self) -> Result<(), String> {
+        self.base.validate("azure_ai")?;
+        let endpoint = self
+            .base
+            .api_base
+            .as_deref()
+            .ok_or_else(|| "Azure AI API base URL not set".to_string())?;
+        let endpoint_url =
+            Url::parse(endpoint).map_err(|error| format!("Invalid Azure AI endpoint: {error}"))?;
+        if !matches!(endpoint_url.scheme(), "http" | "https") {
+            return Err("Azure AI endpoint must use http or https".to_string());
+        }
+        ProviderEndpointPolicy::for_base_url(self.base.endpoint_access, endpoint)
+            .map(|_| ())
+            .map_err(|error| format!("Invalid Azure AI endpoint policy: {error}"))
     }
 }
 
 // Implementation of ProviderConfig trait
 impl ProviderConfig for AzureAIConfig {
     fn validate(&self) -> Result<(), String> {
-        self.base.validate("azure_ai")
+        self.validate_policy_client_settings()
     }
 
     fn api_key(&self) -> Option<&str> {
@@ -143,6 +162,10 @@ impl ProviderConfig for AzureAIConfig {
 
     fn max_retries(&self) -> u32 {
         self.base.max_retries
+    }
+
+    fn endpoint_access(&self) -> ProviderEndpointAccess {
+        self.base.endpoint_access
     }
 }
 
@@ -327,6 +350,31 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_endpoint_policy_and_scheme() {
+        let mut config = AzureAIConfig::new("azure_ai");
+        config.base.api_key = Some("test-key".to_string());
+
+        for endpoint in ["http://example.com", "https://example.com"] {
+            config.base.api_base = Some(endpoint.to_string());
+            assert!(config.validate().is_ok(), "{endpoint} should be accepted");
+        }
+
+        for endpoint in ["ws://example.com", "wss://example.com"] {
+            config.base.api_base = Some(endpoint.to_string());
+            assert!(config.validate().is_err(), "{endpoint} should be rejected");
+        }
+
+        config.base.api_base = Some("http://127.0.0.1:18080".to_string());
+        config.base.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        assert!(config.validate().is_err());
+        config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        assert!(config.validate().is_ok());
+
+        config.base.api_base = Some("http://169.254.169.254".to_string());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn test_validate_missing_api_key() {
         let mut config = AzureAIConfig::new("azure_ai");
         config.base.api_base = Some("https://test.com".to_string());
@@ -366,5 +414,6 @@ mod tests {
             std::time::Duration::from_secs(60)
         );
         assert_eq!(config.max_retries(), 3);
+        assert_eq!(config.endpoint_access(), ProviderEndpointAccess::PublicOnly);
     }
 }

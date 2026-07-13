@@ -4,11 +4,14 @@
 
 // Complete Azure AI modules
 pub mod chat;
+mod client;
 pub mod config;
 pub mod embed;
 pub mod error;
 pub mod image_generation;
 pub mod models;
+#[cfg(test)]
+mod policy_tests;
 pub mod rerank;
 
 // Re-export main components
@@ -21,6 +24,7 @@ pub use models::{AzureAIModelRegistry, AzureAIModelSpec, AzureAIModelType, get_a
 pub use rerank::{AzureAIRerankHandler, AzureAIRerankUtils, RerankRequest, RerankResponse};
 
 use futures::Stream;
+use reqwest::Method;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -38,11 +42,12 @@ use crate::core::types::{
     model::ProviderCapability,
     responses::{ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse},
 };
+use client::AzureAIClient;
 
 /// Main Azure AI provider following unified architecture
 #[derive(Debug, Clone)]
 pub struct AzureAIProvider {
-    config: AzureAIConfig,
+    client: AzureAIClient,
     chat_handler: AzureAIChatHandler,
     embedding_handler: AzureAIEmbeddingHandler,
     image_handler: AzureAIImageHandler,
@@ -53,23 +58,19 @@ pub struct AzureAIProvider {
 impl AzureAIProvider {
     /// Create new Azure AI provider
     pub fn new(config: AzureAIConfig) -> Result<Self, ProviderError> {
-        // Configuration
-        config
-            .validate()
-            .map_err(|e| ProviderError::configuration("azure_ai", &e))?;
-
-        let chat_handler = AzureAIChatHandler::new(config.clone())
+        let client = AzureAIClient::new(config)?;
+        let chat_handler = AzureAIChatHandler::from_client(client.clone())
             .map_err(|e| ProviderError::configuration("azure_ai", e.to_string()))?;
-        let embedding_handler = AzureAIEmbeddingHandler::new(config.clone())
+        let embedding_handler = AzureAIEmbeddingHandler::from_client(client.clone())
             .map_err(|e| ProviderError::configuration("azure_ai", e.to_string()))?;
-        let image_handler = AzureAIImageHandler::new(config.clone())
+        let image_handler = AzureAIImageHandler::from_client(client.clone())
             .map_err(|e| ProviderError::configuration("azure_ai", e.to_string()))?;
-        let rerank_handler = AzureAIRerankHandler::new(config.clone())
+        let rerank_handler = AzureAIRerankHandler::from_client(client.clone())
             .map_err(|e| ProviderError::configuration("azure_ai", e.to_string()))?;
         let model_registry = get_azure_ai_registry();
 
         Ok(Self {
-            config,
+            client,
             chat_handler,
             embedding_handler,
             image_handler,
@@ -80,7 +81,7 @@ impl AzureAIProvider {
 
     /// Get Azure AI configuration
     pub fn get_config(&self) -> &AzureAIConfig {
-        &self.config
+        self.client.get_config()
     }
 
     /// Create from environment variables
@@ -240,24 +241,18 @@ impl LLMProvider for AzureAIProvider {
 
     async fn health_check(&self) -> HealthStatus {
         // Validate configuration first
-        if self.config.validate().is_err() {
+        if self.client.get_config().validate().is_err() {
             return HealthStatus::Unhealthy;
         }
 
-        let url = match self.config.build_endpoint_url("models") {
+        let url = match self.client.get_config().build_endpoint_url("models") {
             Ok(url) => url,
             Err(_) => return HealthStatus::Unhealthy,
         };
-        let headers = match self.config.create_default_headers() {
-            Ok(headers) => headers,
+        let request = match self.client.request(Method::GET, &url) {
+            Ok(request) => request,
             Err(_) => return HealthStatus::Unhealthy,
         };
-
-        let client = crate::core::http::outbound::default_outbound_client().clone();
-        let mut request = client.get(url);
-        for (key, value) in headers {
-            request = request.header(key, value);
-        }
 
         match request.send().await {
             Ok(response) if response.status().is_success() => HealthStatus::Healthy,
@@ -597,6 +592,7 @@ mod tests {
             Ok(url) => url,
             Err(error) => panic!("test server should start: {error}"),
         });
+        config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
         let provider = match AzureAIProvider::new(config) {
             Ok(provider) => provider,
             Err(error) => panic!("provider should be created: {error}"),
@@ -615,6 +611,7 @@ mod tests {
                 Err(error) => panic!("test server should start: {error}"),
             },
         );
+        config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
         let provider = match AzureAIProvider::new(config) {
             Ok(provider) => provider,
             Err(error) => panic!("provider should be created: {error}"),
