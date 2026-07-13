@@ -12,12 +12,19 @@ crate::define_http_provider_with_hooks!(
     ],
     url_builder: |provider: &CustomHttpxProvider| -> String { provider.config.endpoint_url.clone() },
     request_builder: |provider: &CustomHttpxProvider, url: &str| {
-        match provider.config.http_method.to_uppercase().as_str() {
-            "GET" => provider.http_client.get(url),
-            "POST" => provider.http_client.post(url),
-            "PUT" => provider.http_client.request(reqwest::Method::PUT, url),
-            _ => provider.http_client.post(url),
-        }
+        let method = provider
+            .config
+            .http_method
+            .trim()
+            .to_ascii_uppercase()
+            .parse::<reqwest::Method>()
+            .map_err(|error| {
+                crate::core::providers::unified_provider::ProviderError::configuration(
+                    "custom_httpx",
+                    format!("invalid HTTP method: {error}"),
+                )
+            })?;
+        provider.http_client.request(method, url)
     },
     supported_params: ["temperature", "max_tokens", "top_p", "stream", "stop"],
     build_headers: |provider: &CustomHttpxProvider,

@@ -88,6 +88,11 @@ impl ProviderConfig for CustomHttpxConfig {
         if self.endpoint_url.is_empty() {
             return Err("Endpoint URL is required".to_string());
         }
+        self.http_method
+            .trim()
+            .to_ascii_uppercase()
+            .parse::<reqwest::Method>()
+            .map_err(|error| format!("invalid HTTP method: {error}"))?;
 
         validate_provider_endpoint_url_str(&self.endpoint_url, self.base.endpoint_access)
             .map(|_| ())
@@ -152,6 +157,16 @@ mod tests {
         );
 
         cfg.endpoint_url = "http://169.254.169.254/latest/meta-data".to_string();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_http_method_is_parsed_fallibly() {
+        let mut cfg = CustomHttpxConfig::new("https://8.8.8.8/endpoint");
+        cfg.http_method = "delete".to_string();
+        assert!(cfg.validate().is_ok());
+
+        cfg.http_method = "not a method".to_string();
         assert!(cfg.validate().is_err());
     }
 

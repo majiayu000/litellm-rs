@@ -23,7 +23,7 @@ struct ProbeGroup {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProbeFailure {
-    Request,
+    Request(String),
     ClientUnavailable,
     Timeout,
     UnexpectedStatus(u16),
@@ -167,10 +167,10 @@ async fn execute_probe(
         let client = custom_client.ok_or(ProbeFailure::ClientUnavailable)?;
         let response = client
             .get(endpoint.clone())
-            .map_err(|_| ProbeFailure::Request)?
+            .map_err(|error| ProbeFailure::Request(error.to_string()))?
             .send()
             .await
-            .map_err(|_| ProbeFailure::Request)?;
+            .map_err(|error| ProbeFailure::Request(error.to_string()))?;
         let status = response.status().as_u16();
         if policy.expected_codes.contains(&status) {
             Ok(())
@@ -574,6 +574,20 @@ mod tests {
                 .is_err(),
             "rejected public probe must not establish a loopback connection"
         );
+    }
+
+    #[tokio::test]
+    async fn custom_probe_preserves_policy_error_details() {
+        let provider = test_provider(None).await;
+        let client_endpoint = Url::parse("http://127.0.0.1:18080/health").unwrap();
+        let client = local_probe_client(&client_endpoint);
+        let policy = test_policy(Some(Url::parse("http://127.0.0.1:18081/health").unwrap()));
+
+        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        assert!(matches!(
+            result,
+            Err(ProbeFailure::Request(message)) if message.contains("authority")
+        ));
     }
 
     #[tokio::test]

@@ -18,6 +18,7 @@ const ALLOWED_BASE_SYMBOLS: &[&str] = &[
     "header",
     "header_owned",
     "header_static",
+    "read_streaming_error_body",
 ];
 const BASE_PREFIX: &[&str] = &["crate", "core", "providers", "base"];
 const RAW_PREFIXES: &[&[&str]] = &[

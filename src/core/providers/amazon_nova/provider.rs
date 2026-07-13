@@ -6,7 +6,9 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::core::providers::base::{HeaderPair, HttpMethod, get_pricing_db, header};
+use crate::core::providers::base::{
+    HeaderPair, HttpMethod, get_pricing_db, header, read_streaming_error_body,
+};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::{
     chat::ChatRequest,
@@ -116,6 +118,7 @@ crate::define_pooled_http_provider_with_hooks!(
         let url = provider.config.get_chat_endpoint();
         let api_key = provider.config.get_api_key().map(|key| key.to_string());
         let client = provider.streaming_client.clone();
+        let header_timeout = provider.config.base.timeout_duration();
 
         let mut body = provider.transform_chat_request(request);
         body["stream"] = serde_json::Value::Bool(true);
@@ -125,21 +128,28 @@ crate::define_pooled_http_provider_with_hooks!(
                 ProviderError::authentication(PROVIDER_NAME, "API key is required")
             })?;
 
-            let response = client
-                .post(&url)
-                .map_err(|error| ProviderError::network(PROVIDER_NAME, error.to_string()))?
+            let request = client
+                .post(&url)?
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
+                .json(&body);
+            let response = tokio::time::timeout(header_timeout, request.send())
                 .await
-                .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
+                .map_err(|_| {
+                    ProviderError::timeout(
+                        PROVIDER_NAME,
+                        format!(
+                            "streaming request did not receive response headers within {header_timeout:?}"
+                        ),
+                    )
+                })?
+                .map_err(|error| ProviderError::network(PROVIDER_NAME, error.to_string()))?;
 
             let status = response.status();
             if !status.is_success() {
-                let error_text = response.text().await.map_err(|error| {
-                    ProviderError::network(PROVIDER_NAME, error.to_string())
-                })?;
+                let error_text = read_streaming_error_body(response)
+                    .await
+                    .map_err(|error| error.into_provider_error(PROVIDER_NAME))?;
                 return Err(ProviderError::api_error(
                     PROVIDER_NAME,
                     status.as_u16(),
@@ -354,6 +364,40 @@ mod tests {
         private.base.api_base = Some("http://127.0.0.1:8080/v1".to_string());
         private.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
         assert!(AmazonNovaProvider::new(private).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_streaming_header_wait_uses_config_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("streaming listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("streaming listener address should exist");
+        let server = tokio::spawn(async move {
+            let _connection = listener.accept().await.expect("request should connect");
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        });
+        let mut config = AmazonNovaConfig::with_api_key("test-key");
+        config.base.api_base = Some(format!("http://{address}/v1"));
+        config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
+        config.base.timeout = 1;
+        let provider = AmazonNovaProvider::new(config).expect("private provider should build");
+        let request = ChatRequest {
+            model: "nova-pro".to_string(),
+            stream: true,
+            ..Default::default()
+        };
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            LLMProvider::chat_completion_stream(&provider, request, RequestContext::default()),
+        )
+        .await
+        .expect("configured header timeout should terminate the request");
+
+        assert!(matches!(result, Err(ProviderError::Timeout { .. })));
+        server.abort();
     }
 
     #[test]
