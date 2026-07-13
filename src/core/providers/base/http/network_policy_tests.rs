@@ -3,6 +3,86 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const PROXY_CHILD_TARGET_ENV: &str = "LITELLM_RS_BASE_HTTP_PROXY_CHILD_TARGET";
 const PROXY_CHILD_TEST: &str = "core::providers::base::http::network_policy_tests::base_policy_client_ignores_proxy_environment_child";
+const ALLOWED_BASE_SYMBOLS: &[&str] = &[
+    "BaseConfig",
+    "BaseHttpClient",
+    "HttpErrorMapper",
+    "OpenAIRequestTransformer",
+    "UrlBuilder",
+    "apply_provider_headers",
+    "create_provider_sse_stream",
+    "get_pricing_db",
+    "header",
+    "header_owned",
+    "header_static",
+];
+
+fn base_boundary_violation(source: &str) -> Option<String> {
+    for forbidden_import in [
+        "use crate::{",
+        "core::providers::{",
+        "use crate as ",
+        "use crate::core::providers as ",
+        "use crate::core::providers;",
+    ] {
+        if source.contains(forbidden_import) {
+            return Some(format!(
+                "unsupported grouped or aliased import {forbidden_import}"
+            ));
+        }
+    }
+
+    let import_prefix = "use crate::core::providers::base";
+    for segment in source.split(';') {
+        let Some(start) = segment.find(import_prefix) else {
+            continue;
+        };
+        let rest = segment[start + import_prefix.len()..].trim();
+        if rest.contains(" as ") {
+            return Some("base import aliases are forbidden".to_string());
+        }
+        if let Some(list) = rest.strip_prefix("::{") {
+            let Some(end) = list.rfind('}') else {
+                return Some("base import list is missing its closing brace".to_string());
+            };
+            for symbol in list[..end]
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                if !symbol
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+                    || !ALLOWED_BASE_SYMBOLS.contains(&symbol)
+                {
+                    return Some(format!("base import {symbol} is not policy-safe"));
+                }
+            }
+        } else if let Some(symbol) = rest.strip_prefix("::") {
+            if !ALLOWED_BASE_SYMBOLS.contains(&symbol) {
+                return Some(format!("base import {symbol} is not policy-safe"));
+            }
+        } else {
+            return Some("the base module itself cannot be imported".to_string());
+        }
+    }
+
+    let qualified_prefix = "crate::core::providers::base::";
+    for (start, _) in source.match_indices(qualified_prefix) {
+        let rest = &source[start + qualified_prefix.len()..];
+        if rest.starts_with('{') {
+            continue;
+        }
+        let symbol: String = rest
+            .chars()
+            .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+            .collect();
+        if !ALLOWED_BASE_SYMBOLS.contains(&symbol.as_str()) {
+            return Some(format!("qualified base access {symbol} is not policy-safe"));
+        }
+    }
+    None
+}
 
 #[test]
 fn migrated_shared_providers_have_no_raw_client_escape() {
@@ -58,35 +138,19 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         "base::connection_pool",
         ".client()",
     ];
-    let raw_client_api_names: Vec<_> = [
-        include_str!("../../../http/outbound.rs"),
-        include_str!("../../../../utils/net/http.rs"),
-        include_str!("../../../../utils/net/client/utils.rs"),
-        include_str!("../connection_pool.rs"),
-    ]
-    .into_iter()
-    .flat_map(|source| {
-        ["pub fn ", "pub(crate) fn "]
-            .into_iter()
-            .flat_map(move |marker| source.split(marker).skip(1))
-    })
-    .filter_map(|declaration| {
-        let signature = declaration.split_once('{')?.0;
-        if !signature.contains("Client") {
-            return None;
-        }
-        let name = declaration.split_once('(')?.0.trim();
-        (name.contains("client") && name != "client").then_some(name)
-    })
-    .collect();
-
-    for required in [
-        "default_outbound_client",
-        "streaming_outbound_client",
-        "build_outbound_client",
-        "build_streaming_outbound_client",
+    assert!(
+        base_boundary_violation(
+            "use crate::core::providers::base::{BaseConfig, BaseHttpClient, header};"
+        )
+        .is_none()
+    );
+    for bypass in [
+        "use crate::core::providers::base::GlobalPoolManager;",
+        "use crate::core::providers::base::{BaseConfig, ConnectionPool};",
+        "crate::core::providers::base::ConnectionPool::client(&pool);",
+        "use crate::core::providers::base as raw_base;",
     ] {
-        assert!(raw_client_api_names.contains(&required));
+        assert!(base_boundary_violation(bypass).is_some());
     }
     for pattern in &forbidden_base_exports {
         assert!(
@@ -101,15 +165,8 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
                 "{path} bypasses BaseHttpClient through {pattern}"
             );
         }
-        for api_name in &raw_client_api_names {
-            assert!(
-                !source
-                    .split(|character: char| {
-                        !(character.is_ascii_alphanumeric() || character == '_')
-                    })
-                    .any(|token| token == *api_name),
-                "{path} uses raw client API {api_name}"
-            );
+        if let Some(violation) = base_boundary_violation(source) {
+            panic!("{path} bypasses the BaseHttpClient boundary: {violation}");
         }
     }
     let no_redirect_constructor = ["ProviderHttpClient::", "no_redirect"].concat();
