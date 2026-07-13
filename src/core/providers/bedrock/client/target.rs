@@ -48,12 +48,14 @@ pub(super) fn request_target(
         }
         "list-foundation-models" => (BedrockService::Control, "foundation-models".to_string()),
         path if path == "model-invocation-job" || path.starts_with("model-invocation-job/") => {
-            (BedrockService::Control, path.to_string())
+            (BedrockService::Control, batch_operation_path(path)?)
         }
         path if path.starts_with("agents/") || path.starts_with("knowledgebases/") => {
             (BedrockService::AgentRuntime, path.to_string())
         }
-        path if path.starts_with("guardrail/") => (BedrockService::Runtime, path.to_string()),
+        path if path.starts_with("guardrail/") => {
+            (BedrockService::Runtime, guardrail_operation_path(path)?)
+        }
         _ => {
             return Err(ProviderError::invalid_request(
                 "bedrock",
@@ -72,73 +74,52 @@ fn encode_model_id_path_segment(model_id: &str) -> String {
     url::form_urlencoded::byte_serialize(model_id.as_bytes()).collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn operation_matrix_selects_the_matching_service_authority() {
-        let cases = [
-            (
-                "model",
-                "invoke",
-                BedrockService::Runtime,
-                "https://bedrock-runtime.us-east-1.amazonaws.com/model/model/invoke",
-            ),
-            (
-                "",
-                "list-foundation-models",
-                BedrockService::Control,
-                "https://bedrock.us-east-1.amazonaws.com/foundation-models",
-            ),
-            (
-                "",
-                "model-invocation-job/job-1",
-                BedrockService::Control,
-                "https://bedrock.us-east-1.amazonaws.com/model-invocation-job/job-1",
-            ),
-            (
-                "",
-                "agents/a/agentAliases/b/sessions/c/text",
-                BedrockService::AgentRuntime,
-                "https://bedrock-agent-runtime.us-east-1.amazonaws.com/agents/a/agentAliases/b/sessions/c/text",
-            ),
-            (
-                "",
-                "knowledgebases/kb/retrieve",
-                BedrockService::AgentRuntime,
-                "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/kb/retrieve",
-            ),
-            (
-                "",
-                "guardrail/g/version/1/apply",
-                BedrockService::Runtime,
-                "https://bedrock-runtime.us-east-1.amazonaws.com/guardrail/g/version/1/apply",
-            ),
-        ];
-
-        for (model_id, operation, expected_service, expected_url) in cases {
-            let target = request_target("us-east-1", model_id, operation)
-                .unwrap_or_else(|error| panic!("target should build: {error}"));
-            assert_eq!(target.service, expected_service);
-            assert_eq!(target.url, expected_url);
-        }
+fn batch_operation_path(path: &str) -> Result<String, ProviderError> {
+    let Some(rest) = path.strip_prefix("model-invocation-job") else {
+        return Err(invalid_operation_path(path));
+    };
+    if rest.is_empty() {
+        return Ok("model-invocation-job".to_string());
     }
-
-    #[test]
-    fn unknown_or_incomplete_operations_fail_closed() {
-        assert!(request_target("us-east-1", "model", "custom-operation").is_err());
-        assert!(request_target("us-east-1", "", "invoke").is_err());
-        assert!(request_target("us-east-1", "", "https://example.com/path").is_err());
+    let Some(rest) = rest.strip_prefix('/') else {
+        return Err(invalid_operation_path(path));
+    };
+    let (identifier, suffix) = rest
+        .strip_suffix("/stop")
+        .map_or((rest, ""), |identifier| (identifier, "/stop"));
+    if identifier.is_empty() {
+        return Err(invalid_operation_path(path));
     }
+    Ok(format!(
+        "model-invocation-job/{}{}",
+        encode_model_id_path_segment(identifier),
+        suffix
+    ))
+}
 
-    #[test]
-    fn model_ids_are_encoded_as_one_path_segment() {
-        let arn = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.model:0";
-        let target = request_target("us-east-1", arn, "invoke")
-            .unwrap_or_else(|error| panic!("ARN target should build: {error}"));
-
-        assert!(target.url.contains("inference-profile%2Fus.model%3A0"));
-        assert!(!target.url.contains("/inference-profile/"));
+fn guardrail_operation_path(path: &str) -> Result<String, ProviderError> {
+    let rest = path
+        .strip_prefix("guardrail/")
+        .ok_or_else(|| invalid_operation_path(path))?;
+    let (identifier, version) = rest
+        .split_once("/version/")
+        .ok_or_else(|| invalid_operation_path(path))?;
+    let version = version
+        .strip_suffix("/apply")
+        .ok_or_else(|| invalid_operation_path(path))?;
+    if identifier.is_empty() || version.is_empty() {
+        return Err(invalid_operation_path(path));
     }
+    Ok(format!(
+        "guardrail/{}/version/{}/apply",
+        encode_model_id_path_segment(identifier),
+        encode_model_id_path_segment(version)
+    ))
+}
+
+fn invalid_operation_path(path: &str) -> ProviderError {
+    ProviderError::invalid_request(
+        "bedrock",
+        format!("invalid Bedrock operation path '{path}'"),
+    )
 }

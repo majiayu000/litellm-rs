@@ -331,13 +331,7 @@ impl BedrockClient {
 
 fn request_headers_for_operation(operation: &str) -> HashMap<String, String> {
     let mut headers = HashMap::new();
-
-    if matches!(
-        operation,
-        "invoke" | "invoke-with-response-stream" | "converse" | "converse-stream"
-    ) {
-        headers.insert("content-type".to_string(), "application/json".to_string());
-    }
+    headers.insert("content-type".to_string(), "application/json".to_string());
 
     if operation == "invoke-with-response-stream" {
         headers.insert(
@@ -503,6 +497,31 @@ mod tests {
     }
 
     #[test]
+    fn test_url_building_agent_and_arn_paths() {
+        let client = create_test_client();
+        let agent = build_test_url(&client, "", "agents/a/agentAliases/b/sessions/c/text");
+        assert!(agent.starts_with("https://bedrock-agent-runtime.us-east-1.amazonaws.com/"));
+
+        let batch_arn = "arn:aws:bedrock:us-east-1:123:model-invocation-job/job-1";
+        let batch = build_test_url(
+            &client,
+            "",
+            &format!("model-invocation-job/{batch_arn}/stop"),
+        );
+        assert!(batch.contains("model-invocation-job/arn%3A"));
+        assert!(batch.contains("%2Fjob-1/stop"));
+
+        let guardrail_arn = "arn:aws:bedrock:us-east-1:123:guardrail/guard-1";
+        let guardrail = build_test_url(
+            &client,
+            "",
+            &format!("guardrail/{guardrail_arn}/version/1/apply"),
+        );
+        assert!(guardrail.contains("guardrail/arn%3A"));
+        assert!(guardrail.contains("%2Fguard-1/version/1/apply"));
+    }
+
+    #[test]
     fn test_url_building_different_regions() {
         // us-west-2
         let config = BedrockConfig {
@@ -642,6 +661,21 @@ mod tests {
             headers.get("x-amzn-bedrock-accept"),
             Some(&"application/json".to_string())
         );
+    }
+
+    #[test]
+    fn test_all_json_post_operations_include_content_type() {
+        for operation in [
+            "model-invocation-job",
+            "agents/a/agentAliases/b/sessions/c/text",
+            "knowledgebases/kb/retrieve",
+            "guardrail/g/version/1/apply",
+        ] {
+            assert_eq!(
+                request_headers_for_operation(operation).get("content-type"),
+                Some(&"application/json".to_string())
+            );
+        }
     }
 
     // ==================== Clone/Debug Tests ====================
