@@ -8,6 +8,7 @@ mod target;
 use reqwest::Response;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, error};
 
 use super::config::BedrockConfig;
@@ -23,9 +24,9 @@ use self::target::{BedrockRequestTarget, BedrockService, request_target as build
 /// Bedrock HTTP client wrapper
 #[derive(Debug, Clone)]
 pub struct BedrockClient {
-    runtime_client: BaseHttpClient,
-    control_client: BaseHttpClient,
-    agent_runtime_client: BaseHttpClient,
+    runtime_client: Arc<BaseHttpClient>,
+    control_client: Arc<BaseHttpClient>,
+    agent_runtime_client: Arc<BaseHttpClient>,
     auth: AwsAuth,
     signer: SigV4Signer,
     error_mapper: BedrockErrorMapper,
@@ -57,12 +58,18 @@ impl BedrockClient {
             ..runtime_config.clone()
         };
 
-        let runtime_client =
-            BaseHttpClient::new_for_provider_no_redirect("bedrock", runtime_config)?;
-        let control_client =
-            BaseHttpClient::new_for_provider_no_redirect("bedrock", control_config)?;
-        let agent_runtime_client =
-            BaseHttpClient::new_for_provider_no_redirect("bedrock", agent_runtime_config)?;
+        let runtime_client = Arc::new(BaseHttpClient::new_for_provider_no_redirect(
+            "bedrock",
+            runtime_config,
+        )?);
+        let control_client = Arc::new(BaseHttpClient::new_for_provider_no_redirect(
+            "bedrock",
+            control_config,
+        )?);
+        let agent_runtime_client = Arc::new(BaseHttpClient::new_for_provider_no_redirect(
+            "bedrock",
+            agent_runtime_config,
+        )?);
 
         // Create AWS auth
         let auth = AwsAuth::new(
