@@ -294,6 +294,19 @@ impl ProviderHttpClient {
         mode: ProviderClientMode,
         resolver: Arc<dyn HostResolver>,
     ) -> Result<Client, ProviderHttpClientError> {
+        let resolver = Arc::new(PolicyDnsResolver {
+            access: policy.access(),
+            resolver,
+        });
+        Self::build_client_with_dns_resolver(policy, timeout, mode, resolver)
+    }
+
+    fn build_client_with_dns_resolver<R: reqwest::dns::Resolve + 'static>(
+        policy: &ProviderEndpointPolicy,
+        timeout: Duration,
+        mode: ProviderClientMode,
+        resolver: Arc<R>,
+    ) -> Result<Client, ProviderHttpClientError> {
         let config = HttpClientPoolConfig::default();
         let builder = match mode {
             ProviderClientMode::Streaming => ClientBuilder::new()
@@ -314,10 +327,7 @@ impl ProviderHttpClient {
         };
         let client = builder
             .no_proxy()
-            .dns_resolver(Arc::new(PolicyDnsResolver {
-                access: policy.access(),
-                resolver,
-            }))
+            .dns_resolver(resolver)
             .redirect(redirect_policy)
             .build()?;
         Ok(client)

@@ -26,6 +26,25 @@ impl HostResolver for SequenceResolver {
     }
 }
 
+impl ProviderHttpClient {
+    pub(crate) fn build_with_dns_resolver_for_test<R: reqwest::dns::Resolve + 'static>(
+        policy: ProviderEndpointPolicy,
+        timeout: Duration,
+        no_redirect: bool,
+        resolver: Arc<R>,
+    ) -> Result<Self, ProviderHttpClientError> {
+        let mode = if no_redirect {
+            ProviderClientMode::NoRedirect
+        } else {
+            ProviderClientMode::Request
+        };
+        let client = Arc::new(Self::build_client_with_dns_resolver(
+            &policy, timeout, mode, resolver,
+        )?);
+        Ok(Self { client, policy })
+    }
+}
+
 #[test]
 fn provider_clients_reuse_pools_for_identical_configurations()
 -> Result<(), Box<dyn std::error::Error>> {

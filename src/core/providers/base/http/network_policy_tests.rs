@@ -1,21 +1,56 @@
 use super::*;
+use crate::utils::net::http::{ProviderHttpClient, ProviderHttpClientError};
+use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const PROXY_CHILD_TARGET_ENV: &str = "LITELLM_RS_BASE_HTTP_PROXY_CHILD_TARGET";
 const PROXY_CHILD_TEST: &str = "core::providers::base::http::network_policy_tests::base_policy_client_ignores_proxy_environment_child";
 
+struct LoopbackDnsResolver;
+
+impl reqwest::dns::Resolve for LoopbackDnsResolver {
+    fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async {
+            let address = SocketAddr::from(([127, 0, 0, 1], 0));
+            Ok(Box::new(std::iter::once(address)) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn public_test_client(no_redirect: bool) -> Result<ProviderHttpClient, ProviderHttpClientError> {
+    ProviderHttpClient::build_with_dns_resolver_for_test(
+        ProviderEndpointPolicy::public_only(),
+        Duration::from_secs(1),
+        no_redirect,
+        Arc::new(LoopbackDnsResolver),
+    )
+}
+
 #[tokio::test]
-async fn base_no_redirect_client_does_not_reach_redirect_target()
--> Result<(), Box<dyn std::error::Error>> {
-    for (status, reason) in [
-        (302, "Found"),
-        (307, "Temporary Redirect"),
-        (308, "Permanent Redirect"),
+async fn public_redirect_modes_preserve_signed_no_follow() -> Result<(), Box<dyn std::error::Error>>
+{
+    for (status, reason, no_redirect, expected_status, expected_target) in [
+        (302, "Found", true, 302, false),
+        (307, "Temporary Redirect", true, 307, false),
+        (308, "Permanent Redirect", true, 308, false),
+        (302, "Found", false, 200, true),
     ] {
         let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let source_address = source.local_addr()?;
         let target = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let target_address = target.local_addr()?;
+        let mut target_probe = tokio::spawn(async move {
+            let (mut stream, _) = target.accept().await?;
+            let mut request = [0_u8; 1024];
+            if stream.read(&mut request).await? == 0 {
+                return Err(std::io::Error::other("redirect target request was empty"));
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await?;
+            Ok::<bool, std::io::Error>(true)
+        });
         let server = tokio::spawn(async move {
             let (mut stream, _) = source.accept().await?;
             let mut request = Vec::new();
@@ -44,25 +79,18 @@ async fn base_no_redirect_client_does_not_reach_redirect_target()
             assert!(request.contains("\r\nx-amz-security-token: session-token\r\n"));
             assert!(request.contains("\r\n\r\nsigned-body"));
             stream
-                .write_all(
-                    format!(
-                        "HTTP/1.1 {status} {reason}\r\nLocation: http://{target_address}/signed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    )
-                    .as_bytes(),
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status} {reason}\r\nLocation: http://provider.test:{}/signed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            target_address.port()
+                        )
+                        .as_bytes(),
                 )
                 .await?;
             Ok::<(), std::io::Error>(())
         });
-        let base_url = format!("http://{source_address}");
-        let client = BaseHttpClient::new_for_provider_no_redirect(
-            "test",
-            BaseConfig {
-                api_base: Some(base_url.clone()),
-                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
-                timeout: 1,
-                ..Default::default()
-            },
-        )?;
+        let base_url = format!("http://provider.test:{}", source_address.port());
+        let client = public_test_client(no_redirect)?;
 
         let response = client
             .post(base_url)?
@@ -71,24 +99,41 @@ async fn base_no_redirect_client_does_not_reach_redirect_target()
             .body("signed-body")
             .send()
             .await?;
-        assert_eq!(response.status().as_u16(), status);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), target.accept())
-                .await
-                .is_err(),
-            "status {status} must not open the redirect target socket"
-        );
+        assert_eq!(response.status().as_u16(), expected_status);
+        let target_reached =
+            match tokio::time::timeout(Duration::from_millis(100), &mut target_probe).await {
+                Ok(result) => result??,
+                Err(_) => {
+                    target_probe.abort();
+                    false
+                }
+            };
+        assert_eq!(target_reached, expected_target, "redirect status {status}");
         server.await??;
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn base_policy_client_ignores_proxy_environment() -> Result<(), Box<dyn std::error::Error>> {
+async fn public_policy_client_ignores_proxy_environment() -> Result<(), Box<dyn std::error::Error>>
+{
     let target = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let target_address = target.local_addr()?;
     let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let proxy_address = proxy.local_addr()?;
+    let mut proxy_probe = tokio::spawn(async move {
+        let (mut stream, _) = proxy.accept().await?;
+        let mut request = [0_u8; 1024];
+        if stream.read(&mut request).await? == 0 {
+            return Err(std::io::Error::other("proxy request was empty"));
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await?;
+        Ok::<bool, std::io::Error>(true)
+    });
     let server = tokio::spawn(async move {
         let (mut stream, _) = target.accept().await?;
         let mut request = [0_u8; 1024];
@@ -101,7 +146,7 @@ async fn base_policy_client_ignores_proxy_environment() -> Result<(), Box<dyn st
         Ok::<(), std::io::Error>(())
     });
     let executable = std::env::current_exe()?;
-    let target_url = format!("http://{target_address}");
+    let target_url = format!("http://provider.test:{}", target_address.port());
     let proxy_url = format!("http://{proxy_address}");
     let child = tokio::task::spawn_blocking(move || {
         std::process::Command::new(executable)
@@ -122,6 +167,18 @@ async fn base_policy_client_ignores_proxy_environment() -> Result<(), Box<dyn st
         .await
         .map_err(|_| std::io::Error::other("isolated proxy child test timed out"))?
         .map_err(|error| std::io::Error::other(error.to_string()))??;
+    let proxy_reached =
+        match tokio::time::timeout(Duration::from_millis(100), &mut proxy_probe).await {
+            Ok(result) => result??,
+            Err(_) => {
+                proxy_probe.abort();
+                false
+            }
+        };
+    assert!(
+        !proxy_reached,
+        "policy client connected to the configured proxy"
+    );
     assert!(
         output.status.success(),
         "isolated proxy child failed\nstdout:\n{}\nstderr:\n{}",
@@ -129,12 +186,6 @@ async fn base_policy_client_ignores_proxy_environment() -> Result<(), Box<dyn st
         String::from_utf8_lossy(&output.stderr)
     );
     server.await??;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), proxy.accept())
-            .await
-            .is_err(),
-        "policy client must not connect to the configured proxy"
-    );
     Ok(())
 }
 
@@ -146,15 +197,7 @@ fn base_policy_client_ignores_proxy_environment_child() -> Result<(), Box<dyn st
         .enable_all()
         .build()?
         .block_on(async move {
-            let client = BaseHttpClient::new_for_provider(
-                "test",
-                BaseConfig {
-                    api_base: Some(target_url.clone()),
-                    endpoint_access: ProviderEndpointAccess::PrivateNetwork,
-                    timeout: 1,
-                    ..Default::default()
-                },
-            )?;
+            let client = public_test_client(false)?;
             assert!(client.get(target_url)?.send().await?.status().is_success());
             Ok(())
         })

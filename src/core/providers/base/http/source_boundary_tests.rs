@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path as FsPath;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{ItemExternCrate, ItemMod, ItemUse, Path, UseTree};
@@ -205,10 +207,53 @@ fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>
     Ok(visitor.violations)
 }
 
+fn collect_bedrock_sources(
+    root: &FsPath,
+    directory: &FsPath,
+    module_path: &[String],
+    output: &mut Vec<(String, Vec<String>, String)>,
+) -> std::io::Result<()> {
+    let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            if entry.file_name() == "provider_tests" {
+                continue;
+            }
+            let mut child_module = module_path.to_vec();
+            child_module.push(entry.file_name().to_string_lossy().into_owned());
+            collect_bedrock_sources(root, &path, &child_module, output)?;
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        if stem == "tests" || stem == "provider_tests" || stem.ends_with("_tests") {
+            continue;
+        }
+        let mut file_module = module_path.to_vec();
+        if stem != "mod" {
+            file_module.push(stem.to_string());
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(std::io::Error::other)?
+            .display()
+            .to_string();
+        output.push((relative, file_module, fs::read_to_string(path)?));
+    }
+    Ok(())
+}
+
 #[test]
 fn migrated_shared_providers_have_no_raw_client_escape() {
     let base_source = include_str!("../http.rs");
-    let provider_sources: [(&str, &[&str], &str); 8] = [
+    let provider_sources: [(&str, &[&str], &str); 2] = [
         (
             "mistral/mod.rs",
             &["crate", "core", "providers", "mistral"],
@@ -218,36 +263,6 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             "cohere/provider.rs",
             &["crate", "core", "providers", "cohere", "provider"],
             include_str!("../../cohere/provider.rs"),
-        ),
-        (
-            "bedrock/client.rs",
-            &["crate", "core", "providers", "bedrock", "client"],
-            include_str!("../../bedrock/client.rs"),
-        ),
-        (
-            "bedrock/client/target.rs",
-            &["crate", "core", "providers", "bedrock", "client", "target"],
-            include_str!("../../bedrock/client/target.rs"),
-        ),
-        (
-            "bedrock/agents/mod.rs",
-            &["crate", "core", "providers", "bedrock", "agents"],
-            include_str!("../../bedrock/agents/mod.rs"),
-        ),
-        (
-            "bedrock/batch/mod.rs",
-            &["crate", "core", "providers", "bedrock", "batch"],
-            include_str!("../../bedrock/batch/mod.rs"),
-        ),
-        (
-            "bedrock/guardrails/mod.rs",
-            &["crate", "core", "providers", "bedrock", "guardrails"],
-            include_str!("../../bedrock/guardrails/mod.rs"),
-        ),
-        (
-            "bedrock/knowledge_bases/mod.rs",
-            &["crate", "core", "providers", "bedrock", "knowledge_bases"],
-            include_str!("../../bedrock/knowledge_bases/mod.rs"),
         ),
     ];
     let allowed = boundary_violations(
@@ -280,6 +295,31 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             .unwrap_or_else(|error| panic!("{path} must parse: {error}"));
         assert!(violations.is_empty(), "{path}: {}", violations.join("; "));
     }
+    let bedrock_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/bedrock");
+    let mut bedrock_sources = Vec::new();
+    collect_bedrock_sources(
+        &bedrock_root,
+        &bedrock_root,
+        &[
+            "crate".to_string(),
+            "core".to_string(),
+            "providers".to_string(),
+            "bedrock".to_string(),
+        ],
+        &mut bedrock_sources,
+    )
+    .unwrap_or_else(|error| panic!("Bedrock source inventory failed: {error}"));
+    assert!(!bedrock_sources.is_empty());
+    for (path, module_path, source) in bedrock_sources {
+        let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
+        let violations = boundary_violations(&source, &module_path)
+            .unwrap_or_else(|error| panic!("bedrock/{path} must parse: {error}"));
+        assert!(
+            violations.is_empty(),
+            "bedrock/{path}: {}",
+            violations.join("; ")
+        );
+    }
     for pattern in [
         ["pub fn ", "inner("].concat(),
         ["pub fn ", "into_inner("].concat(),
@@ -292,8 +332,12 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             "BaseHttpClient exposes policy-bound internals through {pattern}"
         );
     }
-    let no_redirect_constructor = ["ProviderHttpClient::", "no_redirect"].concat();
-    assert!(base_source.contains(&no_redirect_constructor));
+    let compact_base: String = base_source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(compact_base.contains("BaseRedirectMode::Policy=>ProviderHttpClient::new"));
+    assert!(compact_base.contains("BaseRedirectMode::Disabled=>ProviderHttpClient::no_redirect"));
     assert_eq!(
         include_str!("../../bedrock/client.rs")
             .matches("new_for_provider_no_redirect")
