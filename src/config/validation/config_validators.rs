@@ -8,6 +8,7 @@ use super::trait_def::Validate;
 use crate::config::models::gateway::{GatewayConfig, GatewayPricingConfig};
 use crate::config::models::provider::{ProviderConfig, ProviderHealthCheckConfig, RetryConfig};
 use crate::config::models::server::ServerConfig;
+use crate::core::net::validate_provider_endpoint_url;
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -249,10 +250,19 @@ impl ProviderConfig {
                     self.name
                 ));
             }
-            validate_url_against_ssrf(
-                endpoint.as_str(),
-                &format!("Provider {} health check endpoint", self.name),
-            )?;
+            if !matches!(endpoint.scheme(), "http" | "https") {
+                return Err(format!(
+                    "Provider {} health check endpoint must use http:// or https:// scheme, got: {}",
+                    self.name,
+                    endpoint.scheme()
+                ));
+            }
+            validate_provider_endpoint_url(&endpoint, self.endpoint_access).map_err(|error| {
+                format!(
+                    "Provider {} health check endpoint is invalid: {error}",
+                    self.name
+                )
+            })?;
         }
 
         Ok(())
@@ -379,5 +389,25 @@ mod endpoint_access_tests {
                 .unwrap_err()
                 .contains("top-level")
         );
+    }
+
+    #[test]
+    fn health_check_runtime_honors_endpoint_access() {
+        let mut config = public_provider();
+        config.base_url = Some("http://127.0.0.1:18080/v1".to_string());
+        config.health_check.endpoint = Some("health".to_string());
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+
+        assert!(config.validate_health_check_runtime().is_ok());
+
+        config.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        assert!(config.validate_health_check_runtime().is_err());
+
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        config.health_check.endpoint = Some("ws://127.0.0.1:18080/health".to_string());
+        let error = config
+            .validate_health_check_runtime()
+            .expect_err("health checks must remain limited to HTTP transports");
+        assert!(error.contains("http:// or https://"));
     }
 }
