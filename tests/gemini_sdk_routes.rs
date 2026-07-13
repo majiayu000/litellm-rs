@@ -9,16 +9,18 @@ mod support;
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
     use super::support::{
-        BrokenGeminiStreamServer, MockGeminiServer, api_key_with_invalid_runtime_permissions,
-        api_key_with_max_tokens_per_request, build_auth_required_state, build_test_state,
-        gemini_body, gemini_body_without_generation_config, gemini_provider,
-        gemini_upstream_error_body,
+        BrokenGeminiStreamServer, DelayedGeminiStreamServer, MockGeminiServer,
+        api_key_with_invalid_runtime_permissions, api_key_with_max_tokens_per_request,
+        build_auth_required_state, build_test_state, gemini_body,
+        gemini_body_without_generation_config, gemini_provider, gemini_upstream_error_body,
     };
     use actix_web::{App, HttpMessage, dev::Service};
     use actix_web::{http::StatusCode, test, web};
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::models::ApiKey;
+    use litellm_rs::core::net::ProviderEndpointAccess;
     use serde_json::{Value, json};
+    use std::time::{Duration, Instant};
 
     #[tokio::test]
     async fn gemini_sdk_routes_without_provider_fail_closed() {
@@ -610,5 +612,87 @@ mod tests {
         assert_eq!(model_usage.current_spend, 0.0);
 
         broken.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gemini_sdk_stream_body_is_not_cut_off_by_ordinary_timeout() {
+        let delayed = DelayedGeminiStreamServer::launch(Duration::from_millis(1_200)).await;
+        let mut provider = gemini_provider(
+            "gemini",
+            &delayed.base_url,
+            vec!["gemini-3.1-flash-lite".to_string()],
+        );
+        provider.timeout = 1;
+        let state = build_test_state(vec![provider]).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let started = Instant::now();
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent")
+                .set_json(gemini_body())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = tokio::time::timeout(Duration::from_secs(3), test::read_body(response))
+            .await
+            .expect("delayed SSE body should complete")
+            .to_vec();
+        let body = String::from_utf8(body).expect("stream body should be utf8");
+        assert!(body.contains("delayed"));
+        assert!(started.elapsed() >= Duration::from_millis(1_100));
+        delayed.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn public_only_gemini_route_rejects_loopback_before_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let mut provider = gemini_provider(
+            "gemini",
+            &format!("http://{address}"),
+            vec!["gemini-3.1-flash-lite".to_string()],
+        );
+        provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        let state = build_test_state(vec![provider]).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1beta/models/gemini-3.1-flash-lite:generateContent")
+                .set_json(gemini_body())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body: Value = test::read_body_json(response).await;
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("SSRF protection"))
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "public-only Gemini route must not connect to loopback listener"
+        );
     }
 }

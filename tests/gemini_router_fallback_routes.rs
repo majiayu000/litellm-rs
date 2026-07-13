@@ -4,12 +4,13 @@ pub mod provider_fixtures;
 
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
-    use super::provider_fixtures::mock_provider_config;
+    use super::provider_fixtures::{mock_provider_config, route_policy_bootstrap_providers};
     use actix_web::{App, HttpRequest, HttpResponse, HttpServer, http::StatusCode, test, web};
     use bytes::Bytes;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::core::net::ProviderEndpointAccess;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use litellm_rs::server::state::AppState;
     use serde_json::{Value, json};
@@ -158,23 +159,29 @@ mod tests {
         config.gateway.auth.allow_anonymous = true;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
-        config.gateway.providers = providers;
+        config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
-        GatewayHttpServer::new(&config)
+        let state = GatewayHttpServer::new(&config)
             .await
             .expect("gateway server should initialize")
             .state()
-            .clone()
+            .clone();
+        let mut runtime_config = state.config().as_ref().clone();
+        runtime_config.gateway.providers = providers;
+        state.config.store(runtime_config);
+        state
     }
 
     fn gemini_provider(name: &str, base_url: &str) -> ProviderConfig {
-        mock_provider_config(
+        let mut provider = mock_provider_config(
             name,
             "openai_compatible",
             GEMINI_API_KEY,
             base_url,
             vec![GEMINI_MODEL.to_string()],
-        )
+        );
+        provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        provider
     }
 
     fn gemini_body() -> Value {

@@ -286,7 +286,7 @@ fn collect_provider_sources(
 #[test]
 fn migrated_shared_providers_have_no_raw_client_escape() {
     let base_source = include_str!("../http.rs");
-    let provider_sources: [(&str, &[&str], &str); 8] = [
+    let provider_sources: [(&str, &[&str], &str); 12] = [
         (
             "mistral/mod.rs",
             &["crate", "core", "providers", "mistral"],
@@ -326,6 +326,26 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             "router/health_probe.rs",
             &["crate", "core", "router", "health_probe"],
             include_str!("../../../router/health_probe.rs"),
+        ),
+        (
+            "server/routes/ai/route_http.rs",
+            &["crate", "server", "routes", "ai", "route_http"],
+            include_str!("../../../../server/routes/ai/route_http.rs"),
+        ),
+        (
+            "server/routes/ai/batches.rs",
+            &["crate", "server", "routes", "ai", "batches"],
+            include_str!("../../../../server/routes/ai/batches.rs"),
+        ),
+        (
+            "server/routes/ai/gemini/provider.rs",
+            &["crate", "server", "routes", "ai", "gemini", "provider"],
+            include_str!("../../../../server/routes/ai/gemini/provider.rs"),
+        ),
+        (
+            "server/routes/ai/images.rs",
+            &["crate", "server", "routes", "ai", "images"],
+            include_str!("../../../../server/routes/ai/images.rs"),
         ),
     ];
     let allowed = boundary_violations(

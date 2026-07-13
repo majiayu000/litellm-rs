@@ -7,6 +7,7 @@ mod proxy_spend;
 
 use crate::core::models::openai::ImageGenerationRequest;
 use crate::core::pricing_service::PricingUsage;
+use crate::core::providers::base::ProviderRequestBuilder;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::types::context::RequestContext;
 use crate::core::types::model::ProviderCapability;
@@ -17,33 +18,30 @@ use actix_web::{
 };
 use bytes::Bytes;
 use futures::StreamExt;
+use reqwest::Url;
 use reqwest::header::{HeaderName, HeaderValue};
-use reqwest::{Client, RequestBuilder, Url};
-use std::sync::OnceLock;
-use std::time::Duration;
 use tracing::{error, info};
 
 use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
 use super::context::handle_ai_request;
+use super::route_http::RouteHttpClient;
 use super::{openai_errors, provider_config};
 use proxy_spend::{image_proxy_cost, record_image_proxy_spend};
 
 const OPENAI_IMAGE_BASE_URL: &str = "https://api.openai.com/v1";
 const MAX_IMAGE_MULTIPART_BYTES: usize = 64 * 1024 * 1024;
-static IMAGE_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
-
 #[derive(Debug, Clone, Copy)]
 enum ImageProxyEndpoint {
     Edits,
     Variations,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct ImageProxyProvider {
     provider_name: String,
     base_url: String,
     headers: Vec<(HeaderName, HeaderValue)>,
-    timeout: Duration,
+    client: RouteHttpClient,
 }
 
 #[derive(Debug, Clone)]
@@ -214,18 +212,22 @@ async fn proxy_image_multipart_endpoint(
                                 || async move {
                                     let url = image_proxy_url(&provider_for_call, endpoint)
                                         .map_err(image_proxy_gateway_error_to_provider_error)?;
-                                    let response = apply_image_proxy_headers(
-                                        image_http_client().post(url),
-                                        &provider_for_call,
-                                    )
-                                    .header(reqwest::header::CONTENT_TYPE, content_type)
-                                    .body(body)
-                                    .timeout(provider_for_call.timeout)
-                                    .send()
-                                    .await
-                                    .map_err(|error| {
-                                        ProviderError::network("image_proxy", error.to_string())
-                                    })?;
+                                    let request = provider_for_call
+                                        .client
+                                        .ordinary_post(url)
+                                        .map_err(image_proxy_gateway_error_to_provider_error)?;
+                                    let response =
+                                        apply_image_proxy_headers(request, &provider_for_call)
+                                            .header(reqwest::header::CONTENT_TYPE, content_type)
+                                            .body(body)
+                                            .send()
+                                            .await
+                                            .map_err(|error| {
+                                                ProviderError::network(
+                                                    "image_proxy",
+                                                    error.to_string(),
+                                                )
+                                            })?;
 
                                     if !response.status().is_success() {
                                         return Err(image_proxy_upstream_error(response).await);
@@ -511,11 +513,18 @@ fn image_proxy_provider_from_config(
         )));
     }
 
+    let base_url = image_proxy_base_url(provider)?;
+    let client = RouteHttpClient::new(
+        "image_proxy",
+        base_url.clone(),
+        provider.endpoint_access,
+        provider.timeout,
+    )?;
     Ok(ImageProxyProvider {
         provider_name: provider.name.clone(),
-        base_url: image_proxy_base_url(provider)?,
+        base_url,
         headers: image_proxy_provider_headers(provider)?,
-        timeout: Duration::from_secs(provider.timeout),
+        client,
     })
 }
 
@@ -687,14 +696,10 @@ fn missing_image_proxy_provider_error() -> GatewayError {
     )
 }
 
-fn image_http_client() -> &'static Client {
-    IMAGE_HTTP_CLIENT.get_or_init(Client::new)
-}
-
 fn apply_image_proxy_headers(
-    mut request: RequestBuilder,
+    mut request: ProviderRequestBuilder,
     provider: &ImageProxyProvider,
-) -> RequestBuilder {
+) -> ProviderRequestBuilder {
     for (name, value) in &provider.headers {
         request = request.header(name.clone(), value.clone());
     }

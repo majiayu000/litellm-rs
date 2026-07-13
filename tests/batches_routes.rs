@@ -4,7 +4,7 @@ pub mod provider_fixtures;
 
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
-    use super::provider_fixtures::mock_provider_config;
+    use super::provider_fixtures::{mock_provider_config, route_policy_bootstrap_providers};
     use actix_web::{
         App, HttpRequest, HttpResponse, HttpServer,
         http::{Method, StatusCode},
@@ -14,6 +14,7 @@ mod tests {
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::core::net::ProviderEndpointAccess;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use litellm_rs::server::state::AppState;
     use serde_json::{Value, json};
@@ -213,13 +214,17 @@ mod tests {
         let mut config = Config::default();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
-        config.gateway.providers = providers;
+        config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
-        GatewayHttpServer::new(&config)
+        let state = GatewayHttpServer::new(&config)
             .await
             .expect("gateway server should initialize")
             .state()
-            .clone()
+            .clone();
+        let mut runtime_config = state.config().as_ref().clone();
+        runtime_config.gateway.providers = providers;
+        state.config.store(runtime_config);
+        state
     }
 
     fn batch_route_provider_with_headers(base_url: &str) -> ProviderConfig {
@@ -247,6 +252,7 @@ mod tests {
                 }),
             ),
         ]);
+        provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
         provider
     }
 
@@ -554,5 +560,49 @@ mod tests {
         assert_eq!(primary_requests[0].path, "/v1/batches");
 
         primary.stop_batch_mock().await;
+    }
+
+    #[tokio::test]
+    async fn public_only_batch_route_rejects_loopback_before_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let mut provider = batch_route_provider("public-batch", &format!("http://{address}/v1"));
+        provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        let state = build_test_app_state(vec![provider]).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/batches")
+                .set_json(json!({
+                    "input_file_id": "file_123",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body: Value = test::read_body_json(response).await;
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("SSRF protection"))
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "public-only batch route must not connect to loopback listener"
+        );
     }
 }

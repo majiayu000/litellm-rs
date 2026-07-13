@@ -6,6 +6,7 @@
 use std::env;
 
 use litellm_rs::config::models::provider::ProviderConfig;
+use litellm_rs::core::net::ProviderEndpointAccess;
 use litellm_rs::core::providers::openai::OpenAIConfig;
 use litellm_rs::core::providers::openai_like::OpenAILikeConfig;
 
@@ -25,6 +26,19 @@ pub fn mock_provider_config(
         models,
         ..ProviderConfig::default()
     }
+}
+
+/// Build startup-safe copies for direct-route tests that activate private runtime policy later.
+pub fn route_policy_bootstrap_providers(providers: &[ProviderConfig]) -> Vec<ProviderConfig> {
+    providers
+        .iter()
+        .cloned()
+        .map(|mut provider| {
+            provider.base_url = Some("https://example.com/v1".to_string());
+            provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
+            provider
+        })
+        .collect()
 }
 
 pub fn mock_openai_runtime_config(

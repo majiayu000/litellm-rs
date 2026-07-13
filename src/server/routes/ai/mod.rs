@@ -25,6 +25,7 @@ mod rerank;
 mod response_cache;
 mod responses;
 mod responses_stream;
+mod route_http;
 mod spend;
 mod token_policy;
 

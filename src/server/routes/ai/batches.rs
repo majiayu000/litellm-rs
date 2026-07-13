@@ -5,25 +5,25 @@
 
 use crate::config::models::provider::ProviderConfig;
 use crate::core::providers::ProviderError;
+use crate::core::providers::base::ProviderRequestBuilder;
 use crate::core::router::execution::is_retryable_error;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpResponse, Result as ActixResult, http::StatusCode, http::header, web};
 use bytes::Bytes;
+use reqwest::Url;
 use reqwest::header::{HeaderName, HeaderValue};
-use reqwest::{Client, RequestBuilder, Url};
 use serde::Deserialize;
 use serde_json::Value;
 use std::future::Future;
-use std::sync::OnceLock;
 use tracing::error;
 
 use super::budgeted::SettlementMode;
 use super::openai_errors;
 use super::provider_config;
+use super::route_http::RouteHttpClient;
 
 const OPENAI_BATCH_BASE_URL: &str = "https://api.openai.com/v1";
-static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 pub struct ListBatchesQuery {
@@ -31,12 +31,12 @@ pub struct ListBatchesQuery {
     limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct BatchProxyProvider {
     provider_name: String,
-    api_key: String,
     base_url: String,
     headers: Vec<(HeaderName, HeaderValue)>,
+    client: RouteHttpClient,
 }
 
 /// Create a batch request.
@@ -104,7 +104,7 @@ async fn proxy_batch_create(
         let request = request.clone();
         async move {
             let url = batch_url(&provider, None, None)?;
-            apply_provider_headers(http_client().post(url), &provider)
+            apply_provider_headers(provider.client.ordinary_post(url)?, &provider)
                 .json(&request)
                 .send()
                 .await
@@ -135,7 +135,7 @@ async fn proxy_batch_list(
                 }
             }
 
-            apply_provider_headers(http_client().get(url), &provider)
+            apply_provider_headers(provider.client.ordinary_get(url)?, &provider)
                 .send()
                 .await
                 .map_err(GatewayError::from)
@@ -150,7 +150,7 @@ async fn proxy_batch_get(state: &AppState, batch_id: &str) -> Result<HttpRespons
         let batch_id = batch_id.clone();
         async move {
             let url = batch_url(&provider, Some(&batch_id), None)?;
-            apply_provider_headers(http_client().get(url), &provider)
+            apply_provider_headers(provider.client.ordinary_get(url)?, &provider)
                 .send()
                 .await
                 .map_err(GatewayError::from)
@@ -168,7 +168,7 @@ async fn proxy_batch_cancel(
         let batch_id = batch_id.clone();
         async move {
             let url = batch_url(&provider, Some(&batch_id), Some("cancel"))?;
-            apply_provider_headers(http_client().post(url), &provider)
+            apply_provider_headers(provider.client.ordinary_post(url)?, &provider)
                 .send()
                 .await
                 .map_err(GatewayError::from)
@@ -317,11 +317,18 @@ fn batch_proxy_provider_from_config(
         )));
     }
 
+    let base_url = batch_base_url(provider)?;
+    let client = RouteHttpClient::new(
+        "batch_proxy",
+        base_url.clone(),
+        provider.endpoint_access,
+        provider.timeout,
+    )?;
     Ok(BatchProxyProvider {
         provider_name: provider.name.clone(),
-        api_key: provider.api_key.clone(),
-        base_url: batch_base_url(provider)?,
+        base_url,
         headers: batch_provider_headers(provider)?,
+        client,
     })
 }
 
@@ -378,14 +385,10 @@ fn missing_batch_provider_error() -> GatewayError {
     )
 }
 
-fn http_client() -> &'static Client {
-    HTTP_CLIENT.get_or_init(Client::new)
-}
-
 fn apply_provider_headers(
-    mut request: RequestBuilder,
+    mut request: ProviderRequestBuilder,
     provider: &BatchProxyProvider,
-) -> RequestBuilder {
+) -> ProviderRequestBuilder {
     for (name, value) in &provider.headers {
         request = request.header(name.clone(), value.clone());
     }
@@ -516,7 +519,6 @@ mod tests {
             .expect("provider should select");
 
         assert_eq!(selected.base_url, "https://batch.example.test/v1");
-        assert_eq!(selected.api_key, "sk-test");
         assert_eq!(selected.provider_name, "primary");
     }
 
@@ -571,7 +573,7 @@ mod tests {
     fn no_batch_provider_is_explicitly_unconfigured() {
         let selected = select_batch_proxy_provider(&[]);
 
-        assert_eq!(selected.unwrap(), None);
+        assert!(selected.unwrap().is_none());
         assert!(
             missing_batch_provider_error()
                 .to_string()
@@ -583,9 +585,15 @@ mod tests {
     fn builds_batch_urls() {
         let provider = BatchProxyProvider {
             provider_name: "openai".to_string(),
-            api_key: "sk-test".to_string(),
             base_url: "https://batch.example.test/v1".to_string(),
             headers: Vec::new(),
+            client: RouteHttpClient::new(
+                "batch_proxy",
+                "https://batch.example.test/v1".to_string(),
+                crate::core::net::ProviderEndpointAccess::PublicOnly,
+                30,
+            )
+            .expect("route client should build"),
         };
 
         assert_eq!(

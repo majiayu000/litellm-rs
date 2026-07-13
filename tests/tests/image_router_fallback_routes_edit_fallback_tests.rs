@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn image_edit_records_flat_output_image_spend_after_success() {
     let mock = MockImageServer::start().await;
-    let state = build_test_state(vec![image_provider(
+    let state = build_route_policy_test_state(vec![image_provider(
         "openai-primary",
         "openai",
         &mock.base_url,
@@ -58,7 +58,7 @@ async fn image_edit_records_flat_output_image_spend_after_success() {
 async fn native_openai_image_edit_uses_selected_provider_config_after_budget_fallback() {
     let exhausted = MockImageServer::start().await;
     let fallback = MockImageServer::start().await;
-    let state = build_test_state(vec![
+    let state = build_route_policy_test_state(vec![
         image_provider(
             "openai-primary",
             "openai",
@@ -123,7 +123,7 @@ async fn native_openai_image_edit_uses_selected_provider_config_after_budget_fal
 async fn wildcard_openai_compatible_image_edit_tries_next_provider_name_key() {
     let exhausted = MockImageServer::start().await;
     let fallback = MockImageServer::start().await;
-    let state = build_test_state(vec![
+    let state = build_route_policy_test_state(vec![
         image_provider(
             "wild-primary",
             "openai_compatible",
@@ -188,7 +188,7 @@ async fn wildcard_openai_compatible_image_edit_tries_next_provider_name_key() {
 async fn explicit_image_provider_falls_back_to_wildcard_provider() {
     let exhausted = MockImageServer::start().await;
     let fallback = MockImageServer::start().await;
-    let state = build_test_state(vec![
+    let state = build_route_policy_test_state(vec![
         image_provider(
             "explicit-primary",
             "openai_compatible",

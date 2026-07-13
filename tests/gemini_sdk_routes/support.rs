@@ -3,6 +3,7 @@ use bytes::Bytes;
 use litellm_rs::Config;
 use litellm_rs::config::models::provider::ProviderConfig;
 use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
+use litellm_rs::core::net::ProviderEndpointAccess;
 use litellm_rs::server::HttpServer as GatewayHttpServer;
 use litellm_rs::server::state::AppState;
 use serde_json::{Value, json};
@@ -11,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::provider_fixtures::mock_provider_config;
+use super::provider_fixtures::{mock_provider_config, route_policy_bootstrap_providers};
 
 #[derive(Clone, Debug)]
 pub(crate) struct CapturedGeminiRequest {
@@ -123,6 +124,62 @@ impl BrokenGeminiStreamServer {
     }
 }
 
+pub(crate) struct DelayedGeminiStreamServer {
+    pub(crate) base_url: String,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl DelayedGeminiStreamServer {
+    pub(crate) async fn launch(delay: Duration) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("delayed stream server should bind");
+        let address = listener
+            .local_addr()
+            .expect("delayed stream server should have address");
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener
+                .accept()
+                .await
+                .expect("delayed stream server should accept");
+            let mut buffer = [0_u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            socket
+                .write_all(
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "content-type: text/event-stream\r\n",
+                        "transfer-encoding: chunked\r\n",
+                        "connection: close\r\n",
+                        "\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("delayed stream server should write headers");
+            tokio::time::sleep(delay).await;
+            let body =
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"delayed\"}]}}]}\n\n";
+            socket
+                .write_all(format!("{:x}\r\n{body}\r\n0\r\n\r\n", body.len()).as_bytes())
+                .await
+                .expect("delayed stream server should write body");
+            let _ = socket.shutdown().await;
+        });
+
+        Self {
+            base_url: format!("http://{address}"),
+            task,
+        }
+    }
+
+    pub(crate) async fn shutdown(self) {
+        self.task
+            .await
+            .expect("delayed stream server task should join");
+    }
+}
+
 async fn wait_for_server(address: std::net::SocketAddr) {
     for _ in 0..20 {
         if tokio::net::TcpStream::connect(address).await.is_ok() {
@@ -218,26 +275,34 @@ pub(crate) async fn build_test_state(providers: Vec<ProviderConfig>) -> AppState
     config.gateway.auth.allow_anonymous = true;
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
-    config.gateway.providers = providers;
+    config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
-    GatewayHttpServer::new(&config)
+    let state = GatewayHttpServer::new(&config)
         .await
         .expect("gateway server should initialize")
         .state()
-        .clone()
+        .clone();
+    let mut runtime_config = state.config().as_ref().clone();
+    runtime_config.gateway.providers = providers;
+    state.config.store(runtime_config);
+    state
 }
 
 pub(crate) async fn build_auth_required_state(providers: Vec<ProviderConfig>) -> AppState {
     let mut config = Config::default();
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
-    config.gateway.providers = providers;
+    config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
-    GatewayHttpServer::new(&config)
+    let state = GatewayHttpServer::new(&config)
         .await
         .expect("gateway server should initialize")
         .state()
-        .clone()
+        .clone();
+    let mut runtime_config = state.config().as_ref().clone();
+    runtime_config.gateway.providers = providers;
+    state.config.store(runtime_config);
+    state
 }
 
 pub(crate) fn gemini_provider(name: &str, base_url: &str, models: Vec<String>) -> ProviderConfig {
@@ -263,6 +328,7 @@ pub(crate) fn gemini_provider(name: &str, base_url: &str, models: Vec<String>) -
             }),
         ),
     ]);
+    provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     provider
 }
 
