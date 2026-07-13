@@ -1,6 +1,6 @@
 //! Cohere provider config builder.
 
-use super::builder::{config_str, config_u32, config_u64, env_str_any};
+use super::builder::{config_endpoint_access, config_str, config_u32, config_u64, env_str_any};
 use crate::core::providers::{cohere, unified_provider::ProviderError};
 use crate::core::traits::provider::ProviderConfig as _;
 
@@ -15,6 +15,7 @@ pub(super) fn build_cohere_config_from_factory(
         })?;
 
     let mut cohere_config = cohere::CohereConfig::new(api_key);
+    cohere_config.endpoint_access = config_endpoint_access(config, "cohere")?;
 
     if let Some(api_base) =
         config_str(config, "base_url").or_else(|| config_str(config, "api_base"))

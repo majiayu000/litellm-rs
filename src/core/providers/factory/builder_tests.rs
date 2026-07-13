@@ -1,6 +1,8 @@
 //! Tests for provider-specific config builders
 
 use super::builder::*;
+#[cfg(feature = "providers-extended")]
+use super::cohere_builder::build_cohere_config_from_factory;
 use super::{Provider, ProviderType, create_provider};
 use crate::core::net::ProviderEndpointAccess;
 use std::sync::Mutex;
@@ -198,6 +200,7 @@ fn test_build_mistral_config_from_factory_maps_optional_fields() {
     let config = serde_json::json!({
         "api_key": "mistral-key",
         "api_base": "https://example-mistral.test/v1",
+        "endpoint_access": "private_network",
         "timeout": 88,
         "max_retries": 4
     });
@@ -208,6 +211,32 @@ fn test_build_mistral_config_from_factory_maps_optional_fields() {
     assert_eq!(mistral_config.api_base, "https://example-mistral.test/v1");
     assert_eq!(mistral_config.timeout_seconds, 88);
     assert_eq!(mistral_config.max_retries, 4);
+    assert_eq!(
+        mistral_config.endpoint_access,
+        ProviderEndpointAccess::PrivateNetwork
+    );
+}
+
+#[cfg(feature = "providers-extended")]
+#[test]
+fn test_build_cohere_config_from_factory_maps_endpoint_access() {
+    let config = serde_json::json!({
+        "api_key": "cohere-key",
+        "base_url": "https://example-cohere.test",
+        "endpoint_access": "private_network",
+        "timeout": 73,
+        "max_retries": 4
+    });
+
+    let cohere_config = build_cohere_config_from_factory(&config)
+        .unwrap_or_else(|error| panic!("Cohere config should parse: {error}"));
+    assert_eq!(cohere_config.api_base, "https://example-cohere.test");
+    assert_eq!(cohere_config.timeout_seconds, 73);
+    assert_eq!(cohere_config.max_retries, 4);
+    assert_eq!(
+        cohere_config.endpoint_access,
+        ProviderEndpointAccess::PrivateNetwork
+    );
 }
 
 #[test]
@@ -614,7 +643,8 @@ fn test_build_bedrock_config_defaults_region() {
 
     let config = serde_json::json!({
         "aws_access_key_id": "AKIATEST123456789012",
-        "aws_secret_access_key": "test-secret-key"
+        "aws_secret_access_key": "test-secret-key",
+        "endpoint_access": "private_network"
     });
 
     let bedrock_config = build_bedrock_config_from_factory(&config)
@@ -623,6 +653,10 @@ fn test_build_bedrock_config_defaults_region() {
     assert_eq!(bedrock_config.aws_region, "us-east-1");
     assert_eq!(bedrock_config.aws_access_key_id, "AKIATEST123456789012");
     assert_eq!(bedrock_config.aws_secret_access_key, "test-secret-key");
+    assert_eq!(
+        bedrock_config.endpoint_access,
+        ProviderEndpointAccess::PrivateNetwork
+    );
 }
 
 #[test]

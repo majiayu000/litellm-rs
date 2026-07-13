@@ -384,7 +384,10 @@ impl LLMProvider for BedrockProvider {
                     HealthStatus::Unhealthy
                 }
             }
-            Err(_) => HealthStatus::Unhealthy,
+            Err(error) => {
+                debug!(error = %error, "Bedrock health check failed");
+                HealthStatus::Unhealthy
+            }
         }
     }
 
@@ -457,6 +460,7 @@ mod tests {
             aws_region: "us-east-1".to_string(),
             timeout_seconds: 30,
             max_retries: 3,
+            endpoint_access: Default::default(),
         };
         let client = BedrockClient::new(config)
             .unwrap_or_else(|err| panic!("test Bedrock client should build: {err}"));

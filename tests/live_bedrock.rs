@@ -45,6 +45,7 @@ async fn provider_from_env() -> Result<BedrockProvider, Box<dyn Error>> {
         aws_region: required_bedrock_live_env("AWS_REGION")?,
         timeout_seconds: 60,
         max_retries: 2,
+        endpoint_access: Default::default(),
     };
 
     Ok(BedrockProvider::new(config).await?)

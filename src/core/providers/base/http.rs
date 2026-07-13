@@ -3,49 +3,130 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use reqwest::Client;
+use reqwest::{IntoUrl, Method};
 use serde_json::Value;
 
+use crate::core::net::{ProviderEndpointAccess, ProviderEndpointPolicy};
 use crate::core::providers::base::BaseConfig;
+use crate::core::providers::base::connection_pool::HeaderPair;
 use crate::core::providers::unified_provider::ProviderError;
-use crate::utils::net::http::get_client_with_timeout_fallible;
-
-/// Create a provider-scoped HTTP client with a configurable timeout.
-pub fn create_http_client(
-    provider: &'static str,
-    timeout: Duration,
-) -> Result<Client, ProviderError> {
-    get_client_with_timeout_fallible(timeout)
-        .map(|shared_client| (*shared_client).clone())
-        .map_err(|e| {
-            ProviderError::initialization(provider, format!("Failed to create HTTP client: {}", e))
-        })
-}
+use crate::utils::net::http::{ProviderHttpClient, ProviderRequestBuilder};
 
 /// Base HTTP client wrapper used by provider implementations.
 #[derive(Debug, Clone)]
 pub struct BaseHttpClient {
-    client: Client,
+    client: ProviderHttpClient,
     config: BaseConfig,
+    provider: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum BaseRedirectMode {
+    Policy,
+    Disabled,
 }
 
 impl BaseHttpClient {
     /// Create a new HTTP client with common configuration.
     pub fn new(config: BaseConfig) -> Result<Self, ProviderError> {
-        let timeout = Duration::from_secs(config.timeout);
-        let client = create_http_client("provider", timeout)?;
-        Ok(Self { client, config })
+        Self::new_for_provider("provider", config)
     }
 
-    /// Get the underlying reqwest client.
-    pub fn inner(&self) -> &Client {
-        &self.client
+    /// Create a policy-aware HTTP client for a named provider.
+    pub fn new_for_provider(
+        provider: &'static str,
+        config: BaseConfig,
+    ) -> Result<Self, ProviderError> {
+        Self::build(provider, config, BaseRedirectMode::Policy)
+    }
+
+    /// Create a policy-aware client that never follows redirects.
+    pub fn new_for_provider_no_redirect(
+        provider: &'static str,
+        config: BaseConfig,
+    ) -> Result<Self, ProviderError> {
+        Self::build(provider, config, BaseRedirectMode::Disabled)
+    }
+
+    fn build(
+        provider: &'static str,
+        config: BaseConfig,
+        redirect_mode: BaseRedirectMode,
+    ) -> Result<Self, ProviderError> {
+        let policy = match config.api_base.as_deref() {
+            Some(api_base) => {
+                ProviderEndpointPolicy::for_base_url(config.endpoint_access, api_base).map_err(
+                    |error| {
+                        ProviderError::configuration(
+                            provider,
+                            format!("invalid provider API base: {error}"),
+                        )
+                    },
+                )?
+            }
+            None if config.endpoint_access == ProviderEndpointAccess::PrivateNetwork => {
+                return Err(ProviderError::configuration(
+                    provider,
+                    "private_network endpoint access requires an API base",
+                ));
+            }
+            None => ProviderEndpointPolicy::public_only(),
+        };
+        let timeout = Duration::from_secs(config.timeout);
+        let client_result = match redirect_mode {
+            BaseRedirectMode::Policy => ProviderHttpClient::new(policy, timeout),
+            BaseRedirectMode::Disabled => ProviderHttpClient::no_redirect(policy, timeout),
+        };
+        let client = client_result.map_err(|error| {
+            ProviderError::initialization(
+                provider,
+                format!("failed to create policy-aware HTTP client: {error}"),
+            )
+        })?;
+        Ok(Self {
+            client,
+            config,
+            provider,
+        })
+    }
+
+    /// Create a policy-checked request builder.
+    pub fn request<U: IntoUrl>(
+        &self,
+        method: Method,
+        url: U,
+    ) -> Result<ProviderRequestBuilder, ProviderError> {
+        self.client
+            .request(method, url)
+            .map_err(|error| ProviderError::network(self.provider, error.to_string()))
+    }
+
+    /// Create a policy-checked GET request builder.
+    pub fn get<U: IntoUrl>(&self, url: U) -> Result<ProviderRequestBuilder, ProviderError> {
+        self.request(Method::GET, url)
+    }
+
+    /// Create a policy-checked POST request builder.
+    pub fn post<U: IntoUrl>(&self, url: U) -> Result<ProviderRequestBuilder, ProviderError> {
+        self.request(Method::POST, url)
     }
 
     /// Get configuration.
     pub fn config(&self) -> &BaseConfig {
         &self.config
     }
+}
+
+/// Apply provider headers without exposing the policy-bound raw client.
+#[inline]
+pub fn apply_provider_headers(
+    mut builder: ProviderRequestBuilder,
+    headers: Vec<HeaderPair>,
+) -> ProviderRequestBuilder {
+    for (key, value) in headers {
+        builder = builder.header(key.as_ref(), value.as_ref());
+    }
+    builder
 }
 
 /// Canonical HTTP status/body -> ProviderError mapper.
@@ -318,6 +399,223 @@ pub fn validate_chat_request_common(
 mod tests {
     use super::*;
     use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    static PROXY_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct EnvSnapshot(Vec<(&'static str, Option<String>)>);
+
+    impl EnvSnapshot {
+        fn set_proxy(proxy: &str) -> Self {
+            let keys = [
+                "HTTP_PROXY",
+                "http_proxy",
+                "ALL_PROXY",
+                "all_proxy",
+                "NO_PROXY",
+                "no_proxy",
+            ];
+            let values = keys
+                .iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect();
+            // SAFETY: PROXY_ENV_LOCK serializes this module's proxy environment mutations.
+            unsafe {
+                std::env::set_var("HTTP_PROXY", proxy);
+                std::env::set_var("http_proxy", proxy);
+                std::env::set_var("ALL_PROXY", proxy);
+                std::env::set_var("all_proxy", proxy);
+                std::env::remove_var("NO_PROXY");
+                std::env::remove_var("no_proxy");
+            }
+            Self(values)
+        }
+    }
+
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                // SAFETY: the matching PROXY_ENV_LOCK guard remains held until this drop.
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn base_http_client_rejects_public_loopback_base() {
+        let error = BaseHttpClient::new_for_provider(
+            "test",
+            BaseConfig {
+                api_base: Some("http://127.0.0.1:11434/v1".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ProviderError::Configuration { .. }));
+        assert!(error.to_string().contains("SSRF protection"));
+    }
+
+    #[test]
+    fn base_http_client_accepts_private_base_and_pins_authority() {
+        let client = BaseHttpClient::new_for_provider(
+            "test",
+            BaseConfig {
+                api_base: Some("http://127.0.0.1:11434/v1".to_string()),
+                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("private test client should build: {error}"));
+
+        let error = client
+            .get("http://127.0.0.1:11435/v1/models")
+            .err()
+            .unwrap_or_else(|| panic!("cross-authority request must fail"));
+        assert!(matches!(error, ProviderError::Network { .. }));
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn base_http_client_requires_base_for_private_access() {
+        let error = BaseHttpClient::new_for_provider(
+            "test",
+            BaseConfig {
+                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ProviderError::Configuration { .. }));
+        assert!(error.to_string().contains("requires an API base"));
+    }
+
+    #[test]
+    fn migrated_shared_providers_have_no_raw_client_escape() {
+        let base_source = include_str!("http.rs");
+        let provider_sources = [
+            include_str!("../mistral/mod.rs"),
+            include_str!("../cohere/provider.rs"),
+            include_str!("../bedrock/client.rs"),
+        ];
+        let public_inner = ["pub fn ", "inner("].concat();
+        let raw_inner_call = [".", "inner()"].concat();
+        let raw_client_import = ["reqwest::{", "Client,"].concat();
+
+        assert!(!base_source.contains(&public_inner));
+        for source in provider_sources {
+            assert!(!source.contains(&raw_inner_call));
+            assert!(!source.contains(&raw_client_import));
+        }
+        let no_redirect_constructor = ["ProviderHttpClient::", "no_redirect"].concat();
+        assert!(base_source.contains(&no_redirect_constructor));
+    }
+
+    #[tokio::test]
+    async fn base_no_redirect_client_does_not_reach_redirect_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (status, reason) in [
+            (302, "Found"),
+            (307, "Temporary Redirect"),
+            (308, "Permanent Redirect"),
+        ] {
+            let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let source_address = source.local_addr()?;
+            let target = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let target_address = target.local_addr()?;
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = source.accept().await?;
+                let mut request = [0_u8; 1024];
+                if stream.read(&mut request).await? == 0 {
+                    return Err(std::io::Error::other("request ended before headers"));
+                }
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status} {reason}\r\nLocation: http://{target_address}/signed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await?;
+                Ok::<(), std::io::Error>(())
+            });
+            let base_url = format!("http://{source_address}");
+            let client = BaseHttpClient::new_for_provider_no_redirect(
+                "test",
+                BaseConfig {
+                    api_base: Some(base_url.clone()),
+                    endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                    timeout: 1,
+                    ..Default::default()
+                },
+            )?;
+
+            let response = client
+                .post(base_url)?
+                .header("authorization", "signed-request")
+                .header("x-amz-security-token", "session-token")
+                .body("signed-body")
+                .send()
+                .await?;
+            assert_eq!(response.status().as_u16(), status);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), target.accept())
+                    .await
+                    .is_err(),
+                "status {status} must not open the redirect target socket"
+            );
+            server.await??;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn base_policy_client_ignores_proxy_environment() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let _guard = PROXY_ENV_LOCK.lock().await;
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let target_address = target.local_addr()?;
+        let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let proxy_address = proxy.local_addr()?;
+        let _snapshot = EnvSnapshot::set_proxy(&format!("http://{proxy_address}"));
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = target.accept().await?;
+            let mut request = [0_u8; 1024];
+            if stream.read(&mut request).await? == 0 {
+                return Err(std::io::Error::other("request ended before headers"));
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await?;
+            Ok::<(), std::io::Error>(())
+        });
+        let base_url = format!("http://{target_address}");
+        let client = BaseHttpClient::new_for_provider(
+            "test",
+            BaseConfig {
+                api_base: Some(base_url.clone()),
+                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                timeout: 1,
+                ..Default::default()
+            },
+        )?;
+
+        assert!(client.get(base_url)?.send().await?.status().is_success());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), proxy.accept())
+                .await
+                .is_err(),
+            "policy client must not connect to the configured proxy"
+        );
+        server.await??;
+        Ok(())
+    }
 
     #[test]
     fn http_mapper_extracts_json_message_for_invalid_request() {

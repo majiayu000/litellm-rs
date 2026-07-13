@@ -3,6 +3,7 @@
 //! Configuration management for AWS Bedrock provider including
 //! AWS credentials, regions, and model-specific settings.
 
+use crate::core::net::ProviderEndpointAccess;
 use crate::core::traits::provider::ProviderConfig;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,9 @@ pub struct BedrockConfig {
     pub timeout_seconds: u64,
     /// Maximum retries for failed requests
     pub max_retries: u32,
+    /// Network scope allowed for Bedrock endpoints
+    #[serde(default)]
+    pub endpoint_access: ProviderEndpointAccess,
 }
 
 impl Default for BedrockConfig {
@@ -32,6 +36,7 @@ impl Default for BedrockConfig {
             aws_region: "us-east-1".to_string(),
             timeout_seconds: 30,
             max_retries: 3,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
         }
     }
 }
@@ -73,6 +78,10 @@ impl ProviderConfig for BedrockConfig {
     fn max_retries(&self) -> u32 {
         self.max_retries
     }
+
+    fn endpoint_access(&self) -> ProviderEndpointAccess {
+        self.endpoint_access
+    }
 }
 
 #[cfg(test)]
@@ -97,5 +106,6 @@ mod tests {
         assert_eq!(config.aws_region, "us-east-1");
         assert_eq!(config.timeout_seconds, 30);
         assert_eq!(config.max_retries, 3);
+        assert_eq!(config.endpoint_access, ProviderEndpointAccess::PublicOnly);
     }
 }

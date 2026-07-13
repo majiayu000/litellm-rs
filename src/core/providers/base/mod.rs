@@ -20,7 +20,7 @@ pub use connection_pool::{
     streaming_unbounded_client,
 };
 pub use http::{
-    BaseHttpClient, HttpErrorMapper, OpenAIRequestTransformer, UrlBuilder, create_http_client,
+    BaseHttpClient, HttpErrorMapper, OpenAIRequestTransformer, UrlBuilder, apply_provider_headers,
     validate_chat_request_common,
 };
 pub use model_entry::ProviderModelEntry;

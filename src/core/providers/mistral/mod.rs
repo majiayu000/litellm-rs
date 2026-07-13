@@ -13,7 +13,7 @@ use tracing::debug;
 // Use base infrastructure instead of common_utils
 use crate::core::providers::base::{
     BaseConfig, BaseHttpClient, HttpErrorMapper, OpenAIRequestTransformer, UrlBuilder,
-    apply_headers, get_pricing_db, header, header_static,
+    apply_provider_headers, get_pricing_db, header, header_static,
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
@@ -54,6 +54,9 @@ pub struct MistralConfig {
     pub timeout_seconds: u64,
     /// Maximum retries for failed requests
     pub max_retries: u32,
+    /// Network scope allowed for the configured endpoint
+    #[serde(default)]
+    pub endpoint_access: crate::core::net::ProviderEndpointAccess,
 }
 
 impl Default for MistralConfig {
@@ -63,6 +66,7 @@ impl Default for MistralConfig {
             api_base: "https://api.mistral.ai/v1".to_string(),
             timeout_seconds: 30,
             max_retries: 3,
+            endpoint_access: Default::default(),
         }
     }
 }
@@ -86,6 +90,10 @@ impl ProviderConfig for MistralConfig {
 
     fn max_retries(&self) -> u32 {
         self.max_retries
+    }
+
+    fn endpoint_access(&self) -> crate::core::net::ProviderEndpointAccess {
+        self.endpoint_access
     }
 }
 
@@ -140,12 +148,13 @@ impl MistralProvider {
         let base_config = BaseConfig {
             api_key: Some(config.api_key.clone()),
             api_base: Some(config.api_base.clone()),
+            endpoint_access: config.endpoint_access,
             timeout: config.timeout_seconds,
             max_retries: config.max_retries,
             ..Default::default()
         };
 
-        let base_client = BaseHttpClient::new(base_config)?;
+        let base_client = BaseHttpClient::new_for_provider("mistral", base_config)?;
 
         // Define supported models with pricing
         let models = model_catalog::mistral_model_catalog();
@@ -293,7 +302,7 @@ impl LLMProvider for MistralProvider {
             header_static("Content-Type", "application/json"),
         ];
 
-        let response = apply_headers(self.base_client.inner().post(&url), headers)
+        let response = apply_provider_headers(self.base_client.post(&url)?, headers)
             .json(&body)
             .send()
             .await
@@ -331,7 +340,7 @@ impl LLMProvider for MistralProvider {
             header_static("Content-Type", "application/json"),
         ];
 
-        let response = apply_headers(self.base_client.inner().post(&url), headers)
+        let response = apply_provider_headers(self.base_client.post(&url)?, headers)
             .json(&body)
             .send()
             .await
@@ -370,7 +379,7 @@ impl LLMProvider for MistralProvider {
             header_static("Content-Type", "application/json"),
         ];
 
-        let response = apply_headers(self.base_client.inner().post(&url), headers)
+        let response = apply_provider_headers(self.base_client.post(&url)?, headers)
             .json(&body)
             .send()
             .await
@@ -393,8 +402,16 @@ impl LLMProvider for MistralProvider {
             .with_path("/models")
             .build();
 
-        match apply_headers(
-            self.base_client.inner().get(&url),
+        let request = match self.base_client.get(&url) {
+            Ok(request) => request,
+            Err(error) => {
+                debug!("Mistral health check policy error: {}", error);
+                return HealthStatus::Unhealthy;
+            }
+        };
+
+        match apply_provider_headers(
+            request,
             vec![header(
                 "Authorization",
                 format!("Bearer {}", self.config.api_key),

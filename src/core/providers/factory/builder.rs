@@ -391,6 +391,7 @@ pub(super) fn build_mistral_config_from_factory(
         api_key: api_key.to_string(),
         ..Default::default()
     };
+    mistral_config.endpoint_access = config_endpoint_access(config, "mistral")?;
 
     if let Some(base_url) =
         config_str(config, "base_url").or_else(|| config_str(config, "api_base"))
@@ -555,6 +556,7 @@ pub(super) fn build_bedrock_config_from_factory(
         aws_region,
         ..Default::default()
     };
+    bedrock_config.endpoint_access = config_endpoint_access(config, "bedrock")?;
 
     if let Some(timeout) =
         config_u64(config, "timeout_seconds").or_else(|| config_u64(config, "timeout"))

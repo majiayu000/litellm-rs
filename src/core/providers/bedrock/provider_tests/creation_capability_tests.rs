@@ -15,6 +15,7 @@ async fn test_bedrock_provider_creation() {
         aws_region: "us-east-1".to_string(),
         timeout_seconds: 30,
         max_retries: 3,
+        endpoint_access: Default::default(),
     };
 
     let provider = BedrockProvider::new(config).await;
@@ -38,6 +39,7 @@ async fn test_bedrock_provider_creation_with_session_token() {
         aws_region: "us-west-2".to_string(),
         timeout_seconds: 60,
         max_retries: 5,
+        endpoint_access: Default::default(),
     };
 
     let provider = BedrockProvider::new(config).await;
@@ -53,6 +55,7 @@ async fn test_bedrock_provider_creation_invalid_region() {
         aws_region: "invalid-region-xyz".to_string(),
         timeout_seconds: 30,
         max_retries: 3,
+        endpoint_access: Default::default(),
     };
 
     let provider = BedrockProvider::new(config).await;
@@ -68,6 +71,7 @@ async fn test_bedrock_provider_creation_empty_credentials() {
         aws_region: "us-east-1".to_string(),
         timeout_seconds: 30,
         max_retries: 3,
+        endpoint_access: Default::default(),
     };
 
     let provider = BedrockProvider::new(config).await;

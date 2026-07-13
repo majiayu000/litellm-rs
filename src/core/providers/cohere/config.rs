@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::core::net::ProviderEndpointAccess;
 use crate::core::traits::provider::ProviderConfig;
 
 /// Cohere API version to use
@@ -45,6 +46,10 @@ pub struct CohereConfig {
     /// Maximum retry attempts
     pub max_retries: u32,
 
+    /// Network scope allowed for the configured endpoint
+    #[serde(default)]
+    pub endpoint_access: ProviderEndpointAccess,
+
     /// Default input type for embeddings (search_document, search_query, classification, clustering)
     pub default_embedding_input_type: String,
 }
@@ -57,6 +62,7 @@ impl Default for CohereConfig {
             api_version: CohereApiVersion::V2,
             timeout_seconds: 60,
             max_retries: 3,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
             default_embedding_input_type: "search_document".to_string(),
         }
     }
@@ -149,6 +155,10 @@ impl ProviderConfig for CohereConfig {
     fn max_retries(&self) -> u32 {
         self.max_retries
     }
+
+    fn endpoint_access(&self) -> ProviderEndpointAccess {
+        self.endpoint_access
+    }
 }
 
 #[cfg(test)]
@@ -162,6 +172,7 @@ mod tests {
         assert_eq!(config.api_version, CohereApiVersion::V2);
         assert_eq!(config.timeout_seconds, 60);
         assert_eq!(config.max_retries, 3);
+        assert_eq!(config.endpoint_access, ProviderEndpointAccess::PublicOnly);
     }
 
     #[test]

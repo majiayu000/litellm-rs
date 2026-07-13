@@ -20,7 +20,7 @@ use super::streaming::create_cohere_stream;
 use crate::core::cost::calculator::generic_cost_per_token;
 use crate::core::cost::types::UsageTokens;
 use crate::core::providers::base::{
-    BaseConfig, BaseHttpClient, HttpErrorMapper, apply_headers, header, header_static,
+    BaseConfig, BaseHttpClient, HttpErrorMapper, apply_provider_headers, header, header_static,
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::{
@@ -91,12 +91,13 @@ impl CohereProvider {
         let base_config = BaseConfig {
             api_key: Some(config.api_key.clone()),
             api_base: Some(config.api_base.clone()),
+            endpoint_access: config.endpoint_access,
             timeout: config.timeout_seconds,
             max_retries: config.max_retries,
             ..Default::default()
         };
 
-        let client = BaseHttpClient::new(base_config)?;
+        let client = BaseHttpClient::new_for_provider("cohere", base_config)?;
 
         let models = create_model_registry();
 
@@ -141,7 +142,7 @@ impl CohereProvider {
             header_static("Content-Type", "application/json"),
         ];
 
-        let response = apply_headers(self.client.inner().post(&url), headers)
+        let response = apply_provider_headers(self.client.post(&url)?, headers)
             .json(&body)
             .send()
             .await
@@ -245,7 +246,7 @@ impl LLMProvider for CohereProvider {
             header_static("Content-Type", "application/json"),
         ];
 
-        let response = apply_headers(self.client.inner().post(&url), headers)
+        let response = apply_provider_headers(self.client.post(&url)?, headers)
             .json(&body)
             .send()
             .await
@@ -283,7 +284,7 @@ impl LLMProvider for CohereProvider {
             header_static("Content-Type", "application/json"),
         ];
 
-        let response = apply_headers(self.client.inner().post(&url), headers)
+        let response = apply_provider_headers(self.client.post(&url)?, headers)
             .json(&body)
             .send()
             .await
@@ -318,7 +319,7 @@ impl LLMProvider for CohereProvider {
             header_static("Content-Type", "application/json"),
         ];
 
-        let response = apply_headers(self.client.inner().post(&url), headers)
+        let response = apply_provider_headers(self.client.post(&url)?, headers)
             .json(&body)
             .send()
             .await
@@ -347,8 +348,16 @@ impl LLMProvider for CohereProvider {
     async fn health_check(&self) -> HealthStatus {
         let url = self.config.models_endpoint();
 
-        match apply_headers(
-            self.client.inner().get(&url),
+        let request = match self.client.get(&url) {
+            Ok(request) => request,
+            Err(error) => {
+                debug!("Cohere health check policy error: {}", error);
+                return HealthStatus::Unhealthy;
+            }
+        };
+
+        match apply_provider_headers(
+            request,
             vec![header(
                 "Authorization",
                 format!("Bearer {}", self.config.api_key),
@@ -406,6 +415,20 @@ mod tests {
     async fn test_provider_with_api_key() {
         let provider = CohereProvider::with_api_key("test_key").await;
         assert!(provider.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_provider_enforces_endpoint_access() {
+        let public = CohereConfig::new("test_key").with_api_base("http://127.0.0.1:11434");
+        let error = CohereProvider::new(public)
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("public-only loopback must fail"));
+        assert!(error.to_string().contains("SSRF protection"));
+
+        let mut private = CohereConfig::new("test_key").with_api_base("http://127.0.0.1:11434");
+        private.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
+        assert!(CohereProvider::new(private).await.is_ok());
     }
 
     #[tokio::test]

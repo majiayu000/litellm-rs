@@ -15,6 +15,7 @@ fn create_test_config() -> BedrockConfig {
         aws_region: "us-east-1".to_string(),
         timeout_seconds: 30,
         max_retries: 3,
+        endpoint_access: Default::default(),
     }
 }
 
