@@ -2,7 +2,7 @@
 //!
 //! Complete embedding functionality for Azure OpenAI Service
 
-use reqwest::header::HeaderMap;
+use reqwest::{Method, header::HeaderMap};
 use serde_json::{Value, json};
 
 use crate::core::types::{
@@ -11,27 +11,24 @@ use crate::core::types::{
     responses::{EmbeddingData, EmbeddingResponse},
 };
 
+use super::client::AzureClient;
 use super::config::AzureConfig;
 use super::error::{azure_api_error, azure_config_error, azure_header_error};
 use super::utils::{AzureEndpointType, AzureUtils};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::traits::provider::ProviderConfig;
-use crate::utils::net::http::create_custom_client;
 
 /// Azure OpenAI embedding handler
 #[derive(Debug, Clone)]
 pub struct AzureEmbeddingHandler {
-    config: AzureConfig,
-    client: reqwest::Client,
+    client: Box<AzureClient>,
 }
 
 impl AzureEmbeddingHandler {
     /// Create new embedding handler
     pub fn new(config: AzureConfig) -> Result<Self, ProviderError> {
-        let client = create_custom_client(ProviderConfig::timeout(&config))
-            .map_err(|e| azure_config_error(format!("Failed to create HTTP client: {}", e)))?;
-
-        Ok(Self { config, client })
+        Ok(Self {
+            client: Box::new(AzureClient::new(config)?),
+        })
     }
 
     /// Build request headers
@@ -39,7 +36,7 @@ impl AzureEmbeddingHandler {
         let mut headers = HeaderMap::new();
 
         // Add API key
-        if let Some(api_key) = self.config.get_effective_api_key().await {
+        if let Some(api_key) = self.client.get_config().get_effective_api_key().await {
             headers.insert(
                 "api-key",
                 api_key
@@ -61,7 +58,7 @@ impl AzureEmbeddingHandler {
         );
 
         // Add custom headers
-        for (key, value) in &self.config.custom_headers {
+        for (key, value) in &self.client.get_config().custom_headers {
             let header_name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
                 .map_err(|e| azure_header_error(format!("Invalid header name: {}", e)))?;
             let header_value = value
@@ -83,11 +80,15 @@ impl AzureEmbeddingHandler {
         AzureEmbeddingUtils::validate_request(&request)?;
 
         // Get deployment name (Azure uses deployment names for embeddings too)
-        let deployment = self.config.get_effective_deployment_name(&request.model);
+        let deployment = self
+            .client
+            .get_config()
+            .get_effective_deployment_name(&request.model);
 
         // Get Azure endpoint
         let azure_endpoint = self
-            .config
+            .client
+            .get_config()
             .get_effective_azure_endpoint()
             .ok_or_else(|| azure_config_error("Azure endpoint not configured"))?;
 
@@ -95,7 +96,7 @@ impl AzureEmbeddingHandler {
         let url = AzureUtils::build_azure_url(
             &azure_endpoint,
             &deployment,
-            &self.config.api_version,
+            &self.client.get_config().api_version,
             AzureEndpointType::Embeddings,
         );
 
@@ -108,7 +109,7 @@ impl AzureEmbeddingHandler {
         // Execute request
         let response = self
             .client
-            .post(&url)
+            .request(Method::POST, &url)?
             .headers(headers)
             .json(&azure_request)
             .send()
@@ -117,10 +118,9 @@ impl AzureEmbeddingHandler {
         // Check status
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+            let error_body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
             return Err(azure_api_error(status, error_body));
         }
 

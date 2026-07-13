@@ -10,6 +10,7 @@ pub mod pricing;
 pub mod sse;
 
 pub use crate::core::pricing::{PricingDatabase, get_pricing_db};
+pub use crate::utils::net::http::ProviderRequestBuilder;
 pub use config::BaseConfig;
 pub use connection_pool::{
     ConnectionPool, GlobalPoolManager, HeaderPair, HttpMethod, PoolConfig,

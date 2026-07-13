@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::core::net::{ProviderEndpointAccess, ProviderEndpointPolicy};
+
 /// Azure OpenAI configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AzureConfig {
@@ -12,6 +14,9 @@ pub struct AzureConfig {
     pub api_key: Option<String>,
     /// Azure endpoint URL
     pub azure_endpoint: Option<String>,
+    /// Network scope allowed for the Azure endpoint.
+    #[serde(default)]
+    pub endpoint_access: ProviderEndpointAccess,
     /// API version
     pub api_version: String,
     /// Azure AD token provider
@@ -45,6 +50,7 @@ impl Default for AzureConfig {
         Self {
             api_key: None,
             azure_endpoint: None,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
             api_version: "2024-02-01".to_string(),
             azure_ad_token_provider: None,
             deployment_name: None,
@@ -72,6 +78,12 @@ impl AzureConfig {
     /// Set Azure endpoint
     pub fn with_azure_endpoint(mut self, endpoint: String) -> Self {
         self.azure_endpoint = Some(endpoint);
+        self
+    }
+
+    /// Set the endpoint network scope.
+    pub fn with_endpoint_access(mut self, endpoint_access: ProviderEndpointAccess) -> Self {
+        self.endpoint_access = endpoint_access;
         self
     }
 
@@ -131,13 +143,16 @@ impl AzureConfig {
 /// Implement ProviderConfig trait for AzureConfig
 impl crate::core::traits::provider::ProviderConfig for AzureConfig {
     fn validate(&self) -> Result<(), String> {
-        if self.get_effective_azure_endpoint().is_none() {
-            return Err("Azure endpoint is required".to_string());
-        }
+        let endpoint = self
+            .get_effective_azure_endpoint()
+            .ok_or_else(|| "Azure endpoint is required".to_string())?;
 
         if self.api_version.is_empty() {
             return Err("API version is required".to_string());
         }
+
+        ProviderEndpointPolicy::for_base_url(self.endpoint_access, &endpoint)
+            .map_err(|error| format!("Invalid Azure endpoint: {error}"))?;
 
         Ok(())
     }
@@ -156,6 +171,10 @@ impl crate::core::traits::provider::ProviderConfig for AzureConfig {
 
     fn max_retries(&self) -> u32 {
         self.max_retries
+    }
+
+    fn endpoint_access(&self) -> ProviderEndpointAccess {
+        self.endpoint_access
     }
 }
 
@@ -179,6 +198,7 @@ mod tests {
         let config = AzureConfig::default();
         assert!(config.api_key.is_none());
         assert!(config.azure_endpoint.is_none());
+        assert_eq!(config.endpoint_access, ProviderEndpointAccess::PublicOnly);
         assert_eq!(config.api_version, "2024-02-01");
         assert!(config.deployment_name.is_none());
         assert_eq!(config.timeout, 60);
@@ -190,6 +210,7 @@ mod tests {
         let config = AzureConfig::new()
             .with_api_key("test-key".to_string())
             .with_azure_endpoint("https://test.openai.azure.com".to_string())
+            .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork)
             .with_deployment_name("gpt-4".to_string())
             .with_api_version("2024-03-01".to_string());
 
@@ -199,6 +220,10 @@ mod tests {
             Some("https://test.openai.azure.com".to_string())
         );
         assert_eq!(config.deployment_name, Some("gpt-4".to_string()));
+        assert_eq!(
+            config.endpoint_access,
+            ProviderEndpointAccess::PrivateNetwork
+        );
         assert_eq!(config.api_version, "2024-03-01");
     }
 
@@ -251,6 +276,7 @@ mod tests {
         assert_eq!(config.api_base(), Some("https://test.openai.azure.com"));
         assert_eq!(config.timeout(), std::time::Duration::from_secs(60));
         assert_eq!(config.max_retries(), 3);
+        assert_eq!(config.endpoint_access(), ProviderEndpointAccess::PublicOnly);
 
         let mut custom_config = config;
         custom_config.timeout = 12;
@@ -273,6 +299,18 @@ mod tests {
 
         assert_eq!(config.timeout, 60);
         assert_eq!(config.max_retries, 3);
+        assert_eq!(config.endpoint_access, ProviderEndpointAccess::PublicOnly);
+    }
+
+    #[test]
+    fn test_azure_config_endpoint_policy() {
+        use crate::core::traits::provider::ProviderConfig;
+
+        let public = AzureConfig::new().with_azure_endpoint("http://127.0.0.1:18080".to_string());
+        assert!(public.validate().is_err());
+
+        let private = public.with_endpoint_access(ProviderEndpointAccess::PrivateNetwork);
+        assert!(private.validate().is_ok());
     }
 
     #[test]

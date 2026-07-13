@@ -3,6 +3,7 @@
 //! AI assistants with function calling and code interpreter
 
 use async_trait::async_trait;
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -249,6 +250,8 @@ impl BaseAssistantHandler for AzureAssistantHandler {
         request: CreateAssistantRequest,
         config: &AssistantApiConfig,
     ) -> Result<CreateAssistantResponse, AssistantError> {
+        self.client
+            .validate_api_base_override(config.api_base.as_deref())?;
         let api_key = config
             .api_key
             .as_deref()
@@ -278,8 +281,7 @@ impl BaseAssistantHandler for AzureAssistantHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .post(&url)
+            .request(Method::POST, &url)?
             .headers(request_headers)
             .json(&request)
             .send()
@@ -287,11 +289,11 @@ impl BaseAssistantHandler for AzureAssistantHandler {
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response
@@ -308,6 +310,8 @@ impl BaseAssistantHandler for AzureAssistantHandler {
         before: Option<&str>,
         config: &AssistantApiConfig,
     ) -> Result<ListAssistantsResponse, AssistantError> {
+        self.client
+            .validate_api_base_override(config.api_base.as_deref())?;
         let api_key = config
             .api_key
             .as_deref()
@@ -356,19 +360,18 @@ impl BaseAssistantHandler for AzureAssistantHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .get(&url)
+            .request(Method::GET, &url)?
             .headers(request_headers)
             .send()
             .await
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response
@@ -382,6 +385,8 @@ impl BaseAssistantHandler for AzureAssistantHandler {
         assistant_id: &str,
         config: &AssistantApiConfig,
     ) -> Result<RetrieveAssistantResponse, AssistantError> {
+        self.client
+            .validate_api_base_override(config.api_base.as_deref())?;
         let api_key = config
             .api_key
             .as_deref()
@@ -411,19 +416,18 @@ impl BaseAssistantHandler for AzureAssistantHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .get(&url)
+            .request(Method::GET, &url)?
             .headers(request_headers)
             .send()
             .await
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response
@@ -438,6 +442,8 @@ impl BaseAssistantHandler for AzureAssistantHandler {
         request: ModifyAssistantRequest,
         config: &AssistantApiConfig,
     ) -> Result<RetrieveAssistantResponse, AssistantError> {
+        self.client
+            .validate_api_base_override(config.api_base.as_deref())?;
         let api_key = config
             .api_key
             .as_deref()
@@ -467,8 +473,7 @@ impl BaseAssistantHandler for AzureAssistantHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .post(&url)
+            .request(Method::POST, &url)?
             .headers(request_headers)
             .json(&request)
             .send()
@@ -476,11 +481,11 @@ impl BaseAssistantHandler for AzureAssistantHandler {
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response
@@ -494,6 +499,8 @@ impl BaseAssistantHandler for AzureAssistantHandler {
         assistant_id: &str,
         config: &AssistantApiConfig,
     ) -> Result<DeleteAssistantResponse, AssistantError> {
+        self.client
+            .validate_api_base_override(config.api_base.as_deref())?;
         let api_key = config
             .api_key
             .as_deref()
@@ -523,19 +530,18 @@ impl BaseAssistantHandler for AzureAssistantHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .delete(&url)
+            .request(Method::DELETE, &url)?
             .headers(request_headers)
             .send()
             .await
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response
@@ -543,57 +549,6 @@ impl BaseAssistantHandler for AzureAssistantHandler {
             .await
             .map_err(|e| ProviderError::serialization("azure", e.to_string()))
     }
-
-    // Additional methods not in the trait - commented out for now
-    // NOTE: Methods below not yet part of the trait; kept for reference.
-    /*
-    async fn create_thread(
-        &self,
-        request: CreateThreadRequest,
-        api_key: Option<&str>,
-        _api_base: Option<&str>,
-        headers: Option<HashMap<String, String>>,
-    ) -> Result<CreateThreadResponse, AssistantError> {
-        let api_key = api_key
-            .map(|s| s.to_string())
-            .or_else(|| self.client.get_config().api_key.clone())
-            .ok_or_else(|| ProviderError::authentication("azure","Azure API key required".to_string()))?;
-
-        let url = self.build_threads_url("");
-
-        let mut request_headers = AzureUtils::create_azure_headers(self.client.get_config(), api_key)
-            .map_err(|e| ProviderError::configuration("azure",e.to_string()))?;
-
-        if let Some(custom_headers) = &config.headers {
-            for (key, value) in custom_headers {
-                let header_name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                    .map_err(|e| ProviderError::network("azure",format!("Invalid header: {}", e)))?;
-                let header_value = reqwest::header::HeaderValue::from_str(value)
-                    .map_err(|e| ProviderError::network("azure",format!("Invalid header: {}", e)))?;
-                request_headers.insert(header_name, header_value);
-            }
-        }
-
-        let response = self.client.get_http_client()
-            .post(&url)
-            .headers(request_headers)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| ProviderError::network("azure",e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
-        }
-
-        response.json().await
-            .map_err(|e| ProviderError::serialization("azure",e.to_string()))
-    }
-    */
 }
 
 pub struct AzureAssistantUtils;

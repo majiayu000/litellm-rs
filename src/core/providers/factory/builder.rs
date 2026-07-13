@@ -491,6 +491,7 @@ pub(super) fn build_azure_config_from_factory(
     let mut azure_config = azure::AzureConfig::new()
         .with_api_key(api_key.to_string())
         .with_azure_endpoint(api_base.to_string());
+    azure_config.endpoint_access = config_endpoint_access(config, "azure")?;
 
     if let Some(api_version) = config_str(config, "api_version") {
         azure_config.api_version = api_version.to_string();

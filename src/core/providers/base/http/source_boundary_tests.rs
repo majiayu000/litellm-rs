@@ -11,6 +11,7 @@ const ALLOWED_BASE_SYMBOLS: &[&str] = &[
     "HttpErrorMapper",
     "HttpMethod",
     "OpenAIRequestTransformer",
+    "ProviderRequestBuilder",
     "UrlBuilder",
     "apply_provider_headers",
     "create_provider_sse_stream",
@@ -237,7 +238,7 @@ fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>
     Ok(visitor.violations)
 }
 
-fn collect_bedrock_sources(
+fn collect_provider_sources(
     root: &FsPath,
     directory: &FsPath,
     module_path: &[String],
@@ -253,7 +254,7 @@ fn collect_bedrock_sources(
             }
             let mut child_module = module_path.to_vec();
             child_module.push(entry.file_name().to_string_lossy().into_owned());
-            collect_bedrock_sources(root, &path, &child_module, output)?;
+            collect_provider_sources(root, &path, &child_module, output)?;
             continue;
         }
         if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
@@ -359,7 +360,7 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
     }
     let bedrock_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/bedrock");
     let mut bedrock_sources = Vec::new();
-    collect_bedrock_sources(
+    collect_provider_sources(
         &bedrock_root,
         &bedrock_root,
         &[
@@ -379,6 +380,31 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         assert!(
             violations.is_empty(),
             "bedrock/{path}: {}",
+            violations.join("; ")
+        );
+    }
+    let azure_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/azure");
+    let mut azure_sources = Vec::new();
+    collect_provider_sources(
+        &azure_root,
+        &azure_root,
+        &[
+            "crate".to_string(),
+            "core".to_string(),
+            "providers".to_string(),
+            "azure".to_string(),
+        ],
+        &mut azure_sources,
+    )
+    .unwrap_or_else(|error| panic!("Azure source inventory failed: {error}"));
+    assert!(!azure_sources.is_empty());
+    for (path, module_path, source) in azure_sources {
+        let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
+        let violations = boundary_violations(&source, &module_path)
+            .unwrap_or_else(|error| panic!("azure/{path} must parse: {error}"));
+        assert!(
+            violations.is_empty(),
+            "azure/{path}: {}",
             violations.join("; ")
         );
     }

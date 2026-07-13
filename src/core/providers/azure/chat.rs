@@ -3,9 +3,12 @@
 //! Complete chat completion implementation for Azure OpenAI Service
 
 use futures::{Stream, StreamExt};
+use reqwest::Method;
 use serde_json::{Value, json};
 use std::pin::Pin;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::time::timeout;
 
 use crate::core::types::{
     chat::ChatMessage,
@@ -18,39 +21,33 @@ use crate::core::types::{
     },
 };
 
+use super::client::AzureClient;
 use super::config::AzureConfig;
 use super::error::{azure_api_error, azure_config_error};
 use super::utils::{AzureEndpointType, AzureUtils};
 use crate::core::providers::base::{
-    HeaderPair, apply_headers, header, header_owned, header_static,
+    HeaderPair, apply_provider_headers, header, header_owned, header_static,
+    read_streaming_error_body,
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::streaming::utils::is_done_marker;
-use crate::core::traits::provider::ProviderConfig;
-use crate::utils::net::http::{create_custom_client, create_streaming_client};
 
 /// Azure OpenAI chat handler
 #[derive(Debug, Clone)]
 pub struct AzureChatHandler {
-    config: AzureConfig,
-    client: reqwest::Client,
-    streaming_client: reqwest::Client,
+    client: Box<AzureClient>,
 }
 
 impl AzureChatHandler {
     /// Create new chat handler
     pub fn new(config: AzureConfig) -> Result<Self, ProviderError> {
-        let client = create_custom_client(ProviderConfig::timeout(&config))
-            .map_err(|e| azure_config_error(format!("Failed to create HTTP client: {}", e)))?;
-        let streaming_client = create_streaming_client().map_err(|e| {
-            azure_config_error(format!("Failed to create streaming HTTP client: {}", e))
-        })?;
-
         Ok(Self {
-            config,
-            client,
-            streaming_client,
+            client: Box::new(AzureClient::new(config)?),
         })
+    }
+
+    pub(crate) fn policy_client(&self) -> &AzureClient {
+        &self.client
     }
 
     /// Build request headers using the unified HeaderPair pattern.
@@ -58,7 +55,7 @@ impl AzureChatHandler {
         let mut headers = Vec::with_capacity(4);
 
         // Add API key
-        if let Some(api_key) = self.config.get_effective_api_key().await {
+        if let Some(api_key) = self.client.get_config().get_effective_api_key().await {
             headers.push(header("api-key", api_key));
         } else {
             return Err(ProviderError::authentication(
@@ -70,7 +67,7 @@ impl AzureChatHandler {
         headers.push(header_static("Content-Type", "application/json"));
 
         // Add custom headers
-        for (key, value) in &self.config.custom_headers {
+        for (key, value) in &self.client.get_config().custom_headers {
             headers.push(header_owned(key.clone(), value.clone()));
         }
 
@@ -84,11 +81,15 @@ impl AzureChatHandler {
         _context: RequestContext,
     ) -> Result<ChatResponse, ProviderError> {
         // Get deployment name
-        let deployment = self.config.get_effective_deployment_name(&request.model);
+        let deployment = self
+            .client
+            .get_config()
+            .get_effective_deployment_name(&request.model);
 
         // Get Azure endpoint
         let azure_endpoint = self
-            .config
+            .client
+            .get_config()
             .get_effective_azure_endpoint()
             .ok_or_else(|| azure_config_error("Azure endpoint not configured".to_string()))?;
 
@@ -96,7 +97,7 @@ impl AzureChatHandler {
         let url = AzureUtils::build_azure_url(
             &azure_endpoint,
             &deployment,
-            &self.config.api_version,
+            &self.client.get_config().api_version,
             AzureEndpointType::ChatCompletions,
         );
 
@@ -107,17 +108,21 @@ impl AzureChatHandler {
         let headers = self.get_request_headers().await?;
 
         // Execute request
-        let response = apply_headers(self.client.post(&url).json(&azure_request), headers)
-            .send()
-            .await?;
+        let response = apply_provider_headers(
+            self.client
+                .request(Method::POST, &url)?
+                .json(&azure_request),
+            headers,
+        )
+        .send()
+        .await?;
 
         // Check status
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_body =
-                crate::core::providers::base::connection_pool::read_streaming_error_body(response)
-                    .await
-                    .map_err(|err| err.into_provider_error("azure"))?;
+            let error_body = read_streaming_error_body(response)
+                .await
+                .map_err(|err| err.into_provider_error("azure"))?;
             return Err(azure_api_error(status, error_body));
         }
 
@@ -139,11 +144,15 @@ impl AzureChatHandler {
         request.stream = true;
 
         // Get deployment name
-        let deployment = self.config.get_effective_deployment_name(&request.model);
+        let deployment = self
+            .client
+            .get_config()
+            .get_effective_deployment_name(&request.model);
 
         // Get Azure endpoint
         let azure_endpoint = self
-            .config
+            .client
+            .get_config()
             .get_effective_azure_endpoint()
             .ok_or_else(|| azure_config_error("Azure endpoint not configured".to_string()))?;
 
@@ -151,7 +160,7 @@ impl AzureChatHandler {
         let url = AzureUtils::build_azure_url(
             &azure_endpoint,
             &deployment,
-            &self.config.api_version,
+            &self.client.get_config().api_version,
             AzureEndpointType::ChatCompletions,
         );
 
@@ -162,22 +171,26 @@ impl AzureChatHandler {
         let headers = self.get_request_headers().await?;
 
         // Execute streaming request
-        let response = crate::core::providers::base::connection_pool::send_streaming_request(
-            apply_headers(
-                self.streaming_client.post(&url).json(&azure_request),
+        let response = timeout(
+            Duration::from_secs(self.client.get_config().timeout),
+            apply_provider_headers(
+                self.client
+                    .streaming_request(Method::POST, &url)?
+                    .json(&azure_request),
                 headers,
-            ),
-            "azure",
+            )
+            .send(),
         )
-        .await?;
+        .await
+        .map_err(|_| ProviderError::network("azure", "Request timeout"))?
+        .map_err(|error| ProviderError::network("azure", error.to_string()))?;
 
         // Check status
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_body =
-                crate::core::providers::base::connection_pool::read_streaming_error_body(response)
-                    .await
-                    .map_err(|err| err.into_provider_error("azure"))?;
+            let error_body = read_streaming_error_body(response)
+                .await
+                .map_err(|err| err.into_provider_error("azure"))?;
             return Err(azure_api_error(status, error_body));
         }
 

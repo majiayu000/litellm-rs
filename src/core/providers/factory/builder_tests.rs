@@ -581,6 +581,7 @@ fn test_build_azure_config_from_factory_maps_native_fields() {
     let config = serde_json::json!({
         "api_key": "azure-key",
         "azure_endpoint": "https://example-resource.openai.azure.com",
+        "endpoint_access": "private_network",
         "deployment_name": "gpt-4o-prod",
         "api_version": "2024-03-01",
         "timeout": 31,
@@ -605,6 +606,10 @@ fn test_build_azure_config_from_factory_maps_native_fields() {
     assert_eq!(azure_config.api_version, "2024-03-01");
     assert_eq!(azure_config.timeout, 31);
     assert_eq!(azure_config.max_retries, 6);
+    assert_eq!(
+        azure_config.endpoint_access,
+        ProviderEndpointAccess::PrivateNetwork
+    );
     assert_eq!(
         azure_config
             .custom_headers

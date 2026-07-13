@@ -3,6 +3,7 @@
 //! Batch processing for multiple API requests
 
 use async_trait::async_trait;
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -98,13 +99,16 @@ impl AzureBatchHandler {
     }
 
     fn build_batches_url(&self, path: &str) -> String {
+        let endpoint = self
+            .client
+            .get_config()
+            .azure_endpoint
+            .as_deref()
+            .unwrap_or("")
+            .trim_end_matches('/');
         format!(
-            "{}openai/batches{}?api-version={}",
-            self.client
-                .get_config()
-                .azure_endpoint
-                .as_deref()
-                .unwrap_or(""),
+            "{}/openai/batches{}?api-version={}",
+            endpoint,
             path,
             self.client.get_config().api_version
         )
@@ -117,9 +121,10 @@ impl BaseBatchHandler for AzureBatchHandler {
         &self,
         request: CreateBatchRequest,
         api_key: Option<&str>,
-        _api_base: Option<&str>,
+        api_base: Option<&str>,
         headers: Option<HashMap<String, String>>,
     ) -> Result<CreateBatchResponse, BatchError> {
+        self.client.validate_api_base_override(api_base)?;
         let api_key = api_key
             .map(|s| s.to_string())
             .or_else(|| self.client.get_config().api_key.clone())
@@ -148,8 +153,7 @@ impl BaseBatchHandler for AzureBatchHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .post(&url)
+            .request(Method::POST, &url)?
             .headers(request_headers)
             .json(&request)
             .send()
@@ -157,11 +161,11 @@ impl BaseBatchHandler for AzureBatchHandler {
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response
@@ -175,9 +179,10 @@ impl BaseBatchHandler for AzureBatchHandler {
         after: Option<&str>,
         limit: Option<i32>,
         api_key: Option<&str>,
-        _api_base: Option<&str>,
+        api_base: Option<&str>,
         headers: Option<HashMap<String, String>>,
     ) -> Result<ListBatchesResponse, BatchError> {
+        self.client.validate_api_base_override(api_base)?;
         let api_key = api_key
             .map(|s| s.to_string())
             .or_else(|| self.client.get_config().api_key.clone())
@@ -219,19 +224,18 @@ impl BaseBatchHandler for AzureBatchHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .get(&url)
+            .request(Method::GET, &url)?
             .headers(request_headers)
             .send()
             .await
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response
@@ -244,9 +248,10 @@ impl BaseBatchHandler for AzureBatchHandler {
         &self,
         batch_id: &str,
         api_key: Option<&str>,
-        _api_base: Option<&str>,
+        api_base: Option<&str>,
         headers: Option<HashMap<String, String>>,
     ) -> Result<RetrieveBatchResponse, BatchError> {
+        self.client.validate_api_base_override(api_base)?;
         let api_key = api_key
             .map(|s| s.to_string())
             .or_else(|| self.client.get_config().api_key.clone())
@@ -275,19 +280,18 @@ impl BaseBatchHandler for AzureBatchHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .get(&url)
+            .request(Method::GET, &url)?
             .headers(request_headers)
             .send()
             .await
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response
@@ -300,9 +304,10 @@ impl BaseBatchHandler for AzureBatchHandler {
         &self,
         batch_id: &str,
         api_key: Option<&str>,
-        _api_base: Option<&str>,
+        api_base: Option<&str>,
         headers: Option<HashMap<String, String>>,
     ) -> Result<CancelBatchResponse, BatchError> {
+        self.client.validate_api_base_override(api_base)?;
         let api_key = api_key
             .map(|s| s.to_string())
             .or_else(|| self.client.get_config().api_key.clone())
@@ -331,19 +336,18 @@ impl BaseBatchHandler for AzureBatchHandler {
 
         let response = self
             .client
-            .get_http_client()
-            .post(&url)
+            .request(Method::POST, &url)?
             .headers(request_headers)
             .send()
             .await
             .map_err(|e| ProviderError::network("azure", e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                "azure",
-                response.status().as_u16(),
-                &response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                ProviderError::network("azure", format!("failed to read error body: {error}"))
+            })?;
+            return Err(HttpErrorMapper::map_status_code("azure", status, &body));
         }
 
         response

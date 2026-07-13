@@ -2,31 +2,47 @@
 //!
 //! HTTP client wrapper for Azure OpenAI Service
 
-use reqwest::header::HeaderMap;
+use reqwest::{Method, header::HeaderMap};
 use serde::{Deserialize, Serialize};
 
 use super::config::AzureConfig;
 use super::error::azure_config_error;
 use super::utils::{AzureEndpointType, AzureUtils};
+use crate::core::providers::base::{BaseConfig, BaseHttpClient, ProviderRequestBuilder};
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::traits::provider::ProviderConfig as _;
 
 /// Azure OpenAI client
 #[derive(Debug, Clone)]
 pub struct AzureClient {
     config: AzureConfig,
-    http_client: reqwest::Client,
+    http_client: BaseHttpClient,
+    streaming_client: BaseHttpClient,
 }
 
 impl AzureClient {
     /// Create new Azure client
-    pub fn new(config: AzureConfig) -> Result<Self, ProviderError> {
-        AzureUtils::validate_config(&config)?;
-
-        let http_client = crate::core::http::outbound::default_outbound_client().clone();
+    pub fn new(mut config: AzureConfig) -> Result<Self, ProviderError> {
+        config
+            .validate()
+            .map_err(|error| azure_config_error(error.to_string()))?;
+        let endpoint = config
+            .get_effective_azure_endpoint()
+            .ok_or_else(|| azure_config_error("Azure endpoint not configured"))?;
+        config.azure_endpoint = Some(endpoint.clone());
+        let base_config = BaseConfig {
+            api_base: Some(endpoint),
+            endpoint_access: config.endpoint_access,
+            timeout: config.timeout,
+            ..Default::default()
+        };
+        let http_client = BaseHttpClient::new_for_provider("azure", base_config.clone())?;
+        let streaming_client = BaseHttpClient::new_for_provider_streaming("azure", base_config)?;
 
         Ok(Self {
             config,
             http_client,
+            streaming_client,
         })
     }
 
@@ -54,9 +70,39 @@ impl AzureClient {
         ))
     }
 
-    /// Get HTTP client
-    pub fn get_http_client(&self) -> &reqwest::Client {
-        &self.http_client
+    pub(crate) fn request(
+        &self,
+        method: Method,
+        url: &str,
+    ) -> Result<ProviderRequestBuilder, ProviderError> {
+        self.http_client.request(method, url)
+    }
+
+    pub(crate) fn streaming_request(
+        &self,
+        method: Method,
+        url: &str,
+    ) -> Result<ProviderRequestBuilder, ProviderError> {
+        self.streaming_client.request(method, url)
+    }
+
+    pub(crate) fn validate_api_base_override(
+        &self,
+        api_base: Option<&str>,
+    ) -> Result<(), ProviderError> {
+        let Some(api_base) = api_base.filter(|value| !value.trim().is_empty()) else {
+            return Ok(());
+        };
+        let configured = self.config.azure_endpoint.as_deref().ok_or_else(|| {
+            ProviderError::configuration("azure", "Azure endpoint not configured")
+        })?;
+        if api_base.trim_end_matches('/') != configured.trim_end_matches('/') {
+            return Err(ProviderError::configuration(
+                "azure",
+                "per-request api_base must match the policy-bound Azure endpoint",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -215,14 +261,33 @@ mod tests {
     }
 
     #[test]
-    fn test_azure_client_get_http_client() {
+    fn test_azure_client_honors_endpoint_access() {
+        let config = AzureConfig::new()
+            .with_api_key("test-key".to_string())
+            .with_azure_endpoint("http://127.0.0.1:18080".to_string());
+
+        assert!(AzureClient::new(config.clone()).is_err());
+        assert!(
+            AzureClient::new(
+                config
+                    .with_endpoint_access(crate::core::net::ProviderEndpointAccess::PrivateNetwork)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_azure_client_rejects_mismatched_api_base_override() {
         let config = AzureConfig::new()
             .with_api_key("test-key".to_string())
             .with_azure_endpoint("https://test.openai.azure.com".to_string());
 
         let client = AzureClient::new(config).unwrap();
-        let _http_client = client.get_http_client();
-        // Just verify we can get the client without panic
+        assert!(
+            client
+                .validate_api_base_override(Some("https://other.openai.azure.com"))
+                .is_err()
+        );
     }
 
     // ==================== AzureConfigFactory Tests ====================

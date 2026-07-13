@@ -47,6 +47,7 @@ pub use image::{AzureImageHandler, AzureImageUtils};
 pub use responses::{AzureResponseHandler, AzureResponseProcessor, AzureResponseUtils};
 
 use futures::Stream;
+use reqwest::Method;
 use serde_json::Value;
 use std::pin::Pin;
 
@@ -77,7 +78,8 @@ pub struct AzureOpenAIProvider {
 impl AzureOpenAIProvider {
     /// Create new Azure OpenAI provider
     pub fn new(config: AzureConfig) -> Result<Self, ProviderError> {
-        let chat_handler = AzureChatHandler::new(config.clone())?;
+        let chat_handler = AzureChatHandler::new(config)?;
+        let config = chat_handler.policy_client().get_config().clone();
         let embedding_handler = AzureEmbeddingHandler::new(config.clone())?;
         let image_handler = AzureImageHandler::new(config.clone())?;
         let cost_calculator = AzureCostCalculator::new();
@@ -275,23 +277,27 @@ impl LLMProvider for AzureOpenAIProvider {
     }
 
     async fn health_check(&self) -> HealthStatus {
-        let endpoint = match self.config.get_effective_azure_endpoint() {
+        let client = self.chat_handler.policy_client();
+        let config = client.get_config();
+        let endpoint = match config.get_effective_azure_endpoint() {
             Some(endpoint) => endpoint,
             None => return HealthStatus::Unhealthy,
         };
-        if self.config.api_version.is_empty() {
+        if config.api_version.is_empty() {
             return HealthStatus::Unhealthy;
         }
 
-        let api_key = match self.config.get_effective_api_key().await {
+        let api_key = match config.get_effective_api_key().await {
             Some(api_key) => api_key,
             None => return HealthStatus::Unhealthy,
         };
 
-        let url = build_azure_models_health_url(&endpoint, &self.config.api_version);
-        let client = crate::core::http::outbound::default_outbound_client().clone();
-        let mut request = client.get(url).header("api-key", api_key);
-        for (key, value) in &self.config.custom_headers {
+        let url = build_azure_models_health_url(&endpoint, &config.api_version);
+        let mut request = match client.request(Method::GET, &url) {
+            Ok(request) => request.header("api-key", api_key),
+            Err(_) => return HealthStatus::Unhealthy,
+        };
+        for (key, value) in &config.custom_headers {
             request = request.header(key.as_str(), value.as_str());
         }
 
@@ -337,6 +343,7 @@ mod tests {
         AzureConfig::new()
             .with_api_key("test-key".to_string())
             .with_azure_endpoint(endpoint)
+            .with_endpoint_access(crate::core::net::ProviderEndpointAccess::PrivateNetwork)
             .with_api_version("2024-02-01".to_string())
     }
 
