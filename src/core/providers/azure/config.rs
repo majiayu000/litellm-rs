@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use url::Url;
 
 use crate::core::net::{ProviderEndpointAccess, ProviderEndpointPolicy};
 
@@ -149,6 +150,12 @@ impl crate::core::traits::provider::ProviderConfig for AzureConfig {
 
         if self.api_version.is_empty() {
             return Err("API version is required".to_string());
+        }
+
+        let endpoint_url =
+            Url::parse(&endpoint).map_err(|error| format!("Invalid Azure endpoint: {error}"))?;
+        if !matches!(endpoint_url.scheme(), "http" | "https") {
+            return Err("Azure endpoint must use http or https".to_string());
         }
 
         ProviderEndpointPolicy::for_base_url(self.endpoint_access, &endpoint)
@@ -305,6 +312,20 @@ mod tests {
     #[test]
     fn test_azure_config_endpoint_policy() {
         use crate::core::traits::provider::ProviderConfig;
+
+        for endpoint in ["http://example.com", "https://example.com"] {
+            let config = AzureConfig::new().with_azure_endpoint(endpoint.to_string());
+            assert!(config.validate().is_ok(), "{endpoint} should be accepted");
+        }
+
+        for endpoint in ["ws://example.com", "wss://example.com"] {
+            let config = AzureConfig::new().with_azure_endpoint(endpoint.to_string());
+            let error = match config.validate() {
+                Ok(()) => panic!("{endpoint} should be rejected"),
+                Err(error) => error,
+            };
+            assert!(error.contains("http or https"));
+        }
 
         let public = AzureConfig::new().with_azure_endpoint("http://127.0.0.1:18080".to_string());
         assert!(public.validate().is_err());

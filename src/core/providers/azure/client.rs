@@ -2,7 +2,7 @@
 //!
 //! HTTP client wrapper for Azure OpenAI Service
 
-use reqwest::{Method, header::HeaderMap};
+use reqwest::{Method, Url, header::HeaderMap};
 use serde::{Deserialize, Serialize};
 
 use super::config::AzureConfig;
@@ -96,7 +96,16 @@ impl AzureClient {
         let configured = self.config.azure_endpoint.as_deref().ok_or_else(|| {
             ProviderError::configuration("azure", "Azure endpoint not configured")
         })?;
-        if api_base.trim_end_matches('/') != configured.trim_end_matches('/') {
+        let api_base = Url::parse(api_base.trim()).map_err(|error| {
+            ProviderError::configuration("azure", format!("invalid per-request api_base: {error}"))
+        })?;
+        let configured = Url::parse(configured).map_err(|error| {
+            ProviderError::configuration(
+                "azure",
+                format!("invalid policy-bound Azure endpoint: {error}"),
+            )
+        })?;
+        if api_base != configured {
             return Err(ProviderError::configuration(
                 "azure",
                 "per-request api_base must match the policy-bound Azure endpoint",
@@ -287,6 +296,30 @@ mod tests {
             client
                 .validate_api_base_override(Some("https://other.openai.azure.com"))
                 .is_err()
+        );
+        assert!(
+            client
+                .validate_api_base_override(Some("https://test.openai.azure.com/path"))
+                .is_err()
+        );
+        assert!(
+            client
+                .validate_api_base_override(Some("https://test.openai.azure.com?region=eastus"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_azure_client_normalizes_api_base_override_authority() {
+        let config = AzureConfig::new()
+            .with_api_key("test-key".to_string())
+            .with_azure_endpoint("https://test.openai.azure.com".to_string());
+
+        let client = AzureClient::new(config).unwrap();
+        assert!(
+            client
+                .validate_api_base_override(Some("HTTPS://TEST.OPENAI.AZURE.COM/"))
+                .is_ok()
         );
     }
 
