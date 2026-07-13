@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::types::chat::ChatMessage;
 use crate::core::types::context::RequestContext;
+use crate::core::types::health::HealthStatus;
 use crate::core::types::message::{MessageContent, MessageRole};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -176,6 +177,60 @@ async fn test_openai_like_streaming_maps_non_success_status_before_sse()
     }
 
     Ok(())
+}
+
+#[tokio::test]
+async fn openai_like_private_health_uses_policy_bound_runtime_client()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+
+    let api_base = openai_like_stream_response_url("200 OK", "{}").await?;
+    let config = crate::core::providers::openai_like::config::test_openai_like_config(api_base);
+    let provider = OpenAILikeProvider::new(config).await?;
+
+    assert_eq!(
+        LLMProvider::health_check(&provider).await,
+        HealthStatus::Healthy
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_like_policy_pool_rejects_cross_authority_without_connect()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let target = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let config = crate::core::providers::openai_like::config::test_openai_like_config(format!(
+        "http://{}",
+        source.local_addr()?
+    ));
+    let provider = OpenAILikeProvider::new(config).await?;
+    let target_url = format!("http://{}/models", target.local_addr()?);
+
+    let error = provider
+        .pool_manager
+        .execute_request(&target_url, HttpMethod::GET, Vec::new(), None)
+        .await
+        .expect_err("cross-authority request must fail closed");
+    assert!(error.to_string().contains("authority"));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), target.accept())
+            .await
+            .is_err(),
+        "cross-authority request must not reach the listener"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_like_private_metadata_endpoint_is_permanently_rejected() {
+    let mut config = OpenAILikeConfig::new("http://169.254.169.254/v1").with_skip_api_key(true);
+    config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
+
+    let error = OpenAILikeProvider::new(config)
+        .await
+        .expect_err("metadata endpoints must remain forbidden");
+    assert!(error.to_string().contains("private or reserved"));
 }
 
 #[tokio::test]

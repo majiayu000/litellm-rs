@@ -23,19 +23,21 @@ pub fn mock_provider_config(
         provider_type: provider_type.to_string(),
         api_key: api_key.to_string(),
         base_url: Some(base_url.to_string()),
+        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
         models,
         ..ProviderConfig::default()
     }
 }
 
-/// Build startup-safe copies for direct-route tests that activate private runtime policy later.
+/// Preserve private test endpoints while staging PublicOnly request-time negative cases.
 pub fn route_policy_bootstrap_providers(providers: &[ProviderConfig]) -> Vec<ProviderConfig> {
     providers
         .iter()
         .cloned()
         .map(|mut provider| {
-            provider.base_url = Some("https://example.com/v1".to_string());
-            provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
+            if provider.endpoint_access == ProviderEndpointAccess::PublicOnly {
+                provider.base_url = Some("https://example.com/v1".to_string());
+            }
             provider
         })
         .collect()
@@ -48,11 +50,14 @@ pub fn mock_openai_runtime_config(
     let mut config = OpenAIConfig::default();
     config.base.api_base = Some(api_base.into());
     config.base.api_key = Some(api_key.into());
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     config
 }
 
 pub fn mock_openai_like_runtime_config(api_base: impl Into<String>) -> OpenAILikeConfig {
-    OpenAILikeConfig::new(api_base).with_skip_api_key(true)
+    let mut config = OpenAILikeConfig::new(api_base).with_skip_api_key(true);
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    config
 }
 
 /// Configuration for provider tests
@@ -222,9 +227,27 @@ mod tests {
         assert_eq!(config.api_key, "sk-test");
         assert_eq!(config.base_url.as_deref(), Some("http://127.0.0.1:1234/v1"));
         assert_eq!(config.models, vec!["gpt-test"]);
+        assert_eq!(
+            config.endpoint_access,
+            ProviderEndpointAccess::PrivateNetwork
+        );
         assert!(config.organization.is_none());
         assert!(config.project.is_none());
         assert!(config.settings.is_empty());
+    }
+
+    #[test]
+    fn loopback_runtime_helpers_opt_in_to_private_policy() {
+        let openai = mock_openai_runtime_config("http://127.0.0.1:1234/v1", "sk-test");
+        let openai_like = mock_openai_like_runtime_config("http://127.0.0.1:1235/v1");
+        assert_eq!(
+            openai.base.endpoint_access,
+            ProviderEndpointAccess::PrivateNetwork
+        );
+        assert_eq!(
+            openai_like.base.endpoint_access,
+            ProviderEndpointAccess::PrivateNetwork
+        );
     }
 
     #[test]

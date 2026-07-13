@@ -13,8 +13,7 @@ use crate::core::audio::types::{
     TranslationResponse,
 };
 use crate::core::providers::base::{
-    GlobalPoolManager, HeaderPair, HttpMethod, apply_headers, header, header_owned,
-    read_streaming_error_body, send_streaming_request, streaming_unbounded_client,
+    GlobalPoolManager, HeaderPair, HttpMethod, header, header_owned, read_streaming_error_body,
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
@@ -86,13 +85,10 @@ impl OpenAIProvider {
         // Note: Headers are now built per-request in get_request_headers()
         // This avoids redundant HashMap allocation during initialization.
 
-        let pool_manager =
-            Arc::new(
-                GlobalPoolManager::new().map_err(|e| ProviderError::Network {
-                    provider: "openai",
-                    message: e.to_string(),
-                })?,
-            );
+        let pool_manager = Arc::new(GlobalPoolManager::new_for_provider(
+            "openai",
+            config.base.clone(),
+        )?);
         let model_registry = get_openai_registry();
 
         Ok(Self {
@@ -167,14 +163,10 @@ impl OpenAIProvider {
         // Execute streaming request without a total response-lifetime timeout.
         let url = format!("{}/chat/completions", self.config.get_api_base());
         let headers = self.get_request_headers();
-        let req = apply_headers(
-            streaming_unbounded_client()
-                .post(&url)
-                .json(&openai_request),
-            headers,
-        );
-
-        let response = send_streaming_request(req, "openai").await?;
+        let response = self
+            .pool_manager
+            .execute_streaming_request(&url, headers, openai_request, "openai")
+            .await?;
         let status = response.status();
         if !status.is_success() {
             let body = read_streaming_error_body(response)
@@ -474,14 +466,11 @@ impl LLMProvider for OpenAIProvider {
 
     async fn health_check(&self) -> HealthStatus {
         let url = format!("{}/models?limit=1", self.config.get_api_base());
-        let client = crate::core::http::outbound::default_outbound_client().clone();
-        let mut req = client.get(&url);
-
-        if let Some(api_key) = &self.config.base.api_key {
-            req = req.header("Authorization", format!("Bearer {}", api_key));
-        }
-
-        match req.send().await {
+        match self
+            .pool_manager
+            .execute_request(&url, HttpMethod::GET, self.get_request_headers(), None)
+            .await
+        {
             Ok(response) if response.status().is_success() => HealthStatus::Healthy,
             _ => HealthStatus::Unhealthy,
         }

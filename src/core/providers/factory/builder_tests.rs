@@ -5,7 +5,6 @@ use super::builder::*;
 use super::cohere_builder::build_cohere_config_from_factory;
 #[cfg(feature = "providers-extended")]
 use super::gemini_builder::build_gemini_config_from_factory;
-use super::{Provider, ProviderType, create_provider};
 use crate::core::net::ProviderEndpointAccess;
 use std::sync::Mutex;
 
@@ -419,69 +418,6 @@ fn test_factory_endpoint_access_defaults_and_rejects_invalid_values() {
             .err()
             .unwrap_or_else(|| panic!("invalid endpoint_access must fail"));
         assert!(error.to_string().contains("invalid endpoint_access"));
-    }
-}
-
-#[tokio::test]
-async fn test_gateway_and_direct_registry_endpoint_access_contract() {
-    let mut config = crate::config::models::provider::ProviderConfig {
-        name: "test-openai-like".to_string(),
-        provider_type: "openai_compatible".to_string(),
-        base_url: Some("https://api.example.com/v1".to_string()),
-        ..Default::default()
-    };
-    config
-        .settings
-        .insert("skip_api_key".to_string(), serde_json::json!(true));
-
-    let provider = create_provider(config.clone())
-        .await
-        .unwrap_or_else(|error| panic!("public-only Gateway config should work: {error}"));
-    let Provider::OpenAILike(provider) = provider else {
-        panic!("expected OpenAILike provider");
-    };
-    assert_eq!(
-        provider.config().base.endpoint_access,
-        ProviderEndpointAccess::PublicOnly
-    );
-
-    config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
-    let error = create_provider(config)
-        .await
-        .err()
-        .unwrap_or_else(|| panic!("private access must remain staged"));
-    assert!(error.to_string().contains("staged"));
-
-    let mut settings_override = crate::config::models::provider::ProviderConfig {
-        name: "openai".to_string(),
-        provider_type: "openai".to_string(),
-        api_key: "sk-test".to_string(),
-        ..Default::default()
-    };
-    settings_override.settings.insert(
-        "endpoint_access".to_string(),
-        serde_json::json!("private_network"),
-    );
-    let error = create_provider(settings_override)
-        .await
-        .err()
-        .unwrap_or_else(|| panic!("settings must not override endpoint access"));
-    assert!(error.to_string().contains("top-level"));
-
-    for explicit in [
-        serde_json::json!("public_only"),
-        serde_json::json!("private_network"),
-        serde_json::json!("invalid"),
-        serde_json::json!(true),
-    ] {
-        let error = Provider::from_config_async(
-            ProviderType::OpenAICompatible,
-            serde_json::json!({"endpoint_access": explicit}),
-        )
-        .await
-        .err()
-        .unwrap_or_else(|| panic!("direct configs must reject explicit endpoint_access"));
-        assert!(error.to_string().contains("staged"));
     }
 }
 

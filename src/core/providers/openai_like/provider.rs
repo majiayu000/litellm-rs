@@ -9,8 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::core::providers::base::{
-    GlobalPoolManager, HeaderPair, HttpMethod, apply_headers, header, header_owned,
-    read_streaming_error_body, send_streaming_request, streaming_unbounded_client,
+    GlobalPoolManager, HeaderPair, HttpMethod, header, header_owned, read_streaming_error_body,
 };
 use crate::core::providers::openai::{OpenAIResponseTransformer, models::OpenAIChatResponse};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
@@ -104,8 +103,8 @@ impl OpenAILikeProvider {
         Self::validate_capability_profile(capabilities, allowed_capabilities)?;
 
         let pool_manager = Arc::new(
-            GlobalPoolManager::new()
-                .map_err(|e| OpenAILikeError::network(PROVIDER_NAME, e.to_string()))?,
+            GlobalPoolManager::new_for_provider(PROVIDER_NAME, config.base.clone())
+                .map_err(|e| OpenAILikeError::configuration(PROVIDER_NAME, e.to_string()))?,
         );
         let model_registry = get_openai_like_registry();
         let provider_name = config.provider_name.clone();
@@ -216,7 +215,10 @@ impl OpenAILikeProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = response
+                .text()
+                .await
+                .map_err(|error| OpenAILikeError::network(PROVIDER_NAME, error.to_string()))?;
             return Err(self.map_error_response(status.as_u16(), &body));
         }
 
@@ -244,14 +246,10 @@ impl OpenAILikeProvider {
 
         let url = format!("{}/chat/completions", self.config.get_api_base());
         let headers = self.get_request_headers();
-        let req = apply_headers(
-            streaming_unbounded_client()
-                .post(&url)
-                .json(&openai_request),
-            headers,
-        );
-
-        let response = send_streaming_request(req, PROVIDER_NAME).await?;
+        let response = self
+            .pool_manager
+            .execute_streaming_request(&url, headers, openai_request, PROVIDER_NAME)
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -607,13 +605,12 @@ impl LLMProvider for OpenAILikeProvider {
     }
 
     async fn health_check(&self) -> HealthStatus {
-        // Try to connect to the API base via pool_manager's client
         let url = format!("{}/models", self.config.get_api_base());
-        let client = self.pool_manager.client();
-        let headers = self.get_request_headers();
-        let req = apply_headers(client.get(&url), headers);
-
-        match req.send().await {
+        match self
+            .pool_manager
+            .execute_request(&url, HttpMethod::GET, self.get_request_headers(), None)
+            .await
+        {
             Ok(response) if response.status().is_success() => HealthStatus::Healthy,
             Ok(_) => HealthStatus::Degraded,
             Err(_) => HealthStatus::Unhealthy,

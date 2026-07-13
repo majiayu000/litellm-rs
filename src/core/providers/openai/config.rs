@@ -240,6 +240,7 @@ pub(crate) fn test_openai_config(
     let mut config = OpenAIConfig::default();
     config.base.api_base = Some(api_base.into());
     config.base.api_key = Some(api_key.into());
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     config
 }
 

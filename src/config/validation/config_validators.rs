@@ -3,12 +3,13 @@
 //! This module provides validation implementations for the main gateway configuration
 //! structures including GatewayConfig, ServerConfig, and ProviderConfig.
 
-use super::ssrf::validate_url_against_ssrf;
 use super::trait_def::Validate;
 use crate::config::models::gateway::{GatewayConfig, GatewayPricingConfig};
 use crate::config::models::provider::{ProviderConfig, ProviderHealthCheckConfig, RetryConfig};
 use crate::config::models::server::ServerConfig;
-use crate::core::net::validate_provider_endpoint_url;
+use crate::core::net::{
+    validate_provider_endpoint_url, validate_provider_endpoint_url_without_resolution,
+};
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -165,9 +166,21 @@ impl Validate for ProviderConfig {
                 self.name
             ));
         }
-        if self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork {
+        if self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
+            && !crate::core::providers::factory::is_provider_endpoint_access_supported(
+                provider_selector,
+            )
+        {
             return Err(format!(
-                "Provider {} private_network is staged until all provider routes are policy-wired",
+                "Provider {} private_network is unavailable because provider type '{}' is not policy-wired",
+                self.name, self.provider_type
+            ));
+        }
+        if self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
+            && self.base_url.is_none()
+        {
+            return Err(format!(
+                "Provider {} private_network endpoint access requires a base URL",
                 self.name
             ));
         }
@@ -211,7 +224,10 @@ impl Validate for ProviderConfig {
 
         // Validate base URL if present (with SSRF protection)
         if let Some(base_url) = &self.base_url {
-            validate_url_against_ssrf(base_url, &format!("Provider {} base URL", self.name))?;
+            let endpoint = url::Url::parse(base_url)
+                .map_err(|error| format!("Provider {} base URL is invalid: {error}", self.name))?;
+            validate_provider_endpoint_url_without_resolution(&endpoint, self.endpoint_access)
+                .map_err(|error| format!("Provider {} base URL is invalid: {error}", self.name))?;
         }
 
         // Validate rate limits
@@ -363,7 +379,7 @@ mod endpoint_access_tests {
 
     fn public_provider() -> ProviderConfig {
         ProviderConfig {
-            name: "staged".to_string(),
+            name: "endpoint-policy".to_string(),
             provider_type: "openai_compatible".to_string(),
             api_key: "sk-test".to_string(),
             base_url: Some("https://8.8.8.8/v1".to_string()),
@@ -372,14 +388,27 @@ mod endpoint_access_tests {
     }
 
     #[test]
-    fn endpoint_access_is_top_level_and_private_is_staged() {
+    fn endpoint_access_is_top_level_and_private_is_provider_gated() {
         let mut config = public_provider();
         assert!(Validate::validate(&config).is_ok());
 
         config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
-        assert!(Validate::validate(&config).unwrap_err().contains("staged"));
+        assert!(Validate::validate(&config).is_ok());
 
+        config.base_url = Some("http://127.0.0.1:18080/v1".to_string());
+        assert!(Validate::validate(&config).is_ok());
+
+        config.provider_type = "cloudflare".to_string();
+        assert!(
+            Validate::validate(&config)
+                .unwrap_err()
+                .contains("not policy-wired")
+        );
+
+        config.provider_type = "openai_compatible".to_string();
         config.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        assert!(Validate::validate(&config).is_err());
+        config.base_url = Some("https://8.8.8.8/v1".to_string());
         config.settings.insert(
             "endpoint_access".to_string(),
             serde_json::json!("private_network"),

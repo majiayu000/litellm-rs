@@ -350,24 +350,10 @@ mod tests {
         config.base.api_key = Some("sk-test".to_string());
         config.base.api_base = Some(format!("http://{address}"));
         config.base.endpoint_access = ProviderEndpointAccess::PublicOnly;
-        let provider = OpenAIProvider::new(config)
+        let error = OpenAIProvider::new(config)
             .await
-            .expect("provider construction should stay lazy for multipart");
-
-        let result = provider
-            .audio_transcription(TranscriptionRequest {
-                file: b"audio".to_vec(),
-                filename: "audio.mp3".to_string(),
-                model: "whisper-1".to_string(),
-                language: None,
-                prompt: None,
-                response_format: Some("json".to_string()),
-                temperature: None,
-                timestamp_granularities: None,
-            })
-            .await;
-
-        assert!(result.is_err());
+            .expect_err("public-only loopback must fail during provider construction");
+        assert!(error.to_string().contains("private or reserved"));
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
                 .await

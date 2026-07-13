@@ -7,6 +7,8 @@ use futures::StreamExt;
 use reqwest::{Client, RequestBuilder, Response};
 use serde_json;
 
+use super::config::BaseConfig;
+use super::http::{BaseHttpClient, apply_provider_headers};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::utils::net::http::{
     HttpClientPoolConfig, create_custom_client_with_config, create_streaming_client,
@@ -333,6 +335,15 @@ impl ConnectionPool {
 #[derive(Debug, Clone)]
 pub struct GlobalPoolManager {
     pool: Arc<ConnectionPool>,
+    policy: Option<ProviderPool>,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderPool {
+    provider: &'static str,
+    ordinary: BaseHttpClient,
+    streaming: BaseHttpClient,
+    streaming_header_timeout: Duration,
 }
 
 impl GlobalPoolManager {
@@ -343,6 +354,26 @@ impl GlobalPoolManager {
     pub fn new() -> Result<Self, ProviderError> {
         Ok(Self {
             pool: Arc::new(ConnectionPool::new()?),
+            policy: None,
+        })
+    }
+
+    /// Create a manager whose ordinary and streaming clients are bound to one provider policy.
+    pub fn new_for_provider(
+        provider: &'static str,
+        config: BaseConfig,
+    ) -> Result<Self, ProviderError> {
+        let streaming_header_timeout = Duration::from_secs(config.timeout);
+        let ordinary = BaseHttpClient::new_for_provider(provider, config.clone())?;
+        let streaming = BaseHttpClient::new_for_provider_streaming(provider, config)?;
+        Ok(Self {
+            pool: Arc::new(ConnectionPool::new()?),
+            policy: Some(ProviderPool {
+                provider,
+                ordinary,
+                streaming,
+                streaming_header_timeout,
+            }),
         })
     }
 
@@ -356,6 +387,7 @@ impl GlobalPoolManager {
             pool: Arc::new(ConnectionPool {
                 client: global_client(),
             }),
+            policy: None,
         }
     }
 
@@ -370,6 +402,26 @@ impl GlobalPoolManager {
         headers: Vec<HeaderPair>,
         body: Option<serde_json::Value>,
     ) -> Result<reqwest::Response, ProviderError> {
+        if let Some(policy) = &self.policy {
+            let method = match method {
+                HttpMethod::GET => reqwest::Method::GET,
+                HttpMethod::POST => reqwest::Method::POST,
+                HttpMethod::PUT => reqwest::Method::PUT,
+                HttpMethod::DELETE => reqwest::Method::DELETE,
+            };
+            let mut request_builder = policy.ordinary.request(method, url)?;
+            request_builder = apply_provider_headers(request_builder, headers);
+            if let Some(body_data) = body {
+                request_builder = request_builder
+                    .header("Content-Type", "application/json")
+                    .json(&body_data);
+            }
+            return request_builder
+                .send()
+                .await
+                .map_err(|error| ProviderError::network(policy.provider, error.to_string()));
+        }
+
         let client = self.pool.client();
 
         let mut request_builder = match method {
@@ -395,6 +447,34 @@ impl GlobalPoolManager {
             .send()
             .await
             .map_err(|e| ProviderError::network("common", e.to_string()))
+    }
+
+    /// Execute a policy-bound request while bounding only the response-header phase.
+    pub async fn execute_streaming_request(
+        &self,
+        url: &str,
+        headers: Vec<HeaderPair>,
+        body: serde_json::Value,
+        legacy_provider: &'static str,
+    ) -> Result<reqwest::Response, ProviderError> {
+        if let Some(policy) = &self.policy {
+            let request = apply_provider_headers(policy.streaming.post(url)?, headers).json(&body);
+            return match tokio::time::timeout(policy.streaming_header_timeout, request.send()).await
+            {
+                Ok(Ok(response)) => Ok(response),
+                Ok(Err(error)) => Err(ProviderError::network(policy.provider, error.to_string())),
+                Err(_) => Err(ProviderError::timeout(
+                    policy.provider,
+                    format!(
+                        "streaming request did not receive response headers within {:?}",
+                        policy.streaming_header_timeout
+                    ),
+                )),
+            };
+        }
+
+        let request = apply_headers(streaming_unbounded_client().post(url).json(&body), headers);
+        send_streaming_request(request, legacy_provider).await
     }
 
     /// Get the underlying client for direct use

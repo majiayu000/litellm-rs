@@ -7,6 +7,7 @@ use syn::{ExprMethodCall, ItemExternCrate, ItemMacro, ItemMod, ItemUse, Path, Us
 const ALLOWED_BASE_SYMBOLS: &[&str] = &[
     "BaseConfig",
     "BaseHttpClient",
+    "GlobalPoolManager",
     "HeaderPair",
     "HttpErrorMapper",
     "HttpMethod",
@@ -286,7 +287,7 @@ fn collect_provider_sources(
 #[test]
 fn migrated_shared_providers_have_no_raw_client_escape() {
     let base_source = include_str!("../http.rs");
-    let provider_sources: [(&str, &[&str], &str); 19] = [
+    let provider_sources: [(&str, &[&str], &str); 21] = [
         (
             "mistral/mod.rs",
             &["crate", "core", "providers", "mistral"],
@@ -321,6 +322,16 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             "openai/api_methods.rs",
             &["crate", "core", "providers", "openai", "api_methods"],
             include_str!("../../openai/api_methods.rs"),
+        ),
+        (
+            "openai/client.rs",
+            &["crate", "core", "providers", "openai", "client"],
+            include_str!("../../openai/client.rs"),
+        ),
+        (
+            "openai_like/provider.rs",
+            &["crate", "core", "providers", "openai_like", "provider"],
+            include_str!("../../openai_like/provider.rs"),
         ),
         (
             "router/health_probe.rs",
@@ -414,6 +425,33 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         let violations = boundary_violations(source, module_path)
             .unwrap_or_else(|error| panic!("{path} must parse: {error}"));
         assert!(violations.is_empty(), "{path}: {}", violations.join("; "));
+    }
+    for (path, source) in [
+        ("openai/client.rs", include_str!("../../openai/client.rs")),
+        (
+            "openai_like/provider.rs",
+            include_str!("../../openai_like/provider.rs"),
+        ),
+    ] {
+        let compact: String = source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert!(
+            compact.contains("GlobalPoolManager::new_for_provider"),
+            "{path} must construct a provider-policy pool"
+        );
+        for forbidden in [
+            "GlobalPoolManager::new()",
+            "streaming_unbounded_client",
+            "default_outbound_client",
+            ".client()",
+        ] {
+            assert!(
+                !compact.contains(forbidden),
+                "{path} retains forbidden runtime bypass {forbidden}"
+            );
+        }
     }
     let bedrock_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/bedrock");
     let mut bedrock_sources = Vec::new();

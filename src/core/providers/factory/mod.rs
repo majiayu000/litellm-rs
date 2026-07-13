@@ -12,6 +12,8 @@ mod builder;
 mod builder_tests;
 #[cfg(feature = "providers-extended")]
 mod cohere_builder;
+#[cfg(test)]
+mod endpoint_access_tests;
 #[cfg(feature = "providers-extended")]
 mod fal_ai_builder;
 #[cfg(feature = "providers-extended")]
@@ -52,6 +54,36 @@ fn catalog_definition_for_supported_selector(
     }
 }
 
+pub(crate) fn provider_type_supports_endpoint_access(provider_type: &ProviderType) -> bool {
+    match provider_type {
+        ProviderType::OpenAI
+        | ProviderType::OpenAICompatible
+        | ProviderType::Anthropic
+        | ProviderType::Mistral
+        | ProviderType::Cohere
+        | ProviderType::Azure
+        | ProviderType::AzureAI
+        | ProviderType::Bedrock
+        | ProviderType::VertexAI
+        | ProviderType::Gemini => true,
+        ProviderType::Cloudflare
+        | ProviderType::FalAI
+        | ProviderType::Replicate
+        | ProviderType::GitHubCopilot
+        | ProviderType::Custom(_) => false,
+        _ => provider_registry::catalog_definition_for_provider_type(provider_type).is_some(),
+    }
+}
+
+pub(crate) fn is_provider_endpoint_access_supported(selector: &str) -> bool {
+    if catalog_definition_for_supported_selector(selector).is_some() {
+        return true;
+    }
+    selector
+        .parse::<ProviderType>()
+        .is_ok_and(|provider_type| provider_type_supports_endpoint_access(&provider_type))
+}
+
 /// Create a provider from configuration
 ///
 /// This is the main factory function for creating providers
@@ -85,12 +117,6 @@ pub async fn create_provider(
         return Err(ProviderError::configuration(
             "provider",
             "endpoint_access must be configured as a top-level provider field",
-        ));
-    }
-    if endpoint_access == ProviderEndpointAccess::PrivateNetwork {
-        return Err(ProviderError::configuration(
-            "provider",
-            "private_network is staged until all provider routes are policy-wired",
         ));
     }
     if let Some(def) = catalog_definition_for_supported_selector(provider_selector) {
@@ -147,6 +173,14 @@ pub async fn create_provider(
         return Err(ProviderError::not_implemented(
             provider_diagnostic_name(&provider_type_enum),
             format!("Factory for {:?} not yet implemented", provider_type_enum),
+        ));
+    }
+    if endpoint_access == ProviderEndpointAccess::PrivateNetwork
+        && !provider_type_supports_endpoint_access(&provider_type_enum)
+    {
+        return Err(ProviderError::configuration(
+            provider_diagnostic_name(&provider_type_enum),
+            "private_network endpoint access is unavailable because this provider runtime is not policy-wired",
         ));
     }
 
@@ -233,33 +267,6 @@ mod tests {
             "{selector} should remain a pure catalog-only selector for this guard"
         );
         assert!(catalog_definition_for_supported_selector(selector).is_some());
-    }
-
-    #[tokio::test]
-    async fn test_catalog_entries_are_creatable_via_factory() {
-        for (name, def) in provider_registry::PROVIDER_CATALOG.iter() {
-            let config = crate::config::models::provider::ProviderConfig {
-                name: (*name).to_string(),
-                provider_type: (*name).to_string(),
-                api_key: if def.skip_api_key {
-                    String::new()
-                } else {
-                    "test-key".to_string()
-                },
-                ..Default::default()
-            };
-
-            let provider = create_provider(config).await.unwrap_or_else(|e| {
-                panic!("Catalog provider '{}' should be creatable: {}", name, e)
-            });
-
-            assert!(
-                matches!(&provider, Provider::OpenAILike(_)),
-                "Catalog provider '{}' must create OpenAILike variant",
-                name
-            );
-            assert_eq!(provider.capabilities(), def.capabilities);
-        }
     }
 
     #[tokio::test]

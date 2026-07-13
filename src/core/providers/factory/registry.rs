@@ -49,10 +49,12 @@ impl Provider {
         provider_type: ProviderType,
         config: serde_json::Value,
     ) -> Result<Self, ProviderError> {
-        if config.get("endpoint_access").is_some() {
+        if config.get("endpoint_access").is_some()
+            && !super::provider_type_supports_endpoint_access(&provider_type)
+        {
             return Err(ProviderError::configuration(
                 super::provider_diagnostic_name(&provider_type),
-                "endpoint_access is staged until provider routes are policy-wired",
+                "endpoint_access is unavailable because this provider runtime is not policy-wired",
             ));
         }
         Self::from_gateway_config_async(provider_type, config).await
