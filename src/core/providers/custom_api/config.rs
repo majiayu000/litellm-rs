@@ -94,9 +94,15 @@ impl ProviderConfig for CustomHttpxConfig {
             .parse::<reqwest::Method>()
             .map_err(|error| format!("invalid HTTP method: {error}"))?;
 
-        validate_provider_endpoint_url_str(&self.endpoint_url, self.base.endpoint_access)
-            .map(|_| ())
-            .map_err(|error| format!("invalid endpoint URL: {error}"))
+        let endpoint =
+            validate_provider_endpoint_url_str(&self.endpoint_url, self.base.endpoint_access)
+                .map_err(|error| format!("invalid endpoint URL: {error}"))?;
+        match endpoint.scheme() {
+            "http" | "https" => Ok(()),
+            scheme => Err(format!(
+                "invalid endpoint URL: custom HTTP endpoints require http or https, got {scheme}"
+            )),
+        }
     }
 
     fn api_key(&self) -> Option<&str> {
@@ -168,6 +174,17 @@ mod tests {
 
         cfg.http_method = "not a method".to_string();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_reject_websocket_endpoint_schemes() {
+        for endpoint in ["ws://8.8.8.8/endpoint", "wss://8.8.8.8/endpoint"] {
+            let cfg = CustomHttpxConfig::new(endpoint);
+            let error = cfg
+                .validate()
+                .expect_err("custom HTTP endpoints must reject WebSocket schemes");
+            assert!(error.contains("http or https"), "unexpected error: {error}");
+        }
     }
 
     #[test]
