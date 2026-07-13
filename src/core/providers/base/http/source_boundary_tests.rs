@@ -1,3 +1,4 @@
+use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{ItemExternCrate, ItemMod, ItemUse, Path, UseTree};
 
@@ -24,6 +25,10 @@ const RAW_PREFIXES: &[&[&str]] = &[
     &["reqwest", "get"],
     &["reqwest", "request"],
 ];
+
+fn ident_text(ident: &syn::Ident) -> String {
+    ident.unraw().to_string()
+}
 
 fn path_starts_with(path: &[String], prefix: &[&str]) -> bool {
     path.len() >= prefix.len()
@@ -93,23 +98,25 @@ fn path_violation(path: &[String], is_import: bool) -> Option<String> {
 fn flatten_use_tree(tree: &UseTree, prefix: &mut Vec<String>, paths: &mut Vec<Vec<String>>) {
     match tree {
         UseTree::Path(path) => {
-            prefix.push(path.ident.to_string());
+            prefix.push(ident_text(&path.ident));
             flatten_use_tree(&path.tree, prefix, paths);
             prefix.pop();
         }
         UseTree::Name(name) => {
-            if name.ident == "self" {
+            let ident = ident_text(&name.ident);
+            if ident == "self" {
                 paths.push(prefix.clone());
             } else {
                 let mut path = prefix.clone();
-                path.push(name.ident.to_string());
+                path.push(ident);
                 paths.push(path);
             }
         }
         UseTree::Rename(rename) => {
             let mut path = prefix.clone();
-            if rename.ident != "self" {
-                path.push(rename.ident.to_string());
+            let ident = ident_text(&rename.ident);
+            if ident != "self" {
+                path.push(ident);
             }
             paths.push(path);
         }
@@ -150,7 +157,7 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
         self.check_segments(
             path.segments
                 .iter()
-                .map(|segment| segment.ident.to_string())
+                .map(|segment| ident_text(&segment.ident))
                 .collect(),
             false,
         );
@@ -158,9 +165,10 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
     }
 
     fn visit_item_extern_crate(&mut self, item: &'ast ItemExternCrate) {
-        if item.ident == "self" || item.ident == "reqwest" || item.ident == "litellm_rs" {
+        let ident = ident_text(&item.ident);
+        if matches!(ident.as_str(), "self" | "reqwest" | "litellm_rs") {
             self.violations
-                .push(format!("forbidden extern crate alias for {}", item.ident));
+                .push(format!("forbidden extern crate alias for {ident}"));
         }
     }
 
@@ -169,13 +177,13 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
             attribute.path().is_ident("cfg")
                 && attribute
                     .parse_args::<syn::Ident>()
-                    .is_ok_and(|ident| ident == "test")
+                    .is_ok_and(|ident| ident_text(&ident) == "test")
         });
         if is_test {
             return;
         }
         if let Some((_, items)) = &item.content {
-            self.module_path.push(item.ident.to_string());
+            self.module_path.push(ident_text(&item.ident));
             for child in items {
                 self.visit_item(child);
             }
@@ -243,7 +251,7 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         ),
     ];
     let allowed = boundary_violations(
-        "use crate::core::providers::base::{BaseConfig, BaseHttpClient, header};",
+        "use crate::core::providers::base::{BaseConfig, r#BaseHttpClient, header};",
         &["crate", "core", "providers", "mistral"],
     )
     .unwrap_or_else(|error| panic!("allowed fixture must parse: {error}"));
@@ -256,6 +264,11 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         "fn probe() { crate::core::providers::base::ConnectionPool::client(&pool); }",
         "fn probe() { super::super::http::default_outbound_client(); }",
         "use reqwest as raw_http; fn probe() { raw_http::Client::new(); }",
+        "use crate::core::r#http::default_outbound_client;",
+        "use crate::utils::r#net::http::get_shared_client;",
+        "use r#reqwest::Client;",
+        "use crate::core::providers::r#base::ConnectionPool;",
+        "extern crate r#reqwest as raw_http;",
     ] {
         let violations = boundary_violations(bypass, &["crate", "core", "providers", "mistral"])
             .unwrap_or_else(|error| panic!("bypass fixture must parse: {error}"));
