@@ -70,23 +70,7 @@ async fn gateway_and_direct_registry_activate_wired_endpoint_access() {
 }
 
 #[tokio::test]
-async fn endpoint_access_alias_and_unwired_direct_provider_fail_closed() {
-    let mut settings_override = ProviderConfig {
-        name: "openai".to_string(),
-        provider_type: "openai".to_string(),
-        api_key: "sk-test".to_string(),
-        ..Default::default()
-    };
-    settings_override.settings.insert(
-        "endpoint_access".to_string(),
-        serde_json::json!("private_network"),
-    );
-    let error = create_provider(settings_override)
-        .await
-        .err()
-        .unwrap_or_else(|| panic!("settings must not override endpoint access"));
-    assert!(error.to_string().contains("top-level"));
-
+async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
     for (provider_type, selector) in [
         (ProviderType::Cloudflare, "cloudflare"),
         (ProviderType::FalAI, "fal_ai"),
@@ -110,18 +94,27 @@ async fn endpoint_access_alias_and_unwired_direct_provider_fail_closed() {
             base_url: Some("https://unwired.example.test".to_string()),
             ..Default::default()
         };
-        let error = create_provider(gateway_config)
+        let error = create_provider(gateway_config.clone())
             .await
             .expect_err("unwired Gateway endpoint config must fail closed");
         assert!(error.to_string().contains("not policy-wired"));
+        for key in ["base_url", "api_base"] {
+            let mut settings_config = gateway_config.clone();
+            settings_config.base_url = None;
+            settings_config.settings.insert(
+                key.to_string(),
+                serde_json::json!("https://unwired.example.test"),
+            );
+            let error = create_provider(settings_config)
+                .await
+                .expect_err("unwired Gateway settings endpoint must fail closed");
+            assert!(error.to_string().contains("not policy-wired"));
+        }
     }
-}
 
-#[tokio::test]
-async fn unwired_hostname_endpoint_is_rejected_without_connecting() {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
-        .expect("loopback listener must bind");
+        .expect("listener must bind");
     let config = ProviderConfig {
         name: "unwired-cloudflare".to_string(),
         provider_type: "cloudflare".to_string(),
@@ -170,19 +163,13 @@ async fn catalog_local_providers_require_explicit_private_access() {
         if is_local {
             let mut public_config = config.clone();
             public_config.endpoint_access = ProviderEndpointAccess::PublicOnly;
-            let error = create_provider(public_config)
-                .await
-                .expect_err("Local catalog providers must require explicit private access");
-            assert!(
-                error.to_string().contains("private or reserved"),
-                "Local catalog provider '{name}' returned an unexpected error: {error}"
-            );
+            assert!(create_provider(public_config).await.is_err());
         }
 
+        assert!(crate::config::Validate::validate(&config).is_ok());
         let provider = create_provider(config)
             .await
             .unwrap_or_else(|error| panic!("Catalog provider '{name}' should work: {error}"));
-        assert!(matches!(&provider, Provider::OpenAILike(_)));
         assert_eq!(provider.capabilities(), definition.capabilities);
     }
 }

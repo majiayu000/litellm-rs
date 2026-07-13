@@ -166,8 +166,11 @@ impl Validate for ProviderConfig {
                 self.name
             ));
         }
+        let has_configured_endpoint = self.base_url.is_some()
+            || self.settings.contains_key("base_url")
+            || self.settings.contains_key("api_base");
         if (self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
-            || self.base_url.is_some())
+            || has_configured_endpoint)
             && !crate::core::providers::factory::is_provider_endpoint_access_supported(
                 provider_selector,
             )
@@ -179,6 +182,7 @@ impl Validate for ProviderConfig {
         }
         if self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
             && self.base_url.is_none()
+            && !crate::core::providers::factory::selector_uses_catalog_endpoint(provider_selector)
         {
             return Err(format!(
                 "Provider {} private_network endpoint access requires a base URL",
@@ -227,6 +231,12 @@ impl Validate for ProviderConfig {
         if let Some(base_url) = &self.base_url {
             let endpoint = url::Url::parse(base_url)
                 .map_err(|error| format!("Provider {} base URL is invalid: {error}", self.name))?;
+            if !matches!(endpoint.scheme(), "http" | "https") {
+                return Err(format!(
+                    "Provider {} base URL must use http:// or https:// scheme",
+                    self.name
+                ));
+            }
             validate_provider_endpoint_url_without_resolution(&endpoint, self.endpoint_access)
                 .map_err(|error| format!("Provider {} base URL is invalid: {error}", self.name))?;
         }
@@ -408,6 +418,9 @@ mod endpoint_access_tests {
 
         config.provider_type = "openai_compatible".to_string();
         config.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        assert!(Validate::validate(&config).is_err());
+        config.base_url = Some("https://8.8.8.8/v1".to_string());
+        config.base_url = Some("wss://8.8.8.8/v1".to_string());
         assert!(Validate::validate(&config).is_err());
         config.base_url = Some("https://8.8.8.8/v1".to_string());
         config.settings.insert(

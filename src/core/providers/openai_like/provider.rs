@@ -215,10 +215,12 @@ impl OpenAILikeProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .map_err(|error| OpenAILikeError::network(PROVIDER_NAME, error.to_string()))?;
+            let body = response.text().await.map_err(|error| {
+                self.map_error_response(
+                    status.as_u16(),
+                    &format!("failed to read upstream error body: {error}"),
+                )
+            })?;
             return Err(self.map_error_response(status.as_u16(), &body));
         }
 

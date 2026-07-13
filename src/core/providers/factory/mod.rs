@@ -84,6 +84,10 @@ pub(crate) fn is_provider_endpoint_access_supported(selector: &str) -> bool {
         .is_ok_and(|provider_type| provider_type_supports_endpoint_access(&provider_type))
 }
 
+pub(crate) fn selector_uses_catalog_endpoint(selector: &str) -> bool {
+    catalog_definition_for_supported_selector(selector).is_some()
+}
+
 /// Create a provider from configuration
 ///
 /// This is the main factory function for creating providers
@@ -113,6 +117,7 @@ pub async fn create_provider(
     } else {
         provider_type.as_str()
     };
+    let settings_endpoint = settings.contains_key("base_url") || settings.contains_key("api_base");
     if settings.contains_key("endpoint_access") {
         return Err(ProviderError::configuration(
             "provider",
@@ -176,7 +181,9 @@ pub async fn create_provider(
         ));
     }
     if !provider_type_supports_endpoint_access(&provider_type_enum)
-        && (endpoint_access == ProviderEndpointAccess::PrivateNetwork || base_url.is_some())
+        && (endpoint_access == ProviderEndpointAccess::PrivateNetwork
+            || base_url.is_some()
+            || settings_endpoint)
     {
         return Err(ProviderError::configuration(
             provider_diagnostic_name(&provider_type_enum),

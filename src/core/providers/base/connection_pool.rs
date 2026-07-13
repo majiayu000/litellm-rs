@@ -462,7 +462,9 @@ impl GlobalPoolManager {
             return match tokio::time::timeout(policy.streaming_header_timeout, request.send()).await
             {
                 Ok(Ok(response)) => Ok(response),
-                Ok(Err(error)) => Err(ProviderError::network(policy.provider, error.to_string())),
+                Ok(Err(error)) => {
+                    Err(StreamingRequestError::Request(error).into_provider_error(policy.provider))
+                }
                 Err(_) => Err(ProviderError::timeout(
                     policy.provider,
                     format!(
