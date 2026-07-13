@@ -400,6 +400,10 @@ pub fn validate_chat_request_common(
 mod network_policy_tests;
 
 #[cfg(test)]
+#[path = "http/source_boundary_tests.rs"]
+mod source_boundary_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
