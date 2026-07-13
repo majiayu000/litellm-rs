@@ -1,7 +1,7 @@
-//! Pooled HTTP provider macro
+//! Shared HTTP provider macro
 //!
 //! `define_pooled_http_provider_with_hooks!` targets providers that:
-//! - Rely on GlobalPoolManager for non-streaming requests
+//! - Reuse policy-aware clients for ordinary and streaming requests
 //! - Have custom request/response transforms
 //! - Optionally implement streaming via a custom async hook
 
@@ -31,7 +31,8 @@ macro_rules! define_pooled_http_provider_with_hooks {
         #[derive(Debug, Clone)]
         pub struct $struct_name {
             config: $config_type,
-            pool_manager: std::sync::Arc<$crate::core::providers::base::GlobalPoolManager>,
+            http_client: $crate::core::providers::base::BaseHttpClient,
+            streaming_client: $crate::core::providers::base::BaseHttpClient,
             supported_models: Vec<$crate::core::types::model::ModelInfo>,
         }
 
@@ -46,18 +47,26 @@ macro_rules! define_pooled_http_provider_with_hooks {
                             e,
                         )
                     })?;
-                let pool_manager = std::sync::Arc::new(
-                    $crate::core::providers::base::GlobalPoolManager::new().map_err(|e| {
-                        $crate::core::providers::unified_provider::ProviderError::configuration(
-                            $provider_name,
-                            e.to_string(),
-                        )
-                    })?,
-                );
+                let base_config = $crate::core::providers::base::BaseConfig {
+                    api_base: <$config_type as $crate::core::traits::provider::ProviderConfig>::api_base(&config)
+                        .map(std::borrow::ToOwned::to_owned),
+                    endpoint_access: <$config_type as $crate::core::traits::provider::ProviderConfig>::endpoint_access(&config),
+                    timeout: <$config_type as $crate::core::traits::provider::ProviderConfig>::timeout(&config).as_secs(),
+                    ..Default::default()
+                };
+                let http_client = $crate::core::providers::base::BaseHttpClient::new_for_provider(
+                    $provider_name,
+                    base_config.clone(),
+                )?;
+                let streaming_client = $crate::core::providers::base::BaseHttpClient::new_for_provider_streaming(
+                    $provider_name,
+                    base_config,
+                )?;
 
                 Ok(Self {
                     config,
-                    pool_manager,
+                    http_client,
+                    streaming_client,
                     supported_models: ($model_info)(),
                 })
             }
@@ -128,10 +137,23 @@ macro_rules! define_pooled_http_provider_with_hooks {
                 let body = self.transform_request(request.clone(), context.clone()).await?;
                 let headers = self.build_headers();
 
-                let response = self
-                    .pool_manager
-                    .execute_request(&url, $http_method, headers, Some(body))
-                    .await?;
+                let method = match $http_method {
+                    $crate::core::providers::base::HttpMethod::GET => reqwest::Method::GET,
+                    $crate::core::providers::base::HttpMethod::POST => reqwest::Method::POST,
+                    $crate::core::providers::base::HttpMethod::PUT => reqwest::Method::PUT,
+                    $crate::core::providers::base::HttpMethod::DELETE => reqwest::Method::DELETE,
+                };
+                let request_builder = $crate::core::providers::base::apply_provider_headers(
+                    self.http_client.request(method, &url)?,
+                    headers,
+                )
+                .json(&body);
+                let response = request_builder.send().await.map_err(|error| {
+                    $crate::core::providers::unified_provider::ProviderError::network(
+                        $provider_name,
+                        error.to_string(),
+                    )
+                })?;
 
                 let status = response.status();
                 let response_bytes = response

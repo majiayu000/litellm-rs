@@ -2,12 +2,14 @@ use std::fs;
 use std::path::Path as FsPath;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
-use syn::{ItemExternCrate, ItemMod, ItemUse, Path, UseTree};
+use syn::{ExprMethodCall, ItemExternCrate, ItemMacro, ItemMod, ItemUse, Path, UseTree};
 
 const ALLOWED_BASE_SYMBOLS: &[&str] = &[
     "BaseConfig",
     "BaseHttpClient",
+    "HeaderPair",
     "HttpErrorMapper",
+    "HttpMethod",
     "OpenAIRequestTransformer",
     "UrlBuilder",
     "apply_provider_headers",
@@ -166,6 +168,33 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
         visit::visit_path(self, path);
     }
 
+    fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
+        if ident_text(&expression.method) == "client" && expression.args.is_empty() {
+            self.violations
+                .push("raw HTTP client accessor .client()".to_string());
+        }
+        visit::visit_expr_method_call(self, expression);
+    }
+
+    fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
+        let tokens = item.mac.tokens.to_string();
+        for forbidden in [
+            "reqwest :: Client",
+            "reqwest :: ClientBuilder",
+            "GlobalPoolManager",
+            "default_outbound_client",
+            "get_client_with_timeout",
+            "get_ssrf_safe_client",
+            "use_ssrf_safe_client",
+        ] {
+            if tokens.contains(forbidden) {
+                self.violations
+                    .push(format!("raw HTTP macro token {forbidden}"));
+            }
+        }
+        visit::visit_item_macro(self, item);
+    }
+
     fn visit_item_extern_crate(&mut self, item: &'ast ItemExternCrate) {
         let ident = ident_text(&item.ident);
         if matches!(ident.as_str(), "self" | "reqwest" | "litellm_rs") {
@@ -253,7 +282,7 @@ fn collect_bedrock_sources(
 #[test]
 fn migrated_shared_providers_have_no_raw_client_escape() {
     let base_source = include_str!("../http.rs");
-    let provider_sources: [(&str, &[&str], &str); 2] = [
+    let provider_sources: [(&str, &[&str], &str); 8] = [
         (
             "mistral/mod.rs",
             &["crate", "core", "providers", "mistral"],
@@ -263,6 +292,36 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             "cohere/provider.rs",
             &["crate", "core", "providers", "cohere", "provider"],
             include_str!("../../cohere/provider.rs"),
+        ),
+        (
+            "macros/http_hooks.rs",
+            &["crate", "core", "providers", "macros", "http_hooks"],
+            include_str!("../../macros/http_hooks.rs"),
+        ),
+        (
+            "macros/pooled_hooks.rs",
+            &["crate", "core", "providers", "macros", "pooled_hooks"],
+            include_str!("../../macros/pooled_hooks.rs"),
+        ),
+        (
+            "custom_api/provider.rs",
+            &["crate", "core", "providers", "custom_api", "provider"],
+            include_str!("../../custom_api/provider.rs"),
+        ),
+        (
+            "amazon_nova/provider.rs",
+            &["crate", "core", "providers", "amazon_nova", "provider"],
+            include_str!("../../amazon_nova/provider.rs"),
+        ),
+        (
+            "openai/api_methods.rs",
+            &["crate", "core", "providers", "openai", "api_methods"],
+            include_str!("../../openai/api_methods.rs"),
+        ),
+        (
+            "router/health_probe.rs",
+            &["crate", "core", "router", "health_probe"],
+            include_str!("../../../router/health_probe.rs"),
         ),
     ];
     let allowed = boundary_violations(
@@ -284,6 +343,8 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         "use r#reqwest::Client;",
         "use crate::core::providers::r#base::ConnectionPool;",
         "extern crate r#reqwest as raw_http;",
+        "fn probe(pool: Pool) { pool.client(); }",
+        "macro_rules! raw { () => { reqwest::Client::new() } }",
     ] {
         let violations = boundary_violations(bypass, &["crate", "core", "providers", "mistral"])
             .unwrap_or_else(|error| panic!("bypass fixture must parse: {error}"));
@@ -338,6 +399,11 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         .collect();
     assert!(compact_base.contains("BaseRedirectMode::Policy=>ProviderHttpClient::new"));
     assert!(compact_base.contains("BaseRedirectMode::Disabled=>ProviderHttpClient::no_redirect"));
+    assert!(compact_base.contains("BaseRedirectMode::Streaming=>ProviderHttpClient::streaming"));
+    assert!(
+        !include_str!("../../../../utils/net/http.rs")
+            .contains("get_ssrf_safe_no_redirect_client_with_timeout_fallible")
+    );
     assert_eq!(
         include_str!("../../bedrock/client.rs")
             .matches("new_for_provider_no_redirect")

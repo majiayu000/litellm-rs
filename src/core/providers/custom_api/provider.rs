@@ -11,11 +11,11 @@ crate::define_http_provider_with_hooks!(
         crate::core::types::model::ProviderCapability::ChatCompletionStream,
     ],
     url_builder: |provider: &CustomHttpxProvider| -> String { provider.config.endpoint_url.clone() },
-    request_builder: |provider: &CustomHttpxProvider, url: &str| -> reqwest::RequestBuilder {
+    request_builder: |provider: &CustomHttpxProvider, url: &str| {
         match provider.config.http_method.to_uppercase().as_str() {
             "GET" => provider.http_client.get(url),
             "POST" => provider.http_client.post(url),
-            "PUT" => provider.http_client.put(url),
+            "PUT" => provider.http_client.request(reqwest::Method::PUT, url),
             _ => provider.http_client.post(url),
         }
     },
@@ -129,5 +129,22 @@ impl CustomHttpxProvider {
     ) -> Result<Self, crate::core::providers::unified_provider::ProviderError> {
         let config = super::config::CustomHttpxConfig::new(endpoint_url);
         Self::new(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::net::ProviderEndpointAccess;
+
+    #[test]
+    fn policy_client_construction_honors_custom_endpoint_access() {
+        let public = super::super::config::CustomHttpxConfig::new("http://127.0.0.1:8080/endpoint");
+        assert!(CustomHttpxProvider::new(public).is_err());
+
+        let mut private =
+            super::super::config::CustomHttpxConfig::new("http://127.0.0.1:8080/endpoint");
+        private.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        assert!(CustomHttpxProvider::new(private).is_ok());
     }
 }

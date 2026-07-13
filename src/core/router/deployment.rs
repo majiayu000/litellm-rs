@@ -20,6 +20,7 @@
 //! - Zero-copy: Deployments are accessed by reference, never cloned
 //! - Cache-friendly: Hot path fields grouped together
 
+use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -59,6 +60,8 @@ pub struct HealthCheckPolicy {
     pub recovery_timeout_secs: u64,
     /// Normalized custom unauthenticated GET endpoint, or native provider probe when absent.
     pub endpoint: Option<Url>,
+    /// Runtime network policy applied to a configured custom endpoint.
+    pub endpoint_access: ProviderEndpointAccess,
     /// HTTP statuses accepted by a custom endpoint probe.
     pub expected_codes: Vec<u16>,
 }

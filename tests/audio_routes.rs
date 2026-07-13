@@ -9,7 +9,11 @@ mod tests {
     use bytes::Bytes;
     use litellm_rs::Config;
     use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::core::net::ProviderEndpointAccess;
     use litellm_rs::core::pricing_service::LiteLLMModelInfo;
+    use litellm_rs::core::providers::Provider;
+    use litellm_rs::core::providers::openai::{OpenAIConfig, OpenAIProvider};
+    use litellm_rs::core::router::{Deployment, UnifiedRouter};
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -172,14 +176,41 @@ mod tests {
             "openai",
             "sk-test",
             base_url,
-            models,
+            models.clone(),
         )];
 
-        GatewayHttpServer::new(&config)
+        let mut state = GatewayHttpServer::new(&config)
             .await
             .expect("gateway server should initialize")
             .state()
-            .clone()
+            .clone();
+
+        let openai_config = OpenAIConfig {
+            provider_name: "mock-openai-audio".to_string(),
+            base: litellm_rs::core::providers::base::BaseConfig {
+                api_key: Some("sk-test".to_string()),
+                api_base: Some(base_url.to_string()),
+                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let provider = Provider::OpenAI(
+            OpenAIProvider::new(openai_config)
+                .await
+                .expect("private audio provider should initialize"),
+        );
+        let router = UnifiedRouter::default();
+        for model in models {
+            router.add_deployment(Deployment::new(
+                format!("mock-openai-audio-{model}"),
+                provider.clone(),
+                model.clone(),
+                model,
+            ));
+        }
+        state.unified_router = Arc::new(router);
+        state
     }
 
     fn add_test_audio_pricing(state: &litellm_rs::server::state::AppState, model: &str) {

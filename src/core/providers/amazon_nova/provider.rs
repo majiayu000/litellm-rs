@@ -115,6 +115,7 @@ crate::define_pooled_http_provider_with_hooks!(
     streaming: |provider: &AmazonNovaProvider, request: ChatRequest, _context: RequestContext| {
         let url = provider.config.get_chat_endpoint();
         let api_key = provider.config.get_api_key().map(|key| key.to_string());
+        let client = provider.streaming_client.clone();
 
         let mut body = provider.transform_chat_request(request);
         body["stream"] = serde_json::Value::Bool(true);
@@ -124,9 +125,9 @@ crate::define_pooled_http_provider_with_hooks!(
                 ProviderError::authentication(PROVIDER_NAME, "API key is required")
             })?;
 
-            let client = crate::core::http::outbound::default_outbound_client().clone();
             let response = client
                 .post(&url)
+                .map_err(|error| ProviderError::network(PROVIDER_NAME, error.to_string()))?
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -136,10 +137,9 @@ crate::define_pooled_http_provider_with_hooks!(
 
             let status = response.status();
             if !status.is_success() {
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
+                let error_text = response.text().await.map_err(|error| {
+                    ProviderError::network(PROVIDER_NAME, error.to_string())
+                })?;
                 return Err(ProviderError::api_error(
                     PROVIDER_NAME,
                     status.as_u16(),
@@ -342,6 +342,18 @@ mod tests {
         let config = AmazonNovaConfig::with_api_key("test-key");
         let result = AmazonNovaProvider::new(config);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_policy_clients_honor_endpoint_access() {
+        let mut public = AmazonNovaConfig::with_api_key("test-key");
+        public.base.api_base = Some("http://127.0.0.1:8080/v1".to_string());
+        assert!(AmazonNovaProvider::new(public).is_err());
+
+        let mut private = AmazonNovaConfig::with_api_key("test-key");
+        private.base.api_base = Some("http://127.0.0.1:8080/v1".to_string());
+        private.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
+        assert!(AmazonNovaProvider::new(private).is_ok());
     }
 
     #[test]

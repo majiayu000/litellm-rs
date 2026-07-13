@@ -4,9 +4,8 @@ use super::deployment::{Deployment, HealthCheckPolicy, HealthStatus};
 use super::error::RouterError;
 use super::unified::Router;
 use crate::core::providers::Provider;
+use crate::core::providers::base::{BaseConfig, BaseHttpClient};
 use crate::core::types::health::HealthStatus as ProviderHealthStatus;
-use crate::utils::net::http::get_ssrf_safe_no_redirect_client_with_timeout_fallible;
-use reqwest::Client;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -19,7 +18,7 @@ struct ProbeGroup {
     provider: Provider,
     deployments: Vec<Arc<Deployment>>,
     timeout_secs: u64,
-    custom_client: Option<Arc<Client>>,
+    custom_client: Option<Arc<BaseHttpClient>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,20 +46,28 @@ impl Router {
             match groups.entry(policy.provider_name.clone()) {
                 Entry::Vacant(entry) => {
                     let timeout = Duration::from_secs(deployment.config.timeout_secs);
-                    let custom_client = if policy.endpoint.is_some() {
-                        Some(
-                            get_ssrf_safe_no_redirect_client_with_timeout_fallible(timeout).map_err(
-                                |error| {
-                                    RouterError::InvalidConfiguration(format!(
-                                        "provider '{}' health probe client failed to initialize: {error}",
-                                        policy.provider_name
-                                    ))
+                    let custom_client = policy
+                        .endpoint
+                        .as_ref()
+                        .map(|endpoint| {
+                            BaseHttpClient::new_for_provider_no_redirect(
+                                "health_probe",
+                                BaseConfig {
+                                    api_base: Some(endpoint.to_string()),
+                                    endpoint_access: policy.endpoint_access,
+                                    timeout: timeout.as_secs(),
+                                    ..Default::default()
                                 },
-                            )?,
-                        )
-                    } else {
-                        None
-                    };
+                            )
+                            .map(Arc::new)
+                        })
+                        .transpose()
+                        .map_err(|error| {
+                            RouterError::InvalidConfiguration(format!(
+                                "provider '{}' health probe client failed to initialize: {error}",
+                                policy.provider_name
+                            ))
+                        })?;
                     entry.insert(ProbeGroup {
                         policy,
                         provider: deployment.provider.clone(),
@@ -154,12 +161,13 @@ async fn run_probe_loop(group: ProbeGroup) {
 async fn execute_probe(
     provider: &Provider,
     policy: &HealthCheckPolicy,
-    custom_client: Option<&Client>,
+    custom_client: Option<&BaseHttpClient>,
 ) -> Result<(), ProbeFailure> {
     if let Some(endpoint) = &policy.endpoint {
         let client = custom_client.ok_or(ProbeFailure::ClientUnavailable)?;
         let response = client
             .get(endpoint.clone())
+            .map_err(|_| ProbeFailure::Request)?
             .send()
             .await
             .map_err(|_| ProbeFailure::Request)?;
@@ -270,6 +278,7 @@ fn log_probe_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::net::ProviderEndpointAccess;
     use crate::core::providers::openai::OpenAIProvider;
     use crate::core::providers::openai::config::test_openai_config;
     use crate::core::router::config::RouterConfig;
@@ -296,12 +305,18 @@ mod tests {
     }
 
     fn test_policy(endpoint: Option<Url>) -> HealthCheckPolicy {
+        let endpoint_access = if endpoint.is_some() {
+            ProviderEndpointAccess::PrivateNetwork
+        } else {
+            ProviderEndpointAccess::PublicOnly
+        };
         HealthCheckPolicy {
             provider_name: "openai-primary".to_string(),
             interval_secs: 30,
             failure_threshold: 2,
             recovery_timeout_secs: 60,
             endpoint,
+            endpoint_access,
             expected_codes: vec![204],
         }
     }
@@ -435,17 +450,17 @@ mod tests {
         (endpoint, redirect_task, target_task)
     }
 
-    fn local_probe_client() -> Client {
-        Client::builder()
-            .build()
-            .expect("local probe client should build")
-    }
-
-    fn local_no_redirect_probe_client() -> Client {
-        Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("local no-redirect probe client should build")
+    fn local_probe_client(endpoint: &Url) -> BaseHttpClient {
+        BaseHttpClient::new_for_provider_no_redirect(
+            "health_probe",
+            BaseConfig {
+                api_base: Some(endpoint.to_string()),
+                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                timeout: 2,
+                ..Default::default()
+            },
+        )
+        .expect("local policy probe client should build")
     }
 
     async fn wait_for_health(deployment: &Deployment, expected: HealthStatus) {
@@ -479,8 +494,8 @@ mod tests {
     #[tokio::test]
     async fn custom_endpoint_uses_expected_status_codes() {
         let provider = test_provider(None).await;
-        let client = local_probe_client();
         let (healthy_endpoint, healthy_server) = status_server(204).await;
+        let client = local_probe_client(&healthy_endpoint);
         assert_eq!(
             execute_probe(
                 &provider,
@@ -495,6 +510,7 @@ mod tests {
         assert!(!request.contains("authorization:"));
 
         let (failed_endpoint, failed_server) = status_server(500).await;
+        let client = local_probe_client(&failed_endpoint);
         assert_eq!(
             execute_probe(
                 &provider,
@@ -510,8 +526,8 @@ mod tests {
     #[tokio::test]
     async fn custom_endpoint_observes_redirect_status_without_following_it() {
         let provider = test_provider(None).await;
-        let client = local_no_redirect_probe_client();
         let (endpoint, redirect_task, redirect_target) = redirect_server().await;
+        let client = local_probe_client(&endpoint);
         let mut policy = test_policy(Some(endpoint));
         policy.expected_codes = vec![302];
 
@@ -523,6 +539,7 @@ mod tests {
         assert!(!target_was_requested);
 
         let (endpoint, redirect_task, redirect_target) = redirect_server().await;
+        let client = local_probe_client(&endpoint);
         policy.endpoint = Some(endpoint);
         policy.expected_codes = vec![200];
 
@@ -532,6 +549,31 @@ mod tests {
 
         assert_eq!(result, Err(ProbeFailure::UnexpectedStatus(302)));
         assert!(!target_was_requested);
+    }
+
+    #[tokio::test]
+    async fn public_custom_endpoint_is_rejected_before_socket_connect() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("public probe listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener address should exist");
+        let endpoint = Url::parse(&format!("http://{address}/health"))
+            .expect("public probe endpoint should parse");
+        let provider = test_provider(None).await;
+        let mut policy = test_policy(Some(endpoint));
+        policy.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        let router = Router::new(RouterConfig::default());
+        router.add_deployment(test_deployment("public-probe", provider, policy).await);
+
+        assert!(router.start_configured_health_checks().is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "rejected public probe must not establish a loopback connection"
+        );
     }
 
     #[tokio::test]
@@ -639,12 +681,18 @@ mod tests {
         policy.interval_secs = 1;
         policy.recovery_timeout_secs = 1;
         let deployment = Arc::new(test_deployment("one", provider.clone(), policy.clone()).await);
+        let custom_client = Arc::new(local_probe_client(
+            policy
+                .endpoint
+                .as_ref()
+                .expect("custom endpoint should exist"),
+        ));
         let group = ProbeGroup {
             policy,
             provider,
             deployments: vec![deployment.clone()],
             timeout_secs: 2,
-            custom_client: Some(Arc::new(local_probe_client())),
+            custom_client: Some(custom_client),
         };
 
         let probe_task = tokio::spawn(run_probe_loop(group));

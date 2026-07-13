@@ -24,6 +24,7 @@ pub struct BaseHttpClient {
 enum BaseRedirectMode {
     Policy,
     Disabled,
+    Streaming,
 }
 
 impl BaseHttpClient {
@@ -46,6 +47,14 @@ impl BaseHttpClient {
         config: BaseConfig,
     ) -> Result<Self, ProviderError> {
         Self::build(provider, config, BaseRedirectMode::Disabled)
+    }
+
+    /// Create a policy-aware client without a total response-lifetime timeout.
+    pub fn new_for_provider_streaming(
+        provider: &'static str,
+        config: BaseConfig,
+    ) -> Result<Self, ProviderError> {
+        Self::build(provider, config, BaseRedirectMode::Streaming)
     }
 
     fn build(
@@ -76,6 +85,7 @@ impl BaseHttpClient {
         let client_result = match redirect_mode {
             BaseRedirectMode::Policy => ProviderHttpClient::new(policy, timeout),
             BaseRedirectMode::Disabled => ProviderHttpClient::no_redirect(policy, timeout),
+            BaseRedirectMode::Streaming => ProviderHttpClient::streaming(policy),
         };
         let client = client_result.map_err(|error| {
             ProviderError::initialization(

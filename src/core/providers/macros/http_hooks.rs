@@ -134,7 +134,7 @@ macro_rules! define_http_provider_with_hooks {
         #[derive(Debug, Clone)]
         pub struct $struct_name {
             config: $config_type,
-            http_client: std::sync::Arc<reqwest::Client>,
+            http_client: $crate::core::providers::base::BaseHttpClient,
             supported_models: Vec<$crate::core::types::model::ModelInfo>,
         }
 
@@ -143,21 +143,17 @@ macro_rules! define_http_provider_with_hooks {
                 <$config_type as $crate::core::traits::provider::ProviderConfig>::validate(&config)
                     .map_err(|e| $crate::core::providers::unified_provider::ProviderError::configuration($provider_name, e))?;
 
-                let http_client = if <$config_type as $crate::core::traits::provider::ProviderConfig>::use_ssrf_safe_client(&config) {
-                    $crate::utils::net::http::get_ssrf_safe_client_with_timeout_fallible(
-                        <$config_type as $crate::core::traits::provider::ProviderConfig>::timeout(&config),
-                    )
-                } else {
-                    $crate::utils::net::http::get_client_with_timeout_fallible(
-                        <$config_type as $crate::core::traits::provider::ProviderConfig>::timeout(&config),
-                    )
-                }
-                .map_err(|e| {
-                    $crate::core::providers::unified_provider::ProviderError::initialization(
-                        $provider_name,
-                        format!("Failed to create HTTP client: {}", e),
-                    )
-                })?;
+                let base_config = $crate::core::providers::base::BaseConfig {
+                    api_base: <$config_type as $crate::core::traits::provider::ProviderConfig>::api_base(&config)
+                        .map(std::borrow::ToOwned::to_owned),
+                    endpoint_access: <$config_type as $crate::core::traits::provider::ProviderConfig>::endpoint_access(&config),
+                    timeout: <$config_type as $crate::core::traits::provider::ProviderConfig>::timeout(&config).as_secs(),
+                    ..Default::default()
+                };
+                let http_client = $crate::core::providers::base::BaseHttpClient::new_for_provider(
+                    $provider_name,
+                    base_config,
+                )?;
 
                 Ok(Self {
                     config,
@@ -234,7 +230,7 @@ macro_rules! define_http_provider_with_hooks {
                 let body = self.transform_request(request.clone(), context).await?;
                 let headers = self.build_headers();
 
-                let mut req_builder = ($request_builder)(self, &url);
+                let mut req_builder = ($request_builder)(self, &url)?;
                 for (key, value) in headers {
                     req_builder = req_builder.header(key, value);
                 }
@@ -252,7 +248,12 @@ macro_rules! define_http_provider_with_hooks {
 
                 if !response.status().is_success() {
                     let status = response.status().as_u16();
-                    let error_text = response.text().await.unwrap_or_default();
+                    let error_text = response.text().await.map_err(|error| {
+                        $crate::core::providers::unified_provider::ProviderError::network(
+                            $provider_name,
+                            error.to_string(),
+                        )
+                    })?;
                     return Err(($error_map)(self, status, error_text, &request));
                 }
 

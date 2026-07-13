@@ -2,6 +2,7 @@
 //!
 //! Configuration for Amazon Nova multimodal provider
 
+use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::base::config::BaseConfig;
 use crate::core::traits::provider::ProviderConfig;
 use serde::{Deserialize, Serialize};
@@ -114,6 +115,10 @@ impl ProviderConfig for AmazonNovaConfig {
         self.base.api_base.as_deref()
     }
 
+    fn endpoint_access(&self) -> ProviderEndpointAccess {
+        self.base.endpoint_access
+    }
+
     fn timeout(&self) -> std::time::Duration {
         self.base.timeout_duration()
     }
@@ -190,6 +195,14 @@ mod tests {
         assert_eq!(config.api_base(), Some(DEFAULT_AMAZON_NOVA_API_BASE));
         assert_eq!(config.timeout(), std::time::Duration::from_secs(60));
         assert_eq!(config.max_retries(), 3);
+        assert_eq!(config.endpoint_access(), ProviderEndpointAccess::PublicOnly);
+
+        let mut private = config;
+        private.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        assert_eq!(
+            private.endpoint_access(),
+            ProviderEndpointAccess::PrivateNetwork
+        );
     }
 
     #[test]

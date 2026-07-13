@@ -19,7 +19,7 @@ use crate::core::audio::types::{
     SpeechRequest, SpeechResponse, TranscriptionRequest, TranscriptionResponse, TranslationRequest,
     TranslationResponse, format_to_content_type,
 };
-use crate::core::providers::base::{HttpMethod, apply_headers};
+use crate::core::providers::base::{BaseHttpClient, HttpMethod, apply_provider_headers};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::types::embedding::EmbeddingRequest;
 use crate::core::types::responses::EmbeddingResponse;
@@ -31,6 +31,10 @@ use super::error_mapper::OpenAIErrorMapper;
 
 /// Additional OpenAI-specific API methods
 impl OpenAIProvider {
+    fn multipart_client(&self) -> Result<BaseHttpClient, OpenAIError> {
+        BaseHttpClient::new_for_provider("openai", self.config.base.clone())
+    }
+
     /// Generate embeddings
     pub async fn embeddings(
         &self,
@@ -155,10 +159,11 @@ impl OpenAIProvider {
 
         let form = transcription_form(request);
         let url = format!("{}/audio/transcriptions", self.config.get_api_base());
-        let response = apply_headers(
-            self.pool_manager.client().post(url).multipart(form),
+        let response = apply_provider_headers(
+            self.multipart_client()?.post(url)?,
             self.get_request_headers(),
         )
+        .multipart(form)
         .send()
         .await
         .map_err(|e| OpenAIError::Network {
@@ -187,10 +192,11 @@ impl OpenAIProvider {
 
         let form = translation_form(request);
         let url = format!("{}/audio/translations", self.config.get_api_base());
-        let response = apply_headers(
-            self.pool_manager.client().post(url).multipart(form),
+        let response = apply_provider_headers(
+            self.multipart_client()?.post(url)?,
             self.get_request_headers(),
         )
+        .multipart(form)
         .send()
         .await
         .map_err(|e| OpenAIError::Network {
@@ -324,4 +330,49 @@ async fn read_success_response_bytes(response: reqwest::Response) -> Result<Vec<
     }
 
     Ok(response_bytes.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::config::OpenAIConfig;
+    use super::*;
+    use crate::core::net::ProviderEndpointAccess;
+
+    #[tokio::test]
+    async fn public_multipart_loopback_fails_before_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("multipart listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener address should exist");
+        let mut config = OpenAIConfig::default();
+        config.base.api_key = Some("sk-test".to_string());
+        config.base.api_base = Some(format!("http://{address}"));
+        config.base.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        let provider = OpenAIProvider::new(config)
+            .await
+            .expect("provider construction should stay lazy for multipart");
+
+        let result = provider
+            .audio_transcription(TranscriptionRequest {
+                file: b"audio".to_vec(),
+                filename: "audio.mp3".to_string(),
+                model: "whisper-1".to_string(),
+                language: None,
+                prompt: None,
+                response_format: Some("json".to_string()),
+                temperature: None,
+                timestamp_granularities: None,
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "public-only multipart request must not reach loopback"
+        );
+    }
 }
