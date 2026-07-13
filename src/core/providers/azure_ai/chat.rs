@@ -6,7 +6,6 @@ use futures::Stream;
 use reqwest::Method;
 use serde_json::{Value, json};
 use std::pin::Pin;
-use std::time::Duration;
 use tokio::time::timeout;
 
 // Type system imports
@@ -114,7 +113,7 @@ impl AzureAIChatHandler {
             .map_err(|e| ProviderError::configuration("azure_ai", &e))?;
         // Execute streaming request
         let response = timeout(
-            Duration::from_secs(self.client.get_config().base.timeout),
+            self.client.get_config().timeout(),
             self.client
                 .streaming_request(Method::POST, &url)?
                 .json(&azure_request)
