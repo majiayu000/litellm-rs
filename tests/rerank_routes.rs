@@ -4,7 +4,7 @@ pub mod provider_fixtures;
 
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
-    use super::provider_fixtures::mock_provider_config;
+    use super::provider_fixtures::{mock_provider_config, route_policy_bootstrap_providers};
     use actix_web::{App, HttpRequest, HttpResponse, HttpServer, http::StatusCode, test, web};
     use actix_web::{HttpMessage, dev::Service};
     use bytes::Bytes;
@@ -13,6 +13,7 @@ mod tests {
     use litellm_rs::config::models::router::RoutingStrategyConfig;
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
+    use litellm_rs::core::net::ProviderEndpointAccess;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -177,13 +178,17 @@ mod tests {
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.router.strategy = RoutingStrategyConfig::RoundRobin;
-        config.gateway.providers = providers;
+        config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
-        GatewayHttpServer::new(&config)
+        let state = GatewayHttpServer::new(&config)
             .await
             .expect("gateway server should initialize")
             .state()
-            .clone()
+            .clone();
+        let mut runtime_config = state.config().as_ref().clone();
+        runtime_config.gateway.providers = providers;
+        state.config.store(runtime_config);
+        state
     }
 
     fn cohere_rerank_provider(base_url: &str) -> ProviderConfig {
@@ -199,17 +204,22 @@ mod tests {
         base_url: &str,
         models: Vec<String>,
     ) -> ProviderConfig {
-        mock_provider_config(name, "openai_compatible", "sk-test", base_url, models)
+        let mut provider =
+            mock_provider_config(name, "openai_compatible", "sk-test", base_url, models);
+        provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        provider
     }
 
     fn jina_rerank_provider_with_models(base_url: &str, models: Vec<String>) -> ProviderConfig {
-        mock_provider_config(
+        let mut provider = mock_provider_config(
             "mock-jina-rerank",
             "openai_compatible",
             "sk-test",
             base_url,
             models,
-        )
+        );
+        provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        provider
     }
 
     fn authenticated_api_key() -> ApiKey {
@@ -241,6 +251,9 @@ mod tests {
             "return_documents": true
         })
     }
+
+    #[path = "rerank_routes_policy_tests.rs"]
+    mod policy_tests;
 
     #[tokio::test]
     async fn rerank_route_without_provider_fails_closed() {

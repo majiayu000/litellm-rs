@@ -1,6 +1,8 @@
 //! Jina AI rerank provider implementation
 
 use super::rerank_upstream_error;
+use crate::core::net::ProviderEndpointAccess;
+use crate::core::providers::base::{BaseConfig, BaseHttpClient};
 use crate::core::rerank::service::RerankProvider;
 use crate::core::rerank::types::{RerankRequest, RerankResponse, RerankResult, RerankUsage};
 use crate::utils::error::gateway_error::{GatewayError, Result};
@@ -13,24 +15,57 @@ pub struct JinaRerankProvider {
     api_key: String,
     /// API base URL
     base_url: String,
-    /// HTTP client
-    client: reqwest::Client,
+    /// Policy-aware HTTP client.
+    client: BaseHttpClient,
+    endpoint_access: ProviderEndpointAccess,
+    timeout_seconds: u64,
 }
 
 impl JinaRerankProvider {
     /// Create a new Jina rerank provider
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            base_url: "https://api.jina.ai/v1".to_string(),
-            client: crate::core::http::outbound::default_outbound_client().clone(),
-        }
+    pub fn new(api_key: impl Into<String>) -> Result<Self> {
+        Self::new_with_endpoint(
+            api_key,
+            "https://api.jina.ai/v1",
+            ProviderEndpointAccess::PublicOnly,
+            30,
+        )
     }
 
     /// Set custom base URL
-    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into();
-        self
+    pub fn with_base_url(self, url: impl Into<String>) -> Result<Self> {
+        Self::new_with_endpoint(
+            self.api_key,
+            url,
+            self.endpoint_access,
+            self.timeout_seconds,
+        )
+    }
+
+    /// Create a provider bound to an exact endpoint policy and authority.
+    pub fn new_with_endpoint(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        endpoint_access: ProviderEndpointAccess,
+        timeout_seconds: u64,
+    ) -> Result<Self> {
+        let base_url = base_url.into().trim_end_matches('/').to_string();
+        let client = BaseHttpClient::new_for_provider(
+            "jina_rerank",
+            BaseConfig {
+                api_base: Some(base_url.clone()),
+                endpoint_access,
+                timeout: timeout_seconds,
+                ..BaseConfig::default()
+            },
+        )?;
+        Ok(Self {
+            api_key: api_key.into(),
+            base_url,
+            client,
+            endpoint_access,
+            timeout_seconds,
+        })
     }
 }
 
@@ -65,7 +100,7 @@ impl RerankProvider for JinaRerankProvider {
 
         let response = self
             .client
-            .post(format!("{}/rerank", self.base_url))
+            .post(format!("{}/rerank", self.base_url))?
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -75,7 +110,11 @@ impl RerankProvider for JinaRerankProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text = response.text().await.map_err(|error| {
+                GatewayError::Network(format!(
+                    "Failed to read Jina rerank error response: {error}"
+                ))
+            })?;
             return Err(rerank_upstream_error("jina", status, error_text));
         }
 
@@ -146,5 +185,38 @@ impl RerankProvider for JinaRerankProvider {
             "jina-reranker-v1-base-en",
             "jina-reranker-v1-turbo-en",
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_constructor_binds_private_jina_authority() {
+        let metadata = JinaRerankProvider::new_with_endpoint(
+            "test-key",
+            "http://169.254.169.254/latest",
+            ProviderEndpointAccess::PrivateNetwork,
+            30,
+        );
+        assert!(metadata.is_err());
+
+        let Ok(private) = JinaRerankProvider::new_with_endpoint(
+            "test-key",
+            "http://127.0.0.1:11434/v1",
+            ProviderEndpointAccess::PrivateNetwork,
+            30,
+        ) else {
+            panic!("private Jina endpoint should build");
+        };
+        let Some(error) = private
+            .client
+            .post("http://127.0.0.1:11435/v1/rerank")
+            .err()
+        else {
+            panic!("cross-authority Jina request should fail");
+        };
+        assert!(error.to_string().contains("does not match"));
     }
 }

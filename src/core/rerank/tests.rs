@@ -104,7 +104,9 @@ fn test_rerank_service_validation() {
 
 #[test]
 fn test_cohere_provider_supports_model() {
-    let provider = CohereRerankProvider::new("test-key");
+    let Ok(provider) = CohereRerankProvider::new("test-key") else {
+        panic!("official Cohere provider should build");
+    };
 
     assert!(provider.supports_model("rerank-english-v3.0"));
     assert!(provider.supports_model("cohere/rerank-english-v3.0"));
@@ -114,7 +116,9 @@ fn test_cohere_provider_supports_model() {
 
 #[test]
 fn test_jina_provider_supports_model() {
-    let provider = JinaRerankProvider::new("test-key");
+    let Ok(provider) = JinaRerankProvider::new("test-key") else {
+        panic!("official Jina provider should build");
+    };
 
     assert!(provider.supports_model("jina-reranker-v2-base-multilingual"));
     assert!(provider.supports_model("jina/jina-reranker-v2-base-multilingual"));

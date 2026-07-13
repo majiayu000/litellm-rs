@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::core::net::ProviderEndpointAccess;
+
 /// Fine-tuning configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FineTuningConfig {
@@ -96,6 +98,10 @@ pub struct ProviderFineTuningConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_base: Option<String>,
 
+    /// Network access allowed for the configured API base.
+    #[serde(default)]
+    pub endpoint_access: ProviderEndpointAccess,
+
     /// Organization ID (for OpenAI)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organization_id: Option<String>,
@@ -123,6 +129,7 @@ impl Default for ProviderFineTuningConfig {
             enabled: true,
             api_key: None,
             api_base: None,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
             organization_id: None,
             supported_models: vec![],
             timeout_seconds: default_timeout(),
@@ -143,6 +150,11 @@ impl ProviderFineTuningConfig {
 
     pub fn api_base(mut self, base: impl Into<String>) -> Self {
         self.api_base = Some(base.into());
+        self
+    }
+
+    pub fn endpoint_access(mut self, access: ProviderEndpointAccess) -> Self {
+        self.endpoint_access = access;
         self
     }
 
@@ -177,6 +189,36 @@ mod tests {
         assert!(config.enabled);
         assert!(config.default_provider.is_none());
         assert_eq!(config.max_concurrent_jobs, 5);
+    }
+
+    #[test]
+    fn provider_endpoint_access_defaults_public_and_accepts_private() {
+        let default = ProviderFineTuningConfig::default();
+        assert_eq!(default.endpoint_access, ProviderEndpointAccess::PublicOnly);
+
+        let private =
+            ProviderFineTuningConfig::new().endpoint_access(ProviderEndpointAccess::PrivateNetwork);
+        assert_eq!(
+            private.endpoint_access,
+            ProviderEndpointAccess::PrivateNetwork
+        );
+    }
+
+    #[test]
+    fn provider_endpoint_access_serde_is_strict() {
+        let private: ProviderFineTuningConfig = serde_json::from_value(serde_json::json!({
+            "endpoint_access": "private_network"
+        }))
+        .unwrap_or_else(|error| panic!("private endpoint access should deserialize: {error}"));
+        assert_eq!(
+            private.endpoint_access,
+            ProviderEndpointAccess::PrivateNetwork
+        );
+
+        let invalid = serde_json::from_value::<ProviderFineTuningConfig>(serde_json::json!({
+            "endpoint_access": "internal"
+        }));
+        assert!(invalid.is_err());
     }
 
     #[test]

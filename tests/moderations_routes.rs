@@ -4,7 +4,7 @@ pub mod provider_fixtures;
 
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
-    use super::provider_fixtures::mock_provider_config;
+    use super::provider_fixtures::{mock_provider_config, route_policy_bootstrap_providers};
     use actix_web::{App, HttpRequest, HttpResponse, HttpServer, http::StatusCode, test, web};
     use actix_web::{HttpMessage, dev::Service};
     use bytes::Bytes;
@@ -12,6 +12,7 @@ mod tests {
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
+    use litellm_rs::core::net::ProviderEndpointAccess;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -155,13 +156,17 @@ mod tests {
         config.gateway.auth.allow_anonymous = allow_anonymous;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
-        config.gateway.providers = providers;
+        config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
-        GatewayHttpServer::new(&config)
+        let state = GatewayHttpServer::new(&config)
             .await
             .expect("gateway server should initialize")
             .state()
-            .clone()
+            .clone();
+        let mut runtime_config = state.config().as_ref().clone();
+        runtime_config.gateway.providers = providers;
+        state.config.store(runtime_config);
+        state
     }
 
     fn moderation_provider(base_url: &str) -> ProviderConfig {
@@ -209,6 +214,7 @@ mod tests {
                 }),
             ),
         ]);
+        provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
         provider
     }
 
@@ -227,6 +233,49 @@ mod tests {
             last_used_at: None,
             usage_stats: UsageStats::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn public_only_moderation_route_rejects_loopback_before_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let mut provider = moderation_provider(&format!("http://{address}/v1"));
+        provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        let state = build_test_app_state(vec![provider]).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({
+                    "model": "omni-moderation-latest",
+                    "input": "listener must remain untouched"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert!(!response.status().is_success());
+        let body: Value = test::read_body_json(response).await;
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("SSRF protection"))
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "public-only moderation route must not connect to loopback listener"
+        );
     }
 
     #[path = "moderations_routes_auth_validation_tests.rs"]

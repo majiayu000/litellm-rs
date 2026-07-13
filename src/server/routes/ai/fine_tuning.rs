@@ -243,7 +243,8 @@ where
         let route_provider =
             fine_tuning_route_provider(provider_config).map_err(FineTuningRouteError::Gateway)?;
         let provider =
-            OpenAIFineTuningProvider::new_named(route_provider.config, route_provider.name);
+            OpenAIFineTuningProvider::new_named(route_provider.config, route_provider.name)
+                .map_err(FineTuningRouteError::FineTuning)?;
         match operation(provider).await {
             Ok(response) => return Ok(response),
             Err(error) => {
@@ -340,6 +341,7 @@ fn fine_tuning_route_provider(
             enabled: true,
             api_key: Some(provider.api_key.clone()),
             api_base: Some(fine_tuning_api_base(provider)?),
+            endpoint_access: provider.endpoint_access,
             organization_id: provider.organization.clone(),
             supported_models: provider.models.clone(),
             timeout_seconds: provider.timeout,

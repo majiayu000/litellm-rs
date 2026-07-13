@@ -286,7 +286,7 @@ fn collect_provider_sources(
 #[test]
 fn migrated_shared_providers_have_no_raw_client_escape() {
     let base_source = include_str!("../http.rs");
-    let provider_sources: [(&str, &[&str], &str); 12] = [
+    let provider_sources: [(&str, &[&str], &str); 19] = [
         (
             "mistral/mod.rs",
             &["crate", "core", "providers", "mistral"],
@@ -346,6 +346,41 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             "server/routes/ai/images.rs",
             &["crate", "server", "routes", "ai", "images"],
             include_str!("../../../../server/routes/ai/images.rs"),
+        ),
+        (
+            "server/routes/ai/provider_config.rs",
+            &["crate", "server", "routes", "ai", "provider_config"],
+            include_str!("../../../../server/routes/ai/provider_config.rs"),
+        ),
+        (
+            "server/routes/ai/moderations.rs",
+            &["crate", "server", "routes", "ai", "moderations"],
+            include_str!("../../../../server/routes/ai/moderations.rs"),
+        ),
+        (
+            "server/routes/ai/fine_tuning.rs",
+            &["crate", "server", "routes", "ai", "fine_tuning"],
+            include_str!("../../../../server/routes/ai/fine_tuning.rs"),
+        ),
+        (
+            "server/routes/ai/rerank.rs",
+            &["crate", "server", "routes", "ai", "rerank"],
+            include_str!("../../../../server/routes/ai/rerank.rs"),
+        ),
+        (
+            "core/fine_tuning/providers/openai.rs",
+            &["crate", "core", "fine_tuning", "providers", "openai"],
+            include_str!("../../../fine_tuning/providers/openai.rs"),
+        ),
+        (
+            "core/rerank/providers/cohere.rs",
+            &["crate", "core", "rerank", "providers", "cohere"],
+            include_str!("../../../rerank/providers/cohere.rs"),
+        ),
+        (
+            "core/rerank/providers/jina.rs",
+            &["crate", "core", "rerank", "providers", "jina"],
+            include_str!("../../../rerank/providers/jina.rs"),
         ),
     ];
     let allowed = boundary_violations(

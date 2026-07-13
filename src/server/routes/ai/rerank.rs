@@ -149,17 +149,27 @@ fn build_rerank_service(provider: &SelectedRerankProvider) -> Result<RerankServi
 
     match provider.kind {
         RerankProviderKind::Cohere => {
-            let mut rerank_provider = CohereRerankProvider::new(provider.api_key.clone());
-            if let Some(base_url) = provider.base_url.as_deref() {
-                rerank_provider = rerank_provider.with_base_url(base_url.trim_end_matches('/'));
-            }
+            let rerank_provider = CohereRerankProvider::new_with_endpoint(
+                provider.api_key.clone(),
+                provider
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("https://api.cohere.ai/v1"),
+                provider.endpoint_access,
+                provider.timeout.as_secs(),
+            )?;
             service.register_provider("cohere", Arc::new(rerank_provider));
         }
         RerankProviderKind::Jina => {
-            let mut rerank_provider = JinaRerankProvider::new(provider.api_key.clone());
-            if let Some(base_url) = provider.base_url.as_deref() {
-                rerank_provider = rerank_provider.with_base_url(base_url.trim_end_matches('/'));
-            }
+            let rerank_provider = JinaRerankProvider::new_with_endpoint(
+                provider.api_key.clone(),
+                provider
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("https://api.jina.ai/v1"),
+                provider.endpoint_access,
+                provider.timeout.as_secs(),
+            )?;
             service.register_provider("jina", Arc::new(rerank_provider));
         }
     }
@@ -222,6 +232,7 @@ fn selected_rerank_provider_from_config(
         api_key: provider.api_key.clone(),
         base_url: provider.base_url.clone(),
         timeout: Duration::from_secs(provider.timeout),
+        endpoint_access: provider.endpoint_access,
     })
 }
 
@@ -465,6 +476,7 @@ struct SelectedRerankProvider {
     api_key: String,
     base_url: Option<String>,
     timeout: Duration,
+    endpoint_access: crate::core::net::ProviderEndpointAccess,
 }
 
 #[cfg(test)]

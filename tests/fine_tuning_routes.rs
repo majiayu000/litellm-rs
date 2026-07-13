@@ -4,7 +4,7 @@ pub mod provider_fixtures;
 
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
-    use super::provider_fixtures::mock_provider_config;
+    use super::provider_fixtures::{mock_provider_config, route_policy_bootstrap_providers};
     use actix_web::{
         App, HttpRequest, HttpResponse, HttpServer,
         http::{Method, StatusCode},
@@ -14,6 +14,7 @@ mod tests {
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::core::net::ProviderEndpointAccess;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -278,13 +279,17 @@ mod tests {
         config.gateway.auth.allow_anonymous = true;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
-        config.gateway.providers = providers;
+        config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
-        GatewayHttpServer::new(&config)
+        let state = GatewayHttpServer::new(&config)
             .await
             .expect("gateway server should initialize")
             .state()
-            .clone()
+            .clone();
+        let mut runtime_config = state.config().as_ref().clone();
+        runtime_config.gateway.providers = providers;
+        state.config.store(runtime_config);
+        state
     }
 
     fn fine_tuning_provider(base_url: &str) -> ProviderConfig {
@@ -312,6 +317,7 @@ mod tests {
                 }),
             ),
         ]);
+        provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
         provider
     }
 
@@ -323,6 +329,9 @@ mod tests {
         provider.settings.clear();
         provider
     }
+
+    #[path = "fine_tuning_routes_policy_tests.rs"]
+    mod policy_tests;
 
     #[tokio::test]
     async fn fine_tuning_route_without_provider_fails_closed() {

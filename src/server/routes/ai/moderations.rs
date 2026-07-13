@@ -1,6 +1,7 @@
 //! OpenAI-compatible moderation API route.
 
 use crate::config::models::provider::ProviderConfig;
+use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
@@ -14,7 +15,7 @@ use tracing::error;
 
 use super::budgeted::{SettlementMode, run_unary};
 use super::openai_errors;
-use super::provider_config;
+use super::{provider_config, route_http::RouteHttpClient};
 
 const DEFAULT_MODERATION_MODEL: &str = "omni-moderation-latest";
 const OPENAI_MODERATION_BASE_URL: &str = "https://api.openai.com/v1";
@@ -25,6 +26,7 @@ struct ModerationProxyProvider {
     base_url: String,
     headers: Vec<(HeaderName, HeaderValue)>,
     timeout: Duration,
+    endpoint_access: ProviderEndpointAccess,
 }
 
 /// Create a moderation request.
@@ -112,11 +114,20 @@ async fn proxy_moderation(
                                 || async move {
                                     let url = moderation_url(&provider)
                                         .map_err(moderation_gateway_error_to_provider_error)?;
+                                    let client = RouteHttpClient::new(
+                                        "moderation_proxy",
+                                        provider.base_url.clone(),
+                                        provider.endpoint_access,
+                                        provider.timeout.as_secs(),
+                                    )
+                                    .map_err(moderation_gateway_error_to_provider_error)?;
+                                    let request_builder = client
+                                        .ordinary_post(url)
+                                        .map_err(moderation_gateway_error_to_provider_error)?;
                                     let response = provider_config::apply_proxy_headers(
-                                        provider_config::proxy_http_client().post(url),
+                                        request_builder,
                                         &provider.headers,
                                     )
-                                    .timeout(provider.timeout)
                                     .json(&request)
                                     .send()
                                     .await
@@ -309,6 +320,7 @@ fn moderation_proxy_provider_from_config(
         base_url: moderation_base_url(provider)?,
         headers: moderation_provider_headers(provider)?,
         timeout: Duration::from_secs(provider.timeout),
+        endpoint_access: provider.endpoint_access,
     })
 }
 

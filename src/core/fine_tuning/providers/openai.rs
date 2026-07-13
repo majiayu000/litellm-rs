@@ -3,12 +3,10 @@
 //! Implementation of fine-tuning for OpenAI API.
 
 use async_trait::async_trait;
-use reqwest::{Client, Method, Url, header::RETRY_AFTER};
+use reqwest::{Method, Url, header::RETRY_AFTER};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 use tracing::{debug, warn};
 
 use super::{FineTuningError, FineTuningProvider, FineTuningResult};
@@ -17,51 +15,67 @@ use crate::core::fine_tuning::types::{
     CreateJobRequest, FineTuningCheckpoint, FineTuningJob, ListEventsParams, ListEventsResponse,
     ListJobsParams, ListJobsResponse,
 };
-use crate::utils::net::http::create_custom_client;
-
-static CLIENTS_BY_TIMEOUT: OnceLock<Mutex<HashMap<u64, Client>>> = OnceLock::new();
+use crate::core::providers::base::{BaseConfig, BaseHttpClient};
 
 /// OpenAI fine-tuning provider
 pub struct OpenAIFineTuningProvider {
     config: ProviderFineTuningConfig,
-    client: Client,
+    client: BaseHttpClient,
     api_base: String,
     provider_name: String,
 }
 
 impl OpenAIFineTuningProvider {
     /// Create a new OpenAI fine-tuning provider
-    pub fn new(config: ProviderFineTuningConfig) -> Self {
+    pub fn new(config: ProviderFineTuningConfig) -> FineTuningResult<Self> {
         Self::new_named(config, "openai")
     }
 
     /// Create a new OpenAI-compatible fine-tuning provider with a gateway provider name.
-    pub fn new_named(config: ProviderFineTuningConfig, provider_name: impl Into<String>) -> Self {
-        let client = shared_client(config.timeout_seconds);
-
+    pub fn new_named(
+        config: ProviderFineTuningConfig,
+        provider_name: impl Into<String>,
+    ) -> FineTuningResult<Self> {
         let api_base = config
             .api_base
             .clone()
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
             .trim_end_matches('/')
             .to_string();
+        let client = BaseHttpClient::new_for_provider(
+            "openai_fine_tuning",
+            BaseConfig {
+                api_base: Some(api_base.clone()),
+                endpoint_access: config.endpoint_access,
+                timeout: config.timeout_seconds,
+                ..BaseConfig::default()
+            },
+        )
+        .map_err(|error| {
+            FineTuningError::provider(format!(
+                "Failed to create policy-aware fine-tuning client: {error}"
+            ))
+        })?;
 
-        Self {
+        Ok(Self {
             config,
             client,
             api_base,
             provider_name: provider_name.into(),
-        }
+        })
     }
 
     /// Create from API key
-    pub fn from_api_key(api_key: impl Into<String>) -> Self {
+    pub fn from_api_key(api_key: impl Into<String>) -> FineTuningResult<Self> {
         Self::new(ProviderFineTuningConfig::new().api_key(api_key))
     }
 
     /// Create from environment variable
-    pub fn from_env() -> Option<Self> {
-        std::env::var("OPENAI_API_KEY").ok().map(Self::from_api_key)
+    pub fn from_env() -> FineTuningResult<Option<Self>> {
+        std::env::var("OPENAI_API_KEY")
+            .ok()
+            .map(Self::from_api_key)
+            .transpose()
     }
 
     /// Build authorization header
@@ -102,6 +116,9 @@ impl OpenAIFineTuningProvider {
         let mut request = self
             .client
             .request(method, url)
+            .map_err(|error| {
+                FineTuningError::network(format!("Request policy rejected URL: {error}"))
+            })?
             .header("Authorization", auth);
 
         // Add organization header if configured
@@ -140,13 +157,11 @@ impl OpenAIFineTuningProvider {
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(60);
-            let error_text = response.text().await.unwrap_or_else(|e| {
-                warn!(
-                    "Failed to read OpenAI fine-tuning error response payload: {}",
-                    e
-                );
-                String::new()
-            });
+            let error_text = response.text().await.map_err(|error| {
+                FineTuningError::network(format!(
+                    "Failed to read OpenAI fine-tuning error response payload: {error}"
+                ))
+            })?;
             let response_bytes = error_text.len();
             let safe_error_message = extract_openai_error_message(&error_text);
             warn!(
@@ -179,26 +194,6 @@ impl OpenAIFineTuningProvider {
         job.provider = Some(self.provider_name.clone());
         job
     }
-}
-
-fn shared_client(timeout_seconds: u64) -> Client {
-    let clients = CLIENTS_BY_TIMEOUT.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut clients = clients
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    clients
-        .entry(timeout_seconds)
-        .or_insert_with(|| {
-            create_custom_client(Duration::from_secs(timeout_seconds)).unwrap_or_else(|error| {
-                warn!(
-                    "Failed to create custom fine-tuning HTTP client, using default client: {}",
-                    error
-                );
-                Client::new()
-            })
-        })
-        .clone()
 }
 
 fn extract_openai_error_message(error_text: &str) -> Option<String> {
@@ -369,7 +364,9 @@ mod tests {
 
     #[test]
     fn test_provider_creation() {
-        let provider = OpenAIFineTuningProvider::from_api_key("sk-test");
+        let Ok(provider) = OpenAIFineTuningProvider::from_api_key("sk-test") else {
+            panic!("official provider should build");
+        };
         assert_eq!(provider.name(), "openai");
     }
 
@@ -404,16 +401,42 @@ mod tests {
 
     #[test]
     fn test_auth_header() {
-        let provider = OpenAIFineTuningProvider::from_api_key("sk-test");
+        let Ok(provider) = OpenAIFineTuningProvider::from_api_key("sk-test") else {
+            panic!("official provider should build");
+        };
         let header = provider.auth_header().unwrap();
         assert_eq!(header, "Bearer sk-test");
     }
 
     #[test]
     fn test_auth_header_missing() {
-        let provider = OpenAIFineTuningProvider::new(ProviderFineTuningConfig::new());
+        let Ok(provider) = OpenAIFineTuningProvider::new(ProviderFineTuningConfig::new()) else {
+            panic!("official provider should build without an API key");
+        };
         let result = provider.auth_header();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn policy_constructor_rejects_public_loopback_and_private_metadata() {
+        let public = OpenAIFineTuningProvider::new(
+            ProviderFineTuningConfig::new().api_base("http://127.0.0.1:11434/v1"),
+        );
+        assert!(public.is_err());
+
+        let private = OpenAIFineTuningProvider::new(
+            ProviderFineTuningConfig::new()
+                .api_base("http://127.0.0.1:11434/v1")
+                .endpoint_access(crate::core::net::ProviderEndpointAccess::PrivateNetwork),
+        );
+        assert!(private.is_ok());
+
+        let metadata = OpenAIFineTuningProvider::new(
+            ProviderFineTuningConfig::new()
+                .api_base("http://169.254.169.254/latest")
+                .endpoint_access(crate::core::net::ProviderEndpointAccess::PrivateNetwork),
+        );
+        assert!(metadata.is_err());
     }
 
     #[test]

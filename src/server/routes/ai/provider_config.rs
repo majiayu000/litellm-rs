@@ -1,14 +1,11 @@
 //! Shared helpers for OpenAI-compatible provider route configuration.
 
 use crate::config::models::provider::ProviderConfig;
+use crate::core::providers::base::ProviderRequestBuilder;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::HttpResponse;
 use actix_web::http::{StatusCode, header};
 use reqwest::header::{HeaderName, HeaderValue};
-use reqwest::{Client, RequestBuilder};
-use std::sync::OnceLock;
-
-static PROXY_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
 pub(super) fn append_string_header_map(
     provider: &ProviderConfig,
@@ -35,10 +32,6 @@ pub(super) fn normalize_provider_selector(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace(['_', '-'], "")
 }
 
-pub(super) fn proxy_http_client() -> &'static Client {
-    PROXY_HTTP_CLIENT.get_or_init(Client::new)
-}
-
 pub(super) async fn proxy_response_to_http_response(
     response: reqwest::Response,
 ) -> Result<HttpResponse, GatewayError> {
@@ -58,9 +51,9 @@ pub(super) async fn proxy_response_to_http_response(
 }
 
 pub(super) fn apply_proxy_headers(
-    mut request: RequestBuilder,
+    mut request: ProviderRequestBuilder,
     headers: &[(HeaderName, HeaderValue)],
-) -> RequestBuilder {
+) -> ProviderRequestBuilder {
     for (name, value) in headers {
         request = request.header(name.clone(), value.clone());
     }
