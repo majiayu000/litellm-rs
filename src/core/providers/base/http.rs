@@ -401,50 +401,9 @@ mod tests {
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    static PROXY_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-    struct EnvSnapshot(Vec<(&'static str, Option<String>)>);
-
-    impl EnvSnapshot {
-        fn set_proxy(proxy: &str) -> Self {
-            let keys = [
-                "HTTP_PROXY",
-                "http_proxy",
-                "ALL_PROXY",
-                "all_proxy",
-                "NO_PROXY",
-                "no_proxy",
-            ];
-            let values = keys
-                .iter()
-                .map(|key| (*key, std::env::var(key).ok()))
-                .collect();
-            // SAFETY: PROXY_ENV_LOCK serializes this module's proxy environment mutations.
-            unsafe {
-                std::env::set_var("HTTP_PROXY", proxy);
-                std::env::set_var("http_proxy", proxy);
-                std::env::set_var("ALL_PROXY", proxy);
-                std::env::set_var("all_proxy", proxy);
-                std::env::remove_var("NO_PROXY");
-                std::env::remove_var("no_proxy");
-            }
-            Self(values)
-        }
-    }
-
-    impl Drop for EnvSnapshot {
-        fn drop(&mut self) {
-            for (key, value) in &self.0 {
-                // SAFETY: the matching PROXY_ENV_LOCK guard remains held until this drop.
-                unsafe {
-                    match value {
-                        Some(value) => std::env::set_var(key, value),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-        }
-    }
+    const PROXY_CHILD_TARGET_ENV: &str = "LITELLM_RS_BASE_HTTP_PROXY_CHILD_TARGET";
+    const PROXY_CHILD_TEST: &str =
+        "core::providers::base::http::tests::base_policy_client_ignores_proxy_environment_child";
 
     #[test]
     fn base_http_client_rejects_public_loopback_base() {
@@ -540,6 +499,21 @@ mod tests {
             "use reqwest::{",
             "use reqwest as",
             "extern crate reqwest as",
+            "reqwest::get",
+            "reqwest::request",
+            "create_http_client",
+            "create_provider_specific_client",
+            "create_client_builder",
+            "get_shared_client",
+            "get_client_with_timeout",
+            "create_custom_client",
+            "create_streaming_client",
+            "get_ssrf_safe_client",
+            "global_client",
+            "streaming_client",
+            "streaming_unbounded_client",
+            "get_http_client",
+            ".client()",
         ];
 
         for pattern in &forbidden_base_exports {
@@ -648,12 +622,10 @@ mod tests {
     #[tokio::test]
     async fn base_policy_client_ignores_proxy_environment() -> Result<(), Box<dyn std::error::Error>>
     {
-        let _guard = PROXY_ENV_LOCK.lock().await;
         let target = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let target_address = target.local_addr()?;
         let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let proxy_address = proxy.local_addr()?;
-        let _snapshot = EnvSnapshot::set_proxy(&format!("http://{proxy_address}"));
         let server = tokio::spawn(async move {
             let (mut stream, _) = target.accept().await?;
             let mut request = [0_u8; 1024];
@@ -665,26 +637,65 @@ mod tests {
                 .await?;
             Ok::<(), std::io::Error>(())
         });
-        let base_url = format!("http://{target_address}");
-        let client = BaseHttpClient::new_for_provider(
-            "test",
-            BaseConfig {
-                api_base: Some(base_url.clone()),
-                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
-                timeout: 1,
-                ..Default::default()
-            },
-        )?;
-
-        assert!(client.get(base_url)?.send().await?.status().is_success());
+        let executable = std::env::current_exe()?;
+        let target_url = format!("http://{target_address}");
+        let proxy_url = format!("http://{proxy_address}");
+        let child = tokio::task::spawn_blocking(move || {
+            std::process::Command::new(executable)
+                .arg("--exact")
+                .arg(PROXY_CHILD_TEST)
+                .arg("--ignored")
+                .arg("--nocapture")
+                .env(PROXY_CHILD_TARGET_ENV, target_url)
+                .env("HTTP_PROXY", &proxy_url)
+                .env("http_proxy", &proxy_url)
+                .env("ALL_PROXY", &proxy_url)
+                .env("all_proxy", &proxy_url)
+                .env_remove("NO_PROXY")
+                .env_remove("no_proxy")
+                .output()
+        });
+        let output = tokio::time::timeout(Duration::from_secs(10), child)
+            .await
+            .map_err(|_| std::io::Error::other("isolated proxy child test timed out"))?
+            .map_err(|error| std::io::Error::other(error.to_string()))??;
+        assert!(
+            output.status.success(),
+            "isolated proxy child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        server.await??;
         assert!(
             tokio::time::timeout(Duration::from_millis(100), proxy.accept())
                 .await
                 .is_err(),
             "policy client must not connect to the configured proxy"
         );
-        server.await??;
         Ok(())
+    }
+
+    #[test]
+    #[ignore = "launched by the isolated proxy parent test"]
+    fn base_policy_client_ignores_proxy_environment_child() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let target_url = std::env::var(PROXY_CHILD_TARGET_ENV)?;
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(async move {
+                let client = BaseHttpClient::new_for_provider(
+                    "test",
+                    BaseConfig {
+                        api_base: Some(target_url.clone()),
+                        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                        timeout: 1,
+                        ..Default::default()
+                    },
+                )?;
+                assert!(client.get(target_url)?.send().await?.status().is_success());
+                Ok(())
+            })
     }
 
     #[test]
