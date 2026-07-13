@@ -2,6 +2,7 @@ use super::create_provider;
 use crate::config::models::provider::ProviderConfig;
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::{Provider, ProviderType};
+use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn gateway_and_direct_registry_activate_wired_endpoint_access() {
@@ -86,14 +87,61 @@ async fn endpoint_access_alias_and_unwired_direct_provider_fail_closed() {
         .unwrap_or_else(|| panic!("settings must not override endpoint access"));
     assert!(error.to_string().contains("top-level"));
 
-    let error = Provider::from_config_async(
-        ProviderType::Cloudflare,
-        serde_json::json!({"endpoint_access": "public_only"}),
-    )
-    .await
-    .err()
-    .unwrap_or_else(|| panic!("unwired direct config must fail closed"));
+    for (provider_type, selector) in [
+        (ProviderType::Cloudflare, "cloudflare"),
+        (ProviderType::FalAI, "fal_ai"),
+        (ProviderType::Replicate, "replicate"),
+        (ProviderType::GitHubCopilot, "github_copilot"),
+    ] {
+        for direct_config in [
+            serde_json::json!({"endpoint_access": "public_only"}),
+            serde_json::json!({"base_url": "https://unwired.example.test"}),
+            serde_json::json!({"api_base": "https://unwired.example.test"}),
+        ] {
+            let error = Provider::from_config_async(provider_type.clone(), direct_config)
+                .await
+                .expect_err("unwired direct endpoint config must fail closed");
+            assert!(error.to_string().contains("not policy-wired"));
+        }
+
+        let gateway_config = ProviderConfig {
+            name: format!("unwired-{selector}"),
+            provider_type: selector.to_string(),
+            base_url: Some("https://unwired.example.test".to_string()),
+            ..Default::default()
+        };
+        let error = create_provider(gateway_config)
+            .await
+            .expect_err("unwired Gateway endpoint config must fail closed");
+        assert!(error.to_string().contains("not policy-wired"));
+    }
+}
+
+#[tokio::test]
+async fn unwired_hostname_endpoint_is_rejected_without_connecting() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("loopback listener must bind");
+    let config = ProviderConfig {
+        name: "unwired-cloudflare".to_string(),
+        provider_type: "cloudflare".to_string(),
+        base_url: Some(format!(
+            "http://localhost:{}",
+            listener.local_addr().unwrap().port()
+        )),
+        ..Default::default()
+    };
+
+    let error = create_provider(config)
+        .await
+        .expect_err("unwired hostname endpoint must fail closed before construction");
     assert!(error.to_string().contains("not policy-wired"));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "unwired endpoint gate must not connect to the listener"
+    );
 }
 
 #[tokio::test]

@@ -166,13 +166,14 @@ impl Validate for ProviderConfig {
                 self.name
             ));
         }
-        if self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
+        if (self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
+            || self.base_url.is_some())
             && !crate::core::providers::factory::is_provider_endpoint_access_supported(
                 provider_selector,
             )
         {
             return Err(format!(
-                "Provider {} private_network is unavailable because provider type '{}' is not policy-wired",
+                "Provider {} configurable endpoint access is unavailable because provider type '{}' is not policy-wired",
                 self.name, self.provider_type
             ));
         }

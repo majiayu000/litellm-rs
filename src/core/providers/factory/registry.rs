@@ -49,12 +49,16 @@ impl Provider {
         provider_type: ProviderType,
         config: serde_json::Value,
     ) -> Result<Self, ProviderError> {
-        if config.get("endpoint_access").is_some()
-            && !super::provider_type_supports_endpoint_access(&provider_type)
+        if !super::provider_type_supports_endpoint_access(&provider_type)
+            && config
+                .get("endpoint_access")
+                .or_else(|| config.get("base_url"))
+                .or_else(|| config.get("api_base"))
+                .is_some()
         {
             return Err(ProviderError::configuration(
                 super::provider_diagnostic_name(&provider_type),
-                "endpoint_access is unavailable because this provider runtime is not policy-wired",
+                "configurable endpoint access is unavailable because this provider runtime is not policy-wired",
             ));
         }
         Self::from_gateway_config_async(provider_type, config).await
@@ -326,15 +330,17 @@ mod tests {
                 "enable_caching": false,
                 "debug": true
             }),
+            ProviderType::Cloudflare => serde_json::json!({
+                "organization": "test-account",
+                "api_key": "sk-test-key"
+            }),
             ProviderType::GitHubCopilot => serde_json::json!({
                 "token_dir": "/tmp/litellm-rs-github-copilot-test",
                 "access_token_file": "access-token",
                 "api_key_file": "api-key.json",
-                "api_base": "https://example.test",
                 "timeout": 30,
                 "max_retries": 2,
-                "disable_system_to_assistant": true,
-                "debug": true
+                "disable_system_to_assistant": true
             }),
             ProviderType::Cohere => serde_json::json!({
                 "api_key": "test-cohere-key",
@@ -346,7 +352,6 @@ mod tests {
             }),
             ProviderType::FalAI => serde_json::json!({
                 "api_key": "test-fal-ai-key",
-                "api_base": "https://fal.run",
                 "timeout": 30,
                 "max_retries": 2,
                 "output_format": "png",
@@ -354,7 +359,6 @@ mod tests {
             }),
             ProviderType::Replicate => serde_json::json!({
                 "api_key": "test-replicate-token",
-                "api_base": "https://api.replicate.com/v1",
                 "timeout": 30,
                 "max_retries": 2,
                 "polling_delay_seconds": 1,

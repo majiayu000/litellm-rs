@@ -175,12 +175,12 @@ pub async fn create_provider(
             format!("Factory for {:?} not yet implemented", provider_type_enum),
         ));
     }
-    if endpoint_access == ProviderEndpointAccess::PrivateNetwork
-        && !provider_type_supports_endpoint_access(&provider_type_enum)
+    if !provider_type_supports_endpoint_access(&provider_type_enum)
+        && (endpoint_access == ProviderEndpointAccess::PrivateNetwork || base_url.is_some())
     {
         return Err(ProviderError::configuration(
             provider_diagnostic_name(&provider_type_enum),
-            "private_network endpoint access is unavailable because this provider runtime is not policy-wired",
+            "configurable endpoint access is unavailable because this provider runtime is not policy-wired",
         ));
     }
 
@@ -371,7 +371,6 @@ mod tests {
             name: "fal_ai".to_string(),
             provider_type: "fal_ai".to_string(),
             api_key: "test-fal-ai-key".to_string(),
-            base_url: Some("https://fal.run".to_string()),
             timeout: 30,
             max_retries: 2,
             ..Default::default()
@@ -415,7 +414,6 @@ mod tests {
             name: "replicate".to_string(),
             provider_type: "replicate".to_string(),
             api_key: "test-replicate-token".to_string(),
-            base_url: Some("https://api.replicate.com/v1".to_string()),
             timeout: 30,
             max_retries: 2,
             ..Default::default()
