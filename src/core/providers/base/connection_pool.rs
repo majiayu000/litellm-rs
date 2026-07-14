@@ -478,15 +478,6 @@ impl GlobalPoolManager {
     }
 }
 
-impl Default for GlobalPoolManager {
-    /// Create a default GlobalPoolManager
-    ///
-    /// Uses the global client singleton, so this is always cheap and fast.
-    fn default() -> Self {
-        Self::shared()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -765,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_default_manager() {
-        let manager = GlobalPoolManager::default();
+        let manager = GlobalPoolManager::shared();
         // Should work without panic
         let _client = manager.client();
     }

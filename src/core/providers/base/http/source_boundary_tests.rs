@@ -71,10 +71,7 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
     },
     BoundaryException {
         path: "src/core/providers/cloudflare/provider.rs",
-        violations: &[
-            "new: legacy GlobalPoolManager::new() constructor",
-            "with_credentials: legacy GlobalPoolManager inferred Default::default() constructor",
-        ],
+        violations: &["new: legacy GlobalPoolManager::new() constructor"],
         purpose: "native runtime is restricted by the factory to its account-scoped official endpoint",
     },
     BoundaryException {
@@ -83,7 +80,6 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
-            "with_api_key: legacy GlobalPoolManager inferred Default::default() constructor",
         ],
         purpose: "unwired lifecycle stub with no Gateway factory owner",
     },
@@ -102,7 +98,6 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
-            "with_api_key: legacy GlobalPoolManager inferred Default::default() constructor",
         ],
         purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
     },
@@ -156,7 +151,6 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
-            "with_base_url: legacy GlobalPoolManager inferred Default::default() constructor",
         ],
         purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
     },
@@ -327,11 +321,13 @@ fn collect_manager_aliases(tree: &UseTree, matched: bool, aliases: &mut Vec<Stri
     }
 }
 
+#[rustfmt::skip]
+fn is_manager_type(ty: &Type) -> bool { match ty { Type::Path(ty) => ty.path.segments.last().is_some_and(|segment| segment.ident == "GlobalPoolManager"), Type::Group(ty) => is_manager_type(&ty.elem), Type::Paren(ty) => is_manager_type(&ty.elem), _ => false } }
+
 struct BoundaryVisitor {
     module_path: Vec<String>,
     context: Vec<String>,
     violations: Vec<String>,
-    manager_present: bool,
 }
 
 impl BoundaryVisitor {
@@ -379,29 +375,15 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
                 "legacy GlobalPoolManager::{}() constructor",
                 window[1]
             ));
-        } else if self.manager_present
-            && segments.ends_with(&["Default".to_string(), "default".to_string()])
-        {
-            self.record("legacy GlobalPoolManager inferred Default::default() constructor".into());
         }
         visit::visit_path(self, path);
     }
 
     #[rustfmt::skip]
-    fn visit_item_type(&mut self, item: &'ast ItemType) {
-        if let Type::Path(ty) = &*item.ty && ty.path.segments.last().is_some_and(|segment| segment.ident == "GlobalPoolManager") {
-            self.record(format!("legacy GlobalPoolManager alias {}", item.ident));
-        }
-        visit::visit_item_type(self, item);
-    }
+    fn visit_item_type(&mut self, item: &'ast ItemType) { if is_manager_type(&item.ty) { self.record(format!("legacy GlobalPoolManager alias {}", item.ident)); } visit::visit_item_type(self, item); }
 
     #[rustfmt::skip]
-    fn visit_impl_item_type(&mut self, item: &'ast syn::ImplItemType) {
-        if let Type::Path(ty) = &item.ty && ty.path.segments.last().is_some_and(|segment| segment.ident == "GlobalPoolManager") {
-            self.record(format!("legacy GlobalPoolManager alias {}", item.ident));
-        }
-        visit::visit_impl_item_type(self, item);
-    }
+    fn visit_impl_item_type(&mut self, item: &'ast syn::ImplItemType) { if is_manager_type(&item.ty) { self.record(format!("legacy GlobalPoolManager alias {}", item.ident)); } visit::visit_impl_item_type(self, item); }
 
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
         if ident_text(&expression.method) == "client" && expression.args.is_empty() {
@@ -478,7 +460,6 @@ fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>
             .collect(),
         context: Vec::new(),
         violations: Vec::new(),
-        manager_present: source.contains("GlobalPoolManager"),
     };
     visitor.visit_file(&file);
     Ok(visitor.violations)
@@ -575,8 +556,8 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "fn probe() { GlobalPoolManager::shared(); }",
         "fn probe() { Pool::new(); } use crate::core::providers::base::GlobalPoolManager as Pool;",
         "type Pool = crate::core::providers::base::GlobalPoolManager; fn probe() { Pool::shared(); }",
+        "#[allow(unused_parens)] type Pool = (crate::core::providers::base::GlobalPoolManager); fn probe() { Pool::default(); }",
         "trait HasPool { type Pool; } struct Marker; impl HasPool for Marker { type Pool = crate::core::providers::base::GlobalPoolManager; }",
-        "fn probe() -> GlobalPoolManager { Default::default() }",
         "use crate::core as raw_core; fn probe() { raw_core::http::default_outbound_client(); }",
         "use crate::utils as raw_utils; fn probe() { raw_utils::net::http::get_shared_client(); }",
         "use crate::core::{http as raw_http}; fn probe() { raw_http::default_outbound_client(); }",

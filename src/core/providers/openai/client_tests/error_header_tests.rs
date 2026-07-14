@@ -81,7 +81,7 @@ fn test_get_request_headers_with_organization() {
     config.organization = Some("org-test123".to_string());
 
     let provider = OpenAIProvider {
-        pool_manager: Arc::new(GlobalPoolManager::default()),
+        pool_manager: Arc::new(GlobalPoolManager::shared()),
         config,
         model_registry: get_openai_registry(),
     };
@@ -99,7 +99,7 @@ fn test_get_request_headers_with_project() {
     config.project = Some("proj-test123".to_string());
 
     let provider = OpenAIProvider {
-        pool_manager: Arc::new(GlobalPoolManager::default()),
+        pool_manager: Arc::new(GlobalPoolManager::shared()),
         config,
         model_registry: get_openai_registry(),
     };

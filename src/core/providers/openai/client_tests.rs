@@ -22,7 +22,7 @@ fn create_test_config() -> OpenAIConfig {
 
 fn create_test_provider() -> OpenAIProvider {
     OpenAIProvider {
-        pool_manager: Arc::new(GlobalPoolManager::default()),
+        pool_manager: Arc::new(GlobalPoolManager::shared()),
         config: create_test_config(),
         model_registry: get_openai_registry(),
     }
