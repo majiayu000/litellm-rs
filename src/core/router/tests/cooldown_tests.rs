@@ -303,6 +303,21 @@ async fn test_infer_cooldown_reason_api_error_401() {
 }
 
 #[tokio::test]
+async fn test_infer_cooldown_reason_bedrock_403() {
+    let bedrock = ProviderError::api_error("bedrock", 403, "Access denied");
+    let unrelated = ProviderError::api_error("custom_httpx", 403, "Forbidden");
+
+    assert_eq!(
+        Router::infer_cooldown_reason(&bedrock),
+        CooldownReason::AuthError
+    );
+    assert_eq!(
+        Router::infer_cooldown_reason(&unrelated),
+        CooldownReason::ConsecutiveFailures
+    );
+}
+
+#[tokio::test]
 async fn test_infer_cooldown_reason_generic_error() {
     let error = ProviderError::network("test_provider", "Connection failed");
     let reason = Router::infer_cooldown_reason(&error);
