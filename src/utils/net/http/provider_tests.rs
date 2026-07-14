@@ -1,29 +1,172 @@
 use super::*;
 use std::collections::VecDeque;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
+use std::task::{Context, Poll};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+type ConnectorBoxError = Box<dyn std::error::Error + Send + Sync>;
+
+#[derive(Clone)]
+struct TripwireConnectorLayer {
+    address: SocketAddr,
+}
+
+impl<S> tower_layer::Layer<S> for TripwireConnectorLayer {
+    type Service = TripwireConnector<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        TripwireConnector {
+            _inner: inner,
+            address: self.address,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct TripwireConnector<S> {
+    _inner: S,
+    address: SocketAddr,
+}
+
+impl<S, Request> tower_service::Service<Request> for TripwireConnector<S>
+where
+    S: tower_service::Service<Request>,
+    S::Response: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = ConnectorBoxError;
+    type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, _context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, _request: Request) -> Self::Future {
+        let result = std::net::TcpStream::connect(self.address)
+            .map_err(ConnectorBoxError::from)
+            .and_then(|_stream| {
+                Err(ConnectorBoxError::from(io::Error::other(
+                    "connector tripwire invoked",
+                )))
+            });
+        std::future::ready(result)
+    }
+}
 
 struct SequenceResolver {
     answers: Mutex<VecDeque<Vec<SocketAddr>>>,
+    queries: Mutex<Vec<String>>,
 }
 
 impl SequenceResolver {
     fn new(answers: Vec<Vec<SocketAddr>>) -> Self {
         Self {
             answers: Mutex::new(answers.into()),
+            queries: Mutex::new(Vec::new()),
         }
+    }
+
+    fn remaining_answers(&self) -> io::Result<usize> {
+        self.answers
+            .lock()
+            .map(|answers| answers.len())
+            .map_err(|_| io::Error::other("sequence resolver lock poisoned"))
+    }
+
+    fn queries(&self) -> io::Result<Vec<String>> {
+        self.queries
+            .lock()
+            .map(|queries| queries.clone())
+            .map_err(|_| io::Error::other("sequence resolver query lock poisoned"))
     }
 }
 
 impl HostResolver for SequenceResolver {
-    fn resolve(&self, _host: &str) -> io::Result<Vec<SocketAddr>> {
+    fn resolve(&self, host: &str) -> io::Result<Vec<SocketAddr>> {
+        self.queries
+            .lock()
+            .map_err(|_| io::Error::other("sequence resolver query lock poisoned"))?
+            .push(host.to_string());
         self.answers
             .lock()
             .map_err(|_| io::Error::other("sequence resolver lock poisoned"))?
             .pop_front()
             .ok_or_else(|| io::Error::other("sequence resolver exhausted"))
     }
+}
+
+async fn assert_listener_did_not_accept(listener: &tokio::net::TcpListener, context: &str) {
+    match tokio::time::timeout(Duration::from_millis(100), listener.accept()).await {
+        Err(_) => {}
+        Ok(Ok((_stream, peer))) => panic!("{context}: unexpectedly accepted {peer}"),
+        Ok(Err(error)) => panic!("{context}: listener failed before timeout: {error}"),
+    }
+}
+
+async fn assert_public_rebind_is_blocked(
+    mode: ProviderClientMode,
+    blocked_ip: IpAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let tripwire = listener.local_addr()?;
+    let port = tripwire.port();
+    let url = reqwest::Url::parse(&format!("http://rebind.test:{port}/v1"))?;
+    let resolver = Arc::new(SequenceResolver::new(vec![
+        vec![SocketAddr::from((Ipv4Addr::new(93, 184, 216, 34), port))],
+        vec![tripwire, SocketAddr::new(blocked_ip, port)],
+    ]));
+    let policy = ProviderEndpointPolicy::public_only();
+    assert!(
+        validate_provider_addresses(
+            ProviderEndpointAccess::PublicOnly,
+            vec![SocketAddr::new(blocked_ip, port)],
+        )
+        .is_err(),
+        "the classifier must reject the specific rebinding address {blocked_ip}"
+    );
+
+    crate::core::net::ssrf_guard::validate_provider_endpoint_url_with_resolver(
+        &url,
+        policy.access(),
+        |host, _port| {
+            resolver
+                .resolve(host)
+                .map(|addresses| addresses.into_iter().map(|addr| addr.ip()).collect())
+                .map_err(|error| SsrfError::HostResolutionFailed {
+                    host: host.to_string(),
+                    message: error.to_string(),
+                })
+        },
+    )?;
+    assert_eq!(
+        resolver.remaining_answers()?,
+        1,
+        "configuration validation must consume only the public answer"
+    );
+
+    let client = ProviderHttpClient::build(policy, Duration::from_secs(1), mode, resolver.clone())?;
+    let result = client.get(url)?.send().await;
+    assert!(
+        result.is_err(),
+        "{mode:?} must reject connection-time rebind to {blocked_ip}"
+    );
+    assert_eq!(
+        resolver.remaining_answers()?,
+        0,
+        "connection attempt must consume and validate the rebinding answer"
+    );
+    assert_eq!(
+        resolver.queries()?,
+        ["rebind.test", "rebind.test"],
+        "the injected resolver must exclusively serve validation and connection"
+    );
+    assert_listener_did_not_accept(
+        &listener,
+        &format!("{mode:?} rebind to {blocked_ip} must not open the target socket"),
+    )
+    .await;
+    Ok(())
 }
 
 impl ProviderHttpClient {
@@ -42,6 +185,20 @@ impl ProviderHttpClient {
             &policy, timeout, mode, resolver,
         )?);
         Ok(Self { client, policy })
+    }
+
+    fn build_with_connector_tripwire_for_test(
+        policy: ProviderEndpointPolicy,
+        address: SocketAddr,
+    ) -> Result<Self, ProviderHttpClientError> {
+        let client = ClientBuilder::new()
+            .no_proxy()
+            .connector_layer(TripwireConnectorLayer { address })
+            .build()?;
+        Ok(Self {
+            client: Arc::new(client),
+            policy,
+        })
     }
 }
 
@@ -74,18 +231,81 @@ fn provider_clients_reuse_pools_for_identical_configurations()
 }
 
 #[test]
-fn shared_dns_filter_rejects_platform_metadata_encodings() {
+fn security_evidence_private_client_cache_isolated_by_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let timeout = Duration::from_secs(38);
+    let first_policy = ProviderEndpointPolicy::for_base_url(
+        ProviderEndpointAccess::PrivateNetwork,
+        "http://127.0.0.1:11434",
+    )?;
+    let second_policy = ProviderEndpointPolicy::for_base_url(
+        ProviderEndpointAccess::PrivateNetwork,
+        "http://127.0.0.1:11435",
+    )?;
+    let first = ProviderHttpClient::new(first_policy.clone(), timeout)?;
+    let identical = ProviderHttpClient::new(first_policy, timeout)?;
+    let other_authority = ProviderHttpClient::new(second_policy, timeout)?;
+    let public = ProviderHttpClient::new(ProviderEndpointPolicy::public_only(), timeout)?;
+
+    assert!(Arc::ptr_eq(&first.client, &identical.client));
+    assert!(!Arc::ptr_eq(&first.client, &other_authority.client));
+    assert!(!Arc::ptr_eq(&first.client, &public.client));
+    Ok(())
+}
+
+#[test]
+fn security_evidence_shared_dns_filter_rejects_platform_metadata_encodings()
+-> Result<(), Box<dyn std::error::Error>> {
     for ip in [
         "168.63.129.16",
         "::ffff:168.63.129.16",
         "64:ff9b::a83f:8110",
     ] {
-        let address = SocketAddr::new(ip.parse().unwrap(), 80);
+        let address = SocketAddr::new(ip.parse()?, 80);
         assert!(
             validate_provider_addresses(ProviderEndpointAccess::PublicOnly, vec![address]).is_err(),
             "metadata destination {ip} must be rejected"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn security_evidence_private_dns_filter_allows_only_explicit_private_network_ranges()
+-> Result<(), Box<dyn std::error::Error>> {
+    for ip in [
+        "127.0.0.1",
+        "10.0.0.1",
+        "172.16.0.1",
+        "192.168.0.1",
+        "::1",
+        "fd00::1",
+    ] {
+        let address = SocketAddr::new(ip.parse()?, 80);
+        assert!(
+            validate_provider_addresses(ProviderEndpointAccess::PrivateNetwork, vec![address])
+                .is_ok(),
+            "private-network destination {ip} must be allowed"
+        );
+    }
+
+    for ip in [
+        "100.64.0.1",
+        "168.63.129.16",
+        "169.254.169.254",
+        "198.18.0.1",
+        "203.0.113.1",
+        "fd00:ec2::254",
+        "fe80::1",
+    ] {
+        let address = SocketAddr::new(ip.parse()?, 80);
+        assert!(
+            validate_provider_addresses(ProviderEndpointAccess::PrivateNetwork, vec![address])
+                .is_err(),
+            "permanently blocked destination {ip} must remain rejected"
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -132,27 +352,101 @@ fn provider_request_builder_has_no_public_raw_client_escape_hatch() {
 }
 
 #[tokio::test]
-async fn provider_client_rejects_initial_literal_without_opening_socket()
+async fn security_evidence_initial_blocked_literals_fail_before_dns()
+-> Result<(), Box<dyn std::error::Error>> {
+    for blocked_ip in [
+        "127.0.0.1",
+        "10.0.0.1",
+        "169.254.169.254",
+        "168.63.129.16",
+        "100.64.0.1",
+        "198.18.0.1",
+        "203.0.113.1",
+        "fd00::1",
+        "fd00:ec2::254",
+        "::ffff:168.63.129.16",
+        "fe80::1",
+    ] {
+        let resolver = Arc::new(SequenceResolver::new(vec![vec![SocketAddr::from((
+            Ipv4Addr::new(93, 184, 216, 34),
+            80,
+        ))]]));
+        let client = ProviderHttpClient::build(
+            ProviderEndpointPolicy::public_only(),
+            Duration::from_secs(1),
+            ProviderClientMode::Request,
+            resolver.clone(),
+        )?;
+        let target = SocketAddr::new(blocked_ip.parse()?, 80);
+        assert!(
+            client.get(format!("http://{target}/v1")).is_err(),
+            "public-only request must reject literal {blocked_ip}"
+        );
+        assert_eq!(
+            resolver.remaining_answers()?,
+            1,
+            "blocked literal {blocked_ip} must fail before DNS"
+        );
+        assert!(
+            resolver.queries()?.is_empty(),
+            "blocked literal {blocked_ip} must not invoke the resolver"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn security_evidence_initial_loopback_literal_does_not_reach_exact_listener()
 -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
+    let target = listener.local_addr()?;
     let client = ProviderHttpClient::new(
         ProviderEndpointPolicy::public_only(),
         Duration::from_secs(1),
     )?;
 
-    assert!(client.get(format!("http://{address}/v1")).is_err());
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), listener.accept())
-            .await
-            .is_err(),
-        "rejected literal must not open the target socket"
-    );
+    assert!(client.get(format!("http://{target}/v1")).is_err());
+    assert_listener_did_not_accept(
+        &listener,
+        "rejected loopback literal must not open its exact target socket",
+    )
+    .await;
     Ok(())
 }
 
 #[tokio::test]
-async fn provider_client_rejects_metadata_hostname_before_dns_or_socket()
+async fn security_evidence_metadata_literals_do_not_reach_connector_tripwire()
+-> Result<(), Box<dyn std::error::Error>> {
+    for metadata_ip in [
+        "169.254.169.254",
+        "168.63.129.16",
+        "fd00:ec2::254",
+        "::ffff:168.63.129.16",
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let client = ProviderHttpClient::build_with_connector_tripwire_for_test(
+            ProviderEndpointPolicy::public_only(),
+            listener.local_addr()?,
+        )?;
+        let target = SocketAddr::new(metadata_ip.parse()?, 80);
+
+        if let Ok(request) = client.get(format!("http://{target}/latest/meta-data/")) {
+            assert!(
+                request.send().await.is_err(),
+                "connector tripwire must terminate an unsafe metadata request"
+            );
+        }
+        assert_listener_did_not_accept(
+            &listener,
+            &format!("metadata literal {metadata_ip} must not reach the connector"),
+        )
+        .await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn security_evidence_metadata_hostname_fails_before_dns_or_socket()
 -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -169,23 +463,15 @@ async fn provider_client_rejects_metadata_hostname_before_dns_or_socket()
             .get(format!("http://metadata.goog:{}/v1", address.port()))
             .is_err()
     );
-    let remaining_answers = resolver
-        .answers
-        .lock()
-        .map_err(|_| io::Error::other("sequence resolver lock poisoned"))?
-        .len();
+    let remaining_answers = resolver.remaining_answers()?;
     assert_eq!(remaining_answers, 1, "metadata URL must not invoke DNS");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), listener.accept())
-            .await
-            .is_err(),
-        "metadata URL must not open the target socket"
-    );
+    assert!(resolver.queries()?.is_empty());
+    assert_listener_did_not_accept(&listener, "metadata URL must not open the target socket").await;
     Ok(())
 }
 
 #[tokio::test]
-async fn public_provider_redirect_rejects_private_target_without_opening_socket()
+async fn security_evidence_public_redirect_to_private_literal_does_not_reach_target()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let source_address = source.local_addr()?;
@@ -208,6 +494,7 @@ async fn public_provider_redirect_rejects_private_target_without_opening_socket(
         Ok::<(), io::Error>(())
     });
     let client = ClientBuilder::new()
+        .no_proxy()
         .redirect(provider_redirect_policy(
             ProviderEndpointPolicy::public_only(),
         ))
@@ -218,64 +505,82 @@ async fn public_provider_redirect_rejects_private_target_without_opening_socket(
         .send()
         .await;
     assert!(result.is_err(), "private redirect target must fail");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), target.accept())
-            .await
-            .is_err(),
-        "provider redirect must not open the target socket"
-    );
+    assert_listener_did_not_accept(&target, "provider redirect must not open the target socket")
+        .await;
     server.await??;
     Ok(())
 }
 #[tokio::test]
-async fn provider_client_rechecks_dns_at_connection_time_without_opening_socket()
+async fn security_evidence_public_rebinding_matrix_fails_before_socket()
 -> Result<(), Box<dyn std::error::Error>> {
-    for mode in [
-        ProviderClientMode::Request,
-        ProviderClientMode::Streaming,
-        ProviderClientMode::NoRedirect,
-    ] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let url = reqwest::Url::parse(&format!("http://rebind.test:{}/v1", address.port()))?;
-        let resolver = Arc::new(SequenceResolver::new(vec![
-            vec![SocketAddr::from((
-                Ipv4Addr::new(93, 184, 216, 34),
-                address.port(),
-            ))],
-            vec![address],
-        ]));
-        let policy = ProviderEndpointPolicy::public_only();
-
-        crate::core::net::ssrf_guard::validate_provider_endpoint_url_with_resolver(
-            &url,
-            policy.access(),
-            |host, _port| {
-                resolver
-                    .resolve(host)
-                    .map(|addresses| addresses.into_iter().map(|addr| addr.ip()).collect())
-                    .map_err(|error| SsrfError::HostResolutionFailed {
-                        host: host.to_string(),
-                        message: error.to_string(),
-                    })
-            },
-        )?;
-
-        let client = ProviderHttpClient::build(policy, Duration::from_secs(1), mode, resolver)?;
-        let result = client.get(url)?.send().await;
-        assert!(result.is_err(), "{mode:?} loopback rebind must fail");
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), listener.accept())
-                .await
-                .is_err(),
-            "{mode:?} blocked rebind must not open the target socket"
-        );
+    for blocked_ip in ["127.0.0.1", "10.0.0.1", "169.254.169.254", "fd00::1"] {
+        for mode in [
+            ProviderClientMode::Request,
+            ProviderClientMode::Streaming,
+            ProviderClientMode::NoRedirect,
+        ] {
+            assert_public_rebind_is_blocked(mode, blocked_ip.parse()?).await?;
+        }
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn private_provider_connects_to_its_authority_but_does_not_follow_redirects()
+async fn security_evidence_private_metadata_answer_does_not_fallback_to_allowed_loopback()
+-> Result<(), Box<dyn std::error::Error>> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let tripwire = listener.local_addr()?;
+    let port = tripwire.port();
+    let url = reqwest::Url::parse(&format!("http://private-rebind.test:{port}/v1"))?;
+    let resolver = Arc::new(SequenceResolver::new(vec![
+        vec![SocketAddr::from((Ipv4Addr::new(93, 184, 216, 34), port))],
+        vec![
+            tripwire,
+            SocketAddr::from((Ipv4Addr::new(169, 254, 169, 254), port)),
+        ],
+    ]));
+    let policy =
+        ProviderEndpointPolicy::for_base_url(ProviderEndpointAccess::PrivateNetwork, url.as_str())?;
+
+    crate::core::net::ssrf_guard::validate_provider_endpoint_url_with_resolver(
+        &url,
+        policy.access(),
+        |host, _port| {
+            resolver
+                .resolve(host)
+                .map(|addresses| addresses.into_iter().map(|addr| addr.ip()).collect())
+                .map_err(|error| SsrfError::HostResolutionFailed {
+                    host: host.to_string(),
+                    message: error.to_string(),
+                })
+        },
+    )?;
+
+    let client = ProviderHttpClient::build(
+        policy,
+        Duration::from_secs(1),
+        ProviderClientMode::Request,
+        resolver.clone(),
+    )?;
+    assert!(
+        client.get(url)?.send().await.is_err(),
+        "metadata in a mixed private-network answer must reject the whole answer set"
+    );
+    assert_eq!(resolver.remaining_answers()?, 0);
+    assert_eq!(
+        resolver.queries()?,
+        ["private-rebind.test", "private-rebind.test"]
+    );
+    assert_listener_did_not_accept(
+        &listener,
+        "private-network resolver must not filter metadata and continue with loopback",
+    )
+    .await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn security_evidence_private_loopback_connects_but_redirect_and_metadata_stay_blocked()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let source_address = source.local_addr()?;
@@ -305,18 +610,16 @@ async fn private_provider_connects_to_its_authority_but_does_not_follow_redirect
     let client = ProviderHttpClient::new(policy, Duration::from_secs(1))?;
     assert!(
         client
-            .get("http://169.254.169.254/latest/meta-data/")
+            .get(format!(
+                "http://169.254.169.254:{}/latest/meta-data/",
+                target_address.port()
+            ))
             .is_err()
     );
 
     let response = client.get(base_url)?.send().await?;
     assert_eq!(response.status(), reqwest::StatusCode::FOUND);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), target.accept())
-            .await
-            .is_err(),
-        "private-network mode must not follow redirects"
-    );
+    assert_listener_did_not_accept(&target, "private-network mode must not follow redirects").await;
     server.await??;
     Ok(())
 }

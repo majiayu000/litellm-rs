@@ -3250,6 +3250,8 @@ dependencies = [
  "tokio-stream",
  "tokio-test",
  "tokio-util",
+ "tower-layer",
+ "tower-service",
  "tracing",
  "tracing-subscriber",
  "url",
