@@ -182,7 +182,9 @@ impl Validate for ProviderConfig {
         }
         if self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
             && self.base_url.is_none()
-            && !crate::core::providers::factory::selector_uses_catalog_endpoint(provider_selector)
+            && !crate::core::providers::factory::selector_allows_implicit_private_endpoint(
+                provider_selector,
+            )
         {
             return Err(format!(
                 "Provider {} private_network endpoint access requires a base URL",
@@ -409,6 +411,11 @@ mod endpoint_access_tests {
         config.base_url = Some("http://127.0.0.1:18080/v1".to_string());
         assert!(Validate::validate(&config).is_ok());
 
+        config.base_url = None;
+        for (provider_type, allowed) in [("bedrock", true), ("vllm", true), ("openrouter", false)] {
+            config.provider_type = provider_type.to_string();
+            assert_eq!(Validate::validate(&config).is_ok(), allowed);
+        }
         config.provider_type = "cloudflare".to_string();
         assert!(
             Validate::validate(&config)
@@ -417,6 +424,7 @@ mod endpoint_access_tests {
         );
 
         config.provider_type = "openai_compatible".to_string();
+        config.base_url = Some("http://127.0.0.1:18080/v1".to_string());
         config.endpoint_access = ProviderEndpointAccess::PublicOnly;
         assert!(Validate::validate(&config).is_err());
         config.base_url = Some("https://8.8.8.8/v1".to_string());

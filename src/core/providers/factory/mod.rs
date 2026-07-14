@@ -69,8 +69,7 @@ pub(crate) fn provider_type_supports_endpoint_access(provider_type: &ProviderTyp
         ProviderType::Cloudflare
         | ProviderType::FalAI
         | ProviderType::Replicate
-        | ProviderType::GitHubCopilot
-        | ProviderType::Custom(_) => false,
+        | ProviderType::GitHubCopilot => false,
         _ => provider_registry::catalog_definition_for_provider_type(provider_type).is_some(),
     }
 }
@@ -84,8 +83,16 @@ pub(crate) fn is_provider_endpoint_access_supported(selector: &str) -> bool {
         .is_ok_and(|provider_type| provider_type_supports_endpoint_access(&provider_type))
 }
 
-pub(crate) fn selector_uses_catalog_endpoint(selector: &str) -> bool {
-    catalog_definition_for_supported_selector(selector).is_some()
+pub(crate) fn selector_allows_implicit_private_endpoint(selector: &str) -> bool {
+    if selector
+        .parse::<ProviderType>()
+        .is_ok_and(|provider_type| matches!(provider_type, ProviderType::Bedrock))
+    {
+        return true;
+    }
+    catalog_definition_for_supported_selector(selector)
+        .and_then(|definition| url::Url::parse(definition.base_url).ok())
+        .is_some_and(|url| url.host_str() == Some("localhost"))
 }
 
 /// Create a provider from configuration
