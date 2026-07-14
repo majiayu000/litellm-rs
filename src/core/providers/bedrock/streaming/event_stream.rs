@@ -92,8 +92,9 @@ impl BedrockStream {
         if buffer.len() < total_length {
             return None;
         }
-        let message_data = buffer.drain(..total_length).collect::<Vec<_>>();
-        Some(Self::parse_event_message(&message_data))
+        let message = Self::parse_event_message(&buffer[..total_length]);
+        buffer.drain(..total_length);
+        Some(message)
     }
 
     pub(crate) fn header_value<'a>(message: &'a EventStreamMessage, name: &str) -> Option<&'a str> {

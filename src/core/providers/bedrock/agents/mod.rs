@@ -105,7 +105,7 @@ pub struct TraceEntry {
 #[derive(Default)]
 struct AgentResponseAccumulator {
     buffer: Vec<u8>,
-    text: String,
+    text_bytes: Vec<u8>,
     attributions: Vec<Value>,
     traces: Vec<TraceEntry>,
     return_control: Option<Value>,
@@ -153,10 +153,7 @@ impl AgentResponseAccumulator {
                     .map_err(|error| {
                         ProviderError::response_parsing("bedrock", error.to_string())
                     })?;
-                let text = String::from_utf8(bytes).map_err(|error| {
-                    ProviderError::response_parsing("bedrock", error.to_string())
-                })?;
-                self.text.push_str(&text);
+                self.text_bytes.extend_from_slice(&bytes);
                 if let Some(attribution) = event.get("attribution") {
                     self.attributions.push(attribution.clone());
                 }
@@ -214,15 +211,19 @@ impl AgentResponseAccumulator {
             ));
         }
         if !self.seen_event
-            || (self.text.is_empty() && self.return_control.is_none() && self.files.is_empty())
+            || (self.text_bytes.is_empty()
+                && self.return_control.is_none()
+                && self.files.is_empty())
         {
             return Err(ProviderError::response_parsing(
                 "bedrock",
                 "agent response contained no completion or returnControl event",
             ));
         }
+        let text = String::from_utf8(self.text_bytes)
+            .map_err(|error| ProviderError::response_parsing("bedrock", error.to_string()))?;
         Ok(AgentInvocationResult {
-            completion: AgentCompletion { text: self.text },
+            completion: AgentCompletion { text },
             session_id,
             memory_id,
             session_state: None,
@@ -352,10 +353,8 @@ mod tests {
         }
     }
 
-    fn finish(
-        accumulator: AgentResponseAccumulator,
-    ) -> Result<AgentInvocationResult, ProviderError> {
-        accumulator.finish("session-1".to_string(), None)
+    fn finish(value: AgentResponseAccumulator) -> Result<AgentInvocationResult, ProviderError> {
+        value.finish("session-1".to_string(), None)
     }
 
     #[test]
@@ -487,6 +486,8 @@ mod tests {
     fn split_frames_are_buffered_and_completion_chunks_are_concatenated() {
         let mut frames = event_frame("chunk", serde_json::json!({"bytes": "aGVs"}));
         frames.extend(event_frame("chunk", serde_json::json!({"bytes": "bG8="})));
+        frames.extend(event_frame("chunk", serde_json::json!({"bytes": "8J8="})));
+        frames.extend(event_frame("chunk", serde_json::json!({"bytes": "mIA="})));
         let split = frames.len() / 2;
         let mut accumulator = AgentResponseAccumulator::default();
         accumulator
@@ -498,7 +499,7 @@ mod tests {
 
         let response =
             finish(accumulator).unwrap_or_else(|error| panic!("response should finish: {error}"));
-        assert_eq!(response.completion.text, "hello");
+        assert_eq!(response.completion.text, "hello😀");
     }
 
     #[test]
@@ -535,10 +536,6 @@ mod tests {
                 "Invalid symbol",
             ),
             (
-                event_message("chunk", serde_json::json!({"bytes": "/w=="})),
-                "invalid utf-8",
-            ),
-            (
                 event_message("futureEvent", serde_json::json!({})),
                 "unsupported",
             ),
@@ -550,6 +547,12 @@ mod tests {
                 .expect_err("malformed event must fail");
             assert!(error.to_string().contains(expected), "{error}");
         }
+        let mut invalid_utf8 = AgentResponseAccumulator::default();
+        invalid_utf8
+            .consume(event_message("chunk", serde_json::json!({"bytes": "/w=="})))
+            .unwrap_or_else(|error| panic!("raw bytes should buffer: {error}"));
+        let error = finish(invalid_utf8).expect_err("invalid combined UTF-8 must fail");
+        assert!(error.to_string().contains("invalid utf-8"), "{error}");
     }
 
     #[test]
