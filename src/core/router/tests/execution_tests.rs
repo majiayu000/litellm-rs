@@ -34,7 +34,12 @@ fn test_is_retryable_error() {
     assert!(is_retryable_error(&ProviderError::api_error(
         "bedrock",
         424,
-        "model not ready"
+        "ModelNotReadyException: model not ready"
+    )));
+    assert!(!is_retryable_error(&ProviderError::api_error(
+        "bedrock",
+        424,
+        "ModelErrorException: model invocation failed"
     )));
     assert!(!is_retryable_error(&ProviderError::api_error(
         "bedrock",

@@ -45,6 +45,7 @@ pub struct ProviderFailureFacts {
     pub provider: &'static str,
     pub kind: ProviderFailureKind,
     pub upstream_status: Option<u16>,
+    pub explicitly_retryable: bool,
     pub retry_hint: ProviderRetryHint,
 }
 
@@ -63,6 +64,7 @@ impl From<&ProviderError> for ProviderFailureFacts {
                 ProviderError::ApiError { status, .. } => Some(*status),
                 _ => None,
             },
+            explicitly_retryable: error.is_explicitly_retryable_api_error(),
             retry_hint: match error {
                 ProviderError::RateLimit { retry_after, .. } => ProviderRetryHint {
                     retry_after: retry_after.map(Duration::from_secs),
@@ -129,6 +131,24 @@ mod tests {
         assert_eq!(facts.provider, "anthropic");
         assert_eq!(facts.kind, ProviderFailureKind::ApiError);
         assert_eq!(facts.upstream_status, Some(503));
+        assert!(!facts.explicitly_retryable);
         assert_eq!(facts.retry_hint.retry_after, None);
+    }
+
+    #[test]
+    fn facts_preserve_only_modeled_bedrock_retry_signals() {
+        let modeled = ProviderFailureFacts::from_error(&ProviderError::api_error(
+            "bedrock",
+            424,
+            "ModelNotReadyException: model not ready",
+        ));
+        let ordinary = ProviderFailureFacts::from_error(&ProviderError::api_error(
+            "bedrock",
+            424,
+            "ModelErrorException: model invocation failed",
+        ));
+
+        assert!(modeled.explicitly_retryable);
+        assert!(!ordinary.explicitly_retryable);
     }
 }

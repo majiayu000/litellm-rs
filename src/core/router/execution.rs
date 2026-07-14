@@ -20,11 +20,7 @@ pub fn is_retryable_error(error: &ProviderError) -> bool {
         | ProviderError::Timeout { .. }
         | ProviderError::ProviderUnavailable { .. }
         | ProviderError::Network { .. } => true,
-        ProviderError::ApiError {
-            provider: "bedrock",
-            status: 424,
-            ..
-        } => true,
+        ProviderError::ApiError { .. } if error.is_explicitly_retryable_api_error() => true,
         ProviderError::QuotaExceeded { .. } => retryable_budget_scope(error).is_some(),
         _ => false,
     }

@@ -130,6 +130,11 @@ mod tests {
 
         let error = mapper.map_http_error(429, "Rate limited");
         assert!(matches!(error, ProviderError::RateLimit { .. }));
+
+        let error = mapper.map_http_error(424, "ModelErrorException");
+        assert!(matches!(error, ProviderError::ApiError { status: 424, .. }));
+        assert!(!error.is_retryable());
+        assert_eq!(error.retry_delay(), None);
     }
 
     #[test]

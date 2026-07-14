@@ -430,9 +430,17 @@ mod provider_error_tests {
         assert!(ProviderError::provider_unavailable("a", "b").is_retryable());
         assert!(ProviderError::deployment_error("a", "b").is_retryable());
         assert!(ProviderError::streaming_error("a", "b", None, None, "c").is_retryable());
-        let failed_dependency = ProviderError::api_error("bedrock", 424, "not ready");
+        let failed_dependency =
+            ProviderError::api_error("bedrock", 424, "DependencyFailedException: not ready");
         assert!(failed_dependency.is_retryable());
         assert_eq!(failed_dependency.retry_delay(), Some(3));
+        let ordinary_failed_dependency = ProviderError::api_error(
+            "bedrock",
+            424,
+            "ModelErrorException: model invocation failed",
+        );
+        assert!(!ordinary_failed_dependency.is_retryable());
+        assert_eq!(ordinary_failed_dependency.retry_delay(), None);
         let unrelated_failed_dependency = ProviderError::api_error("custom_httpx", 424, "failed");
         assert!(!unrelated_failed_dependency.is_retryable());
         assert_eq!(unrelated_failed_dependency.retry_delay(), None);

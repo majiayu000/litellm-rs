@@ -210,9 +210,7 @@ fn failure_is_retryable(facts: ProviderFailureFacts, context: RetryContext) -> b
         | ProviderFailureKind::Network
         | ProviderFailureKind::DeploymentError => true,
         ProviderFailureKind::ApiError => facts.upstream_status.is_some_and(|status| {
-            (facts.provider == "bedrock" && status == 424)
-                || status == 429
-                || (500..=599).contains(&status)
+            facts.explicitly_retryable || status == 429 || (500..=599).contains(&status)
         }),
         ProviderFailureKind::Streaming => {
             context.operation == RetryOperation::Streaming
@@ -360,7 +358,13 @@ mod tests {
 
     #[test]
     fn failed_dependency_api_error_is_retryable_but_not_not_found() {
-        let not_ready = ProviderError::api_error("bedrock", 424, "model not ready");
+        let not_ready =
+            ProviderError::api_error("bedrock", 424, "ModelNotReadyException: model not ready");
+        let model_error = ProviderError::api_error(
+            "bedrock",
+            424,
+            "ModelErrorException: model invocation failed",
+        );
         let missing = ProviderError::api_error("bedrock", 404, "resource not found");
         let unrelated = ProviderError::api_error("custom_httpx", 424, "failed dependency");
 
@@ -374,6 +378,11 @@ mod tests {
             &missing,
             RetryContext::unary(1, 2),
         );
+        let model_error_stop = RetryPolicy.decide(
+            &RouterConfig::default(),
+            &model_error,
+            RetryContext::unary(1, 2),
+        );
         let unrelated_stop = RetryPolicy.decide(
             &RouterConfig::default(),
             &unrelated,
@@ -381,6 +390,11 @@ mod tests {
         );
 
         assert!(retry.should_retry);
+        assert!(!model_error_stop.should_retry);
+        assert_eq!(
+            model_error_stop.reason,
+            RetryDecisionReason::NonRetryableFailure
+        );
         assert!(!stop.should_retry);
         assert_eq!(stop.reason, RetryDecisionReason::NonRetryableFailure);
         assert!(!unrelated_stop.should_retry);

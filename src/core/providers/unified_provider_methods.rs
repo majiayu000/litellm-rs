@@ -187,6 +187,25 @@ impl ProviderError {
         }
     }
 
+    /// Whether an API error carries a provider-modeled retry signal.
+    pub(crate) fn is_explicitly_retryable_api_error(&self) -> bool {
+        let Self::ApiError {
+            provider: "bedrock",
+            status: 424,
+            message,
+        } = self
+        else {
+            return false;
+        };
+
+        message.split_once(':').is_some_and(|(code, _)| {
+            code.trim().eq_ignore_ascii_case("ModelNotReadyException")
+                || code
+                    .trim()
+                    .eq_ignore_ascii_case("DependencyFailedException")
+        })
+    }
+
     /// Create token limit exceeded error
     pub fn token_limit_exceeded(provider: &'static str, message: impl Into<String>) -> Self {
         Self::TokenLimitExceeded {
@@ -340,11 +359,8 @@ impl ProviderError {
             | Self::ProviderUnavailable { .. } => true,
 
             // API errors depend on status code
-            Self::ApiError {
-                provider, status, ..
-            } => {
-                (*provider == "bedrock" && *status == 424)
-                    || matches!(*status, 429 | 500..=599)
+            Self::ApiError { status, .. } => {
+                self.is_explicitly_retryable_api_error() || matches!(*status, 429 | 500..=599)
             }
 
             // Deployment errors might be retryable depending on the issue
@@ -386,14 +402,17 @@ impl ProviderError {
             Self::ProviderUnavailable { .. } => Some(5),
 
             // API errors with 429 (rate limit) or 5xx get retry delays
-            Self::ApiError {
-                provider, status, ..
-            } => match *status {
-                424 if *provider == "bedrock" => Some(3), // Bedrock dependency/not-ready
-                429 => Some(60),                          // Rate limit, wait longer
-                500..=599 => Some(3),                     // Server errors, shorter delay
-                _ => None,
-            },
+            Self::ApiError { status, .. } => {
+                if self.is_explicitly_retryable_api_error() {
+                    Some(3)
+                } else {
+                    match *status {
+                        429 => Some(60),      // Rate limit, wait longer
+                        500..=599 => Some(3), // Server errors, shorter delay
+                        _ => None,
+                    }
+                }
+            }
 
             // Deployment errors get a retry delay
             Self::DeploymentError { .. } => Some(5),
