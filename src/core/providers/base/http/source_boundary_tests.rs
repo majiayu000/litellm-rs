@@ -210,11 +210,21 @@ fn has_test_cfg(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-#[rustfmt::skip]
-fn path_starts_with(path: &[String], prefix: &[&str]) -> bool { path.len() >= prefix.len() && path.iter().zip(prefix).all(|(segment, expected)| segment == expected) }
+fn path_starts_with(path: &[String], prefix: &[&str]) -> bool {
+    path.len() >= prefix.len()
+        && path
+            .iter()
+            .zip(prefix)
+            .all(|(segment, expected)| segment == expected)
+}
 
-#[rustfmt::skip]
-fn path_is_prefix_of(path: &[String], target: &[&str]) -> bool { path.len() <= target.len() && path.iter().zip(target).all(|(segment, expected)| segment == expected) }
+fn path_is_prefix_of(path: &[String], target: &[&str]) -> bool {
+    path.len() <= target.len()
+        && path
+            .iter()
+            .zip(target)
+            .all(|(segment, expected)| segment == expected)
+}
 
 fn canonicalize_path(module_path: &[String], path: &[String]) -> Option<Vec<String>> {
     let first = path.first()?;
@@ -390,17 +400,11 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
         visit::visit_expr_method_call(self, expression);
     }
 
-    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        self.context.push(ident_text(&item.sig.ident));
-        visit::visit_item_fn(self, item);
-        self.context.pop();
-    }
+    #[rustfmt::skip]
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) { self.context.push(ident_text(&item.sig.ident)); visit::visit_item_fn(self, item); self.context.pop(); }
 
-    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
-        self.context.push(ident_text(&item.sig.ident));
-        visit::visit_impl_item_fn(self, item);
-        self.context.pop();
-    }
+    #[rustfmt::skip]
+    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) { self.context.push(ident_text(&item.sig.ident)); visit::visit_impl_item_fn(self, item); self.context.pop(); }
 
     fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
         self.context.push(
@@ -413,17 +417,18 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
         self.context.pop();
     }
 
+    #[rustfmt::skip]
     fn visit_macro(&mut self, item: &'ast Macro) {
         let tokens = item.tokens.to_string();
+        for prefix in RAW_PREFIXES {
+            let forbidden = prefix.join(" :: ");
+            if tokens.contains(&forbidden) {
+                self.record(format!("raw HTTP macro token {forbidden}"));
+            }
+        }
         for forbidden in [
-            "reqwest :: Client",
-            "reqwest :: ClientBuilder",
-            "GlobalPoolManager",
-            "create_custom_client",
-            "create_streaming_client",
-            "default_outbound_client",
-            "get_client_with_timeout",
-            "get_ssrf_safe_client",
+            "GlobalPoolManager", "create_custom_client", "create_streaming_client",
+            "default_outbound_client", "get_client_with_timeout", "get_ssrf_safe_client",
             "use_ssrf_safe_client",
         ] {
             if tokens.contains(forbidden) {
@@ -469,31 +474,24 @@ fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>
     Ok(visitor.violations)
 }
 
+#[rustfmt::skip]
 fn is_test_only_module(path: &FsPath) -> std::io::Result<bool> {
     let Some(parent) = path.parent() else {
         return Ok(false);
     };
-    let name = if path.is_dir() {
-        path.file_name()
-    } else {
-        path.file_stem()
-    }
-    .and_then(|name| name.to_str())
-    .unwrap_or_default();
+    let name = if path.is_dir() { path.file_name() } else { path.file_stem() }
+        .and_then(|name| name.to_str()).unwrap_or_default();
     let Some(owner) = [parent.join("mod.rs"), parent.with_extension("rs")]
-        .into_iter()
-        .find(|candidate| candidate.is_file() && candidate != path)
+        .into_iter().find(|candidate| candidate.is_file() && candidate != path)
     else {
         return Ok(false);
     };
     let source = fs::read_to_string(owner)?;
-    let file = syn::parse_file(&source)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))?;
+    let file = syn::parse_file(&source).map_err(|error| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+    })?;
     Ok(file.items.iter().any(|item| {
-        matches!(item, syn::Item::Mod(module)
-            if ident_text(&module.ident) == name
-                && module.content.is_none()
-                && has_test_cfg(&module.attrs))
+        matches!(item, syn::Item::Mod(module) if ident_text(&module.ident) == name && module.content.is_none() && has_test_cfg(&module.attrs))
     }))
 }
 
@@ -583,6 +581,7 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "fn probe(pool: Pool) { pool.client(); }",
         "macro_rules! raw { () => { reqwest::Client::new() } }",
         "fn probe() { passthrough!(reqwest::Client::new()); }",
+        "fn probe() { passthrough!(crate::core::providers::base::send_streaming_request(req, provider)); }",
     ] {
         let violations = boundary_violations(bypass, &["crate", "core", "providers", "mistral"])
             .unwrap_or_else(|error| panic!("bypass fixture must parse: {error}"));
