@@ -41,6 +41,11 @@ fn test_is_retryable_error() {
         404,
         "resource not found"
     )));
+    assert!(!is_retryable_error(&ProviderError::api_error(
+        "custom_httpx",
+        424,
+        "failed dependency"
+    )));
 
     assert!(!is_retryable_error(&ProviderError::authentication(
         "test",
