@@ -174,12 +174,6 @@ pub async fn create_provider(
         .parse::<ProviderType>()
         .map_err(|e| ProviderError::invalid_request("provider_type", e.to_string()))?;
 
-    if !Provider::factory_supported_provider_types().contains(&provider_type_enum) {
-        return Err(ProviderError::not_implemented(
-            provider_diagnostic_name(&provider_type_enum),
-            format!("Factory for {:?} not yet implemented", provider_type_enum),
-        ));
-    }
     if !provider_type_supports_endpoint_access(&provider_type_enum)
         && (endpoint_access == ProviderEndpointAccess::PrivateNetwork
             || base_url.is_some()
@@ -188,6 +182,12 @@ pub async fn create_provider(
         return Err(ProviderError::configuration(
             provider_diagnostic_name(&provider_type_enum),
             "configurable endpoint access is unavailable because this provider runtime is not policy-wired",
+        ));
+    }
+    if !Provider::factory_supported_provider_types().contains(&provider_type_enum) {
+        return Err(ProviderError::not_implemented(
+            provider_diagnostic_name(&provider_type_enum),
+            format!("Factory for {:?} not yet implemented", provider_type_enum),
         ));
     }
 

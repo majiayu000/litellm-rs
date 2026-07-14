@@ -3,72 +3,70 @@ use crate::config::models::provider::ProviderConfig;
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::{Provider, ProviderType};
 use tokio::net::TcpListener;
-
+fn openai_like_access(provider: Provider) -> ProviderEndpointAccess {
+    let Provider::OpenAILike(provider) = provider else {
+        panic!("expected OpenAILike provider")
+    };
+    provider.config().base.endpoint_access
+}
+#[cfg(not(feature = "providers-extra"))]
+#[tokio::test]
+async fn azure_fallbacks_propagate_private_endpoint_access() {
+    for (provider_type, base_url) in [
+        (ProviderType::Azure, "http://127.0.0.1/openai/deployments/x"),
+        (ProviderType::AzureAI, "http://127.0.0.1/models"),
+    ] {
+        let provider = Provider::from_config_async(
+            provider_type,
+            serde_json::json!({"api_key": "x", "base_url": base_url,
+                "endpoint_access": "private_network"}),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("Azure fallback must propagate access: {error}"));
+        assert_eq!(
+            openai_like_access(provider),
+            ProviderEndpointAccess::PrivateNetwork
+        );
+    }
+}
 #[tokio::test]
 async fn gateway_and_direct_registry_activate_wired_endpoint_access() {
     let mut config = ProviderConfig {
         name: "test-openai-like".to_string(),
         provider_type: "openai_compatible".to_string(),
-        base_url: Some("https://api.example.com/v1".to_string()),
         ..Default::default()
     };
     config
         .settings
         .insert("skip_api_key".to_string(), serde_json::json!(true));
-
-    let provider = create_provider(config.clone())
-        .await
-        .unwrap_or_else(|error| panic!("public-only Gateway config should work: {error}"));
-    let Provider::OpenAILike(provider) = provider else {
-        panic!("expected OpenAILike provider");
-    };
-    assert_eq!(
-        provider.config().base.endpoint_access,
-        ProviderEndpointAccess::PublicOnly
-    );
-
-    config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
-    config.base_url = Some("http://127.0.0.1:18080/v1".to_string());
-    let provider = create_provider(config)
-        .await
-        .unwrap_or_else(|error| panic!("private Gateway access should activate: {error}"));
-    let Provider::OpenAILike(provider) = provider else {
-        panic!("expected OpenAILike provider");
-    };
-    assert_eq!(
-        provider.config().base.endpoint_access,
-        ProviderEndpointAccess::PrivateNetwork
-    );
-
     for (explicit, base_url, expected) in [
         (
             "public_only",
-            "https://api.example.test/v1",
+            "https://example.test/v1",
             ProviderEndpointAccess::PublicOnly,
         ),
         (
             "private_network",
-            "http://127.0.0.1:18081/v1",
+            "http://127.0.0.1/v1",
             ProviderEndpointAccess::PrivateNetwork,
         ),
     ] {
-        let provider = Provider::from_config_async(
+        config.endpoint_access = expected;
+        config.base_url = Some(base_url.to_string());
+        let gateway = create_provider(config.clone())
+            .await
+            .unwrap_or_else(|error| panic!("Gateway access should activate: {error}"));
+        assert_eq!(openai_like_access(gateway), expected);
+        let direct = Provider::from_config_async(
             ProviderType::OpenAICompatible,
-            serde_json::json!({
-                "endpoint_access": explicit,
-                "base_url": base_url,
-                "skip_api_key": true
-            }),
+            serde_json::json!({"endpoint_access": explicit, "base_url": base_url,
+                "skip_api_key": true}),
         )
         .await
         .unwrap_or_else(|error| panic!("wired direct config should activate: {error}"));
-        let Provider::OpenAILike(provider) = provider else {
-            panic!("expected OpenAILike provider");
-        };
-        assert_eq!(provider.config().base.endpoint_access, expected);
+        assert_eq!(openai_like_access(direct), expected);
     }
 }
-
 #[tokio::test]
 async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
     for (provider_type, selector) in [
@@ -87,7 +85,6 @@ async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
                 .expect_err("unwired direct endpoint config must fail closed");
             assert!(error.to_string().contains("not policy-wired"));
         }
-
         let gateway_config = ProviderConfig {
             name: format!("unwired-{selector}"),
             provider_type: selector.to_string(),
@@ -111,7 +108,6 @@ async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
             assert!(error.to_string().contains("not policy-wired"));
         }
     }
-
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("listener must bind");
@@ -124,7 +120,6 @@ async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
         )),
         ..Default::default()
     };
-
     let error = create_provider(config)
         .await
         .expect_err("unwired hostname endpoint must fail closed before construction");
@@ -136,7 +131,6 @@ async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
         "unwired endpoint gate must not connect to the listener"
     );
 }
-
 #[tokio::test]
 async fn catalog_local_providers_require_explicit_private_access() {
     for (name, definition) in super::provider_registry::PROVIDER_CATALOG.iter() {
@@ -159,13 +153,11 @@ async fn catalog_local_providers_require_explicit_private_access() {
             },
             ..Default::default()
         };
-
         if is_local {
             let mut public_config = config.clone();
             public_config.endpoint_access = ProviderEndpointAccess::PublicOnly;
             assert!(create_provider(public_config).await.is_err());
         }
-
         assert!(crate::config::Validate::validate(&config).is_ok());
         let provider = create_provider(config)
             .await

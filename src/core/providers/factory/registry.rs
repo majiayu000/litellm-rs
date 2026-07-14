@@ -131,7 +131,8 @@ impl Provider {
                 }
                 #[cfg(not(feature = "providers-extra"))]
                 {
-                    let oai_config = build_azure_ai_openai_like_config_from_factory(&config)?;
+                    let mut oai_config = build_azure_ai_openai_like_config_from_factory(&config)?;
+                    oai_config.base.endpoint_access = config_endpoint_access(&config, "azure_ai")?;
                     let provider = openai_like::OpenAILikeProvider::new(oai_config)
                         .await
                         .map_err(|e| ProviderError::initialization("azure_ai", e.to_string()))?;
@@ -164,7 +165,8 @@ impl Provider {
                 }
                 #[cfg(not(feature = "providers-extra"))]
                 {
-                    let oai_config = build_azure_openai_like_config_from_factory(&config)?;
+                    let mut oai_config = build_azure_openai_like_config_from_factory(&config)?;
+                    oai_config.base.endpoint_access = config_endpoint_access(&config, "azure")?;
                     let provider = openai_like::OpenAILikeProvider::new(oai_config)
                         .await
                         .map_err(|e| ProviderError::initialization("azure", e.to_string()))?;
@@ -279,7 +281,6 @@ impl Provider {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
