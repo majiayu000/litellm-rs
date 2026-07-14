@@ -19,9 +19,8 @@ impl BedrockErrorMapper {
         let details = format!("{error_code}: {error_message}");
         match error_code.to_ascii_lowercase().as_str() {
             "validationexception" => Some(ProviderError::invalid_request("bedrock", details)),
-            "unauthorizedexception" | "accessdeniedexception" => {
-                Some(ProviderError::authentication("bedrock", details))
-            }
+            "unauthorizedexception" => Some(ProviderError::authentication("bedrock", details)),
+            "accessdeniedexception" => Some(ProviderError::api_error("bedrock", 403, details)),
             "throttlingexception" | "servicequotaexceededexception" => {
                 Some(ProviderError::rate_limit("bedrock", None))
             }
@@ -46,8 +45,9 @@ impl ErrorMapper<ProviderError> for BedrockErrorMapper {
                 "bedrock",
                 "Invalid AWS credentials or insufficient permissions".to_string(),
             ),
-            403 => ProviderError::authentication(
+            403 => ProviderError::api_error(
                 "bedrock",
+                403,
                 format!("Access forbidden: {}", response_body),
             ),
             404 => ProviderError::model_not_found(
@@ -119,6 +119,14 @@ mod tests {
 
         let error = mapper.map_http_error(401, "Unauthorized");
         assert!(matches!(error, ProviderError::Authentication { .. }));
+
+        let error = mapper.map_http_error(403, "Forbidden");
+        assert!(matches!(error, ProviderError::ApiError { status: 403, .. }));
+        assert_eq!(
+            crate::core::providers::unified_provider::provider_http_error_facts(&error).status,
+            403
+        );
+        assert!(!error.is_retryable());
 
         let error = mapper.map_http_error(429, "Rate limited");
         assert!(matches!(error, ProviderError::RateLimit { .. }));

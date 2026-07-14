@@ -470,7 +470,7 @@ mod tests {
             ),
             (
                 "accessDeniedException",
-                ProviderError::authentication("bedrock", "denied"),
+                ProviderError::api_error("bedrock", 403, "denied"),
             ),
         ];
 

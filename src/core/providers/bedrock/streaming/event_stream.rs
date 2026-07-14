@@ -218,7 +218,7 @@ mod strict_frame_tests {
     fn maps_modeled_service_exceptions_to_structured_provider_errors() {
         let cases = [
             ("validationException", "invalid_request", None, false),
-            ("accessDeniedException", "authentication", None, false),
+            ("accessDeniedException", "api_error", Some(403), false),
             ("throttlingException", "rate_limit", None, true),
             ("serviceQuotaExceededException", "rate_limit", None, true),
             ("resourceNotFoundException", "api_error", Some(404), false),
