@@ -211,7 +211,7 @@ fn failure_is_retryable(facts: ProviderFailureFacts, context: RetryContext) -> b
         | ProviderFailureKind::DeploymentError => true,
         ProviderFailureKind::ApiError => facts
             .upstream_status
-            .is_some_and(|status| status == 429 || (500..=599).contains(&status)),
+            .is_some_and(|status| status == 424 || status == 429 || (500..=599).contains(&status)),
         ProviderFailureKind::Streaming => {
             context.operation == RetryOperation::Streaming
                 && context.stream_stage == StreamRetryStage::BeforeFirstChunk
@@ -354,6 +354,27 @@ mod tests {
             RetryPolicy.decide(&RouterConfig::default(), &error, RetryContext::unary(1, 2));
 
         assert!(decision.should_retry);
+    }
+
+    #[test]
+    fn failed_dependency_api_error_is_retryable_but_not_not_found() {
+        let not_ready = ProviderError::api_error("bedrock", 424, "model not ready");
+        let missing = ProviderError::api_error("bedrock", 404, "resource not found");
+
+        let retry = RetryPolicy.decide(
+            &RouterConfig::default(),
+            &not_ready,
+            RetryContext::unary(1, 2),
+        );
+        let stop = RetryPolicy.decide(
+            &RouterConfig::default(),
+            &missing,
+            RetryContext::unary(1, 2),
+        );
+
+        assert!(retry.should_retry);
+        assert!(!stop.should_retry);
+        assert_eq!(stop.reason, RetryDecisionReason::NonRetryableFailure);
     }
 
     #[test]

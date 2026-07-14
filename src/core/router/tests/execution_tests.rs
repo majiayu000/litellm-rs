@@ -31,6 +31,16 @@ fn test_is_retryable_error() {
         provider: "test",
         message: "Service unavailable".to_string(),
     }));
+    assert!(is_retryable_error(&ProviderError::api_error(
+        "bedrock",
+        424,
+        "model not ready"
+    )));
+    assert!(!is_retryable_error(&ProviderError::api_error(
+        "bedrock",
+        404,
+        "resource not found"
+    )));
 
     assert!(!is_retryable_error(&ProviderError::authentication(
         "test",

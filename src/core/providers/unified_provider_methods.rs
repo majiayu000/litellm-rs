@@ -340,7 +340,7 @@ impl ProviderError {
             | Self::ProviderUnavailable { .. } => true,
 
             // API errors depend on status code
-            Self::ApiError { status, .. } => matches!(*status, 429 | 500..=599),
+            Self::ApiError { status, .. } => matches!(*status, 424 | 429 | 500..=599),
 
             // Deployment errors might be retryable depending on the issue
             Self::DeploymentError { .. } => true,
@@ -382,6 +382,7 @@ impl ProviderError {
 
             // API errors with 429 (rate limit) or 5xx get retry delays
             Self::ApiError { status, .. } => match *status {
+                424 => Some(3),       // Failed dependency/not ready, retry after a short delay
                 429 => Some(60),      // Rate limit, wait longer
                 500..=599 => Some(3), // Server errors, shorter delay
                 _ => None,

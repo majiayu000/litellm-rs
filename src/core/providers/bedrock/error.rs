@@ -25,9 +25,8 @@ impl BedrockErrorMapper {
             "throttlingexception" | "servicequotaexceededexception" => {
                 Some(ProviderError::rate_limit("bedrock", None))
             }
-            "modelnotreadyexception" | "resourcenotfoundexception" => {
-                Some(ProviderError::model_not_found("bedrock", details))
-            }
+            "modelnotreadyexception" => Some(ProviderError::api_error("bedrock", 424, details)),
+            "resourcenotfoundexception" => Some(ProviderError::api_error("bedrock", 404, details)),
             "badgatewayexception" => Some(ProviderError::network("bedrock", details)),
             "conflictexception" => Some(ProviderError::api_error("bedrock", 409, details)),
             "dependencyfailedexception" => Some(ProviderError::api_error("bedrock", 424, details)),

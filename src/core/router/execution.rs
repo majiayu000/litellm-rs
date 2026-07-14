@@ -20,6 +20,7 @@ pub fn is_retryable_error(error: &ProviderError) -> bool {
         | ProviderError::Timeout { .. }
         | ProviderError::ProviderUnavailable { .. }
         | ProviderError::Network { .. } => true,
+        ProviderError::ApiError { status: 424, .. } => true,
         ProviderError::QuotaExceeded { .. } => retryable_budget_scope(error).is_some(),
         _ => false,
     }

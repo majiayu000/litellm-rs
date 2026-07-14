@@ -217,21 +217,22 @@ mod strict_frame_tests {
     #[test]
     fn maps_modeled_service_exceptions_to_structured_provider_errors() {
         let cases = [
-            ("validationException", "invalid_request", None),
-            ("accessDeniedException", "authentication", None),
-            ("throttlingException", "rate_limit", None),
-            ("serviceQuotaExceededException", "rate_limit", None),
-            ("resourceNotFoundException", "model_not_found", None),
-            ("modelNotReadyException", "model_not_found", None),
-            ("badGatewayException", "network", None),
-            ("conflictException", "api_error", Some(409)),
-            ("dependencyFailedException", "api_error", Some(424)),
-            ("internalServerException", "api_error", Some(500)),
+            ("validationException", "invalid_request", None, false),
+            ("accessDeniedException", "authentication", None, false),
+            ("throttlingException", "rate_limit", None, true),
+            ("serviceQuotaExceededException", "rate_limit", None, true),
+            ("resourceNotFoundException", "api_error", Some(404), false),
+            ("modelNotReadyException", "api_error", Some(424), true),
+            ("badGatewayException", "network", None, true),
+            ("conflictException", "api_error", Some(409), false),
+            ("dependencyFailedException", "api_error", Some(424), true),
+            ("internalServerException", "api_error", Some(500), true),
         ];
 
-        for (exception_type, expected_category, expected_status) in cases {
+        for (exception_type, expected_category, expected_status, expected_retryable) in cases {
             let error = BedrockStream::check_stream_error(&exception_message(exception_type))
                 .expect_err("modeled exception must fail");
+            assert_eq!(error.is_retryable(), expected_retryable, "{exception_type}");
             let (category, status) = match error {
                 ProviderError::InvalidRequest { .. } => ("invalid_request", None),
                 ProviderError::Authentication { .. } => ("authentication", None),
