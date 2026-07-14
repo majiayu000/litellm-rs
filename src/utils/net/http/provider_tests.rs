@@ -7,6 +7,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 type ConnectorBoxError = Box<dyn std::error::Error + Send + Sync>;
 
+fn error_chain_contains(error: &(dyn std::error::Error + 'static), expected: &str) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.to_string().contains(expected) {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
 #[derive(Clone)]
 struct TripwireConnectorLayer {
     address: SocketAddr,
@@ -99,6 +110,25 @@ impl HostResolver for SequenceResolver {
     }
 }
 
+struct TripwireAfterPolicyResolver<R> {
+    inner: Arc<R>,
+    tripwire: SocketAddr,
+}
+
+impl<R> reqwest::dns::Resolve for TripwireAfterPolicyResolver<R>
+where
+    R: reqwest::dns::Resolve + 'static,
+{
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let resolving = self.inner.resolve(name);
+        let tripwire = self.tripwire;
+        Box::pin(async move {
+            drop(resolving.await?);
+            Ok(Box::new(std::iter::once(tripwire)) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 async fn assert_listener_did_not_accept(listener: &tokio::net::TcpListener, context: &str) {
     match tokio::time::timeout(Duration::from_millis(100), listener.accept()).await {
         Err(_) => {}
@@ -117,7 +147,7 @@ async fn assert_public_rebind_is_blocked(
     let url = reqwest::Url::parse(&format!("http://rebind.test:{port}/v1"))?;
     let resolver = Arc::new(SequenceResolver::new(vec![
         vec![SocketAddr::from((Ipv4Addr::new(93, 184, 216, 34), port))],
-        vec![tripwire, SocketAddr::new(blocked_ip, port)],
+        vec![SocketAddr::new(blocked_ip, port)],
     ]));
     let policy = ProviderEndpointPolicy::public_only();
     assert!(
@@ -148,11 +178,30 @@ async fn assert_public_rebind_is_blocked(
         "configuration validation must consume only the public answer"
     );
 
-    let client = ProviderHttpClient::build(policy, Duration::from_secs(1), mode, resolver.clone())?;
-    let result = client.get(url)?.send().await;
+    let client = ProviderHttpClient::build_with_rebinding_tripwire_for_test(
+        policy,
+        Duration::from_secs(1),
+        mode,
+        resolver.clone(),
+        tripwire,
+    )?;
+    let result = tokio::time::timeout(Duration::from_millis(250), client.get(url)?.send()).await;
+    assert_listener_did_not_accept(
+        &listener,
+        &format!("{mode:?} rebind to {blocked_ip} must not open the target socket"),
+    )
+    .await;
+    let error = match result {
+        Ok(Err(error)) => error,
+        Ok(Ok(_)) => panic!("{mode:?} must reject connection-time rebind to {blocked_ip}"),
+        Err(_) => panic!("{mode:?} did not reject connection-time rebind to {blocked_ip}"),
+    };
     assert!(
-        result.is_err(),
-        "{mode:?} must reject connection-time rebind to {blocked_ip}"
+        error_chain_contains(
+            &error,
+            "Host resolves to a disallowed address (SSRF protection)"
+        ),
+        "{mode:?} must fail in the DNS policy for {blocked_ip}, got {error:?}"
     );
     assert_eq!(
         resolver.remaining_answers()?,
@@ -164,11 +213,6 @@ async fn assert_public_rebind_is_blocked(
         ["rebind.test", "rebind.test"],
         "the injected resolver must exclusively serve validation and connection"
     );
-    assert_listener_did_not_accept(
-        &listener,
-        &format!("{mode:?} rebind to {blocked_ip} must not open the target socket"),
-    )
-    .await;
     Ok(())
 }
 
@@ -202,6 +246,27 @@ impl ProviderHttpClient {
             client: Arc::new(client),
             policy,
         })
+    }
+
+    fn build_with_rebinding_tripwire_for_test(
+        policy: ProviderEndpointPolicy,
+        timeout: Duration,
+        mode: ProviderClientMode,
+        resolver: Arc<dyn HostResolver>,
+        tripwire: SocketAddr,
+    ) -> Result<Self, ProviderHttpClientError> {
+        let policy_resolver = Arc::new(PolicyDnsResolver {
+            access: policy.access(),
+            resolver,
+        });
+        let resolver = Arc::new(TripwireAfterPolicyResolver {
+            inner: policy_resolver,
+            tripwire,
+        });
+        let client = Arc::new(Self::build_client_with_dns_resolver(
+            &policy, timeout, mode, resolver,
+        )?);
+        Ok(Self { client, policy })
     }
 }
 
