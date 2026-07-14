@@ -14,6 +14,7 @@ mod builder_tests;
 mod cohere_builder;
 #[cfg(test)]
 mod endpoint_access_tests;
+mod endpoint_policy;
 #[cfg(feature = "providers-extended")]
 mod fal_ai_builder;
 #[cfg(feature = "providers-extended")]
@@ -23,12 +24,16 @@ mod registry;
 mod replicate_builder;
 mod resolver;
 
+pub(crate) use endpoint_policy::{
+    invalid_endpoint, selector_allows_implicit_private, selector_supports_endpoint_access,
+};
 pub use resolver::is_provider_selector_supported;
 
 use super::provider_type::ProviderType;
 use super::unified_provider::ProviderError;
 use super::{Provider, openai_like, registry as provider_registry};
 use crate::core::net::ProviderEndpointAccess;
+use endpoint_policy::provider_type_supports;
 use tracing::warn;
 
 fn provider_diagnostic_name(provider_type: &ProviderType) -> &'static str {
@@ -52,59 +57,6 @@ fn catalog_definition_for_supported_selector(
         Some(_) => None,
         None => Some(def),
     }
-}
-
-pub(crate) fn provider_type_supports_endpoint_access(provider_type: &ProviderType) -> bool {
-    match provider_type {
-        ProviderType::OpenAI
-        | ProviderType::OpenAICompatible
-        | ProviderType::Anthropic
-        | ProviderType::Mistral
-        | ProviderType::Cohere
-        | ProviderType::Azure
-        | ProviderType::AzureAI
-        | ProviderType::Bedrock
-        | ProviderType::VertexAI
-        | ProviderType::Gemini => true,
-        ProviderType::Cloudflare
-        | ProviderType::FalAI
-        | ProviderType::Replicate
-        | ProviderType::GitHubCopilot => false,
-        _ => provider_registry::catalog_definition_for_provider_type(provider_type).is_some(),
-    }
-}
-
-pub(crate) fn is_provider_endpoint_access_supported(selector: &str) -> bool {
-    if catalog_definition_for_supported_selector(selector).is_some() {
-        return true;
-    }
-    selector
-        .parse::<ProviderType>()
-        .is_ok_and(|provider_type| provider_type_supports_endpoint_access(&provider_type))
-}
-
-pub(crate) fn selector_allows_implicit_private_endpoint(selector: &str) -> bool {
-    if selector
-        .parse::<ProviderType>()
-        .is_ok_and(|provider_type| matches!(provider_type, ProviderType::Bedrock))
-    {
-        return true;
-    }
-    catalog_definition_for_supported_selector(selector)
-        .and_then(|definition| url::Url::parse(definition.base_url).ok())
-        .is_some_and(|url| url.host_str() == Some("localhost"))
-}
-
-pub(crate) fn config_has_explicit_endpoint(config: &serde_json::Value) -> bool {
-    let has_url = |key| {
-        config
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty())
-    };
-    config.get("endpoint_access").is_some_and(|v| !v.is_null())
-        || has_url("base_url")
-        || has_url("api_base")
 }
 
 /// Create a provider from configuration
@@ -136,16 +88,36 @@ pub async fn create_provider(
     } else {
         provider_type.as_str()
     };
+    if ["base_url", "api_base"]
+        .into_iter()
+        .any(|key| invalid_endpoint(settings.get(key)))
+    {
+        return Err(ProviderError::configuration(
+            "provider",
+            "endpoint must be a string",
+        ));
+    }
+    let base_endpoint = base_url.as_deref().filter(|url| !url.trim().is_empty());
     let settings_endpoint = ["base_url", "api_base"].into_iter().any(|key| {
         settings
             .get(key)
             .and_then(Value::as_str)
             .is_some_and(|value| !value.trim().is_empty())
     });
+    let has_endpoint = base_endpoint.is_some() || settings_endpoint;
     if settings.contains_key("endpoint_access") {
         return Err(ProviderError::configuration(
             "provider",
             "endpoint_access must be configured as a top-level provider field",
+        ));
+    }
+    if endpoint_access == ProviderEndpointAccess::PrivateNetwork
+        && !has_endpoint
+        && !selector_allows_implicit_private(provider_selector)
+    {
+        return Err(ProviderError::configuration(
+            "provider",
+            "private_network endpoint access requires a base URL",
         ));
     }
     if let Some(def) = catalog_definition_for_supported_selector(provider_selector) {
@@ -165,7 +137,7 @@ pub async fn create_provider(
             });
         let mut oai_config = def.to_openai_like_config(
             effective_key.as_deref(),
-            base_url.as_deref().or(settings_base_url.as_deref()),
+            base_endpoint.or(settings_base_url.as_deref()),
         );
         oai_config.base.endpoint_access = endpoint_access;
         oai_config.base.timeout = timeout;
@@ -209,10 +181,8 @@ pub async fn create_provider(
         .parse::<ProviderType>()
         .map_err(|e| ProviderError::invalid_request("provider_type", e.to_string()))?;
 
-    if !provider_type_supports_endpoint_access(&provider_type_enum)
-        && (endpoint_access == ProviderEndpointAccess::PrivateNetwork
-            || base_url.is_some()
-            || settings_endpoint)
+    if !provider_type_supports(&provider_type_enum)
+        && (endpoint_access == ProviderEndpointAccess::PrivateNetwork || has_endpoint)
     {
         return Err(ProviderError::configuration(
             provider_diagnostic_name(&provider_type_enum),
@@ -284,6 +254,7 @@ pub async fn create_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::net::ProviderEndpointAccess::{PrivateNetwork, PublicOnly};
     use crate::core::providers::registry as provider_registry;
 
     #[test]
@@ -309,6 +280,32 @@ mod tests {
             "{selector} should remain a pure catalog-only selector for this guard"
         );
         assert!(catalog_definition_for_supported_selector(selector).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_catalog_entries_are_creatable_via_factory() {
+        for (name, def) in provider_registry::PROVIDER_CATALOG.iter() {
+            let is_local = def.base_url.contains("localhost");
+            let config = crate::config::models::provider::ProviderConfig {
+                name: (*name).to_string(),
+                provider_type: (*name).to_string(),
+                api_key: "test-key".into(),
+                endpoint_access: if is_local { PrivateNetwork } else { PublicOnly },
+                ..Default::default()
+            };
+            let mut opposite = config.clone();
+            opposite.endpoint_access = if is_local { PublicOnly } else { PrivateNetwork };
+            if is_local {
+                assert!(create_provider(opposite).await.is_err());
+            } else {
+                assert!(crate::config::Validate::validate(&opposite).is_err());
+            }
+            let provider = create_provider(config)
+                .await
+                .unwrap_or_else(|error| panic!("Catalog provider '{name}': {error}"));
+            assert!(matches!(&provider, Provider::OpenAILike(_)));
+            assert_eq!(provider.capabilities(), def.capabilities);
+        }
     }
 
     #[tokio::test]

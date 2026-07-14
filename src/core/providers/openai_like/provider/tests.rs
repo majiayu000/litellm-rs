@@ -8,6 +8,12 @@ use tokio::net::{TcpListener, TcpStream};
 
 const TEST_PUBLIC_API_BASE: &str = "https://api.example.com/v1";
 
+fn private_openai_like_config(api_base: impl Into<String>) -> OpenAILikeConfig {
+    let mut config = crate::core::providers::openai_like::config::test_openai_like_config(api_base);
+    config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
+    config
+}
+
 async fn read_full_http_request(socket: &mut TcpStream) -> std::io::Result<()> {
     let mut request_bytes = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -154,7 +160,7 @@ async fn test_openai_like_streaming_maps_non_success_status_before_sse()
 
     let body = r#"{"error":{"type":"rate_limit_error","message":"slow down","retry_after":5}}"#;
     let api_base = openai_like_stream_response_url("429 Too Many Requests", body, true).await?;
-    let config = crate::core::providers::openai_like::config::test_openai_like_config(api_base);
+    let config = private_openai_like_config(api_base);
     let provider = OpenAILikeProvider::new(config).await?;
 
     let err = match LLMProvider::chat_completion_stream(
@@ -189,13 +195,11 @@ async fn openai_like_private_health_uses_policy_bound_runtime_client()
     use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 
     let api_base = openai_like_stream_response_url("200 OK", "{}", true).await?;
-    let config = crate::core::providers::openai_like::config::test_openai_like_config(api_base);
+    let config = private_openai_like_config(api_base);
     let provider = OpenAILikeProvider::new(config).await?;
 
-    assert_eq!(
-        LLMProvider::health_check(&provider).await,
-        HealthStatus::Healthy
-    );
+    let health = LLMProvider::health_check(&provider).await;
+    assert_eq!(health, HealthStatus::Healthy);
     Ok(())
 }
 
@@ -204,10 +208,7 @@ async fn openai_like_policy_pool_rejects_cross_authority_without_connect()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = TcpListener::bind(("127.0.0.1", 0)).await?;
     let target = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let config = crate::core::providers::openai_like::config::test_openai_like_config(format!(
-        "http://{}",
-        source.local_addr()?
-    ));
+    let config = private_openai_like_config(format!("http://{}", source.local_addr()?));
     let provider = OpenAILikeProvider::new(config).await?;
     let target_url = format!("http://{}/models", target.local_addr()?);
 
@@ -217,20 +218,15 @@ async fn openai_like_policy_pool_rejects_cross_authority_without_connect()
         .await
         .expect_err("cross-authority request must fail closed");
     assert!(error.to_string().contains("authority"));
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), target.accept())
-            .await
-            .is_err(),
-        "cross-authority request must not reach the listener"
-    );
+    let accepted =
+        tokio::time::timeout(std::time::Duration::from_millis(100), target.accept()).await;
+    assert!(accepted.is_err());
     Ok(())
 }
 
 #[tokio::test]
 async fn openai_like_private_metadata_endpoint_is_permanently_rejected() {
-    let mut config = OpenAILikeConfig::new("http://169.254.169.254/v1").with_skip_api_key(true);
-    config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
-
+    let config = private_openai_like_config("http://169.254.169.254/v1");
     let error = OpenAILikeProvider::new(config)
         .await
         .expect_err("metadata endpoints must remain forbidden");
@@ -241,7 +237,7 @@ async fn openai_like_private_metadata_endpoint_is_permanently_rejected() {
 async fn ordinary_error_body_failure_preserves_http_status()
 -> Result<(), Box<dyn std::error::Error>> {
     let api_base = openai_like_stream_response_url("401 Unauthorized", "{}", false).await?;
-    let config = crate::core::providers::openai_like::config::test_openai_like_config(api_base);
+    let config = private_openai_like_config(api_base);
     let provider = OpenAILikeProvider::new(config).await?;
 
     let error = provider

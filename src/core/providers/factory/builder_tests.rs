@@ -424,7 +424,7 @@ fn test_factory_endpoint_access_defaults_and_rejects_invalid_values() {
 #[tokio::test]
 async fn test_gateway_and_direct_registry_endpoint_access_contract() {
     let mut config = crate::config::models::provider::ProviderConfig {
-        name: "openai-compatible-test".to_string(),
+        name: "test-openai-like".to_string(),
         provider_type: "openai_compatible".to_string(),
         api_key: "test-key".to_string(),
         base_url: Some("https://api.example.com/v1".to_string()),
@@ -461,7 +461,7 @@ async fn test_gateway_and_direct_registry_endpoint_access_contract() {
         ..Default::default()
     };
     settings_override.settings.insert(
-        "endpoint_access".into(),
+        "endpoint_access".to_string(),
         serde_json::json!("private_network"),
     );
     let error = create_provider(settings_override)

@@ -1,6 +1,5 @@
 use super::OpenAIProvider;
 use super::config::test_openai_config;
-use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::base::HttpMethod;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
@@ -120,10 +119,8 @@ async fn openai_private_health_uses_policy_bound_runtime_client()
     let config = test_openai_config(api_base, "sk-test-health");
     let provider = OpenAIProvider::new(config).await?;
 
-    assert_eq!(
-        LLMProvider::health_check(&provider).await,
-        HealthStatus::Healthy
-    );
+    let health = LLMProvider::health_check(&provider).await;
+    assert_eq!(health, HealthStatus::Healthy);
     Ok(())
 }
 
@@ -132,10 +129,8 @@ async fn openai_policy_pool_rejects_cross_authority_without_connect()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = TcpListener::bind(("127.0.0.1", 0)).await?;
     let target = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let config = test_openai_config(
-        format!("http://{}", source.local_addr()?),
-        "sk-test-authority",
-    );
+    let source_url = format!("http://{}", source.local_addr()?);
+    let config = test_openai_config(source_url, "sk-test-authority");
     let provider = OpenAIProvider::new(config).await?;
     let target_url = format!("http://{}/models", target.local_addr()?);
 
@@ -145,31 +140,22 @@ async fn openai_policy_pool_rejects_cross_authority_without_connect()
         .await
         .expect_err("cross-authority request must fail closed");
     assert!(error.to_string().contains("authority"));
+    let body = serde_json::json!({"stream": true});
     let streaming_error = provider
         .pool_manager
-        .execute_streaming_request(
-            &target_url,
-            Vec::new(),
-            serde_json::json!({"stream": true}),
-            "openai",
-        )
+        .execute_streaming_request(&target_url, Vec::new(), body, "openai")
         .await
         .expect_err("streaming cross-authority request must fail closed");
     assert!(streaming_error.to_string().contains("authority"));
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), target.accept())
-            .await
-            .is_err(),
-        "cross-authority request must not reach the listener"
-    );
+    let accepted =
+        tokio::time::timeout(std::time::Duration::from_millis(100), target.accept()).await;
+    assert!(accepted.is_err());
     Ok(())
 }
 
 #[tokio::test]
 async fn openai_private_metadata_endpoint_is_permanently_rejected() {
-    let mut config = test_openai_config("http://169.254.169.254/v1", "sk-test-metadata");
-    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
-
+    let config = test_openai_config("http://169.254.169.254/v1", "sk-test-metadata");
     let error = OpenAIProvider::new(config)
         .await
         .expect_err("metadata endpoints must remain forbidden");

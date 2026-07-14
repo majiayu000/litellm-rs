@@ -227,10 +227,8 @@ mod tests {
         assert_eq!(config.api_key, "sk-test");
         assert_eq!(config.base_url.as_deref(), Some("http://127.0.0.1:1234/v1"));
         assert_eq!(config.models, vec!["gpt-test"]);
-        assert_eq!(
-            config.endpoint_access,
-            ProviderEndpointAccess::PrivateNetwork
-        );
+        let private = ProviderEndpointAccess::PrivateNetwork;
+        assert_eq!(config.endpoint_access, private);
         assert!(config.organization.is_none());
         assert!(config.project.is_none());
         assert!(config.settings.is_empty());
@@ -240,14 +238,9 @@ mod tests {
     fn loopback_runtime_helpers_opt_in_to_private_policy() {
         let openai = mock_openai_runtime_config("http://127.0.0.1:1234/v1", "sk-test");
         let openai_like = mock_openai_like_runtime_config("http://127.0.0.1:1235/v1");
-        assert_eq!(
-            openai.base.endpoint_access,
-            ProviderEndpointAccess::PrivateNetwork
-        );
-        assert_eq!(
-            openai_like.base.endpoint_access,
-            ProviderEndpointAccess::PrivateNetwork
-        );
+        let private = ProviderEndpointAccess::PrivateNetwork;
+        assert_eq!(openai.base.endpoint_access, private);
+        assert_eq!(openai_like.base.endpoint_access, private);
     }
 
     #[test]

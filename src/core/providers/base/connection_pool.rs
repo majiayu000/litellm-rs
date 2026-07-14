@@ -363,16 +363,13 @@ impl GlobalPoolManager {
         provider: &'static str,
         config: BaseConfig,
     ) -> Result<Self, ProviderError> {
-        let streaming_header_timeout = Duration::from_secs(STREAMING_HEADER_TIMEOUT_SECS);
-        let ordinary = BaseHttpClient::new_for_provider(provider, config.clone())?;
-        let streaming = BaseHttpClient::new_for_provider_streaming(provider, config)?;
         Ok(Self {
             pool: Arc::new(ConnectionPool::new()?),
             policy: Some(ProviderPool {
                 provider,
-                ordinary,
-                streaming,
-                streaming_header_timeout,
+                ordinary: BaseHttpClient::new_for_provider(provider, config.clone())?,
+                streaming: BaseHttpClient::new_for_provider_streaming(provider, config)?,
+                streaming_header_timeout: Duration::from_secs(STREAMING_HEADER_TIMEOUT_SECS),
             }),
         })
     }
@@ -459,20 +456,17 @@ impl GlobalPoolManager {
     ) -> Result<reqwest::Response, ProviderError> {
         if let Some(policy) = &self.policy {
             let request = apply_provider_headers(policy.streaming.post(url)?, headers).json(&body);
-            return match tokio::time::timeout(policy.streaming_header_timeout, request.send()).await
-            {
-                Ok(Ok(response)) => Ok(response),
-                Ok(Err(error)) => {
-                    Err(StreamingRequestError::Request(error).into_provider_error(policy.provider))
-                }
-                Err(_) => Err(ProviderError::timeout(
-                    policy.provider,
-                    format!(
-                        "streaming request did not receive response headers within {:?}",
-                        policy.streaming_header_timeout
-                    ),
-                )),
-            };
+            let response = tokio::time::timeout(policy.streaming_header_timeout, request.send())
+                .await
+                .map_err(|_| {
+                    StreamingRequestError::HeaderTimeout {
+                        timeout: policy.streaming_header_timeout,
+                    }
+                    .into_provider_error(policy.provider)
+                })?;
+            return response.map_err(|error| {
+                StreamingRequestError::Request(error).into_provider_error(policy.provider)
+            });
         }
 
         let request = apply_headers(streaming_unbounded_client().post(url).json(&body), headers);

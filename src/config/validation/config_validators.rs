@@ -10,6 +10,7 @@ use crate::config::models::server::ServerConfig;
 use crate::core::net::{
     validate_provider_endpoint_url, validate_provider_endpoint_url_without_resolution,
 };
+use crate::core::providers::factory::invalid_endpoint;
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -166,6 +167,12 @@ impl Validate for ProviderConfig {
                 self.name
             ));
         }
+        if ["base_url", "api_base"]
+            .into_iter()
+            .any(|key| invalid_endpoint(self.settings.get(key)))
+        {
+            return Err(format!("Provider {} endpoint must be a string", self.name));
+        }
         let setting_url = |key| {
             self.settings
                 .get(key)
@@ -181,7 +188,7 @@ impl Validate for ProviderConfig {
         let has_configured_endpoint = configured_endpoint.is_some();
         if (self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
             || has_configured_endpoint)
-            && !crate::core::providers::factory::is_provider_endpoint_access_supported(
+            && !crate::core::providers::factory::selector_supports_endpoint_access(
                 provider_selector,
             )
         {
@@ -192,9 +199,7 @@ impl Validate for ProviderConfig {
         }
         if self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
             && !has_configured_endpoint
-            && !crate::core::providers::factory::selector_allows_implicit_private_endpoint(
-                provider_selector,
-            )
+            && !crate::core::providers::factory::selector_allows_implicit_private(provider_selector)
         {
             return Err(format!(
                 "Provider {} private_network endpoint access requires a base URL",
@@ -402,7 +407,7 @@ mod endpoint_access_tests {
 
     fn public_provider() -> ProviderConfig {
         ProviderConfig {
-            name: "endpoint-policy".to_string(),
+            name: "staged".to_string(),
             provider_type: "openai_compatible".to_string(),
             api_key: "sk-test".to_string(),
             base_url: Some("https://8.8.8.8/v1".to_string()),
@@ -437,7 +442,6 @@ mod endpoint_access_tests {
         config.base_url = Some("http://127.0.0.1:18080/v1".to_string());
         config.endpoint_access = ProviderEndpointAccess::PublicOnly;
         assert!(Validate::validate(&config).is_err());
-        config.base_url = Some("https://8.8.8.8/v1".to_string());
         config.base_url = Some("wss://8.8.8.8/v1".to_string());
         assert!(Validate::validate(&config).is_err());
         config.base_url = Some("https://8.8.8.8/v1".to_string());

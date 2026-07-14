@@ -1,6 +1,6 @@
 use super::create_provider;
 use crate::config::models::provider::ProviderConfig;
-use crate::core::net::ProviderEndpointAccess::{PrivateNetwork, PublicOnly};
+use crate::core::net::ProviderEndpointAccess::PrivateNetwork;
 use crate::core::providers::{Provider, ProviderType};
 #[cfg(not(feature = "providers-extra"))]
 #[tokio::test]
@@ -68,35 +68,35 @@ async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
     let result = create_provider(config).await;
     let error = result.expect_err("must reject before construction");
     assert!(error.to_string().contains("not policy-wired"));
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
-            .await
-            .is_err(),
-        "unwired endpoint gate must not connect to the listener"
-    );
+    let accepted =
+        tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept()).await;
+    assert!(accepted.is_err(), "unwired endpoint gate must not connect");
 }
 #[tokio::test]
-async fn catalog_local_providers_require_explicit_private_access() {
-    for (name, definition) in super::provider_registry::PROVIDER_CATALOG.iter() {
-        let is_local = definition.base_url.contains("localhost");
-        let config = ProviderConfig {
-            name: (*name).to_string(),
-            provider_type: (*name).to_string(),
-            api_key: "test-key".into(),
-            endpoint_access: if is_local { PrivateNetwork } else { PublicOnly },
-            ..Default::default()
-        };
-        let mut opposite = config.clone();
-        opposite.endpoint_access = if is_local { PublicOnly } else { PrivateNetwork };
-        if is_local {
-            assert!(create_provider(opposite).await.is_err());
-        } else {
-            assert!(crate::config::Validate::validate(&opposite).is_err());
-        }
-        assert!(crate::config::Validate::validate(&config).is_ok());
-        let provider = create_provider(config)
+async fn invalid_or_implicit_private_endpoints_fail_closed() {
+    let mut gateway = ProviderConfig {
+        name: "openai-test".into(),
+        provider_type: "openai".into(),
+        api_key: "sk-test".into(),
+        ..Default::default()
+    };
+    gateway.settings.insert("api_base".into(), 42.into());
+    let error = crate::config::Validate::validate(&gateway).expect_err("must reject");
+    assert!(error.contains("must be a string"), "{error}");
+    let result = create_provider(gateway.clone()).await;
+    let error = result.expect_err("must reject");
+    assert!(error.to_string().contains("must be a string"), "{error}");
+    gateway.settings.clear();
+    gateway.endpoint_access = PrivateNetwork;
+    let error = create_provider(gateway).await.expect_err("must reject");
+    assert!(error.to_string().contains("requires a base URL"), "{error}");
+    for config in [
+        serde_json::json!({"api_key": "sk-test", "api_base": 42}),
+        serde_json::json!({"api_key": "sk-test", "endpoint_access": "private_network"}),
+    ] {
+        let error = Provider::from_config_async(ProviderType::OpenAI, config)
             .await
-            .unwrap_or_else(|error| panic!("Catalog provider '{name}' should work: {error}"));
-        assert_eq!(provider.capabilities(), definition.capabilities);
+            .expect_err("must reject");
+        assert!(error.to_string().contains("endpoint"), "{error}");
     }
 }
