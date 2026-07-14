@@ -210,21 +210,11 @@ fn has_test_cfg(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-fn path_starts_with(path: &[String], prefix: &[&str]) -> bool {
-    path.len() >= prefix.len()
-        && path
-            .iter()
-            .zip(prefix)
-            .all(|(segment, expected)| segment == expected)
-}
+#[rustfmt::skip]
+fn path_starts_with(path: &[String], prefix: &[&str]) -> bool { path.len() >= prefix.len() && path.iter().zip(prefix).all(|(segment, expected)| segment == expected) }
 
-fn path_is_prefix_of(path: &[String], target: &[&str]) -> bool {
-    path.len() <= target.len()
-        && path
-            .iter()
-            .zip(target)
-            .all(|(segment, expected)| segment == expected)
-}
+#[rustfmt::skip]
+fn path_is_prefix_of(path: &[String], target: &[&str]) -> bool { path.len() <= target.len() && path.iter().zip(target).all(|(segment, expected)| segment == expected) }
 
 fn canonicalize_path(module_path: &[String], path: &[String]) -> Option<Vec<String>> {
     let first = path.first()?;
@@ -314,43 +304,14 @@ fn flatten_use_tree(tree: &UseTree, prefix: &mut Vec<String>, paths: &mut Vec<Ve
     }
 }
 
+#[rustfmt::skip]
 fn collect_manager_aliases(tree: &UseTree, matched: bool, aliases: &mut Vec<String>) {
     match tree {
-        UseTree::Path(path) => collect_manager_aliases(
-            &path.tree,
-            matched || ident_text(&path.ident) == "GlobalPoolManager",
-            aliases,
-        ),
-        UseTree::Name(name) if matched || ident_text(&name.ident) == "GlobalPoolManager" => {
-            aliases.push(ident_text(&name.ident));
-        }
-        UseTree::Rename(rename) if matched || ident_text(&rename.ident) == "GlobalPoolManager" => {
-            aliases.push(ident_text(&rename.rename));
-        }
-        UseTree::Group(group) => {
-            for item in &group.items {
-                collect_manager_aliases(item, matched, aliases);
-            }
-        }
+        UseTree::Path(path) => collect_manager_aliases(&path.tree, matched || ident_text(&path.ident) == "GlobalPoolManager", aliases),
+        UseTree::Name(name) if matched || ident_text(&name.ident) == "GlobalPoolManager" => aliases.push(ident_text(&name.ident)),
+        UseTree::Rename(rename) if matched || ident_text(&rename.ident) == "GlobalPoolManager" => aliases.push(ident_text(&rename.rename)),
+        UseTree::Group(group) => group.items.iter().for_each(|item| collect_manager_aliases(item, matched, aliases)),
         _ => {}
-    }
-}
-
-struct ManagerAliasCollector(Vec<String>);
-
-impl<'ast> Visit<'ast> for ManagerAliasCollector {
-    fn visit_item_use(&mut self, item: &'ast ItemUse) {
-        collect_manager_aliases(&item.tree, false, &mut self.0);
-        visit::visit_item_use(self, item);
-    }
-
-    fn visit_item_type(&mut self, item: &'ast ItemType) {
-        if let Type::Path(ty) = &*item.ty
-            && ty.path.is_ident("GlobalPoolManager")
-        {
-            self.0.push(ident_text(&item.ident));
-        }
-        visit::visit_item_type(self, item);
     }
 }
 
@@ -358,17 +319,12 @@ struct BoundaryVisitor {
     module_path: Vec<String>,
     context: Vec<String>,
     violations: Vec<String>,
-    manager_aliases: Vec<String>,
     manager_present: bool,
 }
 
 impl BoundaryVisitor {
     fn record(&mut self, violation: String) {
-        let context = self
-            .context
-            .last()
-            .map(String::as_str)
-            .unwrap_or("<module>");
+        let context = self.context.last().map_or("<module>", String::as_str);
         self.violations.push(format!("{context}: {violation}"));
     }
 
@@ -383,6 +339,12 @@ impl BoundaryVisitor {
 
 impl<'ast> Visit<'ast> for BoundaryVisitor {
     fn visit_item_use(&mut self, item: &'ast ItemUse) {
+        let mut aliases = Vec::new();
+        collect_manager_aliases(&item.tree, false, &mut aliases);
+        aliases.retain(|alias| alias != "GlobalPoolManager");
+        for alias in aliases {
+            self.record(format!("legacy GlobalPoolManager alias {alias}"));
+        }
         let mut paths = Vec::new();
         flatten_use_tree(&item.tree, &mut Vec::new(), &mut paths);
         for path in paths {
@@ -398,7 +360,7 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
             .collect();
         self.check_segments(segments.clone(), false);
         if let Some(window) = segments.windows(2).find(|window| {
-            self.manager_aliases.contains(&window[0])
+            window[0] == "GlobalPoolManager"
                 && matches!(window[1].as_str(), "new" | "shared" | "default")
         }) {
             self.record(format!(
@@ -411,6 +373,14 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
             self.record("legacy GlobalPoolManager inferred Default::default() constructor".into());
         }
         visit::visit_path(self, path);
+    }
+
+    #[rustfmt::skip]
+    fn visit_item_type(&mut self, item: &'ast ItemType) {
+        if let Type::Path(ty) = &*item.ty && ty.path.segments.last().is_some_and(|segment| segment.ident == "GlobalPoolManager") {
+            self.record(format!("legacy GlobalPoolManager alias {}", item.ident));
+        }
+        visit::visit_item_type(self, item);
     }
 
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
@@ -486,8 +456,6 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
 
 fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>, syn::Error> {
     let file = syn::parse_file(source)?;
-    let mut aliases = ManagerAliasCollector(vec!["GlobalPoolManager".to_string()]);
-    aliases.visit_file(&file);
     let mut visitor = BoundaryVisitor {
         module_path: module_path
             .iter()
@@ -495,7 +463,6 @@ fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>
             .collect(),
         context: Vec::new(),
         violations: Vec::new(),
-        manager_aliases: aliases.0,
         manager_present: source.contains("GlobalPoolManager"),
     };
     visitor.visit_file(&file);
@@ -599,7 +566,7 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "fn probe() { GlobalPoolManager::new(); }",
         "fn probe() { GlobalPoolManager::shared(); }",
         "fn probe() { Pool::new(); } use crate::core::providers::base::GlobalPoolManager as Pool;",
-        "type Pool = GlobalPoolManager; fn probe() { Pool::shared(); }",
+        "type Pool = crate::core::providers::base::GlobalPoolManager; fn probe() { Pool::shared(); }",
         "fn probe() -> GlobalPoolManager { Default::default() }",
         "use crate::core as raw_core; fn probe() { raw_core::http::default_outbound_client(); }",
         "use crate::utils as raw_utils; fn probe() { raw_utils::net::http::get_shared_client(); }",
@@ -692,6 +659,7 @@ fn collect_boundary_inventory() -> Vec<(String, Vec<String>, String)> {
 #[test]
 fn provider_runtime_http_boundary_has_no_unapproved_bypass() {
     let base_source = include_str!("../http.rs");
+    let repository_root = FsPath::new(env!("CARGO_MANIFEST_DIR"));
     let sources = collect_boundary_inventory();
     assert!(
         sources.len() > 300,
@@ -740,6 +708,26 @@ fn provider_runtime_http_boundary_has_no_unapproved_bypass() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let mut all_sources = Vec::new();
+    collect_production_sources(
+        repository_root,
+        &repository_root.join("src"),
+        &["crate".into()],
+        &mut all_sources,
+    )
+    .unwrap_or_else(|error| panic!("repository alias inventory failed: {error}"));
+    for (path, module_path, source) in all_sources {
+        let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
+        let violations = boundary_violations(&source, &module_path)
+            .unwrap_or_else(|error| panic!("{path} must parse: {error}"));
+        let has_alias = violations
+            .iter()
+            .any(|violation| violation.contains("GlobalPoolManager alias"));
+        assert!(
+            !has_alias,
+            "{path}: GlobalPoolManager aliases are forbidden across production src"
+        );
+    }
     for pattern in [
         ["pub fn ", "inner("].concat(),
         ["pub fn ", "into_inner("].concat(),
