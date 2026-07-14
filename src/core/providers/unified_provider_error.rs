@@ -107,8 +107,6 @@ pub enum ProviderError {
         provider: &'static str,
         status: u16,
         message: String,
-        /// Provider mapper asserted that retry is safe for this modeled error.
-        retryable: bool,
     },
 
     /// Token limit exceeded (separate from context length)

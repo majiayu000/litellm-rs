@@ -103,7 +103,11 @@ impl OpenAIError {
 
     /// Create OpenAI API error with status code
     pub fn openai_api_error(status: u16, message: impl Into<String>) -> Self {
-        Self::api_error("openai", status, message)
+        Self::ApiError {
+            provider: "openai",
+            status,
+            message: message.into(),
+        }
     }
 
     /// Create generic OpenAI error

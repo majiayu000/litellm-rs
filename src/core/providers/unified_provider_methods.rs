@@ -184,33 +184,7 @@ impl ProviderError {
             provider,
             status,
             message: message.into(),
-            retryable: false,
         }
-    }
-
-    /// Create a provider-modeled API error with an explicit retry signal.
-    pub(crate) fn retryable_api_error(
-        provider: &'static str,
-        status: u16,
-        message: impl Into<String>,
-    ) -> Self {
-        Self::ApiError {
-            provider,
-            status,
-            message: message.into(),
-            retryable: true,
-        }
-    }
-
-    /// Whether an API error carries a provider-modeled retry signal.
-    pub(crate) fn is_explicitly_retryable_api_error(&self) -> bool {
-        matches!(
-            self,
-            Self::ApiError {
-                retryable: true,
-                ..
-            }
-        )
     }
 
     /// Create token limit exceeded error
@@ -366,9 +340,7 @@ impl ProviderError {
             | Self::ProviderUnavailable { .. } => true,
 
             // API errors depend on status code
-            Self::ApiError { status, .. } => {
-                self.is_explicitly_retryable_api_error() || matches!(*status, 429 | 500..=599)
-            }
+            Self::ApiError { status, .. } => matches!(*status, 429 | 500..=599),
 
             // Deployment errors might be retryable depending on the issue
             Self::DeploymentError { .. } => true,
@@ -406,20 +378,18 @@ impl ProviderError {
         match self {
             Self::RateLimit { retry_after, .. } => *retry_after,
             Self::Network { .. } | Self::Timeout { .. } => Some(1),
+            Self::ProviderUnavailable {
+                provider: "bedrock",
+                ..
+            } => Some(3),
             Self::ProviderUnavailable { .. } => Some(5),
 
             // API errors with 429 (rate limit) or 5xx get retry delays
-            Self::ApiError { status, .. } => {
-                if self.is_explicitly_retryable_api_error() {
-                    Some(3)
-                } else {
-                    match *status {
-                        429 => Some(60),      // Rate limit, wait longer
-                        500..=599 => Some(3), // Server errors, shorter delay
-                        _ => None,
-                    }
-                }
-            }
+            Self::ApiError { status, .. } => match *status {
+                429 => Some(60),      // Rate limit, wait longer
+                500..=599 => Some(3), // Server errors, shorter delay
+                _ => None,
+            },
 
             // Deployment errors get a retry delay
             Self::DeploymentError { .. } => Some(5),

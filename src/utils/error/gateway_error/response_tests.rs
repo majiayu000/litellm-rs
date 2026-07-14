@@ -429,7 +429,6 @@ fn test_provider_error_api_error_passthrough() {
         provider: "unknown",
         status: 418,
         message: "I'm a teapot".to_string(),
-        retryable: false,
     };
     let error = GatewayError::Provider(provider_error);
     let response = error.error_response();
@@ -442,7 +441,6 @@ fn test_provider_error_api_error_invalid_status_fallback() {
         provider: "unknown",
         status: 0,
         message: "Invalid status".to_string(),
-        retryable: false,
     };
     let error = GatewayError::Provider(provider_error);
     let response = error.error_response();

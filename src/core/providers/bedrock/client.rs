@@ -234,12 +234,21 @@ impl BedrockClient {
             return Ok(response);
         }
         let status = response.status().as_u16();
+        let aws_error_type = response
+            .headers()
+            .get("x-amzn-errortype")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let error_body = response
             .text()
             .await
             .map_err(|error| self.error_mapper.map_network_error(&error))?;
         error!(status, body_bytes = error_body.len(), "Bedrock API error");
-        Err(self.error_mapper.map_http_error(status, &error_body))
+        Err(self.error_mapper.map_http_response_error(
+            status,
+            &error_body,
+            aws_error_type.as_deref(),
+        ))
     }
 
     /// Send a streaming request to Bedrock API
@@ -282,23 +291,7 @@ impl BedrockClient {
             .await
             .map_err(|e| self.error_mapper.map_network_error(&e))?;
 
-        // Check for errors
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            let error_body_bytes = error_body.len();
-            error!(
-                status,
-                body_bytes = error_body_bytes,
-                "Bedrock streaming API error"
-            );
-            return Err(self.error_mapper.map_http_error(status, &error_body));
-        }
-
-        Ok(response)
+        self.ensure_successful_response(response).await
     }
 
     /// Send a GET request (for operations like listing models)
@@ -321,23 +314,7 @@ impl BedrockClient {
             .await
             .map_err(|e| self.error_mapper.map_network_error(&e))?;
 
-        // Check for errors
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            let error_body_bytes = error_body.len();
-            error!(
-                status,
-                body_bytes = error_body_bytes,
-                "Bedrock GET API error"
-            );
-            return Err(self.error_mapper.map_http_error(status, &error_body));
-        }
-
-        Ok(response)
+        self.ensure_successful_response(response).await
     }
 
     /// Health check by listing foundation models

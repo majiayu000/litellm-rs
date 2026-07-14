@@ -209,9 +209,9 @@ fn failure_is_retryable(facts: ProviderFailureFacts, context: RetryContext) -> b
         | ProviderFailureKind::ProviderUnavailable
         | ProviderFailureKind::Network
         | ProviderFailureKind::DeploymentError => true,
-        ProviderFailureKind::ApiError => facts.upstream_status.is_some_and(|status| {
-            facts.explicitly_retryable || status == 429 || (500..=599).contains(&status)
-        }),
+        ProviderFailureKind::ApiError => facts
+            .upstream_status
+            .is_some_and(|status| status == 429 || (500..=599).contains(&status)),
         ProviderFailureKind::Streaming => {
             context.operation == RetryOperation::Streaming
                 && context.stream_stage == StreamRetryStage::BeforeFirstChunk
