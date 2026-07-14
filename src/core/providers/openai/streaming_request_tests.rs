@@ -101,6 +101,7 @@ async fn test_openai_streaming_maps_non_success_status_before_sse()
             provider,
             status,
             message,
+            ..
         } => {
             assert_eq!(provider, "openai");
             assert_eq!(status, 429);

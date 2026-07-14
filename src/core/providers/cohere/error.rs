@@ -52,11 +52,7 @@ pub fn cohere_response_parsing(message: impl Into<String>) -> CohereError {
 /// Create Cohere API error with status code
 #[cfg(test)]
 pub fn cohere_api_error(status: u16, message: impl Into<String>) -> CohereError {
-    ProviderError::ApiError {
-        provider: "cohere",
-        status,
-        message: message.into(),
-    }
+    ProviderError::api_error("cohere", status, message)
 }
 
 /// Check if this is a Cohere-specific error

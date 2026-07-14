@@ -57,6 +57,7 @@ mod tests {
                 provider,
                 status,
                 message,
+                ..
             } => {
                 assert_eq!(provider, "openai");
                 assert_eq!(status, 400);

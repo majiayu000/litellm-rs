@@ -24,11 +24,15 @@ impl BedrockErrorMapper {
             "throttlingexception" | "servicequotaexceededexception" => {
                 Some(ProviderError::rate_limit("bedrock", None))
             }
-            "modelnotreadyexception" => Some(ProviderError::api_error("bedrock", 424, details)),
+            "modelnotreadyexception" => {
+                Some(ProviderError::retryable_api_error("bedrock", 424, details))
+            }
             "resourcenotfoundexception" => Some(ProviderError::api_error("bedrock", 404, details)),
             "badgatewayexception" => Some(ProviderError::network("bedrock", details)),
             "conflictexception" => Some(ProviderError::api_error("bedrock", 409, details)),
-            "dependencyfailedexception" => Some(ProviderError::api_error("bedrock", 424, details)),
+            "dependencyfailedexception" => {
+                Some(ProviderError::retryable_api_error("bedrock", 424, details))
+            }
             "internalserverexception" => Some(ProviderError::api_error("bedrock", 500, details)),
             _ => None,
         }
@@ -131,7 +135,10 @@ mod tests {
         let error = mapper.map_http_error(429, "Rate limited");
         assert!(matches!(error, ProviderError::RateLimit { .. }));
 
-        let error = mapper.map_http_error(424, "ModelErrorException");
+        let error = mapper.map_http_error(
+            424,
+            "ModelNotReadyException: misleading ordinary HTTP message",
+        );
         assert!(matches!(error, ProviderError::ApiError { status: 424, .. }));
         assert!(!error.is_retryable());
         assert_eq!(error.retry_delay(), None);

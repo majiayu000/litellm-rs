@@ -3,6 +3,7 @@
 #![allow(deprecated)]
 
 use super::router_tests::create_test_deployment;
+use crate::core::providers::bedrock::BedrockErrorMapper;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::router::RetrySchedule;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
@@ -31,15 +32,14 @@ fn test_is_retryable_error() {
         provider: "test",
         message: "Service unavailable".to_string(),
     }));
-    assert!(is_retryable_error(&ProviderError::api_error(
-        "bedrock",
-        424,
-        "ModelNotReadyException: model not ready"
-    )));
+    let not_ready =
+        BedrockErrorMapper::map_service_error("ModelNotReadyException", "model not ready")
+            .expect("modeled Bedrock service error");
+    assert!(is_retryable_error(&not_ready));
     assert!(!is_retryable_error(&ProviderError::api_error(
         "bedrock",
         424,
-        "ModelErrorException: model invocation failed"
+        "ModelNotReadyException: misleading ordinary HTTP message"
     )));
     assert!(!is_retryable_error(&ProviderError::api_error(
         "bedrock",

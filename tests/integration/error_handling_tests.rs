@@ -217,6 +217,7 @@ mod tests {
                 provider: "openai",
                 status: api_status,
                 message: format!("status {}", api_status),
+                retryable: false,
             };
             let gateway: GatewayError = err.into();
             assert!(matches!(gateway, GatewayError::Provider(_)));

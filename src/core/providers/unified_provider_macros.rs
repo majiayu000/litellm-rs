@@ -128,11 +128,7 @@ macro_rules! impl_provider_error_helpers {
 
                 /// Create API error with status code
                 pub fn [<$prefix _api_error>](status: u16, message: impl Into<String>) -> Self {
-                    Self::ApiError {
-                        provider: $provider,
-                        status,
-                        message: message.into(),
-                    }
+                    Self::api_error($provider, status, message)
                 }
 
                 /// Check if this is a provider-specific error

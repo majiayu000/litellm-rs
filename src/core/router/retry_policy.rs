@@ -223,6 +223,7 @@ fn failure_is_retryable(facts: ProviderFailureFacts, context: RetryContext) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::providers::bedrock::BedrockErrorMapper;
     use crate::core::router::deployment::RetrySchedule;
 
     fn deployment_config_with_schedule() -> DeploymentConfig {
@@ -359,11 +360,12 @@ mod tests {
     #[test]
     fn failed_dependency_api_error_is_retryable_but_not_not_found() {
         let not_ready =
-            ProviderError::api_error("bedrock", 424, "ModelNotReadyException: model not ready");
+            BedrockErrorMapper::map_service_error("ModelNotReadyException", "model not ready")
+                .expect("modeled Bedrock service error");
         let model_error = ProviderError::api_error(
             "bedrock",
             424,
-            "ModelErrorException: model invocation failed",
+            "ModelNotReadyException: misleading ordinary HTTP message",
         );
         let missing = ProviderError::api_error("bedrock", 404, "resource not found");
         let unrelated = ProviderError::api_error("custom_httpx", 424, "failed dependency");

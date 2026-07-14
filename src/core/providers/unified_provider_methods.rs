@@ -184,26 +184,33 @@ impl ProviderError {
             provider,
             status,
             message: message.into(),
+            retryable: false,
+        }
+    }
+
+    /// Create a provider-modeled API error with an explicit retry signal.
+    pub(crate) fn retryable_api_error(
+        provider: &'static str,
+        status: u16,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::ApiError {
+            provider,
+            status,
+            message: message.into(),
+            retryable: true,
         }
     }
 
     /// Whether an API error carries a provider-modeled retry signal.
     pub(crate) fn is_explicitly_retryable_api_error(&self) -> bool {
-        let Self::ApiError {
-            provider: "bedrock",
-            status: 424,
-            message,
-        } = self
-        else {
-            return false;
-        };
-
-        message.split_once(':').is_some_and(|(code, _)| {
-            code.trim().eq_ignore_ascii_case("ModelNotReadyException")
-                || code
-                    .trim()
-                    .eq_ignore_ascii_case("DependencyFailedException")
-        })
+        matches!(
+            self,
+            Self::ApiError {
+                retryable: true,
+                ..
+            }
+        )
     }
 
     /// Create token limit exceeded error
