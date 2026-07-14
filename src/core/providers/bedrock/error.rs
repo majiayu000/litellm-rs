@@ -100,10 +100,10 @@ impl BedrockErrorMapper {
 
 impl ErrorMapper<ProviderError> for BedrockErrorMapper {
     fn map_http_error(&self, status_code: u16, response_body: &str) -> ProviderError {
-        if status_code == 424 {
-            if let Some(error) = Self::map_retryable_http_424_body(response_body) {
-                return error;
-            }
+        if status_code == 424
+            && let Some(error) = Self::map_retryable_http_424_body(response_body)
+        {
+            return error;
         }
         match status_code {
             400 => {
