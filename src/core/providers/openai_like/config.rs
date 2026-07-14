@@ -174,6 +174,12 @@ impl OpenAILikeConfig {
             return Err("api_base is required for openai_like provider".to_string());
         }
 
+        crate::core::providers::openai::config::validate_private_official_openai_endpoint(
+            self.base.endpoint_access,
+            self.base.api_base.as_deref(),
+        )
+        .map_err(str::to_owned)?;
+
         // API key is required unless skip_api_key is set
         if !self.skip_api_key && self.base.api_key.is_none() {
             return Err(
@@ -318,6 +324,17 @@ mod tests {
     fn test_validation_with_api_key() {
         let config = OpenAILikeConfig::with_api_key("http://localhost:8000/v1", "sk-test123");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validation_rejects_private_access_to_official_openai_endpoint() {
+        let mut config = OpenAILikeConfig::new("https://api.openai.com/v1").with_skip_api_key(true);
+        config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+
+        assert_eq!(
+            config.validate(),
+            Err("private_network access cannot target the official OpenAI endpoint".to_string())
+        );
     }
 
     #[test]

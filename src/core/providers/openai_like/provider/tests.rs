@@ -94,6 +94,24 @@ async fn test_provider_creation_with_api_base() {
 }
 
 #[tokio::test]
+async fn provider_rejects_private_access_to_official_openai_endpoint() {
+    OpenAILikeProvider::with_api_base("https://api.openai.com/v1")
+        .await
+        .expect("official OpenAI endpoints must remain valid with public-only access");
+
+    let config = private_openai_like_config("https://api.openai.com/v1");
+
+    let error = OpenAILikeProvider::new(config)
+        .await
+        .expect_err("official OpenAI endpoints must remain public-only");
+    assert!(
+        error
+            .to_string()
+            .contains("private_network access cannot target the official OpenAI endpoint")
+    );
+}
+
+#[tokio::test]
 async fn generic_openai_like_declares_only_catalog_executable_capabilities() {
     use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 

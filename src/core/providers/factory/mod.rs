@@ -24,10 +24,10 @@ mod registry;
 mod replicate_builder;
 mod resolver;
 
+pub(crate) use super::openai::config::validate_private_official_openai_endpoint;
 pub(crate) use endpoint_policy::{
     configured_endpoint_for_keys, endpoint_keys_for_selector, invalid_endpoint,
     selector_allows_implicit_private, selector_supports_endpoint_access,
-    validate_private_official_openai_endpoint,
 };
 pub use resolver::is_provider_selector_supported;
 

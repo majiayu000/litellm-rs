@@ -1,5 +1,6 @@
 use super::{builder, catalog_definition_for_supported_selector, provider_diagnostic_name};
 use crate::core::net::ProviderEndpointAccess;
+use crate::core::providers::openai::config::validate_private_official_openai_endpoint;
 use crate::core::providers::{ProviderError, ProviderType, registry as provider_registry};
 
 pub(super) fn provider_type_supports(provider_type: &ProviderType) -> bool {
@@ -61,18 +62,6 @@ pub(crate) fn configured_endpoint_for_keys<'a>(
                 .filter(|value| !value.trim().is_empty())
         })
     })
-}
-
-pub(crate) fn validate_private_official_openai_endpoint(
-    access: ProviderEndpointAccess,
-    endpoint: Option<&str>,
-) -> Result<(), &'static str> {
-    if access == ProviderEndpointAccess::PrivateNetwork
-        && endpoint.is_some_and(crate::core::providers::openai::config::is_official_openai_endpoint)
-    {
-        return Err("private_network access cannot target the official OpenAI endpoint");
-    }
-    Ok(())
 }
 
 fn is_native_default_endpoint(

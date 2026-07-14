@@ -76,6 +76,18 @@ pub(crate) fn is_official_openai_endpoint(raw_url: &str) -> bool {
     })
 }
 
+pub(crate) fn validate_private_official_openai_endpoint(
+    access: ProviderEndpointAccess,
+    endpoint: Option<&str>,
+) -> Result<(), &'static str> {
+    if access == ProviderEndpointAccess::PrivateNetwork
+        && endpoint.is_some_and(is_official_openai_endpoint)
+    {
+        return Err("private_network access cannot target the official OpenAI endpoint");
+    }
+    Ok(())
+}
+
 impl Default for OpenAIFeatures {
     fn default() -> Self {
         Self {
@@ -146,17 +158,11 @@ impl OpenAIConfig {
     pub fn validate(&self) -> Result<(), String> {
         // Validate base config
         self.base.validate("openai")?;
-        if self.base.endpoint_access == ProviderEndpointAccess::PrivateNetwork
-            && self
-                .base
-                .api_base
-                .as_deref()
-                .is_some_and(is_official_openai_endpoint)
-        {
-            return Err(
-                "private_network access cannot target the official OpenAI endpoint".to_string(),
-            );
-        }
+        validate_private_official_openai_endpoint(
+            self.base.endpoint_access,
+            self.base.api_base.as_deref(),
+        )
+        .map_err(str::to_owned)?;
 
         // OpenAI specific validations
         if let Some(ref api_key) = self.base.api_key
