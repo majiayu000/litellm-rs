@@ -101,15 +101,6 @@ pub fn provider_http_error_facts(error: &ProviderError) -> ProviderHttpErrorFact
             "server_error",
             "provider_network_error",
         ),
-        ProviderError::ProviderUnavailable {
-            provider: "bedrock",
-            ..
-        } => facts(
-            424,
-            "PROVIDER_UNAVAILABLE",
-            "server_error",
-            "provider_unavailable",
-        ),
         ProviderError::ProviderUnavailable { .. } => facts(
             503,
             "PROVIDER_UNAVAILABLE",

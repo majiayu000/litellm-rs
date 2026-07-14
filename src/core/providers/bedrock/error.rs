@@ -63,48 +63,15 @@ impl BedrockErrorMapper {
         aws_error_type: Option<&str>,
     ) -> ProviderError {
         if status_code == 424
-            && let Some(error) =
-                aws_error_type.and_then(|code| Self::map_structured_http_424(code, response_body))
+            && let Some(error_code) = aws_error_type
         {
-            return error;
+            return Self::map_structured_http_424(error_code, response_body)
+                .unwrap_or_else(|| self.map_status_error(status_code, response_body));
         }
         self.map_http_error(status_code, response_body)
     }
 
-    pub(crate) fn map_service_error(
-        error_code: &str,
-        error_message: &str,
-    ) -> Option<ProviderError> {
-        let details = format!("{error_code}: {error_message}");
-        match error_code.to_ascii_lowercase().as_str() {
-            "validationexception" => Some(ProviderError::invalid_request("bedrock", details)),
-            "unauthorizedexception" => Some(ProviderError::authentication("bedrock", details)),
-            "accessdeniedexception" => Some(ProviderError::api_error("bedrock", 403, details)),
-            "throttlingexception" | "servicequotaexceededexception" => {
-                Some(ProviderError::rate_limit("bedrock", None))
-            }
-            "modelnotreadyexception" => {
-                Some(ProviderError::provider_unavailable("bedrock", details))
-            }
-            "resourcenotfoundexception" => Some(ProviderError::api_error("bedrock", 404, details)),
-            "badgatewayexception" => Some(ProviderError::network("bedrock", details)),
-            "conflictexception" => Some(ProviderError::api_error("bedrock", 409, details)),
-            "dependencyfailedexception" => {
-                Some(ProviderError::provider_unavailable("bedrock", details))
-            }
-            "internalserverexception" => Some(ProviderError::api_error("bedrock", 500, details)),
-            _ => None,
-        }
-    }
-}
-
-impl ErrorMapper<ProviderError> for BedrockErrorMapper {
-    fn map_http_error(&self, status_code: u16, response_body: &str) -> ProviderError {
-        if status_code == 424
-            && let Some(error) = Self::map_retryable_http_424_body(response_body)
-        {
-            return error;
-        }
+    fn map_status_error(&self, status_code: u16, response_body: &str) -> ProviderError {
         match status_code {
             400 => {
                 ProviderError::invalid_request("bedrock", format!("Bad request: {}", response_body))
@@ -132,6 +99,41 @@ impl ErrorMapper<ProviderError> for BedrockErrorMapper {
                 &format!("HTTP {}: {}", status_code, response_body),
             ),
         }
+    }
+
+    pub(crate) fn map_service_error(
+        error_code: &str,
+        error_message: &str,
+    ) -> Option<ProviderError> {
+        let details = format!("{error_code}: {error_message}");
+        match error_code.to_ascii_lowercase().as_str() {
+            "validationexception" => Some(ProviderError::invalid_request("bedrock", details)),
+            "unauthorizedexception" => Some(ProviderError::authentication("bedrock", details)),
+            "accessdeniedexception" => Some(ProviderError::api_error("bedrock", 403, details)),
+            "throttlingexception" | "servicequotaexceededexception" => {
+                Some(ProviderError::rate_limit("bedrock", None))
+            }
+            "modelnotreadyexception" => Some(ProviderError::bedrock_modeled_retry_error(details)),
+            "resourcenotfoundexception" => Some(ProviderError::api_error("bedrock", 404, details)),
+            "badgatewayexception" => Some(ProviderError::network("bedrock", details)),
+            "conflictexception" => Some(ProviderError::api_error("bedrock", 409, details)),
+            "dependencyfailedexception" => {
+                Some(ProviderError::bedrock_modeled_retry_error(details))
+            }
+            "internalserverexception" => Some(ProviderError::api_error("bedrock", 500, details)),
+            _ => None,
+        }
+    }
+}
+
+impl ErrorMapper<ProviderError> for BedrockErrorMapper {
+    fn map_http_error(&self, status_code: u16, response_body: &str) -> ProviderError {
+        if status_code == 424
+            && let Some(error) = Self::map_retryable_http_424_body(response_body)
+        {
+            return error;
+        }
+        self.map_status_error(status_code, response_body)
     }
 
     fn map_json_error(&self, error_response: &Value) -> ProviderError {
@@ -217,7 +219,7 @@ mod tests {
             r#"{"code":"DependencyFailedException","message":"dependency unavailable"}"#,
         ] {
             let error = mapper.map_http_error(424, body);
-            assert!(matches!(error, ProviderError::ProviderUnavailable { .. }));
+            assert!(matches!(error, ProviderError::ApiError { status: 424, .. }));
             assert_eq!(
                 crate::core::providers::unified_provider::provider_http_error_facts(&error).status,
                 424
@@ -238,7 +240,7 @@ mod tests {
             r#"{"message":"model warming"}"#,
             Some("aws.protocoltests.restjson#ModelNotReadyException:http://internal.amazon.com"),
         );
-        assert!(matches!(error, ProviderError::ProviderUnavailable { .. }));
+        assert!(matches!(error, ProviderError::ApiError { status: 424, .. }));
         assert_eq!(
             crate::core::providers::unified_provider::provider_http_error_facts(&error).status,
             424
@@ -247,7 +249,7 @@ mod tests {
 
         let error = mapper.map_http_response_error(
             424,
-            r#"{"message":"ordinary model failure"}"#,
+            r#"{"code":"ModelNotReadyException","message":"misleading body code"}"#,
             Some("ModelErrorException"),
         );
         assert!(matches!(error, ProviderError::ApiError { status: 424, .. }));

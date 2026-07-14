@@ -169,6 +169,7 @@ impl RetryPolicy {
         F: FnOnce() -> Duration,
     {
         let facts = ProviderFailureFacts::from_error(error);
+        let explicitly_retryable = error.is_bedrock_modeled_retry_error();
 
         if context.attempt >= context.max_attempts {
             return RetryDecision::stop(RetryDecisionReason::AttemptsExhausted);
@@ -186,7 +187,7 @@ impl RetryPolicy {
             return RetryDecision::stop(RetryDecisionReason::NonIdempotentRequest);
         }
 
-        if !failure_is_retryable(facts, context) {
+        if !failure_is_retryable(facts, context, explicitly_retryable) {
             return RetryDecision::stop(RetryDecisionReason::NonRetryableFailure);
         }
 
@@ -202,16 +203,20 @@ impl RetryPolicy {
     }
 }
 
-fn failure_is_retryable(facts: ProviderFailureFacts, context: RetryContext) -> bool {
+fn failure_is_retryable(
+    facts: ProviderFailureFacts,
+    context: RetryContext,
+    explicitly_retryable: bool,
+) -> bool {
     match facts.kind {
         ProviderFailureKind::RateLimit
         | ProviderFailureKind::Timeout
         | ProviderFailureKind::ProviderUnavailable
         | ProviderFailureKind::Network
         | ProviderFailureKind::DeploymentError => true,
-        ProviderFailureKind::ApiError => facts
-            .upstream_status
-            .is_some_and(|status| status == 429 || (500..=599).contains(&status)),
+        ProviderFailureKind::ApiError => facts.upstream_status.is_some_and(|status| {
+            explicitly_retryable || status == 429 || (500..=599).contains(&status)
+        }),
         ProviderFailureKind::Streaming => {
             context.operation == RetryOperation::Streaming
                 && context.stream_stage == StreamRetryStage::BeforeFirstChunk

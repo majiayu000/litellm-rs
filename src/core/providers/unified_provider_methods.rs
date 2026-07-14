@@ -1,6 +1,13 @@
 use super::{ContextualError, ProviderError};
 
 impl ProviderError {
+    fn bedrock_modeled_retry_provider() -> &'static str {
+        use std::sync::OnceLock;
+
+        static PROVIDER: OnceLock<Box<str>> = OnceLock::new();
+        PROVIDER.get_or_init(|| "bedrock".into()).as_ref()
+    }
+
     /// Create authentication error
     pub fn authentication(provider: &'static str, message: impl Into<String>) -> Self {
         Self::Authentication {
@@ -187,6 +194,27 @@ impl ProviderError {
         }
     }
 
+    /// Create a Bedrock 424 whose retry provenance came from a structured AWS error code.
+    pub(crate) fn bedrock_modeled_retry_error(message: impl Into<String>) -> Self {
+        Self::ApiError {
+            provider: Self::bedrock_modeled_retry_provider(),
+            status: 424,
+            message: message.into(),
+        }
+    }
+
+    /// Whether this API error carries the internal Bedrock modeled-error identity.
+    pub(crate) fn is_bedrock_modeled_retry_error(&self) -> bool {
+        matches!(
+            self,
+            Self::ApiError {
+                provider,
+                status: 424,
+                ..
+            } if std::ptr::eq(*provider, Self::bedrock_modeled_retry_provider())
+        )
+    }
+
     /// Create token limit exceeded error
     pub fn token_limit_exceeded(provider: &'static str, message: impl Into<String>) -> Self {
         Self::TokenLimitExceeded {
@@ -340,7 +368,9 @@ impl ProviderError {
             | Self::ProviderUnavailable { .. } => true,
 
             // API errors depend on status code
-            Self::ApiError { status, .. } => matches!(*status, 429 | 500..=599),
+            Self::ApiError { status, .. } => {
+                self.is_bedrock_modeled_retry_error() || matches!(*status, 429 | 500..=599)
+            }
 
             // Deployment errors might be retryable depending on the issue
             Self::DeploymentError { .. } => true,
@@ -378,14 +408,11 @@ impl ProviderError {
         match self {
             Self::RateLimit { retry_after, .. } => *retry_after,
             Self::Network { .. } | Self::Timeout { .. } => Some(1),
-            Self::ProviderUnavailable {
-                provider: "bedrock",
-                ..
-            } => Some(3),
             Self::ProviderUnavailable { .. } => Some(5),
 
             // API errors with 429 (rate limit) or 5xx get retry delays
             Self::ApiError { status, .. } => match *status {
+                424 if self.is_bedrock_modeled_retry_error() => Some(3),
                 429 => Some(60),      // Rate limit, wait longer
                 500..=599 => Some(3), // Server errors, shorter delay
                 _ => None,

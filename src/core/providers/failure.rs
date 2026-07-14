@@ -61,10 +61,6 @@ impl From<&ProviderError> for ProviderFailureFacts {
             kind: ProviderFailureKind::from(error),
             upstream_status: match error {
                 ProviderError::ApiError { status, .. } => Some(*status),
-                ProviderError::ProviderUnavailable {
-                    provider: "bedrock",
-                    ..
-                } => Some(424),
                 _ => None,
             },
             retry_hint: match error {
@@ -149,7 +145,7 @@ mod tests {
             "ModelNotReadyException: misleading ordinary HTTP message",
         ));
 
-        assert_eq!(modeled.kind, ProviderFailureKind::ProviderUnavailable);
+        assert_eq!(modeled.kind, ProviderFailureKind::ApiError);
         assert_eq!(modeled.upstream_status, Some(424));
         assert_eq!(ordinary.kind, ProviderFailureKind::ApiError);
         assert_eq!(ordinary.upstream_status, Some(424));
