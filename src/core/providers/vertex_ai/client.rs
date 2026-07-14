@@ -42,7 +42,7 @@ pub use self::error_mapper::VertexAIErrorMapper;
 /// Vertex AI Provider implementation
 #[derive(Debug, Clone)]
 pub struct VertexAIProvider {
-    config: VertexAIProviderConfig,
+    config: Box<VertexAIProviderConfig>,
     auth: Arc<VertexAuth>,
     http_client: BaseHttpClient,
     // Cost calculation integrated internally
@@ -68,7 +68,7 @@ impl VertexAIProvider {
         )?;
 
         Ok(Self {
-            config,
+            config: Box::new(config),
             auth,
             http_client,
             gemini_transformer: GeminiTransformer::new(),
