@@ -40,9 +40,10 @@ Gateway provider 配置，复制 endpoint、认证、headers 与 timeout，并�
    可以执行 Gemini native wire protocol，并使用自身不可变配置；其他 OpenAI-compatible provider 必须不可选。
 5. B-005 若没有支持 Gemini native wire protocol 且匹配请求模型的 runtime deployment，route 必须返回明确
    的未配置/不支持错误，不得扫描配置、换用默认 provider 或创建临时 client 降级。
-6. B-006 预算预留与 spend 必须使用 selected snapshot 的 provider 名称和 deployment model；fallback 排除、
-   健康成功/失败与并发 lease 必须使用该 snapshot 的 deployment id。两组身份必须来自同一次选择，不得来自
-   第二份配置或互相指向不同 deployment。
+6. B-006 native URL、预算预留与 spend 必须使用 selected runtime provider 的名称和客户端原始请求的 Gemini
+   model；fallback 排除、健康成功/失败与并发 lease 必须使用本次选择的 deployment id（router selection key
+   仅用于定位候选）。这些身份必须属于同一次选择尝试，不得把空 `models` 兼容 deployment 的 provider 名称
+   当作 Gemini 请求 model，也不得来自第二份配置。
 7. B-007 普通请求的可重试 upstream 错误、provider/model 预算拒绝和未定价策略必须沿用统一路由器现有重试
    与 fallback 语义；失败执行器与被记录/排除的 deployment 必须相同。
 8. B-008 流式请求在 response headers 成功后必须持有 selected deployment lease，直到流结束、读取失败或

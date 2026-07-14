@@ -49,9 +49,11 @@ Link to `product.md`.
   route-owned client 构造。router key 由请求模型与受限兼容别名组成并去重；`run_unary`/`run_stream` 继续使用
   现有 `select_deployment_lease_for_capability_matching`，但传入 Gemini native marker，使不支持的 deployment
   在 lease 获取前被排除，不修改 799 行的 execution helper。
-- `GeminiRouteProvider` 缩为 `provider_name`、`pricing_provider`、`model` 的只读 identity。预算预留在发送前仍用
-  selected provider/model identity；真正 send 调用 selected `Provider`。fallback/health/lease 继续由 helper 持有
-  selected deployment id，普通 retry 与 stream lease 保持现有 helper 所有权。
+- `GeminiRouteProvider` 缩为 `provider_name`、`pricing_provider`、`requested_model` 的只读 identity。native URL、
+  预算与 spend 使用 selected provider name + 客户端原始 requested Gemini model；不得用 callback 的
+  `selected_model` 替换请求 model，因为空 `models` 的 named compatibility deployment 可能以 provider name
+  作为 deployment model。fallback/health/lease 继续由 helper 持有 selected deployment id，普通 retry 与
+  stream lease 保持现有 helper 所有权。
 - client channel 断开时保持现有 neutral health 语义：结算取消前已观察 usage/输出，随后 drop 同一 lease 仅释放
   并发计数，不调用 `finish_success` 或 `finish_failure`；上游读取失败仍显式 `finish_failure`。
 
@@ -78,6 +80,8 @@ Link to `product.md`.
 
 - integration fixture 先构造 router/runtime provider，再把 `AppState` 的 Gateway provider config 改为第二个
   listener/错误 key；普通与 stream 均必须只命中第一个 listener，第二个 listener 未接收连接。
+- named compatibility fixture 覆盖 `models=[]`：router deployment model/selection key 可为 `googleai` 等 provider
+  name，但 upstream URL、pricing lookup、model budget 与 spend 必须仍使用客户端请求的 Gemini model。
 - 扩展 fallback suite 覆盖上游错误、provider/model budget、health/cooldown、stream lease/spend identity；保留
   既有 named `gemini`/`googleai` OpenAI-compatible fixtures并增加 `googleaistudio`/非闭集拒绝。
 - cancel 测试断言 selected lease active count 回到零、健康成功/失败计数均不增加，并按取消前已观察数据处理
@@ -96,7 +100,7 @@ Link to `product.md`.
 | B-003 | native Gemini passthrough | v1/v1beta unary/stream URL、query、headers、JSON/SSE integration matrix |
 | B-004 | OpenAILike named compatibility dispatch | 三个名称正例、大小写规范化与任意名称拒绝 tests |
 | B-005 | selection/unsupported error mapping | 无 deployment、模型不匹配、非 Gemini provider tests；无 fallback client source guard |
-| B-006 | identity-only route adapter + execution helper | provider/model budget+spend 与 deployment-id fallback+health+lease assertions |
+| B-006 | identity-only route adapter + execution helper | selected provider + requested Gemini model 的 URL/budget/spend；deployment-id fallback/health/lease；空 `models` named compatibility assertions |
 | B-007 | existing unary retry helper | upstream 429/5xx、provider/model budget fallback tests |
 | B-008 | existing stream execution lease + spend settlement | success=healthy、read failure=failed、cancel=neutral 的 lease/health/spend tests |
 | B-009 | reduced `GeminiRouteProvider` | compile-time struct fields + source guard 禁止 key/url/headers/timeout/client |
@@ -106,9 +110,10 @@ Link to `product.md`.
 ## 数据流
 
 请求经过鉴权与 payload 校验后，以请求模型进入统一路由器。路由器从同一 immutable snapshot 选出 deployment，
-callback 获得 concrete `Provider`、deployment model 与 id；route 先以该身份预留预算，再把 native request 交给
-该 `Provider` 的 crate-private dispatch。provider 自己的 runtime client 发出请求并返回原始 response。普通响应
-与 SSE 仍由 route 透传/解析 usage；健康、fallback、lease 和 spend 全部使用同一 selected deployment identity。
+callback 获得 concrete `Provider`、deployment model 与 id，同时保留原始 requested Gemini model；route 以
+selected provider name + requested model 预留预算并构造 native request，再交给该 `Provider` 的 crate-private
+dispatch。provider runtime client 发出请求并返回 typed response/error。普通响应与 SSE 仍由 route 透传/解析
+usage；spend 使用相同 provider/requested-model，健康、fallback 与 lease 使用相同 selected deployment id。
 
 ## 备选方案
 
