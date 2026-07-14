@@ -456,13 +456,12 @@ impl GlobalPoolManager {
     ) -> Result<reqwest::Response, ProviderError> {
         if let Some(policy) = &self.policy {
             let request = apply_provider_headers(policy.streaming.post(url)?, headers).json(&body);
-            let response = tokio::time::timeout(policy.streaming_header_timeout, request.send())
+            let timeout = policy.streaming_header_timeout;
+            let response = tokio::time::timeout(timeout, request.send())
                 .await
                 .map_err(|_| {
-                    StreamingRequestError::HeaderTimeout {
-                        timeout: policy.streaming_header_timeout,
-                    }
-                    .into_provider_error(policy.provider)
+                    StreamingRequestError::HeaderTimeout { timeout }
+                        .into_provider_error(policy.provider)
                 })?;
             return response.map_err(|error| {
                 StreamingRequestError::Request(error).into_provider_error(policy.provider)
@@ -629,10 +628,8 @@ mod tests {
             .unwrap()
             .policy
             .unwrap();
-        assert_eq!(
-            policy.streaming_header_timeout,
-            Duration::from_secs(STREAMING_HEADER_TIMEOUT_SECS)
-        );
+        let expected = Duration::from_secs(STREAMING_HEADER_TIMEOUT_SECS);
+        assert_eq!(policy.streaming_header_timeout, expected);
     }
 
     #[tokio::test]

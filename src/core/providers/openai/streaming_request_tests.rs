@@ -113,24 +113,16 @@ async fn test_openai_streaming_maps_non_success_status_before_sse()
 }
 
 #[tokio::test]
-async fn openai_private_health_uses_policy_bound_runtime_client()
--> Result<(), Box<dyn std::error::Error>> {
-    let api_base = response_url("200 OK", "{}").await?;
-    let config = test_openai_config(api_base, "sk-test-health");
-    let provider = OpenAIProvider::new(config).await?;
-
-    let health = LLMProvider::health_check(&provider).await;
-    assert_eq!(health, HealthStatus::Healthy);
-    Ok(())
-}
-
-#[tokio::test]
 async fn openai_policy_pool_rejects_cross_authority_without_connect()
 -> Result<(), Box<dyn std::error::Error>> {
-    let source = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let api_base = response_url("200 OK", "{}").await?;
+    let health_provider = OpenAIProvider::new(test_openai_config(api_base, "sk-health")).await?;
+    assert_eq!(
+        LLMProvider::health_check(&health_provider).await,
+        HealthStatus::Healthy
+    );
     let target = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let source_url = format!("http://{}", source.local_addr()?);
-    let config = test_openai_config(source_url, "sk-test-authority");
+    let config = test_openai_config("http://127.0.0.1:1", "sk-test-authority");
     let provider = OpenAIProvider::new(config).await?;
     let target_url = format!("http://{}/models", target.local_addr()?);
 
@@ -150,14 +142,10 @@ async fn openai_policy_pool_rejects_cross_authority_without_connect()
     let accepted =
         tokio::time::timeout(std::time::Duration::from_millis(100), target.accept()).await;
     assert!(accepted.is_err());
-    Ok(())
-}
-
-#[tokio::test]
-async fn openai_private_metadata_endpoint_is_permanently_rejected() {
     let config = test_openai_config("http://169.254.169.254/v1", "sk-test-metadata");
     let error = OpenAIProvider::new(config)
         .await
         .expect_err("metadata endpoints must remain forbidden");
     assert!(error.to_string().contains("private or reserved"));
+    Ok(())
 }

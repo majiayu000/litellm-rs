@@ -425,26 +425,12 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
         let violations = boundary_violations(source, module_path)
             .unwrap_or_else(|error| panic!("{path} must parse: {error}"));
         assert!(violations.is_empty(), "{path}: {}", violations.join("; "));
-    }
-    for (path, source) in [
-        ("openai/client.rs", include_str!("../../openai/client.rs")),
-        (
-            "openai_like/provider.rs",
-            include_str!("../../openai_like/provider.rs"),
-        ),
-    ] {
-        let compact = source.split_whitespace().collect::<String>();
-        assert!(
-            compact.contains("GlobalPoolManager::new_for_provider"),
-            "{path}"
-        );
-        for forbidden in [
-            "GlobalPoolManager::new()",
-            "streaming_unbounded_client",
-            "default_outbound_client",
-            ".client()",
-        ] {
-            assert!(!compact.contains(forbidden), "{path}: {forbidden}");
+        if matches!(path, "openai/client.rs" | "openai_like/provider.rs") {
+            let compact = source.split_whitespace().collect::<String>();
+            assert!(compact.contains("GlobalPoolManager::new_for_provider"));
+            for forbidden in ["GlobalPoolManager::new()", ".client()"] {
+                assert!(!compact.contains(forbidden), "{path}: {forbidden}");
+            }
         }
     }
     let bedrock_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/bedrock");

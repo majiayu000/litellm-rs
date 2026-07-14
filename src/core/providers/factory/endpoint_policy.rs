@@ -1,7 +1,6 @@
 use super::{builder, catalog_definition_for_supported_selector, provider_diagnostic_name};
 use crate::core::net::ProviderEndpointAccess;
-use crate::core::providers::unified_provider::ProviderError;
-use crate::core::providers::{ProviderType, registry as provider_registry};
+use crate::core::providers::{ProviderError, ProviderType, registry as provider_registry};
 
 pub(super) fn provider_type_supports(provider_type: &ProviderType) -> bool {
     use ProviderType::*;
@@ -30,7 +29,27 @@ pub(crate) fn selector_allows_implicit_private(selector: &str) -> bool {
 }
 
 pub(crate) fn invalid_endpoint(value: Option<&serde_json::Value>) -> bool {
-    value.is_some_and(|value| !value.is_null() && !value.is_string())
+    value.is_some_and(|value| {
+        !value.is_null() && value.as_str().is_none_or(|url| url.trim().is_empty())
+    })
+}
+
+fn is_native_default_endpoint(
+    provider_type: &ProviderType,
+    config: &serde_json::Value,
+    access: ProviderEndpointAccess,
+) -> bool {
+    let endpoint = config.get("api_base").and_then(serde_json::Value::as_str);
+    let default = match provider_type {
+        ProviderType::FalAI => "https://fal.run",
+        ProviderType::Replicate => "https://api.replicate.com/v1",
+        _ => return false,
+    };
+    access == ProviderEndpointAccess::PublicOnly
+        && config
+            .get("base_url")
+            .is_none_or(serde_json::Value::is_null)
+        && endpoint == Some(default)
 }
 
 pub(super) fn validate_direct_endpoint_policy(
@@ -64,6 +83,7 @@ pub(super) fn validate_direct_endpoint_policy(
             .get("endpoint_access")
             .is_some_and(|value| !value.is_null())
             || has_endpoint)
+        && !is_native_default_endpoint(provider_type, config, access)
     {
         return Err(fail(
             "configurable endpoint access is unavailable because this provider runtime is not policy-wired",

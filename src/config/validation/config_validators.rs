@@ -167,9 +167,14 @@ impl Validate for ProviderConfig {
                 self.name
             ));
         }
-        if ["base_url", "api_base"]
-            .into_iter()
-            .any(|key| invalid_endpoint(self.settings.get(key)))
+        let blank_base = self
+            .base_url
+            .as_ref()
+            .is_some_and(|url| url.trim().is_empty());
+        if blank_base
+            || ["base_url", "api_base"]
+                .into_iter()
+                .any(|key| invalid_endpoint(self.settings.get(key)))
         {
             return Err(format!("Provider {} endpoint must be a string", self.name));
         }
@@ -443,6 +448,8 @@ mod endpoint_access_tests {
         config.endpoint_access = ProviderEndpointAccess::PublicOnly;
         assert!(Validate::validate(&config).is_err());
         config.base_url = Some("wss://8.8.8.8/v1".to_string());
+        assert!(Validate::validate(&config).is_err());
+        config.base_url = Some(" ".to_string());
         assert!(Validate::validate(&config).is_err());
         config.base_url = Some("https://8.8.8.8/v1".to_string());
         config.settings.insert(

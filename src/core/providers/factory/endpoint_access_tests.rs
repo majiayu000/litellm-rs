@@ -43,16 +43,18 @@ async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
             base_url: Some("https://x.test".to_string()),
             ..Default::default()
         };
-        let result = create_provider(gateway_config.clone()).await;
-        let error = result.expect_err("must reject");
+        let error = create_provider(gateway_config.clone())
+            .await
+            .expect_err("must reject");
         assert!(error.to_string().contains("not policy-wired"));
         for key in ["base_url", "api_base"] {
             let mut settings_config = gateway_config.clone();
             settings_config.base_url = None;
             let settings = &mut settings_config.settings;
             settings.insert(key.into(), "https://x.test".into());
-            let result = create_provider(settings_config).await;
-            let error = result.expect_err("must reject");
+            let error = create_provider(settings_config)
+                .await
+                .expect_err("must reject");
             assert!(error.to_string().contains("not policy-wired"));
         }
     }
@@ -65,8 +67,9 @@ async fn unwired_gateway_and_direct_endpoint_config_fail_closed() {
         base_url: Some(format!("http://localhost:{port}")),
         ..Default::default()
     };
-    let result = create_provider(config).await;
-    let error = result.expect_err("must reject before construction");
+    let error = create_provider(config)
+        .await
+        .expect_err("must reject before construction");
     assert!(error.to_string().contains("not policy-wired"));
     let accepted =
         tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept()).await;
@@ -83,15 +86,20 @@ async fn invalid_or_implicit_private_endpoints_fail_closed() {
     gateway.settings.insert("api_base".into(), 42.into());
     let error = crate::config::Validate::validate(&gateway).expect_err("must reject");
     assert!(error.contains("must be a string"), "{error}");
-    let result = create_provider(gateway.clone()).await;
-    let error = result.expect_err("must reject");
+    let error = create_provider(gateway.clone())
+        .await
+        .expect_err("must reject");
     assert!(error.to_string().contains("must be a string"), "{error}");
+    gateway.settings.insert("api_base".into(), " ".into());
+    assert!(crate::config::Validate::validate(&gateway).is_err());
+    assert!(create_provider(gateway.clone()).await.is_err());
     gateway.settings.clear();
     gateway.endpoint_access = PrivateNetwork;
     let error = create_provider(gateway).await.expect_err("must reject");
     assert!(error.to_string().contains("requires a base URL"), "{error}");
     for config in [
         serde_json::json!({"api_key": "sk-test", "api_base": 42}),
+        serde_json::json!({"api_key": "sk-test", "api_base": " "}),
         serde_json::json!({"api_key": "sk-test", "endpoint_access": "private_network"}),
     ] {
         let error = Provider::from_config_async(ProviderType::OpenAI, config)

@@ -273,6 +273,8 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "providers-extended")]
+    use crate::core::providers::{fal_ai::FalAIConfig, replicate::ReplicateConfig};
     use provider_registry::{ProviderDispatchKind, provider_type_registry};
 
     fn supported_factory_provider_types() -> Vec<ProviderType> {
@@ -558,7 +560,7 @@ mod tests {
     async fn test_from_config_async_fal_ai_creates_native_image_provider() {
         let provider = Provider::from_config_async(
             ProviderType::FalAI,
-            minimal_dispatch_config_for(&ProviderType::FalAI),
+            serde_json::to_value(FalAIConfig::with_api_key("test-fal-ai-key")).unwrap(),
         )
         .await
         .unwrap_or_else(|err| panic!("fal_ai should create native provider: {err}"));
@@ -578,7 +580,7 @@ mod tests {
     async fn test_from_config_async_replicate_creates_native_prediction_provider() {
         let provider = Provider::from_config_async(
             ProviderType::Replicate,
-            minimal_dispatch_config_for(&ProviderType::Replicate),
+            serde_json::to_value(ReplicateConfig::new("test-replicate-token")).unwrap(),
         )
         .await
         .unwrap_or_else(|err| panic!("replicate should create native provider: {err}"));

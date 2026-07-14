@@ -88,9 +88,10 @@ pub async fn create_provider(
     } else {
         provider_type.as_str()
     };
-    if ["base_url", "api_base"]
-        .into_iter()
-        .any(|key| invalid_endpoint(settings.get(key)))
+    if base_url.as_ref().is_some_and(|url| url.trim().is_empty())
+        || ["base_url", "api_base"]
+            .into_iter()
+            .any(|key| invalid_endpoint(settings.get(key)))
     {
         return Err(ProviderError::configuration(
             "provider",

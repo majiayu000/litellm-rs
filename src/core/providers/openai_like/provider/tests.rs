@@ -190,25 +190,18 @@ async fn test_openai_like_streaming_maps_non_success_status_before_sse()
 }
 
 #[tokio::test]
-async fn openai_like_private_health_uses_policy_bound_runtime_client()
+async fn openai_like_policy_pool_rejects_cross_authority_without_connect()
 -> Result<(), Box<dyn std::error::Error>> {
     use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 
     let api_base = openai_like_stream_response_url("200 OK", "{}", true).await?;
-    let config = private_openai_like_config(api_base);
-    let provider = OpenAILikeProvider::new(config).await?;
-
-    let health = LLMProvider::health_check(&provider).await;
-    assert_eq!(health, HealthStatus::Healthy);
-    Ok(())
-}
-
-#[tokio::test]
-async fn openai_like_policy_pool_rejects_cross_authority_without_connect()
--> Result<(), Box<dyn std::error::Error>> {
-    let source = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let health_provider = OpenAILikeProvider::new(private_openai_like_config(api_base)).await?;
+    assert_eq!(
+        LLMProvider::health_check(&health_provider).await,
+        HealthStatus::Healthy
+    );
     let target = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let config = private_openai_like_config(format!("http://{}", source.local_addr()?));
+    let config = private_openai_like_config("http://127.0.0.1:1");
     let provider = OpenAILikeProvider::new(config).await?;
     let target_url = format!("http://{}/models", target.local_addr()?);
 
@@ -221,16 +214,12 @@ async fn openai_like_policy_pool_rejects_cross_authority_without_connect()
     let accepted =
         tokio::time::timeout(std::time::Duration::from_millis(100), target.accept()).await;
     assert!(accepted.is_err());
-    Ok(())
-}
-
-#[tokio::test]
-async fn openai_like_private_metadata_endpoint_is_permanently_rejected() {
     let config = private_openai_like_config("http://169.254.169.254/v1");
     let error = OpenAILikeProvider::new(config)
         .await
         .expect_err("metadata endpoints must remain forbidden");
     assert!(error.to_string().contains("private or reserved"));
+    Ok(())
 }
 
 #[tokio::test]
