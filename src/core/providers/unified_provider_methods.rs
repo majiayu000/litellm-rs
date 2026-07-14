@@ -187,6 +187,12 @@ impl ProviderError {
 
     /// Create API error with status code
     pub fn api_error(provider: &'static str, status: u16, message: impl Into<String>) -> Self {
+        // Never propagate the internal Bedrock provenance token through a public constructor.
+        let provider = if provider == "bedrock" {
+            "bedrock"
+        } else {
+            provider
+        };
         Self::ApiError {
             provider,
             status,
@@ -346,7 +352,6 @@ impl ProviderError {
             | Self::Timeout { provider, .. }
             | Self::ContextLengthExceeded { provider, .. }
             | Self::ContentFiltered { provider, .. }
-            | Self::ApiError { provider, .. }
             | Self::TokenLimitExceeded { provider, .. }
             | Self::FeatureDisabled { provider, .. }
             | Self::DeploymentError { provider, .. }
@@ -356,6 +361,12 @@ impl ProviderError {
             | Self::Cancelled { provider, .. }
             | Self::Streaming { provider, .. }
             | Self::Other { provider, .. } => provider,
+            Self::ApiError { provider, .. }
+                if std::ptr::eq(*provider, Self::bedrock_modeled_retry_provider()) =>
+            {
+                "bedrock"
+            }
+            Self::ApiError { provider, .. } => provider,
         }
     }
 

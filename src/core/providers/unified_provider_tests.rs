@@ -436,6 +436,14 @@ mod provider_error_tests {
                 .expect("modeled Bedrock service error");
         assert!(failed_dependency.is_retryable());
         assert_eq!(failed_dependency.retry_delay(), Some(3));
+        assert_eq!(failed_dependency.provider(), "bedrock");
+        let reconstructed = ProviderError::api_error(
+            failed_dependency.provider(),
+            424,
+            "ordinary reconstructed error",
+        );
+        assert!(!reconstructed.is_retryable());
+        assert_eq!(reconstructed.retry_delay(), None);
         let ordinary_failed_dependency = ProviderError::api_error(
             "bedrock",
             424,
