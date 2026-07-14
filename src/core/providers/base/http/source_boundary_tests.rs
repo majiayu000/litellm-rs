@@ -3,8 +3,9 @@ use std::path::Path as FsPath;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{
-    Expr, ExprMethodCall, ExprStruct, GenericArgument, ImplItemFn, ItemExternCrate, ItemFn,
-    ItemMacro, ItemMod, ItemStruct, ItemType, ItemUse, Macro, Path, PathArguments, Type, UseTree,
+    Expr, ExprClosure, ExprMethodCall, ExprStruct, GenericArgument, ImplItemFn, ItemConst,
+    ItemExternCrate, ItemFn, ItemMacro, ItemMod, ItemStatic, ItemStruct, ItemType, ItemUse, Local,
+    Macro, Pat, Path, PathArguments, ReturnType, Type, UseTree,
 };
 
 #[rustfmt::skip]
@@ -278,16 +279,17 @@ fn is_manager_type(ty: &Type) -> bool {
     }
 }
 
+struct DefaultFinder(bool);
 #[rustfmt::skip]
-fn uses_default(expr: &Expr) -> bool {
-    struct Finder(bool);
-    impl<'ast> Visit<'ast> for Finder {
+impl<'ast> Visit<'ast> for DefaultFinder {
         fn visit_path(&mut self, path: &'ast Path) {
             let names: Vec<_> = path.segments.iter().map(|segment| ident_text(&segment.ident)).collect();
             self.0 |= names.ends_with(&["Default".into(), "default".into()]); visit::visit_path(self, path);
         } }
-    let mut finder = Finder(false); finder.visit_expr(expr); finder.0
-}
+#[rustfmt::skip]
+fn uses_default(expr: &Expr) -> bool { let mut finder = DefaultFinder(false); finder.visit_expr(expr); finder.0 }
+#[rustfmt::skip]
+fn returns_manager(output: &ReturnType) -> bool { matches!(output, ReturnType::Type(_, ty) if is_manager_type(ty)) }
 
 #[rustfmt::skip]
 fn manager_fields(source: &str) -> Result<Vec<String>, syn::Error> {
@@ -321,6 +323,7 @@ impl BoundaryVisitor {
     }
 }
 
+#[rustfmt::skip]
 impl<'ast> Visit<'ast> for BoundaryVisitor {
     fn visit_item_use(&mut self, item: &'ast ItemUse) {
         let mut aliases = Vec::new();
@@ -355,10 +358,8 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
         visit::visit_path(self, path);
     }
 
-    #[rustfmt::skip]
     fn visit_item_type(&mut self, item: &'ast ItemType) { if is_manager_type(&item.ty) { self.record(format!("legacy GlobalPoolManager alias {}", item.ident)); } visit::visit_item_type(self, item); }
 
-    #[rustfmt::skip]
     fn visit_impl_item_type(&mut self, item: &'ast syn::ImplItemType) { if is_manager_type(&item.ty) { self.record(format!("legacy GlobalPoolManager alias {}", item.ident)); } visit::visit_impl_item_type(self, item); }
 
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
@@ -368,7 +369,6 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
         visit::visit_expr_method_call(self, expression);
     }
 
-    #[rustfmt::skip]
     fn visit_expr_struct(&mut self, expression: &'ast ExprStruct) {
         for field in &expression.fields {
             let name = match &field.member { syn::Member::Named(name) => ident_text(name), syn::Member::Unnamed(_) => continue };
@@ -379,11 +379,17 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
         visit::visit_expr_struct(self, expression);
     }
 
-    #[rustfmt::skip]
-    fn visit_item_fn(&mut self, item: &'ast ItemFn) { self.context.push(ident_text(&item.sig.ident)); visit::visit_item_fn(self, item); self.context.pop(); }
+    fn visit_local(&mut self, local: &'ast Local) { let manager = match &local.pat { Pat::Type(pat) => is_manager_type(&pat.ty), Pat::Ident(pat) => self.manager_fields.contains(&ident_text(&pat.ident)), _ => false }; if manager && local.init.as_ref().is_some_and(|init| uses_default(&init.expr)) { self.record("policy-less Default construction for GlobalPoolManager local".into()); } visit::visit_local(self, local); }
 
-    #[rustfmt::skip]
-    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) { self.context.push(ident_text(&item.sig.ident)); visit::visit_impl_item_fn(self, item); self.context.pop(); }
+    fn visit_item_const(&mut self, item: &'ast ItemConst) { if is_manager_type(&item.ty) && uses_default(&item.expr) { self.record("policy-less Default construction for GlobalPoolManager const".into()); } visit::visit_item_const(self, item); }
+
+    fn visit_item_static(&mut self, item: &'ast ItemStatic) { if is_manager_type(&item.ty) && uses_default(&item.expr) { self.record("policy-less Default construction for GlobalPoolManager static".into()); } visit::visit_item_static(self, item); }
+
+    fn visit_expr_closure(&mut self, expression: &'ast ExprClosure) { if returns_manager(&expression.output) && uses_default(&expression.body) { self.record("policy-less Default construction for GlobalPoolManager closure".into()); } visit::visit_expr_closure(self, expression); }
+
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) { self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } visit::visit_item_fn(self, item); self.context.pop(); }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) { self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } visit::visit_impl_item_fn(self, item); self.context.pop(); }
 
     fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
         self.context.push(
@@ -396,7 +402,6 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
         self.context.pop();
     }
 
-    #[rustfmt::skip]
     fn visit_macro(&mut self, item: &'ast Macro) {
         let tokens = item.tokens.to_string();
         for path in macro_paths(&tokens) {
@@ -452,25 +457,18 @@ fn boundary_violations(source: &str, module_path: &[&str], manager_fields: &[Str
 
 #[rustfmt::skip]
 fn declared_module(path: &FsPath, module_path: &[String]) -> std::io::Result<Option<(Vec<String>, bool)>> {
-    let Some(parent) = path.parent() else { return Ok(None); };
-    let target = fs::canonicalize(path)?;
-    let mut owners = fs::read_dir(parent)?.filter_map(Result::ok).map(|entry| entry.path())
-        .filter(|candidate| candidate.extension().and_then(|value| value.to_str()) == Some("rs")).collect::<Vec<_>>();
+    let Some(parent) = path.parent() else { return Ok(None); }; let target = fs::canonicalize(path)?;
+    let mut owners = fs::read_dir(parent)?.filter_map(Result::ok).map(|entry| entry.path()).filter(|candidate| candidate.extension().and_then(|value| value.to_str()) == Some("rs")).collect::<Vec<_>>();
     owners.extend([parent.join("mod.rs"), parent.with_extension("rs")]); owners.sort(); owners.dedup();
     for owner in owners.into_iter().filter(|owner| owner.is_file() && owner != path) {
-        let file = syn::parse_file(&fs::read_to_string(&owner)?).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        for item in file.items {
-            let syn::Item::Mod(module) = item else { continue; };
-            let declared = module.attrs.iter().find_map(|attr| match &attr.meta {
-                syn::Meta::NameValue(value) if attr.path().is_ident("path") => match &value.value {
-                    Expr::Lit(value) => match &value.lit { syn::Lit::Str(path) => Some(path.value()), _ => None }, _ => None }, _ => None });
+        let file = syn::parse_file(&fs::read_to_string(&owner)?).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?; for item in file.items {
+            let syn::Item::Mod(module) = item else { continue; }; let declared = module.attrs.iter().find_map(|attr| match &attr.meta {
+                syn::Meta::NameValue(value) if attr.path().is_ident("path") => match &value.value { Expr::Lit(value) => match &value.lit { syn::Lit::Str(path) => Some(path.value()), _ => None }, _ => None }, _ => None });
             if declared.and_then(|declared| fs::canonicalize(owner.parent()?.join(declared)).ok()).as_ref() != Some(&target) { continue; }
             let mut resolved = module_path.to_vec();
             if owner != parent.with_extension("rs") && owner.file_name().and_then(|name| name.to_str()) != Some("mod.rs")
                 && let Some(stem) = owner.file_stem().and_then(|stem| stem.to_str()) { resolved.push(stem.to_string()); }
-            resolved.push(ident_text(&module.ident)); return Ok(Some((resolved, has_test_cfg(&module.attrs))));
-        }
-    }
+            resolved.push(ident_text(&module.ident)); return Ok(Some((resolved, has_test_cfg(&module.attrs)))); } }
     Ok(None)
 }
 
@@ -586,6 +584,8 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "fn probe() { passthrough!(crate::core::providers::base::send_streaming_request(req, provider)); }",
         "fn probe() { passthrough!(super::base::send_streaming_request(req, provider)); }",
         "struct Provider { pool_manager: crate::core::providers::base::GlobalPoolManager } impl Provider { fn new() -> Self { Self { pool_manager: std::sync::Arc::new(Default::default()) } } }",
+        "fn legacy() -> crate::core::providers::base::GlobalPoolManager { Default::default() }",
+        "fn legacy() { let pool_manager: crate::core::providers::base::GlobalPoolManager = Default::default(); consume(pool_manager); }",
         "macro_rules! manager_type { () => { crate::core::providers::base::GlobalPoolManager } } type Pool = manager_type!();",
     ] {
         let violations = boundary_violations(
