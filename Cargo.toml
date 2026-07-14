@@ -18,6 +18,7 @@ include = [
     "config/*.template",
     "config/model_prices_extended.json",
     "migrations/**/*",
+    ".github/workflows/*.yml",
     "build.rs",
     "Cargo.toml",
     "README.md",

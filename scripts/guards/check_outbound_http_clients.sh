@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Provider/runtime outbound HTTP boundary guard.
-#
-# The Rust AST guard scans all production provider and AI runtime route sources,
-# validates exact path + violation + purpose exceptions, and runs red/green
-# fixtures for every forbidden raw-client spelling.
+# Outbound HTTP client guard.
 
 set -euo pipefail
 

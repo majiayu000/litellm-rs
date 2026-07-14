@@ -3,8 +3,8 @@ use std::path::Path as FsPath;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{
-    Expr, ExprMethodCall, ImplItemFn, ItemExternCrate, ItemFn, ItemMacro, ItemMod, ItemUse, Local,
-    Macro, Pat, Path, Type, UseTree,
+    ExprMethodCall, ImplItemFn, ItemExternCrate, ItemFn, ItemMacro, ItemMod, ItemType, ItemUse,
+    Macro, Path, Type, UseTree,
 };
 
 const RAW_PREFIXES: &[&[&str]] = &[
@@ -71,7 +71,10 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
     },
     BoundaryException {
         path: "src/core/providers/cloudflare/provider.rs",
-        violations: &["new: legacy GlobalPoolManager::new() constructor"],
+        violations: &[
+            "new: legacy GlobalPoolManager::new() constructor",
+            "with_credentials: legacy GlobalPoolManager inferred Default::default() constructor",
+        ],
         purpose: "native runtime is restricted by the factory to its account-scoped official endpoint",
     },
     BoundaryException {
@@ -80,6 +83,7 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
+            "with_api_key: legacy GlobalPoolManager inferred Default::default() constructor",
         ],
         purpose: "unwired lifecycle stub with no Gateway factory owner",
     },
@@ -96,9 +100,9 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
         path: "src/core/providers/github/provider.rs",
         violations: &[
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::read_streaming_error_body",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
+            "with_api_key: legacy GlobalPoolManager inferred Default::default() constructor",
         ],
         purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
     },
@@ -115,7 +119,6 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
         violations: &[
             "chat_completion: raw HTTP path crate::core::http::outbound::default_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::read_streaming_error_body",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "embeddings: raw HTTP path crate::core::http::outbound::default_outbound_client",
         ],
@@ -149,9 +152,9 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
         path: "src/core/providers/ollama/provider.rs",
         violations: &[
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::read_streaming_error_body",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
+            "with_base_url: legacy GlobalPoolManager inferred Default::default() constructor",
         ],
         purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
     },
@@ -164,7 +167,6 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
             "build_request: raw HTTP client accessor .client()",
             "build_request: raw HTTP client accessor .client()",
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::read_streaming_error_body",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request_with_timeout",
             "new: legacy GlobalPoolManager::new() constructor",
         ],
@@ -253,10 +255,18 @@ fn path_violation(path: &[String], is_import: bool, module_path: &[String]) -> O
     let connection_pool = &["crate", "core", "providers", "base", "connection_pool"];
     let internal_connection_pool =
         path_starts_with(module_path, connection_pool) && path_starts_with(path, connection_pool);
+    let response_reader = path_starts_with(path, connection_pool)
+        && path.get(connection_pool.len()).is_some_and(|name| {
+            matches!(
+                name.as_str(),
+                "read_streaming_error_body" | "read_streaming_error_body_with_limits"
+            )
+        });
     if RAW_PREFIXES
         .iter()
         .any(|prefix| path_starts_with(path, prefix))
         && !internal_connection_pool
+        && !response_reader
     {
         return Some(format!("raw HTTP path {}", path.join("::")));
     }
@@ -326,11 +336,30 @@ fn collect_manager_aliases(tree: &UseTree, matched: bool, aliases: &mut Vec<Stri
     }
 }
 
+struct ManagerAliasCollector(Vec<String>);
+
+impl<'ast> Visit<'ast> for ManagerAliasCollector {
+    fn visit_item_use(&mut self, item: &'ast ItemUse) {
+        collect_manager_aliases(&item.tree, false, &mut self.0);
+        visit::visit_item_use(self, item);
+    }
+
+    fn visit_item_type(&mut self, item: &'ast ItemType) {
+        if let Type::Path(ty) = &*item.ty
+            && ty.path.is_ident("GlobalPoolManager")
+        {
+            self.0.push(ident_text(&item.ident));
+        }
+        visit::visit_item_type(self, item);
+    }
+}
+
 struct BoundaryVisitor {
     module_path: Vec<String>,
     context: Vec<String>,
     violations: Vec<String>,
     manager_aliases: Vec<String>,
+    manager_present: bool,
 }
 
 impl BoundaryVisitor {
@@ -354,7 +383,6 @@ impl BoundaryVisitor {
 
 impl<'ast> Visit<'ast> for BoundaryVisitor {
     fn visit_item_use(&mut self, item: &'ast ItemUse) {
-        collect_manager_aliases(&item.tree, false, &mut self.manager_aliases);
         let mut paths = Vec::new();
         flatten_use_tree(&item.tree, &mut Vec::new(), &mut paths);
         for path in paths {
@@ -377,33 +405,12 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
                 "legacy GlobalPoolManager::{}() constructor",
                 window[1]
             ));
+        } else if self.manager_present
+            && segments.ends_with(&["Default".to_string(), "default".to_string()])
+        {
+            self.record("legacy GlobalPoolManager inferred Default::default() constructor".into());
         }
         visit::visit_path(self, path);
-    }
-
-    fn visit_local(&mut self, local: &'ast Local) {
-        if let Pat::Type(pattern) = &local.pat
-            && let Type::Path(ty) = &*pattern.ty
-            && ty
-                .path
-                .segments
-                .last()
-                .is_some_and(|segment| self.manager_aliases.contains(&ident_text(&segment.ident)))
-            && let Some(initializer) = &local.init
-            && let Expr::Call(call) = &*initializer.expr
-            && let Expr::Path(function) = &*call.func
-        {
-            let segments: Vec<_> = function
-                .path
-                .segments
-                .iter()
-                .map(|segment| ident_text(&segment.ident))
-                .collect();
-            if segments.ends_with(&["Default".to_string(), "default".to_string()]) {
-                self.record("legacy GlobalPoolManager Default::default() constructor".to_string());
-            }
-        }
-        visit::visit_local(self, local);
     }
 
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
@@ -479,6 +486,8 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
 
 fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>, syn::Error> {
     let file = syn::parse_file(source)?;
+    let mut aliases = ManagerAliasCollector(vec!["GlobalPoolManager".to_string()]);
+    aliases.visit_file(&file);
     let mut visitor = BoundaryVisitor {
         module_path: module_path
             .iter()
@@ -486,7 +495,8 @@ fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>
             .collect(),
         context: Vec::new(),
         violations: Vec::new(),
-        manager_aliases: vec!["GlobalPoolManager".to_string()],
+        manager_aliases: aliases.0,
+        manager_present: source.contains("GlobalPoolManager"),
     };
     visitor.visit_file(&file);
     Ok(visitor.violations)
@@ -588,8 +598,9 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "fn probe() { crate::utils::net::http::create_streaming_client(); }",
         "fn probe() { GlobalPoolManager::new(); }",
         "fn probe() { GlobalPoolManager::shared(); }",
-        "use crate::core::providers::base::GlobalPoolManager as Pool; fn probe() { Pool::new(); }",
-        "fn probe() { let pool: GlobalPoolManager = Default::default(); }",
+        "fn probe() { Pool::new(); } use crate::core::providers::base::GlobalPoolManager as Pool;",
+        "type Pool = GlobalPoolManager; fn probe() { Pool::shared(); }",
+        "fn probe() -> GlobalPoolManager { Default::default() }",
         "use crate::core as raw_core; fn probe() { raw_core::http::default_outbound_client(); }",
         "use crate::utils as raw_utils; fn probe() { raw_utils::net::http::get_shared_client(); }",
         "use crate::core::{http as raw_http}; fn probe() { raw_http::default_outbound_client(); }",
@@ -640,9 +651,17 @@ fn source_exception_violations(path: &str) -> Vec<String> {
 
 fn collect_boundary_inventory() -> Vec<(String, Vec<String>, String)> {
     let repository_root = FsPath::new(env!("CARGO_MANIFEST_DIR"));
-    let roots: [(&str, &[&str]); 2] = [
+    let roots: [(&str, &[&str]); 4] = [
         ("src/core/providers", &["crate", "core", "providers"]),
         ("src/server/routes/ai", &["crate", "server", "routes", "ai"]),
+        (
+            "src/core/fine_tuning/providers",
+            &["crate", "core", "fine_tuning", "providers"],
+        ),
+        (
+            "src/core/rerank/providers",
+            &["crate", "core", "rerank", "providers"],
+        ),
     ];
     let mut sources = Vec::new();
     for (relative, module_path) in roots {
@@ -657,34 +676,15 @@ fn collect_boundary_inventory() -> Vec<(String, Vec<String>, String)> {
         )
         .unwrap_or_else(|error| panic!("{relative} source inventory failed: {error}"));
     }
-    for (relative, module_path) in [
-        (
-            "src/core/router/health_probe.rs",
-            &["crate", "core", "router", "health_probe"][..],
-        ),
-        (
-            "src/core/fine_tuning/providers/openai.rs",
-            &["crate", "core", "fine_tuning", "providers", "openai"][..],
-        ),
-        (
-            "src/core/rerank/providers/cohere.rs",
-            &["crate", "core", "rerank", "providers", "cohere"][..],
-        ),
-        (
-            "src/core/rerank/providers/jina.rs",
-            &["crate", "core", "rerank", "providers", "jina"][..],
-        ),
-    ] {
-        sources.push((
-            relative.to_string(),
-            module_path
-                .iter()
-                .map(|segment| (*segment).to_string())
-                .collect(),
-            fs::read_to_string(repository_root.join(relative))
-                .unwrap_or_else(|error| panic!("cannot read {relative}: {error}")),
-        ));
-    }
+    let relative = "src/core/router/health_probe.rs";
+    sources.push((
+        relative.to_string(),
+        ["crate", "core", "router", "health_probe"]
+            .map(str::to_string)
+            .to_vec(),
+        fs::read_to_string(repository_root.join(relative))
+            .unwrap_or_else(|error| panic!("cannot read {relative}: {error}")),
+    ));
     sources.sort_by(|left, right| left.0.cmp(&right.0));
     sources
 }
