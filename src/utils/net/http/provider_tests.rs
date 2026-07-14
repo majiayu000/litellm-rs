@@ -36,21 +36,24 @@ where
 {
     type Response = S::Response;
     type Error = ConnectorBoxError;
-    type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+    >;
 
     fn poll_ready(&mut self, _context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, _request: Request) -> Self::Future {
-        let result = std::net::TcpStream::connect(self.address)
-            .map_err(ConnectorBoxError::from)
-            .and_then(|_stream| {
-                Err(ConnectorBoxError::from(io::Error::other(
-                    "connector tripwire invoked",
-                )))
-            });
-        std::future::ready(result)
+        let address = self.address;
+        Box::pin(async move {
+            let _stream = tokio::net::TcpStream::connect(address)
+                .await
+                .map_err(ConnectorBoxError::from)?;
+            Err(ConnectorBoxError::from(io::Error::other(
+                "connector tripwire invoked",
+            )))
+        })
     }
 }
 
