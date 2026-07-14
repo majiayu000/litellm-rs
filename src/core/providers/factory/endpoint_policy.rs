@@ -48,6 +48,33 @@ pub(crate) fn invalid_endpoint(value: Option<&serde_json::Value>) -> bool {
     })
 }
 
+pub(crate) fn configured_endpoint_for_keys<'a>(
+    base_endpoint: Option<&'a str>,
+    config: &'a std::collections::HashMap<String, serde_json::Value>,
+    endpoint_keys: &[&str],
+) -> Option<&'a str> {
+    base_endpoint.or_else(|| {
+        endpoint_keys.iter().copied().find_map(|key| {
+            config
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        })
+    })
+}
+
+pub(crate) fn validate_private_official_openai_endpoint(
+    access: ProviderEndpointAccess,
+    endpoint: Option<&str>,
+) -> Result<(), &'static str> {
+    if access == ProviderEndpointAccess::PrivateNetwork
+        && endpoint.is_some_and(crate::core::providers::openai::config::is_official_openai_endpoint)
+    {
+        return Err("private_network access cannot target the official OpenAI endpoint");
+    }
+    Ok(())
+}
+
 fn is_native_default_endpoint(
     provider_type: &ProviderType,
     config: &serde_json::Value,
@@ -80,13 +107,15 @@ pub(super) fn validate_direct_endpoint_policy(
     {
         return Err(fail("endpoint must be a string"));
     }
-    let has_endpoint = endpoint_keys.iter().copied().any(|key| {
+    let configured_endpoint = endpoint_keys.iter().copied().find_map(|key| {
         config
             .get(key)
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty())
+            .filter(|value| !value.trim().is_empty())
     });
+    let has_endpoint = configured_endpoint.is_some();
     let access = builder::config_endpoint_access(config, provider)?;
+    validate_private_official_openai_endpoint(access, configured_endpoint).map_err(fail)?;
     let selector = provider_type.to_string();
     if access == ProviderEndpointAccess::PrivateNetwork
         && !has_endpoint

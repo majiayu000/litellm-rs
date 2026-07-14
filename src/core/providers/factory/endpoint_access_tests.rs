@@ -255,29 +255,66 @@ async fn vertex_endpoint_alias_reaches_gateway_and_direct_factories() {
 #[tokio::test]
 async fn official_openai_authority_rejects_private_factory_access() {
     for endpoint in ["https://api.openai.com/v1", "https://api.openai.com./v1"] {
-        let direct = Provider::from_config_async(
-            ProviderType::OpenAI,
-            serde_json::json!({
-                "api_key": "sk-test",
-                "base_url": endpoint,
-                "endpoint_access": "private_network"
-            }),
-        )
-        .await
-        .expect_err("direct official OpenAI endpoint must stay public");
-        assert!(direct.to_string().contains("official OpenAI"), "{direct}");
+        for provider_type in [ProviderType::OpenAI, ProviderType::OpenAICompatible] {
+            for endpoint_key in ["base_url", "api_base"] {
+                let mut direct_config = serde_json::json!({
+                    "api_key": "sk-test",
+                    "endpoint_access": "private_network"
+                });
+                direct_config[endpoint_key] = endpoint.into();
+                let direct = Provider::from_config_async(provider_type.clone(), direct_config)
+                    .await
+                    .expect_err("direct official OpenAI endpoint must stay public");
+                assert!(
+                    direct.to_string().contains("official OpenAI"),
+                    "{provider_type}.{endpoint_key}: {direct}"
+                );
+            }
+        }
 
-        let gateway = ProviderConfig {
-            name: "openai-test".to_string(),
-            provider_type: "openai".to_string(),
-            api_key: "sk-test".to_string(),
-            base_url: Some(endpoint.to_string()),
-            endpoint_access: PrivateNetwork,
-            ..Default::default()
-        };
-        let error = create_provider(gateway)
-            .await
-            .expect_err("gateway official OpenAI endpoint must stay public");
-        assert!(error.to_string().contains("official OpenAI"), "{error}");
+        for provider_type in ["openai", "openai_compatible"] {
+            for endpoint_key in ["base_url", "api_base"] {
+                let mut gateway = ProviderConfig {
+                    name: "openai-test".to_string(),
+                    provider_type: provider_type.to_string(),
+                    api_key: "sk-test".to_string(),
+                    endpoint_access: PrivateNetwork,
+                    ..Default::default()
+                };
+                if endpoint_key == "base_url" {
+                    gateway.base_url = Some(endpoint.to_string());
+                } else {
+                    gateway
+                        .settings
+                        .insert(endpoint_key.to_string(), endpoint.into());
+                }
+                let error = create_provider(gateway)
+                    .await
+                    .expect_err("gateway official OpenAI endpoint must stay public");
+                assert!(
+                    error.to_string().contains("official OpenAI"),
+                    "{provider_type}.{endpoint_key}: {error}"
+                );
+            }
+        }
     }
+}
+
+#[tokio::test]
+async fn gateway_selector_normalization_preserves_endpoint_alias_policy() {
+    let mut config = ProviderConfig {
+        name: "azure-test".to_string(),
+        provider_type: " Azure ".to_string(),
+        api_key: "sk-test".to_string(),
+        endpoint_access: PrivateNetwork,
+        ..Default::default()
+    };
+    config.settings.insert(
+        "azure_endpoint".to_string(),
+        "http://127.0.0.1:18080/openai/deployments/test".into(),
+    );
+
+    create_provider(config)
+        .await
+        .expect("normalized Azure selector must retain its endpoint alias");
 }

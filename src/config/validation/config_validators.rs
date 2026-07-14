@@ -203,20 +203,11 @@ impl Validate for ProviderConfig {
                 self.name
             ));
         }
-        if self.endpoint_access == ProviderEndpointAccess::PrivateNetwork
-            && provider_selector
-                .parse::<crate::core::providers::ProviderType>()
-                .is_ok_and(|provider_type| {
-                    provider_type == crate::core::providers::ProviderType::OpenAI
-                })
-            && configured_endpoint
-                .is_some_and(crate::core::providers::openai::config::is_official_openai_endpoint)
-        {
-            return Err(format!(
-                "Provider {} cannot grant private_network access to the official OpenAI endpoint",
-                self.name
-            ));
-        }
+        crate::core::providers::factory::validate_private_official_openai_endpoint(
+            self.endpoint_access,
+            configured_endpoint,
+        )
+        .map_err(|message| format!("Provider {} {message}", self.name))?;
 
         let requires_api_key =
             crate::core::providers::registry::get_definition(&provider_selector.to_lowercase())
@@ -556,6 +547,20 @@ mod endpoint_access_tests {
         assert!(error.contains("must be a string"), "azure: {error}");
     }
 
+    #[test]
+    fn provider_selector_normalization_preserves_endpoint_alias_policy() {
+        let mut config = public_provider();
+        config.provider_type = " Azure ".to_string();
+        config.base_url = None;
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        config.settings.insert(
+            "azure_endpoint".to_string(),
+            "http://127.0.0.1:18080/openai/deployments/test".into(),
+        );
+
+        assert!(Validate::validate(&config).is_ok());
+    }
+
     #[cfg(feature = "providers-extra")]
     #[test]
     fn vertex_endpoint_alias_is_a_provider_specific_endpoint_source() {
@@ -608,11 +613,26 @@ mod endpoint_access_tests {
 
     #[test]
     fn official_openai_endpoint_cannot_receive_private_access() {
-        let mut config = public_provider();
-        config.provider_type = "openai".to_string();
-        config.base_url = Some("https://api.openai.com/v1".to_string());
-        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
-        let error = Validate::validate(&config).expect_err("official OpenAI must stay public");
-        assert!(error.contains("official OpenAI"), "{error}");
+        for provider_type in ["openai", "openai_compatible"] {
+            for endpoint_key in ["base_url", "api_base"] {
+                let mut config = public_provider();
+                config.provider_type = provider_type.to_string();
+                config.base_url = None;
+                config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+                if endpoint_key == "base_url" {
+                    config.base_url = Some("https://api.openai.com/v1".to_string());
+                } else {
+                    config
+                        .settings
+                        .insert(endpoint_key.to_string(), "https://api.openai.com/v1".into());
+                }
+                let error =
+                    Validate::validate(&config).expect_err("official OpenAI must stay public");
+                assert!(
+                    error.contains("official OpenAI"),
+                    "{provider_type}.{endpoint_key}: {error}"
+                );
+            }
+        }
     }
 }
