@@ -8,9 +8,10 @@ use crate::config::models::gateway::{GatewayConfig, GatewayPricingConfig};
 use crate::config::models::provider::{ProviderConfig, ProviderHealthCheckConfig, RetryConfig};
 use crate::config::models::server::ServerConfig;
 use crate::core::net::{
-    validate_provider_endpoint_url, validate_provider_endpoint_url_without_resolution,
+    ProviderEndpointAccess, ProviderEndpointPolicy, validate_provider_endpoint_url,
+    validate_provider_endpoint_url_without_resolution,
 };
-use crate::core::providers::factory::invalid_endpoint;
+use crate::core::providers::factory::{endpoint_keys_for_selector, invalid_endpoint};
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -171,25 +172,16 @@ impl Validate for ProviderConfig {
             .base_url
             .as_ref()
             .is_some_and(|url| url.trim().is_empty());
+        let endpoint_keys = endpoint_keys_for_selector(provider_selector);
         if blank_base
-            || ["base_url", "api_base"]
-                .into_iter()
+            || endpoint_keys
+                .iter()
+                .copied()
                 .any(|key| invalid_endpoint(self.settings.get(key)))
         {
             return Err(format!("Provider {} endpoint must be a string", self.name));
         }
-        let setting_url = |key| {
-            self.settings
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .filter(|url| !url.trim().is_empty())
-        };
-        let configured_endpoint = self
-            .base_url
-            .as_deref()
-            .filter(|url| !url.trim().is_empty())
-            .or_else(|| setting_url("base_url"))
-            .or_else(|| setting_url("api_base"));
+        let configured_endpoint = self.configured_endpoint();
         let has_configured_endpoint = configured_endpoint.is_some();
         if (self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
             || has_configured_endpoint)
@@ -208,6 +200,20 @@ impl Validate for ProviderConfig {
         {
             return Err(format!(
                 "Provider {} private_network endpoint access requires a base URL",
+                self.name
+            ));
+        }
+        if self.endpoint_access == ProviderEndpointAccess::PrivateNetwork
+            && provider_selector
+                .parse::<crate::core::providers::ProviderType>()
+                .is_ok_and(|provider_type| {
+                    provider_type == crate::core::providers::ProviderType::OpenAI
+                })
+            && configured_endpoint
+                .is_some_and(crate::core::providers::openai::config::is_official_openai_endpoint)
+        {
+            return Err(format!(
+                "Provider {} cannot grant private_network access to the official OpenAI endpoint",
                 self.name
             ));
         }
@@ -305,6 +311,26 @@ impl ProviderConfig {
                     self.name,
                     endpoint.scheme()
                 ));
+            }
+            if self.endpoint_access == ProviderEndpointAccess::PrivateNetwork {
+                let base_url = self.configured_endpoint().ok_or_else(|| {
+                    format!(
+                        "Provider {} private health check requires a configured endpoint",
+                        self.name
+                    )
+                })?;
+                let policy = ProviderEndpointPolicy::for_base_url(self.endpoint_access, base_url)
+                    .map_err(|error| {
+                    format!("Provider {} endpoint policy is invalid: {error}", self.name)
+                })?;
+                policy
+                    .validate_url_without_resolution(&endpoint)
+                    .map_err(|error| {
+                        format!(
+                            "Provider {} health check endpoint is invalid: {error}",
+                            self.name
+                        )
+                    })?;
             }
             validate_provider_endpoint_url(&endpoint, self.endpoint_access).map_err(|error| {
                 format!(
@@ -481,5 +507,112 @@ mod endpoint_access_tests {
             .validate_health_check_runtime()
             .expect_err("health checks must remain limited to HTTP transports");
         assert!(error.contains("http:// or https://"));
+    }
+
+    #[test]
+    fn azure_endpoint_aliases_are_provider_specific_endpoint_sources() {
+        for (provider_type, key, endpoint) in [
+            (
+                "azure",
+                "endpoint",
+                "http://127.0.0.1:18080/openai/deployments/test",
+            ),
+            (
+                "azure",
+                "azure_endpoint",
+                "http://127.0.0.1:18080/openai/deployments/test",
+            ),
+            ("azure_ai", "endpoint", "http://127.0.0.1:18080/models"),
+            (
+                "azure_ai",
+                "azure_ai_endpoint",
+                "http://127.0.0.1:18080/models",
+            ),
+        ] {
+            let mut config = public_provider();
+            config.provider_type = provider_type.to_string();
+            config.base_url = None;
+            config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+            config.settings.insert(key.to_string(), endpoint.into());
+            assert!(Validate::validate(&config).is_ok(), "{provider_type}.{key}");
+        }
+
+        let mut unrelated = public_provider();
+        unrelated.base_url = None;
+        unrelated.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        unrelated
+            .settings
+            .insert("endpoint".to_string(), "http://127.0.0.1:18080/v1".into());
+        let error = Validate::validate(&unrelated).expect_err("OpenAI aliases must stay closed");
+        assert!(error.contains("requires a base URL"), "{error}");
+
+        let mut invalid = public_provider();
+        invalid.provider_type = "azure".to_string();
+        invalid.base_url = None;
+        invalid
+            .settings
+            .insert("azure_endpoint".to_string(), serde_json::json!(42));
+        let error = Validate::validate(&invalid).expect_err("invalid alias must fail");
+        assert!(error.contains("must be a string"), "azure: {error}");
+    }
+
+    #[cfg(feature = "providers-extra")]
+    #[test]
+    fn vertex_endpoint_alias_is_a_provider_specific_endpoint_source() {
+        let mut config = public_provider();
+        config.provider_type = "vertex_ai".to_string();
+        config.base_url = None;
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        config
+            .settings
+            .insert("endpoint".to_string(), "http://127.0.0.1:18080/v1".into());
+        assert!(Validate::validate(&config).is_ok());
+
+        for value in [serde_json::json!(42), serde_json::json!(" ")] {
+            config.settings.insert("endpoint".to_string(), value);
+            let error = Validate::validate(&config).expect_err("invalid alias must fail");
+            assert!(error.contains("must be a string"), "{error}");
+        }
+    }
+
+    #[test]
+    fn private_health_check_is_bound_to_the_provider_authority() {
+        let mut config = public_provider();
+        config.base_url = Some("http://127.0.0.1:18080/v1".to_string());
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        for endpoint in ["health", "http://127.0.0.1:18080/health"] {
+            config.health_check.endpoint = Some(endpoint.to_string());
+            assert!(config.validate_health_check_runtime().is_ok(), "{endpoint}");
+        }
+        for endpoint in [
+            "http://127.0.0.2:18080/health",
+            "http://127.0.0.1:18081/health",
+            "https://127.0.0.1:18080/health",
+        ] {
+            config.health_check.endpoint = Some(endpoint.to_string());
+            let error = config
+                .validate_health_check_runtime()
+                .expect_err("private health authority must not expand");
+            assert!(error.contains("authority"), "{endpoint}: {error}");
+        }
+
+        config.base_url = None;
+        config.provider_type = "azure".to_string();
+        config.settings.insert(
+            "azure_endpoint".to_string(),
+            "http://127.0.0.1:18080/openai/deployments/test".into(),
+        );
+        config.health_check.endpoint = Some("health".to_string());
+        assert!(config.validate_health_check_runtime().is_ok());
+    }
+
+    #[test]
+    fn official_openai_endpoint_cannot_receive_private_access() {
+        let mut config = public_provider();
+        config.provider_type = "openai".to_string();
+        config.base_url = Some("https://api.openai.com/v1".to_string());
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        let error = Validate::validate(&config).expect_err("official OpenAI must stay public");
+        assert!(error.contains("official OpenAI"), "{error}");
     }
 }

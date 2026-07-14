@@ -121,6 +121,22 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
+    pub(crate) fn configured_endpoint(&self) -> Option<&str> {
+        self.base_url
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| {
+                crate::core::providers::factory::endpoint_keys_for_selector(&self.provider_type)
+                    .iter()
+                    .find_map(|key| {
+                        self.settings
+                            .get(*key)
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|url| !url.trim().is_empty())
+                    })
+            })
+    }
+
     /// Resolve a configured custom health endpoint to an absolute URL.
     pub(crate) fn resolved_health_check_endpoint(&self) -> Result<Option<Url>, String> {
         let Some(endpoint) = self.health_check.endpoint.as_deref() else {
@@ -137,9 +153,9 @@ impl ProviderConfig {
         match Url::parse(endpoint) {
             Ok(url) => Ok(Some(url)),
             Err(url::ParseError::RelativeUrlWithoutBase) => {
-                let base_url = self.base_url.as_deref().ok_or_else(|| {
+                let base_url = self.configured_endpoint().ok_or_else(|| {
                     format!(
-                        "Provider {} relative health check endpoint requires base_url",
+                        "Provider {} relative health check endpoint requires a configured endpoint",
                         self.name
                     )
                 })?;

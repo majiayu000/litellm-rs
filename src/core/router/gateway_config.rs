@@ -334,6 +334,6 @@ mod tests {
             .await
             .expect_err("direct factory must validate disabled providers too");
         assert!(matches!(error, RouterError::InvalidConfiguration(_)));
-        assert!(error.to_string().contains("requires base_url"));
+        assert!(error.to_string().contains("requires a configured endpoint"));
     }
 }

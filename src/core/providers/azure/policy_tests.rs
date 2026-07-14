@@ -142,6 +142,45 @@ async fn azure_core_operation_matrix_uses_policy_client() {
     }
 }
 
+#[tokio::test]
+async fn azure_streaming_uses_the_shared_header_timeout() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("test listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener should have an address");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("request should connect");
+        let mut request = String::new();
+        BufReader::new(&mut socket)
+            .read_line(&mut request)
+            .await
+            .expect("request line should be readable");
+        tokio::time::sleep(Duration::from_millis(1_250)).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("response headers should be writable");
+    });
+    let mut config = private_config(format!("http://{address}"));
+    config.timeout = 1;
+    let chat = AzureChatHandler::new(config).expect("chat should build");
+
+    drop(
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            chat.create_chat_completion_stream(policy_chat_request(), RequestContext::default()),
+        )
+        .await
+        .expect("shared streaming header timeout must exceed the ordinary provider timeout")
+        .expect("delayed response headers must remain valid"),
+    );
+    server.await.expect("server should finish");
+}
+
 fn assert_private_endpoint_rejected<T>(result: Result<T, ProviderError>) {
     let Err(error) = result else {
         panic!("public-only Azure handler accepted a private endpoint");

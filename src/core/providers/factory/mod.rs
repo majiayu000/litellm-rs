@@ -25,7 +25,8 @@ mod replicate_builder;
 mod resolver;
 
 pub(crate) use endpoint_policy::{
-    invalid_endpoint, selector_allows_implicit_private, selector_supports_endpoint_access,
+    endpoint_keys_for_selector, invalid_endpoint, selector_allows_implicit_private,
+    selector_supports_endpoint_access,
 };
 pub use resolver::is_provider_selector_supported;
 
@@ -88,9 +89,11 @@ pub async fn create_provider(
     } else {
         provider_type.as_str()
     };
+    let endpoint_keys = endpoint_keys_for_selector(provider_selector);
     if base_url.as_ref().is_some_and(|url| url.trim().is_empty())
-        || ["base_url", "api_base"]
-            .into_iter()
+        || endpoint_keys
+            .iter()
+            .copied()
             .any(|key| invalid_endpoint(settings.get(key)))
     {
         return Err(ProviderError::configuration(
@@ -99,7 +102,7 @@ pub async fn create_provider(
         ));
     }
     let base_endpoint = base_url.as_deref().filter(|url| !url.trim().is_empty());
-    let settings_endpoint = ["base_url", "api_base"].into_iter().any(|key| {
+    let settings_endpoint = endpoint_keys.iter().copied().any(|key| {
         settings
             .get(key)
             .and_then(Value::as_str)

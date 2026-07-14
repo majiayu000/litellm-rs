@@ -6,7 +6,6 @@ use futures::{Stream, StreamExt};
 use reqwest::Method;
 use serde_json::{Value, json};
 use std::pin::Pin;
-use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::timeout;
 
@@ -26,8 +25,8 @@ use super::config::AzureConfig;
 use super::error::{azure_api_error, azure_config_error};
 use super::utils::{AzureEndpointType, AzureUtils};
 use crate::core::providers::base::{
-    HeaderPair, apply_provider_headers, header, header_owned, header_static,
-    read_streaming_error_body,
+    HeaderPair, STREAMING_HEADER_TIMEOUT_SECS, apply_provider_headers, header, header_owned,
+    header_static, read_streaming_error_body,
 };
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::streaming::utils::is_done_marker;
@@ -172,7 +171,7 @@ impl AzureChatHandler {
 
         // Execute streaming request
         let response = timeout(
-            Duration::from_secs(self.client.get_config().timeout),
+            std::time::Duration::from_secs(STREAMING_HEADER_TIMEOUT_SECS),
             apply_provider_headers(
                 self.client
                     .streaming_request(Method::POST, &url)?
@@ -182,7 +181,7 @@ impl AzureChatHandler {
             .send(),
         )
         .await
-        .map_err(|_| ProviderError::network("azure", "Request timeout"))?
+        .map_err(|_| ProviderError::network("azure", "Streaming response header timeout"))?
         .map_err(|error| ProviderError::network("azure", error.to_string()))?;
 
         // Check status

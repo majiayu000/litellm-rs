@@ -67,6 +67,15 @@ fn default_provider_name() -> String {
     "openai".to_string()
 }
 
+pub(crate) fn is_official_openai_endpoint(raw_url: &str) -> bool {
+    url::Url::parse(raw_url).is_ok_and(|url| {
+        url.host_str().is_some_and(|host| {
+            host.trim_end_matches('.')
+                .eq_ignore_ascii_case("api.openai.com")
+        })
+    })
+}
+
 impl Default for OpenAIFeatures {
     fn default() -> Self {
         Self {
@@ -137,6 +146,17 @@ impl OpenAIConfig {
     pub fn validate(&self) -> Result<(), String> {
         // Validate base config
         self.base.validate("openai")?;
+        if self.base.endpoint_access == ProviderEndpointAccess::PrivateNetwork
+            && self
+                .base
+                .api_base
+                .as_deref()
+                .is_some_and(is_official_openai_endpoint)
+        {
+            return Err(
+                "private_network access cannot target the official OpenAI endpoint".to_string(),
+            );
+        }
 
         // OpenAI specific validations
         if let Some(ref api_key) = self.base.api_key
@@ -273,6 +293,24 @@ mod tests {
             serde_json::to_value(config).unwrap()["endpoint_access"],
             "private_network"
         );
+    }
+
+    #[test]
+    fn private_access_rejects_the_official_openai_authority() {
+        let mut config = OpenAIConfig::default();
+        config.base.api_key = Some("sk-test".to_string());
+        config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        let error = config
+            .validate()
+            .expect_err("official OpenAI must stay public");
+        assert!(error.contains("official OpenAI"), "{error}");
+
+        config.base.api_base = Some("http://127.0.0.1:18080/v1".to_string());
+        assert!(config.validate().is_ok());
+
+        config.base.api_base = Some("https://api.openai.com/v1".to_string());
+        config.base.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

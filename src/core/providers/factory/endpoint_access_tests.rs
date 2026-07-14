@@ -108,3 +108,176 @@ async fn invalid_or_implicit_private_endpoints_fail_closed() {
         assert!(error.to_string().contains("endpoint"), "{error}");
     }
 }
+
+#[tokio::test]
+async fn azure_endpoint_aliases_reach_gateway_and_direct_factories() {
+    for (provider_type, selector, key, endpoint) in [
+        (
+            ProviderType::Azure,
+            "azure",
+            "endpoint",
+            "http://127.0.0.1:18080/openai/deployments/test",
+        ),
+        (
+            ProviderType::Azure,
+            "azure",
+            "azure_endpoint",
+            "http://127.0.0.1:18080/openai/deployments/test",
+        ),
+        (
+            ProviderType::AzureAI,
+            "azure_ai",
+            "endpoint",
+            "http://127.0.0.1:18080/models",
+        ),
+        (
+            ProviderType::AzureAI,
+            "azure_ai",
+            "azure_ai_endpoint",
+            "http://127.0.0.1:18080/models",
+        ),
+    ] {
+        let direct = serde_json::json!({
+            "api_key": "test-key",
+            key: endpoint,
+            "endpoint_access": "private_network"
+        });
+        Provider::from_config_async(provider_type, direct)
+            .await
+            .unwrap_or_else(|error| panic!("direct {selector}.{key} failed: {error}"));
+
+        let mut gateway = ProviderConfig {
+            name: format!("{selector}-test"),
+            provider_type: selector.to_string(),
+            api_key: "test-key".to_string(),
+            endpoint_access: PrivateNetwork,
+            ..Default::default()
+        };
+        gateway.settings.insert(key.to_string(), endpoint.into());
+        create_provider(gateway)
+            .await
+            .unwrap_or_else(|error| panic!("gateway {selector}.{key} failed: {error}"));
+    }
+}
+
+#[cfg(feature = "providers-extra")]
+#[tokio::test]
+async fn vertex_endpoint_alias_reaches_gateway_and_direct_factories() {
+    let endpoint = "http://127.0.0.1:18080/v1/projects/test";
+    let direct = serde_json::json!({
+        "project_id": "test-project",
+        "access_token": "test-token",
+        "endpoint": endpoint,
+        "endpoint_access": "private_network"
+    });
+    Provider::from_config_async(ProviderType::VertexAI, direct)
+        .await
+        .unwrap_or_else(|error| panic!("direct vertex_ai.endpoint failed: {error}"));
+
+    let mut gateway = ProviderConfig {
+        name: "vertex-test".to_string(),
+        provider_type: "vertex_ai".to_string(),
+        project: Some("test-project".to_string()),
+        endpoint_access: PrivateNetwork,
+        ..Default::default()
+    };
+    gateway
+        .settings
+        .insert("endpoint".to_string(), endpoint.into());
+    gateway
+        .settings
+        .insert("access_token".to_string(), "test-token".into());
+    create_provider(gateway)
+        .await
+        .unwrap_or_else(|error| panic!("gateway vertex_ai.endpoint failed: {error}"));
+
+    for invalid in [serde_json::json!(42), serde_json::json!(" ")] {
+        let direct = serde_json::json!({
+            "project_id": "test-project",
+            "access_token": "test-token",
+            "endpoint": invalid.clone(),
+            "endpoint_access": "private_network"
+        });
+        let error = Provider::from_config_async(ProviderType::VertexAI, direct)
+            .await
+            .expect_err("invalid direct Vertex endpoint alias must fail");
+        assert!(
+            error.to_string().contains("endpoint must be a string"),
+            "{error}"
+        );
+
+        let mut gateway = ProviderConfig {
+            name: "vertex-invalid".to_string(),
+            provider_type: "vertex_ai".to_string(),
+            project: Some("test-project".to_string()),
+            endpoint_access: PrivateNetwork,
+            ..Default::default()
+        };
+        gateway.settings.insert("endpoint".to_string(), invalid);
+        gateway
+            .settings
+            .insert("access_token".to_string(), "test-token".into());
+        let error = create_provider(gateway)
+            .await
+            .expect_err("invalid gateway Vertex endpoint alias must fail");
+        assert!(
+            error.to_string().contains("endpoint must be a string"),
+            "{error}"
+        );
+    }
+
+    let unrelated = serde_json::json!({
+        "api_key": "sk-test",
+        "endpoint": endpoint,
+        "endpoint_access": "private_network"
+    });
+    let error = Provider::from_config_async(ProviderType::OpenAI, unrelated)
+        .await
+        .expect_err("Vertex endpoint alias must stay provider-specific");
+    assert!(error.to_string().contains("requires a base URL"), "{error}");
+
+    let mut unrelated = ProviderConfig {
+        name: "openai-test".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-test".to_string(),
+        endpoint_access: PrivateNetwork,
+        ..Default::default()
+    };
+    unrelated
+        .settings
+        .insert("endpoint".to_string(), endpoint.into());
+    let error = create_provider(unrelated)
+        .await
+        .expect_err("Vertex gateway endpoint alias must stay provider-specific");
+    assert!(error.to_string().contains("requires a base URL"), "{error}");
+}
+
+#[tokio::test]
+async fn official_openai_authority_rejects_private_factory_access() {
+    for endpoint in ["https://api.openai.com/v1", "https://api.openai.com./v1"] {
+        let direct = Provider::from_config_async(
+            ProviderType::OpenAI,
+            serde_json::json!({
+                "api_key": "sk-test",
+                "base_url": endpoint,
+                "endpoint_access": "private_network"
+            }),
+        )
+        .await
+        .expect_err("direct official OpenAI endpoint must stay public");
+        assert!(direct.to_string().contains("official OpenAI"), "{direct}");
+
+        let gateway = ProviderConfig {
+            name: "openai-test".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            base_url: Some(endpoint.to_string()),
+            endpoint_access: PrivateNetwork,
+            ..Default::default()
+        };
+        let error = create_provider(gateway)
+            .await
+            .expect_err("gateway official OpenAI endpoint must stay public");
+        assert!(error.to_string().contains("official OpenAI"), "{error}");
+    }
+}

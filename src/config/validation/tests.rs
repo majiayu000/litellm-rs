@@ -207,7 +207,12 @@ fn test_provider_health_check_rejects_unsupported_combinations() {
     };
 
     config.health_check.endpoint = Some("/health".to_string());
-    assert!(config.validate().unwrap_err().contains("requires base_url"));
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .contains("requires a configured endpoint")
+    );
 
     config.health_check.endpoint = None;
     config.health_check.expected_codes = vec![204];
