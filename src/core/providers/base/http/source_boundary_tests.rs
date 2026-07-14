@@ -42,59 +42,40 @@ macro_rules! exception {
 #[rustfmt::skip]
 const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
     exception!("src/core/providers/base/connection_pool.rs", "unified pool implementation retains legacy fixed-endpoint clients beside the policy manager", [
-            "<module>: raw HTTP path crate::core::http::outbound::default_outbound_client",
-            "<module>: raw HTTP path crate::core::http::outbound::default_outbound_client",
-            "<module>: raw HTTP path crate::utils::net::http::HttpClientPoolConfig",
-            "<module>: raw HTTP path crate::utils::net::http::create_custom_client_with_config",
-            "<module>: raw HTTP path crate::utils::net::http::create_streaming_client",
-            "<module>: raw HTTP path reqwest::Client",
-            "client: raw HTTP client accessor .client()",
-            "execute_request: raw HTTP client accessor .client()",
+            "<module>: raw HTTP path crate::core::http::outbound::default_outbound_client", "<module>: raw HTTP path crate::core::http::outbound::default_outbound_client",
+            "<module>: raw HTTP path crate::utils::net::http::HttpClientPoolConfig", "<module>: raw HTTP path crate::utils::net::http::create_custom_client_with_config",
+            "<module>: raw HTTP path crate::utils::net::http::create_streaming_client", "<module>: raw HTTP path reqwest::Client",
+            "client: raw HTTP client accessor .client()", "execute_request: raw HTTP client accessor .client()",
     ]),
     exception!("src/core/providers/base/mod.rs", "unified provider HTTP wrapper re-export", ["<module>: raw HTTP path crate::utils::net::http::ProviderRequestBuilder"]),
     exception!("src/core/providers/cloudflare/provider.rs", "native runtime is restricted by the factory to its account-scoped official endpoint", ["new: legacy GlobalPoolManager::new() constructor"]),
     exception!("src/core/providers/codestral/provider.rs", "unwired lifecycle stub with no Gateway factory owner", [
-            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
-            "new: legacy GlobalPoolManager::new() constructor",
+            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client", "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request", "new: legacy GlobalPoolManager::new() constructor",
     ]),
     exception!("src/core/providers/fal_ai/provider.rs", "native runtime is restricted by the factory to the fixed https://fal.run endpoint", [
-            "<module>: raw HTTP path crate::core::providers::base::apply_headers",
-            "execute_image_request: raw HTTP client accessor .client()",
-            "new: legacy GlobalPoolManager::new() constructor",
+            "<module>: raw HTTP path crate::core::providers::base::apply_headers", "execute_image_request: raw HTTP client accessor .client()", "new: legacy GlobalPoolManager::new() constructor",
     ]),
     exception!("src/core/providers/github/provider.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
-            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
-            "new: legacy GlobalPoolManager::new() constructor",
+            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client", "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request", "new: legacy GlobalPoolManager::new() constructor",
     ]),
     exception!("src/core/providers/github_copilot/authenticator.rs", "fixed GitHub OAuth and token exchange endpoints, outside provider API base configuration", [
-            "perform_device_flow: raw HTTP path crate::core::http::outbound::default_outbound_client",
-            "refresh_api_key: raw HTTP path crate::core::http::outbound::default_outbound_client",
+            "perform_device_flow: raw HTTP path crate::core::http::outbound::default_outbound_client", "refresh_api_key: raw HTTP path crate::core::http::outbound::default_outbound_client",
     ]),
     exception!("src/core/providers/github_copilot/provider.rs", "service-discovered Copilot endpoint; factory rejects caller-configured endpoint access", [
-            "chat_completion: raw HTTP path crate::core::http::outbound::default_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
-            "embeddings: raw HTTP path crate::core::http::outbound::default_outbound_client",
+            "chat_completion: raw HTTP path crate::core::http::outbound::default_outbound_client", "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request", "embeddings: raw HTTP path crate::core::http::outbound::default_outbound_client",
     ]),
     exception!("src/core/providers/macros/openai_compatible.rs", "retained but uninvoked legacy lifecycle macro", [
-            "define_openai_compatible_provider: raw HTTP macro token crate :: utils :: net :: http :: get_client_with_timeout_fallible",
-            "define_openai_compatible_provider: raw HTTP macro token get_client_with_timeout",
-            "define_openai_compatible_provider: raw HTTP macro token reqwest :: Client",
+            "define_openai_compatible_provider: raw HTTP macro token crate :: utils :: net :: http :: get_client_with_timeout_fallible", "define_openai_compatible_provider: raw HTTP macro token get_client_with_timeout", "define_openai_compatible_provider: raw HTTP macro token reqwest :: Client",
     ]),
     exception!("src/core/providers/macros/provider_definitions.rs", "retained but uninvoked legacy lifecycle macro", [
-            "standard_provider: raw HTTP macro token crate :: utils :: net :: http :: create_custom_client",
-            "standard_provider: raw HTTP macro token create_custom_client",
-            "standard_provider: raw HTTP macro token reqwest :: Client",
+            "standard_provider: raw HTTP macro token crate :: utils :: net :: http :: create_custom_client", "standard_provider: raw HTTP macro token create_custom_client", "standard_provider: raw HTTP macro token reqwest :: Client",
     ]),
     exception!("src/core/providers/meta_llama/common_utils.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
-            "<module>: raw HTTP path crate::utils::net::http::create_custom_client",
-            "<module>: raw HTTP path reqwest::Client",
+            "<module>: raw HTTP path crate::utils::net::http::create_custom_client", "<module>: raw HTTP path reqwest::Client",
     ]),
     exception!("src/core/providers/ollama/provider.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
-            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
-            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
+            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client", "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
     ]),
     exception!("src/core/providers/replicate/provider.rs", "native runtime is restricted by the factory to the fixed Replicate API endpoint", [
@@ -252,12 +233,12 @@ fn flatten_use_tree(tree: &UseTree, prefix: &mut Vec<String>, paths: &mut Vec<Ve
 }
 
 #[rustfmt::skip]
-fn collect_manager_aliases(tree: &UseTree, matched: bool, aliases: &mut Vec<String>) {
+fn collect_aliases(tree: &UseTree, target: &str, matched: bool, aliases: &mut Vec<String>) {
     match tree {
-        UseTree::Path(path) => collect_manager_aliases(&path.tree, matched || ident_text(&path.ident) == "GlobalPoolManager", aliases),
-        UseTree::Name(name) if matched || ident_text(&name.ident) == "GlobalPoolManager" => aliases.push(ident_text(&name.ident)),
-        UseTree::Rename(rename) if matched || ident_text(&rename.ident) == "GlobalPoolManager" => aliases.push(ident_text(&rename.rename)),
-        UseTree::Group(group) => group.items.iter().for_each(|item| collect_manager_aliases(item, matched, aliases)),
+        UseTree::Path(path) => collect_aliases(&path.tree, target, matched || ident_text(&path.ident) == target, aliases),
+        UseTree::Name(name) if matched || ident_text(&name.ident) == target => aliases.push(ident_text(&name.ident)),
+        UseTree::Rename(rename) if matched || ident_text(&rename.ident) == target => aliases.push(ident_text(&rename.rename)),
+        UseTree::Group(group) => group.items.iter().for_each(|item| collect_aliases(item, target, matched, aliases)),
         _ => {}
     }
 }
@@ -271,35 +252,42 @@ fn is_manager_type(ty: &Type) -> bool {
     }
 }
 
-struct DefaultFinder<'a>(bool, &'a [String]);
+struct DefaultFinder<'a>(bool, &'a [String], &'a [String]);
 #[rustfmt::skip]
 impl<'ast> Visit<'ast> for DefaultFinder<'_> {
         fn visit_path(&mut self, path: &'ast Path) {
             let names: Vec<_> = path.segments.iter().map(|segment| ident_text(&segment.ident)).collect();
-            self.0 |= names.ends_with(&["Default".into(), "default".into()]) || (names.len() == 1 && self.1.contains(&names[0])); visit::visit_path(self, path);
+            self.0 |= (names.last().is_some_and(|name| name == "default") && names.iter().rev().nth(1).is_some_and(|name| name == "Default" || self.1.contains(name))) || (names.len() == 1 && self.2.contains(&names[0])); visit::visit_path(self, path);
         } }
-#[rustfmt::skip] fn uses_default_or_local(expr: &Expr, locals: &[String]) -> bool { let mut finder = DefaultFinder(false, locals); finder.visit_expr(expr); finder.0 }
-#[rustfmt::skip] fn uses_default(expr: &Expr) -> bool { uses_default_or_local(expr, &[]) }
+#[rustfmt::skip] fn uses_default_or_local(expr: &Expr, aliases: &[String], locals: &[String]) -> bool { let mut finder = DefaultFinder(false, aliases, locals); finder.visit_expr(expr); finder.0 }
+#[rustfmt::skip] fn uses_default(expr: &Expr, aliases: &[String]) -> bool { uses_default_or_local(expr, aliases, &[]) }
 #[rustfmt::skip]
 fn returns_manager(output: &ReturnType) -> bool { matches!(output, ReturnType::Type(_, ty) if is_manager_type(ty)) }
 
 #[rustfmt::skip] fn item_attrs(item: &syn::Item) -> Option<&[syn::Attribute]> { match item { syn::Item::Const(item) => Some(&item.attrs), syn::Item::Enum(item) => Some(&item.attrs), syn::Item::ExternCrate(item) => Some(&item.attrs), syn::Item::Fn(item) => Some(&item.attrs), syn::Item::ForeignMod(item) => Some(&item.attrs), syn::Item::Impl(item) => Some(&item.attrs), syn::Item::Macro(item) => Some(&item.attrs), syn::Item::Mod(item) => Some(&item.attrs), syn::Item::Static(item) => Some(&item.attrs), syn::Item::Struct(item) => Some(&item.attrs), syn::Item::Trait(item) => Some(&item.attrs), syn::Item::TraitAlias(item) => Some(&item.attrs), syn::Item::Type(item) => Some(&item.attrs), syn::Item::Union(item) => Some(&item.attrs), syn::Item::Use(item) => Some(&item.attrs), _ => None } }
+#[rustfmt::skip] fn impl_item_attrs(item: &syn::ImplItem) -> Option<&[syn::Attribute]> { match item { syn::ImplItem::Const(item) => Some(&item.attrs), syn::ImplItem::Fn(item) => Some(&item.attrs), syn::ImplItem::Macro(item) => Some(&item.attrs), syn::ImplItem::Type(item) => Some(&item.attrs), _ => None } }
+#[rustfmt::skip] fn trait_item_attrs(item: &syn::TraitItem) -> Option<&[syn::Attribute]> { match item { syn::TraitItem::Const(item) => Some(&item.attrs), syn::TraitItem::Fn(item) => Some(&item.attrs), syn::TraitItem::Macro(item) => Some(&item.attrs), syn::TraitItem::Type(item) => Some(&item.attrs), _ => None } }
+#[rustfmt::skip] fn foreign_item_attrs(item: &syn::ForeignItem) -> Option<&[syn::Attribute]> { match item { syn::ForeignItem::Fn(item) => Some(&item.attrs), syn::ForeignItem::Macro(item) => Some(&item.attrs), syn::ForeignItem::Static(item) => Some(&item.attrs), syn::ForeignItem::Type(item) => Some(&item.attrs), _ => None } }
+
+#[rustfmt::skip]
+fn default_aliases(file: &syn::File) -> Vec<String> { struct Aliases(Vec<String>); impl<'ast> Visit<'ast> for Aliases { fn visit_item(&mut self, item: &'ast syn::Item) { if !item_attrs(item).is_some_and(has_test_cfg) { visit::visit_item(self, item); } } fn visit_item_use(&mut self, item: &'ast ItemUse) { collect_aliases(&item.tree, "Default", false, &mut self.0); } } let mut aliases = Aliases(Vec::new()); aliases.visit_file(file); aliases.0 }
 
 #[rustfmt::skip]
 fn manager_fields(source: &str) -> Result<Vec<String>, syn::Error> {
     struct Fields(Vec<String>);
     impl<'ast> Visit<'ast> for Fields {
+        fn visit_item(&mut self, item: &'ast syn::Item) { if !item_attrs(item).is_some_and(has_test_cfg) { visit::visit_item(self, item); } }
         fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
-            self.0.extend(item.fields.iter().filter(|field| is_manager_type(&field.ty)).filter_map(|field| field.ident.as_ref().map(ident_text)));
+            self.0.extend(item.fields.iter().filter(|field| !has_test_cfg(&field.attrs) && is_manager_type(&field.ty)).filter_map(|field| field.ident.as_ref().map(ident_text)));
             visit::visit_item_struct(self, item); } }
     let mut fields = Fields(Vec::new()); fields.visit_file(&syn::parse_file(source)?); Ok(fields.0)
 }
 
-struct BoundaryVisitor {
+#[rustfmt::skip] struct BoundaryVisitor {
     module_path: Vec<String>,
     context: Vec<String>,
     violations: Vec<String>,
-    manager_fields: Vec<String>,
+    manager_fields: Vec<String>, default_aliases: Vec<String>,
     default_locals: Vec<String>,
 }
 
@@ -321,9 +309,16 @@ impl BoundaryVisitor {
 #[rustfmt::skip]
 impl<'ast> Visit<'ast> for BoundaryVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) { if item_attrs(item).is_some_and(has_test_cfg) { return; } visit::visit_item(self, item); }
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) { if impl_item_attrs(item).is_some_and(has_test_cfg) { return; } visit::visit_impl_item(self, item); }
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) { if trait_item_attrs(item).is_some_and(has_test_cfg) { return; } visit::visit_trait_item(self, item); }
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) { if foreign_item_attrs(item).is_some_and(has_test_cfg) { return; } visit::visit_foreign_item(self, item); }
+    fn visit_field(&mut self, field: &'ast syn::Field) { if !has_test_cfg(&field.attrs) { visit::visit_field(self, field); } }
+    fn visit_variant(&mut self, variant: &'ast syn::Variant) { if !has_test_cfg(&variant.attrs) { visit::visit_variant(self, variant); } }
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) { if !has_test_cfg(&arm.attrs) { visit::visit_arm(self, arm); } }
+    fn visit_stmt_macro(&mut self, item: &'ast syn::StmtMacro) { if !has_test_cfg(&item.attrs) { visit::visit_stmt_macro(self, item); } }
     fn visit_item_use(&mut self, item: &'ast ItemUse) {
         let mut aliases = Vec::new();
-        collect_manager_aliases(&item.tree, false, &mut aliases);
+        collect_aliases(&item.tree, "GlobalPoolManager", false, &mut aliases);
         aliases.retain(|alias| alias != "GlobalPoolManager");
         for alias in aliases {
             self.record(format!("legacy GlobalPoolManager alias {alias}"));
@@ -368,24 +363,26 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
     fn visit_expr_struct(&mut self, expression: &'ast ExprStruct) {
         for field in &expression.fields {
             let name = match &field.member { syn::Member::Named(name) => ident_text(name), syn::Member::Unnamed(_) => continue };
-            if self.manager_fields.contains(&name) && uses_default_or_local(&field.expr, &self.default_locals) {
+            if self.manager_fields.contains(&name) && uses_default_or_local(&field.expr, &self.default_aliases, &self.default_locals) {
                 self.record(format!("policy-less Default construction for GlobalPoolManager field {name}"));
             }
         }
         visit::visit_expr_struct(self, expression);
     }
 
-    fn visit_local(&mut self, local: &'ast Local) { if has_test_cfg(&local.attrs) { return; } let name = match &local.pat { Pat::Ident(pat) => Some(ident_text(&pat.ident)), Pat::Type(pat) => match &*pat.pat { Pat::Ident(pat) => Some(ident_text(&pat.ident)), _ => None }, _ => None }; if let Some(name) = &name { self.default_locals.retain(|local| local != name); } let inferred_default = local.init.as_ref().is_some_and(|init| uses_default_or_local(&init.expr, &self.default_locals)); let manager = match &local.pat { Pat::Type(pat) => is_manager_type(&pat.ty), Pat::Ident(pat) => self.manager_fields.contains(&ident_text(&pat.ident)), _ => false }; if inferred_default { if manager { self.record("policy-less Default construction for GlobalPoolManager local".into()); } self.default_locals.extend(name); } visit::visit_local(self, local); }
+    fn visit_local(&mut self, local: &'ast Local) { if has_test_cfg(&local.attrs) { return; } let name = match &local.pat { Pat::Ident(pat) => Some(ident_text(&pat.ident)), Pat::Type(pat) => match &*pat.pat { Pat::Ident(pat) => Some(ident_text(&pat.ident)), _ => None }, _ => None }; if let Some(name) = &name { self.default_locals.retain(|local| local != name); } let inferred_default = local.init.as_ref().is_some_and(|init| uses_default_or_local(&init.expr, &self.default_aliases, &self.default_locals)); let manager = match &local.pat { Pat::Type(pat) => is_manager_type(&pat.ty), Pat::Ident(pat) => self.manager_fields.contains(&ident_text(&pat.ident)), _ => false }; if inferred_default { if manager { self.record("policy-less Default construction for GlobalPoolManager local".into()); } self.default_locals.extend(name); } visit::visit_local(self, local); }
 
-    fn visit_item_const(&mut self, item: &'ast ItemConst) { if is_manager_type(&item.ty) && uses_default(&item.expr) { self.record("policy-less Default construction for GlobalPoolManager const".into()); } visit::visit_item_const(self, item); }
+    fn visit_expr_assign(&mut self, expression: &'ast syn::ExprAssign) { let name = match &*expression.left { Expr::Path(path) if path.qself.is_none() && path.path.segments.len() == 1 => path.path.segments.first().map(|segment| ident_text(&segment.ident)), _ => None }; if let Some(name) = name { let inferred_default = uses_default_or_local(&expression.right, &self.default_aliases, &self.default_locals); self.default_locals.retain(|local| local != &name); if inferred_default { self.default_locals.push(name); } } visit::visit_expr_assign(self, expression); }
 
-    fn visit_item_static(&mut self, item: &'ast ItemStatic) { if is_manager_type(&item.ty) && uses_default(&item.expr) { self.record("policy-less Default construction for GlobalPoolManager static".into()); } visit::visit_item_static(self, item); }
+    fn visit_item_const(&mut self, item: &'ast ItemConst) { if is_manager_type(&item.ty) && uses_default(&item.expr, &self.default_aliases) { self.record("policy-less Default construction for GlobalPoolManager const".into()); } visit::visit_item_const(self, item); }
 
-    fn visit_expr_closure(&mut self, expression: &'ast ExprClosure) { if returns_manager(&expression.output) && uses_default(&expression.body) { self.record("policy-less Default construction for GlobalPoolManager closure".into()); } let outer = std::mem::take(&mut self.default_locals); visit::visit_expr_closure(self, expression); self.default_locals = outer; }
+    fn visit_item_static(&mut self, item: &'ast ItemStatic) { if is_manager_type(&item.ty) && uses_default(&item.expr, &self.default_aliases) { self.record("policy-less Default construction for GlobalPoolManager static".into()); } visit::visit_item_static(self, item); }
 
-    fn visit_item_fn(&mut self, item: &'ast ItemFn) { self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false, &[]); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } let outer = std::mem::take(&mut self.default_locals); visit::visit_item_fn(self, item); self.default_locals = outer; self.context.pop(); }
+    fn visit_expr_closure(&mut self, expression: &'ast ExprClosure) { if returns_manager(&expression.output) && uses_default(&expression.body, &self.default_aliases) { self.record("policy-less Default construction for GlobalPoolManager closure".into()); } let outer = self.default_locals.clone(); visit::visit_expr_closure(self, expression); self.default_locals = outer; }
 
-    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) { if has_test_cfg(&item.attrs) { return; } self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false, &[]); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } let outer = std::mem::take(&mut self.default_locals); visit::visit_impl_item_fn(self, item); self.default_locals = outer; self.context.pop(); }
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) { self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false, &self.default_aliases, &[]); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } let outer = std::mem::take(&mut self.default_locals); visit::visit_item_fn(self, item); self.default_locals = outer; self.context.pop(); }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) { self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false, &self.default_aliases, &[]); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } let outer = std::mem::take(&mut self.default_locals); visit::visit_impl_item_fn(self, item); self.default_locals = outer; self.context.pop(); }
 
     fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
         self.context.push(
@@ -443,9 +440,10 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
 #[rustfmt::skip]
 fn boundary_violations(source: &str, module_path: &[&str], manager_fields: &[String]) -> Result<Vec<String>, syn::Error> {
     let file = syn::parse_file(source)?;
+    let default_aliases = default_aliases(&file);
     let mut visitor = BoundaryVisitor {
         module_path: module_path.iter().map(|segment| (*segment).to_string()).collect(),
-        context: Vec::new(), violations: Vec::new(), manager_fields: manager_fields.to_vec(), default_locals: Vec::new(),
+        context: Vec::new(), violations: Vec::new(), manager_fields: manager_fields.to_vec(), default_aliases, default_locals: Vec::new(),
     };
     visitor.visit_file(&file);
     Ok(visitor.violations)
@@ -540,10 +538,10 @@ fn collect_production_sources(
 }
 
 #[test]
-fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
-    let manager_fields = vec!["pool_manager".to_string()];
+#[rustfmt::skip] fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
+    assert!(manager_fields("struct Fixture { #[cfg(test)] pool_manager: crate::core::providers::base::GlobalPoolManager }").unwrap_or_else(|error| panic!("test-only manager field fixture must parse: {error}")).is_empty()); let manager_fields = vec!["pool_manager".to_string()];
     let allowed = boundary_violations(
-        "use crate::core::providers::base::{BaseConfig, r#BaseHttpClient, header}; #[cfg(test)] fn mock() { reqwest::Client::new(); }",
+        "use crate::core::providers::base::{BaseConfig, r#BaseHttpClient, header}; #[cfg(test)] fn mock() { reqwest::Client::new(); } struct Fixture { #[cfg(test)] client: Option<reqwest::Client> } enum Mode { #[cfg(test)] Mock(reqwest::Client), Prod } trait TestOnly { #[cfg(test)] type Pool; #[cfg(test)] fn raw() { reqwest::Client::new(); } } impl TestOnly for Fixture { #[cfg(test)] type Pool = crate::core::providers::base::GlobalPoolManager; #[cfg(test)] passthrough!(reqwest::Client::new()); } extern \"C\" { #[cfg(test)] fn raw(client: reqwest::Client); } fn nested() { #[cfg(test)] let client = reqwest::Client::new(); #[cfg(test)] passthrough!(reqwest::Client::new()); match false { #[cfg(test)] true => reqwest::Client::new(), false => todo!() }; }",
         &["crate", "core", "providers", "mistral"],
         &manager_fields,
     )
@@ -584,7 +582,7 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "fn legacy() { let pool_manager: crate::core::providers::base::GlobalPoolManager = Default::default(); consume(pool_manager); }",
         "macro_rules! manager_type { () => { crate::core::providers::base::GlobalPoolManager } } type Pool = manager_type!();",
         "struct Provider { pool_manager: crate::core::providers::base::GlobalPoolManager } impl Provider { fn new() -> Self { let manager = Default::default(); Self { pool_manager: manager } } }",
-        "static FACTORY: fn() -> crate::core::providers::base::GlobalPoolManager = || Default::default();",
+        "static FACTORY: fn() -> crate::core::providers::base::GlobalPoolManager = || Default::default();", "use std::default::Default as D; struct Provider { pool_manager: crate::core::providers::base::GlobalPoolManager } impl Provider { fn new() -> Self { let manager = D::default(); Self { pool_manager: manager } } }", "struct Provider { pool_manager: crate::core::providers::base::GlobalPoolManager } impl Provider { fn new(safe_manager: crate::core::providers::base::GlobalPoolManager) -> Self { let mut manager = safe_manager; manager = Default::default(); Self { pool_manager: manager } } }", "struct Provider { pool_manager: crate::core::providers::base::GlobalPoolManager } impl Provider { fn new() -> Self { let manager = Default::default(); let build = || Self { pool_manager: manager }; build() } }",
     ] {
         let violations = boundary_violations(
             bypass,
