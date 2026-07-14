@@ -3,10 +3,11 @@ use std::path::Path as FsPath;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{
-    ExprMethodCall, ImplItemFn, ItemExternCrate, ItemFn, ItemMacro, ItemMod, ItemType, ItemUse,
-    Macro, Path, Type, UseTree,
+    Expr, ExprMethodCall, ExprStruct, GenericArgument, ImplItemFn, ItemExternCrate, ItemFn,
+    ItemMacro, ItemMod, ItemStruct, ItemType, ItemUse, Macro, Path, PathArguments, Type, UseTree,
 };
 
+#[rustfmt::skip]
 const RAW_PREFIXES: &[&[&str]] = &[
     &["crate", "core", "http"],
     &["crate", "utils", "net"],
@@ -14,28 +15,10 @@ const RAW_PREFIXES: &[&[&str]] = &[
     &["crate", "core", "providers", "base", "ConnectionPool"],
     &["crate", "core", "providers", "base", "apply_headers"],
     &["crate", "core", "providers", "base", "global_client"],
-    &[
-        "crate",
-        "core",
-        "providers",
-        "base",
-        "send_streaming_request",
-    ],
-    &[
-        "crate",
-        "core",
-        "providers",
-        "base",
-        "send_streaming_request_with_timeout",
-    ],
+    &["crate", "core", "providers", "base", "send_streaming_request"],
+    &["crate", "core", "providers", "base", "send_streaming_request_with_timeout"],
     &["crate", "core", "providers", "base", "streaming_client"],
-    &[
-        "crate",
-        "core",
-        "providers",
-        "base",
-        "streaming_unbounded_client",
-    ],
+    &["crate", "core", "providers", "base", "streaming_unbounded_client"],
     &["reqwest", "Client"],
     &["reqwest", "ClientBuilder"],
     &["reqwest", "get"],
@@ -49,10 +32,15 @@ struct BoundaryException {
 }
 
 const UNIFIED_HTTP_IMPLEMENTATION: &str = "src/core/providers/base/http.rs";
+macro_rules! exception {
+    ($path:literal, $purpose:literal, [$($violation:literal),* $(,)?]) => {
+        BoundaryException { path: $path, violations: &[$($violation),*], purpose: $purpose }
+    };
+}
+
+#[rustfmt::skip]
 const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
-    BoundaryException {
-        path: "src/core/providers/base/connection_pool.rs",
-        violations: &[
+    exception!("src/core/providers/base/connection_pool.rs", "unified pool implementation retains legacy fixed-endpoint clients beside the policy manager", [
             "<module>: raw HTTP path crate::core::http::outbound::default_outbound_client",
             "<module>: raw HTTP path crate::core::http::outbound::default_outbound_client",
             "<module>: raw HTTP path crate::utils::net::http::HttpClientPoolConfig",
@@ -61,102 +49,54 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
             "<module>: raw HTTP path reqwest::Client",
             "client: raw HTTP client accessor .client()",
             "execute_request: raw HTTP client accessor .client()",
-        ],
-        purpose: "unified pool implementation retains legacy fixed-endpoint clients beside the policy manager",
-    },
-    BoundaryException {
-        path: "src/core/providers/base/mod.rs",
-        violations: &["<module>: raw HTTP path crate::utils::net::http::ProviderRequestBuilder"],
-        purpose: "unified provider HTTP wrapper re-export",
-    },
-    BoundaryException {
-        path: "src/core/providers/cloudflare/provider.rs",
-        violations: &["new: legacy GlobalPoolManager::new() constructor"],
-        purpose: "native runtime is restricted by the factory to its account-scoped official endpoint",
-    },
-    BoundaryException {
-        path: "src/core/providers/codestral/provider.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/base/mod.rs", "unified provider HTTP wrapper re-export", ["<module>: raw HTTP path crate::utils::net::http::ProviderRequestBuilder"]),
+    exception!("src/core/providers/cloudflare/provider.rs", "native runtime is restricted by the factory to its account-scoped official endpoint", ["new: legacy GlobalPoolManager::new() constructor"]),
+    exception!("src/core/providers/codestral/provider.rs", "unwired lifecycle stub with no Gateway factory owner", [
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
-        ],
-        purpose: "unwired lifecycle stub with no Gateway factory owner",
-    },
-    BoundaryException {
-        path: "src/core/providers/fal_ai/provider.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/fal_ai/provider.rs", "native runtime is restricted by the factory to the fixed https://fal.run endpoint", [
             "<module>: raw HTTP path crate::core::providers::base::apply_headers",
             "execute_image_request: raw HTTP client accessor .client()",
             "new: legacy GlobalPoolManager::new() constructor",
-        ],
-        purpose: "native runtime is restricted by the factory to the fixed https://fal.run endpoint",
-    },
-    BoundaryException {
-        path: "src/core/providers/github/provider.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/github/provider.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
-        ],
-        purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
-    },
-    BoundaryException {
-        path: "src/core/providers/github_copilot/authenticator.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/github_copilot/authenticator.rs", "fixed GitHub OAuth and token exchange endpoints, outside provider API base configuration", [
             "perform_device_flow: raw HTTP path crate::core::http::outbound::default_outbound_client",
             "refresh_api_key: raw HTTP path crate::core::http::outbound::default_outbound_client",
-        ],
-        purpose: "fixed GitHub OAuth and token exchange endpoints, outside provider API base configuration",
-    },
-    BoundaryException {
-        path: "src/core/providers/github_copilot/provider.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/github_copilot/provider.rs", "service-discovered Copilot endpoint; factory rejects caller-configured endpoint access", [
             "chat_completion: raw HTTP path crate::core::http::outbound::default_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "embeddings: raw HTTP path crate::core::http::outbound::default_outbound_client",
-        ],
-        purpose: "service-discovered Copilot endpoint; factory rejects caller-configured endpoint access",
-    },
-    BoundaryException {
-        path: "src/core/providers/macros/openai_compatible.rs",
-        violations: &[
-            "define_openai_compatible_provider: raw HTTP macro token crate :: utils :: net",
+    ]),
+    exception!("src/core/providers/macros/openai_compatible.rs", "retained but uninvoked legacy lifecycle macro", [
+            "define_openai_compatible_provider: raw HTTP macro token crate :: utils :: net :: http :: get_client_with_timeout_fallible",
             "define_openai_compatible_provider: raw HTTP macro token get_client_with_timeout",
             "define_openai_compatible_provider: raw HTTP macro token reqwest :: Client",
-        ],
-        purpose: "retained but uninvoked legacy lifecycle macro",
-    },
-    BoundaryException {
-        path: "src/core/providers/macros/provider_definitions.rs",
-        violations: &[
-            "standard_provider: raw HTTP macro token crate :: utils :: net",
+    ]),
+    exception!("src/core/providers/macros/provider_definitions.rs", "retained but uninvoked legacy lifecycle macro", [
+            "standard_provider: raw HTTP macro token crate :: utils :: net :: http :: create_custom_client",
             "standard_provider: raw HTTP macro token create_custom_client",
             "standard_provider: raw HTTP macro token reqwest :: Client",
-        ],
-        purpose: "retained but uninvoked legacy lifecycle macro",
-    },
-    BoundaryException {
-        path: "src/core/providers/meta_llama/common_utils.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/meta_llama/common_utils.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
             "<module>: raw HTTP path crate::utils::net::http::create_custom_client",
             "<module>: raw HTTP path reqwest::Client",
-        ],
-        purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
-    },
-    BoundaryException {
-        path: "src/core/providers/ollama/provider.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/ollama/provider.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
             "new: legacy GlobalPoolManager::new() constructor",
-        ],
-        purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
-    },
-    BoundaryException {
-        path: "src/core/providers/replicate/provider.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/replicate/provider.rs", "native runtime is restricted by the factory to the fixed Replicate API endpoint", [
             "<module>: raw HTTP path crate::core::providers::base::apply_headers",
             "build_request: raw HTTP client accessor .client()",
             "build_request: raw HTTP client accessor .client()",
@@ -165,32 +105,23 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
             "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
             "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request_with_timeout",
             "new: legacy GlobalPoolManager::new() constructor",
-        ],
-        purpose: "native runtime is restricted by the factory to the fixed Replicate API endpoint",
-    },
-    BoundaryException {
-        path: "src/core/providers/v0/mod.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/v0/mod.rs", "unwired lifecycle stub with no Gateway factory owner", [
             "<module>: raw HTTP path crate::utils::net::http::create_custom_client",
             "<module>: raw HTTP path reqwest::Client",
             "new_or_default: raw HTTP path crate::core::http::outbound::default_outbound_client",
-        ],
-        purpose: "unwired lifecycle stub with no Gateway factory owner",
-    },
-    BoundaryException {
-        path: "src/core/providers/vertex_ai/auth.rs",
-        violations: &[
+    ]),
+    exception!("src/core/providers/vertex_ai/auth.rs", "fixed Google service-account token exchange, not the configurable Vertex API base", [
             "<module>: raw HTTP path reqwest::Client",
             "new: raw HTTP path crate::core::http::outbound::default_outbound_client",
-        ],
-        purpose: "fixed Google service-account token exchange, not the configurable Vertex API base",
-    },
+    ]),
 ];
 
 fn ident_text(ident: &syn::Ident) -> String {
     ident.unraw().to_string()
 }
 
+#[rustfmt::skip]
 fn has_test_cfg(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attribute| {
         let syn::Meta::List(meta) = &attribute.meta else {
@@ -245,6 +176,23 @@ fn canonicalize_path(module_path: &[String], path: &[String]) -> Option<Vec<Stri
     }
     canonical.extend(path[index..].iter().cloned());
     Some(canonical)
+}
+
+#[rustfmt::skip]
+fn macro_paths(tokens: &str) -> Vec<Vec<String>> {
+    let parts: Vec<_> = tokens.split_whitespace().collect();
+    let mut paths = Vec::new();
+    for start in 0..parts.len() {
+        let first = parts[start].trim_start_matches("r#");
+        if !matches!(first, "crate" | "reqwest" | "self" | "super") { continue; }
+        let (mut path, mut index) = (vec![first.to_string()], start + 1);
+        while parts.get(index) == Some(&"::") {
+            let Some(segment) = parts.get(index + 1) else { break; };
+            let segment = segment.trim_start_matches("r#");
+            if !segment.chars().all(|character| character == '_' || character.is_alphanumeric()) { break; }
+            path.push(segment.to_string()); index += 2; }
+        if path.len() > 1 { paths.push(path); }
+    } paths
 }
 
 fn path_violation(path: &[String], is_import: bool, module_path: &[String]) -> Option<String> {
@@ -321,13 +269,41 @@ fn collect_manager_aliases(tree: &UseTree, matched: bool, aliases: &mut Vec<Stri
     }
 }
 
+fn is_manager_type(ty: &Type) -> bool {
+    match ty {
+        Type::Path(ty) => ty.path.segments.iter().any(|segment| segment.ident == "GlobalPoolManager" || matches!(&segment.arguments, PathArguments::AngleBracketed(args) if args.args.iter().any(|arg| matches!(arg, GenericArgument::Type(ty) if is_manager_type(ty))))),
+        Type::Group(ty) => is_manager_type(&ty.elem), Type::Paren(ty) => is_manager_type(&ty.elem),
+        Type::Reference(ty) => is_manager_type(&ty.elem), Type::Tuple(ty) => ty.elems.iter().any(is_manager_type),
+        Type::Macro(ty) => ty.mac.tokens.to_string().contains("GlobalPoolManager"), _ => false,
+    }
+}
+
 #[rustfmt::skip]
-fn is_manager_type(ty: &Type) -> bool { match ty { Type::Path(ty) => ty.path.segments.last().is_some_and(|segment| segment.ident == "GlobalPoolManager"), Type::Group(ty) => is_manager_type(&ty.elem), Type::Paren(ty) => is_manager_type(&ty.elem), _ => false } }
+fn uses_default(expr: &Expr) -> bool {
+    struct Finder(bool);
+    impl<'ast> Visit<'ast> for Finder {
+        fn visit_path(&mut self, path: &'ast Path) {
+            let names: Vec<_> = path.segments.iter().map(|segment| ident_text(&segment.ident)).collect();
+            self.0 |= names.ends_with(&["Default".into(), "default".into()]); visit::visit_path(self, path);
+        } }
+    let mut finder = Finder(false); finder.visit_expr(expr); finder.0
+}
+
+#[rustfmt::skip]
+fn manager_fields(source: &str) -> Result<Vec<String>, syn::Error> {
+    struct Fields(Vec<String>);
+    impl<'ast> Visit<'ast> for Fields {
+        fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
+            self.0.extend(item.fields.iter().filter(|field| is_manager_type(&field.ty)).filter_map(|field| field.ident.as_ref().map(ident_text)));
+            visit::visit_item_struct(self, item); } }
+    let mut fields = Fields(Vec::new()); fields.visit_file(&syn::parse_file(source)?); Ok(fields.0)
+}
 
 struct BoundaryVisitor {
     module_path: Vec<String>,
     context: Vec<String>,
     violations: Vec<String>,
+    manager_fields: Vec<String>,
 }
 
 impl BoundaryVisitor {
@@ -393,6 +369,17 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
     }
 
     #[rustfmt::skip]
+    fn visit_expr_struct(&mut self, expression: &'ast ExprStruct) {
+        for field in &expression.fields {
+            let name = match &field.member { syn::Member::Named(name) => ident_text(name), syn::Member::Unnamed(_) => continue };
+            if self.manager_fields.contains(&name) && uses_default(&field.expr) {
+                self.record(format!("policy-less Default construction for GlobalPoolManager field {name}"));
+            }
+        }
+        visit::visit_expr_struct(self, expression);
+    }
+
+    #[rustfmt::skip]
     fn visit_item_fn(&mut self, item: &'ast ItemFn) { self.context.push(ident_text(&item.sig.ident)); visit::visit_item_fn(self, item); self.context.pop(); }
 
     #[rustfmt::skip]
@@ -412,10 +399,11 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
     #[rustfmt::skip]
     fn visit_macro(&mut self, item: &'ast Macro) {
         let tokens = item.tokens.to_string();
-        for prefix in RAW_PREFIXES {
-            let forbidden = prefix.join(" :: ");
-            if tokens.contains(&forbidden) {
-                self.record(format!("raw HTTP macro token {forbidden}"));
+        for path in macro_paths(&tokens) {
+            if let Some(path) = canonicalize_path(&self.module_path, &path)
+                && path_violation(&path, false, &self.module_path).is_some()
+            {
+                self.record(format!("raw HTTP macro token {}", path.join(" :: ")));
             }
         }
         for forbidden in [
@@ -451,39 +439,53 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
     }
 }
 
-fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>, syn::Error> {
+#[rustfmt::skip]
+fn boundary_violations(source: &str, module_path: &[&str], manager_fields: &[String]) -> Result<Vec<String>, syn::Error> {
     let file = syn::parse_file(source)?;
     let mut visitor = BoundaryVisitor {
-        module_path: module_path
-            .iter()
-            .map(|segment| (*segment).to_string())
-            .collect(),
-        context: Vec::new(),
-        violations: Vec::new(),
+        module_path: module_path.iter().map(|segment| (*segment).to_string()).collect(),
+        context: Vec::new(), violations: Vec::new(), manager_fields: manager_fields.to_vec(),
     };
     visitor.visit_file(&file);
     Ok(visitor.violations)
 }
 
 #[rustfmt::skip]
-fn is_test_only_module(path: &FsPath) -> std::io::Result<bool> {
-    let Some(parent) = path.parent() else {
-        return Ok(false);
-    };
+fn declared_module(path: &FsPath, module_path: &[String]) -> std::io::Result<Option<(Vec<String>, bool)>> {
+    let Some(parent) = path.parent() else { return Ok(None); };
+    let target = fs::canonicalize(path)?;
+    let mut owners = fs::read_dir(parent)?.filter_map(Result::ok).map(|entry| entry.path())
+        .filter(|candidate| candidate.extension().and_then(|value| value.to_str()) == Some("rs")).collect::<Vec<_>>();
+    owners.extend([parent.join("mod.rs"), parent.with_extension("rs")]); owners.sort(); owners.dedup();
+    for owner in owners.into_iter().filter(|owner| owner.is_file() && owner != path) {
+        let file = syn::parse_file(&fs::read_to_string(&owner)?).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        for item in file.items {
+            let syn::Item::Mod(module) = item else { continue; };
+            let declared = module.attrs.iter().find_map(|attr| match &attr.meta {
+                syn::Meta::NameValue(value) if attr.path().is_ident("path") => match &value.value {
+                    Expr::Lit(value) => match &value.lit { syn::Lit::Str(path) => Some(path.value()), _ => None }, _ => None }, _ => None });
+            if declared.and_then(|declared| fs::canonicalize(owner.parent()?.join(declared)).ok()).as_ref() != Some(&target) { continue; }
+            let mut resolved = module_path.to_vec();
+            if owner != parent.with_extension("rs") && owner.file_name().and_then(|name| name.to_str()) != Some("mod.rs") {
+                if let Some(stem) = owner.file_stem().and_then(|stem| stem.to_str()) { resolved.push(stem.to_string()); } }
+            resolved.push(ident_text(&module.ident)); return Ok(Some((resolved, has_test_cfg(&module.attrs))));
+        }
+    }
+    Ok(None)
+}
+
+#[rustfmt::skip]
+fn is_test_only_module(path: &FsPath, module_path: &[String]) -> std::io::Result<bool> {
+    if let Some((_, test_only)) = declared_module(path, module_path)? { return Ok(test_only); }
+    let Some(parent) = path.parent() else { return Ok(false); };
     let name = if path.is_dir() { path.file_name() } else { path.file_stem() }
         .and_then(|name| name.to_str()).unwrap_or_default();
     let Some(owner) = [parent.join("mod.rs"), parent.with_extension("rs")]
         .into_iter().find(|candidate| candidate.is_file() && candidate != path)
-    else {
-        return Ok(false);
-    };
+    else { return Ok(false); };
     let source = fs::read_to_string(owner)?;
-    let file = syn::parse_file(&source).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-    })?;
-    Ok(file.items.iter().any(|item| {
-        matches!(item, syn::Item::Mod(module) if ident_text(&module.ident) == name && module.content.is_none() && has_test_cfg(&module.attrs))
-    }))
+    let file = syn::parse_file(&source).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    Ok(file.items.iter().any(|item| matches!(item, syn::Item::Mod(module) if ident_text(&module.ident) == name && module.content.is_none() && has_test_cfg(&module.attrs))))
 }
 
 fn collect_production_sources(
@@ -502,7 +504,7 @@ fn collect_production_sources(
             if (directory_name == "tests"
                 || directory_name == "provider_tests"
                 || directory_name.ends_with("_tests"))
-                && is_test_only_module(&path)?
+                && is_test_only_module(&path, module_path)?
             {
                 continue;
             }
@@ -519,12 +521,18 @@ fn collect_production_sources(
             .and_then(|stem| stem.to_str())
             .unwrap_or_default();
         if (stem == "tests" || stem == "provider_tests" || stem.ends_with("_tests"))
-            && is_test_only_module(&path)?
+            && is_test_only_module(&path, module_path)?
         {
             continue;
         }
-        let mut file_module = module_path.to_vec();
-        if stem != "mod" {
+        let declared = declared_module(&path, module_path)?;
+        if declared.as_ref().is_some_and(|(_, test_only)| *test_only) {
+            continue;
+        }
+        let mut file_module = declared
+            .map(|(module, _)| module)
+            .unwrap_or_else(|| module_path.to_vec());
+        if stem != "mod" && file_module == module_path {
             file_module.push(stem.to_string());
         }
         let relative = path
@@ -539,9 +547,11 @@ fn collect_production_sources(
 
 #[test]
 fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
+    let manager_fields = vec!["pool_manager".to_string()];
     let allowed = boundary_violations(
         "use crate::core::providers::base::{BaseConfig, r#BaseHttpClient, header};",
         &["crate", "core", "providers", "mistral"],
+        &manager_fields,
     )
     .unwrap_or_else(|error| panic!("allowed fixture must parse: {error}"));
     assert!(allowed.is_empty());
@@ -574,65 +584,46 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "macro_rules! raw { () => { reqwest::Client::new() } }",
         "fn probe() { passthrough!(reqwest::Client::new()); }",
         "fn probe() { passthrough!(crate::core::providers::base::send_streaming_request(req, provider)); }",
+        "fn probe() { passthrough!(super::base::send_streaming_request(req, provider)); }",
+        "struct Provider { pool_manager: crate::core::providers::base::GlobalPoolManager } impl Provider { fn new() -> Self { Self { pool_manager: std::sync::Arc::new(Default::default()) } } }",
+        "macro_rules! manager_type { () => { crate::core::providers::base::GlobalPoolManager } } type Pool = manager_type!();",
     ] {
-        let violations = boundary_violations(bypass, &["crate", "core", "providers", "mistral"])
-            .unwrap_or_else(|error| panic!("bypass fixture must parse: {error}"));
+        let violations = boundary_violations(
+            bypass,
+            &["crate", "core", "providers", "mistral"],
+            &manager_fields,
+        )
+        .unwrap_or_else(|error| panic!("bypass fixture must parse: {error}"));
         assert!(!violations.is_empty(), "bypass was not rejected: {bypass}");
     }
 }
 
+#[rustfmt::skip]
 fn source_exception_violations(path: &str) -> Vec<String> {
-    let matches: Vec<_> = BOUNDARY_EXCEPTIONS
-        .iter()
-        .filter(|exception| exception.path == path)
-        .collect();
-    assert!(
-        matches.len() <= 1,
-        "{path}: duplicate boundary exception entry"
-    );
-    let mut violations: Vec<_> = matches
-        .into_iter()
-        .flat_map(|exception| {
-            assert!(
-                !exception.purpose.trim().is_empty(),
-                "{path}: boundary exception must document a fixed purpose"
-            );
-            exception
-                .violations
-                .iter()
-                .map(|violation| violation.to_string())
-        })
-        .collect();
+    let matches: Vec<_> = BOUNDARY_EXCEPTIONS.iter().filter(|exception| exception.path == path).collect();
+    assert!(matches.len() <= 1, "{path}: duplicate boundary exception entry");
+    let mut violations: Vec<_> = matches.into_iter().flat_map(|exception| {
+            assert!(!exception.purpose.trim().is_empty(), "{path}: boundary exception must document a fixed purpose");
+            exception.violations.iter().map(|violation| violation.to_string()) }).collect();
     violations.sort();
     violations
 }
 
+#[rustfmt::skip]
 fn collect_boundary_inventory() -> Vec<(String, Vec<String>, String)> {
     let repository_root = FsPath::new(env!("CARGO_MANIFEST_DIR"));
+    #[rustfmt::skip]
     let roots: [(&str, &[&str]); 4] = [
         ("src/core/providers", &["crate", "core", "providers"]),
         ("src/server/routes/ai", &["crate", "server", "routes", "ai"]),
-        (
-            "src/core/fine_tuning/providers",
-            &["crate", "core", "fine_tuning", "providers"],
-        ),
-        (
-            "src/core/rerank/providers",
-            &["crate", "core", "rerank", "providers"],
-        ),
+        ("src/core/fine_tuning/providers", &["crate", "core", "fine_tuning", "providers"]),
+        ("src/core/rerank/providers", &["crate", "core", "rerank", "providers"]),
     ];
     let mut sources = Vec::new();
     for (relative, module_path) in roots {
-        collect_production_sources(
-            repository_root,
-            &repository_root.join(relative),
-            &module_path
-                .iter()
-                .map(|segment| (*segment).to_string())
-                .collect::<Vec<_>>(),
-            &mut sources,
-        )
-        .unwrap_or_else(|error| panic!("{relative} source inventory failed: {error}"));
+        let module_path = module_path.iter().map(|segment| (*segment).to_string()).collect::<Vec<_>>();
+        collect_production_sources(repository_root, &repository_root.join(relative), &module_path, &mut sources)
+            .unwrap_or_else(|error| panic!("{relative} source inventory failed: {error}"));
     }
     let relative = "src/core/router/health_probe.rs";
     sources.push((
@@ -648,44 +639,38 @@ fn collect_boundary_inventory() -> Vec<(String, Vec<String>, String)> {
 }
 
 #[test]
+#[rustfmt::skip]
 fn provider_runtime_http_boundary_has_no_unapproved_bypass() {
     let base_source = include_str!("../http.rs");
     let repository_root = FsPath::new(env!("CARGO_MANIFEST_DIR"));
     let sources = collect_boundary_inventory();
-    assert!(
-        sources.len() > 300,
-        "provider/runtime inventory is incomplete"
-    );
+    assert!(!sources.iter().any(|(path, _, _)| path == "src/server/routes/ai/chat_tests.rs"), "#[path] test module entered production inventory");
+    let unified = sources.iter().find(|(path, _, _)| path == "src/core/providers/unified_provider_methods.rs").expect("#[path] production module missing");
+    assert_eq!(unified.1.join("::"), "crate::core::providers::unified_provider::methods");
+    let mut all_sources = Vec::new();
+    collect_production_sources(repository_root, &repository_root.join("src"), &["crate".into()], &mut all_sources)
+        .unwrap_or_else(|error| panic!("repository alias inventory failed: {error}"));
+    let mut manager_field_names = Vec::new();
+    for (path, _, source) in &all_sources { manager_field_names.extend(manager_fields(source).unwrap_or_else(|error| panic!("{path} must parse: {error}"))); }
+    manager_field_names.sort(); manager_field_names.dedup();
+    assert!(sources.len() > 300, "provider/runtime inventory is incomplete");
     for exception in BOUNDARY_EXCEPTIONS {
-        assert!(
-            sources.iter().any(|(path, _, _)| path == exception.path),
-            "stale boundary exception for {}",
-            exception.path
-        );
+        assert!(sources.iter().any(|(path, _, _)| path == exception.path), "stale boundary exception for {}", exception.path);
     }
-    assert!(
-        sources
-            .iter()
-            .any(|(path, _, _)| path == UNIFIED_HTTP_IMPLEMENTATION),
-        "unified HTTP implementation is missing from the inventory"
-    );
+    assert!(sources.iter().any(|(path, _, _)| path == UNIFIED_HTTP_IMPLEMENTATION), "unified HTTP implementation is missing from the inventory");
     let mut failures = Vec::new();
     for (path, module_path, source) in sources {
         if path == UNIFIED_HTTP_IMPLEMENTATION {
             continue;
         }
         let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
-        let violations = boundary_violations(&source, &module_path)
+        let violations = boundary_violations(&source, &module_path, &manager_field_names)
             .unwrap_or_else(|error| panic!("{path} must parse: {error}"));
         let mut violations = violations;
         violations.sort();
         let expected = source_exception_violations(&path);
         if violations != expected {
-            failures.push(format!(
-                "{path}: expected [{}], found [{}]",
-                expected.join("; "),
-                violations.join("; ")
-            ));
+            failures.push(format!("{path}: expected [{}], found [{}]", expected.join("; "), violations.join("; ")));
         }
         if matches!(
             path.as_str(),
@@ -699,21 +684,13 @@ fn provider_runtime_http_boundary_has_no_unapproved_bypass() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    let mut all_sources = Vec::new();
-    collect_production_sources(
-        repository_root,
-        &repository_root.join("src"),
-        &["crate".into()],
-        &mut all_sources,
-    )
-    .unwrap_or_else(|error| panic!("repository alias inventory failed: {error}"));
     for (path, module_path, source) in all_sources {
         let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
-        let violations = boundary_violations(&source, &module_path)
+        let violations = boundary_violations(&source, &module_path, &manager_field_names)
             .unwrap_or_else(|error| panic!("{path} must parse: {error}"));
         let has_alias = violations
             .iter()
-            .any(|violation| violation.contains("GlobalPoolManager alias"));
+            .any(|violation| violation.contains("GlobalPoolManager alias") || violation.contains("macro token GlobalPoolManager"));
         assert!(
             !has_alias,
             "{path}: GlobalPoolManager aliases are forbidden across production src"
@@ -726,28 +703,14 @@ fn provider_runtime_http_boundary_has_no_unapproved_bypass() {
         ["impl Deref for ", "BaseHttpClient"].concat(),
         ["pub ", "client:"].concat(),
     ] {
-        assert!(
-            !base_source.contains(&pattern),
-            "BaseHttpClient exposes policy-bound internals through {pattern}"
-        );
+        assert!(!base_source.contains(&pattern), "BaseHttpClient exposes policy-bound internals through {pattern}");
     }
-    let compact_base: String = base_source
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect();
+    let compact_base: String = base_source.chars().filter(|character| !character.is_whitespace()).collect();
     assert!(compact_base.contains("BaseRedirectMode::Policy=>ProviderHttpClient::new"));
     assert!(compact_base.contains("BaseRedirectMode::Disabled=>ProviderHttpClient::no_redirect"));
     assert!(compact_base.contains("BaseRedirectMode::Streaming=>ProviderHttpClient::streaming"));
-    assert!(
-        !include_str!("../../../../utils/net/http.rs")
-            .contains("get_ssrf_safe_no_redirect_client_with_timeout_fallible")
-    );
-    assert_eq!(
-        include_str!("../../bedrock/client.rs")
-            .matches("new_for_provider_no_redirect")
-            .count(),
-        3
-    );
+    assert!(!include_str!("../../../../utils/net/http.rs").contains("get_ssrf_safe_no_redirect_client_with_timeout_fallible"));
+    assert_eq!(include_str!("../../bedrock/client.rs").matches("new_for_provider_no_redirect").count(), 3);
 }
 
 #[test]
