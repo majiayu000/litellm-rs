@@ -3,7 +3,8 @@ use std::path::Path as FsPath;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{
-    ExprMethodCall, ImplItemFn, ItemExternCrate, ItemFn, ItemMacro, ItemMod, ItemUse, Path, UseTree,
+    Expr, ExprMethodCall, ImplItemFn, ItemExternCrate, ItemFn, ItemMacro, ItemMod, ItemUse, Local,
+    Macro, Pat, Path, Type, UseTree,
 };
 
 const RAW_PREFIXES: &[&[&str]] = &[
@@ -192,6 +193,21 @@ fn ident_text(ident: &syn::Ident) -> String {
     ident.unraw().to_string()
 }
 
+fn has_test_cfg(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attribute| {
+        let syn::Meta::List(meta) = &attribute.meta else {
+            return false;
+        };
+        let cfg = meta.tokens.to_string().replace(' ', "");
+        attribute.path().is_ident("cfg")
+            && (cfg == "test"
+                || cfg
+                    .strip_prefix("all(")
+                    .and_then(|cfg| cfg.strip_suffix(')'))
+                    .is_some_and(|cfg| cfg.split(',').any(|term| term == "test")))
+    })
+}
+
 fn path_starts_with(path: &[String], prefix: &[&str]) -> bool {
     path.len() >= prefix.len()
         && path
@@ -288,10 +304,33 @@ fn flatten_use_tree(tree: &UseTree, prefix: &mut Vec<String>, paths: &mut Vec<Ve
     }
 }
 
+fn collect_manager_aliases(tree: &UseTree, matched: bool, aliases: &mut Vec<String>) {
+    match tree {
+        UseTree::Path(path) => collect_manager_aliases(
+            &path.tree,
+            matched || ident_text(&path.ident) == "GlobalPoolManager",
+            aliases,
+        ),
+        UseTree::Name(name) if matched || ident_text(&name.ident) == "GlobalPoolManager" => {
+            aliases.push(ident_text(&name.ident));
+        }
+        UseTree::Rename(rename) if matched || ident_text(&rename.ident) == "GlobalPoolManager" => {
+            aliases.push(ident_text(&rename.rename));
+        }
+        UseTree::Group(group) => {
+            for item in &group.items {
+                collect_manager_aliases(item, matched, aliases);
+            }
+        }
+        _ => {}
+    }
+}
+
 struct BoundaryVisitor {
     module_path: Vec<String>,
     context: Vec<String>,
     violations: Vec<String>,
+    manager_aliases: Vec<String>,
 }
 
 impl BoundaryVisitor {
@@ -315,6 +354,7 @@ impl BoundaryVisitor {
 
 impl<'ast> Visit<'ast> for BoundaryVisitor {
     fn visit_item_use(&mut self, item: &'ast ItemUse) {
+        collect_manager_aliases(&item.tree, false, &mut self.manager_aliases);
         let mut paths = Vec::new();
         flatten_use_tree(&item.tree, &mut Vec::new(), &mut paths);
         for path in paths {
@@ -329,13 +369,41 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
             .map(|segment| ident_text(&segment.ident))
             .collect();
         self.check_segments(segments.clone(), false);
-        if segments
-            .windows(2)
-            .any(|window| window[0] == "GlobalPoolManager" && window[1] == "new")
-        {
-            self.record("legacy GlobalPoolManager::new() constructor".to_string());
+        if let Some(window) = segments.windows(2).find(|window| {
+            self.manager_aliases.contains(&window[0])
+                && matches!(window[1].as_str(), "new" | "shared" | "default")
+        }) {
+            self.record(format!(
+                "legacy GlobalPoolManager::{}() constructor",
+                window[1]
+            ));
         }
         visit::visit_path(self, path);
+    }
+
+    fn visit_local(&mut self, local: &'ast Local) {
+        if let Pat::Type(pattern) = &local.pat
+            && let Type::Path(ty) = &*pattern.ty
+            && ty
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| self.manager_aliases.contains(&ident_text(&segment.ident)))
+            && let Some(initializer) = &local.init
+            && let Expr::Call(call) = &*initializer.expr
+            && let Expr::Path(function) = &*call.func
+        {
+            let segments: Vec<_> = function
+                .path
+                .segments
+                .iter()
+                .map(|segment| ident_text(&segment.ident))
+                .collect();
+            if segments.ends_with(&["Default".to_string(), "default".to_string()]) {
+                self.record("legacy GlobalPoolManager Default::default() constructor".to_string());
+            }
+        }
+        visit::visit_local(self, local);
     }
 
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
@@ -364,7 +432,12 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
                 .map(ident_text)
                 .unwrap_or_else(|| "<macro>".to_string()),
         );
-        let tokens = item.mac.tokens.to_string();
+        visit::visit_item_macro(self, item);
+        self.context.pop();
+    }
+
+    fn visit_macro(&mut self, item: &'ast Macro) {
+        let tokens = item.tokens.to_string();
         for forbidden in [
             "reqwest :: Client",
             "reqwest :: ClientBuilder",
@@ -380,8 +453,7 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
                 self.record(format!("raw HTTP macro token {forbidden}"));
             }
         }
-        visit::visit_item_macro(self, item);
-        self.context.pop();
+        visit::visit_macro(self, item);
     }
 
     fn visit_item_extern_crate(&mut self, item: &'ast ItemExternCrate) {
@@ -392,13 +464,7 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
     }
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        let is_test = item.attrs.iter().any(|attribute| {
-            attribute.path().is_ident("cfg")
-                && attribute
-                    .parse_args::<syn::Ident>()
-                    .is_ok_and(|ident| ident_text(&ident) == "test")
-        });
-        if is_test {
+        if has_test_cfg(&item.attrs) {
             return;
         }
         if let Some((_, items)) = &item.content {
@@ -420,9 +486,38 @@ fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>
             .collect(),
         context: Vec::new(),
         violations: Vec::new(),
+        manager_aliases: vec!["GlobalPoolManager".to_string()],
     };
     visitor.visit_file(&file);
     Ok(visitor.violations)
+}
+
+fn is_test_only_module(path: &FsPath) -> std::io::Result<bool> {
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    let name = if path.is_dir() {
+        path.file_name()
+    } else {
+        path.file_stem()
+    }
+    .and_then(|name| name.to_str())
+    .unwrap_or_default();
+    let Some(owner) = [parent.join("mod.rs"), parent.with_extension("rs")]
+        .into_iter()
+        .find(|candidate| candidate.is_file() && candidate != path)
+    else {
+        return Ok(false);
+    };
+    let source = fs::read_to_string(owner)?;
+    let file = syn::parse_file(&source)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))?;
+    Ok(file.items.iter().any(|item| {
+        matches!(item, syn::Item::Mod(module)
+            if ident_text(&module.ident) == name
+                && module.content.is_none()
+                && has_test_cfg(&module.attrs))
+    }))
 }
 
 fn collect_production_sources(
@@ -438,9 +533,10 @@ fn collect_production_sources(
         if path.is_dir() {
             let directory_name = entry.file_name();
             let directory_name = directory_name.to_string_lossy();
-            if directory_name == "tests"
+            if (directory_name == "tests"
                 || directory_name == "provider_tests"
-                || directory_name.ends_with("_tests")
+                || directory_name.ends_with("_tests"))
+                && is_test_only_module(&path)?
             {
                 continue;
             }
@@ -456,7 +552,9 @@ fn collect_production_sources(
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or_default();
-        if stem == "tests" || stem == "provider_tests" || stem.ends_with("_tests") {
+        if (stem == "tests" || stem == "provider_tests" || stem.ends_with("_tests"))
+            && is_test_only_module(&path)?
+        {
             continue;
         }
         let mut file_module = module_path.to_vec();
@@ -489,6 +587,9 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "fn probe() { crate::utils::net::http::create_custom_client_with_config(timeout, config); }",
         "fn probe() { crate::utils::net::http::create_streaming_client(); }",
         "fn probe() { GlobalPoolManager::new(); }",
+        "fn probe() { GlobalPoolManager::shared(); }",
+        "use crate::core::providers::base::GlobalPoolManager as Pool; fn probe() { Pool::new(); }",
+        "fn probe() { let pool: GlobalPoolManager = Default::default(); }",
         "use crate::core as raw_core; fn probe() { raw_core::http::default_outbound_client(); }",
         "use crate::utils as raw_utils; fn probe() { raw_utils::net::http::get_shared_client(); }",
         "use crate::core::{http as raw_http}; fn probe() { raw_http::default_outbound_client(); }",
@@ -503,6 +604,7 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "extern crate r#reqwest as raw_http;",
         "fn probe(pool: Pool) { pool.client(); }",
         "macro_rules! raw { () => { reqwest::Client::new() } }",
+        "fn probe() { passthrough!(reqwest::Client::new()); }",
     ] {
         let violations = boundary_violations(bypass, &["crate", "core", "providers", "mistral"])
             .unwrap_or_else(|error| panic!("bypass fixture must parse: {error}"));
