@@ -466,8 +466,8 @@ fn declared_module(path: &FsPath, module_path: &[String]) -> std::io::Result<Opt
                     Expr::Lit(value) => match &value.lit { syn::Lit::Str(path) => Some(path.value()), _ => None }, _ => None }, _ => None });
             if declared.and_then(|declared| fs::canonicalize(owner.parent()?.join(declared)).ok()).as_ref() != Some(&target) { continue; }
             let mut resolved = module_path.to_vec();
-            if owner != parent.with_extension("rs") && owner.file_name().and_then(|name| name.to_str()) != Some("mod.rs") {
-                if let Some(stem) = owner.file_stem().and_then(|stem| stem.to_str()) { resolved.push(stem.to_string()); } }
+            if owner != parent.with_extension("rs") && owner.file_name().and_then(|name| name.to_str()) != Some("mod.rs")
+                && let Some(stem) = owner.file_stem().and_then(|stem| stem.to_str()) { resolved.push(stem.to_string()); }
             resolved.push(ident_text(&module.ident)); return Ok(Some((resolved, has_test_cfg(&module.attrs))));
         }
     }
