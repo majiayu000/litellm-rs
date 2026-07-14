@@ -35,92 +35,68 @@ pub enum HeaderValue {
 
 impl BedrockStream {
     /// Parse event stream message from bytes
-    pub(super) fn parse_event_message(data: &[u8]) -> Result<EventStreamMessage, ProviderError> {
-        if data.len() < 16 {
-            return Err(ProviderError::response_parsing(
+    pub(crate) fn parse_event_message(data: &[u8]) -> Result<EventStreamMessage, ProviderError> {
+        let message = aws_smithy_eventstream::frame::read_message_from(data).map_err(|error| {
+            ProviderError::response_parsing(
                 "bedrock",
-                "Invalid event stream message",
-            ));
-        }
-
-        // Parse prelude (12 bytes)
-        let total_length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        let headers_length = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as usize;
-        // let prelude_crc = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
-
-        if data.len() < total_length {
-            return Err(ProviderError::response_parsing(
-                "bedrock",
-                "Incomplete event stream message",
-            ));
-        }
-
-        // Parse headers
-        let mut headers = Vec::new();
-        let mut offset = 12;
-        let headers_end = 12 + headers_length;
-
-        while offset < headers_end {
-            if offset + 1 > data.len() {
-                break;
-            }
-
-            let name_length = data[offset] as usize;
-            offset += 1;
-
-            if offset + name_length > data.len() {
-                break;
-            }
-
-            let name = String::from_utf8_lossy(&data[offset..offset + name_length]).to_string();
-            offset += name_length;
-
-            if offset >= data.len() {
-                break;
-            }
-
-            let header_type = data[offset];
-            offset += 1;
-
-            let value = match header_type {
-                5 | 7 => {
-                    // String type
-                    if offset + 2 > data.len() {
-                        break;
-                    }
-                    let string_length =
-                        u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
-                    offset += 2;
-                    if offset + string_length > data.len() {
-                        break;
-                    }
-                    let string_value =
-                        String::from_utf8_lossy(&data[offset..offset + string_length]).to_string();
-                    offset += string_length;
-                    HeaderValue::String(string_value)
-                }
-                _ => {
-                    // Skip unknown header types
-                    HeaderValue::String(String::new())
-                }
-            };
-
-            headers.push(EventStreamHeader { name, value });
-        }
-
-        // Extract payload
-        let payload_start = headers_end;
-        let payload_end = total_length - 4; // Exclude message CRC
-        let payload = if payload_start < payload_end && payload_end <= data.len() {
-            Bytes::copy_from_slice(&data[payload_start..payload_end])
-        } else {
-            Bytes::new()
-        };
-
-        Ok(EventStreamMessage { headers, payload })
+                format!("invalid AWS event stream frame: {error}"),
+            )
+        })?;
+        let headers = message
+            .headers()
+            .iter()
+            .map(|header| {
+                let value = header.value().as_string().map_err(|_| {
+                    ProviderError::response_parsing(
+                        "bedrock",
+                        "unsupported non-string AWS event stream header",
+                    )
+                })?;
+                Ok(EventStreamHeader {
+                    name: header.name().as_str().to_string(),
+                    value: HeaderValue::String(value.as_str().to_string()),
+                })
+            })
+            .collect::<Result<Vec<_>, ProviderError>>()?;
+        Ok(EventStreamMessage {
+            headers,
+            payload: message.payload().clone(),
+        })
     }
 
-    fn header_value<'a>(message: &'a EventStreamMessage, name: &str) -> Option<&'a str> {
+    pub(crate) fn take_event_message(
+        buffer: &mut Vec<u8>,
+    ) -> Option<Result<EventStreamMessage, ProviderError>> {
+        if buffer.len() < 12 {
+            return None;
+        }
+        let total_length =
+            u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+        let headers_length =
+            u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]) as usize;
+        let prelude_crc = u32::from_be_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]);
+        if crc32fast::hash(&buffer[..8]) != prelude_crc {
+            buffer.clear();
+            return Some(Err(ProviderError::response_parsing(
+                "bedrock",
+                "invalid AWS event stream prelude checksum",
+            )));
+        }
+        if total_length < 16 || headers_length > total_length - 16 || headers_length == 1 {
+            buffer.clear();
+            return Some(Err(ProviderError::response_parsing(
+                "bedrock",
+                "invalid AWS event stream frame length",
+            )));
+        }
+        if buffer.len() < total_length {
+            return None;
+        }
+        let message_data = buffer.drain(..total_length).collect::<Vec<_>>();
+        Some(Self::parse_event_message(&message_data))
+    }
+
+    pub(crate) fn header_value<'a>(message: &'a EventStreamMessage, name: &str) -> Option<&'a str> {
         message.headers.iter().find_map(|header| {
             (header.name == name)
                 .then_some(&header.value)
@@ -162,7 +138,7 @@ impl BedrockStream {
         }
     }
 
-    pub(super) fn check_stream_error(message: &EventStreamMessage) -> Result<(), ProviderError> {
+    pub(crate) fn check_stream_error(message: &EventStreamMessage) -> Result<(), ProviderError> {
         let message_type = Self::header_value(message, ":message-type");
         let exception_type = Self::header_value(message, ":exception-type");
 
@@ -184,5 +160,40 @@ impl BedrockStream {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod strict_frame_tests {
+    use super::*;
+
+    fn frame(headers: &[u8], payload: &[u8]) -> Vec<u8> {
+        let total_length = 16 + headers.len() + payload.len();
+        let mut data = Vec::new();
+        data.extend_from_slice(&(total_length as u32).to_be_bytes());
+        data.extend_from_slice(&(headers.len() as u32).to_be_bytes());
+        data.extend_from_slice(&crc32fast::hash(&data).to_be_bytes());
+        data.extend_from_slice(headers);
+        data.extend_from_slice(payload);
+        data.extend_from_slice(&crc32fast::hash(&data).to_be_bytes());
+        data
+    }
+
+    #[test]
+    fn rejects_bad_checksums() {
+        let mut bad_prelude = frame(&[], b"{}");
+        bad_prelude[8..12].copy_from_slice(&1_u32.to_be_bytes());
+        assert!(BedrockStream::parse_event_message(&bad_prelude).is_err());
+
+        let mut bad_message = frame(&[], b"{}");
+        let end = bad_message.len();
+        bad_message[end - 4..].copy_from_slice(&1_u32.to_be_bytes());
+        assert!(BedrockStream::parse_event_message(&bad_message).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_header() {
+        let truncated_header = [4_u8, b'a'];
+        assert!(BedrockStream::parse_event_message(&frame(&truncated_header, &[])).is_err());
     }
 }

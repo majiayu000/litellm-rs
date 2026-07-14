@@ -79,9 +79,10 @@ pub struct GuardrailOutput {
 
 /// Guardrail action
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
 pub enum GuardrailAction {
+    #[serde(rename = "NONE")]
     None,
+    #[serde(rename = "GUARDRAIL_INTERVENED", alias = "GUARDRAIL")]
     Guardrail,
 }
 
@@ -228,5 +229,19 @@ impl<'a> GuardrailClient<'a> {
             .apply(guardrail_id, guardrail_version, content, source)
             .await?;
         Ok(matches!(response.action, GuardrailAction::None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intervened_action_deserializes_and_fails_content_check() {
+        let action =
+            serde_json::from_value::<GuardrailAction>(serde_json::json!("GUARDRAIL_INTERVENED"))
+                .unwrap_or_else(|error| panic!("intervened action should parse: {error}"));
+
+        assert!(matches!(action, GuardrailAction::Guardrail));
     }
 }

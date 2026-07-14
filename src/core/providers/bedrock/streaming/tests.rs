@@ -98,14 +98,11 @@ fn test_parse_event_message_minimal() {
     // total_length = 12 (prelude) + 4 (message CRC) = 16
     let total_length: u32 = 16;
     let headers_length: u32 = 0;
-    let prelude_crc: u32 = 0;
-    let message_crc: u32 = 0;
-
     let mut data = Vec::new();
     data.extend_from_slice(&total_length.to_be_bytes());
     data.extend_from_slice(&headers_length.to_be_bytes());
-    data.extend_from_slice(&prelude_crc.to_be_bytes());
-    data.extend_from_slice(&message_crc.to_be_bytes());
+    data.extend_from_slice(&crc32fast::hash(&data).to_be_bytes());
+    data.extend_from_slice(&crc32fast::hash(&data).to_be_bytes());
 
     let result = BedrockStream::parse_event_message(&data);
     assert!(result.is_ok());
@@ -319,16 +316,13 @@ fn event_stream_message_with_headers(payload: &[u8], headers: &[(&str, &str)]) -
     let header_bytes = event_stream_headers(headers);
     let total_length = 16 + header_bytes.len() as u32 + payload.len() as u32;
     let headers_length = header_bytes.len() as u32;
-    let prelude_crc: u32 = 0;
-    let message_crc: u32 = 0;
-
     let mut data = Vec::new();
     data.extend_from_slice(&total_length.to_be_bytes());
     data.extend_from_slice(&headers_length.to_be_bytes());
-    data.extend_from_slice(&prelude_crc.to_be_bytes());
+    data.extend_from_slice(&crc32fast::hash(&data).to_be_bytes());
     data.extend_from_slice(&header_bytes);
     data.extend_from_slice(payload);
-    data.extend_from_slice(&message_crc.to_be_bytes());
+    data.extend_from_slice(&crc32fast::hash(&data).to_be_bytes());
     Bytes::from(data)
 }
 

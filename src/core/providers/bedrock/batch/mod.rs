@@ -4,7 +4,6 @@
 
 use crate::core::providers::unified_provider::ProviderError;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 /// Batch inference job request
 #[derive(Debug, Serialize, Deserialize)]
@@ -157,7 +156,7 @@ impl<'a> BatchClient<'a> {
     /// Stop a batch job
     pub async fn stop_job(&self, job_identifier: &str) -> Result<(), ProviderError> {
         let url = format!("model-invocation-job/{}/stop", job_identifier);
-        self.client.send_request("", &url, &Value::Null).await?;
+        self.client.send_empty_post_request(&url).await?;
         Ok(())
     }
 }

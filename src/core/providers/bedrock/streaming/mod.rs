@@ -93,36 +93,12 @@ impl BedrockStream {
     }
 
     fn parse_buffered_chunk(&mut self) -> Option<Result<Option<ChatChunk>, ProviderError>> {
-        if self.buffer.len() < 16 {
-            return None;
-        }
-
-        let total_length = u32::from_be_bytes([
-            self.buffer[0],
-            self.buffer[1],
-            self.buffer[2],
-            self.buffer[3],
-        ]) as usize;
-        if total_length < 16 {
-            self.buffer.clear();
-            return Some(Err(ProviderError::response_parsing(
-                "bedrock",
-                "invalid Bedrock event stream frame length",
-            )));
-        }
-
-        if self.buffer.len() < total_length {
-            return None;
-        }
-
-        let message_data = self.buffer[..total_length].to_vec();
-        self.buffer.drain(..total_length);
-        Some(
-            Self::parse_event_message(&message_data).and_then(|message| {
+        Self::take_event_message(&mut self.buffer).map(|message| {
+            message.and_then(|message| {
                 Self::check_stream_error(&message)?;
                 self.parse_chunk(&message.payload)
-            }),
-        )
+            })
+        })
     }
 
     fn parse_converse_finish_reason(

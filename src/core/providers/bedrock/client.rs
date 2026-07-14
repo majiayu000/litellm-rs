@@ -169,7 +169,7 @@ impl BedrockClient {
         Ok(header_map)
     }
 
-    /// Send a request to Bedrock API
+    /// Send a JSON request to Bedrock API.
     pub async fn send_request(
         &self,
         model_id: &str,
@@ -179,16 +179,13 @@ impl BedrockClient {
         let target = self.request_target(model_id, operation)?;
         let url = target.url;
         let body_str = serde_json::to_string(body)
-            .map_err(|e| ProviderError::serialization("bedrock", e.to_string()))?;
-
+            .map_err(|error| ProviderError::serialization("bedrock", error.to_string()))?;
         debug!(
             operation,
             url,
             body_bytes = body_str.len(),
             "Bedrock request prepared"
         );
-
-        // Create signed headers
         let headers = self
             .create_signed_headers_with_extra(
                 &url,
@@ -197,8 +194,6 @@ impl BedrockClient {
                 request_headers_for_operation(operation),
             )
             .await?;
-
-        // Send request
         let response = self
             .client_for_service(target.service)
             .post(&url)?
@@ -206,21 +201,45 @@ impl BedrockClient {
             .body(body_str)
             .send()
             .await
-            .map_err(|e| self.error_mapper.map_network_error(&e))?;
+            .map_err(|error| self.error_mapper.map_network_error(&error))?;
+        self.ensure_successful_response(response).await
+    }
 
-        // Check for errors
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            let error_body_bytes = error_body.len();
-            error!(status, body_bytes = error_body_bytes, "Bedrock API error");
-            return Err(self.error_mapper.map_http_error(status, &error_body));
+    /// Send an empty-body POST request to Bedrock API.
+    pub async fn send_empty_post_request(
+        &self,
+        operation: &str,
+    ) -> Result<Response, ProviderError> {
+        let target = self.request_target("", operation)?;
+        let url = target.url;
+        let (body, request_headers) = empty_post_signing_parts();
+        let headers = self
+            .create_signed_headers_with_extra(&url, body, "POST", request_headers)
+            .await?;
+        let response = self
+            .client_for_service(target.service)
+            .post(&url)?
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|error| self.error_mapper.map_network_error(&error))?;
+        self.ensure_successful_response(response).await
+    }
+
+    async fn ensure_successful_response(
+        &self,
+        response: Response,
+    ) -> Result<Response, ProviderError> {
+        if response.status().is_success() {
+            return Ok(response);
         }
-
-        Ok(response)
+        let status = response.status().as_u16();
+        let error_body = response
+            .text()
+            .await
+            .map_err(|error| self.error_mapper.map_network_error(&error))?;
+        error!(status, body_bytes = error_body.len(), "Bedrock API error");
+        Err(self.error_mapper.map_http_error(status, &error_body))
     }
 
     /// Send a streaming request to Bedrock API
@@ -341,6 +360,10 @@ fn request_headers_for_operation(operation: &str) -> HashMap<String, String> {
     }
 
     headers
+}
+
+fn empty_post_signing_parts() -> (&'static str, HashMap<String, String>) {
+    ("", HashMap::new())
 }
 
 #[cfg(test)]
@@ -684,6 +707,12 @@ mod tests {
                 Some(&"application/json".to_string())
             );
         }
+    }
+
+    #[test]
+    fn empty_post_has_no_body_or_json_headers() {
+        let (body, headers) = empty_post_signing_parts();
+        assert!(body.is_empty() && headers.is_empty());
     }
 
     // ==================== Clone/Debug Tests ====================

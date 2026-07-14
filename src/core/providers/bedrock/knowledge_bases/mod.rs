@@ -88,6 +88,7 @@ pub struct RetrievalContent {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RetrievalLocation {
+    #[serde(rename = "type")]
     pub type_: String,
     pub s3_location: Option<S3Location>,
     pub web_location: Option<WebLocation>,
@@ -170,5 +171,18 @@ impl<'a> KnowledgeBaseClient<'a> {
             .map_err(|e| ProviderError::response_parsing("bedrock", e.to_string()))?;
 
         Ok(kb_response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retrieval_location_maps_wire_type_field() {
+        let location =
+            serde_json::from_value::<RetrievalLocation>(serde_json::json!({"type": "S3"}))
+                .unwrap_or_else(|error| panic!("retrieval location should parse: {error}"));
+        assert_eq!(location.type_, "S3");
     }
 }
