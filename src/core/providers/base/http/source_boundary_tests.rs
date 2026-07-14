@@ -2,37 +2,190 @@ use std::fs;
 use std::path::Path as FsPath;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
-use syn::{ExprMethodCall, ItemExternCrate, ItemMacro, ItemMod, ItemUse, Path, UseTree};
+use syn::{
+    ExprMethodCall, ImplItemFn, ItemExternCrate, ItemFn, ItemMacro, ItemMod, ItemUse, Path, UseTree,
+};
 
-const ALLOWED_BASE_SYMBOLS: &[&str] = &[
-    "BaseConfig",
-    "BaseHttpClient",
-    "GlobalPoolManager",
-    "HeaderPair",
-    "HttpErrorMapper",
-    "HttpMethod",
-    "OpenAIRequestTransformer",
-    "ProviderRequestBuilder",
-    "SSETransformer",
-    "UnifiedSSEStream",
-    "UrlBuilder",
-    "apply_provider_headers",
-    "create_provider_sse_stream",
-    "get_pricing_db",
-    "header",
-    "header_owned",
-    "header_static",
-    "read_streaming_error_body",
-];
-const BASE_PREFIX: &[&str] = &["crate", "core", "providers", "base"];
 const RAW_PREFIXES: &[&[&str]] = &[
     &["crate", "core", "http"],
     &["crate", "utils", "net"],
     &["crate", "core", "providers", "base", "connection_pool"],
+    &["crate", "core", "providers", "base", "ConnectionPool"],
+    &["crate", "core", "providers", "base", "apply_headers"],
+    &["crate", "core", "providers", "base", "global_client"],
+    &[
+        "crate",
+        "core",
+        "providers",
+        "base",
+        "send_streaming_request",
+    ],
+    &[
+        "crate",
+        "core",
+        "providers",
+        "base",
+        "send_streaming_request_with_timeout",
+    ],
+    &["crate", "core", "providers", "base", "streaming_client"],
+    &[
+        "crate",
+        "core",
+        "providers",
+        "base",
+        "streaming_unbounded_client",
+    ],
     &["reqwest", "Client"],
     &["reqwest", "ClientBuilder"],
     &["reqwest", "get"],
     &["reqwest", "request"],
+];
+
+struct BoundaryException {
+    path: &'static str,
+    violations: &'static [&'static str],
+    purpose: &'static str,
+}
+
+const UNIFIED_HTTP_IMPLEMENTATION: &str = "src/core/providers/base/http.rs";
+const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
+    BoundaryException {
+        path: "src/core/providers/base/connection_pool.rs",
+        violations: &[
+            "<module>: raw HTTP path crate::core::http::outbound::default_outbound_client",
+            "<module>: raw HTTP path crate::core::http::outbound::default_outbound_client",
+            "<module>: raw HTTP path crate::utils::net::http::HttpClientPoolConfig",
+            "<module>: raw HTTP path crate::utils::net::http::create_custom_client_with_config",
+            "<module>: raw HTTP path crate::utils::net::http::create_streaming_client",
+            "<module>: raw HTTP path reqwest::Client",
+            "client: raw HTTP client accessor .client()",
+            "execute_request: raw HTTP client accessor .client()",
+        ],
+        purpose: "unified pool implementation retains legacy fixed-endpoint clients beside the policy manager",
+    },
+    BoundaryException {
+        path: "src/core/providers/base/mod.rs",
+        violations: &["<module>: raw HTTP path crate::utils::net::http::ProviderRequestBuilder"],
+        purpose: "unified provider HTTP wrapper re-export",
+    },
+    BoundaryException {
+        path: "src/core/providers/cloudflare/provider.rs",
+        violations: &["new: legacy GlobalPoolManager::new() constructor"],
+        purpose: "native runtime is restricted by the factory to its account-scoped official endpoint",
+    },
+    BoundaryException {
+        path: "src/core/providers/codestral/provider.rs",
+        violations: &[
+            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
+            "new: legacy GlobalPoolManager::new() constructor",
+        ],
+        purpose: "unwired lifecycle stub with no Gateway factory owner",
+    },
+    BoundaryException {
+        path: "src/core/providers/fal_ai/provider.rs",
+        violations: &[
+            "<module>: raw HTTP path crate::core::providers::base::apply_headers",
+            "execute_image_request: raw HTTP client accessor .client()",
+            "new: legacy GlobalPoolManager::new() constructor",
+        ],
+        purpose: "native runtime is restricted by the factory to the fixed https://fal.run endpoint",
+    },
+    BoundaryException {
+        path: "src/core/providers/github/provider.rs",
+        violations: &[
+            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::read_streaming_error_body",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
+            "new: legacy GlobalPoolManager::new() constructor",
+        ],
+        purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
+    },
+    BoundaryException {
+        path: "src/core/providers/github_copilot/authenticator.rs",
+        violations: &[
+            "perform_device_flow: raw HTTP path crate::core::http::outbound::default_outbound_client",
+            "refresh_api_key: raw HTTP path crate::core::http::outbound::default_outbound_client",
+        ],
+        purpose: "fixed GitHub OAuth and token exchange endpoints, outside provider API base configuration",
+    },
+    BoundaryException {
+        path: "src/core/providers/github_copilot/provider.rs",
+        violations: &[
+            "chat_completion: raw HTTP path crate::core::http::outbound::default_outbound_client",
+            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::read_streaming_error_body",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
+            "embeddings: raw HTTP path crate::core::http::outbound::default_outbound_client",
+        ],
+        purpose: "service-discovered Copilot endpoint; factory rejects caller-configured endpoint access",
+    },
+    BoundaryException {
+        path: "src/core/providers/macros/openai_compatible.rs",
+        violations: &[
+            "define_openai_compatible_provider: raw HTTP macro token get_client_with_timeout",
+            "define_openai_compatible_provider: raw HTTP macro token reqwest :: Client",
+        ],
+        purpose: "retained but uninvoked legacy lifecycle macro",
+    },
+    BoundaryException {
+        path: "src/core/providers/macros/provider_definitions.rs",
+        violations: &[
+            "standard_provider: raw HTTP macro token create_custom_client",
+            "standard_provider: raw HTTP macro token reqwest :: Client",
+        ],
+        purpose: "retained but uninvoked legacy lifecycle macro",
+    },
+    BoundaryException {
+        path: "src/core/providers/meta_llama/common_utils.rs",
+        violations: &[
+            "<module>: raw HTTP path crate::utils::net::http::create_custom_client",
+            "<module>: raw HTTP path reqwest::Client",
+        ],
+        purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
+    },
+    BoundaryException {
+        path: "src/core/providers/ollama/provider.rs",
+        violations: &[
+            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::read_streaming_error_body",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request",
+            "new: legacy GlobalPoolManager::new() constructor",
+        ],
+        purpose: "unwired lifecycle stub; Gateway uses the policy-wired catalog route",
+    },
+    BoundaryException {
+        path: "src/core/providers/replicate/provider.rs",
+        violations: &[
+            "<module>: raw HTTP path crate::core::providers::base::apply_headers",
+            "build_request: raw HTTP client accessor .client()",
+            "build_request: raw HTTP client accessor .client()",
+            "build_request: raw HTTP client accessor .client()",
+            "build_request: raw HTTP client accessor .client()",
+            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::read_streaming_error_body",
+            "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request_with_timeout",
+            "new: legacy GlobalPoolManager::new() constructor",
+        ],
+        purpose: "native runtime is restricted by the factory to the fixed Replicate API endpoint",
+    },
+    BoundaryException {
+        path: "src/core/providers/v0/mod.rs",
+        violations: &[
+            "<module>: raw HTTP path crate::utils::net::http::create_custom_client",
+            "<module>: raw HTTP path reqwest::Client",
+            "new_or_default: raw HTTP path crate::core::http::outbound::default_outbound_client",
+        ],
+        purpose: "unwired lifecycle stub with no Gateway factory owner",
+    },
+    BoundaryException {
+        path: "src/core/providers/vertex_ai/auth.rs",
+        violations: &[
+            "<module>: raw HTTP path reqwest::Client",
+            "new: raw HTTP path crate::core::http::outbound::default_outbound_client",
+        ],
+        purpose: "fixed Google service-account token exchange, not the configurable Vertex API base",
+    },
 ];
 
 fn ident_text(ident: &syn::Ident) -> String {
@@ -80,24 +233,21 @@ fn canonicalize_path(module_path: &[String], path: &[String]) -> Option<Vec<Stri
     Some(canonical)
 }
 
-fn path_violation(path: &[String], is_import: bool) -> Option<String> {
+fn path_violation(path: &[String], is_import: bool, module_path: &[String]) -> Option<String> {
+    let connection_pool = &["crate", "core", "providers", "base", "connection_pool"];
+    let internal_connection_pool =
+        path_starts_with(module_path, connection_pool) && path_starts_with(path, connection_pool);
     if RAW_PREFIXES
         .iter()
         .any(|prefix| path_starts_with(path, prefix))
+        && !internal_connection_pool
     {
         return Some(format!("raw HTTP path {}", path.join("::")));
-    }
-    if path_starts_with(path, BASE_PREFIX) {
-        let symbol = path.get(BASE_PREFIX.len()).map(String::as_str);
-        if symbol.is_none() || !ALLOWED_BASE_SYMBOLS.contains(&symbol.unwrap_or_default()) {
-            return Some(format!("unapproved base path {}", path.join("::")));
-        }
     }
     if is_import
         && (RAW_PREFIXES
             .iter()
-            .any(|prefix| path_is_prefix_of(path, prefix))
-            || path_is_prefix_of(path, BASE_PREFIX))
+            .any(|prefix| path_is_prefix_of(path, prefix)))
     {
         return Some(format!("raw HTTP ancestor import {}", path.join("::")));
     }
@@ -140,15 +290,25 @@ fn flatten_use_tree(tree: &UseTree, prefix: &mut Vec<String>, paths: &mut Vec<Ve
 
 struct BoundaryVisitor {
     module_path: Vec<String>,
+    context: Vec<String>,
     violations: Vec<String>,
 }
 
 impl BoundaryVisitor {
+    fn record(&mut self, violation: String) {
+        let context = self
+            .context
+            .last()
+            .map(String::as_str)
+            .unwrap_or("<module>");
+        self.violations.push(format!("{context}: {violation}"));
+    }
+
     fn check_segments(&mut self, segments: Vec<String>, is_import: bool) {
         if let Some(path) = canonicalize_path(&self.module_path, &segments)
-            && let Some(violation) = path_violation(&path, is_import)
+            && let Some(violation) = path_violation(&path, is_import, &self.module_path)
         {
-            self.violations.push(violation);
+            self.record(violation);
         }
     }
 }
@@ -163,48 +323,71 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
     }
 
     fn visit_path(&mut self, path: &'ast Path) {
-        self.check_segments(
-            path.segments
-                .iter()
-                .map(|segment| ident_text(&segment.ident))
-                .collect(),
-            false,
-        );
+        let segments: Vec<_> = path
+            .segments
+            .iter()
+            .map(|segment| ident_text(&segment.ident))
+            .collect();
+        self.check_segments(segments.clone(), false);
+        if segments
+            .windows(2)
+            .any(|window| window[0] == "GlobalPoolManager" && window[1] == "new")
+        {
+            self.record("legacy GlobalPoolManager::new() constructor".to_string());
+        }
         visit::visit_path(self, path);
     }
 
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
         if ident_text(&expression.method) == "client" && expression.args.is_empty() {
-            self.violations
-                .push("raw HTTP client accessor .client()".to_string());
+            self.record("raw HTTP client accessor .client()".to_string());
         }
         visit::visit_expr_method_call(self, expression);
     }
 
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        self.context.push(ident_text(&item.sig.ident));
+        visit::visit_item_fn(self, item);
+        self.context.pop();
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
+        self.context.push(ident_text(&item.sig.ident));
+        visit::visit_impl_item_fn(self, item);
+        self.context.pop();
+    }
+
     fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
+        self.context.push(
+            item.ident
+                .as_ref()
+                .map(ident_text)
+                .unwrap_or_else(|| "<macro>".to_string()),
+        );
         let tokens = item.mac.tokens.to_string();
         for forbidden in [
             "reqwest :: Client",
             "reqwest :: ClientBuilder",
             "GlobalPoolManager",
+            "create_custom_client",
+            "create_streaming_client",
             "default_outbound_client",
             "get_client_with_timeout",
             "get_ssrf_safe_client",
             "use_ssrf_safe_client",
         ] {
             if tokens.contains(forbidden) {
-                self.violations
-                    .push(format!("raw HTTP macro token {forbidden}"));
+                self.record(format!("raw HTTP macro token {forbidden}"));
             }
         }
         visit::visit_item_macro(self, item);
+        self.context.pop();
     }
 
     fn visit_item_extern_crate(&mut self, item: &'ast ItemExternCrate) {
         let ident = ident_text(&item.ident);
         if matches!(ident.as_str(), "self" | "reqwest" | "litellm_rs") {
-            self.violations
-                .push(format!("forbidden extern crate alias for {ident}"));
+            self.record(format!("forbidden extern crate alias for {ident}"));
         }
     }
 
@@ -235,14 +418,15 @@ fn boundary_violations(source: &str, module_path: &[&str]) -> Result<Vec<String>
             .iter()
             .map(|segment| (*segment).to_string())
             .collect(),
+        context: Vec::new(),
         violations: Vec::new(),
     };
     visitor.visit_file(&file);
     Ok(visitor.violations)
 }
 
-fn collect_provider_sources(
-    root: &FsPath,
+fn collect_production_sources(
+    repository_root: &FsPath,
     directory: &FsPath,
     module_path: &[String],
     output: &mut Vec<(String, Vec<String>, String)>,
@@ -252,12 +436,17 @@ fn collect_provider_sources(
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
-            if entry.file_name() == "provider_tests" {
+            let directory_name = entry.file_name();
+            let directory_name = directory_name.to_string_lossy();
+            if directory_name == "tests"
+                || directory_name == "provider_tests"
+                || directory_name.ends_with("_tests")
+            {
                 continue;
             }
             let mut child_module = module_path.to_vec();
-            child_module.push(entry.file_name().to_string_lossy().into_owned());
-            collect_provider_sources(root, &path, &child_module, output)?;
+            child_module.push(directory_name.into_owned());
+            collect_production_sources(repository_root, &path, &child_module, output)?;
             continue;
         }
         if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
@@ -275,7 +464,7 @@ fn collect_provider_sources(
             file_module.push(stem.to_string());
         }
         let relative = path
-            .strip_prefix(root)
+            .strip_prefix(repository_root)
             .map_err(std::io::Error::other)?
             .display()
             .to_string();
@@ -285,115 +474,7 @@ fn collect_provider_sources(
 }
 
 #[test]
-fn migrated_shared_providers_have_no_raw_client_escape() {
-    let base_source = include_str!("../http.rs");
-    let provider_sources: [(&str, &[&str], &str); 21] = [
-        (
-            "mistral/mod.rs",
-            &["crate", "core", "providers", "mistral"],
-            include_str!("../../mistral/mod.rs"),
-        ),
-        (
-            "cohere/provider.rs",
-            &["crate", "core", "providers", "cohere", "provider"],
-            include_str!("../../cohere/provider.rs"),
-        ),
-        (
-            "macros/http_hooks.rs",
-            &["crate", "core", "providers", "macros", "http_hooks"],
-            include_str!("../../macros/http_hooks.rs"),
-        ),
-        (
-            "macros/pooled_hooks.rs",
-            &["crate", "core", "providers", "macros", "pooled_hooks"],
-            include_str!("../../macros/pooled_hooks.rs"),
-        ),
-        (
-            "custom_api/provider.rs",
-            &["crate", "core", "providers", "custom_api", "provider"],
-            include_str!("../../custom_api/provider.rs"),
-        ),
-        (
-            "amazon_nova/provider.rs",
-            &["crate", "core", "providers", "amazon_nova", "provider"],
-            include_str!("../../amazon_nova/provider.rs"),
-        ),
-        (
-            "openai/api_methods.rs",
-            &["crate", "core", "providers", "openai", "api_methods"],
-            include_str!("../../openai/api_methods.rs"),
-        ),
-        (
-            "openai/client.rs",
-            &["crate", "core", "providers", "openai", "client"],
-            include_str!("../../openai/client.rs"),
-        ),
-        (
-            "openai_like/provider.rs",
-            &["crate", "core", "providers", "openai_like", "provider"],
-            include_str!("../../openai_like/provider.rs"),
-        ),
-        (
-            "router/health_probe.rs",
-            &["crate", "core", "router", "health_probe"],
-            include_str!("../../../router/health_probe.rs"),
-        ),
-        (
-            "server/routes/ai/route_http.rs",
-            &["crate", "server", "routes", "ai", "route_http"],
-            include_str!("../../../../server/routes/ai/route_http.rs"),
-        ),
-        (
-            "server/routes/ai/batches.rs",
-            &["crate", "server", "routes", "ai", "batches"],
-            include_str!("../../../../server/routes/ai/batches.rs"),
-        ),
-        (
-            "server/routes/ai/gemini/provider.rs",
-            &["crate", "server", "routes", "ai", "gemini", "provider"],
-            include_str!("../../../../server/routes/ai/gemini/provider.rs"),
-        ),
-        (
-            "server/routes/ai/images.rs",
-            &["crate", "server", "routes", "ai", "images"],
-            include_str!("../../../../server/routes/ai/images.rs"),
-        ),
-        (
-            "server/routes/ai/provider_config.rs",
-            &["crate", "server", "routes", "ai", "provider_config"],
-            include_str!("../../../../server/routes/ai/provider_config.rs"),
-        ),
-        (
-            "server/routes/ai/moderations.rs",
-            &["crate", "server", "routes", "ai", "moderations"],
-            include_str!("../../../../server/routes/ai/moderations.rs"),
-        ),
-        (
-            "server/routes/ai/fine_tuning.rs",
-            &["crate", "server", "routes", "ai", "fine_tuning"],
-            include_str!("../../../../server/routes/ai/fine_tuning.rs"),
-        ),
-        (
-            "server/routes/ai/rerank.rs",
-            &["crate", "server", "routes", "ai", "rerank"],
-            include_str!("../../../../server/routes/ai/rerank.rs"),
-        ),
-        (
-            "core/fine_tuning/providers/openai.rs",
-            &["crate", "core", "fine_tuning", "providers", "openai"],
-            include_str!("../../../fine_tuning/providers/openai.rs"),
-        ),
-        (
-            "core/rerank/providers/cohere.rs",
-            &["crate", "core", "rerank", "providers", "cohere"],
-            include_str!("../../../rerank/providers/cohere.rs"),
-        ),
-        (
-            "core/rerank/providers/jina.rs",
-            &["crate", "core", "rerank", "providers", "jina"],
-            include_str!("../../../rerank/providers/jina.rs"),
-        ),
-    ];
+fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
     let allowed = boundary_violations(
         "use crate::core::providers::base::{BaseConfig, r#BaseHttpClient, header};",
         &["crate", "core", "providers", "mistral"],
@@ -401,6 +482,13 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
     .unwrap_or_else(|error| panic!("allowed fixture must parse: {error}"));
     assert!(allowed.is_empty());
     for bypass in [
+        "fn probe() { reqwest::Client::new(); }",
+        "fn probe() { reqwest::Client::builder(); }",
+        "fn probe() { reqwest::ClientBuilder::new(); }",
+        "fn probe() { crate::utils::net::http::create_custom_client(timeout); }",
+        "fn probe() { crate::utils::net::http::create_custom_client_with_config(timeout, config); }",
+        "fn probe() { crate::utils::net::http::create_streaming_client(); }",
+        "fn probe() { GlobalPoolManager::new(); }",
         "use crate::core as raw_core; fn probe() { raw_core::http::default_outbound_client(); }",
         "use crate::utils as raw_utils; fn probe() { raw_utils::net::http::get_shared_client(); }",
         "use crate::core::{http as raw_http}; fn probe() { raw_http::default_outbound_client(); }",
@@ -420,12 +508,128 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             .unwrap_or_else(|error| panic!("bypass fixture must parse: {error}"));
         assert!(!violations.is_empty(), "bypass was not rejected: {bypass}");
     }
+}
 
-    for (path, module_path, source) in provider_sources {
-        let violations = boundary_violations(source, module_path)
+fn source_exception_violations(path: &str) -> Vec<String> {
+    let matches: Vec<_> = BOUNDARY_EXCEPTIONS
+        .iter()
+        .filter(|exception| exception.path == path)
+        .collect();
+    assert!(
+        matches.len() <= 1,
+        "{path}: duplicate boundary exception entry"
+    );
+    let mut violations: Vec<_> = matches
+        .into_iter()
+        .flat_map(|exception| {
+            assert!(
+                !exception.purpose.trim().is_empty(),
+                "{path}: boundary exception must document a fixed purpose"
+            );
+            exception
+                .violations
+                .iter()
+                .map(|violation| violation.to_string())
+        })
+        .collect();
+    violations.sort();
+    violations
+}
+
+fn collect_boundary_inventory() -> Vec<(String, Vec<String>, String)> {
+    let repository_root = FsPath::new(env!("CARGO_MANIFEST_DIR"));
+    let roots: [(&str, &[&str]); 2] = [
+        ("src/core/providers", &["crate", "core", "providers"]),
+        ("src/server/routes/ai", &["crate", "server", "routes", "ai"]),
+    ];
+    let mut sources = Vec::new();
+    for (relative, module_path) in roots {
+        collect_production_sources(
+            repository_root,
+            &repository_root.join(relative),
+            &module_path
+                .iter()
+                .map(|segment| (*segment).to_string())
+                .collect::<Vec<_>>(),
+            &mut sources,
+        )
+        .unwrap_or_else(|error| panic!("{relative} source inventory failed: {error}"));
+    }
+    for (relative, module_path) in [
+        (
+            "src/core/router/health_probe.rs",
+            &["crate", "core", "router", "health_probe"][..],
+        ),
+        (
+            "src/core/fine_tuning/providers/openai.rs",
+            &["crate", "core", "fine_tuning", "providers", "openai"][..],
+        ),
+        (
+            "src/core/rerank/providers/cohere.rs",
+            &["crate", "core", "rerank", "providers", "cohere"][..],
+        ),
+        (
+            "src/core/rerank/providers/jina.rs",
+            &["crate", "core", "rerank", "providers", "jina"][..],
+        ),
+    ] {
+        sources.push((
+            relative.to_string(),
+            module_path
+                .iter()
+                .map(|segment| (*segment).to_string())
+                .collect(),
+            fs::read_to_string(repository_root.join(relative))
+                .unwrap_or_else(|error| panic!("cannot read {relative}: {error}")),
+        ));
+    }
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
+    sources
+}
+
+#[test]
+fn provider_runtime_http_boundary_has_no_unapproved_bypass() {
+    let base_source = include_str!("../http.rs");
+    let sources = collect_boundary_inventory();
+    assert!(
+        sources.len() > 300,
+        "provider/runtime inventory is incomplete"
+    );
+    for exception in BOUNDARY_EXCEPTIONS {
+        assert!(
+            sources.iter().any(|(path, _, _)| path == exception.path),
+            "stale boundary exception for {}",
+            exception.path
+        );
+    }
+    assert!(
+        sources
+            .iter()
+            .any(|(path, _, _)| path == UNIFIED_HTTP_IMPLEMENTATION),
+        "unified HTTP implementation is missing from the inventory"
+    );
+    let mut failures = Vec::new();
+    for (path, module_path, source) in sources {
+        if path == UNIFIED_HTTP_IMPLEMENTATION {
+            continue;
+        }
+        let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
+        let violations = boundary_violations(&source, &module_path)
             .unwrap_or_else(|error| panic!("{path} must parse: {error}"));
-        assert!(violations.is_empty(), "{path}: {}", violations.join("; "));
-        if matches!(path, "openai/client.rs" | "openai_like/provider.rs") {
+        let mut violations = violations;
+        violations.sort();
+        let expected = source_exception_violations(&path);
+        if violations != expected {
+            failures.push(format!(
+                "{path}: expected [{}], found [{}]",
+                expected.join("; "),
+                violations.join("; ")
+            ));
+        }
+        if matches!(
+            path.as_str(),
+            "src/core/providers/openai/client.rs" | "src/core/providers/openai_like/provider.rs"
+        ) {
             let compact = source.split_whitespace().collect::<String>();
             assert!(compact.contains("GlobalPoolManager::new_for_provider"));
             for forbidden in ["GlobalPoolManager::new()", ".client()"] {
@@ -433,81 +637,7 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             }
         }
     }
-    let bedrock_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/bedrock");
-    let mut bedrock_sources = Vec::new();
-    collect_provider_sources(
-        &bedrock_root,
-        &bedrock_root,
-        &[
-            "crate".to_string(),
-            "core".to_string(),
-            "providers".to_string(),
-            "bedrock".to_string(),
-        ],
-        &mut bedrock_sources,
-    )
-    .unwrap_or_else(|error| panic!("Bedrock source inventory failed: {error}"));
-    assert!(!bedrock_sources.is_empty());
-    for (path, module_path, source) in bedrock_sources {
-        let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
-        let violations = boundary_violations(&source, &module_path)
-            .unwrap_or_else(|error| panic!("bedrock/{path} must parse: {error}"));
-        assert!(
-            violations.is_empty(),
-            "bedrock/{path}: {}",
-            violations.join("; ")
-        );
-    }
-    let azure_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/azure");
-    let mut azure_sources = Vec::new();
-    collect_provider_sources(
-        &azure_root,
-        &azure_root,
-        &[
-            "crate".to_string(),
-            "core".to_string(),
-            "providers".to_string(),
-            "azure".to_string(),
-        ],
-        &mut azure_sources,
-    )
-    .unwrap_or_else(|error| panic!("Azure source inventory failed: {error}"));
-    assert!(!azure_sources.is_empty());
-    for (path, module_path, source) in azure_sources {
-        let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
-        let violations = boundary_violations(&source, &module_path)
-            .unwrap_or_else(|error| panic!("azure/{path} must parse: {error}"));
-        assert!(
-            violations.is_empty(),
-            "azure/{path}: {}",
-            violations.join("; ")
-        );
-    }
-    let azure_ai_root = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers/azure_ai");
-    let mut azure_ai_sources = Vec::new();
-    collect_provider_sources(
-        &azure_ai_root,
-        &azure_ai_root,
-        &[
-            "crate".to_string(),
-            "core".to_string(),
-            "providers".to_string(),
-            "azure_ai".to_string(),
-        ],
-        &mut azure_ai_sources,
-    )
-    .unwrap_or_else(|error| panic!("AzureAI source inventory failed: {error}"));
-    assert!(!azure_ai_sources.is_empty());
-    for (path, module_path, source) in azure_ai_sources {
-        let module_path: Vec<_> = module_path.iter().map(String::as_str).collect();
-        let violations = boundary_violations(&source, &module_path)
-            .unwrap_or_else(|error| panic!("azure_ai/{path} must parse: {error}"));
-        assert!(
-            violations.is_empty(),
-            "azure_ai/{path}: {}",
-            violations.join("; ")
-        );
-    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
     for pattern in [
         ["pub fn ", "inner("].concat(),
         ["pub fn ", "into_inner("].concat(),
@@ -537,4 +667,23 @@ fn migrated_shared_providers_have_no_raw_client_escape() {
             .count(),
         3
     );
+}
+
+#[test]
+fn provider_runtime_http_boundary_guard_is_wired_to_pr_and_main_ci() {
+    for (path, workflow) in [
+        (
+            ".github/workflows/ci.yml",
+            include_str!("../../../../../.github/workflows/ci.yml"),
+        ),
+        (
+            ".github/workflows/ci-main-full.yml",
+            include_str!("../../../../../.github/workflows/ci-main-full.yml"),
+        ),
+    ] {
+        assert!(
+            workflow.contains("bash scripts/guards/check_outbound_http_clients.sh"),
+            "{path} must run the provider/runtime HTTP boundary guard"
+        );
+    }
 }

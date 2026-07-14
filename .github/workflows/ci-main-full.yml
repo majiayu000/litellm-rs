@@ -54,6 +54,9 @@ jobs:
       - name: Core subsystem registry guard
         run: bash scripts/guards/check_core_subsystem_registry.sh
 
+      - name: Provider runtime HTTP boundary guard
+        run: bash scripts/guards/check_outbound_http_clients.sh
+
       - name: Install guard dependencies
         run: |
           sudo apt-get update
