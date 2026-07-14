@@ -122,19 +122,11 @@ fn ident_text(ident: &syn::Ident) -> String {
     ident.unraw().to_string()
 }
 
-#[rustfmt::skip]
-fn has_test_cfg(attrs: &[syn::Attribute]) -> bool {
+#[rustfmt::skip] fn has_test_cfg(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attribute| {
-        let syn::Meta::List(meta) = &attribute.meta else {
-            return false;
-        };
+        let syn::Meta::List(meta) = &attribute.meta else { return false; };
         let cfg = meta.tokens.to_string().replace(' ', "");
-        attribute.path().is_ident("cfg")
-            && (cfg == "test"
-                || cfg
-                    .strip_prefix("all(")
-                    .and_then(|cfg| cfg.strip_suffix(')'))
-                    .is_some_and(|cfg| cfg.split(',').any(|term| term == "test")))
+        attribute.path().is_ident("cfg") && (cfg == "test" || cfg.strip_prefix("all(").and_then(|cfg| cfg.strip_suffix(')')).is_some_and(|cfg| cfg.split(',').any(|term| term == "test")))
     })
 }
 
@@ -273,23 +265,25 @@ fn collect_manager_aliases(tree: &UseTree, matched: bool, aliases: &mut Vec<Stri
 fn is_manager_type(ty: &Type) -> bool {
     match ty {
         Type::Path(ty) => ty.path.segments.iter().any(|segment| segment.ident == "GlobalPoolManager" || matches!(&segment.arguments, PathArguments::AngleBracketed(args) if args.args.iter().any(|arg| matches!(arg, GenericArgument::Type(ty) if is_manager_type(ty))))),
-        Type::Group(ty) => is_manager_type(&ty.elem), Type::Paren(ty) => is_manager_type(&ty.elem),
+        Type::BareFn(ty) => matches!(&ty.output, ReturnType::Type(_, ty) if is_manager_type(ty)), Type::Group(ty) => is_manager_type(&ty.elem), Type::Paren(ty) => is_manager_type(&ty.elem),
         Type::Reference(ty) => is_manager_type(&ty.elem), Type::Tuple(ty) => ty.elems.iter().any(is_manager_type),
         Type::Macro(ty) => ty.mac.tokens.to_string().contains("GlobalPoolManager"), _ => false,
     }
 }
 
-struct DefaultFinder(bool);
+struct DefaultFinder<'a>(bool, &'a [String]);
 #[rustfmt::skip]
-impl<'ast> Visit<'ast> for DefaultFinder {
+impl<'ast> Visit<'ast> for DefaultFinder<'_> {
         fn visit_path(&mut self, path: &'ast Path) {
             let names: Vec<_> = path.segments.iter().map(|segment| ident_text(&segment.ident)).collect();
-            self.0 |= names.ends_with(&["Default".into(), "default".into()]); visit::visit_path(self, path);
+            self.0 |= names.ends_with(&["Default".into(), "default".into()]) || (names.len() == 1 && self.1.contains(&names[0])); visit::visit_path(self, path);
         } }
-#[rustfmt::skip]
-fn uses_default(expr: &Expr) -> bool { let mut finder = DefaultFinder(false); finder.visit_expr(expr); finder.0 }
+#[rustfmt::skip] fn uses_default_or_local(expr: &Expr, locals: &[String]) -> bool { let mut finder = DefaultFinder(false, locals); finder.visit_expr(expr); finder.0 }
+#[rustfmt::skip] fn uses_default(expr: &Expr) -> bool { uses_default_or_local(expr, &[]) }
 #[rustfmt::skip]
 fn returns_manager(output: &ReturnType) -> bool { matches!(output, ReturnType::Type(_, ty) if is_manager_type(ty)) }
+
+#[rustfmt::skip] fn item_attrs(item: &syn::Item) -> Option<&[syn::Attribute]> { match item { syn::Item::Const(item) => Some(&item.attrs), syn::Item::Enum(item) => Some(&item.attrs), syn::Item::ExternCrate(item) => Some(&item.attrs), syn::Item::Fn(item) => Some(&item.attrs), syn::Item::ForeignMod(item) => Some(&item.attrs), syn::Item::Impl(item) => Some(&item.attrs), syn::Item::Macro(item) => Some(&item.attrs), syn::Item::Mod(item) => Some(&item.attrs), syn::Item::Static(item) => Some(&item.attrs), syn::Item::Struct(item) => Some(&item.attrs), syn::Item::Trait(item) => Some(&item.attrs), syn::Item::TraitAlias(item) => Some(&item.attrs), syn::Item::Type(item) => Some(&item.attrs), syn::Item::Union(item) => Some(&item.attrs), syn::Item::Use(item) => Some(&item.attrs), _ => None } }
 
 #[rustfmt::skip]
 fn manager_fields(source: &str) -> Result<Vec<String>, syn::Error> {
@@ -306,6 +300,7 @@ struct BoundaryVisitor {
     context: Vec<String>,
     violations: Vec<String>,
     manager_fields: Vec<String>,
+    default_locals: Vec<String>,
 }
 
 impl BoundaryVisitor {
@@ -325,6 +320,7 @@ impl BoundaryVisitor {
 
 #[rustfmt::skip]
 impl<'ast> Visit<'ast> for BoundaryVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) { if item_attrs(item).is_some_and(has_test_cfg) { return; } visit::visit_item(self, item); }
     fn visit_item_use(&mut self, item: &'ast ItemUse) {
         let mut aliases = Vec::new();
         collect_manager_aliases(&item.tree, false, &mut aliases);
@@ -372,24 +368,24 @@ impl<'ast> Visit<'ast> for BoundaryVisitor {
     fn visit_expr_struct(&mut self, expression: &'ast ExprStruct) {
         for field in &expression.fields {
             let name = match &field.member { syn::Member::Named(name) => ident_text(name), syn::Member::Unnamed(_) => continue };
-            if self.manager_fields.contains(&name) && uses_default(&field.expr) {
+            if self.manager_fields.contains(&name) && uses_default_or_local(&field.expr, &self.default_locals) {
                 self.record(format!("policy-less Default construction for GlobalPoolManager field {name}"));
             }
         }
         visit::visit_expr_struct(self, expression);
     }
 
-    fn visit_local(&mut self, local: &'ast Local) { let manager = match &local.pat { Pat::Type(pat) => is_manager_type(&pat.ty), Pat::Ident(pat) => self.manager_fields.contains(&ident_text(&pat.ident)), _ => false }; if manager && local.init.as_ref().is_some_and(|init| uses_default(&init.expr)) { self.record("policy-less Default construction for GlobalPoolManager local".into()); } visit::visit_local(self, local); }
+    fn visit_local(&mut self, local: &'ast Local) { if has_test_cfg(&local.attrs) { return; } let name = match &local.pat { Pat::Ident(pat) => Some(ident_text(&pat.ident)), Pat::Type(pat) => match &*pat.pat { Pat::Ident(pat) => Some(ident_text(&pat.ident)), _ => None }, _ => None }; if let Some(name) = &name { self.default_locals.retain(|local| local != name); } let inferred_default = local.init.as_ref().is_some_and(|init| uses_default_or_local(&init.expr, &self.default_locals)); let manager = match &local.pat { Pat::Type(pat) => is_manager_type(&pat.ty), Pat::Ident(pat) => self.manager_fields.contains(&ident_text(&pat.ident)), _ => false }; if inferred_default { if manager { self.record("policy-less Default construction for GlobalPoolManager local".into()); } self.default_locals.extend(name); } visit::visit_local(self, local); }
 
     fn visit_item_const(&mut self, item: &'ast ItemConst) { if is_manager_type(&item.ty) && uses_default(&item.expr) { self.record("policy-less Default construction for GlobalPoolManager const".into()); } visit::visit_item_const(self, item); }
 
     fn visit_item_static(&mut self, item: &'ast ItemStatic) { if is_manager_type(&item.ty) && uses_default(&item.expr) { self.record("policy-less Default construction for GlobalPoolManager static".into()); } visit::visit_item_static(self, item); }
 
-    fn visit_expr_closure(&mut self, expression: &'ast ExprClosure) { if returns_manager(&expression.output) && uses_default(&expression.body) { self.record("policy-less Default construction for GlobalPoolManager closure".into()); } visit::visit_expr_closure(self, expression); }
+    fn visit_expr_closure(&mut self, expression: &'ast ExprClosure) { if returns_manager(&expression.output) && uses_default(&expression.body) { self.record("policy-less Default construction for GlobalPoolManager closure".into()); } let outer = std::mem::take(&mut self.default_locals); visit::visit_expr_closure(self, expression); self.default_locals = outer; }
 
-    fn visit_item_fn(&mut self, item: &'ast ItemFn) { self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } visit::visit_item_fn(self, item); self.context.pop(); }
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) { self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false, &[]); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } let outer = std::mem::take(&mut self.default_locals); visit::visit_item_fn(self, item); self.default_locals = outer; self.context.pop(); }
 
-    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) { self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } visit::visit_impl_item_fn(self, item); self.context.pop(); }
+    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) { if has_test_cfg(&item.attrs) { return; } self.context.push(ident_text(&item.sig.ident)); let mut defaults = DefaultFinder(false, &[]); defaults.visit_block(&item.block); if returns_manager(&item.sig.output) && defaults.0 { self.record("policy-less Default construction for GlobalPoolManager return".into()); } let outer = std::mem::take(&mut self.default_locals); visit::visit_impl_item_fn(self, item); self.default_locals = outer; self.context.pop(); }
 
     fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
         self.context.push(
@@ -449,7 +445,7 @@ fn boundary_violations(source: &str, module_path: &[&str], manager_fields: &[Str
     let file = syn::parse_file(source)?;
     let mut visitor = BoundaryVisitor {
         module_path: module_path.iter().map(|segment| (*segment).to_string()).collect(),
-        context: Vec::new(), violations: Vec::new(), manager_fields: manager_fields.to_vec(),
+        context: Vec::new(), violations: Vec::new(), manager_fields: manager_fields.to_vec(), default_locals: Vec::new(),
     };
     visitor.visit_file(&file);
     Ok(visitor.violations)
@@ -547,7 +543,7 @@ fn collect_production_sources(
 fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
     let manager_fields = vec!["pool_manager".to_string()];
     let allowed = boundary_violations(
-        "use crate::core::providers::base::{BaseConfig, r#BaseHttpClient, header};",
+        "use crate::core::providers::base::{BaseConfig, r#BaseHttpClient, header}; #[cfg(test)] fn mock() { reqwest::Client::new(); }",
         &["crate", "core", "providers", "mistral"],
         &manager_fields,
     )
@@ -587,6 +583,8 @@ fn provider_runtime_http_boundary_guard_rejects_forbidden_spellings() {
         "fn legacy() -> crate::core::providers::base::GlobalPoolManager { Default::default() }",
         "fn legacy() { let pool_manager: crate::core::providers::base::GlobalPoolManager = Default::default(); consume(pool_manager); }",
         "macro_rules! manager_type { () => { crate::core::providers::base::GlobalPoolManager } } type Pool = manager_type!();",
+        "struct Provider { pool_manager: crate::core::providers::base::GlobalPoolManager } impl Provider { fn new() -> Self { let manager = Default::default(); Self { pool_manager: manager } } }",
+        "static FACTORY: fn() -> crate::core::providers::base::GlobalPoolManager = || Default::default();",
     ] {
         let violations = boundary_violations(
             bypass,
