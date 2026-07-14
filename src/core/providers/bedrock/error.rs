@@ -11,6 +11,32 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 pub struct BedrockErrorMapper;
 
+impl BedrockErrorMapper {
+    pub(crate) fn map_service_error(
+        error_code: &str,
+        error_message: &str,
+    ) -> Option<ProviderError> {
+        let details = format!("{error_code}: {error_message}");
+        match error_code.to_ascii_lowercase().as_str() {
+            "validationexception" => Some(ProviderError::invalid_request("bedrock", details)),
+            "unauthorizedexception" | "accessdeniedexception" => {
+                Some(ProviderError::authentication("bedrock", details))
+            }
+            "throttlingexception" | "servicequotaexceededexception" => {
+                Some(ProviderError::rate_limit("bedrock", None))
+            }
+            "modelnotreadyexception" | "resourcenotfoundexception" => {
+                Some(ProviderError::model_not_found("bedrock", details))
+            }
+            "badgatewayexception" => Some(ProviderError::network("bedrock", details)),
+            "conflictexception" => Some(ProviderError::api_error("bedrock", 409, details)),
+            "dependencyfailedexception" => Some(ProviderError::api_error("bedrock", 424, details)),
+            "internalserverexception" => Some(ProviderError::api_error("bedrock", 500, details)),
+            _ => None,
+        }
+    }
+}
+
 impl ErrorMapper<ProviderError> for BedrockErrorMapper {
     fn map_http_error(&self, status_code: u16, response_body: &str) -> ProviderError {
         match status_code {
@@ -52,32 +78,13 @@ impl ErrorMapper<ProviderError> for BedrockErrorMapper {
                 .and_then(|m| m.as_str())
                 .unwrap_or("Unknown error");
 
-            match error_code {
-                "ValidationException" => ProviderError::invalid_request(
-                    "bedrock",
-                    format!("Validation error: {}", error_message),
-                ),
-                "UnauthorizedException" => ProviderError::authentication(
-                    "bedrock",
-                    format!("Unauthorized: {}", error_message),
-                ),
-                "ThrottlingException" => ProviderError::rate_limit("bedrock", None),
-                "ModelNotReadyException" => ProviderError::model_not_found(
-                    "bedrock",
-                    format!("Model not ready: {}", error_message),
-                ),
-                "ServiceQuotaExceededException" => ProviderError::rate_limit("bedrock", None),
-                "InternalServerException" => ProviderError::api_error(
-                    "bedrock",
-                    500,
-                    format!("Internal server error: {}", error_message),
-                ),
-                _ => ProviderError::api_error(
+            Self::map_service_error(error_code, error_message).unwrap_or_else(|| {
+                ProviderError::api_error(
                     "bedrock",
                     400,
                     format!("{}: {}", error_code, error_message),
-                ),
-            }
+                )
+            })
         } else {
             ProviderError::response_parsing("bedrock", "Unknown error response format".to_string())
         }

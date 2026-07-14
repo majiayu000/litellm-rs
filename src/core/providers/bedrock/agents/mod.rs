@@ -68,14 +68,12 @@ pub struct AgentInvocationResult {
 
 impl AgentInvocationResult {
     fn into_legacy_response(self) -> Result<AgentInvocationResponse, ProviderError> {
-        if self.memory_id.is_some()
-            || !self.attributions.is_empty()
-            || self.return_control.is_some()
-            || !self.files.is_empty()
+        if self.completion.text.is_empty()
+            && (self.return_control.is_some() || !self.files.is_empty())
         {
             return Err(ProviderError::response_parsing(
                 "bedrock",
-                "agent response contains extended metadata; use AgentClient::invoke_detailed",
+                "agent response has no text completion; use AgentClient::invoke_detailed",
             ));
         }
         Ok(AgentInvocationResponse {
@@ -248,7 +246,10 @@ impl<'a> AgentClient<'a> {
         Self { client }
     }
 
-    /// Invoke an agent
+    /// Invoke an agent using the legacy response shape.
+    ///
+    /// Successful memory, attribution, return-control, and file metadata is omitted when text is
+    /// available. Use [`Self::invoke_detailed`] to preserve those fields.
     pub async fn invoke(
         &self,
         agent_id: &str,
@@ -353,6 +354,25 @@ mod tests {
         }
     }
 
+    fn exception_message(exception_type: &str, payload: Value) -> EventStreamMessage {
+        EventStreamMessage {
+            headers: vec![
+                super::super::streaming::EventStreamHeader {
+                    name: ":message-type".to_string(),
+                    value: super::super::streaming::HeaderValue::String("exception".to_string()),
+                },
+                super::super::streaming::EventStreamHeader {
+                    name: ":exception-type".to_string(),
+                    value: super::super::streaming::HeaderValue::String(exception_type.to_string()),
+                },
+            ],
+            payload: bytes::Bytes::from(
+                serde_json::to_vec(&payload)
+                    .unwrap_or_else(|error| panic!("exception should serialize: {error}")),
+            ),
+        }
+    }
+
     fn finish(value: AgentResponseAccumulator) -> Result<AgentInvocationResult, ProviderError> {
         value.finish("session-1".to_string(), None)
     }
@@ -384,6 +404,89 @@ mod tests {
         };
 
         assert_eq!(response.completion.text, "hello");
+    }
+
+    #[test]
+    fn legacy_conversion_keeps_successful_text_when_extended_metadata_is_present() {
+        let result = AgentInvocationResult {
+            completion: AgentCompletion {
+                text: "hello".to_string(),
+            },
+            session_id: "session-1".to_string(),
+            memory_id: Some("memory-1".to_string()),
+            session_state: None,
+            trace: None,
+            attributions: vec![serde_json::json!({"citations": []})],
+            return_control: None,
+            files: Vec::new(),
+        };
+
+        let response = result
+            .into_legacy_response()
+            .unwrap_or_else(|error| panic!("successful legacy response must not fail: {error}"));
+        assert_eq!(response.completion.text, "hello");
+        assert_eq!(response.session_id, "session-1");
+    }
+
+    #[test]
+    fn legacy_conversion_rejects_control_only_successes() {
+        for (return_control, files) in [
+            (
+                Some(serde_json::json!({"invocationId": "invoke-1"})),
+                Vec::new(),
+            ),
+            (None, vec![serde_json::json!({"name": "report.csv"})]),
+        ] {
+            let result = AgentInvocationResult {
+                completion: AgentCompletion {
+                    text: String::new(),
+                },
+                session_id: "session-1".to_string(),
+                memory_id: None,
+                session_state: None,
+                trace: None,
+                attributions: Vec::new(),
+                return_control,
+                files,
+            };
+
+            let error = result
+                .into_legacy_response()
+                .expect_err("control-only response cannot be represented by legacy API");
+            assert!(error.to_string().contains("invoke_detailed"), "{error}");
+        }
+    }
+
+    #[test]
+    fn agent_error_events_keep_provider_error_categories() {
+        let cases = [
+            (
+                "throttlingException",
+                ProviderError::rate_limit("bedrock", None),
+            ),
+            (
+                "validationException",
+                ProviderError::invalid_request("bedrock", "invalid input"),
+            ),
+            (
+                "accessDeniedException",
+                ProviderError::authentication("bedrock", "denied"),
+            ),
+        ];
+
+        for (event_type, expected) in cases {
+            let error = AgentResponseAccumulator::default()
+                .consume(exception_message(
+                    event_type,
+                    serde_json::json!({"message": "request failed"}),
+                ))
+                .expect_err("agent error event must fail");
+            assert_eq!(
+                std::mem::discriminant(&error),
+                std::mem::discriminant(&expected),
+                "unexpected category for {event_type}: {error}"
+            );
+        }
     }
 
     #[test]
