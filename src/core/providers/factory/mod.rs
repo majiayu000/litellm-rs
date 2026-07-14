@@ -95,6 +95,18 @@ pub(crate) fn selector_allows_implicit_private_endpoint(selector: &str) -> bool 
         .is_some_and(|url| url.host_str() == Some("localhost"))
 }
 
+pub(crate) fn config_has_explicit_endpoint(config: &serde_json::Value) -> bool {
+    let has_url = |key| {
+        config
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    };
+    config.get("endpoint_access").is_some_and(|v| !v.is_null())
+        || has_url("base_url")
+        || has_url("api_base")
+}
+
 /// Create a provider from configuration
 ///
 /// This is the main factory function for creating providers
@@ -114,7 +126,7 @@ pub async fn create_provider(
         project,
         timeout,
         max_retries,
-        settings,
+        mut settings,
         models,
         ..
     } = config;
@@ -124,7 +136,12 @@ pub async fn create_provider(
     } else {
         provider_type.as_str()
     };
-    let settings_endpoint = settings.contains_key("base_url") || settings.contains_key("api_base");
+    let settings_endpoint = ["base_url", "api_base"].into_iter().any(|key| {
+        settings
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    });
     if settings.contains_key("endpoint_access") {
         return Err(ProviderError::configuration(
             "provider",
@@ -137,8 +154,19 @@ pub async fn create_provider(
         } else {
             Some(api_key.clone())
         };
-        let mut oai_config =
-            def.to_openai_like_config(effective_key.as_deref(), base_url.as_deref());
+        let settings_base_url = ["base_url", "api_base"]
+            .into_iter()
+            .filter_map(|key| settings.remove(key))
+            .find_map(|value| {
+                value
+                    .as_str()
+                    .filter(|url| !url.trim().is_empty())
+                    .map(str::to_owned)
+            });
+        let mut oai_config = def.to_openai_like_config(
+            effective_key.as_deref(),
+            base_url.as_deref().or(settings_base_url.as_deref()),
+        );
         oai_config.base.endpoint_access = endpoint_access;
         oai_config.base.timeout = timeout;
         oai_config.base.max_retries = max_retries;

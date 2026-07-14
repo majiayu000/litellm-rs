@@ -166,9 +166,19 @@ impl Validate for ProviderConfig {
                 self.name
             ));
         }
-        let has_configured_endpoint = self.base_url.is_some()
-            || self.settings.contains_key("base_url")
-            || self.settings.contains_key("api_base");
+        let setting_url = |key| {
+            self.settings
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|url| !url.trim().is_empty())
+        };
+        let configured_endpoint = self
+            .base_url
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| setting_url("base_url"))
+            .or_else(|| setting_url("api_base"));
+        let has_configured_endpoint = configured_endpoint.is_some();
         if (self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
             || has_configured_endpoint)
             && !crate::core::providers::factory::is_provider_endpoint_access_supported(
@@ -181,7 +191,7 @@ impl Validate for ProviderConfig {
             ));
         }
         if self.endpoint_access == crate::core::net::ProviderEndpointAccess::PrivateNetwork
-            && self.base_url.is_none()
+            && !has_configured_endpoint
             && !crate::core::providers::factory::selector_allows_implicit_private_endpoint(
                 provider_selector,
             )
@@ -230,7 +240,7 @@ impl Validate for ProviderConfig {
         }
 
         // Validate base URL if present (with SSRF protection)
-        if let Some(base_url) = &self.base_url {
+        if let Some(base_url) = configured_endpoint {
             let endpoint = url::Url::parse(base_url)
                 .map_err(|error| format!("Provider {} base URL is invalid: {error}", self.name))?;
             if !matches!(endpoint.scheme(), "http" | "https") {

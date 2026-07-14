@@ -50,11 +50,7 @@ impl Provider {
         config: serde_json::Value,
     ) -> Result<Self, ProviderError> {
         if !super::provider_type_supports_endpoint_access(&provider_type)
-            && config
-                .get("endpoint_access")
-                .or_else(|| config.get("base_url"))
-                .or_else(|| config.get("api_base"))
-                .is_some()
+            && super::config_has_explicit_endpoint(&config)
         {
             return Err(ProviderError::configuration(
                 super::provider_diagnostic_name(&provider_type),
@@ -552,7 +548,7 @@ mod tests {
     async fn test_from_config_async_cloudflare_accepts_alias_fields() {
         let config = serde_json::json!({
             "organization": "acct-alias",
-            "api_key": "token-alias"
+            "api_key": "token-alias", "api_base": null
         });
 
         let provider = Provider::from_config_async(ProviderType::Cloudflare, config)

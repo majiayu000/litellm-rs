@@ -363,7 +363,7 @@ impl GlobalPoolManager {
         provider: &'static str,
         config: BaseConfig,
     ) -> Result<Self, ProviderError> {
-        let streaming_header_timeout = Duration::from_secs(config.timeout);
+        let streaming_header_timeout = Duration::from_secs(STREAMING_HEADER_TIMEOUT_SECS);
         let ordinary = BaseHttpClient::new_for_provider(provider, config.clone())?;
         let streaming = BaseHttpClient::new_for_provider_streaming(provider, config)?;
         Ok(Self {
@@ -627,6 +627,18 @@ mod tests {
     async fn test_global_manager() {
         let manager = GlobalPoolManager::new();
         assert!(manager.is_ok());
+        let config = BaseConfig {
+            timeout: 1,
+            ..Default::default()
+        };
+        let policy = GlobalPoolManager::new_for_provider("test", config)
+            .unwrap()
+            .policy
+            .unwrap();
+        assert_eq!(
+            policy.streaming_header_timeout,
+            Duration::from_secs(STREAMING_HEADER_TIMEOUT_SECS)
+        );
     }
 
     #[tokio::test]

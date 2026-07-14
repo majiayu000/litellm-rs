@@ -421,19 +421,15 @@ fn test_factory_endpoint_access_defaults_and_rejects_invalid_values() {
         assert!(error.to_string().contains("invalid endpoint_access"));
     }
 }
-
 #[tokio::test]
 async fn test_gateway_and_direct_registry_endpoint_access_contract() {
     let mut config = crate::config::models::provider::ProviderConfig {
-        name: "test-openai-like".to_string(),
+        name: "openai-compatible-test".to_string(),
         provider_type: "openai_compatible".to_string(),
+        api_key: "test-key".to_string(),
         base_url: Some("https://api.example.com/v1".to_string()),
         ..Default::default()
     };
-    config
-        .settings
-        .insert("skip_api_key".to_string(), serde_json::json!(true));
-
     let provider = create_provider(config.clone())
         .await
         .unwrap_or_else(|error| panic!("public-only Gateway config should work: {error}"));
@@ -444,11 +440,20 @@ async fn test_gateway_and_direct_registry_endpoint_access_contract() {
         provider.config().base.endpoint_access,
         ProviderEndpointAccess::PublicOnly
     );
-
     config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
-    config.base_url = Some("http://127.0.0.1/v1".to_string());
+    config.base_url = None;
+    config
+        .settings
+        .insert("api_base".into(), serde_json::json!("http://127.0.0.1/v1"));
+    assert!(crate::config::Validate::validate(&config).is_ok());
+    config
+        .settings
+        .insert("api_base".into(), serde_json::json!("wss://127.0.0.1/v1"));
+    assert!(crate::config::Validate::validate(&config).is_err());
+    config
+        .settings
+        .insert("api_base".into(), serde_json::json!("http://127.0.0.1/v1"));
     assert!(create_provider(config).await.is_ok());
-
     let mut settings_override = crate::config::models::provider::ProviderConfig {
         name: "openai".to_string(),
         provider_type: "openai".to_string(),
@@ -456,7 +461,7 @@ async fn test_gateway_and_direct_registry_endpoint_access_contract() {
         ..Default::default()
     };
     settings_override.settings.insert(
-        "endpoint_access".to_string(),
+        "endpoint_access".into(),
         serde_json::json!("private_network"),
     );
     let error = create_provider(settings_override)
@@ -464,7 +469,6 @@ async fn test_gateway_and_direct_registry_endpoint_access_contract() {
         .err()
         .unwrap_or_else(|| panic!("settings must not override endpoint access"));
     assert!(error.to_string().contains("top-level"));
-
     let provider = Provider::from_config_async(
         ProviderType::Custom("together".to_string()),
         serde_json::json!({"api_key": "x", "base_url": "http://127.0.0.1/v1",

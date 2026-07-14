@@ -607,6 +607,7 @@ impl LLMProvider for OpenAILikeProvider {
     }
 
     async fn health_check(&self) -> HealthStatus {
+        // Try to connect to the API base via pool_manager's client
         let url = format!("{}/models", self.config.get_api_base());
         match self
             .pool_manager
