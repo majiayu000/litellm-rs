@@ -1,9 +1,13 @@
 use super::*;
+use actix_web::body::MessageBody;
+use std::pin::Pin;
+use std::sync::atomic::Ordering;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     let selected = MockGeminiServer::launch().await;
+    let backup = MockGeminiServer::launch().await;
     let replacement = MockGeminiServer::launch().await;
     let configured = |name: &str, base_url: &str, api_key: &str, header_value: &str| {
         let mut provider = gemini_provider(name, base_url, Vec::new());
@@ -17,12 +21,15 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
         );
         provider
     };
-    let state = build_test_state(vec![configured(
-        "runtime-alias",
-        &selected.base_url,
-        "selected-runtime-key",
-        "selected-runtime-header",
-    )])
+    let state = build_test_state(vec![
+        configured(
+            "zz-primary",
+            &selected.base_url,
+            "selected-runtime-key",
+            "selected-runtime-header",
+        ),
+        configured("aa-backup", &backup.base_url, "backup-key", "backup-header"),
+    ])
     .await;
     state.budget_limits.providers.set_provider_limit(
         "gemini",
@@ -35,7 +42,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     let budget_limits = state.budget_limits.clone();
     let mut replaced_config = state.config().as_ref().clone();
     replaced_config.gateway.providers = vec![configured(
-        "runtime-alias",
+        "zz-primary",
         &replacement.base_url,
         "replacement-key",
         "replacement-header",
@@ -56,16 +63,32 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
+    let stream_response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent")
+            .set_json(gemini_body())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = test::read_body(stream_response).await;
+    assert!(String::from_utf8_lossy(&stream_body).contains("usageMetadata"));
     let requests = selected.requests();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].path_and_query,
         "/v1beta/models/gemini-3.1-flash-lite:generateContent?key=selected-runtime-key"
     );
     assert_eq!(
+        requests[1].path_and_query,
+        "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse&key=selected-runtime-key"
+    );
+    assert_eq!(
         requests[0].headers["x-custom-header"],
         "selected-runtime-header"
     );
+    assert!(backup.requests().is_empty());
     assert!(replacement.requests().is_empty());
     let provider_usage = budget_limits
         .providers
@@ -78,6 +101,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
         .expect("requested model budget should exist");
     assert!(model_usage.current_spend > 0.0);
     selected.shutdown().await;
+    backup.shutdown().await;
     replacement.shutdown().await;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -98,10 +122,13 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
             .expect("response should write");
     });
     let mut selected = gemini_provider(
-        "gemini",
+        "runtime-explicit",
         &format!("http://{address}"),
         vec!["gemini-3.1-flash-lite".to_string()],
     );
+    selected
+        .settings
+        .insert("provider_name".to_string(), json!("gemini"));
     selected.timeout = 2;
     let mut replacement = selected.clone();
     let state = build_test_state(vec![selected]).await;
@@ -128,6 +155,285 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(started.elapsed() >= Duration::from_millis(1_100));
     upstream.await.expect("delayed upstream should finish");
+}
+
+#[tokio::test]
+async fn gemini_sdk_route_accepts_only_closed_runtime_alias_set() {
+    let mock = MockGeminiServer::launch().await;
+    for (index, name) in ["gemini", "Google-AI", "google_ai_studio"]
+        .into_iter()
+        .enumerate()
+    {
+        let state = build_test_state(vec![gemini_provider(name, &mock.base_url, Vec::new())]).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1beta/models/gemini-3.1-flash-lite:generateContent")
+                .set_json(gemini_body())
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "alias {name}");
+        assert_eq!(mock.requests().len(), index + 1, "alias {name}");
+    }
+
+    let rejected = ["openai", "my-gemini-proxy", "g.e.m.i.n.i"]
+        .into_iter()
+        .map(|name| gemini_provider(name, &mock.base_url, Vec::new()))
+        .collect();
+    let state = build_test_state(rejected).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1beta/models/gemini-3.1-flash-lite:generateContent")
+            .set_json(gemini_body())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(mock.requests().len(), 3);
+    mock.shutdown().await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn gemini_sdk_route_accepts_native_gemini_runtime() {
+    let mock = MockGeminiServer::launch().await;
+    let mut provider = gemini_provider(
+        "native-gemini",
+        &mock.base_url,
+        vec!["gemini-3.1-flash-lite".to_string()],
+    );
+    provider.provider_type = "gemini".to_string();
+    let state = build_test_state(vec![provider]).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1beta/models/gemini-3.1-flash-lite:generateContent")
+            .set_json(gemini_body())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(mock.requests().len(), 1);
+
+    let mut unrelated = gemini_provider(
+        "native-registry",
+        &mock.base_url,
+        vec!["gemini-3.1-flash-lite".to_string()],
+    );
+    unrelated.provider_type = "gemini".to_string();
+    let state = build_test_state(vec![unrelated]).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1beta/models/gemini-unrelated-model:generateContent")
+            .set_json(gemini_body())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(mock.requests().len(), 1);
+    mock.shutdown().await;
+}
+
+#[tokio::test]
+async fn gemini_sdk_route_source_has_one_runtime_sender_and_no_config_adapter() {
+    let route = include_str!("../../src/server/routes/ai/gemini.rs");
+    let provider = include_str!("../../src/server/routes/ai/gemini/provider.rs");
+    let spend = include_str!("../../src/server/routes/ai/gemini/spend.rs");
+    let source = format!("{route}\n{provider}\n{spend}");
+    for forbidden in [
+        "state.config().providers()",
+        ".gateway.providers",
+        ".providers()",
+        "RouteHttpClient",
+        "ProviderConfig",
+        "create_provider(",
+        "BaseHttpClient",
+        "reqwest::Client",
+        "Client::new(",
+        "GeminiClient::new(",
+        "OpenAILikeProvider::new(",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "forbidden Gemini route source: {forbidden}"
+        );
+    }
+    let adapter = provider
+        .split("pub(super) struct GeminiRouteProvider")
+        .nth(1)
+        .expect("route adapter declaration")
+        .split("impl GeminiRouteProvider")
+        .next()
+        .expect("route adapter fields");
+    for sensitive in ["api_key", "base_url", "headers", "timeout", "client"] {
+        assert!(!adapter.contains(sensitive), "adapter retains {sensitive}");
+    }
+    assert_eq!(source.matches(".gemini_generate_content(").count(), 1);
+    assert_eq!(
+        source
+            .matches("selected_provider.gemini_generate_content(native_request)")
+            .count(),
+        1
+    );
+    for alternate_sender in [
+        "Provider::gemini_generate_content(",
+        "GeminiProvider::gemini_generate_content(",
+        "OpenAILikeProvider::gemini_generate_content(",
+        ".execute_request(",
+        ".execute_streaming_request(",
+        ".post(",
+        ".request(",
+    ] {
+        assert!(
+            !source.contains(alternate_sender),
+            "alternate sender: {alternate_sender}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn gemini_sdk_stream_client_cancel_is_health_neutral_and_settles_observed_spend() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("cancel upstream should bind");
+    let address = listener.local_addr().expect("cancel upstream address");
+    let (continue_tx, continue_rx) = tokio::sync::oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("request should connect");
+        let mut request = [0_u8; 4096];
+        socket
+            .read_exact(&mut request[..1])
+            .await
+            .expect("request should read");
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .expect("headers should write");
+        let first = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"observed\"}]}}],",
+            "\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":5,",
+            "\"totalTokenCount\":15}}\n\n"
+        );
+        socket
+            .write_all(format!("{:x}\r\n{first}\r\n", first.len()).as_bytes())
+            .await
+            .expect("observed chunk should write");
+        continue_rx
+            .await
+            .expect("client cancellation should release upstream");
+        let second = "data: {\"candidates\":[]}\n\n";
+        let _ = socket
+            .write_all(format!("{:x}\r\n{second}\r\n0\r\n\r\n", second.len()).as_bytes())
+            .await;
+    });
+    let state = build_test_state(vec![gemini_provider(
+        "gemini",
+        &format!("http://{address}"),
+        vec!["gemini-3.1-flash-lite".to_string()],
+    )])
+    .await;
+    state.budget_limits.providers.set_provider_limit(
+        "gemini",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    state.budget_limits.models.set_model_limit(
+        "gemini-3.1-flash-lite",
+        ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let budget_limits = state.budget_limits.clone();
+    let deployment = state
+        .unified_router
+        .get_deployment("gemini-gemini-3.1-flash-lite")
+        .expect("runtime deployment");
+    let successes = deployment.state.success_requests.load(Ordering::Relaxed);
+    let failures = deployment.state.fail_requests.load(Ordering::Relaxed);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent")
+            .set_json(gemini_body())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    let observed =
+        futures::future::poll_fn(|context| MessageBody::poll_next(Pin::new(&mut body), context))
+            .await
+            .expect("stream should yield")
+            .expect("observed chunk should be valid");
+    assert!(String::from_utf8_lossy(&observed).contains("usageMetadata"));
+    drop(body);
+    continue_tx
+        .send(())
+        .expect("cancelled client should release upstream");
+    upstream.await.expect("cancel upstream should finish");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while deployment.state.active_requests.load(Ordering::Relaxed) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled stream lease should release");
+    assert_eq!(
+        deployment.state.success_requests.load(Ordering::Relaxed),
+        successes
+    );
+    assert_eq!(
+        deployment.state.fail_requests.load(Ordering::Relaxed),
+        failures
+    );
+    assert!(
+        budget_limits
+            .providers
+            .get_provider_usage("gemini")
+            .expect("observed provider spend")
+            .current_spend
+            > 0.0
+    );
+    assert!(
+        budget_limits
+            .models
+            .get_model_usage("gemini-3.1-flash-lite")
+            .expect("observed model spend")
+            .current_spend
+            > 0.0
+    );
 }
 
 #[tokio::test]
@@ -268,6 +574,12 @@ async fn gemini_sdk_stream_route_releases_budget_on_midstream_read_error() {
         ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
     let budget_limits = state.budget_limits.clone();
+    let deployment = state
+        .unified_router
+        .get_deployment("gemini-gemini-3.1-flash-lite")
+        .expect("runtime deployment");
+    let successes = deployment.state.success_requests.load(Ordering::Relaxed);
+    let failures = deployment.state.fail_requests.load(Ordering::Relaxed);
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(state))
@@ -299,6 +611,15 @@ async fn gemini_sdk_stream_route_releases_budget_on_midstream_read_error() {
         .get_model_usage("gemini-3.1-flash-lite")
         .expect("model budget should exist");
     assert_eq!(model_usage.current_spend, 0.0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        deployment.state.success_requests.load(Ordering::Relaxed),
+        successes
+    );
+    assert_eq!(
+        deployment.state.fail_requests.load(Ordering::Relaxed),
+        failures + 1
+    );
 
     broken.shutdown().await;
 }

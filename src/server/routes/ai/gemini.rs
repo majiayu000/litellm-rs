@@ -20,9 +20,8 @@ use super::openai_errors;
 mod provider;
 mod spend;
 use provider::{
-    GeminiRouteProvider, ensure_gemini_provider_candidate_configured,
-    gemini_gateway_error_to_provider_error, gemini_http_error, gemini_router_models,
-    missing_gemini_provider_error, send_gemini_request,
+    GeminiRouteProvider, gemini_gateway_error_to_provider_error, gemini_http_error,
+    gemini_router_models, missing_gemini_provider_error, send_gemini_request,
 };
 use spend::{
     GeminiSpendState, extract_gemini_sse_usage, record_gemini_spend, settle_gemini_stream_spend,
@@ -132,7 +131,6 @@ async fn proxy_gemini_route_inner(
         gemini_requested_max_output_tokens(&request),
     )?;
 
-    ensure_gemini_provider_candidate_configured(state.config().providers(), &requested_model)?;
     if stream {
         return proxy_gemini_stream_route_inner(
             state,
@@ -145,7 +143,7 @@ async fn proxy_gemini_route_inner(
         .await;
     }
 
-    let router_models = gemini_router_models(state.config().providers(), &requested_model);
+    let router_models = gemini_router_models(&state.unified_router, &requested_model);
 
     let mut last_router_error = None;
     for router_model in router_models {
@@ -227,7 +225,7 @@ async fn proxy_gemini_stream_route_inner(
     method: &'static str,
     request: Value,
 ) -> Result<HttpResponse, GatewayError> {
-    let router_models = gemini_router_models(state.config().providers(), &requested_model);
+    let router_models = gemini_router_models(&state.unified_router, &requested_model);
     let api_key_budget_id = context.api_key_budget_id();
     let mut last_router_error = None;
     for router_model in router_models {
