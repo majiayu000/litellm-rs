@@ -95,18 +95,24 @@ impl OpenAILikeProvider {
             Self::map_gemini_stream_response(
                 tokio::time::timeout(
                     Duration::from_secs(self.config.base.timeout),
-                    self.pool_manager.execute_streaming_request(
-                        url.as_str(),
-                        headers,
-                        request.body,
-                        "gemini_proxy",
-                    ),
+                    self.pool_manager
+                        .execute_streaming_request_preserving_endpoint_policy(
+                            url.as_str(),
+                            headers,
+                            request.body,
+                            "gemini_proxy",
+                        ),
                 )
                 .await,
             )?
         } else {
             self.pool_manager
-                .execute_request(url.as_str(), HttpMethod::POST, headers, Some(request.body))
+                .execute_request_preserving_endpoint_policy(
+                    url.as_str(),
+                    HttpMethod::POST,
+                    headers,
+                    Some(request.body),
+                )
                 .await
                 .map_err(gemini_openai_like_transport_error)?
         };
@@ -575,21 +581,9 @@ fn gemini_openai_like_transport_error(error: ProviderError) -> ProviderError {
         ProviderError::Configuration { message, .. } => {
             ProviderError::configuration("gemini_proxy", message)
         }
-        ProviderError::Network { message, .. } if is_gemini_endpoint_policy_error(&message) => {
-            ProviderError::configuration(
-                "gemini_proxy",
-                "Gemini endpoint rejected by SSRF protection",
-            )
-        }
         ProviderError::Timeout { .. } => gemini_transport_error(true),
         _ => gemini_transport_error(false),
     }
-}
-
-fn is_gemini_endpoint_policy_error(message: &str) -> bool {
-    message.starts_with("Outbound URL ")
-        || message.starts_with("error following redirect for url")
-        || message.contains("SSRF protection")
 }
 
 fn sanitized_upstream_error(status: u16) -> String {

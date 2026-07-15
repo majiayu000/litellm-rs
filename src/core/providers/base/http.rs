@@ -12,6 +12,8 @@ use crate::core::providers::base::connection_pool::HeaderPair;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::utils::net::http::{ProviderHttpClient, ProviderRequestBuilder};
 
+const ENDPOINT_POLICY_ERROR_MESSAGE: &str = "Provider endpoint rejected by SSRF protection";
+
 /// Base HTTP client wrapper used by provider implementations.
 #[derive(Debug, Clone)]
 pub struct BaseHttpClient {
@@ -109,6 +111,30 @@ impl BaseHttpClient {
         self.client
             .request(method, url)
             .map_err(|error| ProviderError::network(self.provider, error.to_string()))
+    }
+
+    pub(crate) fn request_preserving_endpoint_policy<U: IntoUrl>(
+        &self,
+        method: Method,
+        url: U,
+    ) -> Result<ProviderRequestBuilder, ProviderError> {
+        self.client.request(method, url).map_err(|error| {
+            if error.is_endpoint_policy() {
+                ProviderError::configuration(self.provider, ENDPOINT_POLICY_ERROR_MESSAGE)
+            } else {
+                ProviderError::network(self.provider, error.to_string())
+            }
+        })
+    }
+
+    pub(crate) fn map_preserved_request_error(&self, error: reqwest::Error) -> ProviderError {
+        if ProviderHttpClient::request_error_is_endpoint_policy(&error) {
+            ProviderError::configuration(self.provider, ENDPOINT_POLICY_ERROR_MESSAGE)
+        } else if error.is_timeout() {
+            ProviderError::timeout(self.provider, "Provider request timed out")
+        } else {
+            ProviderError::network(self.provider, error.to_string())
+        }
     }
 
     /// Create a policy-checked GET request builder.
@@ -451,6 +477,26 @@ mod tests {
             .unwrap_or_else(|| panic!("cross-authority request must fail"));
         assert!(matches!(error, ProviderError::Network { .. }));
         assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn typed_request_preserves_direct_endpoint_policy_error() {
+        let client = BaseHttpClient::new_for_provider(
+            "test",
+            BaseConfig {
+                api_base: Some("https://api.example.com/v1".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("public test client should build");
+        let error = match client
+            .request_preserving_endpoint_policy(Method::GET, "ftp://api.example.com/v1")
+        {
+            Err(error) => error,
+            Ok(_) => panic!("unsupported schemes must be rejected"),
+        };
+
+        assert!(matches!(error, ProviderError::Configuration { .. }));
     }
 
     #[test]

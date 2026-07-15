@@ -28,6 +28,7 @@ use reqwest::{
     Body, Client, ClientBuilder, IntoUrl, Method, RequestBuilder, Version, multipart, redirect,
 };
 use serde::Serialize;
+use std::error::Error as _;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
@@ -63,6 +64,35 @@ struct PolicyDnsResolver {
     resolver: Arc<dyn HostResolver>,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum ProviderEndpointPolicyRequestError {
+    #[error("Host resolution returned no addresses (SSRF protection)")]
+    EmptyDnsAnswer,
+    #[error("Host resolves to a disallowed address (SSRF protection)")]
+    DisallowedDnsAddress,
+    #[error("Redirect target failed SSRF validation")]
+    RedirectTarget,
+}
+
+fn reqwest_error_is_endpoint_policy(error: &reqwest::Error) -> bool {
+    let mut source = error.source();
+    while let Some(current) = source {
+        if current
+            .downcast_ref::<ProviderEndpointPolicyRequestError>()
+            .is_some()
+            || current
+                .downcast_ref::<io::Error>()
+                .and_then(io::Error::get_ref)
+                .and_then(|inner| inner.downcast_ref::<ProviderEndpointPolicyRequestError>())
+                .is_some()
+        {
+            return true;
+        }
+        source = current.source();
+    }
+    false
+}
+
 impl reqwest::dns::Resolve for PolicyDnsResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_owned();
@@ -85,7 +115,7 @@ fn validate_provider_addresses(
 ) -> io::Result<Vec<SocketAddr>> {
     if addrs.is_empty() {
         return Err(io::Error::other(
-            "Host resolution returned no addresses (SSRF protection)",
+            ProviderEndpointPolicyRequestError::EmptyDnsAnswer,
         ));
     }
     if addrs
@@ -93,7 +123,7 @@ fn validate_provider_addresses(
         .any(|addr| !is_provider_endpoint_ip_allowed(access, &addr.ip()))
     {
         return Err(io::Error::other(
-            "Host resolves to a disallowed address (SSRF protection)",
+            ProviderEndpointPolicyRequestError::DisallowedDnsAddress,
         ));
     }
     Ok(addrs)
@@ -101,8 +131,9 @@ fn validate_provider_addresses(
 
 fn ssrf_safe_redirect_policy() -> redirect::Policy {
     redirect::Policy::custom(|attempt| {
-        if let Err(error) = validate_outbound_url_without_resolution(attempt.url()) {
-            return attempt.error(format!("Redirect target failed SSRF validation: {error}"));
+        if validate_outbound_url_without_resolution(attempt.url()).is_err() {
+            debug!("blocked redirect target by outbound endpoint policy");
+            return attempt.error(ProviderEndpointPolicyRequestError::RedirectTarget);
         }
 
         redirect::Policy::limited(10).redirect(attempt)
@@ -115,8 +146,12 @@ fn provider_redirect_policy(policy: ProviderEndpointPolicy) -> redirect::Policy 
     }
 
     redirect::Policy::custom(move |attempt| {
-        if let Err(error) = policy.validate_url_without_resolution(attempt.url()) {
-            return attempt.error(format!("Redirect target failed SSRF validation: {error}"));
+        if policy
+            .validate_url_without_resolution(attempt.url())
+            .is_err()
+        {
+            debug!("blocked provider redirect target by endpoint policy");
+            return attempt.error(ProviderEndpointPolicyRequestError::RedirectTarget);
         }
         redirect::Policy::limited(10).redirect(attempt)
     })
@@ -128,6 +163,12 @@ pub enum ProviderHttpClientError {
     Endpoint(#[from] SsrfError),
     #[error(transparent)]
     Request(#[from] reqwest::Error),
+}
+
+impl ProviderHttpClientError {
+    pub(crate) fn is_endpoint_policy(&self) -> bool {
+        matches!(self, Self::Endpoint(_))
+    }
 }
 
 /// Request builder that cannot expose or replace its policy-bound HTTP client.
@@ -234,6 +275,10 @@ impl std::fmt::Debug for ProviderHttpClient {
 }
 
 impl ProviderHttpClient {
+    pub(crate) fn request_error_is_endpoint_policy(error: &reqwest::Error) -> bool {
+        reqwest_error_is_endpoint_policy(error)
+    }
+
     pub fn new(
         policy: ProviderEndpointPolicy,
         timeout: Duration,
@@ -690,10 +735,7 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.is_redirect(), "{error:?}");
-        assert!(
-            format!("{error:?}").contains("SSRF validation"),
-            "{error:?}"
-        );
+        assert!(reqwest_error_is_endpoint_policy(&error), "{error:?}");
         assert!(
             tokio::time::timeout(Duration::from_millis(100), target.accept())
                 .await

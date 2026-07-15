@@ -9,67 +9,24 @@ use tokio::net::{TcpListener, TcpStream};
 const TEST_PUBLIC_API_BASE: &str = "https://api.example.com/v1";
 
 #[test]
-fn gemini_transport_preserves_policy_configuration_errors() {
-    let raw_key = "secret/key+value";
-    let encoded_key: String = url::form_urlencoded::byte_serialize(raw_key.as_bytes()).collect();
-    let error = gemini_openai_like_transport_error(ProviderError::network(
+fn gemini_transport_preserves_typed_policy_configuration_errors() {
+    let error = gemini_openai_like_transport_error(ProviderError::configuration(
         "openai_like",
-        format!(
-            "blocked by SSRF protection at https://example.test?raw={raw_key}&encoded={encoded_key}"
-        ),
+        "Provider endpoint rejected by SSRF protection",
     ));
 
     assert!(matches!(error, ProviderError::Configuration { .. }));
     assert!(error.to_string().contains("SSRF protection"));
-    assert!(!error.to_string().contains(raw_key));
-    assert!(!error.to_string().contains(&encoded_key));
 }
 
 #[test]
-fn gemini_transport_classifies_direct_endpoint_policy_rejection() {
+fn gemini_transport_keeps_redirect_loops_retryable() {
     let error = gemini_openai_like_transport_error(ProviderError::network(
         "openai_like",
-        "Outbound URL scheme 'ftp' is not allowed",
+        "error following redirect for url (https://example.test/loop)",
     ));
 
-    assert!(matches!(error, ProviderError::Configuration { .. }));
-}
-
-#[tokio::test]
-async fn gemini_transport_classifies_reqwest_redirect_policy_rejection() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        read_full_http_request(&mut socket).await.unwrap();
-        socket
-            .write_all(
-                b"HTTP/1.1 302 Found\r\nlocation: https://example.test?key=secret-key\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
-    });
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            attempt.error("Redirect target failed SSRF validation: blocked")
-        }))
-        .build()
-        .unwrap();
-    let transport_error = client
-        .get(format!("http://{address}"))
-        .send()
-        .await
-        .unwrap_err();
-    task.await.unwrap();
-    let message = transport_error.to_string();
-    assert!(message.starts_with("error following redirect for url"));
-    assert!(!message.contains("Redirect target failed SSRF validation"));
-
-    let error = gemini_openai_like_transport_error(ProviderError::network("openai_like", message));
-
-    assert!(matches!(error, ProviderError::Configuration { .. }));
-    assert!(!error.to_string().contains("secret-key"));
-    assert!(!error.to_string().contains("example.test"));
+    assert!(matches!(error, ProviderError::Network { .. }));
 }
 
 #[test]
@@ -80,6 +37,49 @@ fn gemini_transport_redacts_network_error_details() {
     ));
 
     assert!(matches!(error, ProviderError::Network { .. }));
+    assert!(!error.to_string().contains("secret-key"));
+}
+
+fn endpoint_policy_pool() -> GlobalPoolManager {
+    GlobalPoolManager::new_for_provider(
+        "openai_like",
+        crate::core::providers::base::BaseConfig {
+            api_base: Some("https://api.example.com/v1".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("policy pool should build")
+}
+
+#[tokio::test]
+async fn gemini_unary_pool_preserves_direct_policy_rejection() {
+    let error = endpoint_policy_pool()
+        .execute_request_preserving_endpoint_policy(
+            "ftp://api.example.com/secret-key",
+            HttpMethod::POST,
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect_err("unsupported scheme must fail");
+
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(!error.to_string().contains("secret-key"));
+}
+
+#[tokio::test]
+async fn gemini_stream_pool_preserves_direct_policy_rejection() {
+    let error = endpoint_policy_pool()
+        .execute_streaming_request_preserving_endpoint_policy(
+            "ftp://api.example.com/secret-key",
+            Vec::new(),
+            serde_json::json!({}),
+            "gemini_proxy",
+        )
+        .await
+        .expect_err("unsupported scheme must fail");
+
+    assert!(matches!(error, ProviderError::Configuration { .. }));
     assert!(!error.to_string().contains("secret-key"));
 }
 

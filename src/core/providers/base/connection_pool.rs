@@ -14,33 +14,25 @@ use crate::utils::net::http::{
     HttpClientPoolConfig, create_custom_client_with_config, create_streaming_client,
 };
 
-/// Type alias for HTTP headers using Cow to avoid allocations for static strings.
-///
-/// Use `Cow::Borrowed("Header-Name")` for static strings and `Cow::Owned(value)` for dynamic values.
+/// HTTP headers that borrow static values when possible.
 pub type HeaderPair = (Cow<'static, str>, Cow<'static, str>);
 
-/// Helper to create a header from static key and dynamic value.
 #[inline]
 pub fn header(key: &'static str, value: String) -> HeaderPair {
     (Cow::Borrowed(key), Cow::Owned(value))
 }
 
-/// Helper to create a header from both static key and static value (zero allocation).
 #[inline]
 pub fn header_static(key: &'static str, value: &'static str) -> HeaderPair {
     (Cow::Borrowed(key), Cow::Borrowed(value))
 }
 
-/// Helper to create a header from both dynamic key and value.
 #[inline]
 pub fn header_owned(key: String, value: String) -> HeaderPair {
     (Cow::Owned(key), Cow::Owned(value))
 }
 
-/// Apply a list of `HeaderPair`s to a `reqwest::RequestBuilder`.
-///
-/// This bridges the `Vec<HeaderPair>` pattern with providers that still use
-/// `reqwest::Client` directly instead of `GlobalPoolManager`.
+/// Apply `HeaderPair`s to a raw request builder.
 #[inline]
 pub fn apply_headers(
     mut builder: reqwest::RequestBuilder,
@@ -60,7 +52,6 @@ pub enum HttpMethod {
     DELETE,
 }
 
-/// Unified connection pool configuration
 pub struct PoolConfig;
 impl PoolConfig {
     pub const TIMEOUT_SECS: u64 = 600;
@@ -115,10 +106,7 @@ fn pool_http_config() -> HttpClientPoolConfig {
     }
 }
 
-/// Global HTTP client singleton
-///
-/// This is the actual global singleton that holds the reqwest::Client.
-/// All providers share this single client instance for connection pooling efficiency.
+/// Global shared HTTP client.
 static GLOBAL_CLIENT: LazyLock<Arc<Client>> = LazyLock::new(|| {
     let client = create_custom_client_with_config(
         Duration::from_secs(PoolConfig::TIMEOUT_SECS),
@@ -139,76 +127,25 @@ static STREAMING_CLIENT: LazyLock<Arc<Client>> = LazyLock::new(|| {
     Arc::new(client)
 });
 
-/// Get the global HTTP client
-///
-/// Returns a reference to the shared global HTTP client instance.
-/// This is the preferred way to access the HTTP client for connection pooling.
+/// Get the global HTTP client.
 #[inline]
 pub fn global_client() -> Arc<Client> {
     Arc::clone(&GLOBAL_CLIENT)
 }
 
-/// Get a streaming-ready HTTP client
-///
-/// Returns the legacy bounded HTTP client for streaming requests.
-/// This should be used instead of ad hoc client construction for streaming
-/// to benefit from the streaming connection pool.
-///
-/// Existing callers still use this client directly with `.send().await`, so it
-/// must keep the global total timeout until callers migrate to
-/// `streaming_unbounded_client()` plus `send_streaming_request()`.
-///
-/// # Example
-///
-/// ```ignore
-/// use crate::core::providers::base::connection_pool::streaming_client;
-///
-/// // Use the shared legacy streaming client.
-/// let response = streaming_client()
-///     .post(&url)
-///     .headers(headers)
-///     .json(&body)
-///     .send()
-///     .await?;
-/// let stream = response.bytes_stream();
-/// ```
+/// Get the legacy bounded client used by direct streaming callers.
 #[inline]
 pub fn streaming_client() -> Arc<Client> {
     global_client()
 }
 
 /// Get an HTTP client for streaming bodies without a total request timeout.
-///
-/// Pair this with `send_streaming_request()` so only the pre-header request
-/// phase is bounded and the response body can stream indefinitely.
-///
-/// # Example
-///
-/// ```ignore
-/// use crate::core::providers::base::connection_pool::{
-///     send_streaming_request, streaming_unbounded_client,
-/// };
-///
-/// let response = send_streaming_request(
-///     streaming_unbounded_client()
-///         .post(&url)
-///         .headers(headers)
-///         .json(&body),
-///     "provider_name",
-/// )
-/// .await?;
-/// let stream = response.bytes_stream();
-/// ```
 #[inline]
 pub fn streaming_unbounded_client() -> Arc<Client> {
     Arc::clone(&STREAMING_CLIENT)
 }
 
 /// Send a streaming request with a bounded pre-header phase.
-///
-/// The timeout wraps only `RequestBuilder::send()`, which completes when
-/// response headers arrive. It does not impose a total timeout on the response
-/// body stream.
 pub async fn send_streaming_request(
     request_builder: RequestBuilder,
     provider: &'static str,
@@ -233,10 +170,6 @@ pub async fn send_streaming_request_with_timeout(
 }
 
 /// Read a non-success streaming response body with bounded time and memory.
-///
-/// Successful SSE bodies must stay unbounded, but error bodies are finite
-/// diagnostics. This prevents a provider that sends 4xx/5xx headers and then
-/// stalls the body from tying up the task forever.
 pub async fn read_streaming_error_body(
     response: Response,
 ) -> Result<String, StreamingRequestError> {
@@ -296,20 +229,14 @@ pub struct ConnectionPool {
 }
 
 impl ConnectionPool {
-    /// Create a new connection pool with optimized settings
-    ///
-    /// Note: This now uses the global client singleton instead of creating a new client.
-    /// For true isolation (rare use cases), use `new_isolated()`.
+    /// Create a connection pool backed by the global client.
     pub fn new() -> Result<Self, ProviderError> {
         Ok(Self {
             client: global_client(),
         })
     }
 
-    /// Create an isolated connection pool with its own client
-    ///
-    /// Use this only when you need a separate connection pool from the global one.
-    /// Most use cases should use `new()` which shares the global client.
+    /// Create an isolated connection pool with its own client.
     pub fn new_isolated() -> Result<Self, ProviderError> {
         let client = create_custom_client_with_config(
             Duration::from_secs(PoolConfig::TIMEOUT_SECS),
@@ -328,10 +255,7 @@ impl ConnectionPool {
     }
 }
 
-/// Global pool manager - single instance for all providers
-///
-/// This manager wraps the global connection pool singleton.
-/// Multiple `GlobalPoolManager` instances all share the same underlying HTTP client.
+/// Manager for the global or provider-policy-bound clients.
 #[derive(Debug, Clone)]
 pub struct GlobalPoolManager {
     pool: Arc<ConnectionPool>,
@@ -347,10 +271,7 @@ struct ProviderPool {
 }
 
 impl GlobalPoolManager {
-    /// Create a new global pool manager
-    ///
-    /// Note: This returns a manager that uses the global client singleton.
-    /// Creating multiple managers is cheap as they all share the same client.
+    /// Create a manager backed by the global client.
     pub fn new() -> Result<Self, ProviderError> {
         Ok(Self {
             pool: Arc::new(ConnectionPool::new()?),
@@ -446,6 +367,37 @@ impl GlobalPoolManager {
             .map_err(|e| ProviderError::network("common", e.to_string()))
     }
 
+    pub(crate) async fn execute_request_preserving_endpoint_policy(
+        &self,
+        url: &str,
+        method: HttpMethod,
+        headers: Vec<HeaderPair>,
+        body: Option<serde_json::Value>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let Some(policy) = &self.policy else {
+            return self.execute_request(url, method, headers, body).await;
+        };
+        let method = match method {
+            HttpMethod::GET => reqwest::Method::GET,
+            HttpMethod::POST => reqwest::Method::POST,
+            HttpMethod::PUT => reqwest::Method::PUT,
+            HttpMethod::DELETE => reqwest::Method::DELETE,
+        };
+        let mut request = policy
+            .ordinary
+            .request_preserving_endpoint_policy(method, url)?;
+        request = apply_provider_headers(request, headers);
+        if let Some(body) = body {
+            request = request
+                .header("Content-Type", "application/json")
+                .json(&body);
+        }
+        request
+            .send()
+            .await
+            .map_err(|error| policy.ordinary.map_preserved_request_error(error))
+    }
+
     /// Execute a policy-bound request while bounding only the response-header phase.
     pub async fn execute_streaming_request(
         &self,
@@ -470,6 +422,33 @@ impl GlobalPoolManager {
 
         let request = apply_headers(streaming_unbounded_client().post(url).json(&body), headers);
         send_streaming_request(request, legacy_provider).await
+    }
+
+    pub(crate) async fn execute_streaming_request_preserving_endpoint_policy(
+        &self,
+        url: &str,
+        headers: Vec<HeaderPair>,
+        body: serde_json::Value,
+        legacy_provider: &'static str,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let Some(policy) = &self.policy else {
+            return self
+                .execute_streaming_request(url, headers, body, legacy_provider)
+                .await;
+        };
+        let request = policy
+            .streaming
+            .request_preserving_endpoint_policy(reqwest::Method::POST, url)?;
+        let request = apply_provider_headers(request, headers).json(&body);
+        let timeout = policy.streaming_header_timeout;
+        match tokio::time::timeout(timeout, request.send()).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => Err(policy.streaming.map_preserved_request_error(error)),
+            Err(_) => Err(ProviderError::timeout(
+                policy.provider,
+                "Provider response header timeout",
+            )),
+        }
     }
 
     /// Get the underlying client for direct use
