@@ -1,4 +1,6 @@
 use super::*;
+use crate::core::providers::base::{BaseConfig, BaseHttpClient};
+use crate::core::providers::unified_provider::ProviderError;
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
@@ -6,6 +8,12 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 type ConnectorBoxError = Box<dyn std::error::Error + Send + Sync>;
+
+fn map_preserved_error(error: reqwest::Error) -> ProviderError {
+    BaseHttpClient::new_for_provider("test", BaseConfig::default())
+        .expect("test mapper should build")
+        .map_preserved_request_error(error)
+}
 
 fn error_chain_contains(error: &(dyn std::error::Error + 'static), expected: &str) -> bool {
     let mut current = Some(error);
@@ -204,6 +212,9 @@ async fn assert_public_rebind_is_blocked(
         "{mode:?} must fail in the DNS policy for {blocked_ip}, got {error:?}"
     );
     assert!(reqwest_error_is_endpoint_policy(&error), "{error:?}");
+    let mapped = map_preserved_error(error);
+    assert!(matches!(mapped, ProviderError::Configuration { .. }));
+    assert!(!mapped.to_string().contains(&blocked_ip.to_string()));
     assert_eq!(
         resolver.remaining_answers()?,
         0,
@@ -575,6 +586,9 @@ async fn security_evidence_public_redirect_to_private_literal_does_not_reach_tar
         .await
         .expect_err("private redirect target must fail");
     assert!(reqwest_error_is_endpoint_policy(&error), "{error:?}");
+    let mapped = map_preserved_error(error);
+    assert!(matches!(mapped, ProviderError::Configuration { .. }));
+    assert!(!mapped.to_string().contains(&source_address.to_string()));
     assert_listener_did_not_accept(&target, "provider redirect must not open the target socket")
         .await;
     server.await??;
@@ -621,6 +635,10 @@ async fn ordinary_redirect_loop_is_not_an_endpoint_policy_error()
 
     assert!(error.is_redirect(), "{error:?}");
     assert!(!reqwest_error_is_endpoint_policy(&error), "{error:?}");
+    assert!(matches!(
+        map_preserved_error(error),
+        ProviderError::Network { .. }
+    ));
     server.await??;
     Ok(())
 }

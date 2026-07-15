@@ -667,6 +667,44 @@ mod tests {
         Ok(())
     }
 
+    #[rustfmt::skip]
+    #[tokio::test]
+    async fn preserved_policy_requests_keep_timeout_variants()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = delayed_response_url(Duration::from_millis(1_100), Duration::ZERO).await?;
+        let config = BaseConfig {
+            api_base: Some(url.clone()),
+            endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+            timeout: 1,
+            ..Default::default()
+        };
+        let mut manager = GlobalPoolManager::new_for_provider("test", config)?;
+        let error = manager
+            .execute_request_preserving_endpoint_policy(&url, HttpMethod::GET, Vec::new(), None)
+            .await
+            .expect_err("ordinary request must time out");
+        assert!(matches!(error, ProviderError::Timeout { .. }));
+
+        let url = delayed_response_url(Duration::from_millis(100), Duration::ZERO).await?;
+        manager = GlobalPoolManager::new_for_provider("test", BaseConfig { api_base: Some(url.clone()), endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork, ..Default::default() })?;
+        manager
+            .policy
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("test manager must have endpoint policy"))?
+            .streaming_header_timeout = Duration::from_millis(20);
+        let error = manager
+            .execute_streaming_request_preserving_endpoint_policy(
+                &url,
+                Vec::new(),
+                serde_json::json!({}),
+                "test",
+            )
+            .await
+            .expect_err("streaming header request must time out");
+        assert!(matches!(error, ProviderError::Timeout { .. }));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_streaming_error_body_read_is_bounded() -> Result<(), Box<dyn std::error::Error>> {
         let url = delayed_error_body_url(Duration::from_millis(150)).await?;

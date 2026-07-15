@@ -444,6 +444,24 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[rustfmt::skip]
+    #[test]
+    fn endpoint_policy_preserving_opt_ins_are_gemini_only() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/providers"); let (mut stack, mut callers) = (vec![root.clone()], Vec::new());
+        while let Some(directory) = stack.pop() { for entry in std::fs::read_dir(directory).expect("provider sources must be readable") {
+                let path = entry.expect("provider entry must be readable").path(); if path.is_dir() { stack.push(path); continue; }
+                let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("rs") || name == "tests.rs"
+                    || name.ends_with("_tests.rs") || path == root.join("base/connection_pool.rs") || path == root.join("base/http.rs") { continue; }
+                let source = std::fs::read_to_string(&path).expect("source must be readable");
+                for method in ["execute_request_preserving_endpoint_policy", "execute_streaming_request_preserving_endpoint_policy"] {
+                    if source.contains(method) { callers.push((path.strip_prefix(&root).unwrap_or(&path).to_path_buf(), method)); }
+                }
+            }
+        }
+        let expected = std::path::PathBuf::from("openai_like/provider.rs"); assert_eq!(callers, vec![(expected.clone(), "execute_request_preserving_endpoint_policy"), (expected, "execute_streaming_request_preserving_endpoint_policy")]);
+    }
+
     #[test]
     fn base_http_client_rejects_public_loopback_base() {
         let error = BaseHttpClient::new_for_provider(
