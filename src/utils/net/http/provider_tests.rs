@@ -588,7 +588,7 @@ async fn security_evidence_public_redirect_to_private_literal_does_not_reach_tar
     assert!(reqwest_error_is_endpoint_policy(&error), "{error:?}");
     let mapped = map_preserved_error(error);
     assert!(matches!(mapped, ProviderError::Configuration { .. }));
-    assert!(!mapped.to_string().contains(&source_address.to_string()));
+    assert!(!mapped.to_string().contains(&target_address.to_string()));
     assert_listener_did_not_accept(&target, "provider redirect must not open the target socket")
         .await;
     server.await??;
