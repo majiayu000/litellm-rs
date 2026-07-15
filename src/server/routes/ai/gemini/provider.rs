@@ -1,14 +1,16 @@
+use bytes::Bytes;
 use reqwest::{
     Url,
-    header::{CONTENT_TYPE, HeaderName, HeaderValue},
+    header::{CONTENT_TYPE, HeaderName, HeaderValue, RETRY_AFTER},
 };
 use serde_json::Value;
 use std::time::Duration;
 
 use crate::config::models::provider::ProviderConfig;
 use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
-use crate::core::providers::base::ProviderRequestBuilder;
-use crate::core::providers::{Provider, ProviderError, gemini_response_or_provider_error};
+use crate::core::providers::base::{ProviderRequestBuilder, read_streaming_error_body};
+use crate::core::providers::shared::parse_retry_after_from_body;
+use crate::core::providers::{Provider, ProviderError};
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
@@ -376,12 +378,59 @@ pub(super) async fn send_gemini_request(
                 .map_err(|error| {
                     gemini_gateway_error_to_provider_error(gemini_http_error(error))
                 })?;
-                gemini_response_or_provider_error(response, &provider.api_key).await
+                gemini_response_or_provider_error(response, provider).await
             },
         )
         .await?;
     let (budget_reservation, key_budget_reservation) = reservations.into_parts();
     Ok((budget_reservation, key_budget_reservation, response))
+}
+
+async fn gemini_response_or_provider_error(
+    response: reqwest::Response,
+    provider: &GeminiRouteProvider,
+) -> Result<reqwest::Response, ProviderError> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let body = read_streaming_error_body(response)
+        .await
+        .map_err(|error| error.into_provider_error("gemini_proxy"))?;
+    let body = sanitize_gemini_error_body(Bytes::from(body), provider);
+    let body_text = String::from_utf8_lossy(&body).to_string();
+    Err(gemini_upstream_status_provider_error(
+        status,
+        body_text,
+        retry_after,
+    ))
+}
+
+fn gemini_upstream_status_provider_error(
+    status: u16,
+    body: String,
+    retry_after: Option<u64>,
+) -> ProviderError {
+    let message = if body.trim().is_empty() {
+        format!("Gemini upstream returned HTTP {status}")
+    } else {
+        format!("Gemini upstream returned HTTP {status}: {body}")
+    };
+    if status == 429 {
+        ProviderError::rate_limit_with_retry(
+            "gemini_proxy",
+            message,
+            retry_after.or_else(|| parse_retry_after_from_body(&body)),
+        )
+    } else {
+        ProviderError::api_error("gemini_proxy", status, message)
+    }
 }
 
 pub(super) fn gemini_http_error(error: reqwest::Error) -> GatewayError {
@@ -432,4 +481,104 @@ fn apply_gemini_headers(
         request = request.header(name.clone(), value.clone());
     }
     request
+}
+
+fn sanitize_gemini_error_body(body: Bytes, provider: &GeminiRouteProvider) -> Bytes {
+    if provider.api_key.is_empty() || body.is_empty() {
+        return body;
+    }
+
+    let text = String::from_utf8_lossy(&body);
+    let encoded_key: String =
+        url::form_urlencoded::byte_serialize(provider.api_key.as_bytes()).collect();
+    if !text.contains(&provider.api_key) && !text.contains(&encoded_key) {
+        return body;
+    }
+
+    let mut sanitized = text.replace(&provider.api_key, "[REDACTED]");
+    if encoded_key != provider.api_key {
+        sanitized = sanitized.replace(&encoded_key, "[REDACTED]");
+    }
+    Bytes::from(sanitized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::providers::base::STREAMING_ERROR_BODY_MAX_BYTES;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn raw_error_response(
+        body: Vec<u8>,
+        content_length: usize,
+        stall: bool,
+    ) -> (reqwest::Response, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("error server should bind");
+        let address = listener.local_addr().expect("error server address");
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("request should connect");
+            let mut request = [0_u8; 4096];
+            let request_bytes = socket
+                .read(&mut request)
+                .await
+                .expect("request should be readable");
+            assert!(request_bytes > 0, "request should not be empty");
+            let headers = format!(
+                "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {content_length}\r\nconnection: close\r\n\r\n"
+            );
+            socket
+                .write_all(headers.as_bytes())
+                .await
+                .expect("headers should write");
+            socket
+                .write_all(&body)
+                .await
+                .expect("error body should write");
+            if stall {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+        let response = reqwest::Client::new()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .expect("response headers should arrive");
+        (response, task)
+    }
+
+    #[tokio::test]
+    async fn gemini_streaming_error_body_stall_times_out() {
+        let (response, task) = raw_error_response(b"partial".to_vec(), 4096, true).await;
+        let provider = test_gemini_route_provider("gemini", "gemini", "model");
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(12),
+            gemini_response_or_provider_error(response, &provider),
+        )
+        .await
+        .expect("bounded error reader should return")
+        .expect_err("stalled error body must fail");
+
+        assert!(matches!(error, ProviderError::Timeout { .. }));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn gemini_streaming_error_body_is_capped() {
+        let mut body = vec![b'a'; STREAMING_ERROR_BODY_MAX_BYTES];
+        body.extend_from_slice(b"TAIL_MARKER");
+        let (response, task) = raw_error_response(body.clone(), body.len(), false).await;
+        let provider = test_gemini_route_provider("gemini", "gemini", "model");
+
+        let error = gemini_response_or_provider_error(response, &provider)
+            .await
+            .expect_err("upstream error must fail");
+        let message = error.to_string();
+
+        assert!(!message.contains("TAIL_MARKER"));
+        assert!(message.len() < STREAMING_ERROR_BODY_MAX_BYTES + 256);
+        task.await.expect("error server should finish");
+    }
 }

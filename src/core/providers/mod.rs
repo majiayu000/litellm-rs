@@ -314,9 +314,6 @@ macro_rules! dispatch_provider_selective {
 
 mod audio_dispatch;
 mod capability_dispatch;
-mod gemini_native;
-
-pub(crate) use gemini_native::gemini_response_or_provider_error;
 
 /// Unified built-in Provider enum (Rust-idiomatic design).
 ///
