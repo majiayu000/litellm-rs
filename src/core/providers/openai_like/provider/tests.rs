@@ -8,6 +8,81 @@ use tokio::net::{TcpListener, TcpStream};
 
 const TEST_PUBLIC_API_BASE: &str = "https://api.example.com/v1";
 
+#[test]
+fn gemini_transport_preserves_typed_policy_configuration_errors() {
+    let error = gemini_openai_like_transport_error(ProviderError::configuration(
+        "openai_like",
+        "Provider endpoint rejected by SSRF protection",
+    ));
+
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(error.to_string().contains("SSRF protection"));
+}
+
+#[test]
+fn gemini_transport_keeps_redirect_loops_retryable() {
+    let error = gemini_openai_like_transport_error(ProviderError::network(
+        "openai_like",
+        "error following redirect for url (https://example.test/loop)",
+    ));
+
+    assert!(matches!(error, ProviderError::Network { .. }));
+}
+
+#[test]
+fn gemini_transport_redacts_network_error_details() {
+    let error = gemini_openai_like_transport_error(ProviderError::network(
+        "openai_like",
+        "https://example.test?key=secret-key",
+    ));
+
+    assert!(matches!(error, ProviderError::Network { .. }));
+    assert!(!error.to_string().contains("secret-key"));
+}
+
+fn endpoint_policy_pool() -> GlobalPoolManager {
+    GlobalPoolManager::new_for_provider(
+        "openai_like",
+        crate::core::providers::base::BaseConfig {
+            api_base: Some("https://api.example.com/v1".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("policy pool should build")
+}
+
+#[tokio::test]
+async fn gemini_unary_pool_preserves_direct_policy_rejection() {
+    let error = endpoint_policy_pool()
+        .execute_request_preserving_endpoint_policy(
+            "ftp://api.example.com/secret-key",
+            HttpMethod::POST,
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect_err("unsupported scheme must fail");
+
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(!error.to_string().contains("secret-key"));
+}
+
+#[tokio::test]
+async fn gemini_stream_pool_preserves_direct_policy_rejection() {
+    let error = endpoint_policy_pool()
+        .execute_streaming_request_preserving_endpoint_policy(
+            "ftp://api.example.com/secret-key",
+            Vec::new(),
+            serde_json::json!({}),
+            "gemini_proxy",
+        )
+        .await
+        .expect_err("unsupported scheme must fail");
+
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(!error.to_string().contains("secret-key"));
+}
+
 fn private_openai_like_config(api_base: impl Into<String>) -> OpenAILikeConfig {
     let mut config = crate::core::providers::openai_like::config::test_openai_like_config(api_base);
     config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;

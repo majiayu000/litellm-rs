@@ -95,22 +95,26 @@ impl OpenAILikeProvider {
             Self::map_gemini_stream_response(
                 tokio::time::timeout(
                     Duration::from_secs(self.config.base.timeout),
-                    self.pool_manager.execute_streaming_request(
-                        url.as_str(),
-                        headers,
-                        request.body,
-                        "gemini_proxy",
-                    ),
+                    self.pool_manager
+                        .execute_streaming_request_preserving_endpoint_policy(
+                            url.as_str(),
+                            headers,
+                            request.body,
+                            "gemini_proxy",
+                        ),
                 )
                 .await,
             )?
         } else {
             self.pool_manager
-                .execute_request(url.as_str(), HttpMethod::POST, headers, Some(request.body))
+                .execute_request_preserving_endpoint_policy(
+                    url.as_str(),
+                    HttpMethod::POST,
+                    headers,
+                    Some(request.body),
+                )
                 .await
-                .map_err(|_| {
-                    ProviderError::network("gemini_proxy", "Gemini upstream request failed")
-                })?
+                .map_err(gemini_openai_like_transport_error)?
         };
         crate::core::providers::gemini_response_or_provider_error(response, api_key).await
     }
@@ -120,7 +124,7 @@ impl OpenAILikeProvider {
     ) -> Result<T, ProviderError> {
         result
             .map_err(|_| ProviderError::timeout("gemini_proxy", "Gemini response header timeout"))?
-            .map_err(|error| gemini_transport_error(matches!(error, ProviderError::Timeout { .. })))
+            .map_err(gemini_openai_like_transport_error)
     }
 
     /// Create a new OpenAI-like provider
@@ -569,6 +573,16 @@ impl OpenAILikeProvider {
     /// Get the provider configuration
     pub fn config(&self) -> &OpenAILikeConfig {
         &self.config
+    }
+}
+
+fn gemini_openai_like_transport_error(error: ProviderError) -> ProviderError {
+    match error {
+        ProviderError::Configuration { message, .. } => {
+            ProviderError::configuration("gemini_proxy", message)
+        }
+        ProviderError::Timeout { .. } => gemini_transport_error(true),
+        _ => gemini_transport_error(false),
     }
 }
 
