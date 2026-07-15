@@ -125,6 +125,29 @@ unsupported-scheme、timeout、ordinary 和 streaming。本 follow-up 最多 6 �
 使用 `Refs #966`；exact-head implementation/security review、CI、0 unresolved threads 与 required gate 通过后才可
 合并，合并后 #966 仍保持 open。
 
+#### Phase B prerequisite regression follow-up — align PublicOnly evidence with immutable runtime
+
+Phase B 的 exact-head 回归暴露出 `tests/gemini_sdk_routes.rs` 中
+`public_only_gemini_route_rejects_loopback_before_connect` 已不再能证明它声明的 route-time 行为：测试在
+`AppState`/router bootstrap 之后发请求，但 immutable selected runtime provider 已在 bootstrap 时固定；旧 fixture
+的 route 请求实际落到 bootstrap runtime 的 `example.com`，返回 405，而不是重新读取 Gateway config 中后来提供的
+loopback endpoint 并返回 500。继续保留该断言会要求 route 恢复 post-selection config reconstruction，直接违反
+B-001/B-002/B-009。
+
+因此在 Phase B 前增加一个严格串行、独立的 regression follow-up，只允许修改
+`tests/gemini_sdk_routes.rs`。它只能删除/替换上述这一条不可达的历史 route assertion：新断言必须在 runtime
+provider bootstrap/configuration 阶段以 `PublicOnly` + loopback 构造 Gemini provider，证明构造以明确的
+`Configuration`/SSRF 错误 fail closed，并证明 loopback listener 未收到连接。不得删除、跳过或放宽底层
+`test_ssrf_validation_loopback`、`GeminiConfig::test_policy_client_settings_fail_closed`、
+`base_http_client_rejects_public_loopback_base` 以及 factory endpoint-access 覆盖；不得把 405 当作安全成功，也不得
+通过恢复 route config scan 让旧断言重新可达。
+
+本 follow-up 最多 1 个非文档文件、500 changed lines，使用 `Refs #966`；exact-head focused test、全特性构建、
+strict Clippy、全量测试、scope/overlap、independent implementation/security review、CI、0 unresolved threads 与
+required gate 全部通过后才可合并，合并后 #966 保持 open。随后原 Phase B PR #1023 必须在原分支 merge 最新
+`origin/main`（禁止 force push、禁止新建替代 PR），并在新的 exact head 重跑全部验证。该 follow-up 不进入 Phase B
+diff，因此 Phase B 仍保持下述四文件 writable scope 和最多 500 changed lines。
+
 #### Phase B — remove post-selection reconstruction
 
 允许修改 `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs`、
@@ -134,7 +157,8 @@ deployment 到 `state.config().providers()` 的反查、route-owned client 构�
 identity 与客户端原始 requested Gemini model；URL/budget/spend 不得使用 named empty-model deployment 的
 provider-name selection key。Phase B 结束时，pre-selection candidate-key 生成仍可读取 Gateway config，但选择
 完成后不得再读取配置或重建执行器；issue 继续 open，PR 使用 `Refs #966`。合并后删除远端阶段分支并确认
-#966 仍为 open，再从最新 main 创建 Phase C。
+#966 仍为 open，再从最新 main 创建 Phase C。Phase B 必须依赖上述 prerequisite regression follow-up 已合并，并从
+该 merge 后的最新 `main` 重放；不得把 parent test 修改挤入已有 497-line Phase B diff。
 
 #### Phase C — runtime-only discovery and final closure
 
@@ -150,6 +174,7 @@ client cancel neutral、upstream read failure 与 source guard。parent integrat
 
 三个阶段的 writable union 为上述 11 个文件，不触碰 `src/server/routes/ai/execution.rs` 或 budget API。若任一阶段
 fresh diff 超过自身 scope，不得削弱断言、压缩可读性或扩大 writable union；先重新切分该阶段并更新已合并规范。
+Phase B prerequisite regression follow-up 是独立测试修正，不扩大 Phase B writable scope 或 changed-line budget。
 
 ### 5. Verification architecture
 
@@ -165,6 +190,8 @@ fresh diff 超过自身 scope，不得削弱断言、压缩可读性或扩大 wr
   和 config-selection helper；不使用可增长的数量 baseline。
 - provider 单测让 upstream error body/URI 分别回显 raw key 与 URL-encoded key，断言返回的 typed error/body、
   `ProviderError` display/debug 候选文本均只含 `[REDACTED]`，且不含两种原值。
+- PublicOnly 回归在 runtime provider bootstrap/configuration 边界断言 loopback fail closed 且 listener 零连接；
+  route integration 不以恢复 config rescan 来制造 500，底层 config/factory/Gemini client/Base HTTP SSRF 覆盖保持。
 
 ## Product-to-Test Mapping
 
@@ -179,7 +206,7 @@ fresh diff 超过自身 scope，不得削弱断言、压缩可读性或扩大 wr
 | B-007 | existing unary retry helper | upstream 429/5xx、provider/model budget fallback tests；policy redirect 不重试且 redirect loop/普通 transport 仍 fallback |
 | B-008 | existing stream execution lease + spend settlement | success=healthy、read failure=failed、cancel=neutral 的 lease/health/spend tests |
 | B-009 | reduced `GeminiRouteProvider` | compile-time struct fields + source guard 禁止 key/url/headers/timeout/client |
-| B-010 | focused source guard + full gates | guard red/green fixture、typed redirect/DNS source + ordinary/streaming regressions、strict Clippy、全量 test、PR gate |
+| B-010 | focused source guard + full gates | guard red/green fixture、typed redirect/DNS source + ordinary/streaming regressions、bootstrap PublicOnly loopback fail-closed、strict Clippy、全量 test、PR gate |
 | B-011 | provider-owned non-success response handling + fixed policy diagnostics | raw key、URL-encoded key、URI/endpoint echo 脱敏 tests；policy errors 不含敏感数据；route adapter 无 key source guard |
 
 ## 数据流
@@ -212,6 +239,8 @@ usage；spend 使用相同 provider/requested-model，健康、fallback 与 leas
 - [ ] Integration tests: unary/stream snapshot mutation、native与 named compatibility、fallback/budget/health/lease/spend。
 - [ ] Cancellation tests: client cancel health neutral/lease release/spend settlement，并以上游 read failure 为失败对照。
 - [ ] Security tests: upstream error/URI 中 raw 与 URL-encoded API key 均在 provider 边界内脱敏。
+- [ ] Endpoint policy tests: PublicOnly loopback 在 config/factory/runtime client/Base HTTP 构造边界 fail closed；
+  listener 零连接，且不依赖 route-time config reconstruction。
 - [ ] Architecture tests: Gemini route config rescan/route client/敏感字段 guard 红绿与 production 零命中。
 - [ ] Repository: `cargo fmt --all -- --check`、`cargo check --all-targets --all-features --locked`、
   `cargo clippy --all-targets --all-features --locked -- -D warnings`、

@@ -29,7 +29,7 @@ GH-966 / #966
   lines，使用 `Refs #966`。 Verify: PR #1019 exact-head 六组 feature matrix、focused tests、
   all-feature check、strict Clippy、全量 test、scope/overlap、implementation/security review、
   CI/reviewThreads/required gate 全部通过；合并后 #966 仍 open。
-- [ ] `SP966-T2R` Covers: B-002, B-007, B-010, B-011. Owner: Phase A endpoint-policy regression
+- [x] `SP966-T2R` Covers: B-002, B-007, B-010, B-011. Owner: Phase A endpoint-policy regression
   owner. Dependencies: SP966-T2 and this regression amendment merged. Done when: 在原 PR
   #1021、原分支 `codex/gh966-transport-classification` merge 最新 `origin/main`（禁止
   force push、禁止新建替代 PR）；connection pool 新增仅由 OpenAI-like Gemini native
@@ -44,8 +44,22 @@ GH-966 / #966
   不泄露；all-feature check；strict Clippy；全量 test；scope/overlap；exact-head
   implementation + security review PASS；CI/0 unresolved threads/required gate。合并后删除
   远程分支并确认 #966 仍 open。
+- [ ] `SP966-T2S` Covers: B-002, B-010. Owner: Phase B prerequisite regression owner.
+  Dependencies: SP966-T2R and this prerequisite amendment merged. Done when: 独立 follow-up PR
+  仅修改 `tests/gemini_sdk_routes.rs`，只删除/替换不可达的
+  `public_only_gemini_route_rejects_loopback_before_connect` 历史 route-time assertion；新断言
+  在 runtime provider bootstrap/configuration 阶段证明 `PublicOnly` + loopback 以明确的
+  `Configuration`/SSRF 错误 fail closed 且 listener 零连接。不得恢复 route config scan，
+  不得接受 405 作为安全成功，不得删除、skip 或弱化 config validation、factory、Gemini
+  runtime client、Base HTTP 的底层 SSRF 覆盖。PR 最多 1 个非文档文件、500 changed lines，
+  使用 `Refs #966`。 Verify: focused parent integration test；
+  `test_ssrf_validation_loopback`；`GeminiConfig::test_policy_client_settings_fail_closed`；
+  `base_http_client_rejects_public_loopback_base`；factory endpoint-access tests；全特性构建；
+  strict Clippy；全量 test；scope/overlap；exact-head implementation/security review PASS；
+  CI/0 unresolved threads/required gate。合并后删除远程分支并确认 #966 仍 open。
 - [ ] `SP966-T3` Covers: B-002, B-006, B-009. Owner: Phase B route ownership owner.
-  Dependencies: SP966-T2R merged. Done when: selected deployment 后的
+  Dependencies: SP966-T2S merged. Done when: 原 PR #1023、原 Phase B 分支 merge prerequisite
+  follow-up 后的最新 `origin/main`（禁止 force push、禁止新建替代 PR），再删除 selected deployment 后的
   `state.config().providers()` 反查、route-owned client construction、API key/base
   URL/headers/timeout 复制和旧 Gemini send/error helpers 全部删除；adapter 只保留
   selected provider/pricing identity 与 original requested Gemini model，native URL/budget/spend
@@ -55,7 +69,8 @@ GH-966 / #966
   mutation tests；empty-model URL/pricing/model-budget/spend identity tests；focused Gemini
   SDK/fallback/spend tests；六组 feature matrix；strict Clippy；全量 test；scope/overlap；
   exact-head implementation + security review PASS；CI/reviewThreads/required gate。合并后
-  删除远程阶段分支并确认 #966 仍 open。
+  删除远程阶段分支并确认 #966 仍 open。不得把 parent test 修改挤入已有 497-line Phase B diff；
+  Phase B 四文件 writable scope 与 500 changed-line 上限保持不变。
 - [ ] `SP966-T4` Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008,
   B-009, B-010, B-011. Owner: Phase C runtime-only discovery owner. Dependencies: SP966-T3
   merged. Done when: Gemini candidate model/alias 只从 immutable router deployments 派生，route
@@ -76,11 +91,13 @@ GH-966 / #966
 
 ## 并行拆分
 
-- T2、T2R、T3、T4 是严格串行的 implementation PR；T2R 是 Phase A 合并后暴露的
-  回归修复，必须在 T3 前合并；每阶段必须合并后，下一阶段才从最新 `main` 继续。
+- T2、T2R、T2S、T3、T4 是严格串行的 implementation/regression PR；T2R 是 Phase A 合并后暴露的
+  endpoint-policy 回归修复，T2S 是 Phase B exact-head 暴露的历史 route assertion 修正；两者都必须在
+  T3 前合并，每阶段必须合并后，下一阶段才从最新 `main` 继续。
 - 每个阶段最多 10 个非文档文件、500 changed lines；三阶段 writable union 为 tech spec
-  明列的 11 个文件，regression follow-up 另限定为 tech spec 明列的 6 个文件，不修改
-  799 行的 `execution.rs` 或 budget API。
+  明列的 11 个文件，T2R 另限定为 tech spec 明列的 6 个文件，T2S 另限定为 parent integration
+  test 1 个文件；T2S 不扩大 Phase B 四文件 scope 或 500-line budget。不修改 799 行的
+  `execution.rs` 或 budget API。
 - T5 的只读 reviewer/security lane 可与 coordinator 的 final verification 并行；reviewer 不写
   production/test 文件，只在 exact head 给 verdict，并由 reviewer 身份解析 review threads。
 - writable worker 使用独立 worktree 且单一 owner；同一阶段不并行修改 `gemini.rs`、
@@ -93,9 +110,9 @@ GH-966 / #966
   undeclared invariant。
 - 本 amendment PR 只包含 `specs/GH966/tech.md` 与 `specs/GH966/tasks.md`；不改变 product
   behavior invariants。
-- Phase A/regression follow-up/B/C 每个 PR 的 fresh exact-head focused、feature matrix、check、
+- Phase A/T2R/T2S/B/C 每个 PR 的 fresh exact-head focused、feature matrix、check、
   strict Clippy、全量 test、scope/overlap、CI、reviewThreads 与 offline gate 全部通过；Phase A、
-  regression follow-up 与 Phase B 合并后 issue 保持 open，Phase C 合并后 #966 closed。
+  T2R、T2S 与 Phase B 合并后 issue 保持 open，Phase C 合并后 #966 closed。
 
 ## Handoff Notes
 
@@ -110,3 +127,6 @@ GH-966 / #966
   URL-encoded key；route 不得取回 key。
 - spec amendment、regression follow-up 与 Phase B 使用 `Refs #966`；仅 Phase C 使用
   `Fixes #966`。
+- Phase B prerequisite 只把失效的 route-time loopback assertion 替换为 bootstrap/configuration
+  fail-closed evidence；#1023 必须在该 follow-up 合并后 merge 最新 `main`，不得用扩大 Phase B diff、
+  压缩测试或恢复 config reconstruction 绕过 500-line gate。
