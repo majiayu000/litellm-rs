@@ -1,4 +1,5 @@
 use super::*;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
@@ -54,14 +55,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
             .to_request(),
     )
     .await;
-    let status = response.status();
-    let response_body = test::read_body(response).await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "unexpected response: {}",
-        String::from_utf8_lossy(&response_body)
-    );
+    assert_eq!(response.status(), StatusCode::OK);
     let requests = selected.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(
@@ -85,6 +79,58 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     assert!(model_usage.current_spend > 0.0);
     selected.shutdown().await;
     replacement.shutdown().await;
+}
+
+#[tokio::test]
+async fn gemini_sdk_route_keeps_selected_runtime_timeout_after_config_mutation() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("delayed upstream should bind");
+    let address = listener.local_addr().expect("delayed upstream address");
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("request should connect");
+        let mut request = [0_u8; 4096];
+        socket
+            .read(&mut request)
+            .await
+            .expect("request should read");
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}")
+            .await
+            .expect("response should write");
+    });
+    let mut selected = gemini_provider(
+        "gemini",
+        &format!("http://{address}"),
+        vec!["gemini-3.1-flash-lite".to_string()],
+    );
+    selected.timeout = 2;
+    let mut replacement = selected.clone();
+    let state = build_test_state(vec![selected]).await;
+    replacement.base_url = Some("http://127.0.0.1:9".to_string());
+    replacement.timeout = 1;
+    let mut replaced_config = state.config().as_ref().clone();
+    replaced_config.gateway.providers = vec![replacement];
+    state.config.store(replaced_config);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let started = Instant::now();
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1beta/models/gemini-3.1-flash-lite:generateContent")
+            .set_json(gemini_body())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(started.elapsed() >= Duration::from_millis(1_100));
+    upstream.await.expect("delayed upstream should finish");
 }
 
 #[tokio::test]
