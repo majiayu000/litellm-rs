@@ -29,7 +29,7 @@ GH-966 / #966
   lines，使用 `Refs #966`。 Verify: PR #1019 exact-head 六组 feature matrix、focused tests、
   all-feature check、strict Clippy、全量 test、scope/overlap、implementation/security review、
   CI/reviewThreads/required gate 全部通过；合并后 #966 仍 open。
-- [ ] `SP966-T2R` Covers: B-005, B-007, B-010. Owner: Phase A endpoint-policy regression
+- [ ] `SP966-T2R` Covers: B-002, B-007, B-010, B-011. Owner: Phase A endpoint-policy regression
   owner. Dependencies: SP966-T2 and this regression amendment merged. Done when: 在原 PR
   #1021、原分支 `codex/gh966-transport-classification` merge 最新 `origin/main`（禁止
   force push、禁止新建替代 PR）；connection pool 新增仅由 OpenAI-like Gemini native

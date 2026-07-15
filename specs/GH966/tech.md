@@ -171,16 +171,16 @@ fresh diff 超过自身 scope，不得削弱断言、压缩可读性或扩大 wr
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | route selected callback + closed provider dispatch | unary/stream snapshot executor tests；source guard 无 config rescan |
-| B-002 | GeminiClient/OpenAILike runtime-owned config/client | router 后 config mutation 双 listener/key/header/timeout tests |
+| B-002 | GeminiClient/OpenAILike runtime-owned config/client + typed policy opt-in | router 后 config mutation 双 listener/key/header/timeout tests；直接 URL 与 reqwest source 在 stringify 前保真 |
 | B-003 | native Gemini passthrough | v1/v1beta unary/stream URL、query、headers、JSON/SSE integration matrix |
 | B-004 | OpenAILike named compatibility dispatch | 三个名称正例、大小写规范化与任意名称拒绝 tests |
 | B-005 | selection/unsupported error mapping | 无 deployment、模型不匹配、非 Gemini provider tests；无 fallback client source guard |
 | B-006 | identity-only route adapter + execution helper | selected provider + requested Gemini model 的 URL/budget/spend；deployment-id fallback/health/lease；空 `models` named compatibility assertions |
-| B-007 | existing unary retry helper | upstream 429/5xx、provider/model budget fallback tests |
+| B-007 | existing unary retry helper | upstream 429/5xx、provider/model budget fallback tests；policy redirect 不重试且 redirect loop/普通 transport 仍 fallback |
 | B-008 | existing stream execution lease + spend settlement | success=healthy、read failure=failed、cancel=neutral 的 lease/health/spend tests |
 | B-009 | reduced `GeminiRouteProvider` | compile-time struct fields + source guard 禁止 key/url/headers/timeout/client |
-| B-010 | focused source guard + full gates | guard red/green fixture、strict Clippy、全量 test、PR gate |
-| B-011 | provider-owned non-success response handling | raw key、URL-encoded key 与 URI echo 脱敏 tests；route adapter 无 key source guard |
+| B-010 | focused source guard + full gates | guard red/green fixture、typed redirect/DNS source + ordinary/streaming regressions、strict Clippy、全量 test、PR gate |
+| B-011 | provider-owned non-success response handling + fixed policy diagnostics | raw key、URL-encoded key、URI/endpoint echo 脱敏 tests；policy errors 不含敏感数据；route adapter 无 key source guard |
 
 ## 数据流
 
