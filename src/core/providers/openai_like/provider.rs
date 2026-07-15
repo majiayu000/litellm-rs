@@ -83,34 +83,27 @@ impl OpenAILikeProvider {
             api_key,
             &request,
         )?;
-        let mut headers =
-            Vec::with_capacity(self.config.base.headers.len() + self.config.custom_headers.len());
-        headers.extend(
-            self.config
-                .base
-                .headers
-                .iter()
-                .map(|(key, value)| header_owned(key.clone(), value.clone())),
-        );
-        headers.extend(
-            self.config
-                .custom_headers
-                .iter()
-                .map(|(key, value)| header_owned(key.clone(), value.clone())),
-        );
+        let headers = self
+            .config
+            .base
+            .headers
+            .iter()
+            .chain(&self.config.custom_headers)
+            .map(|(key, value)| header_owned(key.clone(), value.clone()))
+            .collect();
         let response = if request.stream {
-            tokio::time::timeout(
-                Duration::from_secs(self.config.base.timeout),
-                self.pool_manager.execute_streaming_request(
-                    url.as_str(),
-                    headers,
-                    request.body,
-                    "gemini_proxy",
-                ),
-            )
-            .await
-            .map_err(|_| ProviderError::timeout("gemini_proxy", "Gemini response header timeout"))?
-            .map_err(|_| ProviderError::network("gemini_proxy", "Gemini upstream request failed"))?
+            Self::map_gemini_stream_response(
+                tokio::time::timeout(
+                    Duration::from_secs(self.config.base.timeout),
+                    self.pool_manager.execute_streaming_request(
+                        url.as_str(),
+                        headers,
+                        request.body,
+                        "gemini_proxy",
+                    ),
+                )
+                .await,
+            )?
         } else {
             self.pool_manager
                 .execute_request(url.as_str(), HttpMethod::POST, headers, Some(request.body))
@@ -120,6 +113,13 @@ impl OpenAILikeProvider {
                 })?
         };
         crate::core::providers::gemini_response_or_provider_error(response, api_key).await
+    }
+
+    pub(crate) fn map_gemini_stream_response<T>(
+        result: Result<Result<T, ProviderError>, tokio::time::error::Elapsed>,
+    ) -> Result<T, ProviderError> {
+        result
+            .map_err(|_| ProviderError::timeout("gemini_proxy", "Gemini response header timeout"))?
     }
 
     /// Create a new OpenAI-like provider

@@ -78,8 +78,10 @@ mod tests {
         }
         assert!(!openai_like_provider_supports_gemini("google ai"));
         assert!(openai_like_provider_supports_rerank("cohere.ai"));
+        let timeout = ProviderError::timeout("x", "x");
+        let error = OpenAILikeProvider::map_gemini_stream_response::<()>(Ok(Err(timeout)));
+        assert!(matches!(error, Err(ProviderError::Timeout { .. })));
     }
-
     #[tokio::test]
     async fn named_gemini_stream_uses_runtime_header_timeout() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
