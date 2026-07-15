@@ -18,6 +18,7 @@ Link to `product.md`.
 | Closed provider dispatch | `src/core/providers/mod.rs:326`, `src/core/providers/mod.rs:352` | `Provider` enum 已集中执行 concrete provider 方法，但无 Gemini native passthrough dispatch | B-003/B-004 的类型安全入口 |
 | Native Gemini client | `src/core/providers/gemini/client.rs:35`, `src/core/providers/gemini/client.rs:92`, `src/core/providers/gemini/client.rs:125`, `src/core/providers/gemini/provider.rs:34` | client 已拥有不可变 config 与 policy-aware ordinary/streaming clients，私有发送只服务转换后的 chat API | 应复用的 runtime executor |
 | Named compatibility runtime | `src/core/providers/openai_like/provider.rs:53`, `src/core/providers/openai_like/provider.rs:66`, `src/core/providers/factory/registry.rs:104` | OpenAI-like runtime 已拥有 config/pool/name，但没有受限的 Gemini native passthrough | B-004 兼容闭集 |
+| Shared route HTTP adapter | `src/server/routes/ai/route_http.rs:10`, `src/server/routes/ai/route_http.rs:15`, `src/server/routes/ai/route_http.rs:36`, `src/server/routes/ai/route_http.rs:50` | `RouteHttpClient` 仍服务 batch、image、moderation 等配置型代理；Gemini 脱离后部分方法可能仅由测试覆盖 | Gemini route 必须停止使用它，但本 issue 不删除其他 route 的共享 adapter |
 | Spend/lease | `src/server/routes/ai/gemini/spend.rs:24`, `src/server/routes/ai/gemini/spend.rs:118`, `src/server/routes/ai/gemini.rs:280` | spend 依赖 route adapter 身份；stream lease 由统一 execution helper管理 | adapter 应缩为身份数据而非 executor |
 | Error redaction | `src/server/routes/ai/gemini/provider.rs:406`, `src/server/routes/ai/gemini/provider.rs:486` | route adapter 持有 API key，并在映射 upstream error 前替换 raw/URL-encoded key | 去掉 adapter key 后必须把 B-011 迁移到 runtime owner |
 
@@ -57,24 +58,67 @@ Link to `product.md`.
 - client channel 断开时保持现有 neutral health 语义：结算取消前已观察 usage/输出，随后 drop 同一 lease 仅释放
   并发计数，不调用 `finish_success` 或 `finish_failure`；上游读取失败仍显式 `finish_failure`。
 
-### 4. Bounded implementation file plan
+### 4. Bounded serial implementation plan
 
-完整接线预计修改下列 10 个非文档文件，不触碰 `src/server/routes/ai/execution.rs` 或 budget API：
+Fresh implementation diff 已证明完整接线会跨 11 个非文档文件且超过 500 changed lines；仅移动既有测试的
+decomposition 已先行完成，继续把生产删除与回归测试压入单 PR 会违反 scope gate。实现因此拆为三个严格串行、
+每个最多 10 个非文档文件且最多 500 changed lines 的 PR。每个 PR 都从前一阶段合并后的最新 `main` 开始，运行
+scope/overlap、全特性构建、strict Clippy、全量测试与 current-head PR gate；前两阶段只使用 `Refs #966`，issue
+保持 open，只有 Phase C 使用 `Fixes #966`。每阶段凡改变或删除 API key、endpoint policy、client 或错误脱敏
+边界，必须在 exact head 获得独立 security review PASS；dependency audit 不能替代该审查。
 
-1. `src/core/types/model.rs`：新增 typed Gemini native capability marker。
-2. `src/core/providers/capability_dispatch.rs`：限制 named OpenAI-like capability 闭集。
-3. `src/core/providers/mod.rs`：crate-private request/execute closed-enum dispatch。
-4. `src/core/providers/gemini/client.rs`：复用现有 config/client 的 raw native send；修改后保持 800 行以内。
-5. `src/core/providers/gemini/provider.rs`：声明 capability 并委托现有 client。
-6. `src/core/providers/openai_like/provider.rs`：受限名称的 runtime-owned native send；修改后保持 800 行以内。
-7. `src/server/routes/ai/gemini.rs`：selected provider execution、native marker 与 neutral cancel 断言。
-8. `src/server/routes/ai/gemini/provider.rs`：删除 config scan/client rebuild，保留 identity/budget/error adapter。
-9. `tests/gemini_sdk_routes.rs`：只登记新的拆分测试子模块，不继续膨胀现有 698 行主体。
-10. `tests/gemini_sdk_routes/runtime_provider_tests.rs`：snapshot mutation、兼容闭集与 cancel identity 回归测试。
+#### Phase A — runtime dispatch and selected sender
 
-实现前后都运行 `check_pr_scope.sh`；若 fresh diff 仍超过 500 changed lines，则不得削弱测试或挤压文件，而是先
-提交仅移动既有测试、集合/断言 byte-equivalent 的 `Refs #966` fixture decomposition PR，再从最新 main 执行上述
-接线并在最终 `Fixes #966` PR 关闭 issue。任何中间 PR 不声明未接线 capability。
+允许修改以下 10 个文件：
+
+1. `src/core/types/model.rs`
+2. `src/core/providers/capability_dispatch.rs`
+3. `src/core/providers/mod.rs`
+4. `src/core/providers/gemini/client.rs`
+5. `src/core/providers/gemini/provider.rs`
+6. `src/core/providers/openai_like/provider.rs`
+7. `src/server/routes/ai/gemini.rs`
+8. `src/server/routes/ai/gemini/provider.rs`
+9. `src/server/routes/ai/route_http.rs`
+10. `tests/gemini_sdk_routes/runtime_provider_tests.rs`
+
+该阶段增加 typed native capability/request/closed dispatch，并把 Gemini route 的实际 HTTP send 接到 selected
+runtime `Provider`。native Gemini 与受限命名 OpenAI-like runtime 各自拥有 URL、key、headers、endpoint policy、
+client、错误脱敏和 response-header timeout；名称规范化只接受大小写及 `_`/`-` 差异，不删除空格或任意标点。
+为保持可构建的 500 行原子边界，route 暂时可以扫描 Gateway config 来形成候选 key 和只读 route identity，
+`GeminiRouteProvider` 也可暂时保留旧敏感字段与不再发送请求的 `RouteHttpClient`；这些字段不得参与实际 send，
+并必须在 Phase B 删除。`route_http.rs` 仅允许增加 Gemini 不再调用的方法所需 dead-code annotation，不改变其他
+route 的共享 adapter 行为。Phase A 必须包含 config mutation 的 unary sender snapshot 回归、feature-matrix
+构建、受限名称闭集与 named stream runtime timeout 测试，不得宣称满足 B-001/B-002/B-009 的最终形态。
+Phase A 的原 PR 已在本 amendment 之前创建；amendment 合并后必须在原分支
+`codex/gh966-runtime-dispatch` merge 最新 `origin/main`，禁止 force push或新建替代 PR，再对新的 exact head 重跑
+CI、reviewThreads、implementation/security review 与 required gate。
+
+#### Phase B — remove post-selection reconstruction
+
+允许修改 `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs`、
+`src/server/routes/ai/route_http.rs` 与 `tests/gemini_sdk_routes/runtime_provider_tests.rs`。该阶段删除 selected
+deployment 到 `state.config().providers()` 的反查、route-owned client 构造、API key/base URL/headers/timeout
+复制以及 Gemini adapter 的旧 send/error helpers。adapter 只保留 selected runtime provider name、pricing
+identity 与客户端原始 requested Gemini model；URL/budget/spend 不得使用 named empty-model deployment 的
+provider-name selection key。Phase B 结束时，pre-selection candidate-key 生成仍可读取 Gateway config，但选择
+完成后不得再读取配置或重建执行器；issue 继续 open，PR 使用 `Refs #966`。合并后删除远端阶段分支并确认
+#966 仍为 open，再从最新 main 创建 Phase C。
+
+#### Phase C — runtime-only discovery and final closure
+
+允许修改 `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs`、
+`tests/gemini_sdk_routes.rs` 与 `tests/gemini_sdk_routes/runtime_provider_tests.rs`。候选模型/别名只从 router 的
+immutable runtime deployments 派生，删除 Gemini route 最后一处 `state.config().providers()`。补齐 unary/stream
+双 snapshot、native + 三个命名兼容正例、任意名称拒绝、empty-model identity、fallback/budget/health/lease/spend、
+client cancel neutral、upstream read failure 与 source guard。parent integration test 只在 immutable runtime 语义
+改变既有断言时修改。最终 source guard 必须拒绝 Gemini route 的 config scan、`RouteHttpClient`、敏感 adapter
+字段和 selected provider 之外的 sender；Phase C 通过 required gate 后使用 `Fixes #966` 关闭 issue。
+旧 full checkpoint 只可作为实现参考，不可作为完成证据：不得恢复其过宽的标点归一化或过时 helper 布局，且
+必须另行补齐 `googleaistudio` route 正例、cancel spend 与 upstream read-failure health assertions。
+
+三个阶段的 writable union 为上述 11 个文件，不触碰 `src/server/routes/ai/execution.rs` 或 budget API。若任一阶段
+fresh diff 超过自身 scope，不得削弱断言、压缩可读性或扩大 writable union；先重新切分该阶段并更新已合并规范。
 
 ### 5. Verification architecture
 
@@ -144,6 +188,6 @@ usage；spend 使用相同 provider/requested-model，健康、fallback 与 leas
 
 ## 回滚方案
 
-若兼容性失败，整体 revert 本 issue 的 implementation PR，恢复旧 route 行为并重新打开 #966；不得只回滚
-runtime dispatch 而留下声明但不可执行的 capability，也不得以 warning + config rescan 作为降级。修复应保持
-GH968 endpoint policy，不重新引入普通 `reqwest` client。
+若兼容性失败，按 Phase C → Phase B → Phase A 逆序整体 revert 已合并的 implementation PR，并在必要时重新打开
+#966；不得只回滚 runtime dispatch 而留下声明但不可执行的 capability，也不得长期停留在仅 Phase A 的配置反查
+状态或以 warning + config rescan 作为降级。修复应保持 GH968 endpoint policy，不重新引入普通 `reqwest` client。
