@@ -85,9 +85,7 @@ impl GeminiClient {
         let response = timeout(Duration::from_secs(self.config.request_timeout), send)
             .await
             .map_err(|_| ProviderError::timeout("gemini_proxy", "Gemini response header timeout"))?
-            .map_err(|_| {
-                ProviderError::network("gemini_proxy", "Gemini upstream request failed")
-            })?;
+            .map_err(|error| crate::core::providers::gemini_transport_error(error.is_timeout()))?;
         Ok(response)
     }
 

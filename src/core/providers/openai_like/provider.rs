@@ -28,7 +28,7 @@ use super::{
     error::{OpenAILikeError, PROVIDER_NAME},
     models::{OpenAILikeModelRegistry, get_openai_like_registry},
 };
-use crate::core::providers::{GeminiNativeRequest, ProviderError};
+use crate::core::providers::{GeminiNativeRequest, ProviderError, gemini_transport_error};
 
 pub(crate) static OPENAI_LIKE_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
@@ -120,12 +120,7 @@ impl OpenAILikeProvider {
     ) -> Result<T, ProviderError> {
         result
             .map_err(|_| ProviderError::timeout("gemini_proxy", "Gemini response header timeout"))?
-            .map_err(|error| match error {
-                ProviderError::Timeout { .. } => {
-                    ProviderError::timeout("gemini_proxy", "Gemini upstream request timed out")
-                }
-                _ => ProviderError::network("gemini_proxy", "Gemini upstream request failed"),
-            })
+            .map_err(|error| gemini_transport_error(matches!(error, ProviderError::Timeout { .. })))
     }
 
     /// Create a new OpenAI-like provider

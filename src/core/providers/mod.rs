@@ -218,7 +218,13 @@ fn redact_gemini_key(body: &str, api_key: &str) -> String {
     body.replace(api_key, "[REDACTED]")
         .replace(&encoded, "[REDACTED]")
 }
-
+pub(crate) fn gemini_transport_error(is_timeout: bool) -> ProviderError {
+    let message = "Gemini upstream request failed";
+    if is_timeout {
+        return ProviderError::timeout("gemini_proxy", message);
+    }
+    ProviderError::network("gemini_proxy", message)
+}
 // ==================== Provider Dispatch Macros ====================
 //
 // Consolidated into a single `dispatch_provider!` macro with 4 dispatch kinds,

@@ -403,6 +403,11 @@ mod native_tests {
     use super::*;
     use crate::core::net::ProviderEndpointAccess;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[test]
+    fn native_transport_timeout_keeps_timeout_classification() {
+        let error = crate::core::providers::gemini_transport_error(true);
+        assert!(matches!(error, ProviderError::Timeout { .. }));
+    }
     async fn error_provider(status: u16, headers: &str, body: &str, key: &str) -> ProviderError {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -450,16 +455,11 @@ mod native_tests {
         let key = "test-key-12345678901234567890";
         let header = error_provider(429, "retry-after: 7\r\n", r#"{"retry_after":3}"#, key).await;
         let body = error_provider(429, "", r#"{"retry_after":3}"#, key).await;
-        if let ProviderError::RateLimit { retry_after, .. } = header {
-            assert_eq!(retry_after, Some(7));
-        } else {
-            panic!("header response must be rate limited");
-        }
-        if let ProviderError::RateLimit { retry_after, .. } = body {
-            assert_eq!(retry_after, Some(3));
-        } else {
-            panic!("body response must be rate limited");
-        }
+        let retries = [header, body].map(|error| match error {
+            ProviderError::RateLimit { retry_after, .. } => retry_after,
+            _ => None,
+        });
+        assert_eq!(retries, [Some(7), Some(3)]);
     }
     #[tokio::test]
     async fn native_non_rate_limit_empty_body_is_api_error() {
