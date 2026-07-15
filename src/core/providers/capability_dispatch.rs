@@ -36,6 +36,12 @@ impl Provider {
 }
 
 pub(crate) fn openai_like_provider_supports_gemini(provider_name: &str) -> bool {
+    if !provider_name
+        .chars()
+        .all(|ch| matches!(ch, '_' | '-') || ch.is_ascii_alphanumeric())
+    {
+        return false;
+    }
     matches!(
         normalize_provider_name(provider_name).as_str(),
         "gemini" | "googleai" | "googleaistudio"
@@ -48,27 +54,19 @@ fn openai_like_provider_supports_rerank(provider_name: &str) -> bool {
 }
 
 fn normalize_provider_name(provider_name: &str) -> String {
-    if !provider_name
-        .chars()
-        .all(|ch| matches!(ch, '_' | '-') || ch.is_ascii_alphanumeric())
-    {
-        return String::new();
-    }
     provider_name
         .chars()
-        .filter(|ch| !matches!(ch, '_' | '-'))
+        .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::openai_like_provider_supports_gemini;
+    use super::{openai_like_provider_supports_gemini, openai_like_provider_supports_rerank};
     use crate::core::net::ProviderEndpointAccess;
     use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
     use crate::core::providers::{GeminiNativeRequest, ProviderError};
-    use serde_json::json;
-    use std::time::Duration;
 
     #[test]
     fn gemini_compatibility_name_set_is_closed_and_normalized() {
@@ -79,6 +77,7 @@ mod tests {
             assert!(!openai_like_provider_supports_gemini(name));
         }
         assert!(!openai_like_provider_supports_gemini("google ai"));
+        assert!(openai_like_provider_supports_rerank("cohere.ai"));
     }
 
     #[tokio::test]
@@ -87,10 +86,6 @@ mod tests {
             .await
             .expect("timeout server should bind");
         let address = listener.local_addr().expect("listener should have address");
-        let server = tokio::spawn(async move {
-            let _connection = listener.accept().await.expect("server should accept");
-            tokio::time::sleep(Duration::from_millis(1_200)).await;
-        });
         let mut config = OpenAILikeConfig::with_api_key(format!("http://{address}"), "test-key");
         config.provider_name = "Google-AI".to_string();
         config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
@@ -104,12 +99,11 @@ mod tests {
                 model: "gemini-3.1-flash-lite".to_string(),
                 method: "streamGenerateContent",
                 stream: true,
-                body: json!({"contents": []}),
+                body: serde_json::json!({"contents": []}),
             })
             .await
             .expect_err("delayed headers should time out");
-
         assert!(matches!(error, ProviderError::Timeout { .. }));
-        server.await.expect("timeout server should stop");
+        drop(listener);
     }
 }

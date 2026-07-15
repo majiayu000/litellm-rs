@@ -4,18 +4,17 @@ use super::*;
 async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     let selected = MockGeminiServer::launch().await;
     let replacement = MockGeminiServer::launch().await;
-    let state = build_test_state(vec![gemini_provider(
-        "gemini",
-        &selected.base_url,
-        vec!["gemini-3.1-flash-lite".to_string()],
-    )])
-    .await;
+    let configured = |name: &str, base_url: &str| {
+        let mut provider =
+            gemini_provider(name, base_url, vec!["gemini-3.1-flash-lite".to_string()]);
+        provider
+            .settings
+            .insert("provider_name".to_string(), json!("gemini"));
+        provider
+    };
+    let state = build_test_state(vec![configured("runtime-alias", &selected.base_url)]).await;
     let mut replaced_config = state.config().as_ref().clone();
-    replaced_config.gateway.providers = vec![gemini_provider(
-        "gemini",
-        &replacement.base_url,
-        vec!["gemini-3.1-flash-lite".to_string()],
-    )];
+    replaced_config.gateway.providers = vec![configured("replacement", &replacement.base_url)];
     state.config.store(replaced_config);
     let app = test::init_service(
         App::new()

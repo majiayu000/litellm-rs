@@ -232,7 +232,12 @@ fn gemini_provider_uses_registry_models(provider: &ProviderConfig) -> bool {
 fn is_gemini_provider(provider: &ProviderConfig) -> bool {
     let provider_type =
         super::super::provider_config::normalize_provider_selector(&provider.provider_type);
-    let provider_name = super::super::provider_config::normalize_provider_selector(&provider.name);
+    let provider_name = provider
+        .settings
+        .get("provider_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&provider.name);
+    let provider_name = super::super::provider_config::normalize_provider_selector(provider_name);
 
     matches!(
         provider_type.as_str(),
