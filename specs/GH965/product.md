@@ -34,7 +34,8 @@ complexity: large
 - 不修改 #968 的 SSRF/endpoint policy，不允许 adapter 绕过 provider-owned secure client。
 - 不处理 #519 的 type-tree、pricing 或 trait-split 其余路线图，也不以本 issue 承接 #727 的通用
   大文件拆分。
-- 不在维护者完成 `human_decisions` 前猜测全局 singleton、请求级凭据 override 或公共 API 删除策略。
+- 不扩大维护者已批准的 `HD-001` 至 `HD-004`：生命周期、request context、兼容窗口和错误映射按本
+  packet 的 resolved contract 实施，不借实现便利改变选择。
 
 ## Behavior Invariants
 
@@ -49,14 +50,18 @@ complexity: large
    必须来自同一个 selected runtime provider snapshot。
 4. B-004 空 provider 集合、缺失 model、未知 provider/model、非法 provider 配置和无法构造的
    provider 必须在所有入口稳定失败；不得以环境变量、默认 provider、旧 registry 或普通 HTTP client
-   静默补位。若保留请求级 override，其允许字段、优先级和失败语义必须由已批准的 `HD-002` 明确。
+   静默补位。`headers`/`timeout` 只有通过 runtime policy 验证后才进入 request context；0.6.0 中已弃用的
+   `api_key`/`api_base` 只能解析到当前 generation 内 policy-approved canonical deployment，不能构造、注册
+   或缓存请求专属 provider/client，无法唯一匹配时必须稳定失败。
 5. B-005 provider alias、model alias 与 #728 support matrix 在三个入口必须解析为相同 canonical
    identity/surface；明确 unsupported 的组合返回 unsupported，不能退化为 model-not-found、选择其他
    provider 或 generic passthrough。
-6. B-006 provider/runtime 失败必须先归一到同一闭集的 canonical error class，至少区分 invalid
-   configuration/request、authentication、unsupported、model/deployment not found、rate limit/budget、
-   timeout/network、upstream unavailable 和 cancellation；HTTP/SDK/`completion()` 可改变外层类型或
-   status code，但不得改变类别、retryability 或泄漏 secret。
+6. B-006 `ProviderError` 是 provider/runtime 失败的唯一 typed source；其每个 variant 必须穷尽映射到闭集
+   canonical class，区分 invalid configuration/request、authentication、unsupported、model/deployment not
+   found、rate limit/budget、timeout/network、upstream unavailable、parsing/internal 和 cancellation。
+   HTTP/SDK/`completion()` 可改变外层类型或 status code，但不得从字符串重分类、改变 retryability，或在
+   message/log/response 中泄漏 credential、authorization/cookie header、signed URL query 和 provider body 中
+   已识别的 secret。
 7. B-007 health、cooldown、active lease、RPM/TPM、budget/spend、success/failure 与 latency state 必须
    由 selected canonical deployment 更新且每次 attempt 至多结算一次；adapter 本地统计不得参与下一次
    selection 或与 runtime state 产生第二真值源。
@@ -68,9 +73,11 @@ complexity: large
 10. B-010 streaming 在首个可见输出前的失败遵循 B-008；首个输出后的失败、调用方取消与正常结束必须
     释放同一 selected lease，并分别记录 failure、neutral cancellation 或 success，禁止 adapter 发起隐藏
     retry 或重复结算。
-11. B-011 在 staged migration 中，尚未移除的 `DefaultRouter`、`Router` trait、`ProviderRegistry`、
-    `LLMClient` 与高层 free functions 必须只是 canonical runtime 的兼容 facade；公共符号的保留、弃用或
-    semver 移除必须遵循已批准的 `HD-003`，不得在未发布迁移说明时静默改变调用方式。
+11. B-011 在 staged migration 中，`LLMClient`、`ClientConfig` 与高层 free functions 必须保留为 canonical
+    runtime 的无状态 facade；`DefaultRouter`、completion `Router` trait、mutable `ProviderRegistry` runtime
+    ownership 及 request-level `api_key`/`api_base` 在 0.6.0 标记 deprecated，并只可委托 canonical runtime，
+    在 0.7.0 移除。0.7.0 removal 合并前，版本工作流必须经独立 fixture 证明 0.x breaking policy 产出 0.7.0
+    而非 1.0.0；迁移说明、替代 API 或此前置证据缺失时 removal 必须 blocked。
 12. B-012 完成证据必须以同一组确定性 fixtures 经 HTTP、SDK 与 `completion()` 验证 provider identity、
     unsupported/error class、retry/fallback、snapshot isolation、stream/cancel 和 exactly-once state；另有
     source guard 证明 production adapter 中不存在第二 provider map、config rescan、local routing state 或
@@ -78,10 +85,13 @@ complexity: large
 
 ## 验收标准
 
-- [ ] `HD-001` 至 `HD-004` 均由维护者选择并以 spec amendment 合并；任一未决时 implementation gate 阻断。
+- [x] `HD-001` 至 `HD-004` 已由维护者在 issue comment `4982855807` 批准，并由本 amendment 固化 exact
+  API、映射、迁移窗口和 rollback；production implementation 仍需本 amendment review/merge 后开始。
 - [ ] 代码中只有一个 provider construction + deployment selection + execution runtime contract。
 - [ ] HTTP、SDK 与 `completion()` 的 adapter 不持有第二 provider instance map、路由统计或 sender。
 - [ ] 重复 `DefaultRouter`/`Router`/`ProviderRegistry` 状态已删除或变为经批准的无状态兼容 facade。
+- [ ] 0.6.0 发布弃用标记与迁移说明；0.7.0 removal 前版本工作流 fixture 证明 breaking 0.x 可显式发布
+  0.7.0 且不会伪装成 non-breaking commit。
 - [ ] 跨入口 conformance fixtures 覆盖 B-001 至 B-012，且 source guard 对 production 为零命中。
 - [ ] 每个 implementation PR 满足最多 10 个非文档文件、500 changed lines，并通过格式、构建、
   strict Clippy、全量测试、scope/overlap、review threads 与 PR gate。
@@ -96,27 +106,26 @@ complexity: large
 | 并发/竞态 | covered: B-007, B-009, B-010；generation、lease 与结算不得跨 snapshot。 |
 | 重试/幂等 | covered: B-007, B-008, B-010；attempt 选择与 state exactly-once。 |
 | 非法状态转换 | covered: B-007, B-009, B-010；旧/新 generation 和 stream terminal state 不得混用。 |
-| 兼容/迁移 | covered: B-011；公共 facade 的保留/弃用由 human decision 锁定。 |
+| 兼容/迁移 | covered: B-011；0.6.0 deprecation、0.7.0 removal 与 release-policy prerequisite 已锁定。 |
 | 降级/回退 | covered: B-003, B-004, B-005, B-008；禁止 config/client fallback 和 adapter retry。 |
 | 证据与审计完整性 | covered: B-012；三入口 fixture 与 source guard 缺一即未完成。 |
 | 取消/中断 | covered: B-009, B-010；取消释放同一 lease 且不得伪装 success/failure。 |
 
 ## Human Decisions
 
-以下选择会改变公共生命周期、兼容或安全边界，当前 issue 没有足够信息替维护者决定。所有项状态均为
-`unresolved`，不得由实现者按便利默认：
+维护者于 issue comment `4982855807` 批准 recommended matrix；以下状态均为 `resolved`，实现者不得重新选择：
 
-- `HD-001` — canonical runtime 生命周期与注入：选择显式 per-instance `Arc<UnifiedRouter>`、进程级
-  default runtime，或二者的明确组合；同时决定 gateway、SDK、free functions 如何绑定同一 generation。
-- `HD-002` — `CompletionOptions` 的请求级 `api_key`/`api_base`/headers/timeout override：选择保留为
-  canonical runtime 的受限 request-scoped execution input，或按兼容窗口弃用；禁止临时 provider/client。
-- `HD-003` — 公共兼容策略：逐项决定 `DefaultRouter`、completion `Router` trait、`ProviderRegistry`、
-  SDK `ClientConfig`/`LLMClient` 以及 free functions 是保留 facade、deprecate 还是下一 breaking release 移除。
-- `HD-004` — canonical error contract：选择 `ProviderError` 或新的/现有 typed runtime error 为真值源，
-  并批准 HTTP status、`SDKError` 与 `GatewayError` 的完整映射表及 cancellation 表示。
+| ID | Resolved decision | Observable consequence |
+| --- | --- | --- |
+| `HD-001` | HTTP 与每个 SDK instance 显式持有 `Arc<UnifiedRouter>`；仅高层 free functions 使用可替换的 process-default binding。 | replacement 原子发布新 immutable generation；已取得 handle 的 in-flight request 完成于旧 generation。未安装 default 时 free functions 返回 typed configuration error，不从 env 隐式初始化。 |
+| `HD-002` | `headers`/`timeout` 保留为 validated request-scoped context；`api_key`/`api_base` 在 0.6.0 deprecated，0.7.0 removed。 | legacy pair 只可匹配当前 generation 内 policy-approved canonical deployment；零匹配、多匹配、被 endpoint/header policy 拒绝均 fail closed，且不得创建请求专属 provider/client。 |
+| `HD-003` | 永久保留 `LLMClient`、`ClientConfig` 和高层 free functions 为 stateless facade；`DefaultRouter`、completion `Router` trait、mutable `ProviderRegistry` runtime ownership 在 0.6.0 deprecated、0.7.0 removed。 | 0.6.0 facade 也不得 fallback 到 legacy engine；0.7.0 removal 前必须先修订并验证 release workflow 的 0.x breaking policy。 |
+| `HD-004` | `ProviderError` 是 canonical typed runtime error；HTTP、SDK、Gateway、retry/redaction/cancellation 使用 tech spec 的 exhaustive mapping。 | adapter 从 typed variant 映射并保留 class/retryability；字符串只能作为已 redacted 的展示文本，不能参与分支。 |
 
 ## 发布说明
 
-这是 staged architecture migration。最终 release note 必须列出 `HD-003` 批准的保留/弃用项、`HD-002`
-批准的请求级 override 行为和三入口错误映射变化。任何阶段都不能把未迁移入口留在独立 runtime 上作为
-“临时 fallback”。
+这是 staged architecture migration。0.6.0 release note 必须列出全部 deprecated symbol/field、替代 API、
+request-context 规则和 error mapping；0.7.0 release note 必须列出实际 removal。当前 version-bump workflow
+把 0.x breaking commit 计算为 1.0.0；在 workflow 与 deterministic fixture 显式支持批准的 0.7.0 policy 前，
+任何 removal tranche 均不得合并，也不得用 non-breaking commit label 隐藏 breaking change。任何阶段都不能
+把未迁移入口留在独立 runtime 上作为“临时 fallback”。
