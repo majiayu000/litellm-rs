@@ -58,10 +58,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     internal("base", "shared provider infrastructure"),
     wire("bedrock", "native Provider enum variant"),
     wire("cloudflare", "native Provider enum variant"),
-    stub(
-        "codestral",
-        "specialized provider module; not wired through the LLM factory yet",
-    ),
     providers_extended_wire(
         "cohere",
         "ProviderType::Cohere dispatches to native Cohere API paths when providers-extended is enabled",
@@ -121,7 +117,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "demote-to-catalog",
         "catalog-backed duplicate with native macro provider retained until demote tranche",
     ),
-    baseline("codestral", "delete-native", "unwired native chat provider"),
     baseline(
         "custom_api",
         "exempt",

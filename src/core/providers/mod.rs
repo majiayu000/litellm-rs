@@ -26,8 +26,6 @@ pub mod bedrock;
 // cerebras: Tier 1 -> registry/catalog.rs
 pub mod cloudflare;
 #[cfg(feature = "providers-extended")]
-pub mod codestral;
-#[cfg(feature = "providers-extended")]
 pub mod cohere;
 // comet_api: Tier 1 -> registry/catalog.rs
 // compactifai: Tier 1 -> registry/catalog.rs
