@@ -39,14 +39,12 @@ pub(super) fn test_gemini_route_provider(
 }
 
 pub(super) fn gemini_router_models(router: &UnifiedRouter, requested_model: &str) -> Vec<String> {
-    let mut runtime_models = router.list_models();
-    runtime_models.sort();
-    runtime_models.dedup();
+    let runtime_models = router.list_models_in_insertion_order();
 
     let mut candidates = Vec::new();
     if runtime_models
-        .binary_search_by(|model| model.as_str().cmp(requested_model))
-        .is_ok()
+        .iter()
+        .any(|model| model.as_str() == requested_model)
         && gemini_runtime_model_supported(router, requested_model, requested_model)
     {
         candidates.push(requested_model.to_string());

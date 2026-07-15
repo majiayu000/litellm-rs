@@ -7,6 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[tokio::test]
 async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     let selected = MockGeminiServer::launch().await;
+    let backup = MockGeminiServer::launch().await;
     let replacement = MockGeminiServer::launch().await;
     let configured = |name: &str, base_url: &str, api_key: &str, header_value: &str| {
         let mut provider = gemini_provider(name, base_url, Vec::new());
@@ -20,12 +21,15 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
         );
         provider
     };
-    let state = build_test_state(vec![configured(
-        "runtime-alias",
-        &selected.base_url,
-        "selected-runtime-key",
-        "selected-runtime-header",
-    )])
+    let state = build_test_state(vec![
+        configured(
+            "zz-primary",
+            &selected.base_url,
+            "selected-runtime-key",
+            "selected-runtime-header",
+        ),
+        configured("aa-backup", &backup.base_url, "backup-key", "backup-header"),
+    ])
     .await;
     state.budget_limits.providers.set_provider_limit(
         "gemini",
@@ -38,7 +42,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     let budget_limits = state.budget_limits.clone();
     let mut replaced_config = state.config().as_ref().clone();
     replaced_config.gateway.providers = vec![configured(
-        "runtime-alias",
+        "zz-primary",
         &replacement.base_url,
         "replacement-key",
         "replacement-header",
@@ -84,6 +88,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
         requests[0].headers["x-custom-header"],
         "selected-runtime-header"
     );
+    assert!(backup.requests().is_empty());
     assert!(replacement.requests().is_empty());
     let provider_usage = budget_limits
         .providers
@@ -96,6 +101,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
         .expect("requested model budget should exist");
     assert!(model_usage.current_spend > 0.0);
     selected.shutdown().await;
+    backup.shutdown().await;
     replacement.shutdown().await;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
