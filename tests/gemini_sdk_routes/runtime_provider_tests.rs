@@ -91,7 +91,7 @@ async fn gemini_sdk_route_keeps_selected_runtime_timeout_after_config_mutation()
         let (mut socket, _) = listener.accept().await.expect("request should connect");
         let mut request = [0_u8; 4096];
         socket
-            .read(&mut request)
+            .read_exact(&mut request[..1])
             .await
             .expect("request should read");
         tokio::time::sleep(Duration::from_millis(1_200)).await;
