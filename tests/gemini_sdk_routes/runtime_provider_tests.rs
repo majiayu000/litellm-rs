@@ -21,7 +21,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
         provider
     };
     let state = build_test_state(vec![configured(
-        "google_ai_studio",
+        "runtime-alias",
         &selected.base_url,
         "selected-runtime-key",
         "selected-runtime-header",
@@ -38,7 +38,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     let budget_limits = state.budget_limits.clone();
     let mut replaced_config = state.config().as_ref().clone();
     replaced_config.gateway.providers = vec![configured(
-        "google_ai_studio",
+        "runtime-alias",
         &replacement.base_url,
         "replacement-key",
         "replacement-header",
@@ -116,10 +116,13 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
             .expect("response should write");
     });
     let mut selected = gemini_provider(
-        "gemini",
+        "runtime-explicit",
         &format!("http://{address}"),
         vec!["gemini-3.1-flash-lite".to_string()],
     );
+    selected
+        .settings
+        .insert("provider_name".to_string(), json!("gemini"));
     selected.timeout = 2;
     let mut replacement = selected.clone();
     let state = build_test_state(vec![selected]).await;
@@ -225,6 +228,30 @@ async fn gemini_sdk_route_accepts_native_gemini_runtime() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(mock.requests().len(), 1);
+
+    let mut unrelated = gemini_provider(
+        "native-registry",
+        &mock.base_url,
+        vec!["gemini-3.1-flash-lite".to_string()],
+    );
+    unrelated.provider_type = "gemini".to_string();
+    let state = build_test_state(vec![unrelated]).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1beta/models/gemini-unrelated-model:generateContent")
+            .set_json(gemini_body())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(mock.requests().len(), 1);
     mock.shutdown().await;
 }
 
@@ -232,12 +259,20 @@ async fn gemini_sdk_route_accepts_native_gemini_runtime() {
 async fn gemini_sdk_route_source_has_one_runtime_sender_and_no_config_adapter() {
     let route = include_str!("../../src/server/routes/ai/gemini.rs");
     let provider = include_str!("../../src/server/routes/ai/gemini/provider.rs");
-    let source = format!("{route}\n{provider}");
+    let spend = include_str!("../../src/server/routes/ai/gemini/spend.rs");
+    let source = format!("{route}\n{provider}\n{spend}");
     for forbidden in [
         "state.config().providers()",
+        ".gateway.providers",
+        ".providers()",
         "RouteHttpClient",
-        "ensure_gemini_provider_candidate_configured",
         "ProviderConfig",
+        "create_provider(",
+        "BaseHttpClient",
+        "reqwest::Client",
+        "Client::new(",
+        "GeminiClient::new(",
+        "OpenAILikeProvider::new(",
     ] {
         assert!(
             !source.contains(forbidden),
@@ -255,6 +290,26 @@ async fn gemini_sdk_route_source_has_one_runtime_sender_and_no_config_adapter() 
         assert!(!adapter.contains(sensitive), "adapter retains {sensitive}");
     }
     assert_eq!(source.matches(".gemini_generate_content(").count(), 1);
+    assert_eq!(
+        source
+            .matches("selected_provider.gemini_generate_content(native_request)")
+            .count(),
+        1
+    );
+    for alternate_sender in [
+        "Provider::gemini_generate_content(",
+        "GeminiProvider::gemini_generate_content(",
+        "OpenAILikeProvider::gemini_generate_content(",
+        ".execute_request(",
+        ".execute_streaming_request(",
+        ".post(",
+        ".request(",
+    ] {
+        assert!(
+            !source.contains(alternate_sender),
+            "alternate sender: {alternate_sender}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -263,6 +318,7 @@ async fn gemini_sdk_stream_client_cancel_is_health_neutral_and_settles_observed_
         .await
         .expect("cancel upstream should bind");
     let address = listener.local_addr().expect("cancel upstream address");
+    let (continue_tx, continue_rx) = tokio::sync::oneshot::channel();
     let upstream = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("request should connect");
         let mut request = [0_u8; 4096];
@@ -285,7 +341,9 @@ async fn gemini_sdk_stream_client_cancel_is_health_neutral_and_settles_observed_
             .write_all(format!("{:x}\r\n{first}\r\n", first.len()).as_bytes())
             .await
             .expect("observed chunk should write");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        continue_rx
+            .await
+            .expect("client cancellation should release upstream");
         let second = "data: {\"candidates\":[]}\n\n";
         let _ = socket
             .write_all(format!("{:x}\r\n{second}\r\n0\r\n\r\n", second.len()).as_bytes())
@@ -335,6 +393,9 @@ async fn gemini_sdk_stream_client_cancel_is_health_neutral_and_settles_observed_
             .expect("observed chunk should be valid");
     assert!(String::from_utf8_lossy(&observed).contains("usageMetadata"));
     drop(body);
+    continue_tx
+        .send(())
+        .expect("cancelled client should release upstream");
     upstream.await.expect("cancel upstream should finish");
     tokio::time::timeout(Duration::from_secs(2), async {
         while deployment.state.active_requests.load(Ordering::Relaxed) != 0 {
@@ -350,6 +411,14 @@ async fn gemini_sdk_stream_client_cancel_is_health_neutral_and_settles_observed_
     assert_eq!(
         deployment.state.fail_requests.load(Ordering::Relaxed),
         failures
+    );
+    assert!(
+        budget_limits
+            .providers
+            .get_provider_usage("gemini")
+            .expect("observed provider spend")
+            .current_spend
+            > 0.0
     );
     assert!(
         budget_limits

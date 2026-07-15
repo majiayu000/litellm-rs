@@ -1,6 +1,7 @@
 use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
 use crate::core::providers::{GeminiNativeRequest, Provider, ProviderError};
 use crate::core::router::UnifiedRouter;
+use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
@@ -46,33 +47,36 @@ pub(super) fn gemini_router_models(router: &UnifiedRouter, requested_model: &str
     if runtime_models
         .binary_search_by(|model| model.as_str().cmp(requested_model))
         .is_ok()
+        && gemini_runtime_model_supported(router, requested_model, requested_model)
     {
         candidates.push(requested_model.to_string());
     }
-    candidates.extend(
-        runtime_models
-            .into_iter()
-            .filter(|model| model != requested_model && is_gemini_runtime_alias(model)),
-    );
+    candidates.extend(runtime_models.into_iter().filter(|model| {
+        model != requested_model && gemini_runtime_model_supported(router, model, requested_model)
+    }));
     candidates
 }
 
-fn is_gemini_runtime_alias(model: &str) -> bool {
-    if !model
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
-    {
-        return false;
-    }
-    let normalized: String = model
-        .chars()
-        .filter(|character| !matches!(character, '_' | '-'))
-        .flat_map(char::to_lowercase)
-        .collect();
-    matches!(
-        normalized.as_str(),
-        "gemini" | "googleai" | "googleaistudio"
-    )
+fn gemini_runtime_model_supported(
+    router: &UnifiedRouter,
+    model: &str,
+    requested_model: &str,
+) -> bool {
+    router
+        .get_deployments_for_model(model)
+        .into_iter()
+        .filter_map(|deployment_id| router.get_deployment(&deployment_id))
+        .any(|deployment| {
+            let exact_requested_key = model == requested_model;
+            let empty_model_alias = deployment.id == model
+                && deployment.model == model
+                && deployment.model_name == model;
+            (exact_requested_key || empty_model_alias)
+                && deployment.provider.supports_capability_for_model(
+                    &deployment.model,
+                    &ProviderCapability::GeminiGenerateContent,
+                )
+        })
 }
 
 pub(super) async fn send_gemini_request(
