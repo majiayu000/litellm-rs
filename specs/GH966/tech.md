@@ -105,21 +105,23 @@ Phase A 合并后的公开回归证明，仅在 OpenAI-like provider 层分析�
 无法无损区分 endpoint policy 与普通 transport 错误：`reqwest::Error` 的 `Display` 不保留
 redirect-target 与 DNS-rebinding 的 source chain，而宽泛匹配 `error following redirect` 会把 redirect loop
 错判为不可重试配置错误。因此 Phase B 之前先在原 PR #1021、原分支
-`codex/gh966-transport-classification` 完成一个严格串行的 regression follow-up，允许修改以下 5 个文件：
+`codex/gh966-transport-classification` 完成一个严格串行的 regression follow-up，允许修改以下 6 个文件：
 
 1. `src/utils/net/http.rs`
 2. `src/utils/net/http/provider_tests.rs`
-3. `src/core/providers/base/connection_pool.rs`
-4. `src/core/providers/openai_like/provider.rs`
-5. `src/core/providers/openai_like/provider/tests.rs`
+3. `src/core/providers/base/http.rs`
+4. `src/core/providers/base/connection_pool.rs`
+5. `src/core/providers/openai_like/provider.rs`
+6. `src/core/providers/openai_like/provider/tests.rs`
 
-connection pool 必须保留现有 ordinary/streaming 执行方法与全局语义，仅新增显式 opt-in 路径；
+`BaseHttpClient` 与 connection pool 必须保留现有 ordinary/streaming 执行方法与全局语义；
+`BaseHttpClient` 仅可新增 crate-private typed request opt-in，connection pool 仅可新增显式 opt-in 路径；
 OpenAI-like Gemini native sender 是唯一调用者。opt-in 路径在字符串化前检查直接 outbound URL policy
 拒绝与 `reqwest::Error::source()` 链中的精确 redirect-target/DNS-rebinding policy 来源，并为 ordinary 与
 streaming 返回结构化 `Configuration`。不得用宽泛 redirect 文本、URL、host 或 key 作为分类标记；
 对外错误文本必须固定且不泄露 raw/URL-encoded key 或 endpoint。回归必须使用真实本地 redirect
 链证明 policy redirect 为 `Configuration`、redirect loop 仍为 `Network`，并覆盖 DNS-rebinding source、直接
-unsupported-scheme、timeout、ordinary 和 streaming。本 follow-up 最多 5 个非文档文件、500 changed lines，
+unsupported-scheme、timeout、ordinary 和 streaming。本 follow-up 最多 6 个非文档文件、500 changed lines，
 使用 `Refs #966`；exact-head implementation/security review、CI、0 unresolved threads 与 required gate 通过后才可
 合并，合并后 #966 仍保持 open。
 

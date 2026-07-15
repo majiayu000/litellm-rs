@@ -37,7 +37,8 @@ GH-966 / #966
   拒绝与 `reqwest::Error` source chain 中的 redirect-target/DNS-rebinding policy 信号；
   policy 错误映射为固定、无敏感数据的 `Configuration`，redirect loop/普通 transport
   仍为 `Network`，timeout 仍为 `Timeout`，其他 provider 与旧 connection-pool 执行方法
-  语义不变。PR 限 tech follow-up 的 5 文件、最多 500 changed lines，使用
+  语义不变；`BaseHttpClient` 只可新增 crate-private typed request opt-in，现有方法不变。
+  PR 限 tech follow-up 的 6 文件、最多 500 changed lines，使用
   `Refs #966`。 Verify: 真实本地 redirect policy 与 redirect-loop 对照、DNS-rebinding
   source、unsupported scheme、timeout、ordinary/streaming、raw/URL-encoded key 与 endpoint
   不泄露；all-feature check；strict Clippy；全量 test；scope/overlap；exact-head
@@ -78,7 +79,7 @@ GH-966 / #966
 - T2、T2R、T3、T4 是严格串行的 implementation PR；T2R 是 Phase A 合并后暴露的
   回归修复，必须在 T3 前合并；每阶段必须合并后，下一阶段才从最新 `main` 继续。
 - 每个阶段最多 10 个非文档文件、500 changed lines；三阶段 writable union 为 tech spec
-  明列的 11 个文件，regression follow-up 另限定为 tech spec 明列的 5 个文件，不修改
+  明列的 11 个文件，regression follow-up 另限定为 tech spec 明列的 6 个文件，不修改
   799 行的 `execution.rs` 或 budget API。
 - T5 的只读 reviewer/security lane 可与 coordinator 的 final verification 并行；reviewer 不写
   production/test 文件，只在 exact head 给 verdict，并由 reviewer 身份解析 review threads。
