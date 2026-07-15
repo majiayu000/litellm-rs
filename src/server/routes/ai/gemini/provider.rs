@@ -1,6 +1,6 @@
-use crate::config::models::provider::ProviderConfig;
 use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
 use crate::core::providers::{GeminiNativeRequest, Provider, ProviderError};
+use crate::core::router::UnifiedRouter;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
@@ -37,101 +37,40 @@ pub(super) fn test_gemini_route_provider(
     }
 }
 
-pub(super) fn ensure_gemini_provider_candidate_configured(
-    providers: &[ProviderConfig],
-    requested_model: &str,
-) -> Result<(), GatewayError> {
-    let candidates = gemini_candidate_configs(providers);
-    if candidates.is_empty() {
-        return Err(missing_gemini_provider_error(requested_model));
-    }
+pub(super) fn gemini_router_models(router: &UnifiedRouter, requested_model: &str) -> Vec<String> {
+    let mut runtime_models = router.list_models();
+    runtime_models.sort();
+    runtime_models.dedup();
 
-    if candidates
-        .iter()
-        .any(|provider| gemini_provider_supports_requested_model(provider, requested_model))
+    let mut candidates = Vec::new();
+    if runtime_models
+        .binary_search_by(|model| model.as_str().cmp(requested_model))
+        .is_ok()
     {
-        Ok(())
-    } else {
-        Err(missing_gemini_provider_error(requested_model))
+        candidates.push(requested_model.to_string());
     }
+    candidates.extend(
+        runtime_models
+            .into_iter()
+            .filter(|model| model != requested_model && is_gemini_runtime_alias(model)),
+    );
+    candidates
 }
 
-pub(super) fn gemini_router_models(
-    providers: &[ProviderConfig],
-    requested_model: &str,
-) -> Vec<String> {
-    let mut router_models = Vec::new();
-
-    for provider in gemini_candidate_configs(providers) {
-        if !gemini_provider_supports_requested_model(provider, requested_model) {
-            continue;
-        }
-
-        if provider.models.is_empty() {
-            if gemini_provider_uses_registry_models(provider) {
-                push_unique_gemini_router_model(&mut router_models, requested_model);
-            } else {
-                push_unique_gemini_router_model(&mut router_models, &provider.name);
-            }
-            continue;
-        }
-
-        if provider.models.iter().any(|model| model == requested_model) {
-            push_unique_gemini_router_model(&mut router_models, requested_model);
-        }
+fn is_gemini_runtime_alias(model: &str) -> bool {
+    if !model
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return false;
     }
-
-    if router_models.is_empty() {
-        router_models.push(requested_model.to_string());
-    }
-
-    router_models
-}
-
-fn push_unique_gemini_router_model(router_models: &mut Vec<String>, model: &str) {
-    if !router_models.iter().any(|existing| existing == model) {
-        router_models.push(model.to_string());
-    }
-}
-
-fn gemini_candidate_configs(providers: &[ProviderConfig]) -> Vec<&ProviderConfig> {
-    providers
-        .iter()
-        .filter(|provider| provider.enabled)
-        .filter(|provider| is_gemini_provider(provider))
-        .collect()
-}
-
-fn gemini_provider_supports_requested_model(
-    provider: &ProviderConfig,
-    requested_model: &str,
-) -> bool {
-    provider.models.is_empty() || provider.models.iter().any(|model| model == requested_model)
-}
-
-fn gemini_provider_uses_registry_models(provider: &ProviderConfig) -> bool {
+    let normalized: String = model
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-'))
+        .flat_map(char::to_lowercase)
+        .collect();
     matches!(
-        super::super::provider_config::normalize_provider_selector(&provider.provider_type)
-            .as_str(),
-        "gemini" | "googlegemini" | "googleai"
-    )
-}
-
-fn is_gemini_provider(provider: &ProviderConfig) -> bool {
-    let provider_type =
-        super::super::provider_config::normalize_provider_selector(&provider.provider_type);
-    let provider_name = provider
-        .settings
-        .get("provider_name")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(&provider.name);
-    let provider_name = super::super::provider_config::normalize_provider_selector(provider_name);
-
-    matches!(
-        provider_type.as_str(),
-        "gemini" | "googleai" | "googleaistudio"
-    ) || matches!(
-        provider_name.as_str(),
+        normalized.as_str(),
         "gemini" | "googleai" | "googleaistudio"
     )
 }
