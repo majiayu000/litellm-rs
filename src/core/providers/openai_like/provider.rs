@@ -588,7 +588,7 @@ fn gemini_openai_like_transport_error(error: ProviderError) -> ProviderError {
 
 fn is_gemini_endpoint_policy_error(message: &str) -> bool {
     message.starts_with("Outbound URL ")
-        || message.contains("Redirect target failed SSRF validation:")
+        || message.starts_with("error following redirect for url")
         || message.contains("SSRF protection")
 }
 

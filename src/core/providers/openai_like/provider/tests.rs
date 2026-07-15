@@ -26,17 +26,50 @@ fn gemini_transport_preserves_policy_configuration_errors() {
 }
 
 #[test]
-fn gemini_transport_classifies_all_endpoint_policy_rejections() {
-    for message in [
+fn gemini_transport_classifies_direct_endpoint_policy_rejection() {
+    let error = gemini_openai_like_transport_error(ProviderError::network(
+        "openai_like",
         "Outbound URL scheme 'ftp' is not allowed",
-        "Redirect target failed SSRF validation: scheme 'ftp' is not allowed at https://example.test?key=secret-key",
-    ] {
-        let error =
-            gemini_openai_like_transport_error(ProviderError::network("openai_like", message));
+    ));
 
-        assert!(matches!(error, ProviderError::Configuration { .. }));
-        assert!(!error.to_string().contains("secret-key"));
-    }
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+}
+
+#[tokio::test]
+async fn gemini_transport_classifies_reqwest_redirect_policy_rejection() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_full_http_request(&mut socket).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 302 Found\r\nlocation: https://example.test?key=secret-key\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            attempt.error("Redirect target failed SSRF validation: blocked")
+        }))
+        .build()
+        .unwrap();
+    let transport_error = client
+        .get(format!("http://{address}"))
+        .send()
+        .await
+        .unwrap_err();
+    task.await.unwrap();
+    let message = transport_error.to_string();
+    assert!(message.starts_with("error following redirect for url"));
+    assert!(!message.contains("Redirect target failed SSRF validation"));
+
+    let error = gemini_openai_like_transport_error(ProviderError::network("openai_like", message));
+
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(!error.to_string().contains("secret-key"));
+    assert!(!error.to_string().contains("example.test"));
 }
 
 #[test]
