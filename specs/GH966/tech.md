@@ -41,6 +41,11 @@ Link to `product.md`.
   `OpenAILikeConfig` base endpoint/API key/custom headers/timeout 与 pool-owned policy client，不读取 Gateway config。
 - URL 只接受现有 `v1|v1beta` 与 `generateContent|streamGenerateContent` 组合；stream 添加 `alt=sse`，AI Studio
   key 继续使用 query。所有 client/build/send/timeout/HTTP 错误映射为现有 `ProviderError`，无 silent fallback。
+- OpenAI-like Gemini native sender 的 endpoint-policy 错误必须在 `reqwest::Error` 被 `Display`/字符串化之前保留结构化
+  信号：直接 outbound URL policy 拒绝以及 source chain 中的 redirect-target/DNS-rebinding policy 拒绝映射为
+  不可重试的 `Configuration`；redirect loop、普通 redirect failure 与其他 transport 错误仍是可 fallback 的
+  `Network`，timeout 仍是 `Timeout`。只允许 Gemini native sender 显式选择该保真路径，不改变其他 provider
+  或现有 connection-pool 公共执行方法的错误语义。
 - provider-owned execute contract 在读取任何非成功 upstream body 后、返回/记录错误前，同时替换 runtime
   config 中 API key 的 raw 与 `application/x-www-form-urlencoded` 形式；route adapter 不重新获取或保存 key。
 
@@ -94,6 +99,32 @@ Phase A 的原 PR 已在本 amendment 之前创建；amendment 合并后必须�
 `codex/gh966-runtime-dispatch` merge 最新 `origin/main`，禁止 force push或新建替代 PR，再对新的 exact head 重跑
 CI、reviewThreads、implementation/security review 与 required gate。
 
+#### Phase A regression follow-up — preserve typed endpoint-policy failures
+
+Phase A 合并后的公开回归证明，仅在 OpenAI-like provider 层分析已字符串化的 `ProviderError::Network`
+无法无损区分 endpoint policy 与普通 transport 错误：`reqwest::Error` 的 `Display` 不保留
+redirect-target 与 DNS-rebinding 的 source chain，而宽泛匹配 `error following redirect` 会把 redirect loop
+错判为不可重试配置错误。因此 Phase B 之前先在原 PR #1021、原分支
+`codex/gh966-transport-classification` 完成一个严格串行的 regression follow-up，允许修改以下 6 个文件：
+
+1. `src/utils/net/http.rs`
+2. `src/utils/net/http/provider_tests.rs`
+3. `src/core/providers/base/http.rs`
+4. `src/core/providers/base/connection_pool.rs`
+5. `src/core/providers/openai_like/provider.rs`
+6. `src/core/providers/openai_like/provider/tests.rs`
+
+`BaseHttpClient` 与 connection pool 必须保留现有 ordinary/streaming 执行方法与全局语义；
+`BaseHttpClient` 仅可新增 crate-private typed request opt-in，connection pool 仅可新增显式 opt-in 路径；
+OpenAI-like Gemini native sender 是唯一调用者。opt-in 路径在字符串化前检查直接 outbound URL policy
+拒绝与 `reqwest::Error::source()` 链中的精确 redirect-target/DNS-rebinding policy 来源，并为 ordinary 与
+streaming 返回结构化 `Configuration`。不得用宽泛 redirect 文本、URL、host 或 key 作为分类标记；
+对外错误文本必须固定且不泄露 raw/URL-encoded key 或 endpoint。回归必须使用真实本地 redirect
+链证明 policy redirect 为 `Configuration`、redirect loop 仍为 `Network`，并覆盖 DNS-rebinding source、直接
+unsupported-scheme、timeout、ordinary 和 streaming。本 follow-up 最多 6 个非文档文件、500 changed lines，
+使用 `Refs #966`；exact-head implementation/security review、CI、0 unresolved threads 与 required gate 通过后才可
+合并，合并后 #966 仍保持 open。
+
 #### Phase B — remove post-selection reconstruction
 
 允许修改 `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs`、
@@ -140,16 +171,16 @@ fresh diff 超过自身 scope，不得削弱断言、压缩可读性或扩大 wr
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | route selected callback + closed provider dispatch | unary/stream snapshot executor tests；source guard 无 config rescan |
-| B-002 | GeminiClient/OpenAILike runtime-owned config/client | router 后 config mutation 双 listener/key/header/timeout tests |
+| B-002 | GeminiClient/OpenAILike runtime-owned config/client + typed policy opt-in | router 后 config mutation 双 listener/key/header/timeout tests；直接 URL 与 reqwest source 在 stringify 前保真 |
 | B-003 | native Gemini passthrough | v1/v1beta unary/stream URL、query、headers、JSON/SSE integration matrix |
 | B-004 | OpenAILike named compatibility dispatch | 三个名称正例、大小写规范化与任意名称拒绝 tests |
 | B-005 | selection/unsupported error mapping | 无 deployment、模型不匹配、非 Gemini provider tests；无 fallback client source guard |
 | B-006 | identity-only route adapter + execution helper | selected provider + requested Gemini model 的 URL/budget/spend；deployment-id fallback/health/lease；空 `models` named compatibility assertions |
-| B-007 | existing unary retry helper | upstream 429/5xx、provider/model budget fallback tests |
+| B-007 | existing unary retry helper | upstream 429/5xx、provider/model budget fallback tests；policy redirect 不重试且 redirect loop/普通 transport 仍 fallback |
 | B-008 | existing stream execution lease + spend settlement | success=healthy、read failure=failed、cancel=neutral 的 lease/health/spend tests |
 | B-009 | reduced `GeminiRouteProvider` | compile-time struct fields + source guard 禁止 key/url/headers/timeout/client |
-| B-010 | focused source guard + full gates | guard red/green fixture、strict Clippy、全量 test、PR gate |
-| B-011 | provider-owned non-success response handling | raw key、URL-encoded key 与 URI echo 脱敏 tests；route adapter 无 key source guard |
+| B-010 | focused source guard + full gates | guard red/green fixture、typed redirect/DNS source + ordinary/streaming regressions、strict Clippy、全量 test、PR gate |
+| B-011 | provider-owned non-success response handling + fixed policy diagnostics | raw key、URL-encoded key、URI/endpoint echo 脱敏 tests；policy errors 不含敏感数据；route adapter 无 key source guard |
 
 ## 数据流
 
