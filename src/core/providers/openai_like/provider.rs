@@ -575,7 +575,7 @@ fn gemini_openai_like_transport_error(error: ProviderError) -> ProviderError {
         ProviderError::Configuration { message, .. } => {
             ProviderError::configuration("gemini_proxy", message)
         }
-        ProviderError::Network { message, .. } if message.contains("SSRF protection") => {
+        ProviderError::Network { message, .. } if is_gemini_endpoint_policy_error(&message) => {
             ProviderError::configuration(
                 "gemini_proxy",
                 "Gemini endpoint rejected by SSRF protection",
@@ -584,6 +584,12 @@ fn gemini_openai_like_transport_error(error: ProviderError) -> ProviderError {
         ProviderError::Timeout { .. } => gemini_transport_error(true),
         _ => gemini_transport_error(false),
     }
+}
+
+fn is_gemini_endpoint_policy_error(message: &str) -> bool {
+    message.starts_with("Outbound URL ")
+        || message.contains("Redirect target failed SSRF validation:")
+        || message.contains("SSRF protection")
 }
 
 fn sanitized_upstream_error(status: u16) -> String {

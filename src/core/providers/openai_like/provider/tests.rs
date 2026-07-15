@@ -26,6 +26,20 @@ fn gemini_transport_preserves_policy_configuration_errors() {
 }
 
 #[test]
+fn gemini_transport_classifies_all_endpoint_policy_rejections() {
+    for message in [
+        "Outbound URL scheme 'ftp' is not allowed",
+        "Redirect target failed SSRF validation: scheme 'ftp' is not allowed at https://example.test?key=secret-key",
+    ] {
+        let error =
+            gemini_openai_like_transport_error(ProviderError::network("openai_like", message));
+
+        assert!(matches!(error, ProviderError::Configuration { .. }));
+        assert!(!error.to_string().contains("secret-key"));
+    }
+}
+
+#[test]
 fn gemini_transport_redacts_network_error_details() {
     let error = gemini_openai_like_transport_error(ProviderError::network(
         "openai_like",
