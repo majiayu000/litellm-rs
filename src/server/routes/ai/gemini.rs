@@ -22,7 +22,7 @@ mod spend;
 use provider::{
     GeminiRouteProvider, ensure_gemini_provider_candidate_configured,
     gemini_gateway_error_to_provider_error, gemini_http_error, gemini_router_models,
-    missing_gemini_provider_error, selected_gemini_provider, send_gemini_request,
+    missing_gemini_provider_error, send_gemini_request,
 };
 use spend::{
     GeminiSpendState, extract_gemini_sse_usage, record_gemini_spend, settle_gemini_stream_spend,
@@ -157,18 +157,13 @@ async fn proxy_gemini_route_inner(
                 let context = context.clone();
                 let request = request.clone();
                 let requested_model = requested_model.clone();
-                move |selected_provider, selected_model, selected_deployment_id| {
+                move |selected_provider, _selected_model, _selected_deployment_id| {
                     let context = context.clone();
                     let request = request.clone();
                     let requested_model = requested_model.clone();
                     async move {
-                        let provider = selected_gemini_provider(
-                            state.config().providers(),
-                            &selected_deployment_id,
-                            &selected_provider,
-                            &selected_model,
-                            &requested_model,
-                        )?;
+                        let provider =
+                            GeminiRouteProvider::selected(&selected_provider, &requested_model);
                         let (budget_reservation, key_budget_reservation, response) =
                             send_gemini_request(
                                 state,
@@ -243,17 +238,12 @@ async fn proxy_gemini_stream_route_inner(
             {
                 let request = request.clone();
                 let requested_model = requested_model.clone();
-                move |selected_provider, selected_model, selected_deployment_id| {
+                move |selected_provider, _selected_model, _selected_deployment_id| {
                     let request = request.clone();
                     let requested_model = requested_model.clone();
                     async move {
-                        let provider = selected_gemini_provider(
-                            state.config().providers(),
-                            &selected_deployment_id,
-                            &selected_provider,
-                            &selected_model,
-                            &requested_model,
-                        )?;
+                        let provider =
+                            GeminiRouteProvider::selected(&selected_provider, &requested_model);
                         let (budget_reservation, key_budget_reservation, response) =
                             send_gemini_request(
                                 state,
