@@ -576,7 +576,10 @@ fn gemini_openai_like_transport_error(error: ProviderError) -> ProviderError {
             ProviderError::configuration("gemini_proxy", message)
         }
         ProviderError::Network { message, .. } if message.contains("SSRF protection") => {
-            ProviderError::configuration("gemini_proxy", message)
+            ProviderError::configuration(
+                "gemini_proxy",
+                "Gemini endpoint rejected by SSRF protection",
+            )
         }
         ProviderError::Timeout { .. } => gemini_transport_error(true),
         _ => gemini_transport_error(false),

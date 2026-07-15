@@ -10,13 +10,19 @@ const TEST_PUBLIC_API_BASE: &str = "https://api.example.com/v1";
 
 #[test]
 fn gemini_transport_preserves_policy_configuration_errors() {
+    let raw_key = "secret/key+value";
+    let encoded_key: String = url::form_urlencoded::byte_serialize(raw_key.as_bytes()).collect();
     let error = gemini_openai_like_transport_error(ProviderError::network(
         "openai_like",
-        "blocked by SSRF protection",
+        format!(
+            "blocked by SSRF protection at https://example.test?raw={raw_key}&encoded={encoded_key}"
+        ),
     ));
 
     assert!(matches!(error, ProviderError::Configuration { .. }));
     assert!(error.to_string().contains("SSRF protection"));
+    assert!(!error.to_string().contains(raw_key));
+    assert!(!error.to_string().contains(&encoded_key));
 }
 
 #[test]
