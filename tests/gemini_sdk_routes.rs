@@ -19,6 +19,7 @@ mod tests {
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::models::ApiKey;
     use litellm_rs::core::net::ProviderEndpointAccess;
+    use litellm_rs::core::providers::{ProviderError, create_provider};
     use serde_json::{Value, json};
     use std::time::{Duration, Instant};
 
@@ -445,7 +446,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_only_gemini_route_rejects_loopback_before_connect() {
+    async fn public_only_gemini_provider_bootstrap_rejects_loopback_before_connect() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
@@ -455,36 +456,20 @@ mod tests {
             &format!("http://{address}"),
             vec!["gemini-3.1-flash-lite".to_string()],
         );
+        provider.provider_type = "gemini".to_string();
         provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
-        let state = build_test_state(vec![provider]).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
-        .await;
+        let error = create_provider(provider)
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("public-only Gemini bootstrap must reject loopback"));
 
-        let response = test::call_service(
-            &app,
-            test::TestRequest::post()
-                .uri("/v1beta/models/gemini-3.1-flash-lite:generateContent")
-                .set_json(gemini_body())
-                .to_request(),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body: Value = test::read_body_json(response).await;
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("SSRF protection"))
-        );
+        assert!(matches!(error, ProviderError::Configuration { .. }));
+        assert!(error.to_string().contains("SSRF protection"));
         assert!(
             tokio::time::timeout(Duration::from_millis(100), listener.accept())
                 .await
                 .is_err(),
-            "public-only Gemini route must not connect to loopback listener"
+            "rejected public-only Gemini bootstrap must not connect to loopback listener"
         );
     }
 }
