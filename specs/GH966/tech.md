@@ -15,6 +15,9 @@ Link to `product.md`.
 | Gemini route entry | `src/server/routes/ai/gemini.rs:135`, `src/server/routes/ai/gemini.rs:148`, `src/server/routes/ai/gemini.rs:165`, `src/server/routes/ai/gemini.rs:231`, `src/server/routes/ai/gemini.rs:246` | route 从 Gateway config 预检/构造 router keys，selected callback 后再次反查配置 | B-001、B-002、B-005 的漂移入口 |
 | Route provider adapter | `src/server/routes/ai/gemini/provider.rs:24`, `src/server/routes/ai/gemini/provider.rs:61`, `src/server/routes/ai/gemini/provider.rs:80`, `src/server/routes/ai/gemini/provider.rs:118`, `src/server/routes/ai/gemini/provider.rs:178`, `src/server/routes/ai/gemini/provider.rs:316` | adapter 复制 key/base URL/headers/timeout 并构造 `RouteHttpClient` 发送 | issue 指定的第二执行器 |
 | Runtime snapshot | `src/core/router/deployment.rs:295`, `src/server/routes/ai/execution.rs:60`, `src/server/routes/ai/execution.rs:157` | deployment 已持有 concrete `Provider`、model、id，执行 helper 将 snapshot clone 交给 callback | 可直接满足 B-001/B-006 |
+| Immutable model-group index | `src/core/router/unified.rs:49`, `src/core/router/unified.rs:75`, `src/core/router/unified.rs:106`, `src/core/router/unified.rs:282`, `src/core/router/unified.rs:413` | snapshot 的 `model_index` 保留同组 deployment 插入顺序，但 model-group key 由 `HashMap::keys()` 读取，跨组顺序不稳定 | Phase C 必须从 runtime snapshot 读取稳定候选顺序，不能在 route 中按字母重排 |
+| Router construction order | `src/core/router/gateway_config.rs:78`, `src/core/router/gateway_config.rs:90`, `src/core/router/gateway_config.rs:117` | Gateway provider/model 按配置迭代顺序调用 `add_deployment`；空 model-list compatibility deployment 的 canonical identity 为 `id == model == model_name == provider name` | 为 model-group first-insertion order 与 empty-model alias 判定提供 runtime 事实 |
+| Router order regressions | `src/core/router/tests/router_tests.rs:64`, `src/core/router/tests/router_tests.rs:81`, `src/core/router/tests/router_tests.rs:182`, `src/core/router/tests/router_tests.rs:217` | 已覆盖同组插入、重复 id、reindex 与 atomic `set_model_list`，但未锁定跨 model-group 的 immutable insertion order | 前置阶段可在 router owner 内补齐最小顺序回归，不把 core 改动挤入 Phase C |
 | Closed provider dispatch | `src/core/providers/mod.rs:326`, `src/core/providers/mod.rs:352` | `Provider` enum 已集中执行 concrete provider 方法，但无 Gemini native passthrough dispatch | B-003/B-004 的类型安全入口 |
 | Native Gemini client | `src/core/providers/gemini/client.rs:35`, `src/core/providers/gemini/client.rs:92`, `src/core/providers/gemini/client.rs:125`, `src/core/providers/gemini/provider.rs:34` | client 已拥有不可变 config 与 policy-aware ordinary/streaming clients，私有发送只服务转换后的 chat API | 应复用的 runtime executor |
 | Named compatibility runtime | `src/core/providers/openai_like/provider.rs:53`, `src/core/providers/openai_like/provider.rs:66`, `src/core/providers/factory/registry.rs:104` | OpenAI-like runtime 已拥有 config/pool/name，但没有受限的 Gemini native passthrough | B-004 兼容闭集 |
@@ -52,7 +55,8 @@ Link to `product.md`.
 ### 3. Route selection and identity
 
 - Gemini route 删除 `state.config().providers()` candidate scan、selected deployment 到 config 的匹配和
-  route-owned client 构造。router key 由请求模型与受限兼容别名组成并去重；`run_unary`/`run_stream` 继续使用
+  route-owned client 构造。router key 由请求模型与受限兼容别名组成并去重，并按 immutable runtime
+  model-group 的 first-insertion order 读取；不得在 route 中排序这些 key。`run_unary`/`run_stream` 继续使用
   现有 `select_deployment_lease_for_capability_matching`，但传入 Gemini native marker，使不支持的 deployment
   在 lease 获取前被排除，不修改 799 行的 execution helper。
 - `GeminiRouteProvider` 缩为 `provider_name`、`pricing_provider`、`requested_model` 的只读 identity。native URL、
@@ -160,11 +164,43 @@ provider-name selection key。Phase B 结束时，pre-selection candidate-key �
 #966 仍为 open，再从最新 main 创建 Phase C。Phase B 必须依赖上述 prerequisite regression follow-up 已合并，并从
 该 merge 后的最新 `main` 重放；不得把 parent test 修改挤入已有 497-line Phase B diff。
 
+#### Phase C prerequisite — immutable runtime model-group order
+
+PR #1026 的两个 current-head review threads 已分别裁决：
+
+- `discussion_r3587044607` 不构成 spec 扩展。`src/core/router/gateway_config.rs` 的 canonical empty-model
+  compatibility deployment 明确以 provider name 同时构造 `id`、`model` 与 `model_name`；删除 `id == model`
+  条件会把任意自定义 id 的显式 model deployment 误判为 empty-model alias，因此保持现有三字段 identity 判定。
+- `discussion_r3587080223` 是有效 blocker。`RoutingSnapshot::model_index` 的同组 `Vec<DeploymentId>` 已保留
+  deployment 顺序，但 `HashMap` key 枚举没有 model-group 顺序；Phase C 若再 alphabetic sort，会把
+  `zz-primary` 后配置的 `aa-backup` 提前，破坏 B-007 要求沿用的 fallback 语义。
+
+因此 Phase C 前新增独立 prerequisite PR，只允许修改：
+
+1. `src/core/router/unified.rs`
+2. `src/core/router/tests/router_tests.rs`
+
+`RoutingSnapshot` 必须在同一 immutable generation 中维护 model-group first-insertion order，并提供 additive、
+只读的 ordered model-group API。首次出现的 model group 追加一次；同组新增或同 id 原位替换不得重复或重排；
+最后一个 deployment 删除时同步移除该 group；同 id reindex 到新 group 时仅在旧 group 为空时移除旧项，并按新
+group 是否已存在决定保持原位或追加；`set_model_list` 按输入 deployment 的 first occurrence 重建完整顺序并与
+deployments、`model_index` 一次性发布。该阶段不得改变 `model_index` 的 lookup 语义、同组
+`Vec<DeploymentId>` 顺序、alias resolution、selection strategy、health/lease/state preservation，也不得读取
+Gateway config 或加入 Gemini route 特例。
+
+前置 PR 最多 2 个非文档文件、500 changed lines，使用 `Refs #966`；router focused unit tests、格式、全特性
+构建、strict Clippy、全量测试、scope/overlap、independent implementation review、CI、0 unresolved threads 与
+required gate 全部通过后才可合并，合并后 #966 保持 open。随后原 Phase C PR #1026 必须在原分支
+`codex/gh966-runtime-only-discovery` merge 该 prerequisite 后的最新 `origin/main`（禁止 force push、禁止新建
+替代 PR），并在新的 exact head 重跑全部验证。前置阶段不进入 Phase C diff，因此 Phase C 仍保持下述四文件
+writable scope 和最多 500 changed lines。
+
 #### Phase C — runtime-only discovery and final closure
 
 允许修改 `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs`、
 `tests/gemini_sdk_routes.rs` 与 `tests/gemini_sdk_routes/runtime_provider_tests.rs`。候选模型/别名只从 router 的
-immutable runtime deployments 派生，删除 Gemini route 最后一处 `state.config().providers()`。补齐 unary/stream
+immutable runtime deployments 派生，并使用 prerequisite 提供的 ordered model-group API 过滤候选，不得
+alphabetic sort 或从其他 map key 枚举重建顺序；删除 Gemini route 最后一处 `state.config().providers()`。补齐 unary/stream
 双 snapshot、native + 三个命名兼容正例、任意名称拒绝、empty-model identity、fallback/budget/health/lease/spend、
 client cancel neutral、upstream read failure 与 source guard。parent integration test 只在 immutable runtime 语义
 改变既有断言时修改。最终 source guard 必须拒绝 Gemini route 的 config scan、`RouteHttpClient`、敏感 adapter
@@ -175,6 +211,7 @@ client cancel neutral、upstream read failure 与 source guard。parent integrat
 三个阶段的 writable union 为上述 11 个文件，不触碰 `src/server/routes/ai/execution.rs` 或 budget API。若任一阶段
 fresh diff 超过自身 scope，不得削弱断言、压缩可读性或扩大 writable union；先重新切分该阶段并更新已合并规范。
 Phase B prerequisite regression follow-up 是独立测试修正，不扩大 Phase B writable scope 或 changed-line budget。
+Phase C model-order prerequisite 同样是独立 router-core 修正，不扩大 Phase C 四文件 scope 或 changed-line budget。
 
 ### 5. Verification architecture
 
@@ -188,6 +225,9 @@ Phase B prerequisite regression follow-up 是独立测试修正，不扩大 Phas
   spend；upstream read failure 对照组断言健康失败增加。
 - source guard 精确拒绝 Gemini route 中 `state.config().providers()`、`RouteHttpClient`、复制认证/endpoint 字段
   和 config-selection helper；不使用可增长的数量 baseline。
+- router order unit regressions 覆盖 add/remove/reindex/duplicate group 与 `set_model_list` generation swap，证明
+  ordered read API 保持 model-group first-insertion order，同时 `get_deployments_for_model` 的 lookup 与同组
+  deployment 顺序不变。
 - provider 单测让 upstream error body/URI 分别回显 raw key 与 URL-encoded key，断言返回的 typed error/body、
   `ProviderError` display/debug 候选文本均只含 `[REDACTED]`，且不含两种原值。
 - PublicOnly 回归在 runtime provider bootstrap/configuration 边界断言 loopback fail closed 且 listener 零连接；
@@ -203,10 +243,10 @@ Phase B prerequisite regression follow-up 是独立测试修正，不扩大 Phas
 | B-004 | OpenAILike named compatibility dispatch | 三个名称正例、大小写规范化与任意名称拒绝 tests |
 | B-005 | selection/unsupported error mapping | 无 deployment、模型不匹配、非 Gemini provider tests；无 fallback client source guard |
 | B-006 | identity-only route adapter + execution helper | selected provider + requested Gemini model 的 URL/budget/spend；deployment-id fallback/health/lease；空 `models` named compatibility assertions |
-| B-007 | existing unary retry helper | upstream 429/5xx、provider/model budget fallback tests；policy redirect 不重试且 redirect loop/普通 transport 仍 fallback |
+| B-007 | existing unary retry helper + immutable router model-group order | upstream 429/5xx、provider/model budget fallback tests；router add/remove/reindex/`set_model_list` order regressions；Phase C model-less primary/backup 不按字母重排；policy redirect 不重试且 redirect loop/普通 transport 仍 fallback |
 | B-008 | existing stream execution lease + spend settlement | success=healthy、read failure=failed、cancel=neutral 的 lease/health/spend tests |
 | B-009 | reduced `GeminiRouteProvider` | compile-time struct fields + source guard 禁止 key/url/headers/timeout/client |
-| B-010 | focused source guard + full gates | guard red/green fixture、typed redirect/DNS source + ordinary/streaming regressions、bootstrap PublicOnly loopback fail-closed、strict Clippy、全量 test、PR gate |
+| B-010 | focused source guard + router order regressions + full gates | guard red/green fixture、immutable ordered API add/remove/reindex/`set_model_list` regressions、typed redirect/DNS source + ordinary/streaming regressions、bootstrap PublicOnly loopback fail-closed、strict Clippy、全量 test、PR gate |
 | B-011 | provider-owned non-success response handling + fixed policy diagnostics | raw key、URL-encoded key、URI/endpoint echo 脱敏 tests；policy errors 不含敏感数据；route adapter 无 key source guard |
 
 ## 数据流
@@ -242,12 +282,14 @@ usage；spend 使用相同 provider/requested-model，健康、fallback 与 leas
 - [ ] Endpoint policy tests: PublicOnly loopback 在 config/factory/runtime client/Base HTTP 构造边界 fail closed；
   listener 零连接，且不依赖 route-time config reconstruction。
 - [ ] Architecture tests: Gemini route config rescan/route client/敏感字段 guard 红绿与 production 零命中。
+- [ ] Router unit tests: model-group add/remove/reindex/duplicate/`set_model_list` 顺序与同组 deployment order 不变。
 - [ ] Repository: `cargo fmt --all -- --check`、`cargo check --all-targets --all-features --locked`、
   `cargo clippy --all-targets --all-features --locked -- -D warnings`、
   `cargo test --all-features --locked -- --test-threads=1`、scope/overlap、SpecRail/PR gate。
 
 ## 回滚方案
 
-若兼容性失败，按 Phase C → Phase B → Phase A 逆序整体 revert 已合并的 implementation PR，并在必要时重新打开
-#966；不得只回滚 runtime dispatch 而留下声明但不可执行的 capability，也不得长期停留在仅 Phase A 的配置反查
+若兼容性失败，按 Phase C → Phase C model-order prerequisite → Phase B → Phase A 逆序整体 revert 已合并的
+implementation PR，并在必要时重新打开 #966；不得只回滚 runtime dispatch 而留下声明但不可执行的 capability，
+也不得长期停留在仅 Phase A 的配置反查
 状态或以 warning + config rescan 作为降级。修复应保持 GH968 endpoint policy，不重新引入普通 `reqwest` client。
