@@ -71,9 +71,23 @@ GH-966 / #966
   exact-head implementation + security review PASS；CI/reviewThreads/required gate。合并后
   删除远程阶段分支并确认 #966 仍 open。不得把 parent test 修改挤入已有 497-line Phase B diff；
   Phase B 四文件 writable scope 与 500 changed-line 上限保持不变。
+- [ ] `SP966-T3O` Covers: B-007, B-010. Owner: Phase C prerequisite router-order owner. Dependencies: SP966-T3 and this model-order amendment merged. Done when: 下述 immutable order contract 完整实现。Verify: 下述 focused、repository、review 与 gate checks 在 exact head 通过。
+  Implementation details: 从 Phase B 合并后的最新
+  `origin/main` 创建独立 prerequisite PR，只修改 `src/core/router/unified.rs` 与
+  `src/core/router/tests/router_tests.rs`；`RoutingSnapshot` 在同一 immutable generation 维护
+  model-group first-insertion order 并提供 additive ordered read API，add/remove/reindex/同组重复与
+  `set_model_list` 都有 router unit regressions；`model_index` lookup、同组 deployment 顺序、alias、
+  selection strategy、health/lease/state preservation 保持不变，不加入 config scan 或 Gemini route 特例。
+  PR 最多 2 个非文档文件、500 changed lines，使用 `Refs #966`。 Verify: focused router order tests；
+  既有 router tests；`cargo fmt --all -- --check`；`cargo check --all-targets --all-features --locked`；
+  strict Clippy；全量 test；scope/overlap；exact-head independent implementation review PASS；
+  CI/0 unresolved threads/required gate。合并后删除远程前置分支并确认 #966 仍 open；随后原 PR #1026、
+  原分支 `codex/gh966-runtime-only-discovery` merge 最新 `origin/main`（禁止 force push、禁止新建替代
+  PR），在新 exact head 重跑 Phase C 全部验证。前置 diff 不进入 Phase C 四文件/500-line budget。
 - [ ] `SP966-T4` Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008,
-  B-009, B-010, B-011. Owner: Phase C runtime-only discovery owner. Dependencies: SP966-T3
-  merged. Done when: Gemini candidate model/alias 只从 immutable router deployments 派生，route
+  B-009, B-010, B-011. Owner: Phase C runtime-only discovery owner. Dependencies: SP966-T3O
+  merged and original PR #1026 branch merged latest `origin/main`. Done when: Gemini candidate model/alias
+  只从 immutable router deployments 派生，使用 ordered model-group API 过滤且不得 alphabetic sort，route
   不再读取 `state.config().providers()`；unary/stream snapshot、native + 三命名兼容正例、
   任意名称拒绝、fallback/budget/health/lease/spend、client cancel neutral、read failure 与
   raw/encoded key 脱敏全部覆盖；source guard 拒绝 config scan、`RouteHttpClient`、敏感
@@ -91,12 +105,14 @@ GH-966 / #966
 
 ## 并行拆分
 
-- T2、T2R、T2S、T3、T4 是严格串行的 implementation/regression PR；T2R 是 Phase A 合并后暴露的
+- T2、T2R、T2S、T3、T3O、T4 是严格串行的 implementation/regression PR；T2R 是 Phase A 合并后暴露的
   endpoint-policy 回归修复，T2S 是 Phase B exact-head 暴露的历史 route assertion 修正；两者都必须在
-  T3 前合并，每阶段必须合并后，下一阶段才从最新 `main` 继续。
+  T3 前合并；T3O 是 #1026 review 暴露的 immutable model-group order 前置修正，必须先合并，再由原 #1026
+  分支 merge 最新 `main`。每阶段必须合并后，下一阶段才继续。
 - 每个阶段最多 10 个非文档文件、500 changed lines；三阶段 writable union 为 tech spec
   明列的 11 个文件，T2R 另限定为 tech spec 明列的 6 个文件，T2S 另限定为 parent integration
-  test 1 个文件；T2S 不扩大 Phase B 四文件 scope 或 500-line budget。不修改 799 行的
+  test 1 个文件，T3O 另限定为 router core/test 2 个文件；T2S 不扩大 Phase B、T3O 不扩大 Phase C 的
+  四文件 scope 或 500-line budget。不修改 799 行的
   `execution.rs` 或 budget API。
 - T5 的只读 reviewer/security lane 可与 coordinator 的 final verification 并行；reviewer 不写
   production/test 文件，只在 exact head 给 verdict，并由 reviewer 身份解析 review threads。
@@ -110,9 +126,9 @@ GH-966 / #966
   undeclared invariant。
 - 本 amendment PR 只包含 `specs/GH966/tech.md` 与 `specs/GH966/tasks.md`；不改变 product
   behavior invariants。
-- Phase A/T2R/T2S/B/C 每个 PR 的 fresh exact-head focused、feature matrix、check、
+- Phase A/T2R/T2S/B/T3O/C 每个 PR 的 fresh exact-head focused、feature matrix、check、
   strict Clippy、全量 test、scope/overlap、CI、reviewThreads 与 offline gate 全部通过；Phase A、
-  T2R、T2S 与 Phase B 合并后 issue 保持 open，Phase C 合并后 #966 closed。
+  T2R、T2S、Phase B 与 T3O 合并后 issue 保持 open，Phase C 合并后 #966 closed。
 
 ## Handoff Notes
 
@@ -130,3 +146,7 @@ GH-966 / #966
 - Phase B prerequisite 只把失效的 route-time loopback assertion 替换为 bootstrap/configuration
   fail-closed evidence；#1023 必须在该 follow-up 合并后 merge 最新 `main`，不得用扩大 Phase B diff、
   压缩测试或恢复 config reconstruction 绕过 500-line gate。
+- #1026 的 `discussion_r3587044607` 不改变 canonical empty-model 三字段 identity；
+  `discussion_r3587080223` 由 T3O 的 immutable model-group ordered API 与 router regressions 处理。
+  T3O 合并后必须在原 #1026 分支 merge 最新 `main`，不得在 Phase C route 内以 alphabetic sort、config scan、
+  新 PR 或扩大四文件 diff 规避顺序 blocker。

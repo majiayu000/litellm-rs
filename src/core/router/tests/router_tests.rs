@@ -148,6 +148,104 @@ async fn test_add_multiple_models() {
 }
 
 #[tokio::test]
+async fn test_ordered_model_groups_preserve_first_insertion_and_group_order() {
+    let router = Router::default();
+
+    router.add_deployment(create_test_deployment("primary-1", "zz-primary").await);
+    router.add_deployment(create_test_deployment("primary-2", "zz-primary").await);
+    router.add_deployment(create_test_deployment("backup-1", "aa-backup").await);
+    router
+        .add_model_alias("primary-alias", "zz-primary")
+        .unwrap();
+
+    assert_eq!(
+        router.list_models_in_insertion_order(),
+        vec!["zz-primary", "aa-backup"]
+    );
+    assert_eq!(
+        router.get_deployments_for_model("zz-primary"),
+        vec!["primary-1", "primary-2"]
+    );
+
+    router.add_deployment(create_test_deployment("primary-1", "zz-primary").await);
+
+    assert_eq!(
+        router.list_models_in_insertion_order(),
+        vec!["zz-primary", "aa-backup"]
+    );
+    assert_eq!(
+        router.get_deployments_for_model("primary-alias"),
+        vec!["primary-1", "primary-2"]
+    );
+}
+
+#[tokio::test]
+async fn test_ordered_model_groups_remove_only_last_and_reappend_removed_group() {
+    let router = Router::default();
+
+    router.add_deployment(create_test_deployment("primary-1", "primary").await);
+    router.add_deployment(create_test_deployment("primary-2", "primary").await);
+    router.add_deployment(create_test_deployment("backup-1", "backup").await);
+
+    router.remove_deployment("primary-1").unwrap();
+    assert_eq!(
+        router.list_models_in_insertion_order(),
+        vec!["primary", "backup"]
+    );
+    assert_eq!(
+        router.get_deployments_for_model("primary"),
+        vec!["primary-2"]
+    );
+
+    router.remove_deployment("primary-2").unwrap();
+    assert_eq!(router.list_models_in_insertion_order(), vec!["backup"]);
+    assert!(router.get_deployments_for_model("primary").is_empty());
+
+    router.add_deployment(create_test_deployment("primary-3", "primary").await);
+    assert_eq!(
+        router.list_models_in_insertion_order(),
+        vec!["backup", "primary"]
+    );
+}
+
+#[tokio::test]
+async fn test_ordered_model_groups_reindex_to_existing_or_new_group() {
+    let router = Router::default();
+
+    router.add_deployment(create_test_deployment("shared", "first").await);
+    router.add_deployment(create_test_deployment("first-stable", "first").await);
+    router.add_deployment(create_test_deployment("second-stable", "second").await);
+    router.add_deployment(create_test_deployment("third-stable", "third").await);
+
+    router.add_deployment(create_test_deployment("shared", "second").await);
+
+    assert_eq!(
+        router.list_models_in_insertion_order(),
+        vec!["first", "second", "third"]
+    );
+    assert_eq!(
+        router.get_deployments_for_model("first"),
+        vec!["first-stable"]
+    );
+    assert_eq!(
+        router.get_deployments_for_model("second"),
+        vec!["second-stable", "shared"]
+    );
+
+    router.add_deployment(create_test_deployment("first-stable", "fourth").await);
+
+    assert_eq!(
+        router.list_models_in_insertion_order(),
+        vec!["second", "third", "fourth"]
+    );
+    assert!(router.get_deployments_for_model("first").is_empty());
+    assert_eq!(
+        router.get_deployments_for_model("fourth"),
+        vec!["first-stable"]
+    );
+}
+
+#[tokio::test]
 async fn test_get_deployment() {
     let router = Router::default();
     let deployment = create_test_deployment("test-1", "gpt-4").await;
@@ -238,6 +336,57 @@ async fn test_set_model_list_installs_complete_snapshot_generation() {
     );
     assert!(!new_snapshot.deployments.contains_key("old-1"));
     assert!(!new_snapshot.model_index.contains_key("gpt-4"));
+}
+
+#[tokio::test]
+async fn test_set_model_list_publishes_input_first_occurrence_order_atomically() {
+    let router = Router::default();
+
+    router.add_deployment(create_test_deployment("old-1", "old-first").await);
+    router.add_deployment(create_test_deployment("old-2", "old-second").await);
+    let old_snapshot = router.routing_snapshot.load_full();
+
+    router.set_model_list(vec![
+        create_test_deployment("beta-1", "beta").await,
+        create_test_deployment("alpha-1", "alpha").await,
+        create_test_deployment("beta-2", "beta").await,
+        create_test_deployment("gamma-1", "gamma").await,
+    ]);
+    let new_snapshot = router.routing_snapshot.load_full();
+
+    assert_eq!(old_snapshot.model_order, vec!["old-first", "old-second"]);
+    assert!(old_snapshot.deployments.contains_key("old-1"));
+    assert!(!old_snapshot.deployments.contains_key("beta-1"));
+
+    assert_eq!(new_snapshot.model_order, vec!["beta", "alpha", "gamma"]);
+    assert_eq!(
+        new_snapshot.model_index.get("beta"),
+        Some(&vec!["beta-1".to_string(), "beta-2".to_string()])
+    );
+    assert!(!new_snapshot.deployments.contains_key("old-1"));
+    assert!(new_snapshot.deployments.contains_key("gamma-1"));
+    assert_eq!(
+        router.list_models_in_insertion_order(),
+        vec!["beta", "alpha", "gamma"]
+    );
+}
+
+#[tokio::test]
+async fn test_set_model_list_keeps_first_group_order_when_duplicate_id_moves_groups() {
+    let router = Router::default();
+
+    router.set_model_list(vec![
+        create_test_deployment("shared-id", "alpha").await,
+        create_test_deployment("shared-id", "beta").await,
+        create_test_deployment("alpha-id", "alpha").await,
+    ]);
+
+    assert_eq!(
+        router.list_models_in_insertion_order(),
+        vec!["alpha", "beta"]
+    );
+    assert_eq!(router.get_deployments_for_model("alpha"), vec!["alpha-id"]);
+    assert_eq!(router.get_deployments_for_model("beta"), vec!["shared-id"]);
 }
 
 #[tokio::test]

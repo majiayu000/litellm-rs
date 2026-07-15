@@ -43,12 +43,13 @@ pub struct CapabilityDeployment {
 /// Immutable deployment routing generation.
 ///
 /// Each snapshot owns a complete, internally consistent view of deployments,
-/// model indexes, and aliases. Router readers load one snapshot and never walk
-/// split mutable maps from different generations.
+/// model indexes, model-group insertion order, and aliases. Router readers load
+/// one snapshot and never walk split mutable maps from different generations.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RoutingSnapshot {
     pub(crate) deployments: HashMap<DeploymentId, Arc<Deployment>>,
     pub(crate) model_index: HashMap<String, Vec<DeploymentId>>,
+    pub(crate) model_order: Vec<String>,
     pub(crate) model_aliases: HashMap<String, String>,
 }
 
@@ -57,6 +58,13 @@ impl RoutingSnapshot {
         deployments: Vec<Deployment>,
         previous: &RoutingSnapshot,
     ) -> Self {
+        let mut seen_models = HashSet::new();
+        let mut input_model_order = Vec::new();
+        for deployment in &deployments {
+            if seen_models.insert(deployment.model_name.clone()) {
+                input_model_order.push(deployment.model_name.clone());
+            }
+        }
         let mut snapshot = Self {
             model_aliases: previous.model_aliases.clone(),
             ..Default::default()
@@ -68,6 +76,14 @@ impl RoutingSnapshot {
             }
             snapshot.insert_deployment(deployment);
         }
+
+        // Duplicate deployment IDs retain their existing last-wins behavior.
+        // Reapply input group order after indexing so a temporary empty group
+        // cannot move behind groups that first appeared later in the input.
+        snapshot.model_order = input_model_order
+            .into_iter()
+            .filter(|model_name| snapshot.model_index.contains_key(model_name))
+            .collect();
 
         snapshot
     }
@@ -85,6 +101,10 @@ impl RoutingSnapshot {
             && old.model_name != model_name
         {
             self.remove_from_model_index(&old.model_name, &deployment_id);
+        }
+
+        if !self.model_index.contains_key(&model_name) {
+            self.model_order.push(model_name.clone());
         }
 
         let entry = self.model_index.entry(model_name).or_default();
@@ -113,6 +133,13 @@ impl RoutingSnapshot {
 
         if should_remove {
             self.model_index.remove(model_name);
+            if let Some(position) = self
+                .model_order
+                .iter()
+                .position(|existing| existing == model_name)
+            {
+                self.model_order.remove(position);
+            }
         }
     }
 
@@ -417,6 +444,11 @@ impl Router {
             .keys()
             .cloned()
             .collect()
+    }
+
+    /// List model groups in first-insertion order for this immutable snapshot.
+    pub fn list_models_in_insertion_order(&self) -> Vec<String> {
+        self.routing_snapshot.load().model_order.clone()
     }
 
     /// List all deployment IDs
