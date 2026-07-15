@@ -28,16 +28,17 @@ GH-965 / #965
   复用 `create_provider`/`Provider`，不重写 catalog、factory 或 enum dispatch。
 - #728 / merged PR #734 已建立 HTTP/SDK/`completion()` support matrix；GH-965 只让实际执行消费同一
   runtime，不扩大或重算 matrix。
-- #966 已分阶段收敛 Gemini SDK-compatible HTTP route 的 selected runtime identity；当前 open PR #1026
-  仅修改 `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs`、
-  `tests/gemini_sdk_routes/runtime_provider_tests.rs`。GH-965 在 #1026 合并前不修改这三个文件，也不改变
+- #966 已由 merged PR #1026 收敛 Gemini SDK-compatible HTTP route 的 selected runtime identity；
+  该 PR 修改的 `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs`、
+  `tests/gemini_sdk_routes/runtime_provider_tests.rs` 是 GH-965 的已满足前置与非重叠边界。GH-965 不修改
   Gemini wire/policy/selection。
 - #968 负责 provider endpoint access 与 SSRF；GH-965 不创建普通 client 旁路，adapter 只能使用 selected
   provider 已持有的 secure client。
 - #519 保持 umbrella；#727 继续处理通用 U-16 文件拆分。GH-965 的拆分只服务本 issue 的 500-line gate。
-- GitHub 搜索 `DefaultRouter UnifiedRouter`、`ProviderRegistry completion router`、`canonical runtime router`
-  只命中 #965、父 #519 及已关闭 #725 实现；未发现覆盖本 acceptance criteria 的重复工作，也没有
-  `Refs/Fixes #965` PR。
+- 2026-07-15 重复检查：`gh pr list --repo majiayu000/litellm-rs --state all --search
+  '965 in:body'` 返回空列表；GitHub issue 搜索 `DefaultRouter UnifiedRouter`、
+  `ProviderRegistry completion router`、`canonical runtime router` 只命中 #965、umbrella #519 及已关闭
+  #725 实现。未发现覆盖本 acceptance criteria 的重复工作或 `Refs/Fixes #965` PR。
 
 ## Human Decision Gate
 
