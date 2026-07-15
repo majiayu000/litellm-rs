@@ -120,6 +120,12 @@ impl OpenAILikeProvider {
     ) -> Result<T, ProviderError> {
         result
             .map_err(|_| ProviderError::timeout("gemini_proxy", "Gemini response header timeout"))?
+            .map_err(|error| match error {
+                ProviderError::Timeout { .. } => {
+                    ProviderError::timeout("gemini_proxy", "Gemini upstream request timed out")
+                }
+                _ => ProviderError::network("gemini_proxy", "Gemini upstream request failed"),
+            })
     }
 
     /// Create a new OpenAI-like provider

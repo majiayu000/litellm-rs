@@ -145,7 +145,6 @@ pub(crate) struct GeminiNativeRequest {
     pub(crate) stream: bool,
     pub(crate) body: serde_json::Value,
 }
-
 pub(crate) fn gemini_native_url(
     base_url: &str,
     api_key: &str,
@@ -179,7 +178,6 @@ pub(crate) fn gemini_native_url(
     drop(query);
     Ok(url)
 }
-
 pub(crate) async fn gemini_response_or_provider_error(
     response: reqwest::Response,
     api_key: &str,
@@ -212,7 +210,6 @@ pub(crate) async fn gemini_response_or_provider_error(
         ProviderError::api_error("gemini_proxy", status, message)
     })
 }
-
 fn redact_gemini_key(body: &str, api_key: &str) -> String {
     if api_key.is_empty() {
         return body.to_string();

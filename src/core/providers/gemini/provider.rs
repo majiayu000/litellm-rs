@@ -403,7 +403,6 @@ mod native_tests {
     use super::*;
     use crate::core::net::ProviderEndpointAccess;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     async fn error_provider(status: u16, headers: &str, body: &str, key: &str) -> ProviderError {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -435,7 +434,6 @@ mod native_tests {
         task.await.unwrap();
         error
     }
-
     #[tokio::test]
     async fn native_error_redacts_raw_and_form_encoded_key() {
         let key = "secret/key+value-12345678901234567890";
@@ -447,37 +445,28 @@ mod native_tests {
             assert!(!text.contains(&encoded));
         }
     }
-
     #[tokio::test]
     async fn native_rate_limit_prefers_header_then_body_retry_after() {
         let key = "test-key-12345678901234567890";
         let header = error_provider(429, "retry-after: 7\r\n", r#"{"retry_after":3}"#, key).await;
         let body = error_provider(429, "", r#"{"retry_after":3}"#, key).await;
-        assert!(matches!(
-            header,
-            ProviderError::RateLimit {
-                retry_after: Some(7),
-                ..
-            }
-        ));
-        assert!(matches!(
-            body,
-            ProviderError::RateLimit {
-                retry_after: Some(3),
-                ..
-            }
-        ));
+        if let ProviderError::RateLimit { retry_after, .. } = header {
+            assert_eq!(retry_after, Some(7));
+        } else {
+            panic!("header response must be rate limited");
+        }
+        if let ProviderError::RateLimit { retry_after, .. } = body {
+            assert_eq!(retry_after, Some(3));
+        } else {
+            panic!("body response must be rate limited");
+        }
     }
-
     #[tokio::test]
     async fn native_non_rate_limit_empty_body_is_api_error() {
         let error = error_provider(503, "", "", "test-key-12345678901234567890").await;
         assert!(matches!(error, ProviderError::ApiError { status: 503, .. }));
-        assert!(
-            error
-                .to_string()
-                .contains("Gemini upstream returned HTTP 503")
-        );
+        let message = error.to_string();
+        assert!(message.contains("Gemini upstream returned HTTP 503"));
     }
 }
 

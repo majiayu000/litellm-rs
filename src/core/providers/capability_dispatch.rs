@@ -78,9 +78,17 @@ mod tests {
         }
         assert!(!openai_like_provider_supports_gemini("google ai"));
         assert!(openai_like_provider_supports_rerank("cohere.ai"));
-        let timeout = ProviderError::timeout("x", "x");
-        let error = OpenAILikeProvider::map_gemini_stream_response::<()>(Ok(Err(timeout)));
-        assert!(matches!(error, Err(ProviderError::Timeout { .. })));
+        let leaked = "raw/key+value raw%2Fkey%2Bvalue";
+        for (inner, is_timeout) in [
+            (ProviderError::timeout("x", leaked), true),
+            (ProviderError::network("x", leaked), false),
+        ] {
+            let error = OpenAILikeProvider::map_gemini_stream_response::<()>(Ok(Err(inner)))
+                .expect_err("transport error must remain an error");
+            assert_eq!(matches!(error, ProviderError::Timeout { .. }), is_timeout);
+            let text = format!("{error:?} {error}");
+            assert!(!text.contains("raw/key+value") && !text.contains("raw%2Fkey%2Bvalue"));
+        }
     }
     #[tokio::test]
     async fn named_gemini_stream_uses_runtime_header_timeout() {
