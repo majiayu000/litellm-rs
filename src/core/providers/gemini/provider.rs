@@ -3,13 +3,10 @@
 //! Implementation
 
 use futures::Stream;
-use reqwest::{Url, header::RETRY_AFTER};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use crate::core::providers::base::read_streaming_error_body;
-use crate::core::providers::shared::parse_retry_after_from_body;
 use crate::core::providers::{GeminiNativeRequest, ProviderError};
 use crate::core::traits::{
     provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider,
@@ -70,7 +67,7 @@ impl GeminiProvider {
     ) -> Result<reqwest::Response, ProviderError> {
         let api_key = self.client.api_key();
         let response = self.client.send_native_request(&request).await?;
-        gemini_response_or_provider_error(response, api_key).await
+        crate::core::providers::gemini_response_or_provider_error(response, api_key).await
     }
 
     /// Request
@@ -399,82 +396,6 @@ impl LLMProvider for GeminiProvider {
                 .unwrap_or(0.0),
         )
     }
-}
-
-pub(crate) fn gemini_native_url(
-    base_url: &str,
-    api_key: &str,
-    request: &GeminiNativeRequest,
-) -> Result<Url, ProviderError> {
-    if !matches!(request.api_version.as_str(), "v1" | "v1beta")
-        || !matches!(request.method, "generateContent" | "streamGenerateContent")
-        || request.model.is_empty()
-        || !request.model.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-        })
-    {
-        return Err(ProviderError::invalid_request(
-            "gemini_proxy",
-            "invalid Gemini native route segment",
-        ));
-    }
-    let mut url = Url::parse(&format!(
-        "{}/{}/models/{}:{}",
-        base_url.trim_end_matches('/'),
-        request.api_version,
-        request.model,
-        request.method
-    ))
-    .map_err(|_| ProviderError::configuration("gemini_proxy", "invalid Gemini API base URL"))?;
-    let mut query = url.query_pairs_mut();
-    if request.stream {
-        query.append_pair("alt", "sse");
-    }
-    query.append_pair("key", api_key);
-    drop(query);
-    Ok(url)
-}
-
-pub(crate) async fn gemini_response_or_provider_error(
-    response: reqwest::Response,
-    api_key: &str,
-) -> Result<reqwest::Response, ProviderError> {
-    if response.status().is_success() {
-        return Ok(response);
-    }
-    let status = response.status().as_u16();
-    let header_retry = response
-        .headers()
-        .get(RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse::<u64>().ok());
-    let body = read_streaming_error_body(response)
-        .await
-        .map_err(|error| error.into_provider_error("gemini_proxy"))?;
-    let body = redact_gemini_key(&body, api_key);
-    let message = if body.trim().is_empty() {
-        format!("Gemini upstream returned HTTP {status}")
-    } else {
-        format!("Gemini upstream returned HTTP {status}: {body}")
-    };
-    Err(if status == 429 {
-        ProviderError::rate_limit_with_retry(
-            "gemini_proxy",
-            message,
-            header_retry.or_else(|| parse_retry_after_from_body(&body)),
-        )
-    } else {
-        ProviderError::api_error("gemini_proxy", status, message)
-    })
-}
-
-fn redact_gemini_key(body: &str, api_key: &str) -> String {
-    if api_key.is_empty() {
-        return body.to_string();
-    }
-    let encoded: String = url::form_urlencoded::byte_serialize(api_key.as_bytes()).collect();
-    body.replace(api_key, "[REDACTED]")
-        .replace(&encoded, "[REDACTED]")
 }
 
 #[cfg(test)]

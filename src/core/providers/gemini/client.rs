@@ -70,7 +70,8 @@ impl GeminiClient {
         request: &GeminiNativeRequest,
     ) -> Result<Response, ProviderError> {
         let api_key = self.api_key();
-        let url = super::provider::gemini_native_url(&self.config.base_url, api_key, request)?;
+        let url =
+            crate::core::providers::gemini_native_url(&self.config.base_url, api_key, request)?;
         let client = if request.stream {
             &self.streaming_client
         } else {

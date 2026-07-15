@@ -23,7 +23,6 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
             .configure(litellm_rs::server::routes::ai::configure_routes),
     )
     .await;
-
     let response = test::call_service(
         &app,
         test::TestRequest::post()
@@ -32,7 +31,6 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
             .to_request(),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(selected.requests().len(), 1);
     assert!(replacement.requests().is_empty());
