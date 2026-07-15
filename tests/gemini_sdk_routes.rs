@@ -16,10 +16,12 @@ mod tests {
     };
     use actix_web::{App, HttpMessage, dev::Service};
     use actix_web::{http::StatusCode, test, web};
+    use litellm_rs::Config;
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::models::ApiKey;
     use litellm_rs::core::net::ProviderEndpointAccess;
-    use litellm_rs::core::providers::{ProviderError, create_provider};
+    use litellm_rs::server::HttpServer as GatewayHttpServer;
+    use litellm_rs::utils::error::gateway_error::GatewayError;
     use serde_json::{Value, json};
     use std::time::{Duration, Instant};
 
@@ -456,14 +458,17 @@ mod tests {
             &format!("http://{address}"),
             vec!["gemini-3.1-flash-lite".to_string()],
         );
-        provider.provider_type = "gemini".to_string();
         provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
-        let error = create_provider(provider)
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.providers = vec![provider];
+        let error = GatewayHttpServer::new(&config)
             .await
             .err()
             .unwrap_or_else(|| panic!("public-only Gemini bootstrap must reject loopback"));
 
-        assert!(matches!(error, ProviderError::Configuration { .. }));
+        assert!(matches!(error, GatewayError::Config(_)));
         assert!(error.to_string().contains("SSRF protection"));
         assert!(
             tokio::time::timeout(Duration::from_millis(100), listener.accept())
