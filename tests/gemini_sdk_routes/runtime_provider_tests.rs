@@ -79,10 +79,7 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     assert!(model_usage.current_spend > 0.0);
     selected.shutdown().await;
     replacement.shutdown().await;
-}
 
-#[tokio::test]
-async fn gemini_sdk_route_keeps_selected_runtime_timeout_after_config_mutation() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("delayed upstream should bind");
