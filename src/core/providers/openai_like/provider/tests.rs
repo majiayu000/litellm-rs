@@ -10,7 +10,7 @@ const TEST_PUBLIC_API_BASE: &str = "https://api.example.com/v1";
 
 #[test]
 fn gemini_transport_preserves_policy_configuration_errors() {
-    let error = gemini_openai_like_transport_error(ProviderError::configuration(
+    let error = gemini_openai_like_transport_error(ProviderError::network(
         "openai_like",
         "blocked by SSRF protection",
     ));
