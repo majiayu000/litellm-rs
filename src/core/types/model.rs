@@ -44,6 +44,8 @@ pub enum ProviderCapability {
     BatchProcessing,
     /// Real-time API
     RealtimeApi,
+    /// Gemini SDK native generateContent transport
+    GeminiGenerateContent,
 }
 
 /// Model information
@@ -204,6 +206,7 @@ mod tests {
             ProviderCapability::FineTuning,
             ProviderCapability::BatchProcessing,
             ProviderCapability::RealtimeApi,
+            ProviderCapability::GeminiGenerateContent,
         ];
 
         for cap in capabilities {

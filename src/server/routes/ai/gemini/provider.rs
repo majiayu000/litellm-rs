@@ -1,16 +1,15 @@
 use bytes::Bytes;
 use reqwest::{
     Url,
-    header::{CONTENT_TYPE, HeaderName, HeaderValue, RETRY_AFTER},
+    header::{HeaderName, HeaderValue, RETRY_AFTER},
 };
-use serde_json::Value;
 use std::time::Duration;
 
 use crate::config::models::provider::ProviderConfig;
 use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
 use crate::core::providers::base::{ProviderRequestBuilder, read_streaming_error_body};
 use crate::core::providers::shared::parse_retry_after_from_body;
-use crate::core::providers::{Provider, ProviderError};
+use crate::core::providers::{GeminiNativeRequest, Provider, ProviderError};
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
@@ -29,7 +28,9 @@ pub(super) struct GeminiRouteProvider {
     api_key: String,
     base_url: String,
     headers: Vec<(HeaderName, HeaderValue)>,
+    #[allow(dead_code)]
     timeout: Duration,
+    #[allow(dead_code)]
     client: RouteHttpClient,
 }
 
@@ -283,6 +284,7 @@ fn push_gemini_header(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn gemini_url(
     provider: &GeminiRouteProvider,
     api_version: &str,
@@ -315,11 +317,9 @@ fn gemini_url(
 
 pub(super) async fn send_gemini_request(
     state: &AppState,
+    selected_provider: &Provider,
     provider: &GeminiRouteProvider,
-    api_version: &str,
-    method: &'static str,
-    stream: bool,
-    request: &Value,
+    native_request: GeminiNativeRequest,
     api_key_budget_id: Option<Uuid>,
 ) -> Result<
     (
@@ -333,6 +333,7 @@ pub(super) async fn send_gemini_request(
     let pricing = budgeted.pricing();
     let pricing_config = state.config().gateway.pricing.clone();
     let budget_limits = budgeted.budget_limits();
+    let budget_request = native_request.body.clone();
     let (response, reservations) = budgeted
         .for_selected_with_api_key_budget(
             provider.provider_name.clone(),
@@ -347,45 +348,18 @@ pub(super) async fn send_gemini_request(
                     &pricing_config,
                     budget_limits.as_ref(),
                     provider,
-                    request,
+                    &budget_request,
                 )
                 .map_err(gemini_gateway_error_to_provider_error)
             },
-            || async {
-                let url = gemini_url(provider, api_version, method, stream)
-                    .map_err(gemini_gateway_error_to_provider_error)?;
-                let builder = if stream {
-                    provider.client.streaming_post(url)
-                } else {
-                    provider.client.ordinary_post(url)
-                }
-                .map_err(gemini_gateway_error_to_provider_error)?;
-                let builder = apply_gemini_headers(builder, provider)
-                    .header(CONTENT_TYPE, "application/json")
-                    .json(request);
-                let response = if stream {
-                    tokio::time::timeout(provider.timeout, builder.send())
-                        .await
-                        .map_err(|_| {
-                            ProviderError::timeout(
-                                "gemini_proxy",
-                                "Gemini streaming response header timeout",
-                            )
-                        })?
-                } else {
-                    builder.send().await
-                }
-                .map_err(|error| {
-                    gemini_gateway_error_to_provider_error(gemini_http_error(error))
-                })?;
-                gemini_response_or_provider_error(response, provider).await
-            },
+            || selected_provider.gemini_generate_content(native_request),
         )
         .await?;
     let (budget_reservation, key_budget_reservation) = reservations.into_parts();
     Ok((budget_reservation, key_budget_reservation, response))
 }
 
+#[allow(dead_code)]
 async fn gemini_response_or_provider_error(
     response: reqwest::Response,
     provider: &GeminiRouteProvider,
@@ -473,6 +447,7 @@ pub(super) fn gemini_gateway_error_to_provider_error(error: GatewayError) -> Pro
     }
 }
 
+#[allow(dead_code)]
 fn apply_gemini_headers(
     mut request: ProviderRequestBuilder,
     provider: &GeminiRouteProvider,

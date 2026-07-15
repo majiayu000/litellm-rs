@@ -1,6 +1,46 @@
 use super::*;
 
 #[tokio::test]
+async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
+    let selected = MockGeminiServer::launch().await;
+    let replacement = MockGeminiServer::launch().await;
+    let state = build_test_state(vec![gemini_provider(
+        "gemini",
+        &selected.base_url,
+        vec!["gemini-3.1-flash-lite".to_string()],
+    )])
+    .await;
+    let mut replaced_config = state.config().as_ref().clone();
+    replaced_config.gateway.providers = vec![gemini_provider(
+        "gemini",
+        &replacement.base_url,
+        vec!["gemini-3.1-flash-lite".to_string()],
+    )];
+    state.config.store(replaced_config);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1beta/models/gemini-3.1-flash-lite:generateContent")
+            .set_json(gemini_body())
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(selected.requests().len(), 1);
+    assert!(replacement.requests().is_empty());
+    selected.shutdown().await;
+    replacement.shutdown().await;
+}
+
+#[tokio::test]
 async fn gemini_sdk_route_network_error_does_not_leak_provider_key() {
     let state = build_test_state(vec![gemini_provider(
         "gemini",

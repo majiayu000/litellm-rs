@@ -3,11 +3,14 @@
 //! Implementation
 
 use futures::Stream;
+use reqwest::{Url, header::RETRY_AFTER};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use crate::core::providers::unified_provider::ProviderError;
+use crate::core::providers::base::read_streaming_error_body;
+use crate::core::providers::shared::parse_retry_after_from_body;
+use crate::core::providers::{GeminiNativeRequest, ProviderError};
 use crate::core::traits::{
     provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider,
 };
@@ -59,6 +62,15 @@ impl GeminiProvider {
             client,
             supported_models,
         })
+    }
+
+    pub(crate) async fn gemini_generate_content(
+        &self,
+        request: GeminiNativeRequest,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let api_key = self.client.api_key();
+        let response = self.client.send_native_request(&request).await?;
+        gemini_response_or_provider_error(response, api_key).await
     }
 
     /// Request
@@ -124,6 +136,7 @@ impl LLMProvider for GeminiProvider {
             ProviderCapability::ChatCompletion,
             ProviderCapability::ChatCompletionStream,
             ProviderCapability::ToolCalling,
+            ProviderCapability::GeminiGenerateContent,
             // NOTE: Vision capability not yet added to ProviderCapability enum
         ]
     }
@@ -385,6 +398,165 @@ impl LLMProvider for GeminiProvider {
             super::models::CostCalculator::calculate_cost(model, input_tokens, output_tokens)
                 .unwrap_or(0.0),
         )
+    }
+}
+
+pub(crate) fn gemini_native_url(
+    base_url: &str,
+    api_key: &str,
+    request: &GeminiNativeRequest,
+) -> Result<Url, ProviderError> {
+    if !matches!(request.api_version.as_str(), "v1" | "v1beta")
+        || !matches!(request.method, "generateContent" | "streamGenerateContent")
+        || request.model.is_empty()
+        || !request.model.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+    {
+        return Err(ProviderError::invalid_request(
+            "gemini_proxy",
+            "invalid Gemini native route segment",
+        ));
+    }
+    let mut url = Url::parse(&format!(
+        "{}/{}/models/{}:{}",
+        base_url.trim_end_matches('/'),
+        request.api_version,
+        request.model,
+        request.method
+    ))
+    .map_err(|_| ProviderError::configuration("gemini_proxy", "invalid Gemini API base URL"))?;
+    let mut query = url.query_pairs_mut();
+    if request.stream {
+        query.append_pair("alt", "sse");
+    }
+    query.append_pair("key", api_key);
+    drop(query);
+    Ok(url)
+}
+
+pub(crate) async fn gemini_response_or_provider_error(
+    response: reqwest::Response,
+    api_key: &str,
+) -> Result<reqwest::Response, ProviderError> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status().as_u16();
+    let header_retry = response
+        .headers()
+        .get(RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    let body = read_streaming_error_body(response)
+        .await
+        .map_err(|error| error.into_provider_error("gemini_proxy"))?;
+    let body = redact_gemini_key(&body, api_key);
+    let message = if body.trim().is_empty() {
+        format!("Gemini upstream returned HTTP {status}")
+    } else {
+        format!("Gemini upstream returned HTTP {status}: {body}")
+    };
+    Err(if status == 429 {
+        ProviderError::rate_limit_with_retry(
+            "gemini_proxy",
+            message,
+            header_retry.or_else(|| parse_retry_after_from_body(&body)),
+        )
+    } else {
+        ProviderError::api_error("gemini_proxy", status, message)
+    })
+}
+
+fn redact_gemini_key(body: &str, api_key: &str) -> String {
+    if api_key.is_empty() {
+        return body.to_string();
+    }
+    let encoded: String = url::form_urlencoded::byte_serialize(api_key.as_bytes()).collect();
+    body.replace(api_key, "[REDACTED]")
+        .replace(&encoded, "[REDACTED]")
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    use crate::core::net::ProviderEndpointAccess;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn error_provider(status: u16, headers: &str, body: &str, key: &str) -> ProviderError {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response = format!(
+            "HTTP/1.1 {status} Error\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let bytes_read = socket.read(&mut request).await.unwrap();
+            assert!(bytes_read > 0);
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let mut config = GeminiConfig::new_google_ai(key);
+        config.base_url = format!("http://{address}");
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        let provider = GeminiProvider::new(config).unwrap();
+        let error = provider
+            .gemini_generate_content(GeminiNativeRequest {
+                api_version: "v1beta".to_string(),
+                model: "gemini-test".to_string(),
+                method: "generateContent",
+                stream: false,
+                body: serde_json::json!({}),
+            })
+            .await
+            .unwrap_err();
+        task.await.unwrap();
+        error
+    }
+
+    #[tokio::test]
+    async fn native_error_redacts_raw_and_form_encoded_key() {
+        let key = "secret/key+value-12345678901234567890";
+        let encoded: String = url::form_urlencoded::byte_serialize(key.as_bytes()).collect();
+        let error = error_provider(500, "", &format!("{key} {encoded}"), key).await;
+        for text in [error.to_string(), format!("{error:?}")] {
+            assert!(text.contains("[REDACTED]"));
+            assert!(!text.contains(key));
+            assert!(!text.contains(&encoded));
+        }
+    }
+
+    #[tokio::test]
+    async fn native_rate_limit_prefers_header_then_body_retry_after() {
+        let key = "test-key-12345678901234567890";
+        let header = error_provider(429, "retry-after: 7\r\n", r#"{"retry_after":3}"#, key).await;
+        let body = error_provider(429, "", r#"{"retry_after":3}"#, key).await;
+        assert!(matches!(
+            header,
+            ProviderError::RateLimit {
+                retry_after: Some(7),
+                ..
+            }
+        ));
+        assert!(matches!(
+            body,
+            ProviderError::RateLimit {
+                retry_after: Some(3),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn native_non_rate_limit_empty_body_is_api_error() {
+        let error = error_provider(503, "", "", "test-key-12345678901234567890").await;
+        assert!(matches!(error, ProviderError::ApiError { status: 503, .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("Gemini upstream returned HTTP 503")
+        );
     }
 }
 

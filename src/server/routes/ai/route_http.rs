@@ -9,6 +9,7 @@ use crate::utils::error::gateway_error::GatewayError;
 #[derive(Debug, Clone)]
 pub(super) struct RouteHttpClient {
     ordinary: BaseHttpClient,
+    #[cfg_attr(not(test), allow(dead_code))]
     streaming: BaseHttpClient,
 }
 
@@ -47,6 +48,7 @@ impl RouteHttpClient {
         self.ordinary.post(url).map_err(GatewayError::from)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn streaming_post<U: IntoUrl>(
         &self,
         url: U,

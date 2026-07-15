@@ -9,6 +9,7 @@ use reqwest::Response;
 use serde_json::{Value, json};
 use tokio::time::timeout;
 
+use crate::core::providers::GeminiNativeRequest;
 use crate::core::providers::base::{
     BaseConfig, BaseHttpClient, HeaderPair, apply_provider_headers, header, header_owned,
     header_static, read_streaming_error_body,
@@ -39,6 +40,10 @@ pub struct GeminiClient {
 }
 
 impl GeminiClient {
+    pub(crate) fn api_key(&self) -> &str {
+        self.config.api_key.as_deref().unwrap_or_default()
+    }
+
     /// Create
     pub fn new(config: GeminiConfig) -> Result<Self, ProviderError> {
         config
@@ -58,6 +63,31 @@ impl GeminiClient {
             http_client,
             streaming_client,
         })
+    }
+
+    pub(crate) async fn send_native_request(
+        &self,
+        request: &GeminiNativeRequest,
+    ) -> Result<Response, ProviderError> {
+        let api_key = self.api_key();
+        let url = super::provider::gemini_native_url(&self.config.base_url, api_key, request)?;
+        let client = if request.stream {
+            &self.streaming_client
+        } else {
+            &self.http_client
+        };
+        let send = apply_provider_headers(
+            client.post(url)?.json(&request.body),
+            self.get_request_headers(),
+        )
+        .send();
+        let response = timeout(Duration::from_secs(self.config.request_timeout), send)
+            .await
+            .map_err(|_| ProviderError::timeout("gemini_proxy", "Gemini response header timeout"))?
+            .map_err(|_| {
+                ProviderError::network("gemini_proxy", "Gemini upstream request failed")
+            })?;
+        Ok(response)
     }
 
     /// Request

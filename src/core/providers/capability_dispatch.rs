@@ -25,17 +25,47 @@ impl Provider {
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
             }
+            Provider::OpenAILike(provider)
+                if capability == &ProviderCapability::GeminiGenerateContent =>
+            {
+                openai_like_provider_supports_gemini(provider.name())
+            }
             _ => self.supports_capability(capability),
         }
     }
 }
 
+fn openai_like_provider_supports_gemini(provider_name: &str) -> bool {
+    matches!(
+        normalize_provider_name(provider_name).as_str(),
+        "gemini" | "googleai" | "googleaistudio"
+    )
+}
+
 fn openai_like_provider_supports_rerank(provider_name: &str) -> bool {
-    let normalized = provider_name
+    let normalized = normalize_provider_name(provider_name);
+    normalized.contains("cohere") || normalized.contains("jina")
+}
+
+fn normalize_provider_name(provider_name: &str) -> String {
+    provider_name
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(|ch| ch.to_lowercase())
-        .collect::<String>();
+        .collect()
+}
 
-    normalized.contains("cohere") || normalized.contains("jina")
+#[cfg(test)]
+mod tests {
+    use super::openai_like_provider_supports_gemini;
+
+    #[test]
+    fn gemini_compatibility_name_set_is_closed_and_normalized() {
+        for name in ["gemini", "Google-AI", "google_ai_studio"] {
+            assert!(openai_like_provider_supports_gemini(name));
+        }
+        for name in ["openai", "my-gemini-proxy", "google"] {
+            assert!(!openai_like_provider_supports_gemini(name));
+        }
+    }
 }

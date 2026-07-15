@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tracing::error;
 
 use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
-use crate::core::providers::ProviderError;
+use crate::core::providers::{GeminiNativeRequest, ProviderError};
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
@@ -152,7 +152,7 @@ async fn proxy_gemini_route_inner(
         let result = run_unary(
             &state.unified_router,
             &router_model,
-            gemini_route_capability(stream),
+            gemini_route_capability(),
             {
                 let context = context.clone();
                 let request = request.clone();
@@ -172,11 +172,15 @@ async fn proxy_gemini_route_inner(
                         let (budget_reservation, key_budget_reservation, response) =
                             send_gemini_request(
                                 state,
+                                &selected_provider,
                                 &provider,
-                                api_version,
-                                method,
-                                false,
-                                &request,
+                                GeminiNativeRequest {
+                                    api_version: api_version.to_string(),
+                                    model: requested_model,
+                                    method,
+                                    stream: false,
+                                    body: request,
+                                },
                                 context.api_key_budget_id(),
                             )
                             .await?;
@@ -235,7 +239,7 @@ async fn proxy_gemini_stream_route_inner(
         let result = run_stream(
             state.unified_router.clone(),
             &router_model,
-            gemini_route_capability(true),
+            gemini_route_capability(),
             {
                 let request = request.clone();
                 let requested_model = requested_model.clone();
@@ -253,11 +257,15 @@ async fn proxy_gemini_stream_route_inner(
                         let (budget_reservation, key_budget_reservation, response) =
                             send_gemini_request(
                                 state,
+                                &selected_provider,
                                 &provider,
-                                api_version,
-                                method,
-                                true,
-                                &request,
+                                GeminiNativeRequest {
+                                    api_version: api_version.to_string(),
+                                    model: requested_model,
+                                    method,
+                                    stream: true,
+                                    body: request,
+                                },
                                 api_key_budget_id,
                             )
                             .await?;
@@ -532,12 +540,8 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
         .streaming(upstream)
 }
 
-fn gemini_route_capability(stream: bool) -> ProviderCapability {
-    if stream {
-        ProviderCapability::ChatCompletionStream
-    } else {
-        ProviderCapability::ChatCompletion
-    }
+fn gemini_route_capability() -> ProviderCapability {
+    ProviderCapability::GeminiGenerateContent
 }
 
 fn ensure_gemini_route_authorized(

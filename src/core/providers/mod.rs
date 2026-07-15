@@ -137,6 +137,15 @@ pub use failure::{ProviderFailureFacts, ProviderFailureKind, ProviderRetryHint};
 pub use provider_registry::ProviderRegistry;
 pub use unified_provider::ProviderError;
 
+#[derive(Debug, Clone)]
+pub(crate) struct GeminiNativeRequest {
+    pub(crate) api_version: String,
+    pub(crate) model: String,
+    pub(crate) method: &'static str,
+    pub(crate) stream: bool,
+    pub(crate) body: serde_json::Value,
+}
+
 // ==================== Provider Dispatch Macros ====================
 //
 // Consolidated into a single `dispatch_provider!` macro with 4 dispatch kinds,
@@ -350,6 +359,21 @@ pub enum Provider {
 }
 
 impl Provider {
+    pub(crate) async fn gemini_generate_content(
+        &self,
+        request: GeminiNativeRequest,
+    ) -> Result<reqwest::Response, ProviderError> {
+        match self {
+            #[cfg(feature = "providers-extended")]
+            Provider::Gemini(provider) => provider.gemini_generate_content(request).await,
+            Provider::OpenAILike(provider) => provider.gemini_generate_content(request).await,
+            _ => Err(ProviderError::not_supported(
+                "provider",
+                "Gemini native generateContent",
+            )),
+        }
+    }
+
     /// Get provider name
     pub fn name(&self) -> &str {
         match self {
