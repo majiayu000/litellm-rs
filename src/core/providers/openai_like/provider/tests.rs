@@ -8,6 +8,28 @@ use tokio::net::{TcpListener, TcpStream};
 
 const TEST_PUBLIC_API_BASE: &str = "https://api.example.com/v1";
 
+#[test]
+fn gemini_transport_preserves_policy_configuration_errors() {
+    let error = gemini_openai_like_transport_error(ProviderError::configuration(
+        "openai_like",
+        "blocked by SSRF protection",
+    ));
+
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(error.to_string().contains("SSRF protection"));
+}
+
+#[test]
+fn gemini_transport_redacts_network_error_details() {
+    let error = gemini_openai_like_transport_error(ProviderError::network(
+        "openai_like",
+        "https://example.test?key=secret-key",
+    ));
+
+    assert!(matches!(error, ProviderError::Network { .. }));
+    assert!(!error.to_string().contains("secret-key"));
+}
+
 fn private_openai_like_config(api_base: impl Into<String>) -> OpenAILikeConfig {
     let mut config = crate::core::providers::openai_like::config::test_openai_like_config(api_base);
     config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;

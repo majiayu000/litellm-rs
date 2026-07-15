@@ -10,7 +10,9 @@ use crate::core::net::{ProviderEndpointAccess, ProviderEndpointPolicy};
 use crate::core::providers::base::BaseConfig;
 use crate::core::providers::base::connection_pool::HeaderPair;
 use crate::core::providers::unified_provider::ProviderError;
-use crate::utils::net::http::{ProviderHttpClient, ProviderRequestBuilder};
+use crate::utils::net::http::{
+    ProviderHttpClient, ProviderHttpClientError, ProviderRequestBuilder,
+};
 
 /// Base HTTP client wrapper used by provider implementations.
 #[derive(Debug, Clone)]
@@ -108,7 +110,14 @@ impl BaseHttpClient {
     ) -> Result<ProviderRequestBuilder, ProviderError> {
         self.client
             .request(method, url)
-            .map_err(|error| ProviderError::network(self.provider, error.to_string()))
+            .map_err(|error| match error {
+                ProviderHttpClientError::Endpoint(error) => {
+                    ProviderError::configuration(self.provider, error.to_string())
+                }
+                ProviderHttpClientError::Request(error) => {
+                    ProviderError::network(self.provider, error.to_string())
+                }
+            })
     }
 
     /// Create a policy-checked GET request builder.
@@ -449,7 +458,7 @@ mod tests {
             .get("http://127.0.0.1:11435/v1/models")
             .err()
             .unwrap_or_else(|| panic!("cross-authority request must fail"));
-        assert!(matches!(error, ProviderError::Network { .. }));
+        assert!(matches!(error, ProviderError::Configuration { .. }));
         assert!(error.to_string().contains("does not match"));
     }
 
