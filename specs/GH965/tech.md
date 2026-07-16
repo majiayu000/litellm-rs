@@ -199,7 +199,7 @@ deployment identity 与非秘密限额保留。原始 typed error 只在 request
 | `Timeout` | Timeout | 504 | typed wrappers | yes | R |
 | `ContextLengthExceeded` | InvalidRequest | 400 | typed wrappers | no | R |
 | `ContentFiltered` | InvalidRequest | 400 | typed wrappers | only when `potentially_retryable == Some(true)` and runtime has not emitted output | R |
-| `ApiError` | status-derived | preserve valid status | typed wrappers | yes only for 429, 5xx, or modeled Bedrock 424; otherwise no | R; 401→Authentication, 403→Authentication, 404→NotFound, 408/504→Timeout, 409/other 4xx→InvalidRequest, 429→RateLimit, 5xx→Unavailable, other→Internal |
+| `ApiError` | status-derived | preserve valid status | typed wrappers | yes only for 429, 5xx, or modeled Bedrock 424; otherwise no | R; 401→Authentication, 403→Authorization, 404→NotFound, 408/504→Timeout, 409→Conflict, other 4xx→InvalidRequest, 429→RateLimit, 5xx→Unavailable, other→Internal |
 | `TokenLimitExceeded` | InvalidRequest | 400 | typed wrappers | no | R |
 | `FeatureDisabled` | NotImplemented | 501 | typed wrappers | no | R |
 | `DeploymentError` | NotFound | 404 | typed wrappers | yes before first output only | R |
@@ -207,7 +207,7 @@ deployment identity 与非秘密限额保留。原始 typed error 只在 request
 | `RoutingError` | Unavailable | 503 | typed wrappers | no; it is already terminal aggregate failure | R |
 | `TransformationError` | Parsing | 500 | typed wrappers | no | R |
 | `Cancelled` | Cancelled（新增现有 taxonomy variant） | 499 | typed wrappers | never | R; cancellation is neutral lease settlement, not failure/success |
-| `Streaming` | Parsing | 502 | typed wrappers | yes only before first output; never after output | R |
+| `Streaming` | Internal | 502 | typed wrappers | yes only before first output; never after output | R |
 | `Other` | Internal | 502 | typed wrappers | no | R |
 
 The `ApiError` row is exhaustive by status partition. `CanonicalError for ProviderError` 与现有
@@ -308,7 +308,7 @@ completion 外观，不持久化第二份 routing state，也不执行额外外�
 
 ## 回滚方案
 
-按 D7 → D6 → D5 → D4 → D3 → D1E → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
+按 D7 → D6 → D5 → D4 → D3 → D2 → D1E → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
 的 canonical runtime，不得只恢复 adapter fallback。若 closure audit 已关闭 #965，回滚后重新打开 issue 并在
 release note 标明被恢复的 `HD-003` compatibility surface。无持久化迁移；runtime generation replacement
 通过进程重启/重新构造恢复。若安全回归涉及 sender/override，首先回滚对应 D3/D5，同时保持 #968 policy。
