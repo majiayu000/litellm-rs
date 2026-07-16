@@ -37,7 +37,7 @@ Link to `product.md`.
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | `Cargo.lock` spin package entry | `rg -n 'name = "spin"|version = "0\\.9\\.(8|9)"' Cargo.lock`; old-version reverse tree 预期无匹配 |
-| B-002 | 单一 lockfile diff | `git diff --stat`; `git diff -- Cargo.lock`; 确认只有 package metadata 与既有版本消歧引用；`cargo update ... --dry-run` 预期无变化 |
+| B-002 | 单一 lockfile diff | `git diff --stat`; `git diff -- Cargo.lock`; 确认只有 package metadata 与既有版本消歧引用；对 `spin@0.9.9` 执行 precise dry-run 预期无变化 |
 | B-003 | Cargo resolved graph | `cargo tree -i spin@0.9.9 --locked --all-features` |
 | B-004 | RustSec/crates.io audit | `cargo audit`; 检查无 `spin 0.9.8` 且无新增 ignore |
 | B-005 | Workspace | format、check、strict Clippy、全 feature tests |
@@ -61,7 +61,8 @@ Link to `product.md`.
 ## 测试计划
 
 - [ ] `cargo update -p spin@0.9.8 --precise 0.9.9 --dry-run` 在实现前只计划单 package 更新。
-- [ ] 实现后同一精确命令 dry-run 不产生变化。
+- [ ] 实现后 `cargo update -p spin@0.9.9 --precise 0.9.9 --dry-run` 成功且不产生变化；旧 package ID
+      查询则应明确失败。
 - [ ] 旧版本反向树查询失败，新版本反向树显示既有 `flume` 路径。
 - [ ] `cargo audit` 不再报告 `spin 0.9.8`，其他 warning 保持可见。
 - [ ] `cargo fmt --all -- --check`。
