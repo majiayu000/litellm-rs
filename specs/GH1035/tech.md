@@ -26,7 +26,8 @@ Link to `product.md`.
 
 1. 在从最新 `origin/main` 创建的 Impl 分支执行
    `cargo update -p spin@0.9.8 --precise 0.9.9`。
-2. 拒绝任何超出 `Cargo.lock` 的文件变化；在 lockfile 内只接受 `spin` version/checksum 两行变化。
+2. 拒绝任何超出 `Cargo.lock` 的文件变化；在 lockfile 内只接受 `spin` package version/checksum，以及
+   `flume`、`lazy_static` 既有 dependency entry 的版本消歧引用变化。不得改变其他 package 版本或依赖集合。
 3. 用正反向依赖查询确认旧版本消失、新版本仍沿既有 `flume` 路径解析。
 4. 运行 `cargo audit`，确认本 warning 消失且其他独立 warning 没有被 ignore 或吞掉。
 5. 运行完整 Rust 格式、编译、strict Clippy 和全 feature 测试。
@@ -36,7 +37,7 @@ Link to `product.md`.
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | `Cargo.lock` spin package entry | `rg -n 'name = "spin"|version = "0\\.9\\.(8|9)"' Cargo.lock`; old-version reverse tree 预期无匹配 |
-| B-002 | 单一 lockfile diff | `git diff --stat`; `git diff -- Cargo.lock`; `cargo update ... --dry-run` 预期无变化 |
+| B-002 | 单一 lockfile diff | `git diff --stat`; `git diff -- Cargo.lock`; 确认只有 package metadata 与既有版本消歧引用；`cargo update ... --dry-run` 预期无变化 |
 | B-003 | Cargo resolved graph | `cargo tree -i spin@0.9.9 --locked --all-features` |
 | B-004 | RustSec/crates.io audit | `cargo audit`; 检查无 `spin 0.9.8` 且无新增 ignore |
 | B-005 | Workspace | format、check、strict Clippy、全 feature tests |
@@ -53,7 +54,8 @@ Link to `product.md`.
 
 - Compatibility: `0.9.9` 位于同一 semver 兼容版本线，且 MSRV Rust 1.38 低于项目工具链；仍以全量测试验证。
 - Concurrency: `spin` 提供同步原语；虽然本项目经 `flume` 间接使用，必须保留完整测试证据。
-- Scope drift: 普通 update 可能更新其他 crate；使用精确 package/version 并人工审核 lockfile diff。
+- Scope drift: 普通 update 可能更新其他 crate；使用精确 package/version，并区分合法的 dependency
+  disambiguation reference 重写与不允许的其他 package 版本/依赖集合变化。
 - Audit interpretation: 其他 warning 仍可能令输出非空；只验证目标 warning 消失，不篡改其余证据。
 
 ## 测试计划

@@ -29,15 +29,18 @@ yanked warning，并降低从锁文件重建依赖的长期可靠性。
 ## Behavior Invariants
 
 1. B-001 `Cargo.lock` 不再解析到 `spin 0.9.8`，而解析到 `spin 0.9.9`。
-2. B-002 lockfile diff 只包含 `spin` 的版本和对应 checksum，不能连带更新其他 package。
-3. B-003 `spin` 的反向依赖仍为 `flume -> sqlx-sqlite -> sqlx -> SeaORM`，应用功能和依赖 feature 不变。
+2. B-002 lockfile diff 只包含 `spin` package 的版本/checksum，以及既有依赖项对该 package 的版本消歧引用；
+   不能连带更新其他 package 版本或依赖集合。
+3. B-003 active feature graph 中 `spin` 的反向依赖仍为 `flume -> sqlx-sqlite -> sqlx -> SeaORM`，应用功能和
+   依赖 feature 不变；lockfile 中 `flume` 与 `lazy_static` 的既有 package 引用同步指向 `spin 0.9.9`。
 4. B-004 `cargo audit` 不再报告 `spin 0.9.8` yanked warning；其他独立 warning 必须继续可见。
 5. B-005 格式、all-target/all-feature 编译、strict Clippy 与全 feature 测试保持通过。
 6. B-006 Spec PR 与 Impl PR 必须分离，Impl PR 关联 #1035 且不自动合并。
 
 ## 验收标准
 
-- [ ] `Cargo.lock` 只把 `spin 0.9.8` 更新为 `0.9.9` 并更新 checksum。
+- [ ] `Cargo.lock` 只把 `spin 0.9.8` package 更新为 `0.9.9`、更新 checksum，并同步既有依赖项中的
+      `spin 0.9.8` 消歧引用；没有其他 package 版本或依赖集合变化。
 - [ ] `cargo tree -i spin@0.9.9 --locked --all-features` 显示既有 `flume` 路径。
 - [ ] `cargo tree -i spin@0.9.8 --locked --all-features` 不再找到匹配 package。
 - [ ] `cargo audit` 不再报告 `spin 0.9.8`，且没有新增 ignore。
