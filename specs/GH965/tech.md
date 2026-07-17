@@ -276,9 +276,11 @@ D6 因此按如下方式收敛，且不触碰 `HD-003` 的 0.6→0.7 窗口：
 
 D1E-a/D1E-b 以 `ProviderError` 为 source，并复用现有 `src/utils/error/canonical.rs` 的 `ErrorCode` / `CanonicalError`
 以及 `src/core/providers/unified_provider_http_mapping.rs` 的 `ProviderHttpErrorFacts` /
-`provider_http_error_facts`；不得新增平行的 provider error class 或 HTTP facts 类型。现有 `ErrorCode` 增加
-`Cancelled`，class/retry 和 HTTP facts 两个现有 exhaustive mapping 必须由同一 table-driven fixture 锁定；
-HTTP、SDK、Gateway 和 retry policy 只能消费这些现有 API，不得各写一份 match 或解析 `Display`：
+`provider_http_error_facts`；不得新增平行的 provider error class 或 HTTP facts 类型。`ErrorCode` 是公开且未标
+`non_exhaustive` 的 enum，0.6.0 **不得新增 `Cancelled` 等 variant**；cancellation 由
+`ProviderFailureFacts::cancelled` 等非 taxonomy typed facts 保留。class/retry 和 HTTP facts 两个现有 exhaustive
+mapping 必须由同一 table-driven fixture 锁定；HTTP、SDK、Gateway 和 retry policy 只能消费这些现有 API，
+不得各写一份 `ProviderError` match 或解析 `Display`：
 
 ```rust
 impl ProviderError {
@@ -318,43 +320,52 @@ deprecated，但 production provider routing/retry source guard 必须零消费�
 HTTP presentation 的 coarse compatibility fact，0.6/0.7 不删除，但不得参与 provider runtime retry/fallback。
 二者若未来要删除，必须另立 public-API decision，不得借 GH-965 顺带移除。
 
-`SDKError` 新增 `Provider(ProviderError)`，现有 `ProviderError(String)` 在 0.6.0 deprecated 并于 0.7.0
-移除；`GatewayError::Provider(ProviderError)` 保持。原始 runtime `ProviderError` 只在 request-local retry/
-observability 路径中流转；跨公共 SDK/Gateway 边界时必须构造 `SDKError::Provider(e.redacted())` 或
-`GatewayError::Provider(e.redacted())`，wrapper 只持有脱敏 typed copy。outer adapter 只用上述 canonical/http facts
-生成 status/code/retry hint；`completion()` 继续返回 `GatewayError` 外观。
+`SDKError` 同样是公开且未标 `non_exhaustive` 的 enum，0.6.0 **不得新增 `Provider(ProviderError)` variant**。
+现有 `ProviderError(String)` 在 0.6.0 deprecated 并保持源码/运行行为；0.7.0 在 release-workflow prerequisite 完成后
+再引入 typed replacement 并删除 string variant。0.6 SDK conversion 先对 `ProviderError` 调 `redacted()`，再只按
+`canonical_code()` 映射到现有 variant：Authentication/Authorization → `AuthError`，RateLimited/QuotaExceeded →
+`RateLimitError`，InvalidRequest/Conflict → `InvalidRequest`，NotFound → `ModelNotFound`，Timeout/Network →
+`NetworkError`，Unavailable → deprecated `ProviderError`，Configuration → `ConfigError`，Parsing → `ParseError`，
+NotImplemented → `NotSupported`，Internal → `Internal`。variant selection 不得解析 redacted string。
+
+`GatewayError::Provider(ProviderError)` 已存在并保持；跨 Gateway 边界构造
+`GatewayError::Provider(e.redacted())`，只有该既有 wrapper 持有脱敏 typed copy。原始 runtime `ProviderError` 只在
+request-local retry/observability 路径流转。outer adapter 只用 canonical/http facts 生成 status/code/retry hint；
+`completion()` 继续返回 `GatewayError` 外观。
 表中 `R` 表示输出前必须调用 `redacted()`：credential、
 authorization/cookie header、signed query value 和已知 secret pattern 替换为 `[REDACTED]`；provider/model/
 deployment identity 与非秘密限额保留。原始 typed error 只在 request-local memory 中流转，不进入 log/response。
 
-| `ProviderError` variant | Existing/new `ErrorCode` | HTTP | Gateway / SDK | Retryability | Redaction / cancellation |
+| `ProviderError` variant | Existing `ErrorCode` | HTTP | Gateway / SDK 0.6 | Retryability | Redaction / cancellation |
 | --- | --- | --- | --- | --- | --- |
-| `Authentication` | Authentication | 401 | `GatewayError::Provider(e.redacted())` / `SDKError::Provider(e.redacted())` | no | R |
-| `RateLimit` | RateLimited | 429 + limit headers | typed wrappers | yes; honor `retry_after` | R |
-| `QuotaExceeded` | QuotaExceeded | 402 | typed wrappers | no | R |
-| `ModelNotFound` | NotFound | 404 | typed wrappers | no | R |
-| `InvalidRequest` | InvalidRequest | 400 | typed wrappers | no | R |
-| `Network` | Network | 502 | typed wrappers | yes | R |
-| `ProviderUnavailable` | Unavailable | 503 | typed wrappers | yes | R |
-| `NotSupported` | NotImplemented | 501 | typed wrappers | no | R |
-| `NotImplemented` | NotImplemented | 501 | typed wrappers | no | R |
-| `Configuration` | Configuration | 500 | typed wrappers | no | R |
-| `Serialization` | Parsing | 500 | typed wrappers | no | R |
-| `Timeout` | Timeout | 504 | typed wrappers | yes | R |
-| `ContextLengthExceeded` | InvalidRequest | 400 | typed wrappers | no | R |
-| `ContentFiltered` | InvalidRequest | 400 | typed wrappers | only when `potentially_retryable == Some(true)` and runtime has not emitted output | R |
-| `ApiError` | status-derived | preserve valid status | typed wrappers | yes only for 408, 429, 5xx, or modeled Bedrock 424; otherwise no | R; 401→Authentication, 403→Authorization, 404→NotFound, 408/504→Timeout, 409→Conflict, other 4xx→InvalidRequest, 429→RateLimit, 5xx→Unavailable, other→Internal |
-| `TokenLimitExceeded` | InvalidRequest | 400 | typed wrappers | no | R |
-| `FeatureDisabled` | NotImplemented | 501 | typed wrappers | no | R |
-| `DeploymentError` | NotFound | 404 | typed wrappers | yes before first output only | R |
-| `ResponseParsing` | Parsing | 502 | typed wrappers | no | R |
-| `RoutingError` | Unavailable | 503 | typed wrappers | no; it is already terminal aggregate failure | R |
-| `TransformationError` | Parsing | 500 | typed wrappers | no | R |
-| `Cancelled` | Cancelled（新增现有 taxonomy variant） | 499 | typed wrappers | never | R; cancellation is neutral lease settlement, not failure/success |
-| `Streaming` | Internal | 502 | typed wrappers | yes only before first output; never after output | R |
-| `Other` | Internal | 502 | typed wrappers | no | R |
+| `Authentication` | Authentication | 401 | redacted Gateway typed / existing SDK category | no | R |
+| `RateLimit` | RateLimited | 429 + limit headers | redacted Gateway typed / existing SDK category | yes; honor `retry_after` | R |
+| `QuotaExceeded` | QuotaExceeded | 402 | redacted Gateway typed / existing SDK category | no | R |
+| `ModelNotFound` | NotFound | 404 | redacted Gateway typed / existing SDK category | no | R |
+| `InvalidRequest` | InvalidRequest | 400 | redacted Gateway typed / existing SDK category | no | R |
+| `Network` | Network | 502 | redacted Gateway typed / existing SDK category | yes | R |
+| `ProviderUnavailable` | Unavailable | 503 | redacted Gateway typed / existing SDK category | yes | R |
+| `NotSupported` | NotImplemented | 501 | redacted Gateway typed / existing SDK category | no | R |
+| `NotImplemented` | NotImplemented | 501 | redacted Gateway typed / existing SDK category | no | R |
+| `Configuration` | Configuration | 500 | redacted Gateway typed / existing SDK category | no | R |
+| `Serialization` | Parsing | 500 | redacted Gateway typed / existing SDK category | no | R |
+| `Timeout` | Timeout | 504 | redacted Gateway typed / existing SDK category | yes | R |
+| `ContextLengthExceeded` | InvalidRequest | 400 | redacted Gateway typed / existing SDK category | no | R |
+| `ContentFiltered` | InvalidRequest | 400 | redacted Gateway typed / existing SDK category | only when `potentially_retryable == Some(true)` and runtime has not emitted output | R |
+| `ApiError` | status-derived | preserve only 400..=599; otherwise 502 | redacted Gateway typed / existing SDK category | yes only for 408, 429, 5xx, or modeled Bedrock 424; otherwise no | R; 401→Authentication, 403→Authorization, 404→NotFound, 408/504→Timeout, 409→Conflict, other 4xx→InvalidRequest, 429→RateLimit, 5xx→Unavailable, 1xx/2xx/3xx/nonstandard→Internal |
+| `TokenLimitExceeded` | InvalidRequest | 400 | redacted Gateway typed / existing SDK category | no | R |
+| `FeatureDisabled` | NotImplemented | 501 | redacted Gateway typed / existing SDK category | no | R |
+| `DeploymentError` | NotFound | 404 | redacted Gateway typed / existing SDK category | yes before first output only | R |
+| `ResponseParsing` | Parsing | 502 | redacted Gateway typed / existing SDK category | no | R |
+| `RoutingError` | Unavailable | 503 | redacted Gateway typed / existing SDK category | no; it is already terminal aggregate failure | R |
+| `TransformationError` | Parsing | 500 | redacted Gateway typed / existing SDK category | no | R |
+| `Cancelled` | InvalidRequest（0.6 public taxonomy compatibility） | 499 | redacted Gateway typed / existing SDK category | never | R; separate `cancelled` fact makes lease settlement neutral |
+| `Streaming` | Internal | 502 | redacted Gateway typed / existing SDK category | yes only before first output; never after output | R |
+| `Other` | Internal | 502 | redacted Gateway typed / existing SDK category | no | R |
 
-The `ApiError` row is exhaustive by status partition. `CanonicalError for ProviderError` 与现有
+The `ApiError` row is exhaustive by status partition；stored status 只有 400..=599 可透传，其他值（包括当前
+`gemini/error.rs:108` 构造的 200）一律产出 `ErrorCode::Internal` + HTTP 502，绝不能把 provider failure 发成
+success/redirect。`CanonicalError for ProviderError` 与现有
 `provider_http_error_facts()` 都不得有 wildcard arm；table fixture 必须逐 variant 断言 `ErrorCode`、HTTP facts、
 retryability、redaction 与 cancellation settlement，新增 variant 会编译失败直到两个现有 mapping 与本表同步。
 Cancellation never increments failure/cooldown and never triggers fallback; transport disconnect is converted to
@@ -365,11 +376,24 @@ Cancellation never increments failure/cooldown and never triggers fallback; tran
 HTTP 继续从 server startup 获取 `Arc<UnifiedRouter>` 并在 startup 注入边界构造 `RuntimeBinding`，每个请求在
 进入执行 helper 前 bind 一个 pinned `RuntimeHandle`。现有 `execution.rs::{execute_with_selected_deployment,
 execute_stream_with_selected_deployment}` 与 `budgeted.rs::{run_unary,run_stream}` 当前仍接收
-`&UnifiedRouter`/`Arc<UnifiedRouter>`，因此迁移必须按 D7a-D7c 严格串行：D7a 先增加 handle-aware helper 且暂留
-legacy wrapper 以保持 build green；D7b 迁移 unary callers；D7c 迁移 stream/query/Gemini callers 后删除旧
-router field/wrapper。route wire 不变，任何中间 tranche 都不得重新 load 当前 snapshot 替代 pinned handle。
+`&UnifiedRouter`/`Arc<UnifiedRouter>`，因此迁移必须按 D7a-D7i 严格串行：D7a 先增加 handle-aware helper 且暂留
+legacy wrapper；D7b 迁移 unary callers；D7c 迁移 stream/query/Gemini callers 并删除旧 router field/wrapper；
+D7d 在接收 `background=true` response 时就 bind handle 并把它传入 spawned task；D7e 建 capability-only runtime
+attempt plan，D7f 加 closed provider management dispatch，D7g/D7h 再分别迁移 batch 与 fine-tuning route。route
+wire 不变，任何中间 tranche 都不得重新 load 当前 snapshot 替代 pinned handle。
 
-D7d 新增 `tests/integration/router_runtime_conformance.rs` 前已搜索现有 tests，无同名/同职责 fixture；该 module
+management operation 是 crate-private closed enum（batch create/list/get/cancel 与 fine-tuning lifecycle），ID 作为
+单独字段由 provider 做 URL-segment encoding；禁止 adapter 传任意 URL/path/method 或取得 raw client。create request
+若有 model，使用既有 model + capability selection；list/get/cancel 等无 model 操作由 pinned handle 建立
+capability-only attempt plan：只遍历该 snapshot 中声明相应 executable capability 的 canonical deployments，复用
+相同 health/cooldown/budget/routing strategy、`RetryPolicy::decide` 与 exactly-once lease settlement，稳定的内部
+routing key 是 operation capability 而非空字符串/sentinel model。route 不得自行循环 provider，ID 操作的跨
+deployment fallback 也只能由该 runtime plan 决定。只有每个 attempt 实际 selected `Provider` 的
+OpenAI/OpenAI-compatible 实现用其已构造的 auth、endpoint policy 与 pool 发送；unsupported provider 返回 typed
+`NotSupported`。这样 lifecycle route 不扫描 `config.gateway.providers`、不构造
+`RouteHttpClient`/`OpenAIFineTuningProvider`，也不引入 OS/URL injection surface。
+
+D7i 新增 `tests/integration/router_runtime_conformance.rs` 前已搜索现有 tests，无同名/同职责 fixture；该 module
 使用本地 listener 和 deterministic providers，令同一 runtime generation 依次由三入口触发并比较 selected
 identity、typed category、attempt trace 与 state delta。source guard 扫描 production adapter，拒绝第二
 map/config scan/local routing counters/client construction。
@@ -383,7 +407,7 @@ map/config scan/local routing counters/client construction。
 | --- | --- | --- |
 | D0 decision amendment | `specs/GH965/{product,tech,tasks}.md` | docs-only；`Refs #965`；不实现。 |
 | D1 runtime contract | `src/core/router/mod.rs`, `unified.rs`, `gateway_config.rs`, `deployment.rs`, `selection.rs`, `execute_impl.rs`, `execution.rs`, `error.rs`, `src/core/router/tests/router_tests.rs` | 9 files / ≤500；`Refs #965`。 |
-| D1E-a canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `unified_provider_methods.rs`, `src/utils/error/canonical.rs`, `src/core/providers/failure.rs`, `src/core/router/retry_policy.rs`, `gateway_error/http_mapping.rs`, `src/sdk/errors.rs` | 7 files / ≤500；删除 `ProviderFailureKind`，在唯一 exhaustive match 中保留 typed retry facts；SDK wrapper 存 redacted copy；`Refs #965`。 |
+| D1E-a canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `unified_provider_methods.rs`, `src/core/providers/failure.rs`, `src/core/providers/mod.rs`, `src/utils/error/canonical.rs`, `src/core/router/retry_policy.rs`, `gateway_error/http_mapping.rs`, `src/sdk/errors.rs` | 8 files / ≤500；删除 `ProviderFailureKind` 及 re-export，在唯一 exhaustive match 中保留 typed retry facts；0.6 SDK 映射到现有 variant；`Refs #965`。 |
 | D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/utils/error/gateway_error/conversions.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 4 files / ≤500；Gateway wrapper 与真实响应出口都只携带 `redacted()` copy；`Refs #965`。 |
 | D1E-c legacy retry helper deprecation | `src/core/providers/contextual_error.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/types/errors/traits.rs`, `src/core/router/execution.rs`, `src/utils/error/utils/retry.rs`, `src/sdk/errors.rs`, `src/server/routes/ai/batches.rs`, `src/server/routes/ai/fine_tuning.rs` | 8 files / ≤500；六个 provider-specific helper 保留 0.6 行为、deprecated、production 零消费；canonical coarse helpers 明确 grandfather；`Refs #965`。 |
 | D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
@@ -395,7 +419,12 @@ map/config scan/local routing counters/client construction。
 | D7a HTTP handle-aware helpers | `src/server/state.rs`, `http.rs`, `src/server/routes/ai/execution.rs`, `budgeted.rs`, `execution_retry_delay_tests.rs`, `provider_selection.rs` | 6 files / ≤500；AppState/runtime token 与 handle-aware helper plumbing，暂留 build-safe legacy wrapper；`Refs #965`。 |
 | D7b HTTP unary callers | `src/server/routes/ai/audio/speech.rs`, `audio/transcriptions.rs`, `audio/translations.rs`, `chat.rs`, `embeddings.rs`, `images.rs`, `images/generation.rs`, `moderations.rs`, `rerank.rs`, `gemini.rs` | 10 files / ≤500；所有 unary callers 改传 pinned handle；Gemini 仅 binding plumbing；`Refs #965`。 |
 | D7c HTTP stream/query cleanup | `src/server/routes/ai/chat_streaming.rs`, `completions_streaming.rs`, `responses_stream.rs`, `gemini.rs`, `gemini/provider.rs`, `models.rs`, `response_cache.rs`, `budgeted.rs`, `execution.rs`, `src/server/state.rs` | 10 files / ≤500；迁移余下 caller，删除 AppState router field 与 legacy helper；Gemini 行为不变；`Refs #965`。 |
-| D7d HTTP conformance | `tests/integration/mod.rs`, `tests/integration/router_tests.rs`, new `tests/integration/router_runtime_conformance.rs` | 3 files / ≤500；三入口 deterministic conformance + source guard；`Refs #965`。 |
+| D7d background response pinning | `src/server/routes/ai/responses.rs`, `responses/lifecycle.rs`, `responses/lifecycle_tests.rs`, `chat.rs` | 4 files / ≤500；acceptance 时 bind，spawned task 只消费该 handle；`Refs #965`。 |
+| D7e capability-only runtime attempt plan | `src/core/router/selection.rs`, `execute_impl.rs`, `tests/execution_tests.rs`, `tests/router_tests.rs` | 4 files / ≤500；pinned snapshot + capability routing key + runtime-owned retry/settlement，无 sentinel model；`Refs #965`。 |
+| D7f closed provider management dispatch | new `src/core/providers/management_dispatch.rs`, `src/core/providers/mod.rs`, `openai/client.rs`, `openai/api_methods.rs`, new `openai_like/management.rs`, `openai_like/mod.rs`, `openai_like/provider.rs`, `openai_like/provider/tests.rs`, `openai/client_tests/provider_support_tests.rs` | 9 files / ≤500；只暴露 closed batch/fine operations，复用 provider auth/endpoint/pool 并补齐 executable capability；`Refs #965`。 |
+| D7g batch route ownership | `src/server/routes/ai/batches.rs`, `tests/batches_routes.rs` | 2 files / ≤500；route 只组装 typed operation 并委托 D7e/D7f runtime plan；`Refs #965`。 |
+| D7h fine-tuning route ownership + sender cleanup | `src/server/routes/ai/fine_tuning.rs`, `route_http.rs`, `provider_config.rs`, `src/server/routes/ai/mod.rs`, `tests/fine_tuning_routes.rs` | 5 files / ≤500；route 只委托 runtime plan；删除最后的 route-owned client/config helpers；`Refs #965`。 |
+| D7i HTTP conformance | `tests/integration/mod.rs`, `tests/integration/router_tests.rs`, new `tests/integration/router_runtime_conformance.rs` | 3 files / ≤500；三入口 deterministic conformance + 全 production route source guard；`Refs #965`。 |
 | D8 release handoff | GitHub follow-up issue + linked SpecRail packet（不改 production） | durable 0.7.0 removal scope；closure 前完成；`Refs #965`。 |
 
 `src/server/routes/ai/execution.rs` 当前接近 U-16 hard ceiling，D7a/D7c 只允许机械签名迁移与删除 legacy wrapper，
@@ -419,17 +448,17 @@ hash 变长 stored secret，不能满足本 contract。
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | D1 canonical construction/runtime registration | `cargo test --all-features --locked core::router`；factory-count/source guard fixture。 |
-| B-002 | D2/D4/D7a-D7d adapters + shared fixture | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::selection_identity`。 |
+| B-002 | D2/D4/D7a-D7i adapters + shared fixture | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::selection_identity`。 |
 | B-003 | D2-D7 adapter cleanup | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::single_sender`；production source guard。 |
 | B-004 | D1/D2/D4 config normalization | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::invalid_and_empty_config`。 |
 | B-005 | canonical alias/surface selection | `cargo test --all-features --locked support_matrix` 加 conformance `alias_and_unsupported` fixture。 |
-| B-006 | D1E-a 删除 `ProviderFailureKind` 并保留 typed facts；D1E-b 收敛脱敏 wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 typed SDK/Gateway、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output。 |
+| B-006 | D1E-a 删除 `ProviderFailureKind` 并保留 typed facts；D1E-b 收敛脱敏 wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output。 |
 | B-007 | deployment lease/state + SDK stats view | conformance `exactly_once_state` fixture比较 attempt trace 与 counter delta。 |
 | B-008 | runtime retry/fallback | conformance `retry_and_fallback` fixture证明 adapter request count 与 runtime attempts 相等。 |
 | B-009 | immutable generation replacement | conformance `snapshot_replacement` 并发双 listener/key fixture。 |
 | B-010 | runtime streaming lease | conformance `stream_failure_cancel_and_success` fixture；`cargo test --all-features --locked streaming`。 |
 | B-011 | D2-D6 facades/deprecations | compile fixtures + `cargo test --all-features --locked --doc`；release-note/API diff 人工复核。 |
-| B-012 | D7d evidence architecture | 全部 `router_runtime_conformance` tests + source guard red/green fixture；仅 matrix tests 不计完成。 |
+| B-012 | D7i evidence architecture | 全部 `router_runtime_conformance` tests + source guard red/green fixture；guard 扫描所有 production AI routes，`config.gateway.providers` selection scan、`RouteHttpClient`、`OpenAIFineTuningProvider` 与 adapter-owned sender 零命中；仅 matrix tests 不计完成。 |
 
 ## 数据流
 
@@ -476,7 +505,7 @@ completion 外观，不持久化第二份 routing state，也不执行额外外�
 
 ## 回滚方案
 
-按 D7d → D7c → D7b → D7a → D6 → D5 → D4 → D3 → D3C → D2 → D1E-c → D1E-b → D1E-a → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
+按 D7i → D7h → D7g → D7f → D7e → D7d → D7c → D7b → D7a → D6 → D5 → D4 → D3 → D3C → D2 → D1E-c → D1E-b → D1E-a → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
 的 canonical runtime，不得只恢复 adapter fallback。若 closure audit 已关闭 #965，回滚后重新打开 issue 并在
 release note 标明被恢复的 `HD-003` compatibility surface。无持久化迁移；runtime generation replacement
 通过进程重启/重新构造恢复。若安全回归涉及 sender/override，首先回滚对应 D3/D5，同时保持 #968 policy。

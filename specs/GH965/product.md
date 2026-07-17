@@ -51,14 +51,17 @@ complexity: large
 4. B-004 空 provider 集合、缺失 model、未知 provider/model、非法 provider 配置和无法构造的
    provider 必须在所有入口稳定失败；不得以环境变量、默认 provider、旧 registry 或普通 HTTP client
    静默补位。`headers`/`timeout` 只有通过 runtime policy 验证后才进入 request context；0.6.0 中已弃用的
-   `api_key`/`api_base` 只能解析到当前 generation 内 policy-approved canonical deployment，不能构造、注册
-   或缓存请求专属 provider/client，无法唯一匹配时必须稳定失败。
+   `api_key`/`api_base`/`api_version`/`organization` 只能作为同一个 legacy selector 解析到当前 generation 内
+   policy-approved canonical deployment，不能构造、注册或缓存请求专属 provider/client，任一字段无法唯一匹配时
+   必须稳定失败，禁止静默丢弃。
 5. B-005 provider alias、model alias 与 #728 support matrix 在三个入口必须解析为相同 canonical
    identity/surface；明确 unsupported 的组合返回 unsupported，不能退化为 model-not-found、选择其他
    provider 或 generic passthrough。
-6. B-006 `ProviderError` 是 provider/runtime 失败的唯一 typed source；其每个 variant 必须穷尽映射到闭集
-   canonical class，区分 invalid configuration/request、authentication、unsupported、model/deployment not
-   found、rate limit/budget、timeout/network、upstream unavailable、parsing/internal 和 cancellation。
+6. B-006 `ProviderError` 是 provider/runtime 失败的唯一 typed source；其每个 variant 必须穷尽映射到现有闭集
+   canonical code，并以非 taxonomy typed facts 保留 code 合并后仍有行为差异的 cancellation、content-filter、
+   pre-output-only 与 upstream status/retry hint；整体必须区分 invalid configuration/request、authentication、
+   unsupported、model/deployment not found、rate limit/budget、timeout/network、upstream unavailable、
+   parsing/internal 和 cancellation。
    HTTP/SDK/`completion()` 可改变外层类型或 status code，但不得从字符串重分类、改变 retryability，或在
    message/log/response 中泄漏 credential、authorization/cookie header、signed URL query 和 provider body 中
    已识别的 secret。
@@ -120,10 +123,10 @@ complexity: large
 
 | ID | Resolved decision | Observable consequence |
 | --- | --- | --- |
-| `HD-001` | HTTP 与每个 SDK instance 显式持有 `Arc<UnifiedRouter>`；仅高层 free functions 使用可替换的 process-default binding。 | replacement 原子发布新 immutable generation；已取得 handle 的 in-flight request 完成于旧 generation。未安装 default 时 free functions 返回 typed configuration error，不从 env 隐式初始化。 |
+| `HD-001` | HTTP 与每个 SDK instance 显式持有 refreshable `RuntimeBinding`；`Arc<UnifiedRouter>` 只在 bootstrap/construction 边界用于构造该 binding。仅高层 free functions 使用可替换的 process-default binding source。 | replacement 原子发布新 immutable generation；每个 request/operation 入口从 binding 取得一次 pinned handle，in-flight request 完成于旧 generation，后续请求观察新 generation。未安装 default 时 free functions 返回 typed configuration error，不从 env 隐式初始化。 |
 | `HD-002` | `headers`/`timeout` 保留为 validated request-scoped context；`api_key`/`api_base` 在 0.6.0 deprecated，0.7.0 removed。本 amendment 依同一原则补齐 `CompletionOptions` 的其余 override 字段：`api_version`/`organization` 与 `api_key`/`api_base` 同类（0.6.0 deprecated → 0.7.0 removed），分类表见 tech spec §2。 | legacy selector 只可匹配当前 generation 内 policy-approved canonical deployment；零匹配、多匹配、被 endpoint/header policy 拒绝均 fail closed，且不得创建请求专属 provider/client。credential match 使用定长 digest 比较，不得因输入长度产生时序差异。 |
 | `HD-003` | 永久保留 `LLMClient`、`ClientConfig` 和高层 free functions 为 stateless facade；`DefaultRouter`、completion `Router` trait、mutable `ProviderRegistry` runtime ownership 在 0.6.0 deprecated、0.7.0 removed。 | 0.6.0 facade 也不得 fallback 到 legacy engine；0.7.0 removal 前必须先修订并验证 release workflow 的 0.x breaking policy。0.6.0 的 deprecation 只加 `#[deprecated]` 与切断所有权，不改公开签名、不降可见性；任何 0.6.0 breaking 签名变更都超出本决策窗口。 |
-| `HD-004` | `ProviderError` 是 canonical typed runtime error；HTTP、SDK、Gateway、retry/redaction/cancellation 使用 tech spec 的 exhaustive mapping。 | adapter 从 typed variant 映射并保留 class/retryability；字符串只能作为已 redacted 的展示文本，不能参与分支。retryability 必须带 `RetryContext`（既有 `RetryPolicy::decide`），不得暴露 context-free 的 bool；`ProviderFailureKind` 并入 `ErrorCode` 后不得存在第二套分类。`SDKError::ProviderError(String)` 的 0.7.0 removal 由本决策（而非 `HD-003`）负责。 |
+| `HD-004` | `ProviderError` 是 canonical typed runtime error；HTTP、SDK、Gateway、retry/redaction/cancellation 使用 tech spec 的 exhaustive mapping。 | adapter 从 typed variant 映射并保留 class/retryability；字符串只能作为已 redacted 的展示文本，不能参与分支。retryability 必须带 `RetryContext`（既有 `RetryPolicy::decide`），不得暴露 context-free 的 bool；删除 `ProviderFailureKind`，复用现有 `ErrorCode` 并把 cancellation/pre-output 等差异保留为非 taxonomy typed facts。0.6.0 不给公开 `ErrorCode`/`SDKError` 增加 variant；`SDKError::ProviderError(String)` 的 0.7.0 typed replacement/removal 由本决策（而非 `HD-003`）负责。 |
 
 ## 发布说明
 
