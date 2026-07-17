@@ -30,9 +30,9 @@ GH-965 / #965
 - #728 / merged PR #734 已建立 HTTP/SDK/`completion()` support matrix；GH-965 只让实际执行消费同一
   runtime，不扩大或重算 matrix。
 - #966 已由 merged PR #1026 收敛 Gemini SDK-compatible HTTP route 的 selected runtime identity；
-  该 PR 修改的 `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs`、
-  `tests/gemini_sdk_routes/runtime_provider_tests.rs` 是 GH-965 的已满足前置与非重叠边界。GH-965 不修改
-  Gemini wire/policy/selection。
+  `tests/gemini_sdk_routes/runtime_provider_tests.rs` 保持只读并必须继续通过。D7b/D7c 仅可对
+  `src/server/routes/ai/gemini.rs`、`src/server/routes/ai/gemini/provider.rs` 做 RuntimeHandle binding plumbing，
+  不得改变 Gemini wire、endpoint policy 或 selected identity；这是对已实现调用链的机械迁移，不重开 #1026。
 - #968 负责 provider endpoint access 与 SSRF；GH-965 不创建普通 client 旁路，adapter 只能使用 selected
   provider 已持有的 secure client。
 - #519 保持 umbrella；#727 继续处理通用 U-16 文件拆分。GH-965 的拆分只服务本 issue 的 500-line gate。
@@ -287,24 +287,37 @@ idempotency, attempt, max_attempts, retry_budget_remaining, deadline_remaining }
 `StreamRetryStage::{NotStreaming, BeforeFirstChunk, AfterChunksEmitted}`，且已在
 `StreamAlreadyEmitted` 处停止重试——本表的 pre/post-output 语义正是它，不要另建平行 API。
 
-D1E-a 的收敛工作因此不是"加 retryable 方法"，而是消除既有的平行 taxonomy：
+D1E-a 的收敛工作因此不是"加 retryable 方法"，而是删除既有的平行 taxonomy：
 `retry_policy.rs:7` 从 `src/core/providers/failure.rs` 导入 `ProviderFailureFacts`/`ProviderFailureKind`，
 而 `ProviderFailureKind`（`failure.rs:11`）是 `ProviderError` 变体的 1:1 镜像，与 `canonical.rs:13` 的
-class 级 `ErrorCode` 构成第二套分类。D1E-a 必须让 `ProviderFailureFacts::from_error` 由
-`CanonicalError`/`ErrorCode` 派生（或让 `ProviderFailureKind` 退化为 `ErrorCode` 的别名/薄封装），
-使 retry policy 与 HTTP/SDK/Gateway 共用同一闭集，且 `failure.rs` 中不再存在独立的 variant match。
+class 级 `ErrorCode` 构成第二套分类。`ProviderFailureKind` 必须删除；但 retry 需要的 typed facts 不能只从
+`ErrorCode` 反推，因为 class 会合并 `ContentFiltered`、`DeploymentError`、`Streaming` 等具有不同 pre/post-output
+语义的 variant。`ProviderFailureFacts::from_error` 是全仓**唯一**允许对 `ProviderError` 做 exhaustive retry-fact
+match 的位置，输出 `canonical_code: ErrorCode` 加非 taxonomy 的原始事实（至少包含 API status/`retry_after`、
+content-filter potentially-retryable、pre-output-only、cancellation）；`RetryPolicy::decide` 只消费这些 facts 与
+`RetryContext`。不得再建 mirrored enum、第二个 variant classifier，或从 `ErrorCode` 丢失上述事实。
+
+D1E-c 处理已经公开的 provider-specific context-free compatibility helpers：0.6.0 保持其当前返回行为并统一标注
+deprecated，但 production provider routing/retry source guard 必须零消费；不得以它们代替
+`RetryPolicy::decide`。该集合包括 `ProviderError::is_retryable`、
+`ContextualProviderError::is_retryable`、`ProviderErrorTrait::is_retryable`、`SDKError::is_retryable`、
+`core::router::execution::is_retryable_error` 与 `ErrorUtils::should_retry`，并全部进入 0.7.0 removal handoff。
+`ErrorCode::is_retryable` 与 `CanonicalError::canonical_retryable` 则明确 grandfather：它们继续作为 A2A/MCP/
+HTTP presentation 的 coarse compatibility fact，0.6/0.7 不删除，但不得参与 provider runtime retry/fallback。
+二者若未来要删除，必须另立 public-API decision，不得借 GH-965 顺带移除。
 
 `SDKError` 新增 `Provider(ProviderError)`，现有 `ProviderError(String)` 在 0.6.0 deprecated 并于 0.7.0
-移除；`GatewayError::Provider(ProviderError)` 保持。每个 runtime `ProviderError` 原样进入对应 typed wrapper，
-outer adapter 只用上述 canonical/http facts 生成 status/code/retry hint。`completion()` 继续返回
-`GatewayError` 外观。
+移除；`GatewayError::Provider(ProviderError)` 保持。原始 runtime `ProviderError` 只在 request-local retry/
+observability 路径中流转；跨公共 SDK/Gateway 边界时必须构造 `SDKError::Provider(e.redacted())` 或
+`GatewayError::Provider(e.redacted())`，wrapper 只持有脱敏 typed copy。outer adapter 只用上述 canonical/http facts
+生成 status/code/retry hint；`completion()` 继续返回 `GatewayError` 外观。
 表中 `R` 表示输出前必须调用 `redacted()`：credential、
 authorization/cookie header、signed query value 和已知 secret pattern 替换为 `[REDACTED]`；provider/model/
 deployment identity 与非秘密限额保留。原始 typed error 只在 request-local memory 中流转，不进入 log/response。
 
 | `ProviderError` variant | Existing/new `ErrorCode` | HTTP | Gateway / SDK | Retryability | Redaction / cancellation |
 | --- | --- | --- | --- | --- | --- |
-| `Authentication` | Authentication | 401 | `GatewayError::Provider(e)` / `SDKError::Provider(e)` | no | R |
+| `Authentication` | Authentication | 401 | `GatewayError::Provider(e.redacted())` / `SDKError::Provider(e.redacted())` | no | R |
 | `RateLimit` | RateLimited | 429 + limit headers | typed wrappers | yes; honor `retry_after` | R |
 | `QuotaExceeded` | QuotaExceeded | 402 | typed wrappers | no | R |
 | `ModelNotFound` | NotFound | 404 | typed wrappers | no | R |
@@ -318,7 +331,7 @@ deployment identity 与非秘密限额保留。原始 typed error 只在 request
 | `Timeout` | Timeout | 504 | typed wrappers | yes | R |
 | `ContextLengthExceeded` | InvalidRequest | 400 | typed wrappers | no | R |
 | `ContentFiltered` | InvalidRequest | 400 | typed wrappers | only when `potentially_retryable == Some(true)` and runtime has not emitted output | R |
-| `ApiError` | status-derived | preserve valid status | typed wrappers | yes only for 429, 5xx, or modeled Bedrock 424; otherwise no | R; 401→Authentication, 403→Authorization, 404→NotFound, 408/504→Timeout, 409→Conflict, other 4xx→InvalidRequest, 429→RateLimit, 5xx→Unavailable, other→Internal |
+| `ApiError` | status-derived | preserve valid status | typed wrappers | yes only for 408, 429, 5xx, or modeled Bedrock 424; otherwise no | R; 401→Authentication, 403→Authorization, 404→NotFound, 408/504→Timeout, 409→Conflict, other 4xx→InvalidRequest, 429→RateLimit, 5xx→Unavailable, other→Internal |
 | `TokenLimitExceeded` | InvalidRequest | 400 | typed wrappers | no | R |
 | `FeatureDisabled` | NotImplemented | 501 | typed wrappers | no | R |
 | `DeploymentError` | NotFound | 404 | typed wrappers | yes before first output only | R |
@@ -337,11 +350,17 @@ Cancellation never increments failure/cooldown and never triggers fallback; tran
 
 ### 6. HTTP binding and conformance
 
-HTTP 继续从 server startup 获取 `Arc<UnifiedRouter>` 并在注入边界构造 `RuntimeBinding`/`RuntimeHandle`；只在
-`http.rs`/`state.rs` 的注入边界调整，不改 route wire。新增 `tests/integration/router_runtime_conformance.rs`
-前已搜索现有 tests，无同名/同职责 fixture；该 module 使用本地 listener 和 deterministic providers，令同一
-runtime generation 依次由三入口触发并比较 selected identity、typed category、attempt trace 与 state delta。
-source guard 扫描 production adapter，拒绝第二 map/config scan/local routing counters/client construction。
+HTTP 继续从 server startup 获取 `Arc<UnifiedRouter>` 并在 startup 注入边界构造 `RuntimeBinding`，每个请求在
+进入执行 helper 前 bind 一个 pinned `RuntimeHandle`。现有 `execution.rs::{execute_with_selected_deployment,
+execute_stream_with_selected_deployment}` 与 `budgeted.rs::{run_unary,run_stream}` 当前仍接收
+`&UnifiedRouter`/`Arc<UnifiedRouter>`，因此迁移必须按 D7a-D7c 严格串行：D7a 先增加 handle-aware helper 且暂留
+legacy wrapper 以保持 build green；D7b 迁移 unary callers；D7c 迁移 stream/query/Gemini callers 后删除旧
+router field/wrapper。route wire 不变，任何中间 tranche 都不得重新 load 当前 snapshot 替代 pinned handle。
+
+D7d 新增 `tests/integration/router_runtime_conformance.rs` 前已搜索现有 tests，无同名/同职责 fixture；该 module
+使用本地 listener 和 deterministic providers，令同一 runtime generation 依次由三入口触发并比较 selected
+identity、typed category、attempt trace 与 state delta。source guard 扫描 production adapter，拒绝第二
+map/config scan/local routing counters/client construction。
 
 ## Tranche Plan and File Budgets
 
@@ -352,26 +371,33 @@ source guard 扫描 production adapter，拒绝第二 map/config scan/local rout
 | --- | --- | --- |
 | D0 decision amendment | `specs/GH965/{product,tech,tasks}.md` | docs-only；`Refs #965`；不实现。 |
 | D1 runtime contract | `src/core/router/mod.rs`, `unified.rs`, `gateway_config.rs`, `deployment.rs`, `selection.rs`, `execute_impl.rs`, `execution.rs`, `error.rs`, `src/core/router/tests/router_tests.rs` | 9 files / ≤500；`Refs #965`。 |
-| D1E-a canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `unified_provider_methods.rs`, `src/utils/error/canonical.rs`, `src/core/providers/failure.rs`, `src/core/router/retry_policy.rs`, `gateway_error/http_mapping.rs`, `src/sdk/errors.rs` | 7 files / ≤500；`ProviderFailureKind` 并入 `ErrorCode`，retry 只经既有 `RetryPolicy::decide`；`Refs #965`。 |
-| D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 3 files / ≤500；真实错误响应出口消费 canonical facts 并 `redacted()`；`Refs #965`。 |
+| D1E-a canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `unified_provider_methods.rs`, `src/utils/error/canonical.rs`, `src/core/providers/failure.rs`, `src/core/router/retry_policy.rs`, `gateway_error/http_mapping.rs`, `src/sdk/errors.rs` | 7 files / ≤500；删除 `ProviderFailureKind`，在唯一 exhaustive match 中保留 typed retry facts；SDK wrapper 存 redacted copy；`Refs #965`。 |
+| D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/utils/error/gateway_error/conversions.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 4 files / ≤500；Gateway wrapper 与真实响应出口都只携带 `redacted()` copy；`Refs #965`。 |
+| D1E-c legacy retry helper deprecation | `src/core/providers/contextual_error.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/types/errors/traits.rs`, `src/core/router/execution.rs`, `src/utils/error/utils/retry.rs`, `src/sdk/errors.rs`, `src/server/routes/ai/batches.rs`, `src/server/routes/ai/fine_tuning.rs` | 8 files / ≤500；六个 provider-specific helper 保留 0.6 行为、deprecated、production 零消费；canonical coarse helpers 明确 grandfather；`Refs #965`。 |
 | D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
 | D3C credential compare hardening | `src/core/router/unified.rs`, `deployment.rs`, `gateway_config.rs`, `src/utils/auth/crypto/hmac.rs`, `src/utils/auth/crypto/tests.rs` | 5 files / ≤500；deployment publication 预计算并存储定长 digest，request path 每请求只 hash 一次后定长比较；`Refs #965`。 |
 | D3 completion stream/override cleanup | `src/core/completion/stream.rs`, `src/core/completion/types.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `default_router/dynamic_providers.rs`, `default_router/dynamic_providers/routes.rs`, `default_router/dynamic_providers/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；依 `HD-002/003`；含全部 override 字段分类与 `#[deprecated]`；`Refs #965`。 |
 | D4 SDK runtime binding | `src/sdk/config.rs`, `errors.rs`, `client/llm_client.rs`, `client/routing.rs`, `client/types.rs`, `client/tests.rs`, `src/sdk/mod.rs` | 7 files / ≤500；仅 construction/selection；`Refs #965`。 |
 | D5 SDK execution cleanup | `src/sdk/client/completions.rs`, `embeddings.rs`, `provider_payloads.rs`, `stats.rs`, `llm_client.rs`, `routing.rs`, `tests/integration/router_tests.rs` | 7 files / ≤500；sender/state/error mapping；`Refs #965`。 |
 | D6 registry demotion | `src/core/providers/provider_registry.rs`, `src/core/providers/mod.rs`, `src/core/embedding/router.rs`, `src/core/completion/mod.rs`, `src/core/completion/router_trait.rs`, `src/core/completion/default_router/mod.rs`, `src/lib.rs` | 7 files / ≤500；依 `HD-003`；`router_trait.rs` 是 completion `Router` trait 的定义处，必须在此打 `#[deprecated]`；`Refs #965`。 |
-| D7 binding + conformance | `src/server/http.rs`, `src/server/state.rs`, `tests/integration/mod.rs`, `tests/integration/router_tests.rs`, new `tests/integration/router_runtime_conformance.rs` | 5 files / ≤500；不触碰 `execution.rs` 或 #1026 三文件；`Refs #965`。 |
+| D7a HTTP handle-aware helpers | `src/server/state.rs`, `http.rs`, `src/server/routes/ai/execution.rs`, `budgeted.rs`, `execution_retry_delay_tests.rs`, `provider_selection.rs` | 6 files / ≤500；AppState/runtime token 与 handle-aware helper plumbing，暂留 build-safe legacy wrapper；`Refs #965`。 |
+| D7b HTTP unary callers | `src/server/routes/ai/audio/speech.rs`, `audio/transcriptions.rs`, `audio/translations.rs`, `chat.rs`, `embeddings.rs`, `images.rs`, `images/generation.rs`, `moderations.rs`, `rerank.rs`, `gemini.rs` | 10 files / ≤500；所有 unary callers 改传 pinned handle；Gemini 仅 binding plumbing；`Refs #965`。 |
+| D7c HTTP stream/query cleanup | `src/server/routes/ai/chat_streaming.rs`, `completions_streaming.rs`, `responses_stream.rs`, `gemini.rs`, `gemini/provider.rs`, `models.rs`, `response_cache.rs`, `budgeted.rs`, `execution.rs`, `src/server/state.rs` | 10 files / ≤500；迁移余下 caller，删除 AppState router field 与 legacy helper；Gemini 行为不变；`Refs #965`。 |
+| D7d HTTP conformance | `tests/integration/mod.rs`, `tests/integration/router_tests.rs`, new `tests/integration/router_runtime_conformance.rs` | 3 files / ≤500；三入口 deterministic conformance + source guard；`Refs #965`。 |
 | D8 release handoff | GitHub follow-up issue + linked SpecRail packet（不改 production） | durable 0.7.0 removal scope；closure 前完成；`Refs #965`。 |
 
-`src/server/routes/ai/execution.rs` 当前接近 U-16 hard ceiling，不在 writable scope；D7 复用其已存在的
-selected-deployment helper。D2/D3、D4/D5、D2/D6 虽有同路径（`types.rs`、`router_trait.rs`、
+`src/server/routes/ai/execution.rs` 当前接近 U-16 hard ceiling，D7a/D7c 只允许机械签名迁移与删除 legacy wrapper，
+不得在其中扩展业务逻辑；若该机械改动令文件超过 800 行，先在 D7a 内抽取既有 helper，不得扩大行为。
+D2/D3、D4/D5、D2/D6 虽有同路径（`types.rs`、`router_trait.rs`、
 `default_router/mod.rs`），但为严格串行且各自从前一 merged SHA 开始，不并行写同一文件。
 
-D1E 拆成 D1E-a/D1E-b 是本 amendment 的预算修正，不是范围扩大：原 D1E 列的 `utils/retry.rs` **不存在**
+D1E 拆成 D1E-a/D1E-b/D1E-c 是本 amendment 的预算修正，不是范围扩大：原 D1E 列的 `utils/retry.rs` **不存在**
 （repo 中无该文件），而真正的 retry/响应出口是 `src/core/router/retry_policy.rs`、
 `src/core/providers/failure.rs`、`src/utils/error/gateway_error/response.rs`、
-`src/server/routes/ai/openai_errors.rs`。删 1 加 4 后单一 tranche 达 10 个文件并需同时改动 taxonomy 与
-序列化出口，500-line 预算下必然挤压测试，故按本节"超限先拆 tranche"的规则拆分。同理，credential 修复
+`src/server/routes/ai/openai_errors.rs`，且六个 provider-specific context-free compatibility helpers 及其两个
+production callers 分散在八个真实文件（canonical coarse helpers 明确 grandfather，不计 removal scope）。
+单一 tranche 需同时改动 taxonomy、序列化出口与 deprecated compatibility surface，500-line 预算下必然挤压测试，
+故按本节"超限先拆 tranche"的规则拆分。同理，credential 修复
 独立成 D3C，避免 D3 触及 10 文件上限。D3C 为满足 length-independent match 必须同时拥有 digest helper 与
 canonical deployment/snapshot metadata publication；只改 `hmac.rs`/tests 会在 request candidate loop 内重复
 hash 变长 stored secret，不能满足本 contract。
@@ -381,17 +407,17 @@ hash 变长 stored secret，不能满足本 contract。
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | D1 canonical construction/runtime registration | `cargo test --all-features --locked core::router`；factory-count/source guard fixture。 |
-| B-002 | D2/D4/D7 adapters + shared fixture | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::selection_identity`。 |
+| B-002 | D2/D4/D7a-D7d adapters + shared fixture | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::selection_identity`。 |
 | B-003 | D2-D7 adapter cleanup | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::single_sender`；production source guard。 |
 | B-004 | D1/D2/D4 config normalization | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::invalid_and_empty_config`。 |
 | B-005 | canonical alias/surface selection | `cargo test --all-features --locked support_matrix` 加 conformance `alias_and_unsupported` fixture。 |
-| B-006 | D1E-a 复用 `ErrorCode`/`ProviderHttpErrorFacts` 并合并 `ProviderFailureKind`；D1E-b 收敛响应出口 | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 typed SDK/Gateway、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output。 |
+| B-006 | D1E-a 删除 `ProviderFailureKind` 并保留 typed facts；D1E-b 收敛脱敏 wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 typed SDK/Gateway、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output。 |
 | B-007 | deployment lease/state + SDK stats view | conformance `exactly_once_state` fixture比较 attempt trace 与 counter delta。 |
 | B-008 | runtime retry/fallback | conformance `retry_and_fallback` fixture证明 adapter request count 与 runtime attempts 相等。 |
 | B-009 | immutable generation replacement | conformance `snapshot_replacement` 并发双 listener/key fixture。 |
 | B-010 | runtime streaming lease | conformance `stream_failure_cancel_and_success` fixture；`cargo test --all-features --locked streaming`。 |
 | B-011 | D2-D6 facades/deprecations | compile fixtures + `cargo test --all-features --locked --doc`；release-note/API diff 人工复核。 |
-| B-012 | D7 evidence architecture | 全部 `router_runtime_conformance` tests + source guard red/green fixture；仅 matrix tests 不计完成。 |
+| B-012 | D7d evidence architecture | 全部 `router_runtime_conformance` tests + source guard red/green fixture；仅 matrix tests 不计完成。 |
 
 ## 数据流
 
@@ -438,7 +464,7 @@ completion 外观，不持久化第二份 routing state，也不执行额外外�
 
 ## 回滚方案
 
-按 D7 → D6 → D5 → D4 → D3 → D3C → D2 → D1E-b → D1E-a → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
+按 D7d → D7c → D7b → D7a → D6 → D5 → D4 → D3 → D3C → D2 → D1E-c → D1E-b → D1E-a → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
 的 canonical runtime，不得只恢复 adapter fallback。若 closure audit 已关闭 #965，回滚后重新打开 issue 并在
 release note 标明被恢复的 `HD-003` compatibility surface。无持久化迁移；runtime generation replacement
 通过进程重启/重新构造恢复。若安全回归涉及 sender/override，首先回滚对应 D3/D5，同时保持 #968 policy。
