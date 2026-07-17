@@ -131,9 +131,10 @@ mutation 后，旧 handle 仍看到旧 snapshot，而后续 `default_runtime()` 
 显式使用 `replace_default_runtime`。每次 install/replace 在安装 token 时为其当前 snapshot 发布新的、单调递增且
 进程内不复用的 generation；`replace` 返回旧 `RuntimeBinding` token，rollback 通过把该 token 直接传回
 `replace_default_runtime` 完成，禁止从 handle 取回 router 或用 sentinel 重建。free function 每次调用开始只
-load 一次；HTTP startup 从 `Arc<UnifiedRouter>` 构造 `RuntimeBinding` 并由 `AppState` 固定一次 load 得到的
-handle；`LLMClient` 构造时创建或接收 handle。禁止 free function 的 env lazy
-bootstrap；无 default 时返回 `ProviderError::Configuration`。
+load 一次；HTTP startup 从 `Arc<UnifiedRouter>` 构造 `RuntimeBinding` 并由 `AppState` 长期持有 binding，
+**每个请求入口**只调用一次 `bind()` 得到 request-scoped handle；`LLMClient` 等长期 facade 同样只创建或接收
+binding，并在每个公开 operation 入口 bind 一次。任何长期对象都不得缓存已 pin 的 `RuntimeHandle`。禁止 free
+function 的 env lazy bootstrap；无 default 时返回 `ProviderError::Configuration`。
 
 runtime contract 必须同时拥有：
 
@@ -191,8 +192,9 @@ runtime policy 上限；缺失时使用 selected deployment timeout。验证失�
 0.6.0 中 `api_key`/`api_base`/`api_version`/`organization` 带 `#[deprecated(since = "0.6.0", note = "configure a canonical runtime deployment")]`。
 legacy selector 只在当前 handle 的 immutable deployment snapshot 中做 policy match：提供的每个字段都必须与
 同一 deployment 的 canonical config 相符，且结果必须恰好一个；零/多匹配分别返回 typed not-found/
-invalid-configuration。`LegacyRuntimeSelector` 不实现 `Display`，其手写 `Debug` 永远把 `api_key` 输出为
-`[REDACTED]`；raw secret 只存在于 request-local memory，不进入 identity、trace、error 或 log；
+invalid-configuration。`LegacyRuntimeSelector` 不实现 `Display`，其手写 `Debug` 永远把 `api_key` 与
+`api_base` 的 present value 输出为 `[REDACTED]`（不得保留 URL userinfo、path、query 或 fragment）；raw secret、
+signed query 与 private endpoint 只存在于 request-local memory，不进入 identity、trace、error 或 log；
 resolver 不得调用 factory、`add_deployment`、client constructor 或 env。0.7.0 删除字段与 selector。
 
 credential match **不得直接使用现有 `utils::auth::crypto::hmac::constant_time_eq`**（`hmac.rs:26`）：该函数
@@ -215,13 +217,20 @@ provider 的安全 execution API；`api_key`/`api_base` 只在 0.6.0 legacy sele
 ### 3. SDK migration and retained facade API
 
 `LLMClient::new(config: ClientConfig)` 保持；它把 config 归一化并构造一个 canonical router，随后只持有
-`RuntimeHandle` 与 immutable compatibility config view。新增
-`LLMClient::from_runtime(runtime: RuntimeHandle) -> Self` 供显式共享 HTTP/SDK runtime；
-`LLMClient::runtime(&self) -> RuntimeHandle` 返回同 generation handle。签名收 `RuntimeHandle` 而非
-`Arc<UnifiedRouter>` 是 contract 的一部分：后者会丢掉 binding identity，迫使实现为 SDK handle 伪造新
-generation 或填 sentinel，从而让 B-002/B-009 中"HTTP 与 SDK 绑定同一 generation"的 conformance 断言
-失去意义。HTTP `AppState` 与 SDK 共享 runtime 时传递同一个 `RuntimeHandle`。`ClientConfig` 保持配置 DTO，不持有
-provider/client/state。原有 chat/stream/embedding 方法签名保持，全部委托 handle；不读取 process default。
+`RuntimeBinding` 与 immutable compatibility config view。新增
+`LLMClient::from_runtime(runtime: RuntimeBinding) -> Self` 供显式共享 HTTP/SDK runtime owner；
+`LLMClient::runtime(&self) -> RuntimeBinding` 返回同一 refreshable binding token。签名收 `RuntimeBinding` 而非
+`Arc<UnifiedRouter>` 是 contract 的一部分：后者绕过唯一 binding owner，也会诱使实现为 SDK generation 填
+sentinel。原有 chat/stream/embedding 方法签名保持；每个公开 operation 在入口只调用一次 `bind()`，随后把得到的
+`RuntimeHandle` 传完整个 selection/execution/stream 生命周期，不读取 process default，也不在 operation 中二次
+load。
+
+HTTP `AppState` 与 SDK 共享 runtime 时传递同一个 `RuntimeBinding`，因此新请求都能观察后续 snapshot publication；
+已开始的请求仍由各自的 handle 保持 pinned。只有需要证明跨 surface **同一 generation** 的 conformance fixture
+可以先 bind 一个 handle，再调用显式命名的 request-scoped internal adapter（`*_with_runtime_handle`）；该入口不得
+成为长期 client constructor、不得把 handle 写回 `LLMClient`，operation 结束即释放。这样 fixed-generation 是刻意且
+局部的测试/adapter 路径，不会让普通 SDK client 永久停留在构造时 generation。`ClientConfig` 保持配置 DTO，不持有
+provider/client/state。
 
 `ClientConfig` 先归一成 canonical provider/deployment config 并构造 runtime。SDK routing 不再把本地
 `ProviderStats` 转成临时 `RoutingContext`，SDK execution 也不再按 `SdkProviderConfig` 创建请求 client。
@@ -231,7 +240,9 @@ provider/client/state。原有 chat/stream/embedding 方法签名保持，全部
 ### 4. Registry demotion
 
 0.6.0 对 `DefaultRouter`、completion `Router` trait 与 `ProviderRegistry` mutation/ownership surface 添加
-`#[deprecated(since = "0.6.0", ...)]`。`DefaultRouter` 只包装 `RuntimeHandle`；completion trait 实现只委托。
+`#[deprecated(since = "0.6.0", ...)]`。`DefaultRouter` 只包装 refreshable binding source，不保存
+`RuntimeHandle`：显式 runtime 模式持有 `RuntimeBinding` 并在每次 trait call 入口 bind 一次；process-default 模式
+在每次 trait call 入口调用一次 `default_runtime()`，从而观察 `replace_default_runtime`，随后只委托该 handle。
 embedding router 必须迁移到 canonical runtime。本 issue 的 D6 只完成 demotion/deprecation，不提前删除
 public surface；0.7.0 删除由 D8 durable follow-up 执行。
 `LLMClient`、`ClientConfig`、`completion`/`acompletion`/`completion_stream` 永久保留。
@@ -253,8 +264,9 @@ D6 因此按如下方式收敛，且不触碰 `HD-003` 的 0.6→0.7 窗口：
 - 关键变化是**所有权而非签名**：canonical runtime 与全部 production 调用方（completion、embedding router）
   不再读写 `ProviderRegistry`，它因此不再是任何执行路径上的 provider store，也不再是第二真值源。
   B-003/B-011 由"runtime 不消费它"满足，而不是由"它自己变空壳"满足。
-- source guard 断言 production 代码（`src/` 去除 registry 自身定义与 tests）零命中 `ProviderRegistry`，
-  这是 D6 的可验证完成信号。
+- source guard 断言 production 代码（`src/` 去除 registry 自身定义、`src/core/providers/mod.rs` 与
+  `src/lib.rs` 的兼容 re-export、以及 tests）零命中 `ProviderRegistry`，这是 D6 的可验证完成信号；re-export
+  allowlist 只维持 0.6.0 public source compatibility，不得构造、读取或 mutate registry。
 - 0.7.0 由 D8 follow-up 整体删除该类型，届时的 breaking change 与 workflow 修订一并执行。
 
 若维护者后续决定改为在 0.6.0 就引入 `Result` 签名，必须先修订 `HD-003` 与 release workflow 并接受版本会被
