@@ -7,8 +7,12 @@ use crate::core::providers::openai::OpenAIProvider;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::deployment::{Deployment, HealthStatus};
 use crate::core::router::unified::Router;
+use crate::core::router::{
+    DefaultRuntimeBinding, RuntimeBinding, RuntimeRequestContext, RuntimeRequestOptions,
+};
 use crate::core::types::model::ProviderCapability;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
+use std::time::Duration;
 
 async fn create_test_provider() -> Provider {
     let openai = OpenAIProvider::with_api_key("sk-test-key-for-unit-testing-only")
@@ -51,14 +55,20 @@ async fn test_router_with_custom_config() {
 
 #[tokio::test]
 async fn test_add_deployment() {
-    let router = Router::default();
+    let router = Arc::new(Router::default());
+    let binding = RuntimeBinding::new(router.clone());
+    let old = binding.bind();
     let deployment = create_test_deployment("test-1", "gpt-4").await;
 
     router.add_deployment(deployment);
+    let current = binding.bind();
 
     assert_eq!(router.list_deployments().len(), 1);
     assert_eq!(router.list_models().len(), 1);
     assert!(router.list_models().contains(&"gpt-4".to_string()));
+    assert!(current.generation() > old.generation());
+    assert!(old.select_deployment_lease("gpt-4").is_err());
+    current.select_deployment_lease("gpt-4").unwrap();
 }
 
 #[tokio::test]
@@ -615,10 +625,12 @@ fn test_router_config_default() {
 fn test_alias_direct_cycle() {
     let router = Router::default();
     router.add_model_alias("a", "b").unwrap();
+    let generation = router.routing_snapshot.load().generation();
     let result = router.add_model_alias("b", "a");
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.to_string().contains("Circular alias"));
+    assert_eq!(router.routing_snapshot.load().generation(), generation);
 }
 
 #[test]
@@ -643,8 +655,36 @@ fn test_alias_self_cycle() {
 
 #[test]
 fn test_alias_no_cycle() {
-    let router = Router::default();
+    let router = Arc::new(Router::default());
+    let binding = RuntimeBinding::new(router.clone());
+    let old = binding.bind();
     assert!(router.add_model_alias("gpt4", "gpt-4").is_ok());
     assert!(router.add_model_alias("gpt-latest", "gpt-4").is_ok());
     assert!(router.add_model_alias("best", "gpt-latest").is_ok());
+    let current = binding.bind();
+    assert_eq!(old.snapshot().resolve_model_name("best"), "best");
+    assert_eq!(current.snapshot().resolve_model_name("best"), "gpt-4");
+}
+
+#[test]
+fn test_runtime_binding_rollback_and_request_context_validation() {
+    let first = RuntimeBinding::new(Arc::new(Router::default()));
+    let default = DefaultRuntimeBinding::new(first.clone());
+    let first_generation = default.load().generation();
+    let old = default.replace(RuntimeBinding::new(Arc::new(Router::default())));
+    let second_generation = default.load().generation();
+    default.replace(old);
+    assert!(second_generation > first_generation);
+    assert!(default.load().generation() > second_generation);
+
+    let policy = RouterConfig::default();
+    let mut options = RuntimeRequestOptions {
+        headers: Some([("authorization".into(), "secret".into())].into()),
+        ..Default::default()
+    };
+    assert!(RuntimeRequestContext::validate(std::mem::take(&mut options), &policy).is_err());
+    options.timeout = Some(Duration::ZERO);
+    assert!(RuntimeRequestContext::validate(std::mem::take(&mut options), &policy).is_err());
+    options.api_base = Some("file:///tmp/socket".into());
+    assert!(RuntimeRequestContext::validate(options, &policy).is_err());
 }

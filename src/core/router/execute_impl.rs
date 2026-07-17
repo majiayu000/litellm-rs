@@ -11,6 +11,7 @@ use super::execution::{
 use super::fallback::{ExecutionResult, FallbackType};
 use super::retry_policy::{RetryContext, RetryPolicy};
 use super::unified::Router;
+use super::{RoutingSnapshot, RuntimeHandle};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::model::ProviderCapability;
 use std::collections::HashSet;
@@ -29,7 +30,8 @@ impl Router {
         F: Fn(Arc<Deployment>) -> Fut + Clone,
         Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
     {
-        self.execute_with_retry_inner(model_name, operation)
+        let snapshot = self.load_routing_snapshot();
+        self.execute_with_retry_inner(snapshot.as_ref(), model_name, operation)
             .await
             .map(
                 |(value, deployment_id, _model_used, attempts, latency_us)| {
@@ -63,6 +65,7 @@ impl Router {
 
     async fn execute_with_retry_inner<T, F, Fut>(
         &self,
+        snapshot: &RoutingSnapshot,
         model_name: &str,
         operation: F,
     ) -> Result<(T, DeploymentId, String, u32, u64), (ProviderError, u32)>
@@ -79,10 +82,11 @@ impl Router {
             let start = std::time::Instant::now();
 
             // Try to select a deployment
-            let deployment_lease = match self
-                .select_deployment_lease_matching(model_name, |deployment| {
-                    !excluded_budget_deployments.contains(deployment.id.as_str())
-                }) {
+            let deployment_lease = match self.select_deployment_lease_matching_in_snapshot(
+                snapshot,
+                model_name,
+                |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
+            ) {
                 Ok(lease) => lease,
                 Err(router_err) => {
                     if !excluded_budget_deployments.is_empty()
@@ -192,6 +196,7 @@ impl Router {
         F: Fn(Arc<Deployment>) -> Fut + Clone,
         Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
     {
+        let snapshot = self.load_routing_snapshot();
         let max_attempts = self.config.num_retries + 1;
         let mut attempt = 1;
         let mut last_error = None;
@@ -200,11 +205,13 @@ impl Router {
         while attempt <= max_attempts {
             let start = std::time::Instant::now();
 
-            let deployment_lease = match self.select_deployment_lease_for_capability_matching(
-                model_name,
-                capability,
-                |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
-            ) {
+            let deployment_lease = match self
+                .select_deployment_lease_for_capability_matching_in_snapshot(
+                    snapshot.as_ref(),
+                    model_name,
+                    capability,
+                    |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
+                ) {
                 Ok(lease) => lease,
                 Err(router_err) => {
                     if !excluded_budget_deployments.is_empty()
@@ -338,10 +345,29 @@ impl Router {
         F: Fn(Arc<Deployment>) -> Fut + Clone,
         Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
     {
+        let snapshot = self.load_routing_snapshot();
+        self.execute_with_selected_deployment_in_snapshot(snapshot.as_ref(), model_name, operation)
+            .await
+    }
+
+    pub(super) async fn execute_with_selected_deployment_in_snapshot<T, F, Fut>(
+        &self,
+        snapshot: &RoutingSnapshot,
+        model_name: &str,
+        operation: F,
+    ) -> Result<ExecutionResult<T>, RouterError>
+    where
+        F: Fn(Arc<Deployment>) -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+    {
         let start = std::time::Instant::now();
 
         // Get all models to try (original + fallbacks), deduplicated to prevent cycles
-        let models_to_try = self.get_models_with_fallbacks(model_name, FallbackType::General);
+        let models_to_try = self.get_models_with_fallbacks_for_snapshot(
+            snapshot,
+            model_name,
+            FallbackType::General,
+        );
         let max_models = 1 + self.config.max_fallbacks as usize;
         let mut seen = std::collections::HashSet::new();
         let models_to_try: Vec<_> = models_to_try
@@ -369,7 +395,7 @@ impl Router {
             }
 
             match self
-                .execute_with_retry_inner(model, operation.clone())
+                .execute_with_retry_inner(snapshot, model, operation.clone())
                 .await
             {
                 Ok((result, deployment_id, model_used, attempts, _latency_us)) => {
@@ -498,5 +524,26 @@ impl Router {
             operation(deployment.id.clone())
         })
         .await
+    }
+}
+
+impl RuntimeHandle {
+    pub async fn execute_with_selected_deployment<T, F, Fut>(
+        &self,
+        model_name: &str,
+        operation: F,
+    ) -> Result<ExecutionResult<T>, RouterError>
+    where
+        F: Fn(Arc<Deployment>) -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+    {
+        self.binding
+            .router
+            .execute_with_selected_deployment_in_snapshot(
+                self.snapshot.as_ref(),
+                model_name,
+                operation,
+            )
+            .await
     }
 }

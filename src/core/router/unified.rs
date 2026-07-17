@@ -16,10 +16,21 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicU64, AtomicUsize,
+    Ordering::{Relaxed, SeqCst},
+};
 use std::time::Duration;
 
 const MAX_ALIAS_HOPS: usize = 16;
+static NEXT_ROUTING_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn next_routing_generation() -> u64 {
+    NEXT_ROUTING_GENERATION
+        .fetch_update(SeqCst, SeqCst, |current| current.checked_add(1))
+        .expect("routing generation space exhausted")
+        + 1
+}
 
 /// Snapshot of routing metrics counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,8 +56,9 @@ pub struct CapabilityDeployment {
 /// Each snapshot owns a complete, internally consistent view of deployments,
 /// model indexes, model-group insertion order, and aliases. Router readers load
 /// one snapshot and never walk split mutable maps from different generations.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct RoutingSnapshot {
+#[derive(Debug, Clone)]
+pub struct RoutingSnapshot {
+    generation: u64,
     pub(crate) deployments: HashMap<DeploymentId, Arc<Deployment>>,
     pub(crate) model_index: HashMap<String, Vec<DeploymentId>>,
     pub(crate) model_order: Vec<String>,
@@ -54,6 +66,20 @@ pub(crate) struct RoutingSnapshot {
 }
 
 impl RoutingSnapshot {
+    fn empty() -> Self {
+        Self {
+            generation: next_routing_generation(),
+            deployments: HashMap::new(),
+            model_index: HashMap::new(),
+            model_order: Vec::new(),
+            model_aliases: HashMap::new(),
+        }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     fn from_deployments_preserving_state(
         deployments: Vec<Deployment>,
         previous: &RoutingSnapshot,
@@ -66,8 +92,11 @@ impl RoutingSnapshot {
             }
         }
         let mut snapshot = Self {
+            generation: previous.generation,
+            deployments: HashMap::new(),
+            model_index: HashMap::new(),
+            model_order: Vec::new(),
             model_aliases: previous.model_aliases.clone(),
-            ..Default::default()
         };
 
         for mut deployment in deployments {
@@ -237,7 +266,7 @@ impl Router {
     /// Create a new router with the given configuration
     pub fn new(config: RouterConfig) -> Self {
         Self {
-            routing_snapshot: ArcSwap::from_pointee(RoutingSnapshot::default()),
+            routing_snapshot: ArcSwap::from_pointee(RoutingSnapshot::empty()),
             routing_snapshot_write_lock: Mutex::new(()),
             config,
             fallback_config: FallbackConfig::default(),
@@ -276,11 +305,33 @@ impl Router {
 
     // ========== Deployment Management ==========
 
-    fn update_routing_snapshot(&self, update: impl FnOnce(&mut RoutingSnapshot)) {
+    fn update_routing_snapshot<T>(&self, update: impl FnOnce(&mut RoutingSnapshot) -> T) -> T {
         let _guard = self.routing_snapshot_write_lock.lock();
         let mut next = self.routing_snapshot.load_full().as_ref().clone();
-        update(&mut next);
+        let result = update(&mut next);
+        next.generation = next_routing_generation();
         self.routing_snapshot.store(Arc::new(next));
+        result
+    }
+
+    fn try_update_routing_snapshot<T, E>(
+        &self,
+        update: impl FnOnce(&mut RoutingSnapshot) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let _guard = self.routing_snapshot_write_lock.lock();
+        let mut next = self.routing_snapshot.load_full().as_ref().clone();
+        let result = update(&mut next)?;
+        next.generation = next_routing_generation();
+        self.routing_snapshot.store(Arc::new(next));
+        Ok(result)
+    }
+
+    pub(super) fn load_routing_snapshot(&self) -> Arc<RoutingSnapshot> {
+        self.routing_snapshot.load_full()
+    }
+
+    pub(super) fn publish_current_snapshot(&self) {
+        self.update_routing_snapshot(|_| ());
     }
 
     /// Add a deployment to the router
@@ -290,11 +341,7 @@ impl Router {
 
     /// Remove a deployment from the router
     pub fn remove_deployment(&self, id: &str) -> Option<Deployment> {
-        let mut removed = None;
-        self.update_routing_snapshot(|snapshot| {
-            removed = snapshot.remove_deployment(id);
-        });
-        removed
+        self.update_routing_snapshot(|snapshot| snapshot.remove_deployment(id))
     }
 
     /// Get a deployment by ID
@@ -323,11 +370,7 @@ impl Router {
         alias: &str,
         model_name: &str,
     ) -> Result<(), super::error::RouterError> {
-        let _guard = self.routing_snapshot_write_lock.lock();
-        let mut next = self.routing_snapshot.load_full().as_ref().clone();
-        next.add_model_alias(alias, model_name)?;
-        self.routing_snapshot.store(Arc::new(next));
-        Ok(())
+        self.try_update_routing_snapshot(|snapshot| snapshot.add_model_alias(alias, model_name))
     }
 
     /// Resolve a model name (handles aliases)
@@ -604,8 +647,27 @@ impl Router {
         model_name: &str,
         fallback_type: FallbackType,
     ) -> Vec<String> {
-        let mut models = vec![self.resolve_model_name(model_name)];
-        models.extend(self.get_fallbacks(model_name, fallback_type));
+        let snapshot = self.load_routing_snapshot();
+        self.get_models_with_fallbacks_for_snapshot(snapshot.as_ref(), model_name, fallback_type)
+    }
+
+    pub(super) fn get_models_with_fallbacks_for_snapshot(
+        &self,
+        snapshot: &RoutingSnapshot,
+        model_name: &str,
+        fallback_type: FallbackType,
+    ) -> Vec<String> {
+        let resolved = snapshot.resolve_model_name(model_name);
+        let mut fallbacks = self
+            .fallback_config
+            .get_fallbacks_for_type(&resolved, fallback_type);
+        if fallbacks.is_empty() && fallback_type != FallbackType::General {
+            fallbacks = self
+                .fallback_config
+                .get_fallbacks_for_type(&resolved, FallbackType::General);
+        }
+        let mut models = vec![resolved];
+        models.extend(fallbacks);
         models
     }
 

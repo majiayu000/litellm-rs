@@ -8,6 +8,7 @@ use super::deployment::{Deployment, DeploymentId};
 use super::error::RouterError;
 use super::strategy_impl::{self, RoutingContext};
 use super::unified::Router;
+use super::{RoutingSnapshot, RuntimeHandle};
 use crate::core::types::model::ProviderCapability;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -94,18 +95,20 @@ impl Router {
         &self,
         model_name: &str,
     ) -> Result<DeploymentLease, RouterError> {
-        self.select_deployment_matching(model_name, |_| true, None)
+        let snapshot = self.load_routing_snapshot();
+        self.select_deployment_matching(snapshot.as_ref(), model_name, |_| true, None)
     }
 
-    pub(crate) fn select_deployment_lease_matching<F>(
+    pub(crate) fn select_deployment_lease_matching_in_snapshot<F>(
         &self,
+        snapshot: &RoutingSnapshot,
         model_name: &str,
         is_candidate: F,
     ) -> Result<DeploymentLease, RouterError>
     where
         F: Fn(&Deployment) -> bool,
     {
-        self.select_deployment_matching(model_name, is_candidate, None)
+        self.select_deployment_matching(snapshot, model_name, is_candidate, None)
     }
 
     /// Select the best deployment for a model that supports `capability`.
@@ -147,12 +150,32 @@ impl Router {
     where
         F: Fn(&Deployment) -> bool,
     {
+        let snapshot = self.load_routing_snapshot();
+        self.select_deployment_lease_for_capability_matching_in_snapshot(
+            snapshot.as_ref(),
+            model_name,
+            capability,
+            is_candidate,
+        )
+    }
+
+    pub(crate) fn select_deployment_lease_for_capability_matching_in_snapshot<F>(
+        &self,
+        snapshot: &RoutingSnapshot,
+        model_name: &str,
+        capability: &ProviderCapability,
+        is_candidate: F,
+    ) -> Result<DeploymentLease, RouterError>
+    where
+        F: Fn(&Deployment) -> bool,
+    {
         let no_matching_candidate_error = RouterError::UnsupportedCapability {
             model: model_name.to_string(),
             capability: format!("{capability:?}"),
         };
 
         self.select_deployment_matching(
+            snapshot,
             model_name,
             |deployment| {
                 deployment
@@ -201,6 +224,7 @@ impl Router {
 
     fn select_deployment_matching<F>(
         &self,
+        snapshot: &RoutingSnapshot,
         model_name: &str,
         is_candidate: F,
         no_matching_candidate_error: Option<RouterError>,
@@ -210,7 +234,6 @@ impl Router {
     {
         // 1. Resolve model aliases and deployment indexes from one immutable
         // routing generation.
-        let snapshot = self.routing_snapshot.load();
         let resolved_name = snapshot.resolve_model_name(model_name);
 
         // 2. Get all deployment IDs for this model.
@@ -436,7 +459,7 @@ impl Router {
         note = "Use select_deployment_lease so release targets the selected snapshot deployment"
     )]
     pub fn release_deployment(&self, deployment_id: &str) {
-        let snapshot = self.routing_snapshot.load();
+        let snapshot = self.load_routing_snapshot();
         if let Some(deployment) = snapshot.deployments.get(deployment_id) {
             Self::release_selected_deployment(deployment);
         }
@@ -448,5 +471,19 @@ impl Router {
             .active_requests
             .fetch_update(Relaxed, Relaxed, |v| Some(v.saturating_sub(1)));
         debug_assert!(result.is_ok());
+    }
+}
+
+impl RuntimeHandle {
+    pub fn select_deployment_lease(
+        &self,
+        model_name: &str,
+    ) -> Result<DeploymentLease, RouterError> {
+        self.binding.router.select_deployment_matching(
+            self.snapshot.as_ref(),
+            model_name,
+            |_| true,
+            None,
+        )
     }
 }
