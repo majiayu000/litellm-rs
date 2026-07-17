@@ -63,9 +63,17 @@ pub struct RuntimeHandle {
     router: Arc<UnifiedRouter>,
 }
 
+pub struct RuntimeHandle {
+    generation: u64,
+    router: Arc<UnifiedRouter>,
+    /// Pinned at bind time; never re-loaded from the router's `ArcSwap`.
+    snapshot: Arc<RoutingSnapshot>,
+}
+
 impl RuntimeHandle {
     pub fn generation(&self) -> u64;
-    pub fn router(&self) -> &Arc<UnifiedRouter>;
+    /// Read-only view of this generation. Intentionally not `&Arc<UnifiedRouter>`.
+    pub fn snapshot(&self) -> &RoutingSnapshot;
 }
 
 pub struct DefaultRuntimeBinding { /* reuses AtomicValue<RuntimeHandle> */ }
@@ -81,6 +89,26 @@ pub fn default_runtime() -> Result<RuntimeHandle, ProviderError>;
 pub fn replace_default_runtime(runtime: Arc<UnifiedRouter>)
     -> Result<RuntimeHandle, ProviderError>;
 ```
+
+**Generation identity 必须由 pinned snapshot 承担，而不是由"只传 `Arc` 即只读"的假设承担。** `UnifiedRouter`
+现有的 `add_deployment`（`unified.rs:287`）、`remove_deployment`（`:292`）、`set_model_list`（`:309`）都是
+`pub fn(&self, ..)`，经 `update_routing_snapshot`（`:279`）对 `ArcSwap<RoutingSnapshot>`（`:208`）做
+copy-on-write；`&`/`Arc` 借用检查挡不住它们。同时 `selection.rs:213` 与 `:439` 每次都 `routing_snapshot.load()`
+读取**当前**值，因此只持有 `Arc<UnifiedRouter>` 的 handle 会在请求中途观察到 deployment 变化，直接违反 B-009。
+
+D1 的解法是让 `RuntimeHandle` 在 bind 时 pin 住 `Arc<RoutingSnapshot>`，selection/execution 全程只读该 pinned
+snapshot，不再在请求路径上 `load()` router 的 ArcSwap。由此：
+
+- 已绑定请求对任何 in-place mutation 免疫，B-009 由结构保证，而非靠调用方自律；
+- `add_deployment`/`remove_deployment`/`set_model_list` 可**保持现有公开签名不变**，无需降级可见性——
+  这一点是刻意的：这三个方法不在 `HD-003`/B-011 批准的 deprecation/removal 清单内，把它们降为
+  `pub(crate)` 会引入批准窗口之外的 breaking change（`UnifiedRouter` 由 `src/lib.rs:151` 公开导出），
+  违反 product.md 的"不扩大已批准 HD 决策"。
+
+`update_routing_snapshot` 必须在同一 write lock 内原子递增 generation counter，使每次 snapshot 变更
+（无论来自 `replace_default_runtime` 还是 legacy `add_deployment`）都产出新 generation。否则两个 handle 可能
+共享 generation 编号却持有不同 snapshot，conformance fixture 比较的 generation 就不再是有效 binding identity。
+`RuntimeHandle` 不得暴露 `&Arc<UnifiedRouter>`；需要跨 handle 共享 runtime 的调用方传递 `RuntimeHandle` 本身。
 
 `install_default_runtime` 只允许首次安装；重复安装返回 `ProviderError::Configuration`，调用方需要替换时必须
 显式使用 `replace_default_runtime`。每次 install/replace 生成单调递增、进程内不复用的 generation；
@@ -122,13 +150,36 @@ value 必须可解析且通过 runtime header allow/deny policy；`authorization
 runtime policy 上限；缺失时使用 selected deployment timeout。验证失败为 `InvalidRequest`，不得丢弃字段后
 继续。context 是 immutable、只供 selected provider 的既有 secure sender 使用，不参与 config publication。
 
-0.6.0 中 `api_key`/`api_base` 带 `#[deprecated(since = "0.6.0", note = "configure a canonical runtime deployment")]`。
+`CompletionOptions`（`src/core/completion/types.rs`）的 request override 字段必须逐个分类，不得遗漏；
+`HD-002` 只点名了 `headers`/`timeout`/`api_key`/`api_base`，但同一 struct 还公开 `api_version`（`types.rs:71`）
+与 `organization`（`types.rs:73`），且 `default_router/router_impl.rs:215-225` 当前确实把它们记为
+`organization_override` / `api_version_override` 并参与 dynamic provider config。D3 若不分类，这两个字段
+将没有被批准的行为：保留即继续 request-scoped provider config mutation（违反 B-003），丢弃即静默降级
+（违反 B-004/U-29）。分类如下：
+
+| `CompletionOptions` 字段 | 0.6.0 处置 |
+| --- | --- |
+| `headers`, `timeout` | 保留为 validated request context（`HD-002`）。 |
+| `api_key`, `api_base` | 0.6.0 `#[deprecated]` legacy selector，0.7.0 删除（`HD-002`）。 |
+| `api_version`, `organization` | 与 `api_key`/`api_base` **同类处理**：0.6.0 `#[deprecated]`，只作为 legacy selector 的 match 维度参与 deployment 唯一匹配，绝不构造或改写 request-scoped provider config；0.7.0 与 selector 一并删除。 |
+| `extra_params`, `metadata` 及其余 model 参数 | 不是 provider selection/config override，按现状继续随 canonical request 传给 selected provider。 |
+
+`api_version`/`organization` 归入 legacy selector 是本 amendment 的新增判定（`HD-002` 的自然延伸，不改变其
+0.6→0.7 窗口）。若维护者认为两者应长期保留为 validated context，需要显式修订 `HD-002` 后再实现。
+
+0.6.0 中 `api_key`/`api_base`/`api_version`/`organization` 带 `#[deprecated(since = "0.6.0", note = "configure a canonical runtime deployment")]`。
 legacy selector 只在当前 handle 的 immutable deployment snapshot 中做 policy match：提供的每个字段都必须与
 同一 deployment 的 canonical config 相符，且结果必须恰好一个；零/多匹配分别返回 typed not-found/
 invalid-configuration。`LegacyRuntimeSelector` 不实现 `Display`，其手写 `Debug` 永远把 `api_key` 输出为
-`[REDACTED]`；raw secret 只存在于 request-local memory，并使用现有
-`utils::auth::crypto::hmac::constant_time_eq` 做 credential match，不进入 identity、trace、error 或 log；
+`[REDACTED]`；raw secret 只存在于 request-local memory，不进入 identity、trace、error 或 log；
 resolver 不得调用 factory、`add_deployment`、client constructor 或 env。0.7.0 删除字段与 selector。
+
+credential match **不得直接使用现有 `utils::auth::crypto::hmac::constant_time_eq`**（`hmac.rs:26`）：该函数
+对不等长输入提前 `return false`（`:27-29`），泄漏候选 credential 的长度，且比较耗时随长度变化。API key 熵较高
+使其可利用性有限，但 legacy selector 恰好是把用户提供的 raw secret 与 deployment 配置逐个比对的放大场景。
+D3C 的做法是先把两侧输入各自算成定长 SHA-256 digest（`sha2` 已在 `Cargo.toml:97`），再按定长 32 字节做
+constant-time 比较——定长后长度分支不可达，不引入新依赖，也不改动 `verify_hmac_signature` 等既有
+HMAC 调用方的行为（那些输入长度本就由算法固定）。该修复限于 credential-compare helper 本身。
 
 先让现有 free functions 和经 `HD-003` 保留的 trait/type 委托给批准的 runtime binding，再逐段删除
 `DefaultRouter` 的 env bootstrap、static prefix selection、dynamic provider construction 和直接 provider
@@ -140,8 +191,11 @@ provider 的安全 execution API；`api_key`/`api_base` 只在 0.6.0 legacy sele
 
 `LLMClient::new(config: ClientConfig)` 保持；它把 config 归一化并构造一个 canonical router，随后只持有
 `RuntimeHandle` 与 immutable compatibility config view。新增
-`LLMClient::from_runtime(runtime: Arc<UnifiedRouter>) -> Self` 供显式共享 HTTP/SDK runtime；
-`LLMClient::runtime(&self) -> RuntimeHandle` 返回同 generation handle。`ClientConfig` 保持配置 DTO，不持有
+`LLMClient::from_runtime(runtime: RuntimeHandle) -> Self` 供显式共享 HTTP/SDK runtime；
+`LLMClient::runtime(&self) -> RuntimeHandle` 返回同 generation handle。签名收 `RuntimeHandle` 而非
+`Arc<UnifiedRouter>` 是 contract 的一部分：后者会丢掉 binding identity，迫使实现为 SDK handle 伪造新
+generation 或填 sentinel，从而让 B-002/B-009 中"HTTP 与 SDK 绑定同一 generation"的 conformance 断言
+失去意义。HTTP `AppState` 与 SDK 共享 runtime 时传递同一个 `RuntimeHandle`。`ClientConfig` 保持配置 DTO，不持有
 provider/client/state。原有 chat/stream/embedding 方法签名保持，全部委托 handle；不读取 process default。
 
 `ClientConfig` 先归一成 canonical provider/deployment config 并构造 runtime。SDK routing 不再把本地
@@ -152,15 +206,38 @@ provider/client/state。原有 chat/stream/embedding 方法签名保持，全部
 ### 4. Registry demotion
 
 0.6.0 对 `DefaultRouter`、completion `Router` trait 与 `ProviderRegistry` mutation/ownership surface 添加
-`#[deprecated(since = "0.6.0", ...)]`。`DefaultRouter` 只包装 `RuntimeHandle`；completion trait 实现只委托；
-`ProviderRegistry` 若为源码兼容暂留，其 query 来自 immutable canonical snapshot，mutation 返回明确
-configuration error 且不改变 runtime。embedding router 必须迁移到 canonical runtime。本 issue 的 D6 只完成
-stateless demotion/deprecation，不提前删除 public surface；0.7.0 删除由 D8 durable follow-up 执行。
+`#[deprecated(since = "0.6.0", ...)]`。`DefaultRouter` 只包装 `RuntimeHandle`；completion trait 实现只委托。
+embedding router 必须迁移到 canonical runtime。本 issue 的 D6 只完成 demotion/deprecation，不提前删除
+public surface；0.7.0 删除由 D8 durable follow-up 执行。
 `LLMClient`、`ClientConfig`、`completion`/`acompletion`/`completion_stream` 永久保留。
+
+**`ProviderRegistry` 在 0.6.0 保持现有签名与现有行为，不改造成 stateless facade。** 现有公开 mutation 是
+`register(&mut self, provider: Provider)`（`provider_registry.rs:22`）、
+`register_with_key(&mut self, ..)`（`:32`）、`remove(&mut self, name: &str) -> Option<Provider>`（`:52`）、
+`clear(&mut self)`（`:72`）。这些签名没有错误通道，因此"mutation 返回 configuration error"在 0.6.0 无法实现：
+`-> ()` 只剩静默 no-op（用户 mutation 被丢弃且无任何信号，违反 U-29 no-silent-degradation）或 panic 两条路，
+而改签名本身就是 `HD-003` 明确推迟到 0.7.0 的 breaking change。product.md 的 release policy 另有硬约束——
+当前 `.github/workflows/version-bump.yml:54` 把 0.x breaking commit 计算为 **1.0.0**，在 workflow 修订并有
+fixture 证据前任何 breaking tranche 都不得合并，所以"0.6.0 直接 break registry"在现有自动化下也发不出去。
+
+D6 因此按如下方式收敛，且不触碰 `HD-003` 的 0.6→0.7 窗口：
+
+- `ProviderRegistry` 在 0.6.0 **继续是一个可独立使用、行为与 0.5.x 一致的数据结构**，整体标注
+  `#[deprecated(since = "0.6.0", note = "construct a canonical runtime deployment instead")]`；
+  其 `&mut self` mutation 照常改自身 map，语义诚实，无需错误通道。
+- 关键变化是**所有权而非签名**：canonical runtime 与全部 production 调用方（completion、embedding router）
+  不再读写 `ProviderRegistry`，它因此不再是任何执行路径上的 provider store，也不再是第二真值源。
+  B-003/B-011 由"runtime 不消费它"满足，而不是由"它自己变空壳"满足。
+- source guard 断言 production 代码（`src/` 去除 registry 自身定义与 tests）零命中 `ProviderRegistry`，
+  这是 D6 的可验证完成信号。
+- 0.7.0 由 D8 follow-up 整体删除该类型，届时的 breaking change 与 workflow 修订一并执行。
+
+若维护者后续决定改为在 0.6.0 就引入 `Result` 签名，必须先修订 `HD-003` 与 release workflow 并接受版本会被
+计算为 1.0.0；实现者不得自行选择该路径。
 
 ### 5. Canonical error API and exhaustive mapping
 
-D1E 以 `ProviderError` 为 source，并复用现有 `src/utils/error/canonical.rs` 的 `ErrorCode` / `CanonicalError`
+D1E-a/D1E-b 以 `ProviderError` 为 source，并复用现有 `src/utils/error/canonical.rs` 的 `ErrorCode` / `CanonicalError`
 以及 `src/core/providers/unified_provider_http_mapping.rs` 的 `ProviderHttpErrorFacts` /
 `provider_http_error_facts`；不得新增平行的 provider error class 或 HTTP facts 类型。现有 `ErrorCode` 增加
 `Cancelled`，class/retry 和 HTTP facts 两个现有 exhaustive mapping 必须由同一 table-driven fixture 锁定；
@@ -169,11 +246,28 @@ HTTP、SDK、Gateway 和 retry policy 只能消费这些现有 API，不得各�
 ```rust
 impl ProviderError {
     pub fn canonical_code(&self) -> ErrorCode; // delegates CanonicalError
-    pub fn canonical_retryable(&self) -> bool; // delegates CanonicalError
     pub fn http_facts(&self) -> ProviderHttpErrorFacts; // delegates existing mapping
     pub fn redacted(&self) -> ProviderError;
 }
 ```
+
+**不得新增 context-free 的 `canonical_retryable(&self) -> bool`。** 下表中 `ContentFiltered`、
+`DeploymentError`、`Streaming` 的 retryability 依赖"runtime 是否已发出可见输出"，无上下文的 bool 无法表达：
+它要么让 adapter 在已输出后重试而重复用户可见内容（违反 B-010），要么一律不重试而压掉 pre-output 的
+合法 fallback（违反 B-008）。
+
+retry 决策唯一入口是**已存在**的 `src/core/router/retry_policy.rs::RetryPolicy::decide(&RouterConfig,
+&ProviderError, RetryContext) -> RetryDecision`。该文件已提供 `RetryContext { operation, stream_stage,
+idempotency, attempt, max_attempts, retry_budget_remaining, deadline_remaining }` 与
+`StreamRetryStage::{NotStreaming, BeforeFirstChunk, AfterChunksEmitted}`，且已在
+`StreamAlreadyEmitted` 处停止重试——本表的 pre/post-output 语义正是它，不要另建平行 API。
+
+D1E-a 的收敛工作因此不是"加 retryable 方法"，而是消除既有的平行 taxonomy：
+`retry_policy.rs:7` 从 `src/core/providers/failure.rs` 导入 `ProviderFailureFacts`/`ProviderFailureKind`，
+而 `ProviderFailureKind`（`failure.rs:11`）是 `ProviderError` 变体的 1:1 镜像，与 `canonical.rs:13` 的
+class 级 `ErrorCode` 构成第二套分类。D1E-a 必须让 `ProviderFailureFacts::from_error` 由
+`CanonicalError`/`ErrorCode` 派生（或让 `ProviderFailureKind` 退化为 `ErrorCode` 的别名/薄封装），
+使 retry policy 与 HTTP/SDK/Gateway 共用同一闭集，且 `failure.rs` 中不再存在独立的 variant match。
 
 `SDKError` 新增 `Provider(ProviderError)`，现有 `ProviderError(String)` 在 0.6.0 deprecated 并于 0.7.0
 移除；`GatewayError::Provider(ProviderError)` 保持。每个 runtime `ProviderError` 原样进入对应 typed wrapper，
@@ -233,18 +327,27 @@ source guard 扫描 production adapter，拒绝第二 map/config scan/local rout
 | --- | --- | --- |
 | D0 decision amendment | `specs/GH965/{product,tech,tasks}.md` | docs-only；`Refs #965`；不实现。 |
 | D1 runtime contract | `src/core/router/mod.rs`, `unified.rs`, `gateway_config.rs`, `deployment.rs`, `selection.rs`, `execute_impl.rs`, `execution.rs`, `error.rs`, `src/core/router/tests/router_tests.rs` | 9 files / ≤500；`Refs #965`。 |
-| D1E canonical error convergence | `src/core/providers/unified_provider_http_mapping.rs`, `unified_provider_methods.rs`, `src/utils/error/canonical.rs`, `gateway_error/http_mapping.rs`, `utils/retry.rs`, `src/sdk/errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 7 files / ≤500；复用现有 taxonomy/facts，不新增平行类型；`Refs #965`。 |
+| D1E-a canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `unified_provider_methods.rs`, `src/utils/error/canonical.rs`, `src/core/providers/failure.rs`, `src/core/router/retry_policy.rs`, `gateway_error/http_mapping.rs`, `src/sdk/errors.rs` | 7 files / ≤500；`ProviderFailureKind` 并入 `ErrorCode`，retry 只经既有 `RetryPolicy::decide`；`Refs #965`。 |
+| D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 3 files / ≤500；真实错误响应出口消费 canonical facts 并 `redacted()`；`Refs #965`。 |
 | D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
-| D3 completion stream/override cleanup | `src/core/completion/stream.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `default_router/dynamic_providers.rs`, `default_router/dynamic_providers/routes.rs`, `default_router/dynamic_providers/tests.rs`, `tests/e2e/chat_completion.rs` | 7 files / ≤500；依 `HD-002/003`；`Refs #965`。 |
+| D3C credential compare hardening | `src/utils/auth/crypto/hmac.rs`, `src/utils/auth/crypto/tests.rs` | 2 files / ≤500；定长 digest 比较，消除长度时序泄漏；`Refs #965`。 |
+| D3 completion stream/override cleanup | `src/core/completion/stream.rs`, `src/core/completion/types.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `default_router/dynamic_providers.rs`, `default_router/dynamic_providers/routes.rs`, `default_router/dynamic_providers/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；依 `HD-002/003`；含全部 override 字段分类与 `#[deprecated]`；`Refs #965`。 |
 | D4 SDK runtime binding | `src/sdk/config.rs`, `errors.rs`, `client/llm_client.rs`, `client/routing.rs`, `client/types.rs`, `client/tests.rs`, `src/sdk/mod.rs` | 7 files / ≤500；仅 construction/selection；`Refs #965`。 |
 | D5 SDK execution cleanup | `src/sdk/client/completions.rs`, `embeddings.rs`, `provider_payloads.rs`, `stats.rs`, `llm_client.rs`, `routing.rs`, `tests/integration/router_tests.rs` | 7 files / ≤500；sender/state/error mapping；`Refs #965`。 |
-| D6 registry demotion | `src/core/providers/provider_registry.rs`, `src/core/providers/mod.rs`, `src/core/embedding/router.rs`, `src/core/completion/mod.rs`, `src/core/completion/default_router/mod.rs`, `src/lib.rs` | 6 files / ≤500；依 `HD-003`；`Refs #965`。 |
+| D6 registry demotion | `src/core/providers/provider_registry.rs`, `src/core/providers/mod.rs`, `src/core/embedding/router.rs`, `src/core/completion/mod.rs`, `src/core/completion/router_trait.rs`, `src/core/completion/default_router/mod.rs`, `src/lib.rs` | 7 files / ≤500；依 `HD-003`；`router_trait.rs` 是 completion `Router` trait 的定义处，必须在此打 `#[deprecated]`；`Refs #965`。 |
 | D7 binding + conformance | `src/server/http.rs`, `src/server/state.rs`, `tests/integration/mod.rs`, `tests/integration/router_tests.rs`, new `tests/integration/router_runtime_conformance.rs` | 5 files / ≤500；不触碰 `execution.rs` 或 #1026 三文件；`Refs #965`。 |
 | D8 release handoff | GitHub follow-up issue + linked SpecRail packet（不改 production） | durable 0.7.0 removal scope；closure 前完成；`Refs #965`。 |
 
 `src/server/routes/ai/execution.rs` 当前接近 U-16 hard ceiling，不在 writable scope；D7 复用其已存在的
-selected-deployment helper。D2/D3、D4/D5 虽有同路径，但为严格串行且各自从前一 merged SHA 开始，不并行
-写同一文件。
+selected-deployment helper。D2/D3、D4/D5、D2/D6 虽有同路径（`types.rs`、`router_trait.rs`、
+`default_router/mod.rs`），但为严格串行且各自从前一 merged SHA 开始，不并行写同一文件。
+
+D1E 拆成 D1E-a/D1E-b 是本 amendment 的预算修正，不是范围扩大：原 D1E 列的 `utils/retry.rs` **不存在**
+（repo 中无该文件），而真正的 retry/响应出口是 `src/core/router/retry_policy.rs`、
+`src/core/providers/failure.rs`、`src/utils/error/gateway_error/response.rs`、
+`src/server/routes/ai/openai_errors.rs`。删 1 加 4 后单一 tranche 达 10 个文件并需同时改动 taxonomy 与
+序列化出口，500-line 预算下必然挤压测试，故按本节"超限先拆 tranche"的规则拆分。同理，credential 修复
+独立成 D3C，避免 D3 触及 10 文件上限。
 
 ## Product-to-Test Mapping
 
@@ -255,7 +358,7 @@ selected-deployment helper。D2/D3、D4/D5 虽有同路径，但为严格串行�
 | B-003 | D2-D7 adapter cleanup | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::single_sender`；production source guard。 |
 | B-004 | D1/D2/D4 config normalization | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::invalid_and_empty_config`。 |
 | B-005 | canonical alias/surface selection | `cargo test --all-features --locked support_matrix` 加 conformance `alias_and_unsupported` fixture。 |
-| B-006 | D1E 复用 `ErrorCode`/`ProviderHttpErrorFacts` + adapters | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 typed SDK/Gateway、secret redaction/retryability/cancellation。 |
+| B-006 | D1E-a 复用 `ErrorCode`/`ProviderHttpErrorFacts` 并合并 `ProviderFailureKind`；D1E-b 收敛响应出口 | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 typed SDK/Gateway、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output。 |
 | B-007 | deployment lease/state + SDK stats view | conformance `exactly_once_state` fixture比较 attempt trace 与 counter delta。 |
 | B-008 | runtime retry/fallback | conformance `retry_and_fallback` fixture证明 adapter request count 与 runtime attempts 相等。 |
 | B-009 | immutable generation replacement | conformance `snapshot_replacement` 并发双 listener/key fixture。 |
@@ -308,7 +411,7 @@ completion 外观，不持久化第二份 routing state，也不执行额外外�
 
 ## 回滚方案
 
-按 D7 → D6 → D5 → D4 → D3 → D2 → D1E → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
+按 D7 → D6 → D5 → D4 → D3 → D3C → D2 → D1E-b → D1E-a → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
 的 canonical runtime，不得只恢复 adapter fallback。若 closure audit 已关闭 #965，回滚后重新打开 issue 并在
 release note 标明被恢复的 `HD-003` compatibility surface。无持久化迁移；runtime generation replacement
 通过进程重启/重新构造恢复。若安全回归涉及 sender/override，首先回滚对应 D3/D5，同时保持 #968 policy。

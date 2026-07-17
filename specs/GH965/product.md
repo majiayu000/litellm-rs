@@ -75,8 +75,10 @@ complexity: large
     retry 或重复结算。
 11. B-011 在 staged migration 中，`LLMClient`、`ClientConfig` 与高层 free functions 必须保留为 canonical
     runtime 的无状态 facade；`DefaultRouter`、completion `Router` trait、mutable `ProviderRegistry` runtime
-    ownership 及 request-level `api_key`/`api_base` 在 0.6.0 标记 deprecated，并只可委托 canonical runtime，
-    在 0.7.0 移除。0.7.0 removal 合并前，版本工作流必须经独立 fixture 证明 0.x breaking policy 产出 0.7.0
+    ownership 及 request-level `api_key`/`api_base`/`api_version`/`organization` 在 0.6.0 标记 deprecated，
+    并只可委托 canonical runtime，在 0.7.0 移除。0.6.0 的 deprecation 不得改变上述任何 symbol 的现有公开
+    签名：`ProviderRegistry` 的 `&mut self` mutation 在 0.6.0 保持既有行为，B-003 由"canonical runtime 与
+    production 调用方不再消费它"满足，而不是由把它改成会丢弃 mutation 的空壳满足。0.7.0 removal 合并前，版本工作流必须经独立 fixture 证明 0.x breaking policy 产出 0.7.0
     而非 1.0.0；迁移说明、替代 API 或此前置证据缺失时 removal 必须 blocked。
 12. B-012 完成证据必须以同一组确定性 fixtures 经 HTTP、SDK 与 `completion()` 验证 provider identity、
     unsupported/error class、retry/fallback、snapshot isolation、stream/cancel 和 exactly-once state；另有
@@ -89,7 +91,8 @@ complexity: large
   API、映射、迁移窗口和 rollback；production implementation 仍需本 amendment review/merge 后开始。
 - [ ] 代码中只有一个 provider construction + deployment selection + execution runtime contract。
 - [ ] HTTP、SDK 与 `completion()` 的 adapter 不持有第二 provider instance map、路由统计或 sender。
-- [ ] 重复 `DefaultRouter`/`Router`/`ProviderRegistry` 状态已删除或变为经批准的无状态兼容 facade。
+- [ ] 重复 `DefaultRouter`/`Router`/`ProviderRegistry` 状态已从 canonical runtime 与全部 production
+  调用方中移除（`ProviderRegistry` 在 0.6.0 保留为 deprecated 独立类型，0.7.0 整体删除）。
 - [ ] 0.6.0 发布弃用标记与迁移说明；0.7.0 removal 前版本工作流 fixture 证明 breaking 0.x 可显式发布
   0.7.0 且不会伪装成 non-breaking commit。
 - [ ] 跨入口 conformance fixtures 覆盖 B-001 至 B-012，且 source guard 对 production 为零命中。
@@ -118,9 +121,9 @@ complexity: large
 | ID | Resolved decision | Observable consequence |
 | --- | --- | --- |
 | `HD-001` | HTTP 与每个 SDK instance 显式持有 `Arc<UnifiedRouter>`；仅高层 free functions 使用可替换的 process-default binding。 | replacement 原子发布新 immutable generation；已取得 handle 的 in-flight request 完成于旧 generation。未安装 default 时 free functions 返回 typed configuration error，不从 env 隐式初始化。 |
-| `HD-002` | `headers`/`timeout` 保留为 validated request-scoped context；`api_key`/`api_base` 在 0.6.0 deprecated，0.7.0 removed。 | legacy pair 只可匹配当前 generation 内 policy-approved canonical deployment；零匹配、多匹配、被 endpoint/header policy 拒绝均 fail closed，且不得创建请求专属 provider/client。 |
-| `HD-003` | 永久保留 `LLMClient`、`ClientConfig` 和高层 free functions 为 stateless facade；`DefaultRouter`、completion `Router` trait、mutable `ProviderRegistry` runtime ownership 在 0.6.0 deprecated、0.7.0 removed。 | 0.6.0 facade 也不得 fallback 到 legacy engine；0.7.0 removal 前必须先修订并验证 release workflow 的 0.x breaking policy。 |
-| `HD-004` | `ProviderError` 是 canonical typed runtime error；HTTP、SDK、Gateway、retry/redaction/cancellation 使用 tech spec 的 exhaustive mapping。 | adapter 从 typed variant 映射并保留 class/retryability；字符串只能作为已 redacted 的展示文本，不能参与分支。 |
+| `HD-002` | `headers`/`timeout` 保留为 validated request-scoped context；`api_key`/`api_base` 在 0.6.0 deprecated，0.7.0 removed。本 amendment 依同一原则补齐 `CompletionOptions` 的其余 override 字段：`api_version`/`organization` 与 `api_key`/`api_base` 同类（0.6.0 deprecated → 0.7.0 removed），分类表见 tech spec §2。 | legacy selector 只可匹配当前 generation 内 policy-approved canonical deployment；零匹配、多匹配、被 endpoint/header policy 拒绝均 fail closed，且不得创建请求专属 provider/client。credential match 使用定长 digest 比较，不得因输入长度产生时序差异。 |
+| `HD-003` | 永久保留 `LLMClient`、`ClientConfig` 和高层 free functions 为 stateless facade；`DefaultRouter`、completion `Router` trait、mutable `ProviderRegistry` runtime ownership 在 0.6.0 deprecated、0.7.0 removed。 | 0.6.0 facade 也不得 fallback 到 legacy engine；0.7.0 removal 前必须先修订并验证 release workflow 的 0.x breaking policy。0.6.0 的 deprecation 只加 `#[deprecated]` 与切断所有权，不改公开签名、不降可见性；任何 0.6.0 breaking 签名变更都超出本决策窗口。 |
+| `HD-004` | `ProviderError` 是 canonical typed runtime error；HTTP、SDK、Gateway、retry/redaction/cancellation 使用 tech spec 的 exhaustive mapping。 | adapter 从 typed variant 映射并保留 class/retryability；字符串只能作为已 redacted 的展示文本，不能参与分支。retryability 必须带 `RetryContext`（既有 `RetryPolicy::decide`），不得暴露 context-free 的 bool；`ProviderFailureKind` 并入 `ErrorCode` 后不得存在第二套分类。`SDKError::ProviderError(String)` 的 0.7.0 removal 由本决策（而非 `HD-003`）负责。 |
 
 ## 发布说明
 
