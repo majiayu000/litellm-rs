@@ -9,6 +9,7 @@ use crate::core::router::deployment::{Deployment, HealthStatus};
 use crate::core::router::unified::Router;
 use crate::core::router::{
     DefaultRuntimeBinding, RuntimeBinding, RuntimeRequestContext, RuntimeRequestOptions,
+    default_runtime, install_default_runtime,
 };
 use crate::core::types::model::ProviderCapability;
 use std::sync::{Arc, atomic::Ordering};
@@ -676,8 +677,11 @@ fn test_runtime_binding_rollback_and_request_context_validation() {
     default.replace(old);
     assert!(second_generation > first_generation);
     assert!(default.load().generation() > second_generation);
+    let installed = install_default_runtime(first.clone()).unwrap().generation();
+    assert!(install_default_runtime(first).is_err());
+    assert_eq!(default_runtime().unwrap().generation(), installed);
 
-    let policy = RouterConfig::default();
+    let mut policy = RouterConfig::default();
     let mut options = RuntimeRequestOptions {
         headers: Some([("authorization".into(), "secret".into())].into()),
         ..Default::default()
@@ -686,5 +690,9 @@ fn test_runtime_binding_rollback_and_request_context_validation() {
     options.timeout = Some(Duration::ZERO);
     assert!(RuntimeRequestContext::validate(std::mem::take(&mut options), &policy).is_err());
     options.api_base = Some("file:///tmp/socket".into());
-    assert!(RuntimeRequestContext::validate(options, &policy).is_err());
+    assert!(RuntimeRequestContext::validate(std::mem::take(&mut options), &policy).is_err());
+    policy.timeout_secs = 0;
+    options.timeout = Some(Duration::from_secs(1));
+    options.api_base = Some(" https://example.com/v1 ".into());
+    assert!(RuntimeRequestContext::validate(options, &policy).is_ok());
 }
