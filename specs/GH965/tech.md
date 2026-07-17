@@ -58,14 +58,18 @@ replacement 语义是 contract；实现可在预算内拆模块，但不得增�
 
 ```rust
 #[derive(Clone)]
-pub struct RuntimeHandle {
-    generation: u64,
+pub struct RuntimeBinding {
     router: Arc<UnifiedRouter>,
 }
 
+impl RuntimeBinding {
+    pub fn new(router: Arc<UnifiedRouter>) -> Self;
+    pub fn bind(&self) -> RuntimeHandle;
+}
+
+#[derive(Clone)]
 pub struct RuntimeHandle {
-    generation: u64,
-    router: Arc<UnifiedRouter>,
+    binding: RuntimeBinding,
     /// Pinned at bind time; never re-loaded from the router's `ArcSwap`.
     snapshot: Arc<RoutingSnapshot>,
 }
@@ -76,18 +80,22 @@ impl RuntimeHandle {
     pub fn snapshot(&self) -> &RoutingSnapshot;
 }
 
-pub struct DefaultRuntimeBinding { /* reuses AtomicValue<RuntimeHandle> */ }
+// Public because it appears in `RuntimeHandle::snapshot`; fields stay private
+// outside the router module, so callers cannot mutate or republish it.
+pub struct RoutingSnapshot { /* generation + immutable routing metadata */ }
+
+pub struct DefaultRuntimeBinding { /* reuses AtomicValue<RuntimeBinding> */ }
 impl DefaultRuntimeBinding {
-    pub fn new(initial: Arc<UnifiedRouter>) -> Self;
+    pub fn new(initial: RuntimeBinding) -> Self;
     pub fn load(&self) -> RuntimeHandle;
-    pub fn replace(&self, next: Arc<UnifiedRouter>) -> RuntimeHandle;
+    pub fn replace(&self, next: RuntimeBinding) -> RuntimeBinding;
 }
 
-pub fn install_default_runtime(runtime: Arc<UnifiedRouter>)
+pub fn install_default_runtime(runtime: RuntimeBinding)
     -> Result<RuntimeHandle, ProviderError>;
 pub fn default_runtime() -> Result<RuntimeHandle, ProviderError>;
-pub fn replace_default_runtime(runtime: Arc<UnifiedRouter>)
-    -> Result<RuntimeHandle, ProviderError>;
+pub fn replace_default_runtime(runtime: RuntimeBinding)
+    -> Result<RuntimeBinding, ProviderError>;
 ```
 
 **Generation identity 必须由 pinned snapshot 承担，而不是由"只传 `Arc` 即只读"的假设承担。** `UnifiedRouter`
@@ -105,15 +113,26 @@ snapshot，不再在请求路径上 `load()` router 的 ArcSwap。由此：
   `pub(crate)` 会引入批准窗口之外的 breaking change（`UnifiedRouter` 由 `src/lib.rs:151` 公开导出），
   违反 product.md 的"不扩大已批准 HD 决策"。
 
-`update_routing_snapshot` 必须在同一 write lock 内原子递增 generation counter，使每次 snapshot 变更
-（无论来自 `replace_default_runtime` 还是 legacy `add_deployment`）都产出新 generation。否则两个 handle 可能
-共享 generation 编号却持有不同 snapshot，conformance fixture 比较的 generation 就不再是有效 binding identity。
-`RuntimeHandle` 不得暴露 `&Arc<UnifiedRouter>`；需要跨 handle 共享 runtime 的调用方传递 `RuntimeHandle` 本身。
+`RoutingSnapshot` 自身携带 generation；所有成功发布 snapshot 的路径必须收敛到同一个持有
+`routing_snapshot_write_lock` 的 publication helper，并在 store 前从进程级 monotonic counter 分配新 generation。
+这包括 `replace_default_runtime`、legacy `add_deployment`/`remove_deployment`/`set_model_list`，也包括当前绕过
+`update_routing_snapshot`、自行 lock/clone/store 的 `add_model_alias`（`unified.rs:321-329`）。alias 校验失败不得
+发布 snapshot 或消耗 generation。否则 alias resolution 可以在 generation 不变时改变，或两个 handle 共享
+generation 编号却持有不同 snapshot，conformance fixture 比较的 generation 就不再是有效 binding identity。
+
+`RuntimeHandle` 不得暴露 `&Arc<UnifiedRouter>`；需要跨 handle 共享同一 pinned generation 的调用方传递
+`RuntimeHandle` 本身。`RuntimeBinding` 是唯一可安装的不透明 owner token：它可以由 `Arc<UnifiedRouter>` 构造并
+在内部访问 router，但不公开 router accessor。`DefaultRuntimeBinding` 原子存储 token，**不得存储已 pin 的
+`RuntimeHandle`**；`load()` 每次从当前 token 的 router 读取一次最新 snapshot 并绑定新 handle。这样 legacy
+mutation 后，旧 handle 仍看到旧 snapshot，而后续 `default_runtime()` 会看到新 snapshot/new generation，
+无需 mutation 回调去重写 process default。
 
 `install_default_runtime` 只允许首次安装；重复安装返回 `ProviderError::Configuration`，调用方需要替换时必须
-显式使用 `replace_default_runtime`。每次 install/replace 生成单调递增、进程内不复用的 generation；
-`replace` 返回旧 handle 以支持 rollback。free function 每次调用开始只 load 一次；HTTP `AppState` 与
-`LLMClient` 构造时接收/创建一个 `Arc<UnifiedRouter>` 并固定到对应 handle。禁止 free function 的 env lazy
+显式使用 `replace_default_runtime`。每次 install/replace 在安装 token 时为其当前 snapshot 发布新的、单调递增且
+进程内不复用的 generation；`replace` 返回旧 `RuntimeBinding` token，rollback 通过把该 token 直接传回
+`replace_default_runtime` 完成，禁止从 handle 取回 router 或用 sentinel 重建。free function 每次调用开始只
+load 一次；HTTP startup 从 `Arc<UnifiedRouter>` 构造 `RuntimeBinding` 并由 `AppState` 固定一次 load 得到的
+handle；`LLMClient` 构造时创建或接收 handle。禁止 free function 的 env lazy
 bootstrap；无 default 时返回 `ProviderError::Configuration`。
 
 runtime contract 必须同时拥有：
@@ -141,6 +160,8 @@ pub struct RuntimeRequestContext {
 pub struct LegacyRuntimeSelector {
     api_key: Option<String>,
     api_base: Option<Url>,
+    api_version: Option<String>,
+    organization: Option<String>,
 }
 ```
 
@@ -177,9 +198,13 @@ resolver 不得调用 factory、`add_deployment`、client constructor 或 env。
 credential match **不得直接使用现有 `utils::auth::crypto::hmac::constant_time_eq`**（`hmac.rs:26`）：该函数
 对不等长输入提前 `return false`（`:27-29`），泄漏候选 credential 的长度，且比较耗时随长度变化。API key 熵较高
 使其可利用性有限，但 legacy selector 恰好是把用户提供的 raw secret 与 deployment 配置逐个比对的放大场景。
-D3C 的做法是先把两侧输入各自算成定长 SHA-256 digest（`sha2` 已在 `Cargo.toml:97`），再按定长 32 字节做
-constant-time 比较——定长后长度分支不可达，不引入新依赖，也不改动 `verify_hmac_signature` 等既有
-HMAC 调用方的行为（那些输入长度本就由算法固定）。该修复限于 credential-compare helper 本身。
+D3C 的做法是在 canonical deployment config 归一化/发布时，把每个 stored credential **预计算**为不透明、
+不可序列化且 `Debug` 恒为 `[REDACTED]` 的 `[u8; 32]` SHA-256 digest，并随 immutable routing snapshot 的
+legacy-selector metadata 保存；raw stored credential 不进入该 metadata。request selector 的 raw key 每请求只
+计算一次 digest，随后对每个候选只做两个定长 32 字节值的 constant-time 比较。禁止在 candidate loop 内重新
+hash stored credential；否则耗时仍随每个候选 secret 长度变化，不能满足 length-independent match。
+`sha2` 已在 `Cargo.toml:97`，因此不引入新依赖，也不改动 `verify_hmac_signature` 等既有 HMAC 调用方的行为
+（那些输入长度本就由算法固定）。
 
 先让现有 free functions 和经 `HD-003` 保留的 trait/type 委托给批准的 runtime binding，再逐段删除
 `DefaultRouter` 的 env bootstrap、static prefix selection、dynamic provider construction 和直接 provider
@@ -312,7 +337,7 @@ Cancellation never increments failure/cooldown and never triggers fallback; tran
 
 ### 6. HTTP binding and conformance
 
-HTTP 继续从 server startup 获取 `Arc<UnifiedRouter>`；若 `HD-001` 要求共享/替换 API，只在
+HTTP 继续从 server startup 获取 `Arc<UnifiedRouter>` 并在注入边界构造 `RuntimeBinding`/`RuntimeHandle`；只在
 `http.rs`/`state.rs` 的注入边界调整，不改 route wire。新增 `tests/integration/router_runtime_conformance.rs`
 前已搜索现有 tests，无同名/同职责 fixture；该 module 使用本地 listener 和 deterministic providers，令同一
 runtime generation 依次由三入口触发并比较 selected identity、typed category、attempt trace 与 state delta。
@@ -330,7 +355,7 @@ source guard 扫描 production adapter，拒绝第二 map/config scan/local rout
 | D1E-a canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `unified_provider_methods.rs`, `src/utils/error/canonical.rs`, `src/core/providers/failure.rs`, `src/core/router/retry_policy.rs`, `gateway_error/http_mapping.rs`, `src/sdk/errors.rs` | 7 files / ≤500；`ProviderFailureKind` 并入 `ErrorCode`，retry 只经既有 `RetryPolicy::decide`；`Refs #965`。 |
 | D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 3 files / ≤500；真实错误响应出口消费 canonical facts 并 `redacted()`；`Refs #965`。 |
 | D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
-| D3C credential compare hardening | `src/utils/auth/crypto/hmac.rs`, `src/utils/auth/crypto/tests.rs` | 2 files / ≤500；定长 digest 比较，消除长度时序泄漏；`Refs #965`。 |
+| D3C credential compare hardening | `src/core/router/unified.rs`, `deployment.rs`, `gateway_config.rs`, `src/utils/auth/crypto/hmac.rs`, `src/utils/auth/crypto/tests.rs` | 5 files / ≤500；deployment publication 预计算并存储定长 digest，request path 每请求只 hash 一次后定长比较；`Refs #965`。 |
 | D3 completion stream/override cleanup | `src/core/completion/stream.rs`, `src/core/completion/types.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `default_router/dynamic_providers.rs`, `default_router/dynamic_providers/routes.rs`, `default_router/dynamic_providers/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；依 `HD-002/003`；含全部 override 字段分类与 `#[deprecated]`；`Refs #965`。 |
 | D4 SDK runtime binding | `src/sdk/config.rs`, `errors.rs`, `client/llm_client.rs`, `client/routing.rs`, `client/types.rs`, `client/tests.rs`, `src/sdk/mod.rs` | 7 files / ≤500；仅 construction/selection；`Refs #965`。 |
 | D5 SDK execution cleanup | `src/sdk/client/completions.rs`, `embeddings.rs`, `provider_payloads.rs`, `stats.rs`, `llm_client.rs`, `routing.rs`, `tests/integration/router_tests.rs` | 7 files / ≤500；sender/state/error mapping；`Refs #965`。 |
@@ -347,7 +372,9 @@ D1E 拆成 D1E-a/D1E-b 是本 amendment 的预算修正，不是范围扩大：�
 `src/core/providers/failure.rs`、`src/utils/error/gateway_error/response.rs`、
 `src/server/routes/ai/openai_errors.rs`。删 1 加 4 后单一 tranche 达 10 个文件并需同时改动 taxonomy 与
 序列化出口，500-line 预算下必然挤压测试，故按本节"超限先拆 tranche"的规则拆分。同理，credential 修复
-独立成 D3C，避免 D3 触及 10 文件上限。
+独立成 D3C，避免 D3 触及 10 文件上限。D3C 为满足 length-independent match 必须同时拥有 digest helper 与
+canonical deployment/snapshot metadata publication；只改 `hmac.rs`/tests 会在 request candidate loop 内重复
+hash 变长 stored secret，不能满足本 contract。
 
 ## Product-to-Test Mapping
 
