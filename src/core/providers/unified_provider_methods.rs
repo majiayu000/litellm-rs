@@ -19,12 +19,12 @@ fn redact_sensitive_text(value: &str) -> String {
     static KNOWN_CREDENTIAL_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     static JWT_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
 
-    let Some(url_pattern) = compiled_regex(&URL_PATTERN, r#"https?://[^\s<>"']+"#) else {
+    let Some(url_pattern) = compiled_regex(&URL_PATTERN, r#"(?i)https?://[^\s<>"']+"#) else {
         return REDACTED.to_string();
     };
     let Some(header_pattern) = compiled_regex(
         &HEADER_PATTERN,
-        r"(?im)\b(authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*[^\r\n]+",
+        r#"(?im)\b(authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*[^\r\n]+"#,
     ) else {
         return REDACTED.to_string();
     };
@@ -643,7 +643,7 @@ mod redaction_tests {
         let error = ProviderError::authentication(
             "openai",
             format!(
-                "request https://user:password-value@example.com/v1?X-Amz-Signature={RAW_SIGNATURE}&api_key={RAW_KEY} Cookie: session=cookie-value"
+                r#"request HTTPS://user:password-value@example.com/v1?X-Amz-Signature={RAW_SIGNATURE} debug={{"Cookie":"session=cookie-value","Authorization":"ApiKey password-value"}}"#
             ),
         );
         let malformed = ProviderError::authentication(
