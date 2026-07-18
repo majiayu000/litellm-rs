@@ -14,7 +14,7 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 
 离"最佳 LLM 网关"还差的，不是核心管道，而是**外围的四层**：
 1. **安全护栏层**（guardrails / ip_access / webhook SSRF）——代码存在但**未接入请求链路**
-2. **治理闭环**（virtual keys 半成品、无 admin UI）——对标 LiteLLM 招牌能力缺口
+2. **治理闭环**（已接线 `core::keys`，但实验性 `core::virtual_keys` 未接线；无 admin UI）——对标 LiteLLM 招牌能力仍有缺口
 3. **可观测导出**（Prometheus `/metrics` 已挂载，但 OTel/Datadog/Langfuse 外部导出未在启动接线）
 4. **架构地基债**（#519：双类型树 / 上帝 trait / 多注册机制 / 多定价 SSOT）——不修会**封顶后续演进速度**
 
@@ -40,16 +40,16 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 
 | # | 维度 | 最佳实践基线 | litellm-rs 当前（现证） | 等级 | 证据锚点 |
 |---|------|--------------|------------------------|------|----------|
-| 1 | 统一 API 广度 | 100+ provider，诚实可达 | enum 14 原生变体 + OpenAI-like catalog；但仍有约 40 个磁盘目录不可达 | 🟡 | `providers/mod.rs:412`；issue #837 |
+| 1 | 统一 API 广度 | 100+ provider，诚实可达 | Provider enum 默认构建 6 个变体、full features 14 个变体（均含 OpenAI-like catalog 入口）；但仍有约 40 个磁盘目录不可达 | 🟡 | `providers/mod.rs:412`；`Cargo.toml:163-180,213`；issue #837 |
 | 2 | 路由/负载均衡 | 多策略 + 健康感知 | SimpleShuffle/LeastBusy/UsageBased/LatencyBased **4 策略全实现并 dispatch** | 🟢 | `strategy_impl.rs:55,87,118,144`；`selection.rs:178-185` |
 | 3 | 可靠性 | retry/fallback/timeout/熔断/健康探测 | retry + fallback 进热路径；健康过滤（is_healthy/cooldown/rate-limit）+ 主动健康探测 | 🟢 | `chat.rs:119-129`；`selection.rs:273`；`health_probe.rs:34` |
-| 4 | 成本治理 | per-key/team 预算 + spend 追踪 + 强制 | chat + streaming 经 budgeted executor 记账并**拦截**；丰富 spend 测试 | 🟢 | `chat.rs:25,120-154`；`routes/ai/responses_stream_budget.rs` |
+| 4 | 成本治理 | per-key/team 预算 + spend 追踪 + 强制 | provider/model 与 API-key 预算在 AI 热路径经 budgeted executor 记账并**拦截**；team scope 有通用预算能力，但未见 AI 热路径按 team 身份 reserve/settle | 🟡🟢 | `chat.rs:25,120-154`；`routes/ai/budgeted.rs:34-76,118-137`；`core/budget/middleware.rs:396-434` |
 | 5 | 缓存 | 精确匹配 + 语义缓存 | 确定性 `response_cache` **已接线**；`semantic_cache_enabled` 仍硬编码 `false` | 🟡 | `state.rs:50,65`；`state.rs:127`；issue #838 |
 | 6 | 可观测 | metrics + tracing + 外部回调导出 | Prometheus `/metrics` 已挂载；OTel/Datadog 客户端代码存在但**启动未构造/未接线** | 🟡🔴 | `routes/health.rs:65`；`observability/metrics.rs:64`（启动无构造，grep 空） |
-| 7 | 安全护栏 | PII/审核/注入防护 + SSRF 安全出站 | guardrails **未进请求链路**；ip_access **非中间件**；webhook 投递用裸 `reqwest::Client`（无 SSRF 守卫） | 🔴 | `routes/ai/*`（grep 空）；`webhooks/manager.rs:13`；issue #838、CR-8（未追踪） |
-| 8 | 多租户治理 | virtual keys + teams + RBAC + 审计 | teams/keys 部分可用；RBAC 存在；**virtual keys 未进请求校验闭环** | 🟡 | `virtual_keys/`（server/auth grep 空）；issue #838 |
+| 7 | 安全护栏 | PII/审核/注入防护 + SSRF 安全出站 | guardrails **未进请求链路**；ip_access **非中间件**；未接线的 WebhookManager 使用无 SSRF policy 的 client，是未来接线前必须消除的潜在风险 | 🔴 | `routes/ai/*`（grep 空）；`webhooks/manager.rs:13,24-40`；`subsystem_registry.rs:311-315`；issue #838、CR-8（未追踪） |
+| 8 | 多租户治理 | virtual keys + teams + RBAC + 审计 | `core::keys` 已由 AppState 和 `/v1/keys` 使用；teams/RBAC 部分可用；另一个实验性 `core::virtual_keys::VirtualKeyManager` 未进 AppState/请求校验 | 🟡 | `server/state.rs:8,42,72`；`server/routes/keys/`；`subsystem_registry.rs:305-309`；issue #838 |
 | 9 | 产品化 UX | admin UI / key 管理面板 | 仅 API（admin.rs）；**无静态 UI / dashboard** | 🔴 | `routes/`（无 Files::new/index.html，grep 空） |
-| 10 | 高级端点 | embed/image/audio/rerank/batch/moderation/files/FT/responses | 路由齐全（含 responses API、moderations、batches、fine_tuning） | 🟢 | `routes/ai/` 目录清单 |
+| 10 | 高级端点 | embed/image/audio/rerank/batch/moderation/files/FT/responses | 主要路由齐全；Files 是 gateway-local storage API，Batches 是 OpenAI-compatible provider proxy，不等于所有 provider 均原生覆盖完整高级端点 | 🟡🟢 | `routes/ai/files.rs:1,48-151`；`routes/ai/batches.rs:1-5,37-95`；`routes/ai/mod.rs:136-164` |
 | 11 | 可扩展协议 | （前瞻差异化）MCP / A2A | 模块 + 单测在；**HTTP server 未挂载** | 🔴 | `http.rs`/`routes/mod.rs`（grep 空）；issue #838 |
 | 12 | 可持续架构 | 单一类型树 / 收敛 trait 与注册 | 双类型树、24+ 方法上帝 trait、3-4 套注册、多定价 SSOT、29 个超 800 行文件 | 🟠 | issue #519 |
 
@@ -59,7 +59,7 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 
 ### 3.1 已追平的"硬骨头"（相对审计文档的进展，事实）
 2026-07-09 审计文档记录的 CR-3/CR-4/CR-7 在**当前 main 已显著推进**——这份文档已部分过时，必须现证：
-- Provider enum 从 **5 → 14 变体**（CR-3"假接线"持续收敛）`[providers/mod.rs:412]`
+- Provider enum 从审计记录的 **5 → 默认 6 / full features 14 变体**（CR-3"假接线"持续收敛）`[providers/mod.rs:412; Cargo.toml:163-180,213]`
 - 确定性 response cache **已接线**（CR-4 主路径修复）`[state.rs:50,65]`
 - Budget 在 chat + streaming **真强制**（CR-7 修复，issue-840 战役落地）`[chat.rs:120-154]`
 - 路由 4 策略 + 健康感知 + retry/fallback **全在热路径**（这是"最佳网关"最难的部分）
@@ -67,8 +67,9 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 **推断（高）**：核心请求管道已具备生产级网关素质；"离最佳的差距"已从"核心能力缺失"下移到"外围层未接线"。
 
 ### 3.2 剩余差距的性质
-所有剩余 🔴 差距共享同一根因——**声明-执行裂缝（U-26）**：能力的代码资产存在（struct/方法/单测），
-但没有在启动构造或请求链路调用。这不是"要从零写功能"，多数是**接线工作**，工作量可控。
+除 Admin UI（当前没有对应前端资产，属于从零产品能力）外，多数剩余 🔴 差距共享同一根因——
+**声明-执行裂缝（U-26）**：能力的代码资产存在（struct/方法/单测），但没有在启动构造或请求链路调用。
+因此多数是**接线工作**；不能把 Admin UI 泛化为 U-26 接线问题。
 
 ### 3.3 权威接线矩阵（仓库自维护，事实）
 仓库有一份自动化守卫矩阵 `src/core/subsystem_registry.rs`，是 wired/unwired 的**权威 SSOT**，直接引用：
@@ -76,9 +77,10 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 - **ConfigRejected（validate 拒绝直到落地）**：`audit`(enterprise.audit_logging) `semantic_cache` `[subsystem_registry.rs:94-99,262-267]`
 - **FeatureGated（默认关闭）**：`analytics` `realtime(websockets)` `[subsystem_registry.rs:82-87,232-237]`
 
-**已交叉验证**：response_cache 确实在请求路径消费 `[chat.rs:110; embeddings.rs:93]`；audio/batch/files/fine_tuning
-端点走真实 provider 执行（非 not_implemented 桩）。**未逐一硬确认** webhooks/user_management/virtual_keys 的
-"从不构造"（置信度中，依据 registry 自述 + 抽样验证准确）。
+**已交叉验证**：response_cache 确实在请求路径消费 `[chat.rs:110; embeddings.rs:93]`；audio/fine_tuning
+端点走 provider 执行；Batches 是 provider proxy，Files 则走 gateway-local storage，并非 provider Files API。
+`core::keys` 已接入 AppState 与 key routes；未接线的是独立的实验性 `core::virtual_keys::VirtualKeyManager`。
+webhooks/user_management 的"从不构造"依据 registry 自述（置信度中）。
 
 ---
 
@@ -86,7 +88,7 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 
 | 差距 | 现有追踪 | 建议 |
 |------|----------|------|
-| Webhook 出站 SSRF（裸 client） | ❌ 审计明确标注"仍未跟踪"（#968 只覆盖 provider base_url） | 开安全 issue：webhook 投递复用 SSRF-safe client |
+| Webhook 出站 SSRF（接线前潜在风险） | ❌ 审计明确标注"仍未跟踪"（#968 只覆盖 provider base_url）；当前 WebhookManager 未由 gateway 构造，尚非可达运行时漏洞 | 开安全 issue：在任何 runtime 接线之前，让 webhook 投递复用 SSRF-safe client |
 | Admin UI / dashboard | ❌ 无 | 产品化 issue：对标 LiteLLM/Portkey 的 key/spend 管理面板（可后置） |
 | 外部可观测导出（OTel/Langfuse/Datadog 在启动接线 + callback 插件系统） | 🟡 #838 以"observability wire or remove"泛化覆盖 | 若要追平 LiteLLM callbacks，需单独 spec |
 
@@ -97,7 +99,7 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 ## 5. 到"最佳网关"的分层 roadmap（建议 · 已标注前置假设）
 
 **Tier A — 安全正确性（先做，风险最高）**
-- A1. Webhook SSRF-safe 出站（未追踪 → 新 issue）
+- A1. Webhook SSRF-safe 出站（未追踪 → 新 issue；作为 WebhookManager 接线前置门禁）
 - A2. guardrails + ip_access 接入请求链路（#838 子项）——假设：默认 fail-closed，不静默降级（U-29）
 
 **Tier B — 治理闭环（对标 LiteLLM 招牌）**
@@ -123,19 +125,19 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 ## 6. 事实 / 推断 / 建议 分离
 
 ### 事实（本会话 main `375bcd85` 直读）
-- Provider enum = 14 变体 `[providers/mod.rs:412]`
+- Provider enum = 默认构建 6 变体；启用 `providers-extra` + `providers-extended` 的 full features 构建为 14 变体 `[providers/mod.rs:412; Cargo.toml:163-180,213]`
 - response_cache 接线、semantic_cache_enabled=false `[state.rs:50,65,127]`
 - chat 走 UnifiedRouter + retry + budgeted executor `[chat.rs:84,119,120-154]`
 - 4 路由策略实现并 dispatch `[strategy_impl.rs:55-144; selection.rs:178-185]`
 - 健康感知选路 + 主动健康探测 `[selection.rs:273; health_probe.rs:34]`
 - `/metrics` 挂载 `[routes/health.rs:65]`
-- guardrails/ip_access/virtual keys/MCP/A2A/OTel 导出/静态 UI —— 在请求链路或启动路径 **grep 无接线证据**
-- webhook 投递用裸 `reqwest::Client` `[webhooks/manager.rs:13]`
+- guardrails/ip_access/实验性 `core::virtual_keys`/MCP/A2A/OTel 导出/静态 UI —— 在请求链路或启动路径 **grep 无接线证据**；`core::keys` 已接线
+- 未接线的 WebhookManager 投递 client 没有 SSRF policy；这是接线前潜在风险，不是当前可达 gateway 漏洞 `[webhooks/manager.rs:13,24-40; subsystem_registry.rs:311-315]`
 
 ### 推断
 - 核心管道已达生产级网关素质（高）——依据：路由/可靠性/预算三大块热路径证据齐全
 - 剩余差距多为"接线"而非"从零实现"（高）——依据：代码资产（struct/方法/单测）存在，缺启动/链路调用
-- 相对 2026-07-09 审计，CR-3/4/7 已推进（高）——依据：enum 14 变体 vs 文档所述 5 变体
+- 相对 2026-07-09 审计，CR-3/4/7 已推进（高）——依据：enum 默认 6 / full features 14 变体 vs 文档所述 5 变体
 
 ### 建议（前置假设已在 §5 标注）
 - 安全护栏优先（假设：默认 fail-closed）
