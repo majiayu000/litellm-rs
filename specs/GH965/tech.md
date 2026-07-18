@@ -329,7 +329,44 @@ HTTP presentation 的 coarse compatibility fact，0.6/0.7 不删除，但不得�
 NotImplemented → `NotSupported`，Internal → `Internal`。variant selection 不得解析 redacted string。
 D1E-a1 结束时，`src/sdk/errors.rs` 中现有、未修改的 exhaustive SDK category match 仅作为严格串行过渡：
 a1 source guard 只禁止 provider/retry production scope 中新增或第二个 retry-fact classifier，不得扩大该
-SDK match；D1E-a2 必须用 `canonical_code()` mapping 删除该 exhaustive/string classifier，且不得增加 allowlist。
+SDK match；D1E-a2 必须用 `canonical_code()` mapping 删除该 exhaustive/string classifier。
+
+2026-07-18 在 D1E-a2 实现 worktree 上重新验证发现：给 legacy
+`SDKError::ProviderError(String)` 加真实 `#[deprecated(since = "0.6.0", ...)]` 后，strict Clippy 会把同一
+0.6 compatibility surface 的既有 construction/match 升级为 `-D deprecated` 错误。除
+`src/sdk/errors.rs` 内部的兼容映射、match 与测试外，`src/sdk/client/completions.rs` 的
+`LLMClient::execute_chat_request` 还在 unsupported provider-type fallback 中构造该 variant；它不在原两文件
+scope 内，因此原 D1E-a2 同时要求 true deprecation、strict Clippy 与两文件 scope 是不可满足的。
+
+D1E-a2 将 writable scope **精确扩为三个 production 文件**：
+`src/core/providers/unified_provider_methods.rs`、`src/sdk/errors.rs`、
+`src/sdk/client/completions.rs`。第三个文件只允许在现有 fallback arm 上增加局部 lint 属性和
+`SP965-T010` removal 注释；不得改 control flow、错误文本、provider selection 或 sender 行为。0.6 legacy
+variant 的公开签名、`Display`、retryability 与所有既有构造/匹配行为保持不变；本 tranche 仍只实施既有
+redaction/canonical mapping contract，不借 lint 修复重分类其他 adapter。
+
+仅下列 legacy compatibility 站点可使用**紧邻目标表达式或单个函数/测试函数**的
+`#[allow(deprecated)]`，且每个属性必须带固定注释
+`SP965-T010 removes SDKError::ProviderError`：
+
+1. `src/sdk/errors.rs` 的 `From<GatewayError>` 中 `GatewayError::Unavailable` construction arm；
+2. `src/sdk/errors.rs` 的 `From<ProviderError>` 中 `ErrorCode::Unavailable` construction arm；
+3. `src/sdk/errors.rs` 的 `SDKError::is_retryable` legacy match；
+4. `src/sdk/client/completions.rs` 的 `LLMClient::execute_chat_request` 既有 unsupported provider-type
+   fallback arm；
+5. `src/sdk/errors.rs` 测试中的单个 `sdk_variant` category helper，以及
+   `test_sdk_error_provider_error`、`test_is_retryable_provider_error`、
+   `test_from_gateway_error_provider_unavailable`、`test_sdk_error_empty_message` 四个既有兼容测试。
+
+上述清单恰为 9 个局部 allow 站点（`src/sdk/errors.rs` 8 个、
+`src/sdk/client/completions.rs` 1 个），不得按文件或 module 合并计数。
+禁止 module/crate-wide `allow(deprecated)`、`expect(deprecated)`、command-line lint 降级、未列名的新
+`SDKError::ProviderError` callsite，或把多个非兼容路径包进同一个 allow。D1E-a2 必须在
+`src/sdk/errors.rs` 的 test scope 增加
+`legacy_provider_error_deprecation_allowlist_does_not_grow` source guard：它读取上述两个 SDK source，
+逐一验证列名函数/arm/test、紧邻的 T010 marker 与局部 allow，拒绝 module/crate-wide lint 属性，并对
+`SDKError::ProviderError` reference 或局部 allow 的站点/数量增长 fail closed。guard 自身不得成为
+allowlisted deprecated use。所有这些例外随 `SP965-T010` 的 0.7.0 removal 一并删除，不形成长期 lint policy。
 
 `GatewayError::Provider(ProviderError)` 已存在并保持；跨 Gateway 边界构造
 `GatewayError::Provider(e.redacted())`，只有该既有 wrapper 持有脱敏 typed copy。原始 runtime `ProviderError` 只在
@@ -411,7 +448,7 @@ map/config scan/local routing counters/client construction。
 | D0 decision amendment | `specs/GH965/{product,tech,tasks}.md` | docs-only；`Refs #965`；不实现。 |
 | D1 runtime contract | `src/core/router/mod.rs`, `unified.rs`, `gateway_config.rs`, `deployment.rs`, `selection.rs`, `execute_impl.rs`, `execution.rs`, `error.rs`, `src/core/router/tests/router_tests.rs` | 9 files / ≤500；`Refs #965`。 |
 | D1E-a1 canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/providers/failure.rs`, `src/core/providers/mod.rs`, `src/utils/error/canonical.rs`, `src/core/router/retry_policy.rs` | 6 files / ≤500；删除 `ProviderFailureKind` 及 re-export，在唯一 exhaustive match 中保留 typed retry facts，并锁定 canonical/HTTP/retry table；`Refs #965`。 |
-| D1E-a2 provider redaction + SDK mapping | `src/core/providers/unified_provider_methods.rs`, `src/sdk/errors.rs` | 2 files / ≤500；增加保留原 variant 的 `redacted()` copy，0.6 SDK 只按 canonical code 映射到既有 variant，并 deprecated legacy string variant；`Refs #965`。 |
+| D1E-a2 provider redaction + SDK mapping | `src/core/providers/unified_provider_methods.rs`, `src/sdk/errors.rs`, `src/sdk/client/completions.rs` | 3 files / ≤500；增加保留原 variant 的 `redacted()` copy，0.6 SDK 只按 canonical code 映射到既有 variant，并 deprecated legacy string variant；`completions.rs` 只可给既有 fallback 加局部 allow + T010 removal marker，无行为改动；source guard 锁定全部批准站点并拒绝增长；`Refs #965`。 |
 | D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/utils/error/gateway_error/conversions.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 4 files / ≤500；Gateway wrapper 与真实响应出口都只携带 `redacted()` copy；`Refs #965`。 |
 | D1E-c legacy retry helper deprecation | `src/core/providers/contextual_error.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/types/errors/traits.rs`, `src/core/router/execution.rs`, `src/utils/error/utils/retry.rs`, `src/sdk/errors.rs`, `src/server/routes/ai/batches.rs`, `src/server/routes/ai/fine_tuning.rs` | 8 files / ≤500；六个 provider-specific helper 保留 0.6 行为、deprecated、production 零消费；canonical coarse helpers 明确 grandfather；`Refs #965`。 |
 | D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
@@ -460,7 +497,7 @@ hash 变长 stored secret，不能满足本 contract。
 | B-003 | D2-D7 adapter cleanup | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::single_sender`；production source guard。 |
 | B-004 | D1/D2/D4 config normalization | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::invalid_and_empty_config`。 |
 | B-005 | canonical alias/surface selection | `cargo test --all-features --locked support_matrix` 加 conformance `alias_and_unsupported` fixture。 |
-| B-006 | D1E-a1 删除 `ProviderFailureKind` 并保留 typed facts；D1E-a2 收敛 provider redaction/SDK existing-category mapping；D1E-b 收敛 Gateway wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output。 |
+| B-006 | D1E-a1 删除 `ProviderFailureKind` 并保留 typed facts；D1E-a2 收敛 provider redaction/SDK existing-category mapping；D1E-b 收敛 Gateway wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output；`legacy_provider_error_deprecation_allowlist_does_not_grow` 锁定 D1E-a2 的局部兼容站点并拒绝 allow/callsite 增长。 |
 | B-007 | deployment lease/state + SDK stats view | conformance `exactly_once_state` fixture比较 attempt trace 与 counter delta。 |
 | B-008 | runtime retry/fallback | conformance `retry_and_fallback` fixture证明 adapter request count 与 runtime attempts 相等。 |
 | B-009 | immutable generation replacement | conformance `snapshot_replacement` 并发双 listener/key fixture。 |
