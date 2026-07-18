@@ -604,75 +604,102 @@ import json, re, subprocess
 from pathlib import Path
 
 root = Path.cwd().resolve(strict=True)
-def resolved(path):
-    return Path(path).resolve(strict=True)
-def discover(base, pattern):
-    return {resolved(path) for path in base.glob(pattern) if path.is_file()}
+def resolved(path): return Path(path).resolve(strict=True)
 def relative(path):
     try: return path.relative_to(root).as_posix()
     except ValueError: return str(path)
 
-tracked = subprocess.run(
-    ["git", "ls-files", "*.rs"], cwd=root, check=True, capture_output=True, text=True
-).stdout.splitlines()
+tracked = []
+if (root / ".git").exists():
+    tracked = subprocess.run(
+        ["git", "ls-files", "*.rs"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.splitlines()
 rust_files = {resolved(root / path) for path in tracked}
-metadata = json.loads(subprocess.run(
-    ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-    cwd=root, check=True, capture_output=True, text=True
-).stdout)
-package_roots = {root}
+metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"],
+    cwd=root, check=True, capture_output=True, text=True).stdout)
+package_roots = {root, resolved(metadata["workspace_root"])}
 lint_files = set()
 for package in metadata["packages"]:
-    manifest = resolved(package["manifest_path"])
-    lint_files.add(manifest)
-    package_roots.add(manifest.parent)
+    manifest = resolved(package["manifest_path"]); lint_files.add(manifest); package_roots.add(manifest.parent)
     rust_files.update(resolved(target["src_path"]) for target in package["targets"])
 for package_root in package_roots:
     for directory in ("src", "tests", "examples", "benches"):
-        rust_files.update(discover(package_root, f"{directory}/**/*.rs"))
+        rust_files.update(resolved(path) for path in package_root.glob(f"{directory}/**/*.rs") if path.is_file())
     build = package_root / "build.rs"
     if build.exists(): rust_files.add(resolved(build))
 sources = {relative(path): path.read_text(encoding="utf-8") for path in sorted(rust_files)}
-
 legacy = "SDKError::" + "ProviderError"
 marker = "SP965-T010 links 0.7 removal follow-up for " + legacy
 allow = "#[allow" + "(deprecated)]"
-expect = "#[expect" + "(deprecated)]"
-def code_count(source):
-    return sum(line.count(legacy) for line in source.splitlines()
-               if not line.lstrip().startswith("//"))
-references = {path: code_count(source) for path, source in sources.items() if code_count(source)}
-assert references == {
-    "src/sdk/client/completions.rs": 1,
-    "src/sdk/errors.rs": 8,
-}, f"legacy references changed: {references}"
-errors = sources["src/sdk/errors.rs"]
-completions = sources["src/sdk/client/completions.rs"]
-windows = []
-for source in (errors, completions):
-    lines = source.splitlines()
-    windows.extend("\n".join(lines[index:index + 12]) for index, line in enumerate(lines)
-                   if marker in line)
-assert len(windows) == 9, f"T010 marker count changed: {len(windows)}"
-assert all(window.splitlines()[1].strip() == allow for window in windows)
-anchors = (
-    "GatewayError::Unavailable(msg) =>", "ErrorCode::Unavailable =>",
-    "pub fn is_retryable(&self)", "fn sdk_variant(error: &SDKError)",
-    "fn test_sdk_error_provider_error()", "fn test_is_retryable_provider_error()",
-    "fn test_from_gateway_error_provider_unavailable()",
-    "fn test_sdk_error_empty_message()", f"_ => Err({legacy}(format!(",
-)
-for anchor in anchors:
-    assert sum(anchor in window for window in windows) == 1, f"allow site changed: {anchor}"
-assert all(code_count(window) == 1 for window in windows), (
-    "each approved enclosure must contain exactly one legacy reference"
-)
-assert sum(source.count(allow) for source in sources.values()) == 19
-assert sum(source.count(expect) for source in sources.values()) == 0
-
+punct = set("{}()[].,:;|=<>?!&+-*/%^#@~$'")
+def lex(text):
+    out, offset = [], 0
+    while offset < len(text):
+        if text[offset].isspace(): offset += 1; continue
+        start = offset
+        if text.startswith("//", offset):
+            offset = text.find("\n", offset); offset = len(text) if offset < 0 else offset; continue
+        if text.startswith("/*", offset):
+            depth = 1; offset += 2
+            while offset < len(text) and depth:
+                if text.startswith("/*", offset): depth += 1; offset += 2
+                elif text.startswith("*/", offset): depth -= 1; offset += 2
+                else: offset += 1
+            assert depth == 0, "unterminated block comment"; continue
+        raw = re.match(r'(?:br|cr|r)(?P<h>#{0,255})"', text[offset:])
+        if raw:
+            closing = '"' + raw.group("h"); offset += raw.end(); end = text.find(closing, offset)
+            assert end >= 0, "unterminated raw string"; offset = end + len(closing)
+            out.append(("LITERAL", start, offset)); continue
+        prefix = 1 if text.startswith(('b"', 'c"'), offset) else 0
+        if text[offset + prefix:offset + prefix + 1] == '"':
+            offset += prefix + 1
+            while offset < len(text):
+                if text[offset] == "\\": offset += 2
+                elif text[offset] == '"': offset += 1; break
+                else: offset += 1
+            assert offset <= len(text) and text[offset - 1] == '"', "unterminated string"
+            out.append(("LITERAL", start, offset)); continue
+        if text[offset] == "'" and offset + 2 < len(text) and (text[offset + 1] == "\\" or text[offset + 2] == "'"):
+            offset += 1; offset += 2 if text[offset] == "\\" else 1
+            assert offset < len(text) and text[offset] == "'", "unterminated char"
+            offset += 1; out.append(("LITERAL", start, offset)); continue
+        match = re.match(r"[A-Za-z_][A-Za-z0-9_]*|[0-9][A-Za-z0-9_.]*", text[offset:])
+        if match: offset += match.end(); out.append((text[start:offset], start, offset)); continue
+        operator = next((item for item in ("::", "=>", "->", "..=", "...", "..") if text.startswith(item, offset)), None)
+        if operator: offset += len(operator); out.append((operator, start, offset)); continue
+        assert text[offset] in punct, f"unrecognized Rust syntax: {text[offset:offset + 20]!r}"
+        offset += 1; out.append((text[start:offset], start, offset))
+    return out
+def values(source): return [value for value, _, _ in lex(source)]
+def occurrences(items, needle):
+    return sum(items[index:index + len(needle)] == needle for index in range(len(items) - len(needle) + 1))
+def matching(tokens, start, opening, closing):
+    depth = 0
+    for index in range(start, len(tokens)):
+        if tokens[index][0] == opening: depth += 1
+        elif tokens[index][0] == closing:
+            depth -= 1
+            if depth == 0: return index
+    raise AssertionError(f"unclosed {opening}")
+def function_source(source, name):
+    tokens = lex(source); items = [value for value, _, _ in tokens]
+    starts = [index for index in range(len(items) - 1) if items[index:index + 2] == ["fn", name]]
+    assert len(starts) == 1, f"function owner changed: {name}"
+    opening = next(index for index in range(starts[0] + 2, len(tokens)) if tokens[index][0] == "{")
+    return source[tokens[starts[0]][1]:tokens[matching(tokens, opening, "{", "}")][2]]
+def deprecated_attrs(source):
+    tokens = lex(source); items = [value for value, _, _ in tokens]; found = []
+    for index, value in enumerate(items):
+        cursor = index + 1
+        if value != "#": continue
+        if cursor < len(items) and items[cursor] == "!": cursor += 1
+        if cursor >= len(items) or items[cursor] != "[": continue
+        end = matching(tokens, cursor, "[", "]"); body = items[cursor + 1:end]
+        if "deprecated" in body and ("allow" in body or "expect" in body): found.append(source[tokens[index][1]:tokens[end][2]])
+    return found
 baselines = {
-    "src/server/routes/mod.rs": (
-        "fn test_api_response_to_http_response_remains_compatibility_shim",),
+    "src/server/routes/mod.rs": ("fn test_api_response_to_http_response_remains_compatibility_shim",),
     "src/core/traits/provider/llm_provider/sub_traits.rs": (
         "impl<T: LLMProvider> LLMChat for T", "impl<T: LLMProvider> LLMEmbed for T",
         "impl<T: LLMProvider> LLMStream for T", "async fn test_llm_chat_blanket_impl",
@@ -681,41 +708,88 @@ baselines = {
         "fn _accepts_stream<T: LLMStream>",
     ),
 }
-for path, items in baselines.items():
-    source = sources[path]
-    for item in items:
-        offset = source.find(item)
-        assert offset >= 0 and source[:offset].rstrip().endswith(allow), (
-            f"unrelated deprecated allow moved: {path}: {item}"
-        )
-for path, source in sources.items():
-    code = re.sub(r'r###".*?"###', '""', source, flags=re.S)
-    for match in re.finditer(r"(?ms)^\s*(?:pub\s+)?use\b.*?;", code):
-        statement = match.group()
-        if "SDKError" in statement:
-            assert "ProviderError" not in statement and "*" not in statement and " as " not in statement, (
-                f"legacy import/alias/wildcard forbidden: {path}: {statement}"
-            )
+inner_roots = ("src/core/router/tests/concurrency_edge_case_tests.rs",
+    "src/core/router/tests/execution_tests.rs", "src/core/router/tests/router_tests.rs",
+    "src/core/router/tests/selection_tests.rs", "src/core/router/tests/strategy_tests.rs")
+def verify(candidate):
+    refs = {}
+    for path, source in candidate.items():
+        items = values(source); count = occurrences(items, ["SDKError", "::", "ProviderError"])
+        if count: refs[path] = count
+        assert not occurrences(items, ["Self", "::", "ProviderError"]), f"Self alias: {path}"
+        for index, value in enumerate(items):
+            if value not in ("type", "use"): continue
+            end = next((cursor for cursor in range(index, len(items)) if items[cursor] == ";"), len(items)); statement = items[index:end]
+            direct = [] if "=" not in statement else [item for item in statement[statement.index("=") + 1:] if item not in ("(", ")")]
+            if value == "type": assert not (direct and direct[-1] == "SDKError" and all(item == "::" or item.isidentifier() for item in direct)), f"SDKError alias: {path}"
+            if value == "use" and "SDKError" in statement:
+                assert not ({"ProviderError", "*", "as"} & set(statement)), f"legacy import: {path}"
+    assert refs == {"src/sdk/client/completions.rs": 1, "src/sdk/errors.rs": 8}, refs
+    attrs = {path: found for path, source in candidate.items() if (found := deprecated_attrs(source))}
+    expected_attrs = {"src/core/traits/provider/llm_provider/sub_traits.rs": 9,
+        "src/sdk/client/completions.rs": 1, "src/sdk/errors.rs": 8, "src/server/routes/mod.rs": 1}
+    expected_attrs.update({path: 1 for path in inner_roots + ("tests/integration/router_tests.rs",)})
+    assert {path: len(found) for path, found in attrs.items()} == expected_attrs, attrs
+    assert all(text in (allow, "#![allow(deprecated)]") for found in attrs.values() for text in found), attrs
+    for path, anchors in baselines.items():
+        for anchor in anchors:
+            offset = candidate[path].find(anchor)
+            assert offset >= 0 and candidate[path][:offset].rstrip().endswith(allow), f"broad allow moved: {path}: {anchor}"
+    for path in inner_roots: assert re.fullmatch(r"(?s)(?://![^\n]*\n|\s)*#!\[allow\(deprecated\)\]\s*", candidate[path][:candidate[path].find("use ")])
+    assert "mod tests {\n    #![allow(deprecated)]\n" in candidate["tests/integration/router_tests.rs"]
+    errors = candidate["src/sdk/errors.rs"]; completions = candidate["src/sdk/client/completions.rs"]
+    assert sum(source.count(marker) for source in candidate.values()) == 9
+    functions = (("is_retryable", False, True), ("sdk_variant", False, False),
+        ("test_sdk_error_provider_error", True, False), ("test_is_retryable_provider_error", True, False),
+        ("test_from_gateway_error_provider_unavailable", True, False), ("test_sdk_error_empty_message", True, False))
+    for name, test, public in functions:
+        prefix = (rf"(?m)^[ \t]*// {re.escape(marker)}\r?\n[ \t]*{re.escape(allow)}\r?\n"
+                  + (r"[ \t]*#\[test\]\r?\n" if test else "") + rf"[ \t]*{'pub ' if public else ''}fn {name}\b")
+        assert len(re.findall(prefix, errors)) == 1, f"owner decoration: {name}"
+        assert occurrences(values(function_source(errors, name)), ["SDKError", "::", "ProviderError"]) == 1, f"owner ref: {name}"
+    head = rf"(?m)^[ \t]*// {re.escape(marker)}\r?\n[ \t]*{re.escape(allow)}\r?\n[ \t]*"
+    arms = ((errors, r"crate::utils::error::gateway_error::GatewayError::Unavailable\(msg\)\s*=>\s*\{\s*SDKError\s*::\s*ProviderError\s*\(\s*msg\s*\)\s*\}"),
+        (errors, r"ErrorCode::Unavailable\s*=>\s*SDKError\s*::\s*ProviderError\s*\(\s*message\s*\)\s*,"),
+        (completions, r"_\s*=>\s*Err\s*\(\s*SDKError\s*::\s*ProviderError\s*\(\s*format!\s*\("))
+    for source, arm in arms: assert len(re.findall(head + arm, source)) == 1, f"arm owner: {arm}"
+verify(sources)
+def replaced(source, old, new): assert source.count(old) == 1; return source.replace(old, new)
+def reject(label, mutated):
+    try: verify({**sources, "src/sdk/errors.rs": mutated})
+    except AssertionError: return
+    raise AssertionError(f"mutation accepted: {label}")
+errors = sources["src/sdk/errors.rs"]
+prefix = f"    // {marker}\n    {allow}\n    #[test]\n    fn test_sdk_error_provider_error() {{"
+relocated = f"    // {marker}\n    {allow}\n    const RELOCATED: fn(String) -> SDKError = {legacy};\n\n    #[test]\n    fn test_sdk_error_provider_error() {{"
+reject("relocated", replaced(replaced(errors, prefix, relocated), f'let error = {legacy}("API unavailable".to_string());', 'let error = RELOCATED("API unavailable".to_string());'))
+retry_line = f"SDKError::NetworkError(_) | SDKError::RateLimitError(_) | {legacy}(_)"
+reject("Self", replaced(errors, retry_line, retry_line + " | Self::ProviderError(_)"))
+constructor = f'let error = {legacy}("API unavailable".to_string());'
+reject("split", replaced(errors, constructor, constructor + "\n        let _ = SDKError::\n            ProviderError(String::new());"))
+reject("alias", replaced(errors, constructor, "type E = SDKError;\n        " + constructor + "\n        let _ = E::ProviderError(String::new());"))
+reject("attribute", replaced(errors, "mod tests {\n", "mod tests {\n    #![allow (deprecated, dead_code)]\n"))
 
 for package_root in package_roots:
     for directory in (".cargo", ".github/workflows", "scripts", "checks", "xtask"):
         path = package_root / directory
-        if path.exists():
-            lint_files.update(
-                resolved(item) for item in path.rglob("*")
-                if item.is_file() and "__pycache__" not in item.parts
-            )
+        if path.exists(): lint_files.update(resolved(item) for item in path.rglob("*")
+                                            if item.is_file() and "__pycache__" not in item.parts)
     for item in package_root.iterdir():
         name = item.name
-        if item.is_file() and (
-            name.startswith("Makefile") or name.startswith("justfile")
-            or name == "clippy.toml" or name.startswith("rust-toolchain")
-        ): lint_files.add(resolved(item))
-for path in sorted(lint_files):
-    compact = " ".join(path.read_text(encoding="utf-8").split())
-    forbidden = ("-A" + "deprecated", "-A " + "deprecated",
-                 "--allow=" + "deprecated", "--allow " + "deprecated")
-    assert not any(value in compact for value in forbidden), f"lint downgrade: {relative(path)}"
+        if item.is_file() and (name.startswith(("Makefile", "justfile", "rust-toolchain"))
+                              or name == "clippy.toml"): lint_files.add(resolved(item))
+def verify_lint(text, label):
+    words = re.sub(r'''["'=,\[\]]''', " ", text.lower()).split()
+    bad = {("-a", "deprecated"), ("-a", "warnings"), ("--allow", "deprecated"),
+           ("--allow", "warnings"), ("--cap-lints", "allow"), ("--cap-lints", "warn")}
+    for index, word in enumerate(words):
+        assert word not in ("-adeprecated", "-awarnings"), f"lint downgrade: {label}"
+        assert tuple(words[index:index + 2]) not in bad, f"lint downgrade: {label}"
+for path in sorted(lint_files): verify_lint(path.read_text(encoding="utf-8"), relative(path))
+for sample in ("RUSTFLAGS='--cap-lints allow'", 'rustflags=["--cap-lints=warn"]', "-A deprecated"):
+    try: verify_lint(sample, "mutation")
+    except AssertionError: pass
+    else: raise AssertionError(f"lint mutation accepted: {sample}")
 "####])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
