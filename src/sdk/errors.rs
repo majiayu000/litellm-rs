@@ -17,6 +17,10 @@ pub enum SDKError {
 
     /// Error
     #[error("Provider error: {0}")]
+    #[deprecated(
+        since = "0.6.0",
+        note = "use the existing typed SDK categories returned by ProviderError conversion"
+    )]
     ProviderError(String),
 
     /// Configuration
@@ -86,6 +90,8 @@ impl From<crate::utils::error::gateway_error::GatewayError> for SDKError {
             crate::utils::error::gateway_error::GatewayError::RateLimit { message, .. } => {
                 SDKError::RateLimitError(message)
             }
+            // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
+            #[allow(deprecated)]
             crate::utils::error::gateway_error::GatewayError::Unavailable(msg) => {
                 SDKError::ProviderError(msg)
             }
@@ -116,6 +122,8 @@ impl From<crate::core::providers::ProviderError> for SDKError {
             ErrorCode::InvalidRequest | ErrorCode::Conflict => SDKError::InvalidRequest(message),
             ErrorCode::NotFound => SDKError::ModelNotFound(message),
             ErrorCode::Timeout | ErrorCode::Network => SDKError::NetworkError(message),
+            // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
+            #[allow(deprecated)]
             ErrorCode::Unavailable => SDKError::ProviderError(message),
             ErrorCode::Configuration => SDKError::ConfigError(message),
             ErrorCode::Parsing => SDKError::ParseError(message),
@@ -130,6 +138,8 @@ pub type Result<T> = std::result::Result<T, SDKError>;
 
 impl SDKError {
     /// Error
+    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
+    #[allow(deprecated)]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -156,7 +166,10 @@ mod tests {
     use super::*;
     use crate::core::providers::ProviderError;
     use crate::utils::error::gateway_error::GatewayError;
+    use std::process::Command;
 
+    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
+    #[allow(deprecated)]
     fn sdk_variant(error: &SDKError) -> &'static str {
         match error {
             SDKError::ProviderNotFound(_) => "provider_not_found",
@@ -192,6 +205,8 @@ mod tests {
         assert_eq!(error.to_string(), "No default provider configured");
     }
 
+    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
+    #[allow(deprecated)]
     #[test]
     fn test_sdk_error_provider_error() {
         let error = SDKError::ProviderError("API unavailable".to_string());
@@ -381,6 +396,8 @@ mod tests {
         assert!(error.is_retryable());
     }
 
+    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
+    #[allow(deprecated)]
     #[test]
     fn test_is_retryable_provider_error() {
         let error = SDKError::ProviderError("unavailable".to_string());
@@ -503,6 +520,8 @@ mod tests {
         assert!(sdk_error.is_retryable());
     }
 
+    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
+    #[allow(deprecated)]
     #[test]
     fn test_from_gateway_error_provider_unavailable() {
         let gateway_error = GatewayError::Unavailable("OpenAI down".to_string());
@@ -556,6 +575,8 @@ mod tests {
 
     // ==================== SDKError Edge Cases ====================
 
+    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
+    #[allow(deprecated)]
     #[test]
     fn test_sdk_error_empty_message() {
         let error = SDKError::ProviderError("".to_string());
@@ -573,5 +594,132 @@ mod tests {
         let long_msg = "a".repeat(1000);
         let error = SDKError::Internal(long_msg.clone());
         assert!(error.to_string().contains(&long_msg));
+    }
+
+    #[test]
+    fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
+        let status = Command::new("python3")
+            .args(["-c", r####"
+import json, re, subprocess
+from pathlib import Path
+
+root = Path.cwd().resolve(strict=True)
+def resolved(path):
+    return Path(path).resolve(strict=True)
+def discover(base, pattern):
+    return {resolved(path) for path in base.glob(pattern) if path.is_file()}
+def relative(path):
+    try: return path.relative_to(root).as_posix()
+    except ValueError: return str(path)
+
+tracked = subprocess.run(
+    ["git", "ls-files", "*.rs"], cwd=root, check=True, capture_output=True, text=True
+).stdout.splitlines()
+rust_files = {resolved(root / path) for path in tracked}
+metadata = json.loads(subprocess.run(
+    ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+    cwd=root, check=True, capture_output=True, text=True
+).stdout)
+package_roots = {root}
+lint_files = set()
+for package in metadata["packages"]:
+    manifest = resolved(package["manifest_path"])
+    lint_files.add(manifest)
+    package_roots.add(manifest.parent)
+    rust_files.update(resolved(target["src_path"]) for target in package["targets"])
+for package_root in package_roots:
+    for directory in ("src", "tests", "examples", "benches"):
+        rust_files.update(discover(package_root, f"{directory}/**/*.rs"))
+    build = package_root / "build.rs"
+    if build.exists(): rust_files.add(resolved(build))
+sources = {relative(path): path.read_text(encoding="utf-8") for path in sorted(rust_files)}
+
+legacy = "SDKError::" + "ProviderError"
+marker = "SP965-T010 links 0.7 removal follow-up for " + legacy
+allow = "#[allow" + "(deprecated)]"
+expect = "#[expect" + "(deprecated)]"
+def code_count(source):
+    return sum(line.count(legacy) for line in source.splitlines()
+               if not line.lstrip().startswith("//"))
+references = {path: code_count(source) for path, source in sources.items() if code_count(source)}
+assert references == {
+    "src/sdk/client/completions.rs": 1,
+    "src/sdk/errors.rs": 8,
+}, f"legacy references changed: {references}"
+errors = sources["src/sdk/errors.rs"]
+completions = sources["src/sdk/client/completions.rs"]
+windows = []
+for source in (errors, completions):
+    lines = source.splitlines()
+    windows.extend("\n".join(lines[index:index + 12]) for index, line in enumerate(lines)
+                   if marker in line)
+assert len(windows) == 9, f"T010 marker count changed: {len(windows)}"
+assert all(window.splitlines()[1].strip() == allow for window in windows)
+anchors = (
+    "GatewayError::Unavailable(msg) =>", "ErrorCode::Unavailable =>",
+    "pub fn is_retryable(&self)", "fn sdk_variant(error: &SDKError)",
+    "fn test_sdk_error_provider_error()", "fn test_is_retryable_provider_error()",
+    "fn test_from_gateway_error_provider_unavailable()",
+    "fn test_sdk_error_empty_message()", f"_ => Err({legacy}(format!(",
+)
+for anchor in anchors:
+    assert sum(anchor in window for window in windows) == 1, f"allow site changed: {anchor}"
+assert all(code_count(window) == 1 for window in windows), (
+    "each approved enclosure must contain exactly one legacy reference"
+)
+assert sum(source.count(allow) for source in sources.values()) == 19
+assert sum(source.count(expect) for source in sources.values()) == 0
+
+baselines = {
+    "src/server/routes/mod.rs": (
+        "fn test_api_response_to_http_response_remains_compatibility_shim",),
+    "src/core/traits/provider/llm_provider/sub_traits.rs": (
+        "impl<T: LLMProvider> LLMChat for T", "impl<T: LLMProvider> LLMEmbed for T",
+        "impl<T: LLMProvider> LLMStream for T", "async fn test_llm_chat_blanket_impl",
+        "async fn test_llm_embed_blanket_impl", "async fn test_llm_stream_blanket_impl",
+        "fn _accepts_chat<T: LLMChat>", "fn _accepts_embed<T: LLMEmbed>",
+        "fn _accepts_stream<T: LLMStream>",
+    ),
+}
+for path, items in baselines.items():
+    source = sources[path]
+    for item in items:
+        offset = source.find(item)
+        assert offset >= 0 and source[:offset].rstrip().endswith(allow), (
+            f"unrelated deprecated allow moved: {path}: {item}"
+        )
+for path, source in sources.items():
+    code = re.sub(r'r###".*?"###', '""', source, flags=re.S)
+    for match in re.finditer(r"(?ms)^\s*(?:pub\s+)?use\b.*?;", code):
+        statement = match.group()
+        if "SDKError" in statement:
+            assert "ProviderError" not in statement and "*" not in statement and " as " not in statement, (
+                f"legacy import/alias/wildcard forbidden: {path}: {statement}"
+            )
+
+for package_root in package_roots:
+    for directory in (".cargo", ".github/workflows", "scripts", "checks", "xtask"):
+        path = package_root / directory
+        if path.exists():
+            lint_files.update(
+                resolved(item) for item in path.rglob("*")
+                if item.is_file() and "__pycache__" not in item.parts
+            )
+    for item in package_root.iterdir():
+        name = item.name
+        if item.is_file() and (
+            name.startswith("Makefile") or name.startswith("justfile")
+            or name == "clippy.toml" or name.startswith("rust-toolchain")
+        ): lint_files.add(resolved(item))
+for path in sorted(lint_files):
+    compact = " ".join(path.read_text(encoding="utf-8").split())
+    forbidden = ("-A" + "deprecated", "-A " + "deprecated",
+                 "--allow=" + "deprecated", "--allow " + "deprecated")
+    assert not any(value in compact for value in forbidden), f"lint downgrade: {relative(path)}"
+"####])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .status()
+            .expect("legacy deprecation guard must run");
+        assert!(status.success(), "legacy deprecation guard failed");
     }
 }
