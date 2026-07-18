@@ -348,7 +348,6 @@ ATTRIBUTE = "#[allow(deprecated)]"
 PUNCT = set("{}()[].,:;|=<>?!&+-*/%^#@~$'")
 MULTI = ("::", "=>", "->", "..=", "...", "..", "&&", "||", "==", "!=", "<=", ">=",
          "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>")
-
 def rust_lex(text, keep_comments=False):
     tokens = []
     offset = 0
@@ -414,42 +413,43 @@ def rust_lex(text, keep_comments=False):
         assert text[offset] in PUNCT, f"unrecognized Rust syntax at {offset}: {text[offset:offset + 20]!r}"
         offset += 1; tokens.append((text[start:offset], start, offset))
     return tokens
-
 def values(text, keep_comments=False):
     return [value for value, _, _ in rust_lex(text, keep_comments)]
 def subsequences(haystack, needle):
     return [index for index in range(len(haystack) - len(needle) + 1)
             if haystack[index:index + len(needle)] == needle]
-
 def matching_brace(tokens, open_index):
     assert tokens[open_index][0] == "{"
     depth = 0
     for index in range(open_index, len(tokens)):
-        if tokens[index][0] == "{":
-            depth += 1
-        elif tokens[index][0] == "}":
+        value = tokens[index][0]
+        if value == "{": depth += 1
+        elif value == "}":
             depth -= 1
-            if depth == 0:
-                return index
+            if depth == 0: return index
     raise AssertionError("unclosed Rust block")
-
+def function_signatures(token_values):
+    signatures = []
+    for index, value in enumerate(token_values):
+        if value == "fn":
+            start = index - 1 if index and token_values[index - 1] == "pub" else index
+            end = token_values.index("{", start)
+            signatures.append(tuple(token_values[start:end]))
+    return sorted(signatures)
 def conversion_span(production):
     tokens = rust_lex(production)
     token_values = [value for value, _, _ in tokens]
     header = values("impl From<crate::core::providers::ProviderError> for SDKError {")
     starts = subsequences(token_values, header)
     assert len(starts) == 1, "expected exactly one ProviderError-to-SDKError conversion"
-    start = starts[0]
-    close = matching_brace(tokens, start + len(header) - 1)
+    start = starts[0]; close = matching_brace(tokens, start + len(header) - 1)
     return tokens[start][1], tokens[close][2]
-
 def normalize_conversion(block):
     marker_line = "// " + MARKER
-    marker_count = block.count(marker_line)
-    attribute_count = block.count(ATTRIBUTE)
-    if marker_count == 0 and attribute_count == 0:
+    counts = block.count(marker_line), block.count(ATTRIBUTE)
+    if counts == (0, 0):
         return block, "T023a"
-    assert marker_count == 1 and attribute_count == 1, "T023b decoration count mismatch"
+    assert counts == (1, 1), "T023b decoration count mismatch"
     decoration = re.compile(
         r"(?m)^(?P<indent>[ \t]*)" + re.escape(marker_line) + r"\r?\n"
         r"(?P=indent)" + re.escape(ATTRIBUTE) + r"\r?\n"
@@ -458,18 +458,14 @@ def normalize_conversion(block):
     matches = list(decoration.finditer(block))
     assert len(matches) == 1, "T023b decoration is not on the exact Unavailable arm"
     match = matches[0]
-    plain_arm = match.group("indent") + (
-        "ErrorCode::Unavailable => SDKError::ProviderError(message),"
-    )
+    plain_arm = match.group("indent") + "ErrorCode::Unavailable => SDKError::ProviderError(message),"
     return block[:match.start()] + plain_arm + block[match.end():], "T023b"
-
 EXPECTED = """
 impl From<crate::core::providers::ProviderError> for SDKError {
     fn from(error: crate::core::providers::ProviderError) -> Self {
         let redacted = error.redacted();
         let code = redacted.canonical_code();
         let message = redacted.to_string();
-
         match code {
             ErrorCode::Authentication | ErrorCode::Authorization => SDKError::AuthError(message),
             ErrorCode::RateLimited | ErrorCode::QuotaExceeded => SDKError::RateLimitError(message),
@@ -485,45 +481,44 @@ impl From<crate::core::providers::ProviderError> for SDKError {
     }
 }
 """
-
 def verify_source(source):
     test_boundary = "\n#[cfg(test)]\nmod tests {"
-    assert source.count(test_boundary) == 1, (
-        "expected one #[cfg(test)] mod tests production/fixture boundary"
-    )
+    assert source.count(test_boundary) == 1, "expected one #[cfg(test)] mod tests boundary"
     production = source.split(test_boundary, 1)[0]
     start, end = conversion_span(production)
     normalized, phase = normalize_conversion(production[start:end])
-    assert values(normalized, True) == values(EXPECTED, True), (
-        "ProviderError conversion deviates from canonical-code-only token shape"
-    )
-
+    assert values(normalized, True) == values(EXPECTED, True), "conversion token shape changed"
     outside = production[:start] + production[end:]
     tokens = rust_lex(outside)
     token_values = [value for value, _, _ in tokens]
+    expected_functions = sorted(tuple(values(item)) for item in (
+        "fn from(error: crate::utils::error::gateway_error::GatewayError) -> Self",
+        "pub fn is_retryable(&self) -> bool", "pub fn is_auth_error(&self) -> bool",
+        "pub fn is_config_error(&self) -> bool"))
+    assert function_signatures(token_values) == expected_functions, (
+        "outside-conversion production function surface changed"
+    )
+    forbidden = {"const", "static", "async", "unsafe", "extern"} & set(token_values)
+    assert not forbidden, f"unexpected production surface: {sorted(forbidden)}"
+    bangs = [tuple(token_values[index - 1:index + 2])
+             for index, value in enumerate(token_values) if value == "!"]
+    assert bangs == [("matches", "!", "(")] * 3, "production macro surface changed"
     enum_header = values("pub enum SDKError {")
     enum_starts = subsequences(token_values, enum_header)
     assert len(enum_starts) == 1, "expected exactly one public SDKError enum"
     enum_open = enum_starts[0] + len(enum_header) - 1
     enum_close = matching_brace(tokens, enum_open)
-    declarations = [
-        index for index in range(enum_open + 1, enum_close)
-        if token_values[index] == "ProviderError"
-    ]
+    declarations = [i for i in range(enum_open + 1, enum_close) if token_values[i] == "ProviderError"]
     assert len(declarations) == 1, "expected one SDKError::ProviderError enum variant declaration"
     declaration = declarations[0]
     assert token_values[declaration:declaration + 5] == [
-        "ProviderError", "(", "String", ")", ","
-    ], "legacy enum variant shape changed"
-
+        "ProviderError", "(", "String", ")", ","], "legacy enum variant shape changed"
     for index, value in enumerate(token_values):
-        if value != "ProviderError":
-            continue
+        if value != "ProviderError": continue
         assert index + 1 >= len(token_values) or token_values[index + 1] != "::", (
             "ProviderError::Variant classifier outside conversion"
         )
-        if index == declaration:
-            continue
+        if index == declaration: continue
         assert index >= 2 and token_values[index - 2:index] == ["SDKError", "::"], (
             "bare/core ProviderError type/helper/classifier outside conversion"
         )
@@ -540,10 +535,13 @@ attribute/comment，以及换行形式的 `match\n redacted.to_string()`、第�
 `ProviderError::Variant` arm、额外 assignment/call 或 variant classifier 都失败；纯格式换行/缩进仍可通过。
 
 同一命令还要求唯一 `#[cfg(test)] mod tests` 边界，并只把该边界前缀视为 production；conversion 外的
-production tokens 中，bare/core `ProviderError` 只能是唯一 `SDKError` enum variant 声明，其他 occurrence
-必须精确为 `SDKError::ProviderError` compatibility reference。任何 `ProviderError::Variant`、core
-`ProviderError` type/import/helper 或 string/parallel classifier 均 fail closed，而 tests 内的 exhaustive
-fixture 不产生误报。该命令不增加任何 production/test changed line。若实现后来使 D1E-a2a 超过 500 changed
+`fn` item signature multiset 必须恰为 Gateway `From::from` 与
+`SDKError::{is_retryable,is_auth_error,is_config_error}`，全部 `!` token 必须恰为三个 `matches!(`，且
+`const/static/async/unsafe/extern` 为零，因此任何新增 helper、static/const 或 macro classifier surface 都失败。
+此外 bare/core `ProviderError` 只能是唯一 `SDKError` enum variant 声明，其他 occurrence 必须精确为
+`SDKError::ProviderError` compatibility reference；任何 `ProviderError::Variant`、core type/import/helper 或
+string/parallel classifier 均 fail closed，而 tests 内 fixture 不产生误报。该命令不增加任何 production/test
+changed line。若实现后来使 D1E-a2a 超过 500 changed
 lines，必须在不删除/压缩安全 fixture 的前提下先减少实现 diff，禁止把验证命令伪装成 source 文件或放宽预算。
 
 2026-07-18 在原 D1E-a2 实现 worktree 上重新验证发现：给 legacy
