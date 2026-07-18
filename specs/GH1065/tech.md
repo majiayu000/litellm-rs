@@ -55,16 +55,17 @@ budget subsystem 虽已 wired，也没有证据证明 `BudgetAlertManager` webho
    boundary；每个实际新连接都重新经过 policy DNS resolver。连接池复用不允许通过
    替换 client 或 generic-client fallback 绕过策略。
 5. redirect 全部禁用。3xx 按 sender 的非成功响应处理，绝不自动请求 `Location`。
-6. 策略错误必须保留可分类原因并映射到既有 sender error/失败统计；日志不得泄露
-   webhook secret、带 userinfo URL 或敏感 query。
+6. 策略错误与任意非 2xx（包括 3xx）必须保留可分类原因并映射到既有 sender
+   error/失败统计；日志不得泄露 webhook secret、URL userinfo 或 query，且必须有
+   capture/fixture 证明，不能只用 `rg` 代替运行时脱敏测试。
 
 ## 串行 Tranche Plan
 | Tranche | Sender / 文件预算 | Done when |
 |----|----|----|
 | SP1065-T001 | 通用 `core/webhooks`；≤6 非文档文件 / ≤500 changed lines | 注册期规范 URL 校验；manager 只持有 public-only/no-redirect policy client；队列重试、签名、统计保持；删除构造 fallback |
 | SP1065-T002 | `core/budget/alerts.rs`；≤4 非文档文件 / ≤400 changed lines | `add_webhook` admission 可报告错误；预算 webhook 重试全走 policy client；payload/header/timeout 语义保持；删除 fallback |
-| SP1065-T003 | monitoring `SlackChannel`；≤4 非文档文件 / ≤350 changed lines | 构造/admission 可报告错误；send 只走 policy client；Slack payload 语义保持 |
-| SP1065-T004 | observability `LogAggregator` webhook；≤4 非文档文件 / ≤350 changed lines | destination admission 可报告错误；flush webhook 只走 policy client；entries/header 语义保持 |
+| SP1065-T003 | monitoring `SlackChannel`；≤4 非文档文件 / ≤350 changed lines | 构造/admission 可报告错误；send 只走 policy client；Slack payload 与当前 120 秒 request timeout 语义保持 |
+| SP1065-T004 | observability `LogAggregator` webhook；≤4 非文档文件 / ≤350 changed lines | destination admission 可报告错误；flush webhook 只走 policy client；任意非 2xx（包括 3xx）进入 error path；entries/header 与当前 120 秒 request timeout 语义保持 |
 
 T001 合并并同步 main 后才开始 T002，依次类推。每个 tranche 独立 `Refs #1065`；
 只有 T004 在前序全部落地后可使用 closing keyword。
@@ -78,7 +79,9 @@ T001 合并并同步 main 后才开始 T002，依次类推。每个 tranche 独�
   不得用“记录 warning 后仍保存”、丢弃配置或 generic fallback 保持表面兼容。
 - timeout 必须在 policy client 构造阶段绑定；同一 manager 中每目标 timeout 不一致时，
   可按 `(public_only, timeout, no_redirect)` 使用既有 cache，但不可降级成 request-level
-  generic client。
+  generic client。Slack 与 LogAggregator 当前继承 `default_outbound_client` 的 120 秒
+  request timeout，T003/T004 必须在 policy client 上显式保留并用回归测试锁定 120 秒，
+  不得误改为 `ProviderHttpClient` 常见的 30 秒默认。
 - tranche 只改该 sender 与必要共享测试设施；不得顺带接线 runtime、改事件 schema、
   新增依赖或扩展到非 webhook endpoint。
 
@@ -87,6 +90,9 @@ T001 合并并同步 main 后才开始 T002，依次类推。每个 tranche 独�
 每个 admission surface 使用共享 table（或同一 SSOT 的等价 table）覆盖：
 - `""`、空白、malformed、`file://`、`ftp://`；
 - `http://127.0.0.1`、`http://10.0.0.1`、`http://169.254.169.254`；
+- `http://localhost`、`http://foo.localhost`、`http://internal`、
+  `http://foo.internal`、`http://local`、`http://foo.local`、
+  `http://metadata`、`http://metadata.google.internal`、`http://metadata.goog`；
 - `http://[::1]`、IPv6 ULA、IPv6 link-local；
 - IPv4-mapped IPv6 metadata、NAT64 metadata/reserved 表示；
 - 合法 `https://example.com/hook` 正例。
@@ -106,21 +112,24 @@ guard 已支持的 mapped/NAT64 metadata 表示。
 
 ### redirect 与 retry/new connection
 - 公网 source fixture 返回 302，`Location` 指向 tripwire private listener；断言 3xx
-  不被跟随、target listener 未 accept。
+  不被跟随、target listener 未 accept；LogAggregator fixture 还必须断言 source 的
+  3xx 使 flush 返回/记录非成功 error，不能把“不跟随”误当作成功。
 - 对有应用层重试的通用/budget sender，sequence resolver 在后续 attempt 或强制
   `Connection: close` 后返回受限地址；断言后续新连接仍拒绝、listener 未 accept，
   且不会换用 generic client。
 - 合法公网直连 fixture 断言 payload、headers、签名、timeout、状态/统计不回归。
+- admission/error/log capture fixture 使用带 userinfo 与敏感 query 的 URL，断言原始
+  userinfo/query secret 不出现在返回错误、Debug/Display 或捕获日志中。
 
 ## Product-to-Test Mapping
 | 需求 | 验证 |
 |----|----|
-| B-001 | 四个 admission surface 的完整 URL fixture |
+| B-001 | 四个 admission surface 的完整 URL fixture，包含 IP literal 与 hostname-only 保留名 |
 | B-002 | 每 tranche 的 sequence-resolver rebind + listener-not-accepted |
 | B-003 | no-proxy 构造证据；redirect target listener；retry/forced-new-connection rebind |
-| B-004 | client 构造/策略错误测试 + 既有失败状态/统计；无 fallback `rg` |
+| B-004 | client 构造/策略错误与非 2xx 测试 + 既有失败状态/统计；LogAggregator 3xx error 断言；URL userinfo/query 日志脱敏 capture；无 fallback `rg` |
 | B-005 | `rg` 证明只复用 policy client/guard、无 sender 私有 IP 分类、依赖不变 |
-| B-006 | 四 tranche 合并证据 + 合法直连兼容回归测试 |
+| B-006 | 四 tranche 合并证据 + 合法直连兼容回归测试；T003/T004 固定 120 秒 timeout |
 
 ## Verification
 每个 tranche 至少执行：

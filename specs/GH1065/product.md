@@ -36,9 +36,9 @@ public-only 目标策略绑定到每次实际连接：
 | B-001 | 四条可构造 sender 的 URL admission 仅接受规范的 `http` / `https` URL；空值、非法 URL、非 HTTP(S)、私网/保留地址字面量 fail-closed |
 | B-002 | 四条 sender 的每次实际新连接都由既有 connection-time DNS/IP policy 执行 **public-only** 校验，关闭 DNS rebinding / TOCTOU；禁止用 pre-flight-only 校验替代 |
 | B-003 | webhook client 必须禁用环境/系统代理；重定向必须禁用；应用层重试的每次发送与底层新连接都不得脱离同一策略绑定 client |
-| B-004 | 解析失败、策略拒绝、redirect 拒绝或 client 构造失败均显式返回/记录 error，并进入该 sender 既有失败语义；禁止 generic outbound client fallback 或静默降级 |
+| B-004 | 解析失败、策略拒绝、任意非 2xx（包括 redirect 3xx）或 client 构造失败均显式返回/记录 error，并进入该 sender 既有失败语义；错误与日志不得泄露 webhook URL 的 userinfo 或 query；禁止 generic outbound client fallback 或静默降级 |
 | B-005 | 复用 `ProviderHttpClient`（或实现时已有、能力完全相同的 connection-time policy-bound client）与 `ssrf_guard`；不复制 IP 分类、不新增依赖 |
-| B-006 | 通过显式串行 tranche 覆盖全部四条 sender；每个 tranche 保留原 sender 的 payload、header、签名、超时和成功状态语义，并记录必要的兼容性变化 |
+| B-006 | 通过显式串行 tranche 覆盖全部四条 sender；每个 tranche 保留原 sender 的 payload、header、签名、超时和成功状态语义，并记录必要的兼容性变化；Slack 与 LogAggregator 固定保留当前 120 秒 request timeout |
 
 ## 已决策安全默认
 - **HD-1 resolved：**首轮全部 public-only，不提供内网 opt-in / allowlist。
@@ -52,10 +52,13 @@ public-only 目标策略绑定到每次实际连接：
 - 可注入 sequence resolver 证明“预校验公网、连接期改绑私网”被拒；tripwire
   listener 明确证明目标 socket **未 accept**。
 - 公网源返回私网/保留地址重定向时不跟随，目标 listener 未 accept；普通
-  webhook 也不依赖 redirect 成功。
+  webhook 也不依赖 redirect 成功；LogAggregator 等 sender 必须把 source 的
+  3xx 本身计为非成功并进入 error path。
 - sender 自带重试时，每次 attempt 仍经同一 policy-bound client；强制新连接后
   的 rebind 仍被拒且 listener 未 accept。
 - 合法公网直连保持 payload、headers、签名、超时与成功/失败统计语义。
+- Slack 与 LogAggregator 的合法直连回归明确断言 120 秒 request timeout；URL
+  admission/error/log capture 断言 userinfo 与 query secret 均不可见。
 - `rg` 证明四条路径不再使用裸/generic client 发 webhook，也没有自写 IP 分类。
 
 ## Non-Goals
