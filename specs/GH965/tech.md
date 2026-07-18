@@ -334,7 +334,33 @@ writable scope **恰为** `src/core/providers/unified_provider_methods.rs` 与 `
 保留原 variant/category 的 `redacted()` copy、SDK canonical mapping 及其 negative/category fixtures，
 ≤500 changed lines。为让该 tranche 在不引入 lint 例外时独立通过 strict Clippy，D1E-a2a **不得**给 legacy
 `SDKError::ProviderError(String)` 增加真实 `#[deprecated]` 属性，也不得增加任何 `allow/expect(deprecated)`；
-0.6 deprecation metadata 延后到紧随其后的 D1E-a2b。
+0.6 deprecation metadata 延后到紧随其后的 D1E-a2b。D1E-a2a 的 classifier guard 是以下**确定性验证命令**，
+不是待加入 `src/` 的测试或 production diff：
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+
+source = Path("src/sdk/errors.rs").read_text(encoding="utf-8")
+start = source.index("impl From<crate::core::providers::ProviderError> for SDKError {")
+end = source.index("\n/// SDK result type", start)
+block = source[start:end]
+redacted = block.index("error.redacted()")
+canonical = block.index("canonical_code()", redacted)
+assert redacted < canonical
+assert block.count("canonical_code()") == 1
+assert block.count("let code") == 1
+assert "let code = redacted.canonical_code();" in block
+assert block.count("match ") == 1 and "match code {" in block
+assert "ProviderError::" not in block
+assert "if " not in block
+PY
+```
+
+该命令证明 conversion 先脱敏、只以单一 `canonical_code()` 分支选择既有 SDK variant，且不存在
+`ProviderError` exhaustive match 或 `if`/第二 `match` 字符串 classifier；它不增加任何 production/test
+changed line。若实现后来使 D1E-a2a 超过 500 changed lines，必须在不删除/压缩安全 fixture 的前提下先减少
+实现 diff，禁止把验证命令伪装成 source 文件或放宽预算。
 
 2026-07-18 在原 D1E-a2 实现 worktree 上重新验证发现：给 legacy
 `SDKError::ProviderError(String)` 加真实 `#[deprecated(since = "0.6.0", ...)]` 后，strict Clippy 会把同一
@@ -370,13 +396,25 @@ provider selection、canonical mapping、redaction 或 sender 行为。0.6 legac
 禁止 module/crate-wide `allow(deprecated)`、`expect(deprecated)`、command-line lint 降级、未列名的新
 `SDKError::ProviderError` callsite，或把多个非兼容路径包进同一个 allow。D1E-a2b 必须在
 `src/sdk/errors.rs` 的 test scope 增加
-`legacy_provider_error_deprecation_allowlist_does_not_grow` source guard。guard 必须从
-`CARGO_MANIFEST_DIR/src` 开始递归、排序检查**全部** `src/**/*.rs`，而非只读两个已知 SDK 文件；对 legacy
-variant 的 qualified reference、显式 variant import/alias 与 wildcard variant import 做 exact allowlist，
-只接受上列 9 个 path + enclosing function/arm/test 站点，任何新增 production/test callsite、改名绕过或数量
-增长都 fail closed。它还必须逐一验证紧邻的 T010 marker 与局部 allow，拒绝
-`#![allow(deprecated)]`、`#![expect(deprecated)]`、module-wide `#[allow/expect(deprecated)]`、任何未列名
-`#[allow/expect(deprecated)]`，并扫描仓库 lint 命令/config surfaces，拒绝 `-A deprecated`、
+`legacy_provider_error_deprecation_allowlist_does_not_grow` source guard。guard 必须从以下来源取并集、
+canonicalize、去重、排序且读取失败时 fail closed，覆盖**每一个 Rust target/source**：
+
+- `git ls-files '*.rs'` 与 filesystem discovery 下 `src/**/*.rs`、`tests/**/*.rs`、`examples/**/*.rs`、
+  `benches/**/*.rs` 以及 workspace/package root 的 `build.rs`；
+- `cargo metadata --no-deps --format-version 1` 返回的每个 package target `src_path`，以及每个 package root
+  的上述 Rust 目录/`build.rs`；metadata 声明在常规目录之外的 target 也必须扫描。
+
+guard 对该全集中的 legacy variant qualified reference、显式 variant import/alias 与 wildcard variant import
+做 exact allowlist，只接受上列 9 个 path + enclosing function/arm/test 站点；任何新增 production/test/example/
+bench/build-script/Cargo-target callsite、改名绕过或数量增长都 fail closed。仓库已存在、与本 legacy variant
+无关的 broad `allow/expect(deprecated)` 可仅按 path + anchor +既有计数基线保留，但新增/移动/扩大的 broad
+attribute 必须失败；即使某文件命中该 unrelated baseline，只要新增 `SDKError::ProviderError` reference/import/
+alias/wildcard，仍必须失败，除非它就是上述 9 个局部 T010 站点。T023b 自身禁止新增 crate/module-wide
+allow/expect，所有 9 个站点仍须逐一验证紧邻的 T010 marker 与局部 allow。
+
+guard 还必须扫描相关 lint/config/command surfaces：workspace/package `Cargo.toml`、`.cargo/config*`、
+`.github/workflows/**`、`Makefile*`、`justfile*`、`scripts/**`、`checks/**`、`xtask/**`、`clippy.toml`、
+`rust-toolchain*` 及 Cargo metadata 暴露的 manifest/target config 路径，拒绝 `-A deprecated`、
 `--allow deprecated` 或等价 `RUSTFLAGS`/command-line lint 降级。strict verification 必须使用原样
 `cargo clippy --all-targets --all-features --locked -- -D warnings`；guard 自身不得成为 allowlisted
 deprecated use。所有这些例外随 `SP965-T010` 的 0.7.0 removal 一并删除，不形成长期 lint policy。
@@ -462,7 +500,7 @@ map/config scan/local routing counters/client construction。
 | D1 runtime contract | `src/core/router/mod.rs`, `unified.rs`, `gateway_config.rs`, `deployment.rs`, `selection.rs`, `execute_impl.rs`, `execution.rs`, `error.rs`, `src/core/router/tests/router_tests.rs` | 9 files / ≤500；`Refs #965`。 |
 | D1E-a1 canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/providers/failure.rs`, `src/core/providers/mod.rs`, `src/utils/error/canonical.rs`, `src/core/router/retry_policy.rs` | 6 files / ≤500；删除 `ProviderFailureKind` 及 re-export，在唯一 exhaustive match 中保留 typed retry facts，并锁定 canonical/HTTP/retry table；`Refs #965`。 |
 | D1E-a2a provider redaction + SDK mapping | `src/core/providers/unified_provider_methods.rs`, `src/sdk/errors.rs` | 2 files / ≤500；增加保留原 variant 的 `redacted()` copy，0.6 SDK 只按 canonical code 映射到既有 variant；不得给 legacy string variant 加真实 deprecation 属性或 lint allow；`Refs #965`。 |
-| D1E-a2b legacy SDK error deprecation | `src/sdk/errors.rs`, `src/sdk/client/completions.rs` | 2 files / ≤500；依赖 D1E-a2a merged；只增加 true deprecation、9 个局部 allow + T010 marker 及递归扫描全部 `src/**/*.rs` 和 lint command/config surfaces 的 exact-allowlist source guard；无运行行为改动；`Refs #965`。 |
+| D1E-a2b legacy SDK error deprecation | `src/sdk/errors.rs`, `src/sdk/client/completions.rs` | 2 files / ≤500；依赖 D1E-a2a merged；只增加 true deprecation、9 个局部 allow + T010 marker 及扫描所有 Rust target/source 和 lint command/config surfaces 的 exact-allowlist source guard；无运行行为改动；`Refs #965`。 |
 | D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/utils/error/gateway_error/conversions.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 4 files / ≤500；Gateway wrapper 与真实响应出口都只携带 `redacted()` copy；`Refs #965`。 |
 | D1E-c legacy retry helper deprecation | `src/core/providers/contextual_error.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/types/errors/traits.rs`, `src/core/router/execution.rs`, `src/utils/error/utils/retry.rs`, `src/sdk/errors.rs`, `src/server/routes/ai/batches.rs`, `src/server/routes/ai/fine_tuning.rs` | 8 files / ≤500；六个 provider-specific helper 保留 0.6 行为、deprecated、production 零消费；canonical coarse helpers 明确 grandfather；`Refs #965`。 |
 | D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
@@ -497,10 +535,14 @@ production callers 分散在八个真实文件（canonical coarse helpers 明确
 原 D1E-a 的 canonical/HTTP/retry table 与 SDK mapping/redaction implementation 已达到 598 changed lines，
 且此时 SDK negative fixture 尚未加入；压缩断言或删测试才能回到 500，明确违反 task guard。
 因此 D1E-a 先严格串行拆为 a1（typed facts/retry/HTTP）与 a2a（redaction/SDK canonical mapping），共享的
-`unified_provider_methods.rs` 只允许前一 tranche 合并后由后一 tranche 接续修改。2026-07-18 的 a2a 实现
-测量为 493 changed lines；若再加入 true deprecation、`completions.rs` 兼容 lint 与递归 source guard，只能
-突破 500 或压缩安全 fixture。独立 P1 review 因此要求再拆 a2b（deprecation/compatibility guard only），严格
-依赖 a2a merged，且不再写 `unified_provider_methods.rs`。同理，credential 修复
+`unified_provider_methods.rs` 只允许前一 tranche 合并后由后一 tranche 接续修改。2026-07-18 对实现 draft 的
+fresh measurement 是 **491 changed lines = 439 additions + 52 deletions**；439 additions 已包含 legacy
+`#[deprecated]` attribute 的 4 行。D1E-a2a 精确移除这 4 行后为
+**487 changed lines = 435 additions + 52 deletions**。上文 deterministic classifier command 当时尚未存在于
+draft，按 contract 只在 verification 中执行且占 0 production/test diff line。若实现偏离该测量或新增行使
+a2a 超过 500，必须先减少实现且不得删除/压缩安全 fixture；不能把 guard 预算记为 0 后继续超限。
+true deprecation、`completions.rs` 兼容 lint 与全 Rust-target source guard 独立进入 a2b；独立 P1 review
+因此要求该 tranche 严格依赖 a2a merged，且不再写 `unified_provider_methods.rs`。同理，credential 修复
 独立成 D3C，避免 D3 触及 10 文件上限。D3C 为满足 length-independent match 必须同时拥有 digest helper 与
 canonical deployment/snapshot metadata publication；只改 `hmac.rs`/tests 会在 request candidate loop 内重复
 hash 变长 stored secret，不能满足本 contract。
@@ -514,13 +556,13 @@ hash 变长 stored secret，不能满足本 contract。
 | B-003 | D2-D7 adapter cleanup | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::single_sender`；production source guard。 |
 | B-004 | D1/D2/D4 config normalization | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::invalid_and_empty_config`。 |
 | B-005 | canonical alias/surface selection | `cargo test --all-features --locked support_matrix` 加 conformance `alias_and_unsupported` fixture。 |
-| B-006 | D1E-a1 删除 `ProviderFailureKind` 并保留 typed facts；D1E-a2a 收敛 provider redaction/SDK existing-category mapping；D1E-a2b 增加 legacy SDK error deprecation 与兼容 guard；D1E-b 收敛 Gateway wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output；`legacy_provider_error_deprecation_allowlist_does_not_grow` 递归扫描全部 `src/**/*.rs`，锁定 D1E-a2b 的局部兼容站点并拒绝 lint downgrade 或 allow/callsite 增长。 |
+| B-006 | D1E-a1 删除 `ProviderFailureKind` 并保留 typed facts；D1E-a2a 收敛 provider redaction/SDK existing-category mapping；D1E-a2b 增加 legacy SDK error deprecation 与兼容 guard；D1E-b 收敛 Gateway wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output；tech §5 deterministic command 证明 a2a canonical-code-only conversion；`legacy_provider_error_deprecation_allowlist_does_not_grow` 扫描所有 Rust target/source，锁定 D1E-a2b 的局部兼容站点并拒绝 lint downgrade 或 allow/callsite 增长。 |
 | B-007 | deployment lease/state + SDK stats view | conformance `exactly_once_state` fixture比较 attempt trace 与 counter delta。 |
 | B-008 | runtime retry/fallback | conformance `retry_and_fallback` fixture证明 adapter request count 与 runtime attempts 相等。 |
 | B-009 | immutable generation replacement | conformance `snapshot_replacement` 并发双 listener/key fixture。 |
 | B-010 | runtime streaming lease | conformance `stream_failure_cancel_and_success` fixture；`cargo test --all-features --locked streaming`。 |
 | B-011 | D2-D6 facades/deprecations | compile fixtures + `cargo test --all-features --locked --doc`；release-note/API diff 人工复核。 |
-| B-012 | D1E-a2a SDK mapping classifier guard、D1E-a2b recursive deprecation allowlist guard；D7i final evidence architecture | D1E-a2a 拒绝 SDK exhaustive/string classifier，D1E-a2b 对全部 `src/**/*.rs` 的 legacy reference/allow exact-allowlist fail closed；最终全部 `router_runtime_conformance` tests + source guard red/green fixture 扫描所有 production AI routes，`config.gateway.providers` selection scan、`RouteHttpClient`、`OpenAIFineTuningProvider` 与 adapter-owned sender 零命中；仅 matrix tests 不计完成。 |
+| B-012 | D1E-a2a SDK mapping classifier command、D1E-a2b all-target deprecation allowlist guard；D7i final evidence architecture | D1E-a2a 的 tech §5 command 拒绝 SDK exhaustive/string classifier且不占 implementation diff；D1E-a2b 对 `src`、`tests`、`examples`、`benches`、`build.rs` 与 Cargo metadata target `src_path` 的 legacy reference/import/alias/wildcard exact-allowlist fail closed；最终全部 `router_runtime_conformance` tests + source guard red/green fixture 扫描所有 production AI routes，`config.gateway.providers` selection scan、`RouteHttpClient`、`OpenAIFineTuningProvider` 与 adapter-owned sender 零命中；仅 matrix tests 不计完成。 |
 
 ## 数据流
 
