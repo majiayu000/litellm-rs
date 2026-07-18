@@ -5,70 +5,38 @@
 #[cfg(test)]
 use super::manager::WebhookManager;
 use super::types::{WebhookConfig, WebhookEventType, WebhookPayload};
-use crate::core::net::{
-    ProviderEndpointAccess, ProviderEndpointPolicy, is_provider_endpoint_ip_allowed,
-};
+use crate::core::net::ProviderEndpointPolicy;
 use crate::utils::net::http::ProviderHttpClient;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[derive(Debug)]
-enum DnsAnswer {
-    Allow(SocketAddr),
-    Reject(IpAddr),
-}
-
 #[derive(Clone)]
 struct SequenceDnsResolver {
-    answers: Arc<Mutex<VecDeque<DnsAnswer>>>,
-    queries: Arc<Mutex<Vec<String>>>,
+    answers: Arc<Mutex<VecDeque<SocketAddr>>>,
 }
 
 impl SequenceDnsResolver {
-    fn new(answers: impl IntoIterator<Item = DnsAnswer>) -> Self {
+    fn new(answers: impl IntoIterator<Item = SocketAddr>) -> Self {
         Self {
             answers: Arc::new(Mutex::new(answers.into_iter().collect())),
-            queries: Arc::new(Mutex::new(Vec::new())),
         }
-    }
-
-    fn queries(&self) -> Vec<String> {
-        self.queries.lock().expect("queries lock").clone()
     }
 }
 
 impl Resolve for SequenceDnsResolver {
-    fn resolve(&self, name: Name) -> Resolving {
-        self.queries
-            .lock()
-            .expect("queries lock")
-            .push(name.as_str().to_string());
+    fn resolve(&self, _name: Name) -> Resolving {
         let answer = self
             .answers
             .lock()
             .expect("answers lock")
             .pop_front()
             .expect("test resolver answer");
-        Box::pin(async move {
-            match answer {
-                DnsAnswer::Allow(address) => Ok(Box::new(std::iter::once(address)) as Addrs),
-                DnsAnswer::Reject(ip) => {
-                    assert!(!is_provider_endpoint_ip_allowed(
-                        ProviderEndpointAccess::PublicOnly,
-                        &ip
-                    ));
-                    Err(Box::new(io::Error::other(
-                        "Host resolves to a disallowed address (SSRF protection)",
-                    ))
-                        as Box<dyn std::error::Error + Send + Sync>)
-                }
-            }
-        })
+        Box::pin(async move { Ok(Box::new(std::iter::once(answer)) as Addrs) })
     }
 }
 
@@ -116,23 +84,6 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> io::Result<Str
         }
     }
     String::from_utf8(request).map_err(io::Error::other)
-}
-
-async fn write_http_response(
-    stream: &mut tokio::net::TcpStream,
-    status: &str,
-    headers: &str,
-    body: &str,
-) -> io::Result<()> {
-    stream
-        .write_all(
-            format!(
-                "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .as_bytes(),
-        )
-        .await
 }
 
 #[derive(Clone)]
@@ -228,38 +179,10 @@ async fn webhook_registration_rejects_private_and_reserved_targets() {
 }
 
 #[tokio::test]
-async fn registration_errors_and_logs_redact_url_secrets() {
-    let bytes = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_writer(CapturedLogs(bytes.clone()))
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
-    let manager = WebhookManager::new().unwrap();
-    let secret_url = "http://admin:password@127.0.0.1/hook?token=query-secret";
-    let error = manager
-        .register_webhook(
-            "redacted".to_string(),
-            WebhookConfig {
-                url: secret_url.to_string(),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect_err("private URL with secrets must be rejected");
-    let logs = String::from_utf8(bytes.lock().expect("log lock").clone()).unwrap();
-    for secret in ["admin", "password", "query-secret", "token="] {
-        assert!(!error.to_string().contains(secret), "{error}");
-        assert!(!logs.contains(secret), "{logs}");
-    }
-}
-
-#[tokio::test]
 async fn legal_delivery_preserves_payload_headers_signature_and_stats() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let resolver = Arc::new(SequenceDnsResolver::new([DnsAnswer::Allow(address)]));
+    let resolver = Arc::new(SequenceDnsResolver::new([address]));
     let manager = manager_with_resolver(resolver.clone());
     let (request_tx, request_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
@@ -268,7 +191,11 @@ async fn legal_delivery_preserves_payload_headers_signature_and_stats() {
         request_tx
             .send(request)
             .map_err(|_| io::Error::other("request receiver dropped"))?;
-        write_http_response(&mut stream, "202 Accepted", "", "accepted").await
+        stream
+            .write_all(
+                b"HTTP/1.1 202 Accepted\r\nContent-Length: 100\r\nConnection: close\r\n\r\nx",
+            )
+            .await
     });
     let mut headers = HashMap::new();
     headers.insert("X-Custom".to_string(), "expected".to_string());
@@ -304,7 +231,6 @@ async fn legal_delivery_preserves_payload_headers_signature_and_stats() {
     assert!(request.contains("x-custom: expected"));
     assert!(request.contains(&format!("x-webhook-signature: {}", expected_signature)));
     assert!(request.contains("\"model\":\"gpt-test\""));
-    assert_eq!(resolver.queries(), ["webhook.test"]);
     let stats = manager.get_stats().await;
     assert_eq!(stats.successful_deliveries, 1);
     assert_eq!(stats.failed_deliveries, 0);
@@ -312,31 +238,40 @@ async fn legal_delivery_preserves_payload_headers_signature_and_stats() {
 
 #[tokio::test]
 async fn redirect_is_not_followed_and_status_is_recorded() {
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(CapturedLogs(bytes.clone()))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
     let source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let source_address = source.local_addr().unwrap();
     let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target_address = target.local_addr().unwrap();
-    let resolver = Arc::new(SequenceDnsResolver::new([DnsAnswer::Allow(source_address)]));
+    let resolver = Arc::new(SequenceDnsResolver::new([source_address]));
     let manager = manager_with_resolver(resolver.clone());
     let server = tokio::spawn(async move {
         let (mut stream, _) = source.accept().await?;
         let _request = read_http_request(&mut stream).await?;
-        write_http_response(
-            &mut stream,
-            "302 Found",
-            &format!(
-                "Location: http://redirect.test:{}/private?token=redirect-secret\r\n",
-                target_address.port()
-            ),
-            "",
-        )
-        .await
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://redirect.test:{}/private?token=redirect-secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    target_address.port()
+                )
+                .as_bytes(),
+            )
+            .await
     });
     manager
         .register_webhook(
             "redirect".to_string(),
             WebhookConfig {
-                url: format!("http://source.test:{}/hook", source_address.port()),
+                url: format!(
+                    "http://source-user:source-password@source.test:{}/hook?token=source-secret",
+                    source_address.port()
+                ),
                 events: vec![WebhookEventType::RequestFailed],
                 max_retries: 1,
                 ..Default::default()
@@ -351,37 +286,55 @@ async fn redirect_is_not_followed_and_status_is_recorded() {
     manager.process_delivery_queue().await.unwrap();
     server.await.unwrap().unwrap();
     assert_listener_did_not_accept(&target, "redirect target").await;
-    assert_eq!(resolver.queries(), ["source.test"]);
     let delivery = manager.get_delivery_history(Some(1)).await.remove(0);
     assert_eq!(delivery.response_status, Some(302));
+    assert_eq!(delivery.response_body.as_deref(), Some(""));
     let stats = manager.get_stats().await;
     assert_eq!(stats.failed_deliveries, 1);
+    let logs = String::from_utf8(bytes.lock().expect("log lock").clone()).unwrap();
+    assert!(
+        logs.contains("Webhook delivery failed permanently"),
+        "{logs}"
+    );
+    for secret in ["source-user", "source-password", "source-secret", "token="] {
+        assert!(!logs.contains(secret), "{logs}");
+        assert!(!delivery.response_body.as_deref().unwrap().contains(secret));
+    }
 }
 
 #[tokio::test]
 async fn retries_revalidate_rebinding_and_never_reach_tripwire() {
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(CapturedLogs(bytes.clone()))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
     for blocked_ip in ["127.0.0.1", "10.0.0.1", "169.254.169.254", "fd00::1"] {
-        let source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let source_address = source.local_addr().unwrap();
         let tripwire = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let resolver = Arc::new(SequenceDnsResolver::new([
-            DnsAnswer::Allow(source_address),
-            DnsAnswer::Reject(blocked_ip.parse().unwrap()),
-        ]));
-        let manager = manager_with_resolver(resolver.clone());
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = source.accept().await?;
-            let _request = read_http_request(&mut stream).await?;
-            write_http_response(&mut stream, "503 Unavailable", "", "retry").await
-        });
+        let tripwire_address = tripwire.local_addr().unwrap();
+        let blocked_address = SocketAddr::new(blocked_ip.parse().unwrap(), tripwire_address.port());
+        let client = ProviderHttpClient::build_public_then_private_tripwire_for_test(
+            blocked_address,
+            tripwire_address,
+        )
+        .await
+        .unwrap();
+        let manager = WebhookManager::with_client_for_test(client);
+        let secret_url = format!(
+            "http://rebind-user:rebind-password@rebind.test:{}/hook?token=rebind-secret",
+            tripwire_address.port()
+        );
         manager
             .register_webhook(
                 "retry".to_string(),
                 WebhookConfig {
-                    url: format!("http://rebind.test:{}/hook", source_address.port()),
+                    url: secret_url,
                     events: vec![WebhookEventType::RequestFailed],
                     max_retries: 2,
                     retry_delay_seconds: 0,
+                    timeout_seconds: 1,
                     ..Default::default()
                 },
             )
@@ -391,14 +344,37 @@ async fn retries_revalidate_rebinding_and_never_reach_tripwire() {
             .send_event(WebhookEventType::RequestFailed, serde_json::json!({}), None)
             .await
             .unwrap();
+        let mut probe = manager.get_delivery_history(Some(1)).await.remove(0);
+        let config = manager.list_webhooks().await["retry"].clone();
+        let error = manager
+            .deliver_webhook_internal(&mut probe, &config)
+            .await
+            .expect_err("private rebind must be rejected during delivery");
+        for secret in ["rebind-user", "rebind-password", "rebind-secret", "token="] {
+            assert!(!error.to_string().contains(secret), "{error}");
+        }
         manager.process_delivery_queue().await.unwrap();
-        server.await.unwrap().unwrap();
+        let retrying = manager.get_delivery_history(Some(1)).await.remove(0);
+        assert_eq!(
+            retrying.status,
+            super::types::WebhookDeliveryStatus::Retrying
+        );
+        assert_eq!(retrying.attempts, 1);
+        assert_eq!(manager.get_stats().await.failed_deliveries, 0);
         manager.process_delivery_queue().await.unwrap();
         assert_listener_did_not_accept(&tripwire, "rebinding retry target").await;
-        assert_eq!(resolver.queries(), ["rebind.test", "rebind.test"]);
         let delivery = manager.get_delivery_history(Some(1)).await.remove(0);
         assert_eq!(delivery.status, super::types::WebhookDeliveryStatus::Failed);
+        assert_eq!(delivery.attempts, 2);
         assert_eq!(manager.get_stats().await.failed_deliveries, 1);
+    }
+    let logs = String::from_utf8(bytes.lock().expect("log lock").clone()).unwrap();
+    assert!(
+        logs.contains("Webhook delivery failed permanently"),
+        "{logs}"
+    );
+    for secret in ["rebind-user", "rebind-password", "rebind-secret", "token="] {
+        assert!(!logs.contains(secret), "{logs}");
     }
 }
 

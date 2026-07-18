@@ -246,6 +246,38 @@ impl ProviderHttpClient {
         Ok(Self { client, policy })
     }
 
+    pub(crate) async fn build_public_then_private_tripwire_for_test(
+        blocked_address: SocketAddr,
+        tripwire: SocketAddr,
+    ) -> Result<Self, ProviderHttpClientError> {
+        let policy = ProviderEndpointPolicy::public_only();
+        let mut answers = vec![vec![blocked_address]; 3];
+        answers.insert(
+            0,
+            vec![SocketAddr::from(([93, 184, 216, 34], tripwire.port()))],
+        );
+        let resolver = Arc::new(SequenceResolver::new(answers));
+        let priming_resolver = PolicyDnsResolver {
+            access: policy.access(),
+            resolver: resolver.clone(),
+        };
+        drop(
+            reqwest::dns::Resolve::resolve(
+                &priming_resolver,
+                "rebind.test".parse().expect("valid test hostname"),
+            )
+            .await
+            .expect("public priming answer must pass endpoint policy"),
+        );
+        Self::build_with_rebinding_tripwire_for_test(
+            policy,
+            Duration::from_secs(1),
+            ProviderClientMode::NoRedirect,
+            resolver,
+            tripwire,
+        )
+    }
+
     fn build_with_connector_tripwire_for_test(
         policy: ProviderEndpointPolicy,
         address: SocketAddr,

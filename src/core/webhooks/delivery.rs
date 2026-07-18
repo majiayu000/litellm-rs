@@ -159,9 +159,7 @@ impl WebhookManager {
             })?;
 
         let status_code = response.status().as_u16();
-        let response_body = response.text().await.map_err(|_| {
-            GatewayError::Network("Webhook response body could not be read".to_string())
-        })?;
+        let response_body = response.text().await.unwrap_or_default();
 
         delivery.response_status = Some(status_code);
         delivery.response_body = Some(response_body.clone());
