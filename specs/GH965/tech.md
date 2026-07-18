@@ -481,10 +481,29 @@ impl From<crate::core::providers::ProviderError> for SDKError {
     }
 }
 """
+def production_before_tests(source):
+    tokens = rust_lex(source)
+    token_values = [value for value, _, _ in tokens]
+    boundary = values("#[cfg(test)] mod tests {")
+    depth = 0
+    starts = []
+    for index, value in enumerate(token_values):
+        if depth == 0 and token_values[index:index + len(boundary)] == boundary:
+            starts.append(index)
+        if value == "{": depth += 1
+        elif value == "}":
+            depth -= 1
+            assert depth >= 0, "unbalanced Rust braces"
+    assert depth == 0, "unbalanced Rust braces"
+    assert len(starts) == 1, "expected one top-level #[cfg(test)] mod tests item"
+    start = starts[0]
+    close = matching_brace(tokens, start + len(boundary) - 1)
+    assert not source[tokens[close][2]:].strip(), (
+        "test module must be the final item; trailing comment/item forbidden"
+    )
+    return source[:tokens[start][1]]
 def verify_source(source):
-    test_boundary = "\n#[cfg(test)]\nmod tests {"
-    assert source.count(test_boundary) == 1, "expected one #[cfg(test)] mod tests boundary"
-    production = source.split(test_boundary, 1)[0]
+    production = production_before_tests(source)
     start, end = conversion_span(production)
     normalized, phase = normalize_conversion(production[start:end])
     assert values(normalized, True) == values(EXPECTED, True), "conversion token shape changed"
@@ -506,8 +525,9 @@ marker 与 `#[allow(deprecated)]`，精确剥离这两行后再要求**整个 to
 attribute/comment，以及换行形式的 `match\n redacted.to_string()`、第二个 `match`/`if`、字符串 helper、
 `ProviderError::Variant` arm、额外 assignment/call 或 variant classifier 都失败；纯格式换行/缩进仍可通过。
 
-同一命令还要求唯一 `#[cfg(test)] mod tests` 边界，并只把该边界前缀视为 production；conversion 外的
-完整 comment/literal-preserving token stream 经无歧义 JSON 编码后必须命中 phase-specific 固定 SHA-256。
+同一命令还由该 fail-closed lexer 定位唯一顶层 `#[cfg(test)] mod tests` item 的 opening brace 与 matching
+close，要求 closing brace 后只有 whitespace（尾随 comment/item 均失败），并只把该 item 前缀视为 production；
+conversion 外的完整 comment/literal-preserving token stream 经无歧义 JSON 编码后必须命中 phase-specific 固定 SHA-256。
 T023a digest 由 immutable `origin/main@2ff9bb2066adfb04d67b2e692ae9fbd9968fa9b5` 的
 `src/sdk/errors.rs` 去掉 conversion/tests 后、只加入编译所需精确
 `use crate::utils::error::ErrorCode;` 生成，禁止 outside decoration。T023b synthetic baseline 只再加入
