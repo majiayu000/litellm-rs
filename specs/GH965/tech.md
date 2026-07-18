@@ -274,7 +274,7 @@ D6 因此按如下方式收敛，且不触碰 `HD-003` 的 0.6→0.7 窗口：
 
 ### 5. Canonical error API and exhaustive mapping
 
-D1E-a1/D1E-a2/D1E-b 以 `ProviderError` 为 source，并复用现有 `src/utils/error/canonical.rs` 的 `ErrorCode` / `CanonicalError`
+D1E-a1/D1E-a2a/D1E-a2b/D1E-b 以 `ProviderError` 为 source，并复用现有 `src/utils/error/canonical.rs` 的 `ErrorCode` / `CanonicalError`
 以及 `src/core/providers/unified_provider_http_mapping.rs` 的 `ProviderHttpErrorFacts` /
 `provider_http_error_facts`；不得新增平行的 provider error class 或 HTTP facts 类型。`ErrorCode` 是公开且未标
 `non_exhaustive` 的 enum，0.6.0 **不得新增 `Cancelled` 等 variant**；cancellation 由
@@ -329,21 +329,28 @@ HTTP presentation 的 coarse compatibility fact，0.6/0.7 不删除，但不得�
 NotImplemented → `NotSupported`，Internal → `Internal`。variant selection 不得解析 redacted string。
 D1E-a1 结束时，`src/sdk/errors.rs` 中现有、未修改的 exhaustive SDK category match 仅作为严格串行过渡：
 a1 source guard 只禁止 provider/retry production scope 中新增或第二个 retry-fact classifier，不得扩大该
-SDK match；D1E-a2 必须用 `canonical_code()` mapping 删除该 exhaustive/string classifier。
+SDK match；D1E-a2a 必须用 `canonical_code()` mapping 删除该 exhaustive/string classifier。D1E-a2a 的
+writable scope **恰为** `src/core/providers/unified_provider_methods.rs` 与 `src/sdk/errors.rs`，只实现
+保留原 variant/category 的 `redacted()` copy、SDK canonical mapping 及其 negative/category fixtures，
+≤500 changed lines。为让该 tranche 在不引入 lint 例外时独立通过 strict Clippy，D1E-a2a **不得**给 legacy
+`SDKError::ProviderError(String)` 增加真实 `#[deprecated]` 属性，也不得增加任何 `allow/expect(deprecated)`；
+0.6 deprecation metadata 延后到紧随其后的 D1E-a2b。
 
-2026-07-18 在 D1E-a2 实现 worktree 上重新验证发现：给 legacy
+2026-07-18 在原 D1E-a2 实现 worktree 上重新验证发现：给 legacy
 `SDKError::ProviderError(String)` 加真实 `#[deprecated(since = "0.6.0", ...)]` 后，strict Clippy 会把同一
 0.6 compatibility surface 的既有 construction/match 升级为 `-D deprecated` 错误。除
 `src/sdk/errors.rs` 内部的兼容映射、match 与测试外，`src/sdk/client/completions.rs` 的
 `LLMClient::execute_chat_request` 还在 unsupported provider-type fallback 中构造该 variant；它不在原两文件
-scope 内，因此原 D1E-a2 同时要求 true deprecation、strict Clippy 与两文件 scope 是不可满足的。
+scope 内，因此把 redaction/mapping、true deprecation、全仓 guard 与兼容 allow 挤进同一个 ≤500-line tranche
+不可满足。
 
-D1E-a2 将 writable scope **精确扩为三个 production 文件**：
-`src/core/providers/unified_provider_methods.rs`、`src/sdk/errors.rs`、
-`src/sdk/client/completions.rs`。第三个文件只允许在现有 fallback arm 上增加局部 lint 属性和
-`SP965-T010` removal 注释；不得改 control flow、错误文本、provider selection 或 sender 行为。0.6 legacy
-variant 的公开签名、`Display`、retryability 与所有既有构造/匹配行为保持不变；本 tranche 仍只实施既有
-redaction/canonical mapping contract，不借 lint 修复重分类其他 adapter。
+D1E-a2b 因此成为独立、严格串行的 deprecation-only tranche：只可从已合并 D1E-a2a 的
+`origin/main` 开始，writable scope **恰为** `src/sdk/errors.rs` 与
+`src/sdk/client/completions.rs`，保持 ≤500 changed lines。它只给 legacy variant 增加真实
+`#[deprecated(since = "0.6.0", ...)]`、下列局部兼容 lint 标记和 source guard；`completions.rs` 只允许在
+现有 fallback arm 上增加局部 lint 属性与 `SP965-T010` removal 注释。不得改 control flow、错误文本、
+provider selection、canonical mapping、redaction 或 sender 行为。0.6 legacy variant 的公开签名、
+`Display`、retryability 与所有既有构造/匹配行为保持不变。
 
 仅下列 legacy compatibility 站点可使用**紧邻目标表达式或单个函数/测试函数**的
 `#[allow(deprecated)]`，且每个属性必须带固定注释
@@ -361,12 +368,18 @@ redaction/canonical mapping contract，不借 lint 修复重分类其他 adapter
 上述清单恰为 9 个局部 allow 站点（`src/sdk/errors.rs` 8 个、
 `src/sdk/client/completions.rs` 1 个），不得按文件或 module 合并计数。
 禁止 module/crate-wide `allow(deprecated)`、`expect(deprecated)`、command-line lint 降级、未列名的新
-`SDKError::ProviderError` callsite，或把多个非兼容路径包进同一个 allow。D1E-a2 必须在
+`SDKError::ProviderError` callsite，或把多个非兼容路径包进同一个 allow。D1E-a2b 必须在
 `src/sdk/errors.rs` 的 test scope 增加
-`legacy_provider_error_deprecation_allowlist_does_not_grow` source guard：它读取上述两个 SDK source，
-逐一验证列名函数/arm/test、紧邻的 T010 marker 与局部 allow，拒绝 module/crate-wide lint 属性，并对
-`SDKError::ProviderError` reference 或局部 allow 的站点/数量增长 fail closed。guard 自身不得成为
-allowlisted deprecated use。所有这些例外随 `SP965-T010` 的 0.7.0 removal 一并删除，不形成长期 lint policy。
+`legacy_provider_error_deprecation_allowlist_does_not_grow` source guard。guard 必须从
+`CARGO_MANIFEST_DIR/src` 开始递归、排序检查**全部** `src/**/*.rs`，而非只读两个已知 SDK 文件；对 legacy
+variant 的 qualified reference、显式 variant import/alias 与 wildcard variant import 做 exact allowlist，
+只接受上列 9 个 path + enclosing function/arm/test 站点，任何新增 production/test callsite、改名绕过或数量
+增长都 fail closed。它还必须逐一验证紧邻的 T010 marker 与局部 allow，拒绝
+`#![allow(deprecated)]`、`#![expect(deprecated)]`、module-wide `#[allow/expect(deprecated)]`、任何未列名
+`#[allow/expect(deprecated)]`，并扫描仓库 lint 命令/config surfaces，拒绝 `-A deprecated`、
+`--allow deprecated` 或等价 `RUSTFLAGS`/command-line lint 降级。strict verification 必须使用原样
+`cargo clippy --all-targets --all-features --locked -- -D warnings`；guard 自身不得成为 allowlisted
+deprecated use。所有这些例外随 `SP965-T010` 的 0.7.0 removal 一并删除，不形成长期 lint policy。
 
 `GatewayError::Provider(ProviderError)` 已存在并保持；跨 Gateway 边界构造
 `GatewayError::Provider(e.redacted())`，只有该既有 wrapper 持有脱敏 typed copy。原始 runtime `ProviderError` 只在
@@ -448,7 +461,8 @@ map/config scan/local routing counters/client construction。
 | D0 decision amendment | `specs/GH965/{product,tech,tasks}.md` | docs-only；`Refs #965`；不实现。 |
 | D1 runtime contract | `src/core/router/mod.rs`, `unified.rs`, `gateway_config.rs`, `deployment.rs`, `selection.rs`, `execute_impl.rs`, `execution.rs`, `error.rs`, `src/core/router/tests/router_tests.rs` | 9 files / ≤500；`Refs #965`。 |
 | D1E-a1 canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/providers/failure.rs`, `src/core/providers/mod.rs`, `src/utils/error/canonical.rs`, `src/core/router/retry_policy.rs` | 6 files / ≤500；删除 `ProviderFailureKind` 及 re-export，在唯一 exhaustive match 中保留 typed retry facts，并锁定 canonical/HTTP/retry table；`Refs #965`。 |
-| D1E-a2 provider redaction + SDK mapping | `src/core/providers/unified_provider_methods.rs`, `src/sdk/errors.rs`, `src/sdk/client/completions.rs` | 3 files / ≤500；增加保留原 variant 的 `redacted()` copy，0.6 SDK 只按 canonical code 映射到既有 variant，并 deprecated legacy string variant；`completions.rs` 只可给既有 fallback 加局部 allow + T010 removal marker，无行为改动；source guard 锁定全部批准站点并拒绝增长；`Refs #965`。 |
+| D1E-a2a provider redaction + SDK mapping | `src/core/providers/unified_provider_methods.rs`, `src/sdk/errors.rs` | 2 files / ≤500；增加保留原 variant 的 `redacted()` copy，0.6 SDK 只按 canonical code 映射到既有 variant；不得给 legacy string variant 加真实 deprecation 属性或 lint allow；`Refs #965`。 |
+| D1E-a2b legacy SDK error deprecation | `src/sdk/errors.rs`, `src/sdk/client/completions.rs` | 2 files / ≤500；依赖 D1E-a2a merged；只增加 true deprecation、9 个局部 allow + T010 marker 及递归扫描全部 `src/**/*.rs` 和 lint command/config surfaces 的 exact-allowlist source guard；无运行行为改动；`Refs #965`。 |
 | D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/utils/error/gateway_error/conversions.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 4 files / ≤500；Gateway wrapper 与真实响应出口都只携带 `redacted()` copy；`Refs #965`。 |
 | D1E-c legacy retry helper deprecation | `src/core/providers/contextual_error.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/types/errors/traits.rs`, `src/core/router/execution.rs`, `src/utils/error/utils/retry.rs`, `src/sdk/errors.rs`, `src/server/routes/ai/batches.rs`, `src/server/routes/ai/fine_tuning.rs` | 8 files / ≤500；六个 provider-specific helper 保留 0.6 行为、deprecated、production 零消费；canonical coarse helpers 明确 grandfather；`Refs #965`。 |
 | D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
@@ -473,7 +487,7 @@ map/config scan/local routing counters/client construction。
 D2/D3、D4/D5、D2/D6 虽有同路径（`types.rs`、`router_trait.rs`、
 `default_router/mod.rs`），但为严格串行且各自从前一 merged SHA 开始，不并行写同一文件。
 
-D1E 拆成 D1E-a1/D1E-a2/D1E-b/D1E-c 是预算修正，不是范围扩大：原 D1E 列的 `utils/retry.rs` **不存在**
+D1E 拆成 D1E-a1/D1E-a2a/D1E-a2b/D1E-b/D1E-c 是预算修正，不是范围扩大：原 D1E 列的 `utils/retry.rs` **不存在**
 （repo 中无该文件），而真正的 retry/响应出口是 `src/core/router/retry_policy.rs`、
 `src/core/providers/failure.rs`、`src/utils/error/gateway_error/response.rs`、
 `src/server/routes/ai/openai_errors.rs`，且六个 provider-specific context-free compatibility helpers 及其两个
@@ -482,8 +496,11 @@ production callers 分散在八个真实文件（canonical coarse helpers 明确
 故按本节"超限先拆 tranche"的规则拆分。2026-07-18 在 merged `origin/main@8d57e42b` 上进行的实现测量进一步证明，
 原 D1E-a 的 canonical/HTTP/retry table 与 SDK mapping/redaction implementation 已达到 598 changed lines，
 且此时 SDK negative fixture 尚未加入；压缩断言或删测试才能回到 500，明确违反 task guard。
-因此 D1E-a 再严格串行拆为 a1（typed facts/retry/HTTP）与 a2（redaction/SDK），共享的
-`unified_provider_methods.rs` 只允许前一 tranche 合并后由后一 tranche 接续修改。同理，credential 修复
+因此 D1E-a 先严格串行拆为 a1（typed facts/retry/HTTP）与 a2a（redaction/SDK canonical mapping），共享的
+`unified_provider_methods.rs` 只允许前一 tranche 合并后由后一 tranche 接续修改。2026-07-18 的 a2a 实现
+测量为 493 changed lines；若再加入 true deprecation、`completions.rs` 兼容 lint 与递归 source guard，只能
+突破 500 或压缩安全 fixture。独立 P1 review 因此要求再拆 a2b（deprecation/compatibility guard only），严格
+依赖 a2a merged，且不再写 `unified_provider_methods.rs`。同理，credential 修复
 独立成 D3C，避免 D3 触及 10 文件上限。D3C 为满足 length-independent match 必须同时拥有 digest helper 与
 canonical deployment/snapshot metadata publication；只改 `hmac.rs`/tests 会在 request candidate loop 内重复
 hash 变长 stored secret，不能满足本 contract。
@@ -497,13 +514,13 @@ hash 变长 stored secret，不能满足本 contract。
 | B-003 | D2-D7 adapter cleanup | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::single_sender`；production source guard。 |
 | B-004 | D1/D2/D4 config normalization | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::invalid_and_empty_config`。 |
 | B-005 | canonical alias/surface selection | `cargo test --all-features --locked support_matrix` 加 conformance `alias_and_unsupported` fixture。 |
-| B-006 | D1E-a1 删除 `ProviderFailureKind` 并保留 typed facts；D1E-a2 收敛 provider redaction/SDK existing-category mapping；D1E-b 收敛 Gateway wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output；`legacy_provider_error_deprecation_allowlist_does_not_grow` 锁定 D1E-a2 的局部兼容站点并拒绝 allow/callsite 增长。 |
+| B-006 | D1E-a1 删除 `ProviderFailureKind` 并保留 typed facts；D1E-a2a 收敛 provider redaction/SDK existing-category mapping；D1E-a2b 增加 legacy SDK error deprecation 与兼容 guard；D1E-b 收敛 Gateway wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output；`legacy_provider_error_deprecation_allowlist_does_not_grow` 递归扫描全部 `src/**/*.rs`，锁定 D1E-a2b 的局部兼容站点并拒绝 lint downgrade 或 allow/callsite 增长。 |
 | B-007 | deployment lease/state + SDK stats view | conformance `exactly_once_state` fixture比较 attempt trace 与 counter delta。 |
 | B-008 | runtime retry/fallback | conformance `retry_and_fallback` fixture证明 adapter request count 与 runtime attempts 相等。 |
 | B-009 | immutable generation replacement | conformance `snapshot_replacement` 并发双 listener/key fixture。 |
 | B-010 | runtime streaming lease | conformance `stream_failure_cancel_and_success` fixture；`cargo test --all-features --locked streaming`。 |
 | B-011 | D2-D6 facades/deprecations | compile fixtures + `cargo test --all-features --locked --doc`；release-note/API diff 人工复核。 |
-| B-012 | D7i evidence architecture | 全部 `router_runtime_conformance` tests + source guard red/green fixture；guard 扫描所有 production AI routes，`config.gateway.providers` selection scan、`RouteHttpClient`、`OpenAIFineTuningProvider` 与 adapter-owned sender 零命中；仅 matrix tests 不计完成。 |
+| B-012 | D1E-a2a SDK mapping classifier guard、D1E-a2b recursive deprecation allowlist guard；D7i final evidence architecture | D1E-a2a 拒绝 SDK exhaustive/string classifier，D1E-a2b 对全部 `src/**/*.rs` 的 legacy reference/allow exact-allowlist fail closed；最终全部 `router_runtime_conformance` tests + source guard red/green fixture 扫描所有 production AI routes，`config.gateway.providers` selection scan、`RouteHttpClient`、`OpenAIFineTuningProvider` 与 adapter-owned sender 零命中；仅 matrix tests 不计完成。 |
 
 ## 数据流
 
@@ -550,7 +567,7 @@ completion 外观，不持久化第二份 routing state，也不执行额外外�
 
 ## 回滚方案
 
-按 D7i → D7h → D7g → D7f → D7e → D7d → D7c → D7b → D7a → D6 → D5 → D4 → D3 → D3C → D2 → D1E-c → D1E-b → D1E-a2 → D1E-a1 → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
+按 D7i → D7h → D7g → D7f → D7e → D7d → D7c → D7b → D7a → D6 → D5 → D4 → D3 → D3C → D2 → D1E-c → D1E-b → D1E-a2b → D1E-a2a → D1E-a1 → D1 逆序整体 revert 已合并 tranche；每个中间点必须仍有一个明确可用
 的 canonical runtime，不得只恢复 adapter fallback。若 closure audit 已关闭 #965，回滚后重新打开 issue 并在
 release note 标明被恢复的 `HD-003` compatibility surface。无持久化迁移；runtime generation replacement
 通过进程重启/重新构造恢复。若安全回归涉及 sender/override，首先回滚对应 D3/D5，同时保持 #968 policy。
