@@ -46,8 +46,9 @@ GH-965 / #965
 维护者 issue comment `4982855807` 已将 `HD-001` 至 `HD-004` 全部标为 `resolved`：采用显式 per-instance
 runtime + replaceable process default、受限 request context、0.6.0 deprecation → 0.7.0 removal，以及
 `ProviderError` typed source。实现门仍需本 D0 amendment 经独立 review 并合并；`SP965-T002` 不得仅凭 issue
-comment 越过 spec gate。另有 release-policy 子门：0.7.0 removal 由 `SP965-T010` 建立的 durable follow-up
-管理，并把当前 version-bump workflow 的显式修订与 fixture 证据设为 removal 前硬依赖。
+comment 越过 spec gate。另有 release-policy 子门：`SP965-T010` 只建立并链接 durable follow-up；
+0.7.0 typed replacement/removal 由该 follow-up 实施，并把当前 version-bump workflow 的显式修订与 fixture
+证据设为 removal 前硬依赖。
 
 ## 设计方案
 
@@ -407,13 +408,13 @@ D1E-a2b 因此成为独立、严格串行的 deprecation-only tranche：只可�
 `origin/main` 开始，writable scope **恰为** `src/sdk/errors.rs` 与
 `src/sdk/client/completions.rs`，保持 ≤500 changed lines。它只给 legacy variant 增加真实
 `#[deprecated(since = "0.6.0", ...)]`、下列局部兼容 lint 标记和 source guard；`completions.rs` 只允许在
-现有 fallback arm 上增加局部 lint 属性与 `SP965-T010` removal 注释。不得改 control flow、错误文本、
+现有 fallback arm 上增加局部 lint 属性与 `SP965-T010` 所链接 0.7 follow-up 的 removal marker。不得改 control flow、错误文本、
 provider selection、canonical mapping、redaction 或 sender 行为。0.6 legacy variant 的公开签名、
 `Display`、retryability 与所有既有构造/匹配行为保持不变。
 
 仅下列 legacy compatibility 站点可使用**紧邻目标表达式或单个函数/测试函数**的
 `#[allow(deprecated)]`，且每个属性必须带固定注释
-`SP965-T010 removes SDKError::ProviderError`：
+`SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError`：
 
 1. `src/sdk/errors.rs` 的 `From<GatewayError>` 中 `GatewayError::Unavailable` construction arm；
 2. `src/sdk/errors.rs` 的 `From<ProviderError>` 中 `ErrorCode::Unavailable` construction arm；
@@ -442,15 +443,16 @@ guard 对该全集中的 legacy variant qualified reference、显式 variant imp
 bench/build-script/Cargo-target callsite、改名绕过或数量增长都 fail closed。仓库已存在、与本 legacy variant
 无关的 broad `allow/expect(deprecated)` 可仅按 path + anchor +既有计数基线保留，但新增/移动/扩大的 broad
 attribute 必须失败；即使某文件命中该 unrelated baseline，只要新增 `SDKError::ProviderError` reference/import/
-alias/wildcard，仍必须失败，除非它就是上述 9 个局部 T010 站点。T023b 自身禁止新增 crate/module-wide
-allow/expect，所有 9 个站点仍须逐一验证紧邻的 T010 marker 与局部 allow。
+alias/wildcard，仍必须失败，除非它就是上述 9 个带 T010 durable-handoff marker 的局部站点。T023b 自身禁止新增 crate/module-wide
+allow/expect，所有 9 个站点仍须逐一验证紧邻的 T010-linked follow-up marker 与局部 allow。
 
 guard 还必须扫描相关 lint/config/command surfaces：workspace/package `Cargo.toml`、`.cargo/config*`、
 `.github/workflows/**`、`Makefile*`、`justfile*`、`scripts/**`、`checks/**`、`xtask/**`、`clippy.toml`、
 `rust-toolchain*` 及 Cargo metadata 暴露的 manifest/target config 路径，拒绝 `-A deprecated`、
 `--allow deprecated` 或等价 `RUSTFLAGS`/command-line lint 降级。strict verification 必须使用原样
 `cargo clippy --all-targets --all-features --locked -- -D warnings`；guard 自身不得成为 allowlisted
-deprecated use。所有这些例外随 `SP965-T010` 的 0.7.0 removal 一并删除，不形成长期 lint policy。
+deprecated use。`SP965-T010` 只负责创建并链接 durable handoff；所有这些例外与 markers 由该 0.7 follow-up
+在 typed replacement/removal 落地时一并删除，不形成长期 lint policy。
 
 `GatewayError::Provider(ProviderError)` 已存在并保持；跨 Gateway 边界构造
 `GatewayError::Provider(e.redacted())`，只有该既有 wrapper 持有脱敏 typed copy。原始 runtime `ProviderError` 只在
@@ -533,7 +535,7 @@ map/config scan/local routing counters/client construction。
 | D1 runtime contract | `src/core/router/mod.rs`, `unified.rs`, `gateway_config.rs`, `deployment.rs`, `selection.rs`, `execute_impl.rs`, `execution.rs`, `error.rs`, `src/core/router/tests/router_tests.rs` | 9 files / ≤500；`Refs #965`。 |
 | D1E-a1 canonical taxonomy + retry convergence | `src/core/providers/unified_provider_http_mapping.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/providers/failure.rs`, `src/core/providers/mod.rs`, `src/utils/error/canonical.rs`, `src/core/router/retry_policy.rs` | 6 files / ≤500；删除 `ProviderFailureKind` 及 re-export，在唯一 exhaustive match 中保留 typed retry facts，并锁定 canonical/HTTP/retry table；`Refs #965`。 |
 | D1E-a2a provider redaction + SDK mapping | `src/core/providers/unified_provider_methods.rs`, `src/sdk/errors.rs` | 2 files / ≤500；增加保留原 variant 的 `redacted()` copy，0.6 SDK 只按 canonical code 映射到既有 variant；不得给 legacy string variant 加真实 deprecation 属性或 lint allow；`Refs #965`。 |
-| D1E-a2b legacy SDK error deprecation | `src/sdk/errors.rs`, `src/sdk/client/completions.rs` | 2 files / ≤500；依赖 D1E-a2a merged；只增加 true deprecation、9 个局部 allow + T010 marker 及扫描所有 Rust target/source 和 lint command/config surfaces 的 exact-allowlist source guard；无运行行为改动；`Refs #965`。 |
+| D1E-a2b legacy SDK error deprecation | `src/sdk/errors.rs`, `src/sdk/client/completions.rs` | 2 files / ≤500；依赖 D1E-a2a merged；只增加 true deprecation、9 个局部 allow + T010-linked 0.7 follow-up marker 及扫描所有 Rust target/source 和 lint command/config surfaces 的 exact-allowlist source guard；无运行行为改动；`Refs #965`。 |
 | D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/utils/error/gateway_error/conversions.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 4 files / ≤500；Gateway wrapper 与真实响应出口都只携带 `redacted()` copy；`Refs #965`。 |
 | D1E-c legacy retry helper deprecation | `src/core/providers/contextual_error.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/types/errors/traits.rs`, `src/core/router/execution.rs`, `src/utils/error/utils/retry.rs`, `src/sdk/errors.rs`, `src/server/routes/ai/batches.rs`, `src/server/routes/ai/fine_tuning.rs` | 8 files / ≤500；六个 provider-specific helper 保留 0.6 行为、deprecated、production 零消费；canonical coarse helpers 明确 grandfather；`Refs #965`。 |
 | D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
