@@ -9,10 +9,11 @@
 
 ## 0. 一句话结论
 
-litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 策略 + 健康感知）、可靠性（retry/fallback/cooldown/健康探测）、
-成本强制（chat + streaming 经 budgeted executor 记账并拦截）在**请求热路径真实生效**。这是多数自建网关做不到的部分。
+litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 策略 + 健康感知）、可靠性中的
+retry/同模型 deployment 重选/cooldown/健康探测、成本强制（chat + streaming 经 budgeted executor
+记账并拦截）在**请求热路径真实生效**；但已配置的跨模型/provider fallback 尚未接入 AI handler 热路径。
 
-离"最佳 LLM 网关"还差的，不是核心管道，而是**外围的四层**：
+离"最佳 LLM 网关"还差一个**核心可靠性接线缺口**（配置型跨模型/provider fallback），以及**外围的四层**：
 1. **安全护栏层**（guardrails / ip_access / webhook SSRF）——代码存在但**未接入请求链路**
 2. **治理闭环**（已接线 `core::keys`，但实验性 `core::virtual_keys` 未接线；无 admin UI）——对标 LiteLLM 招牌能力仍有缺口
 3. **可观测导出**（Prometheus `/metrics` 已挂载，但 OTel/Datadog/Langfuse 外部导出未在启动接线）
@@ -40,9 +41,9 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 
 | # | 维度 | 最佳实践基线 | litellm-rs 当前（现证） | 等级 | 证据锚点 |
 |---|------|--------------|------------------------|------|----------|
-| 1 | 统一 API 广度 | 100+ provider，诚实可达 | Provider enum 默认构建 6 个变体、full features 14 个变体（均含 OpenAI-like catalog 入口）；但仍有约 40 个磁盘目录不可达 | 🟡 | `providers/mod.rs:412`；`Cargo.toml:163-180,213`；issue #837 |
+| 1 | 统一 API 广度 | 100+ provider，诚实可达 | Provider enum 默认构建 6 个变体、full features 14 个变体（均含 OpenAI-like catalog 入口）；当前另有约 6 个非基础设施原生 provider 目录未进入该闭合 enum/factory 路径 | 🟡 | `providers/mod.rs:412`；`providers/{amazon_nova,custom_api,github,meta_llama,ollama,v0}`；`Cargo.toml:163-180,213`；issue #837 |
 | 2 | 路由/负载均衡 | 多策略 + 健康感知 | SimpleShuffle/LeastBusy/UsageBased/LatencyBased **4 策略全实现并 dispatch** | 🟢 | `strategy_impl.rs:55,87,118,144`；`selection.rs:178-185` |
-| 3 | 可靠性 | retry/fallback/timeout/熔断/健康探测 | retry + fallback 进热路径；健康过滤（is_healthy/cooldown/rate-limit）+ 主动健康探测 | 🟢 | `chat.rs:119-129`；`selection.rs:273`；`health_probe.rs:34` |
+| 3 | 可靠性 | retry/fallback/timeout/熔断/健康探测 | retry + 同模型 deployment 重选 + 健康过滤（is_healthy/cooldown/rate-limit）+ 主动健康探测已进热路径；已配置的跨模型/provider fallback 仅在 router API 中实现，AI handler 未调用该执行入口 | 🟡🟢 | `routes/ai/budgeted.rs:97-107`；`routes/ai/execution.rs:53-151`；`execute_impl.rs:366-398`；`selection.rs:273`；`health_probe.rs:34` |
 | 4 | 成本治理 | per-key/team 预算 + spend 追踪 + 强制 | provider/model 与 API-key 预算在 AI 热路径经 budgeted executor 记账并**拦截**；team scope 有通用预算能力，但未见 AI 热路径按 team 身份 reserve/settle | 🟡🟢 | `chat.rs:25,120-154`；`routes/ai/budgeted.rs:34-76,118-137`；`core/budget/middleware.rs:396-434` |
 | 5 | 缓存 | 精确匹配 + 语义缓存 | 确定性 `response_cache` **已接线**；`semantic_cache_enabled` 仍硬编码 `false` | 🟡 | `state.rs:50,65`；`state.rs:127`；issue #838 |
 | 6 | 可观测 | metrics + tracing + 外部回调导出 | Prometheus `/metrics` 已挂载；OTel/Datadog 客户端代码存在但**启动未构造/未接线** | 🟡🔴 | `routes/health.rs:65`；`observability/metrics.rs:64`（启动无构造，grep 空） |
@@ -62,9 +63,12 @@ litellm-rs 已经**跨过了"网关核心竞争力"的门槛**——路由（4 �
 - Provider enum 从审计记录的 **5 → 默认 6 / full features 14 变体**（CR-3"假接线"持续收敛）`[providers/mod.rs:412; Cargo.toml:163-180,213]`
 - 确定性 response cache **已接线**（CR-4 主路径修复）`[state.rs:50,65]`
 - Budget 在 chat + streaming **真强制**（CR-7 修复，issue-840 战役落地）`[chat.rs:120-154]`
-- 路由 4 策略 + 健康感知 + retry/fallback **全在热路径**（这是"最佳网关"最难的部分）
+- 路由 4 策略 + 健康感知 + retry/同模型 deployment 重选 **已在热路径**；配置型跨模型/provider fallback
+  虽在 router API 中实现，但 AI handler 当前调用的执行入口不会遍历 fallback model 列表
+  `[routes/ai/budgeted.rs:97-107; routes/ai/execution.rs:53-151; execute_impl.rs:366-398]`
 
-**推断（高）**：核心请求管道已具备生产级网关素质；"离最佳的差距"已从"核心能力缺失"下移到"外围层未接线"。
+**推断（高）**：核心请求管道已具备较强的生产级基础，但可靠性闭环仍缺 AI 热路径的配置型
+跨模型/provider fallback；"离最佳的差距"主要位于外围层未接线，同时保留这一项核心热路径缺口。
 
 ### 3.2 剩余差距的性质
 除 Admin UI（当前没有对应前端资产，属于从零产品能力）外，多数剩余 🔴 差距共享同一根因——
@@ -125,9 +129,9 @@ webhooks/user_management 的"从不构造"依据 registry 自述（置信度中�
 ## 6. 事实 / 推断 / 建议 分离
 
 ### 事实（本会话 main `375bcd85` 直读）
-- Provider enum = 默认构建 6 变体；启用 `providers-extra` + `providers-extended` 的 full features 构建为 14 变体 `[providers/mod.rs:412; Cargo.toml:163-180,213]`
+- Provider enum = 默认构建 6 变体；启用 `providers-extra` + `providers-extended` 的 full features 构建为 14 变体；另有 6 个非基础设施原生目录（`amazon_nova/custom_api/github/meta_llama/ollama/v0`）未进入闭合 enum/factory 路径 `[providers/mod.rs:412; Cargo.toml:163-180,213]`
 - response_cache 接线、semantic_cache_enabled=false `[state.rs:50,65,127]`
-- chat 走 UnifiedRouter + retry + budgeted executor `[chat.rs:84,119,120-154]`
+- chat 走 UnifiedRouter + retry/同模型 deployment 重选 + budgeted executor；AI handler 未调用会遍历 fallback model 的 router 执行入口 `[chat.rs:84,119,120-154; routes/ai/budgeted.rs:97-107; routes/ai/execution.rs:53-151; execute_impl.rs:366-398]`
 - 4 路由策略实现并 dispatch `[strategy_impl.rs:55-144; selection.rs:178-185]`
 - 健康感知选路 + 主动健康探测 `[selection.rs:273; health_probe.rs:34]`
 - `/metrics` 挂载 `[routes/health.rs:65]`
@@ -135,7 +139,7 @@ webhooks/user_management 的"从不构造"依据 registry 自述（置信度中�
 - 未接线的 WebhookManager 投递 client 没有 SSRF policy；这是接线前潜在风险，不是当前可达 gateway 漏洞 `[webhooks/manager.rs:13,24-40; subsystem_registry.rs:311-315]`
 
 ### 推断
-- 核心管道已达生产级网关素质（高）——依据：路由/可靠性/预算三大块热路径证据齐全
+- 核心管道已具备较强生产级基础（高）——依据：路由、retry/同模型重选/cooldown/health、预算已有热路径证据；配置型跨模型/provider fallback 仍是明确缺口
 - 剩余差距多为"接线"而非"从零实现"（高）——依据：代码资产（struct/方法/单测）存在，缺启动/链路调用
 - 相对 2026-07-09 审计，CR-3/4/7 已推进（高）——依据：enum 默认 6 / full features 14 变体 vs 文档所述 5 变体
 
