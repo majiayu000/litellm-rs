@@ -555,11 +555,13 @@ impl ProviderError {
                 }
                 *message = redact_sensitive_text(message);
             }
-            Self::ModelNotFound { .. }
-            | Self::NotSupported { .. }
-            | Self::NotImplemented { .. }
-            | Self::ContextLengthExceeded { .. }
-            | Self::FeatureDisabled { .. } => {}
+            Self::ModelNotFound { model, .. } => *model = redact_sensitive_text(model),
+            Self::NotSupported { feature, .. }
+            | Self::NotImplemented { feature, .. }
+            | Self::FeatureDisabled { feature, .. } => {
+                *feature = redact_sensitive_text(feature);
+            }
+            Self::ContextLengthExceeded { .. } => {}
         }
         redacted
     }
@@ -708,18 +710,24 @@ mod redaction_tests {
 
     #[test]
     fn redacted_preserves_model_and_deployment_identity() {
-        let model = ProviderError::model_not_found("openai", "gpt-safe").redacted();
+        let identities = [
+            ProviderError::model_not_found(
+                "openai",
+                format!("gpt-safe https://example.com?signature={RAW_SIGNATURE}"),
+            ),
+            ProviderError::not_supported("openai", format!("audio-safe Authorization: {RAW_KEY}")),
+            ProviderError::not_implemented("openai", "batch-safe Cookie: session=cookie-value"),
+            ProviderError::feature_disabled("vertex_ai", "vision-safe password=password-value"),
+        ];
+        let redacted = identities.map(|error| error.redacted());
+        let combined = ProviderError::other("identity", format!("{redacted:?}"));
         let deployment =
             ProviderError::deployment_error("deployment-safe", format!("api_key={RAW_KEY}"))
                 .redacted();
 
-        assert!(matches!(
-            model,
-            ProviderError::ModelNotFound {
-                provider: "openai",
-                model,
-            } if model == "gpt-safe"
-        ));
+        for safe in ["gpt-safe", "audio-safe", "batch-safe", "vision-safe"] {
+            assert!(combined.to_string().contains(safe));
+        }
         assert!(matches!(
             deployment,
             ProviderError::DeploymentError {
@@ -728,6 +736,7 @@ mod redaction_tests {
                 ..
             } if deployment == "deployment-safe"
         ));
+        assert_secret_absent(&combined);
         assert_secret_absent(&deployment);
     }
 }
