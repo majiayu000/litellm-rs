@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specrail.local/schemas/issue_evidence.schema.json",
+  "title": "GitHub Issue Evidence",
+  "type": "object",
+  "required": [
+    "issue",
+    "github_state",
+    "state",
+    "state_source",
+    "state_trusted",
+    "labels",
+    "url",
+    "title",
+    "artifacts"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state_source": {
+            "const": "label"
+          }
+        },
+        "required": ["state_source"]
+      },
+      "then": {
+        "properties": {
+          "state_trusted": {
+            "const": true
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "state_trusted": {
+            "const": false
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "state": {
+      "type": ["string", "null"],
+      "enum": [
+        "needs_info",
+        "triaged",
+        "ready_to_spec",
+        "ready_to_implement",
+        "reserved_internal",
+        "security_private",
+        "duplicate",
+        "abandoned",
+        null
+      ]
+    },
+    "github_state": {
+      "enum": ["OPEN", "CLOSED"]
+    },
+    "state_source": {
+      "enum": ["label", "body_hint", "none"]
+    },
+    "state_trusted": {
+      "type": "boolean"
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["product_spec", "tech_spec", "task_plan"],
+      "additionalProperties": false,
+      "properties": {
+        "product_spec": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tech_spec": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_plan": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

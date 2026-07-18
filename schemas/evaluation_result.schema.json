@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specrail.local/schemas/evaluation_result.schema.json",
+  "title": "Evaluation Result",
+  "type": "object",
+  "required": [
+    "decision",
+    "route",
+    "current_state",
+    "reasons",
+    "satisfied",
+    "missing",
+    "required_artifacts",
+    "human_gates",
+    "allowed_actions",
+    "blocked_actions",
+    "verification_commands"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "decision": {
+      "enum": ["allowed", "warn", "needs_human", "blocked"]
+    },
+    "route": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "enum": ["dry_run", "advisory", "required"]
+    },
+    "current_state": {
+      "type": ["string", "null"]
+    },
+    "issue": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "pr": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "satisfied": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "missing": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "required_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "human_gates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "allowed_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blocked_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verification_commands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,4 +1,6 @@
-use super::{ContextualError, ProviderError};
+use super::{ContextualError, ProviderError, ProviderHttpErrorFacts, provider_http_error_facts};
+use crate::core::providers::failure::ProviderFailureFacts;
+use crate::utils::error::{CanonicalError, ErrorCode};
 
 impl ProviderError {
     fn bedrock_modeled_retry_provider() -> &'static str {
@@ -372,99 +374,24 @@ impl ProviderError {
 
     /// Check if this error is retryable
     pub fn is_retryable(&self) -> bool {
-        match self {
-            Self::Network { .. }
-            | Self::Timeout { .. }
-            | Self::RateLimit { .. }
-            | Self::ProviderUnavailable { .. } => true,
-
-            // API errors depend on status code
-            Self::ApiError { status, .. } => {
-                self.is_bedrock_modeled_retry_error() || matches!(*status, 429 | 500..=599)
-            }
-
-            // Deployment errors might be retryable depending on the issue
-            Self::DeploymentError { .. } => true,
-
-            // Streaming errors are typically retryable
-            Self::Streaming { .. } => true,
-
-            // Content filtered might be retryable with prompt changes
-            Self::ContentFiltered { potentially_retryable, .. } => {
-                potentially_retryable.unwrap_or(false)
-            },
-
-            // All other errors are not retryable
-            Self::Authentication { .. }
-            | Self::QuotaExceeded { .. }
-            | Self::ModelNotFound { .. }
-            | Self::InvalidRequest { .. }
-            | Self::NotSupported { .. }
-            | Self::NotImplemented { .. }
-            | Self::Configuration { .. }
-            | Self::Serialization { .. }
-            | Self::ContextLengthExceeded { .. }
-            | Self::TokenLimitExceeded { .. }
-            | Self::FeatureDisabled { .. }
-            | Self::ResponseParsing { .. }
-            | Self::RoutingError { .. }
-            | Self::TransformationError { .. }
-            | Self::Cancelled { .. } // User cancelled, don't retry
-            | Self::Other { .. } => false,
-        }
+        ProviderFailureFacts::from_error(self).legacy_retryable
     }
 
     /// Get retry delay in seconds
     pub fn retry_delay(&self) -> Option<u64> {
-        match self {
-            Self::RateLimit { retry_after, .. } => *retry_after,
-            Self::Network { .. } | Self::Timeout { .. } => Some(1),
-            Self::ProviderUnavailable { .. } => Some(5),
+        ProviderFailureFacts::from_error(self)
+            .legacy_retry_delay
+            .map(|delay| delay.as_secs())
+    }
 
-            // API errors with 429 (rate limit) or 5xx get retry delays
-            Self::ApiError { status, .. } => match *status {
-                424 if self.is_bedrock_modeled_retry_error() => Some(3),
-                429 => Some(60),      // Rate limit, wait longer
-                500..=599 => Some(3), // Server errors, shorter delay
-                _ => None,
-            },
+    /// Canonical closed-set classification for protocol adapters.
+    pub fn canonical_code(&self) -> ErrorCode {
+        CanonicalError::canonical_code(self)
+    }
 
-            // Deployment errors get a retry delay
-            Self::DeploymentError { .. } => Some(5),
-
-            // Streaming errors get a shorter retry delay
-            Self::Streaming { .. } => Some(2),
-
-            // Content filtered - conditional retry
-            Self::ContentFiltered {
-                potentially_retryable,
-                ..
-            } => {
-                if potentially_retryable.unwrap_or(false) {
-                    Some(10) // Allow time for prompt modification
-                } else {
-                    None
-                }
-            }
-
-            // All other errors have no retry delay
-            Self::Authentication { .. }
-            | Self::QuotaExceeded { .. }
-            | Self::ModelNotFound { .. }
-            | Self::InvalidRequest { .. }
-            | Self::NotSupported { .. }
-            | Self::NotImplemented { .. }
-            | Self::Configuration { .. }
-            | Self::Serialization { .. }
-            | Self::ContextLengthExceeded { .. }
-            | Self::TokenLimitExceeded { .. }
-            | Self::FeatureDisabled { .. }
-            | Self::ResponseParsing { .. }
-            | Self::RoutingError { .. }
-            | Self::TransformationError { .. }
-            | Self::Cancelled { .. }
-            | Self::Other { .. } => None,
-        }
+    /// Canonical HTTP facts for protocol adapters.
+    pub fn http_facts(&self) -> ProviderHttpErrorFacts {
+        provider_http_error_facts(self)
     }
 
     /// Create an error with request context for better debugging.

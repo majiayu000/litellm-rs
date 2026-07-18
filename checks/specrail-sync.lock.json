@@ -1,0 +1,74 @@
+{
+  "upstream_repo": "https://github.com/majiayu000/specrail",
+  "upstream_sha": "75628b21ef676691344e1671f953644ef36da46e",
+  "excluded": [
+    "checks/check_workflow.py",
+    "checks/schema_contract.py"
+  ],
+  "files": [
+    {
+      "path": "checks/duplicate_work_gate.py",
+      "sha256": "c109124d511983b9579d11e0bf2378569435e73036a22f058ed377fb5232317c"
+    },
+    {
+      "path": "checks/github_duplicate_evidence.py",
+      "sha256": "eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55"
+    },
+    {
+      "path": "checks/github_evidence_common.py",
+      "sha256": "46a28a0064c39291d76847b4250071fa0cfaeb48dcd8374acffa0d65e9158c05"
+    },
+    {
+      "path": "checks/github_issue_evidence.py",
+      "sha256": "cbeec2fe91fa5bfe40a855f5148d85f8880d10d8c2bbe91ef607094a50b6608e"
+    },
+    {
+      "path": "checks/github_issue_reference.py",
+      "sha256": "52e7e9c2bdb6c6ca3fe60e83ead98ec1892af7434442bbb859821ecf46729200"
+    },
+    {
+      "path": "checks/github_pr_evidence.py",
+      "sha256": "c2eff0eae0c90ace041b2a994e85fe8cc98f55deb7b320f7caaca6f1f510f022"
+    },
+    {
+      "path": "checks/pr_gate.py",
+      "sha256": "df3c6ca555b22f976d09a961d9945705530f302f2578208bac909805626a0405"
+    },
+    {
+      "path": "checks/review_json_gate.py",
+      "sha256": "1d2adf224f81079e75149c4650fd79e3858ff4072bfac632747ad303a4e0f0ae"
+    },
+    {
+      "path": "checks/route_gate.py",
+      "sha256": "80277a491b8e1001339ab35b9bcde7311fd176f42bca5c1a4cdb86e8f480af8b"
+    },
+    {
+      "path": "checks/runtime_gate_rules.py",
+      "sha256": "74b2901f13ba59eee9b7d95687732b13552e57412b08ea5000c8a2b06872e2f5"
+    },
+    {
+      "path": "checks/runtime_ledger_gate.py",
+      "sha256": "e2bc317062d895e6b9c1ee16d1d334ec74b45c82b1d3b67b7d113ada8ba57cee"
+    },
+    {
+      "path": "checks/specrail_lib.py",
+      "sha256": "b6139fd8c2961b2457eb1794250b1e0c02ab67ea58a0b2f324a85eb2755bfec0"
+    },
+    {
+      "path": "schemas/duplicate_work_evidence.schema.json",
+      "sha256": "bd0db8ecc204d15afe88e85707575ddd418c6937d4dc7fa91eb4060e2f1df627"
+    },
+    {
+      "path": "schemas/pr_review_gate.schema.json",
+      "sha256": "1a165144eec09b93ed8b794704d27b15ef3f943f8826d35fe289ff08021337eb"
+    },
+    {
+      "path": "schemas/review_result.schema.json",
+      "sha256": "1164adc4e50ff9fc735a6192d9581fae013563c7ad89e33be5dcebd196aa7f8b"
+    },
+    {
+      "path": "schemas/runtime_checkpoint.schema.json",
+      "sha256": "03d01f0b92d4f76202c1a851b34eadbd20572c0487105b4a110ac0de23c26d3f"
+    }
+  ]
+}

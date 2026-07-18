@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specrail.local/schemas/workflow_run.schema.json",
+  "title": "Workflow Run",
+  "type": "object",
+  "required": ["mode", "input", "output", "side_effects"],
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "enum": ["dry_run", "comment_only", "write_labels", "implementation"]
+    },
+    "input": {
+      "type": "object"
+    },
+    "output": {
+      "type": "object"
+    },
+    "side_effects": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

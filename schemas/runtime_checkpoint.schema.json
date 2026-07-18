@@ -1,0 +1,636 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specrail.local/schemas/runtime_checkpoint.schema.json",
+  "title": "Runtime Checkpoint",
+  "type": "object",
+  "required": [
+    "checkpoint_version",
+    "tranche_id",
+    "repo",
+    "scope",
+    "status",
+    "context_budget",
+    "output_firewall",
+    "items",
+    "resume_prompt"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "checkpoint_version": {
+      "enum": [1, 2]
+    },
+    "tranche_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": ["planning", "running", "blocked", "handoff", "complete"]
+    },
+    "overall_objective": {
+      "type": "string"
+    },
+    "queue_mode": {
+      "enum": ["bounded_tranche", "full_queue_drain", null]
+    },
+    "tranche_mix": {
+      "type": ["object", "null"],
+      "required": ["spec_pr_count", "impl_pr_count", "consecutive_spec_only"],
+      "additionalProperties": true,
+      "properties": {
+        "spec_pr_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "impl_pr_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "consecutive_spec_only": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "spec_only_declaration": {
+          "type": ["object", "null"],
+          "required": ["scope", "conversation_marker"],
+          "additionalProperties": true,
+          "properties": {
+            "scope": {
+              "type": "string",
+              "minLength": 1
+            },
+            "conversation_marker": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "spec_only_declaration": {
+      "type": ["object", "null"],
+      "required": ["scope", "conversation_marker"],
+      "additionalProperties": true,
+      "properties": {
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "conversation_marker": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "budget": {
+      "type": ["object", "null"],
+      "required": ["basis"],
+      "additionalProperties": true,
+      "properties": {
+        "basis": {
+          "enum": ["compaction", "item_cap", "both"],
+          "description": "What the session budget is measured in. compaction_budget defaults to 1: stop before the second compaction."
+        },
+        "compaction_budget": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "item_cap": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "compaction_count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "stop_reason": {
+          "enum": ["budget_exhausted", "queue_empty", "user_interrupt", "blocked", null]
+        },
+        "budget_override": {
+          "type": ["object", "null"],
+          "required": ["scope", "conversation_marker"],
+          "additionalProperties": true,
+          "properties": {
+            "scope": {
+              "type": "string",
+              "minLength": 1
+            },
+            "conversation_marker": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "spec_coverage": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "checked_at": {
+          "type": ["string", "null"]
+        },
+        "complete": {
+          "type": "array"
+        },
+        "needs_tasks": {
+          "type": "array"
+        },
+        "needs_spec": {
+          "type": "array"
+        },
+        "umbrella_covered": {
+          "type": "array"
+        },
+        "exception_allowed": {
+          "type": "array"
+        }
+      }
+    },
+    "goal": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tokens_used": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "token_budget": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      }
+    },
+    "goal_candidate": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "required": ["objective", "done_when", "blocked_stop_condition"],
+      "properties": {
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "done_when": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "blocked_stop_condition": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "context_budget": {
+      "type": "object",
+      "required": [
+        "window_tokens",
+        "soft_stop_ratio",
+        "hard_stop_ratio",
+        "critical_stop_ratio"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "window_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "soft_stop_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "hard_stop_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "critical_stop_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        }
+      }
+    },
+    "output_firewall": {
+      "type": "object",
+      "required": [
+        "raw_log_policy",
+        "max_parent_stdout_lines",
+        "max_subagent_final_lines",
+        "artifact_root"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "raw_log_policy": {
+          "const": "file_only"
+        },
+        "max_parent_stdout_lines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_subagent_final_lines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifact_root": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "thread_dispatch_gate": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "explicit_thread_request": {
+          "type": ["string", "boolean", "null"]
+        },
+        "native_subagents": {
+          "type": ["string", "boolean", "null"]
+        },
+        "spawn_requirement": {
+          "type": ["string", "boolean", "null"]
+        },
+        "fallback_mode": {
+          "type": ["string", "null"]
+        },
+        "planned_native_threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1
+              },
+              "write_scope": {
+                "type": "string",
+                "minLength": 1
+              },
+              "spawn_status": {
+                "type": "string",
+                "minLength": 1
+              },
+              "no_spawn_reason": {
+                "type": ["string", "null"]
+              }
+            }
+          }
+        },
+        "native_thread_evidence": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "properties": {
+            "spawned_agents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "lane_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "spawn_tool": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "agent_id_or_thread_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "wait_evidence": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "close_evidence": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "result_collected": {
+                    "type": ["string", "boolean"]
+                  }
+                }
+              }
+            },
+            "fallback_reason": {
+              "type": ["string", "null"]
+            }
+          }
+        },
+        "no_spawn_reason": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["state", "next_action"],
+        "additionalProperties": true,
+        "properties": {
+          "issue": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "pr": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "state": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Runtime checkpoint handoff state. This is not a second workflow state machine; mappings to states.yaml are declared in checks/specrail_lib.py as RUNTIME_STATE_MAPPING."
+          },
+          "spec_status": {
+            "enum": [
+              "complete",
+              "needs_tasks",
+              "needs_spec",
+              "umbrella_covered",
+              "exception_allowed",
+              null
+            ]
+          },
+          "spec_status_reason": {
+            "type": ["string", "null"]
+          },
+          "branch": {
+            "type": ["string", "null"]
+          },
+          "worktree": {
+            "type": ["string", "null"]
+          },
+          "head_sha": {
+            "type": ["string", "null"]
+          },
+          "truth_level": {
+            "enum": ["A", "B", "C", "D", null]
+          },
+          "review_source": {
+            "enum": ["independent_lane", "self_review", null]
+          },
+          "ci": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "run_id": {
+                "type": ["integer", "null"],
+                "minimum": 1
+              },
+              "evidence": {
+                "type": ["string", "null"]
+              }
+            }
+          },
+          "local_verification": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["command", "status"],
+              "additionalProperties": true,
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence": {
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          },
+          "review": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "properties": {
+              "reviewer_lane": {
+                "type": ["string", "null"]
+              },
+              "status": {
+                "type": "string"
+              },
+              "blocking_findings": {
+                "type": "array"
+              },
+              "native_thread_id": {
+                "type": ["string", "null"]
+              },
+              "review_source": {
+                "enum": ["independent_lane", "self_review", null],
+                "description": "Where the passing review came from. self_review never satisfies the independent-review requirement without explicit self_review_authorization."
+              },
+              "evidence": {
+                "type": ["string", "null"]
+              }
+            }
+          },
+          "lane_failures": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "object",
+              "required": ["lane_id", "failure_kind", "observed_marker"],
+              "additionalProperties": true,
+              "properties": {
+                "lane_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "failure_kind": {
+                  "enum": ["usage_limit", "crash", "zero_output", "closed", "other"]
+                },
+                "observed_marker": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "detail": {
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          },
+          "blocked_reason": {
+            "type": ["string", "null"],
+            "description": "Required when a lane failure downgrades the item to blocked/needs_human, e.g. reviewer_lane_failure."
+          },
+          "pr_kind": {
+            "enum": ["spec", "impl", "mixed_impl", null],
+            "description": "Classification of the PR this item produced. Production code present means impl/mixed_impl."
+          },
+          "self_review_authorization": {
+            "type": ["object", "null"],
+            "required": ["scope", "conversation_marker"],
+            "additionalProperties": true,
+            "properties": {
+              "scope": {
+                "type": "string",
+                "minLength": 1
+              },
+              "conversation_marker": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "review_threads": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "unresolved_count": {
+                "type": ["integer", "null"],
+                "minimum": 0
+              },
+              "evidence": {
+                "type": ["string", "null"]
+              },
+              "checked_at": {
+                "type": ["string", "null"]
+              }
+            }
+          },
+          "pr_gate": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "head_sha": {
+                "type": ["string", "null"]
+              },
+              "evidence": {
+                "type": ["string", "null"]
+              },
+              "checked_at": {
+                "type": ["string", "null"]
+              }
+            }
+          },
+          "blocker": {
+            "type": ["string", "null"]
+          },
+          "next_action": {
+            "type": "string",
+            "minLength": 1
+          },
+          "merge_state": {
+            "type": ["string", "null"]
+          },
+          "merge_authorization": {
+            "type": ["object", "null"],
+            "required": ["actor", "source"],
+            "additionalProperties": true,
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "summary": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "remaining_queue": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["state", "next_action"],
+        "additionalProperties": true,
+        "properties": {
+          "issue": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "pr": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "state": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Runtime checkpoint handoff state. This is not a second workflow state machine; mappings to states.yaml are declared in checks/specrail_lib.py as RUNTIME_STATE_MAPPING."
+          },
+          "spec_status": {
+            "enum": [
+              "complete",
+              "needs_tasks",
+              "needs_spec",
+              "umbrella_covered",
+              "exception_allowed",
+              null
+            ]
+          },
+          "spec_status_reason": {
+            "type": ["string", "null"]
+          },
+          "blocker": {
+            "type": ["string", "null"]
+          },
+          "next_action": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "resume_prompt": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

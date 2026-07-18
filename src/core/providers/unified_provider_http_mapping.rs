@@ -299,10 +299,9 @@ const fn facts(
 }
 
 const fn valid_status_or_bad_gateway(status: u16) -> u16 {
-    if status >= 100 && status < 1000 {
-        status
-    } else {
-        502
+    match status {
+        400..=599 => status,
+        _ => 502,
     }
 }
 

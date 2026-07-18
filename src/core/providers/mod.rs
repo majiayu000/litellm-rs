@@ -131,7 +131,7 @@ use crate::core::types::{
 };
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
 pub use contextual_error::ContextualError;
-pub use failure::{ProviderFailureFacts, ProviderFailureKind, ProviderRetryHint};
+pub use failure::{ProviderFailureFacts, ProviderRetryHint};
 pub use provider_registry::ProviderRegistry;
 pub use unified_provider::ProviderError;
 

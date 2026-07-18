@@ -79,15 +79,14 @@ impl CanonicalError for ProviderError {
             | ProviderError::ContextLengthExceeded { .. }
             | ProviderError::ContentFiltered { .. }
             | ProviderError::TokenLimitExceeded { .. }
-            | ProviderError::FeatureDisabled { .. }
             | ProviderError::Cancelled { .. } => ErrorCode::InvalidRequest,
             ProviderError::Network { .. } => ErrorCode::Network,
             ProviderError::ProviderUnavailable { .. } | ProviderError::RoutingError { .. } => {
                 ErrorCode::Unavailable
             }
-            ProviderError::NotSupported { .. } | ProviderError::NotImplemented { .. } => {
-                ErrorCode::NotImplemented
-            }
+            ProviderError::NotSupported { .. }
+            | ProviderError::NotImplemented { .. }
+            | ProviderError::FeatureDisabled { .. } => ErrorCode::NotImplemented,
             ProviderError::Configuration { .. } => ErrorCode::Configuration,
             ProviderError::Serialization { .. }
             | ProviderError::ResponseParsing { .. }

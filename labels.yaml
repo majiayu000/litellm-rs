@@ -1,0 +1,30 @@
+labels:
+  readiness:
+    - needs_info
+    - triaged
+    - ready_to_spec
+    - ready_to_implement
+    - reserved_internal
+
+  outcome:
+    - duplicate
+    - abandoned
+    - security_private
+    - merged
+
+  review:
+    - agent_reviewed
+    - human_review_required
+    - owner_approval_required
+    - changes_requested
+
+  area:
+    - area_docs
+    - area_ci
+    - area_runtime
+    - area_ui
+    - area_security
+
+  source:
+    - agent_generated
+    - human_authored
