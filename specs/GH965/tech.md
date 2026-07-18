@@ -339,28 +339,61 @@ writable scope **恰为** `src/core/providers/unified_provider_methods.rs` 与 `
 
 ```bash
 python3 - <<'PY'
+import re
 from pathlib import Path
+
+token_pattern = re.compile(
+    r"::|=>|->|[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[{}()\[\].,;|:=<>?!&+\-*/%]"
+)
+
+def rust_tokens(text: str) -> list[str]:
+    tokens = []
+    offset = 0
+    for match in token_pattern.finditer(text):
+        gap = text[offset:match.start()]
+        assert not gap.strip(), f"unrecognized Rust syntax: {gap!r}"
+        tokens.append(match.group(0))
+        offset = match.end()
+    tail = text[offset:]
+    assert not tail.strip(), f"unrecognized trailing Rust syntax: {tail!r}"
+    return tokens
 
 source = Path("src/sdk/errors.rs").read_text(encoding="utf-8")
 start = source.index("impl From<crate::core::providers::ProviderError> for SDKError {")
 end = source.index("\n/// SDK result type", start)
-block = source[start:end]
-redacted = block.index("error.redacted()")
-canonical = block.index("canonical_code()", redacted)
-assert redacted < canonical
-assert block.count("canonical_code()") == 1
-assert block.count("let code") == 1
-assert "let code = redacted.canonical_code();" in block
-assert block.count("match ") == 1 and "match code {" in block
-assert "ProviderError::" not in block
-assert "if " not in block
+actual = rust_tokens(source[start:end])
+expected = rust_tokens("""
+impl From<crate::core::providers::ProviderError> for SDKError {
+    fn from(error: crate::core::providers::ProviderError) -> Self {
+        let redacted = error.redacted();
+        let code = redacted.canonical_code();
+        let message = redacted.to_string();
+
+        match code {
+            ErrorCode::Authentication | ErrorCode::Authorization => SDKError::AuthError(message),
+            ErrorCode::RateLimited | ErrorCode::QuotaExceeded => SDKError::RateLimitError(message),
+            ErrorCode::InvalidRequest | ErrorCode::Conflict => SDKError::InvalidRequest(message),
+            ErrorCode::NotFound => SDKError::ModelNotFound(message),
+            ErrorCode::Timeout | ErrorCode::Network => SDKError::NetworkError(message),
+            ErrorCode::Unavailable => SDKError::ProviderError(message),
+            ErrorCode::Configuration => SDKError::ConfigError(message),
+            ErrorCode::Parsing => SDKError::ParseError(message),
+            ErrorCode::NotImplemented => SDKError::NotSupported(message),
+            ErrorCode::Internal => SDKError::Internal(message),
+        }
+    }
+}
+""")
+assert actual == expected, "ProviderError conversion deviates from canonical-code-only token shape"
 PY
 ```
 
-该命令证明 conversion 先脱敏、只以单一 `canonical_code()` 分支选择既有 SDK variant，且不存在
-`ProviderError` exhaustive match 或 `if`/第二 `match` 字符串 classifier；它不增加任何 production/test
-changed line。若实现后来使 D1E-a2a 超过 500 changed lines，必须在不删除/压缩安全 fixture 的前提下先减少
-实现 diff，禁止把验证命令伪装成 source 文件或放宽预算。
+该命令不是 whitespace/text-count heuristic：它把 conversion 与批准形状都词法化，任何未识别的非空白 syntax
+先 fail closed，再要求**整个 token 序列逐项相等**。因此换行形式的 `match\n redacted.to_string()`、第二个
+`match`/`if`、字符串 helper、`ProviderError::Variant` arm、额外 assignment/call 或 variant classifier 都会改变
+token 序列并失败；纯格式换行/缩进仍可通过。它不增加任何 production/test changed line。若实现后来使
+D1E-a2a 超过 500 changed lines，必须在不删除/压缩安全 fixture 的前提下先减少实现 diff，禁止把验证命令
+伪装成 source 文件或放宽预算。
 
 2026-07-18 在原 D1E-a2 实现 worktree 上重新验证发现：给 legacy
 `SDKError::ProviderError(String)` 加真实 `#[deprecated(since = "0.6.0", ...)]` 后，strict Clippy 会把同一
