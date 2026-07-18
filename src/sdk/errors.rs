@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::utils::error::ErrorCode;
+
 /// Error
 #[derive(Error, Debug)]
 pub enum SDKError {
@@ -104,56 +106,21 @@ impl From<crate::utils::error::gateway_error::GatewayError> for SDKError {
 
 impl From<crate::core::providers::ProviderError> for SDKError {
     fn from(error: crate::core::providers::ProviderError) -> Self {
-        match error {
-            crate::core::providers::ProviderError::Authentication { message, .. } => {
-                SDKError::AuthError(message)
-            }
-            crate::core::providers::ProviderError::RateLimit { message, .. } => {
-                SDKError::RateLimitError(message)
-            }
-            crate::core::providers::ProviderError::ModelNotFound { model, .. } => {
-                SDKError::ModelNotFound(model)
-            }
-            crate::core::providers::ProviderError::InvalidRequest { message, .. } => {
-                SDKError::InvalidRequest(message)
-            }
-            crate::core::providers::ProviderError::Network { message, .. }
-            | crate::core::providers::ProviderError::Timeout { message, .. } => {
-                SDKError::NetworkError(message)
-            }
-            crate::core::providers::ProviderError::Configuration { message, .. } => {
-                SDKError::ConfigError(message)
-            }
-            crate::core::providers::ProviderError::ApiError {
-                message, status, ..
-            } => SDKError::ApiError(format!("HTTP {}: {}", status, message)),
-            crate::core::providers::ProviderError::NotSupported { feature, .. }
-            | crate::core::providers::ProviderError::NotImplemented { feature, .. }
-            | crate::core::providers::ProviderError::FeatureDisabled { feature, .. } => {
-                SDKError::NotSupported(feature)
-            }
-            crate::core::providers::ProviderError::ContentFiltered { reason, .. } => {
-                SDKError::InvalidRequest(reason)
-            }
-            crate::core::providers::ProviderError::ContextLengthExceeded {
-                max, actual, ..
-            } => SDKError::InvalidRequest(format!(
-                "Context length exceeded: max {} tokens, got {} tokens",
-                max, actual
-            )),
-            crate::core::providers::ProviderError::QuotaExceeded { .. }
-            | crate::core::providers::ProviderError::ProviderUnavailable { .. }
-            | crate::core::providers::ProviderError::Serialization { .. }
-            | crate::core::providers::ProviderError::TokenLimitExceeded { .. }
-            | crate::core::providers::ProviderError::DeploymentError { .. }
-            | crate::core::providers::ProviderError::ResponseParsing { .. }
-            | crate::core::providers::ProviderError::RoutingError { .. }
-            | crate::core::providers::ProviderError::TransformationError { .. }
-            | crate::core::providers::ProviderError::Cancelled { .. }
-            | crate::core::providers::ProviderError::Streaming { .. }
-            | crate::core::providers::ProviderError::Other { .. } => {
-                SDKError::ProviderError(error.to_string())
-            }
+        let redacted = error.redacted();
+        let code = redacted.canonical_code();
+        let message = redacted.to_string();
+
+        match code {
+            ErrorCode::Authentication | ErrorCode::Authorization => SDKError::AuthError(message),
+            ErrorCode::RateLimited | ErrorCode::QuotaExceeded => SDKError::RateLimitError(message),
+            ErrorCode::InvalidRequest | ErrorCode::Conflict => SDKError::InvalidRequest(message),
+            ErrorCode::NotFound => SDKError::ModelNotFound(message),
+            ErrorCode::Timeout | ErrorCode::Network => SDKError::NetworkError(message),
+            ErrorCode::Unavailable => SDKError::ProviderError(message),
+            ErrorCode::Configuration => SDKError::ConfigError(message),
+            ErrorCode::Parsing => SDKError::ParseError(message),
+            ErrorCode::NotImplemented => SDKError::NotSupported(message),
+            ErrorCode::Internal => SDKError::Internal(message),
         }
     }
 }
@@ -189,6 +156,27 @@ mod tests {
     use super::*;
     use crate::core::providers::ProviderError;
     use crate::utils::error::gateway_error::GatewayError;
+
+    fn sdk_variant(error: &SDKError) -> &'static str {
+        match error {
+            SDKError::ProviderNotFound(_) => "provider_not_found",
+            SDKError::NoDefaultProvider => "no_default_provider",
+            SDKError::ProviderError(_) => "provider_error",
+            SDKError::ConfigError(_) => "config_error",
+            SDKError::NetworkError(_) => "network_error",
+            SDKError::AuthError(_) => "auth_error",
+            SDKError::RateLimitError(_) => "rate_limit_error",
+            SDKError::ModelNotFound(_) => "model_not_found",
+            SDKError::NotSupported(_) => "not_supported",
+            SDKError::UnsupportedProvider(_) => "unsupported_provider",
+            SDKError::SerializationError(_) => "serialization_error",
+            SDKError::HttpError(_) => "http_error",
+            SDKError::InvalidRequest(_) => "invalid_request",
+            SDKError::Internal(_) => "internal",
+            SDKError::ApiError(_) => "api_error",
+            SDKError::ParseError(_) => "parse_error",
+        }
+    }
 
     // ==================== SDKError Display Tests ====================
 
@@ -279,7 +267,7 @@ mod tests {
     #[test]
     fn test_provider_error_auth_maps_to_sdk_auth_error() {
         let error = SDKError::from(ProviderError::authentication("openai", "bad key"));
-        assert!(matches!(error, SDKError::AuthError(ref msg) if msg == "bad key"));
+        assert!(matches!(error, SDKError::AuthError(ref msg) if msg.contains("bad key")));
     }
 
     #[test]
@@ -291,7 +279,92 @@ mod tests {
     #[test]
     fn test_provider_error_model_not_found_maps_to_sdk_model_not_found() {
         let error = SDKError::from(ProviderError::model_not_found("openai", "gpt-missing"));
-        assert!(matches!(error, SDKError::ModelNotFound(ref model) if model == "gpt-missing"));
+        assert!(
+            matches!(error, SDKError::ModelNotFound(ref message) if message.contains("gpt-missing"))
+        );
+    }
+
+    #[test]
+    fn provider_error_conversion_uses_existing_canonical_categories() {
+        let cases = [
+            (
+                ProviderError::authentication("openai", "bad key"),
+                "auth_error",
+            ),
+            (
+                ProviderError::api_error("openai", 403, "forbidden"),
+                "auth_error",
+            ),
+            (
+                ProviderError::rate_limit("openai", Some(2)),
+                "rate_limit_error",
+            ),
+            (
+                ProviderError::quota_exceeded("openai", "quota"),
+                "rate_limit_error",
+            ),
+            (
+                ProviderError::invalid_request("openai", "invalid"),
+                "invalid_request",
+            ),
+            (
+                ProviderError::api_error("openai", 409, "conflict"),
+                "invalid_request",
+            ),
+            (
+                ProviderError::model_not_found("openai", "missing"),
+                "model_not_found",
+            ),
+            (ProviderError::timeout("openai", "timeout"), "network_error"),
+            (ProviderError::network("openai", "network"), "network_error"),
+            (
+                ProviderError::provider_unavailable("openai", "down"),
+                "provider_error",
+            ),
+            (
+                ProviderError::configuration("openai", "bad config"),
+                "config_error",
+            ),
+            (
+                ProviderError::response_parsing("openai", "bad json"),
+                "parse_error",
+            ),
+            (
+                ProviderError::not_supported("openai", "audio"),
+                "not_supported",
+            ),
+            (ProviderError::other("openai", "other"), "internal"),
+        ];
+
+        for (provider_error, expected) in cases {
+            assert_eq!(
+                sdk_variant(&SDKError::from(provider_error)),
+                expected,
+                "canonical SDK category mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_error_conversion_redacts_display_and_debug() {
+        let raw_key = "sk-sdk-secret-123456789";
+        let raw_signature = "sdk-signed-value";
+        let sdk_error = SDKError::from(ProviderError::api_error(
+            "openai",
+            503,
+            format!(
+                "Authorization: Bearer {raw_key}\nrequest=https://user:password@example.com/v1?X-Amz-Signature={raw_signature}"
+            ),
+        ));
+
+        assert_eq!(sdk_variant(&sdk_error), "provider_error");
+        let display = sdk_error.to_string();
+        let debug = format!("{sdk_error:?}");
+        for raw in [raw_key, raw_signature, "password"] {
+            assert!(!display.contains(raw), "Display leaked {raw}: {display}");
+            assert!(!debug.contains(raw), "Debug leaked {raw}: {debug}");
+        }
+        assert!(display.contains("[REDACTED]") || debug.contains("[REDACTED]"));
     }
 
     // ==================== SDKError is_retryable Tests ====================

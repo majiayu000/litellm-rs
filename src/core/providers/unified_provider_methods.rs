@@ -1,6 +1,114 @@
 use super::{ContextualError, ProviderError, ProviderHttpErrorFacts, provider_http_error_facts};
 use crate::core::providers::failure::ProviderFailureFacts;
 use crate::utils::error::{CanonicalError, ErrorCode};
+use regex::Regex;
+use std::sync::OnceLock;
+use url::Url;
+
+const REDACTED: &str = "[REDACTED]";
+
+fn compiled_regex<'a>(cell: &'a OnceLock<Option<Regex>>, pattern: &str) -> Option<&'a Regex> {
+    cell.get_or_init(|| Regex::new(pattern).ok()).as_ref()
+}
+
+fn redact_sensitive_text(value: &str) -> String {
+    static URL_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static HEADER_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static AUTH_SCHEME_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static SECRET_PAIR_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static KNOWN_CREDENTIAL_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static JWT_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+
+    let Some(url_pattern) = compiled_regex(&URL_PATTERN, r#"https?://[^\s<>"']+"#) else {
+        return REDACTED.to_string();
+    };
+    let Some(header_pattern) = compiled_regex(
+        &HEADER_PATTERN,
+        r"(?im)\b(authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*[^\r\n]+",
+    ) else {
+        return REDACTED.to_string();
+    };
+    let Some(auth_scheme_pattern) = compiled_regex(
+        &AUTH_SCHEME_PATTERN,
+        r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+",
+    ) else {
+        return REDACTED.to_string();
+    };
+    let Some(secret_pair_pattern) = compiled_regex(
+        &SECRET_PAIR_PATTERN,
+        r#"(?i)(["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|credential|password|passwd|token|secret|signature|sig)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)"#,
+    ) else {
+        return REDACTED.to_string();
+    };
+    let Some(known_credential_pattern) = compiled_regex(
+        &KNOWN_CREDENTIAL_PATTERN,
+        r"\b(?:sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|xox[baprs]-[A-Za-z0-9-]{8,})\b",
+    ) else {
+        return REDACTED.to_string();
+    };
+    let Some(jwt_pattern) = compiled_regex(
+        &JWT_PATTERN,
+        r"\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b",
+    ) else {
+        return REDACTED.to_string();
+    };
+
+    let value = url_pattern
+        .replace_all(value, |captures: &regex::Captures<'_>| {
+            redact_url(&captures[0])
+        })
+        .into_owned();
+    let value = header_pattern
+        .replace_all(&value, |captures: &regex::Captures<'_>| {
+            format!("{}: {REDACTED}", &captures[1])
+        })
+        .into_owned();
+    let value = auth_scheme_pattern
+        .replace_all(&value, |captures: &regex::Captures<'_>| {
+            format!("{} {REDACTED}", &captures[1])
+        })
+        .into_owned();
+    let value = secret_pair_pattern
+        .replace_all(&value, |captures: &regex::Captures<'_>| {
+            format!("{}{REDACTED}", &captures[1])
+        })
+        .into_owned();
+    let value = known_credential_pattern
+        .replace_all(&value, REDACTED)
+        .into_owned();
+    jwt_pattern.replace_all(&value, REDACTED).into_owned()
+}
+
+fn redact_url(candidate: &str) -> String {
+    let core = candidate.trim_end_matches(['.', ',', ';', ')', ']', '}']);
+    let suffix = &candidate[core.len()..];
+    let Ok(mut url) = Url::parse(core) else {
+        return REDACTED.to_string();
+    };
+
+    if !url.username().is_empty() && url.set_username(REDACTED).is_err() {
+        return REDACTED.to_string();
+    }
+    if url.password().is_some() && url.set_password(Some(REDACTED)).is_err() {
+        return REDACTED.to_string();
+    }
+    if url.query().is_some() {
+        let keys = url
+            .query_pairs()
+            .map(|(key, _)| key.into_owned())
+            .collect::<Vec<_>>();
+        url.set_query(None);
+        let mut query = url.query_pairs_mut();
+        for key in keys {
+            query.append_pair(&key, REDACTED);
+        }
+    }
+    if url.fragment().is_some() {
+        url.set_fragment(Some(REDACTED));
+    }
+
+    format!("{url}{suffix}")
+}
 
 impl ProviderError {
     fn bedrock_modeled_retry_provider() -> &'static str {
@@ -389,6 +497,73 @@ impl ProviderError {
         CanonicalError::canonical_code(self)
     }
 
+    /// Return a typed copy safe for logs, protocol adapters, and public errors.
+    ///
+    /// The original variant and non-secret identity/limit fields are preserved.
+    pub fn redacted(&self) -> Self {
+        let mut redacted = self.clone();
+        match &mut redacted {
+            Self::Authentication { message, .. }
+            | Self::QuotaExceeded { message, .. }
+            | Self::InvalidRequest { message, .. }
+            | Self::Network { message, .. }
+            | Self::ProviderUnavailable { message, .. }
+            | Self::Configuration { message, .. }
+            | Self::Serialization { message, .. }
+            | Self::Timeout { message, .. }
+            | Self::ApiError { message, .. }
+            | Self::TokenLimitExceeded { message, .. }
+            | Self::ResponseParsing { message, .. }
+            | Self::Other { message, .. } => {
+                *message = redact_sensitive_text(message);
+            }
+            Self::RateLimit { message, .. } => {
+                *message = redact_sensitive_text(message);
+            }
+            Self::ContentFiltered {
+                reason,
+                policy_violations,
+                ..
+            } => {
+                *reason = redact_sensitive_text(reason);
+                if let Some(violations) = policy_violations {
+                    for violation in violations {
+                        *violation = redact_sensitive_text(violation);
+                    }
+                }
+            }
+            Self::DeploymentError { message, .. }
+            | Self::RoutingError { message, .. }
+            | Self::TransformationError { message, .. } => {
+                *message = redact_sensitive_text(message);
+            }
+            Self::Cancelled {
+                cancellation_reason,
+                ..
+            } => {
+                if let Some(reason) = cancellation_reason {
+                    *reason = redact_sensitive_text(reason);
+                }
+            }
+            Self::Streaming {
+                last_chunk,
+                message,
+                ..
+            } => {
+                if let Some(chunk) = last_chunk {
+                    *chunk = redact_sensitive_text(chunk);
+                }
+                *message = redact_sensitive_text(message);
+            }
+            Self::ModelNotFound { .. }
+            | Self::NotSupported { .. }
+            | Self::NotImplemented { .. }
+            | Self::ContextLengthExceeded { .. }
+            | Self::FeatureDisabled { .. } => {}
+        }
+        redacted
+    }
+
     /// Canonical HTTP facts for protocol adapters.
     pub fn http_facts(&self) -> ProviderHttpErrorFacts {
         provider_http_error_facts(self)
@@ -415,5 +590,144 @@ impl ProviderError {
     /// Get HTTP status code for this error
     pub fn http_status(&self) -> u16 {
         super::provider_http_error_facts(self).status
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    const RAW_KEY: &str = "sk-raw-secret-123456789";
+    const RAW_SIGNATURE: &str = "signed-value-123";
+
+    fn assert_secret_absent(error: &ProviderError) {
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        for raw in [RAW_KEY, RAW_SIGNATURE, "cookie-value", "password-value"] {
+            assert!(!display.contains(raw), "Display leaked {raw}: {display}");
+            assert!(!debug.contains(raw), "Debug leaked {raw}: {debug}");
+        }
+        assert!(display.contains(REDACTED) || debug.contains(REDACTED));
+    }
+
+    #[test]
+    fn redacted_preserves_variant_provider_and_limits() {
+        let error = ProviderError::RateLimit {
+            provider: "openai",
+            message: format!("Authorization: Bearer {RAW_KEY}"),
+            retry_after: Some(7),
+            rpm_limit: Some(60),
+            tpm_limit: Some(1_000),
+            current_usage: Some(0.75),
+        };
+
+        let redacted = error.redacted();
+
+        assert!(matches!(
+            redacted,
+            ProviderError::RateLimit {
+                provider: "openai",
+                retry_after: Some(7),
+                rpm_limit: Some(60),
+                tpm_limit: Some(1_000),
+                current_usage: Some(0.75),
+                ..
+            }
+        ));
+        assert_eq!(redacted.canonical_code(), error.canonical_code());
+        assert_secret_absent(&redacted);
+    }
+
+    #[test]
+    fn redacted_covers_url_userinfo_signed_query_and_known_patterns() {
+        let error = ProviderError::authentication(
+            "openai",
+            format!(
+                "request https://user:password-value@example.com/v1?X-Amz-Signature={RAW_SIGNATURE}&api_key={RAW_KEY} Cookie: session=cookie-value"
+            ),
+        );
+        let malformed = ProviderError::authentication(
+            "openai",
+            format!("request https://user:password-value@[::1?X-Amz-Signature={RAW_SIGNATURE}"),
+        );
+
+        for redacted in [error.redacted(), malformed.redacted()] {
+            assert!(matches!(
+                redacted,
+                ProviderError::Authentication {
+                    provider: "openai",
+                    ..
+                }
+            ));
+            assert_secret_absent(&redacted);
+        }
+    }
+
+    #[test]
+    fn redacted_covers_reason_and_optional_body_fields() {
+        let content = ProviderError::content_filtered(
+            "vertex_ai",
+            format!("client_secret={RAW_KEY}"),
+            Some(vec![format!("password=password-value; token={RAW_KEY}")]),
+            Some(true),
+        )
+        .redacted();
+        let streaming = ProviderError::streaming_error(
+            "openai",
+            "chat",
+            Some(9),
+            Some(format!(r#"{{"access_token":"{RAW_KEY}"}}"#)),
+            format!("Bearer {RAW_KEY}"),
+        )
+        .redacted();
+        let cancelled =
+            ProviderError::cancelled("openai", "chat", Some(format!("signature={RAW_SIGNATURE}")))
+                .redacted();
+
+        for error in [&content, &streaming, &cancelled] {
+            assert_secret_absent(error);
+        }
+        assert!(matches!(
+            content,
+            ProviderError::ContentFiltered {
+                provider: "vertex_ai",
+                potentially_retryable: Some(true),
+                ..
+            }
+        ));
+        assert!(matches!(
+            streaming,
+            ProviderError::Streaming {
+                provider: "openai",
+                stream_type,
+                position: Some(9),
+                ..
+            } if stream_type == "chat"
+        ));
+    }
+
+    #[test]
+    fn redacted_preserves_model_and_deployment_identity() {
+        let model = ProviderError::model_not_found("openai", "gpt-safe").redacted();
+        let deployment =
+            ProviderError::deployment_error("deployment-safe", format!("api_key={RAW_KEY}"))
+                .redacted();
+
+        assert!(matches!(
+            model,
+            ProviderError::ModelNotFound {
+                provider: "openai",
+                model,
+            } if model == "gpt-safe"
+        ));
+        assert!(matches!(
+            deployment,
+            ProviderError::DeploymentError {
+                provider: "azure",
+                ref deployment,
+                ..
+            } if deployment == "deployment-safe"
+        ));
+        assert_secret_absent(&deployment);
     }
 }
