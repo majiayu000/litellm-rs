@@ -33,19 +33,29 @@ impl WebhookManager {
         };
 
         // Process each delivery (without holding the lock)
-        let mut results: Vec<(usize, WebhookDeliveryStatus, Option<String>)> = Vec::new();
+        let mut results: Vec<(
+            usize,
+            WebhookDeliveryStatus,
+            Option<String>,
+            WebhookDelivery,
+        )> = Vec::new();
 
         for (idx, mut delivery, config) in deliveries_to_process {
             let result = self.deliver_webhook_internal(&mut delivery, &config).await;
 
             match result {
                 Ok(_) => {
-                    results.push((idx, WebhookDeliveryStatus::Delivered, None));
+                    results.push((idx, WebhookDeliveryStatus::Delivered, None, delivery));
                 }
                 Err(e) => {
                     delivery.attempts += 1;
                     if delivery.attempts >= config.max_retries {
-                        results.push((idx, WebhookDeliveryStatus::Failed, Some(e.to_string())));
+                        results.push((
+                            idx,
+                            WebhookDeliveryStatus::Failed,
+                            Some(e.to_string()),
+                            delivery,
+                        ));
                     } else {
                         let next_retry = chrono::Utc::now()
                             + chrono::Duration::seconds(config.retry_delay_seconds as i64);
@@ -53,6 +63,7 @@ impl WebhookManager {
                             idx,
                             WebhookDeliveryStatus::Retrying,
                             Some(next_retry.to_rfc3339()),
+                            delivery,
                         ));
                     }
                 }
@@ -62,10 +73,13 @@ impl WebhookManager {
         // Apply results with a single lock acquisition
         {
             let mut data = self.data.write().await;
-            for (idx, status, info) in results {
+            for (idx, status, info, attempted) in results {
                 if let Some(delivery) = data.delivery_queue.get_mut(idx) {
                     delivery.status = status.clone();
                     delivery.last_attempt_at = Some(chrono::Utc::now());
+                    delivery.attempts = attempted.attempts;
+                    delivery.response_status = attempted.response_status;
+                    delivery.response_body = attempted.response_body;
 
                     match status {
                         WebhookDeliveryStatus::Delivered => {
@@ -84,7 +98,6 @@ impl WebhookManager {
                                         .ok()
                                         .map(|dt| dt.with_timezone(&chrono::Utc));
                             }
-                            delivery.attempts += 1;
                         }
                         _ => {}
                     }
@@ -111,6 +124,11 @@ impl WebhookManager {
         let mut request = self
             .client
             .post(&config.url)
+            .map_err(|_| {
+                GatewayError::Network(
+                    "Webhook request rejected by outbound endpoint policy".to_string(),
+                )
+            })?
             .timeout(Duration::from_secs(config.timeout_seconds))
             .header("Content-Type", "application/json")
             .header("User-Agent", "LiteLLM-Gateway/1.0");
@@ -131,10 +149,19 @@ impl WebhookManager {
             .json(&delivery.payload)
             .send()
             .await
-            .map_err(|e| GatewayError::Network(e.to_string()))?;
+            .map_err(|error| {
+                let message = if crate::utils::net::http::ProviderHttpClient::request_error_is_endpoint_policy(&error) {
+                    "Webhook request rejected by outbound endpoint policy"
+                } else {
+                    "Webhook transport request failed"
+                };
+                GatewayError::Network(message.to_string())
+            })?;
 
         let status_code = response.status().as_u16();
-        let response_body = response.text().await.unwrap_or_default();
+        let response_body = response.text().await.map_err(|_| {
+            GatewayError::Network("Webhook response body could not be read".to_string())
+        })?;
 
         delivery.response_status = Some(status_code);
         delivery.response_body = Some(response_body.clone());
@@ -150,15 +177,12 @@ impl WebhookManager {
         }
 
         if (200..300).contains(&status_code) {
-            debug!(
-                "Webhook delivered successfully: {} -> {}",
-                delivery.webhook_id, config.url
-            );
+            debug!("Webhook delivered successfully: {}", delivery.webhook_id);
             Ok(())
         } else {
             Err(GatewayError::Network(format!(
-                "Webhook returned status {}: {}",
-                status_code, response_body
+                "Webhook returned non-success status {}",
+                status_code
             )))
         }
     }

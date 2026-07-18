@@ -6,11 +6,10 @@ use super::types::{
     WebhookConfig, WebhookData, WebhookDelivery, WebhookDeliveryStatus, WebhookEventType,
     WebhookPayload, WebhookStats,
 };
-use crate::core::http::outbound::default_outbound_client;
+use crate::core::net::ProviderEndpointPolicy;
 use crate::core::types::context::RequestContext;
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use crate::utils::net::http::create_custom_client;
-use reqwest::Client;
+use crate::utils::net::http::ProviderHttpClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,8 +19,8 @@ use uuid::Uuid;
 
 /// Webhook manager
 pub struct WebhookManager {
-    /// HTTP client for webhook requests
-    pub(super) client: Client,
+    /// Public-only HTTP client for webhook requests
+    pub(super) client: ProviderHttpClient,
     /// Consolidated webhook data - single lock for all related state
     pub(super) data: Arc<RwLock<WebhookData>>,
 }
@@ -29,8 +28,13 @@ pub struct WebhookManager {
 impl WebhookManager {
     /// Create a new webhook manager
     pub fn new() -> Result<Self> {
-        let client = create_custom_client(Duration::from_secs(30))
-            .map_err(|e| GatewayError::Network(format!("Failed to create HTTP client: {}", e)))?;
+        let client = ProviderHttpClient::no_redirect(
+            ProviderEndpointPolicy::public_only(),
+            Duration::from_secs(30),
+        )
+        .map_err(|_| {
+            GatewayError::Network("Failed to create policy-bound webhook client".to_string())
+        })?;
 
         Ok(Self {
             client,
@@ -38,38 +42,32 @@ impl WebhookManager {
         })
     }
 
-    /// Create a new webhook manager with default settings, panics on failure
-    /// Use `new()` for fallible construction
-    pub fn new_or_default() -> Self {
-        Self::new().unwrap_or_else(|e| {
-            tracing::error!(
-                "Failed to create WebhookManager: {}, using minimal client",
-                e
-            );
-            // Create a minimal client as fallback
-            Self {
-                client: default_outbound_client().clone(),
-                data: Arc::new(RwLock::new(WebhookData::default())),
-            }
-        })
+    #[cfg(test)]
+    pub(super) fn with_client_for_test(client: ProviderHttpClient) -> Self {
+        Self {
+            client,
+            data: Arc::new(RwLock::new(WebhookData::default())),
+        }
     }
 
     /// Register a webhook
-    pub async fn register_webhook(&self, id: String, config: WebhookConfig) -> Result<()> {
-        info!("Registering webhook: {} -> {}", id, config.url);
-
-        // Validate webhook URL
-        if config.url.is_empty() {
+    pub async fn register_webhook(&self, id: String, mut config: WebhookConfig) -> Result<()> {
+        let url = reqwest::Url::parse(&config.url).map_err(|_| {
+            GatewayError::Validation(
+                "Webhook URL is invalid or disallowed by outbound policy".to_string(),
+            )
+        })?;
+        if !matches!(url.scheme(), "http" | "https")
+            || ProviderEndpointPolicy::public_only()
+                .validate_url_without_resolution(&url)
+                .is_err()
+        {
             return Err(GatewayError::Validation(
-                "Webhook URL cannot be empty".to_string(),
+                "Webhook URL is invalid or disallowed by outbound policy".to_string(),
             ));
         }
-
-        if !config.url.starts_with("http://") && !config.url.starts_with("https://") {
-            return Err(GatewayError::Validation(
-                "Webhook URL must be HTTP or HTTPS".to_string(),
-            ));
-        }
+        config.url = url.to_string();
+        info!("Registering webhook: {}", id);
 
         let mut data = self.data.write().await;
         data.webhooks.insert(id, config);
@@ -191,11 +189,5 @@ impl Clone for WebhookManager {
             client: self.client.clone(),
             data: self.data.clone(),
         }
-    }
-}
-
-impl Default for WebhookManager {
-    fn default() -> Self {
-        Self::new_or_default()
     }
 }
