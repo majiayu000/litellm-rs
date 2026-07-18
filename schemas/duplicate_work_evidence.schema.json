@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specrail.local/schemas/duplicate_work_evidence.schema.json",
+  "title": "Duplicate Work Evidence",
+  "type": "object",
+  "required": [
+    "issue",
+    "collected_at",
+    "open_prs_complete",
+    "open_pr_limit",
+    "open_prs",
+    "remote_branches"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "collected_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "open_prs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "number",
+          "head_ref",
+          "references_issue"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "head_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "references_issue": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "open_prs_complete": {
+      "type": "boolean"
+    },
+    "open_pr_limit": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "remote_branches": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

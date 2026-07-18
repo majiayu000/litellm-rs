@@ -1,0 +1,99 @@
+states:
+  new_issue:
+    owner: requester
+    next:
+      - needs_info
+      - duplicate
+      - security_private
+      - triaged
+
+  needs_info:
+    owner: requester
+    next:
+      - triaged
+      - abandoned
+
+  duplicate:
+    owner: maintainer
+    terminal: true
+
+  security_private:
+    owner: maintainer
+    terminal: true
+
+  triaged:
+    owner: maintainer
+    next:
+      - ready_to_spec
+      - ready_to_implement
+      - reserved_internal
+
+  ready_to_spec:
+    owner: maintainer
+    next:
+      - spec_pr_open
+
+  spec_pr_open:
+    owner: contributor_or_agent
+    next:
+      - spec_review
+
+  spec_review:
+    owner: maintainer
+    next:
+      - spec_approved
+      - needs_info
+
+  spec_approved:
+    owner: maintainer
+    next:
+      - ready_to_implement
+
+  ready_to_implement:
+    owner: maintainer
+    next:
+      - impl_pr_open
+
+  impl_pr_open:
+    owner: contributor_or_agent
+    next:
+      - agent_review
+      - human_review
+
+  agent_review:
+    owner: agent
+    next:
+      - human_review
+
+  human_review:
+    owner: maintainer
+    next:
+      - ci_green
+      - needs_info
+
+  ci_green:
+    owner: ci
+    next:
+      - merge_ready
+
+  merge_ready:
+    owner: maintainer
+    next:
+      - merged
+
+  merged:
+    owner: maintainer
+    next:
+      - release_note_drafted
+
+  release_note_drafted:
+    owner: maintainer
+    terminal: true
+
+  reserved_internal:
+    owner: maintainer
+    terminal: true
+
+  abandoned:
+    owner: maintainer
+    terminal: true

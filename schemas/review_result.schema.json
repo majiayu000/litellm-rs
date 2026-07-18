@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specrail.local/schemas/review_result.schema.json",
+  "title": "Review Result",
+  "type": "object",
+  "required": [
+    "verdict",
+    "body",
+    "comments"
+  ],
+  "additionalProperties": false,
+  "dependentRequired": {
+    "review_round": [
+      "review_mode"
+    ],
+    "review_mode": [
+      "review_round"
+    ]
+  },
+  "properties": {
+    "verdict": {
+      "enum": [
+        "APPROVE",
+        "REJECT"
+      ]
+    },
+    "pr": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "Grouping key: PR number this review round belongs to."
+    },
+    "head_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Grouping key: PR head SHA reviewed in this round."
+    },
+    "review_round": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "review_mode": {
+      "enum": [
+        "full",
+        "resumed",
+        "diff_only"
+      ],
+      "description": "full reviews past round 2 require human_full_review_request; resumed/diff_only require prior_findings."
+    },
+    "base_head_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Head SHA reviewed in the prior round; required for diff_only."
+    },
+    "human_full_review_request": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Quoted human request authorizing a full review past the round cap."
+    },
+    "prior_findings": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "required": [
+          "summary",
+          "status"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "resolved",
+              "unresolved",
+              "obsolete"
+            ]
+          }
+        }
+      }
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "pattern": "(^|\\n)## Summary[ \\t]*(\\n|$)"
+        },
+        {
+          "pattern": "(^|\\n)## Verdict[ \\t]*(\\n|$)"
+        }
+      ]
+    },
+    "comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "line",
+          "side",
+          "severity",
+          "body"
+        ],
+        "additionalProperties": false,
+        "dependentRequired": {
+          "start_line": [
+            "start_side"
+          ],
+          "start_side": [
+            "start_line"
+          ]
+        },
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "side": {
+            "enum": [
+              "RIGHT",
+              "LEFT"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "important",
+              "suggestion",
+              "nit"
+            ]
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "start_side": {
+            "enum": [
+              "RIGHT",
+              "LEFT"
+            ]
+          },
+          "suggestion": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "spec_alignment": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "matched",
+            "drift",
+            "not_applicable"
+          ]
+        },
+        "spec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "details": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

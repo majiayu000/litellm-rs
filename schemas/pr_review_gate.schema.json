@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specrail.local/schemas/pr_review_gate.schema.json",
+  "title": "Pull Request Gate Evidence",
+  "type": "object",
+  "required": [
+    "pr",
+    "state",
+    "is_draft",
+    "head_sha",
+    "gate_query_completed_at",
+    "gate_query_head_sha",
+    "linked_issue",
+    "merge_state",
+    "checks",
+    "reviews",
+    "review_threads",
+    "review_source",
+    "lane_failures"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "pr": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "is_draft": {
+      "type": "boolean"
+    },
+    "linked_issue": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "issue_reference": {
+      "type": "object",
+      "required": [
+        "number",
+        "kind",
+        "source",
+        "verified",
+        "closing_issue_numbers"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "enum": ["closing", "partial"]
+        },
+        "source": {
+          "enum": ["closingIssuesReferences", "pr_body"]
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "closing_issue_numbers": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "head_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "gate_query_completed_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gate_query_head_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "merge_dispatched_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "merge_head_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "merge_state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lane_failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["lane_id", "failure_kind", "observed_marker"],
+        "additionalProperties": true,
+        "properties": {
+          "lane_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "failure_kind": {
+            "enum": ["usage_limit", "crash", "zero_output", "closed", "other"]
+          },
+          "observed_marker": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "conclusion"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "conclusion": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["author", "state"],
+        "additionalProperties": false,
+        "properties": {
+          "author": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "review_threads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["is_resolved", "is_outdated", "resolved_by", "resolver_role"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string"
+          },
+          "is_resolved": {
+            "type": "boolean"
+          },
+          "is_outdated": {
+            "type": "boolean"
+          },
+          "resolved_by": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resolver_role": {
+            "enum": ["reviewer_lane", "human", "implementer", "orchestrator", "coordinator", "unknown"]
+          }
+        }
+      }
+    },
+    "merge_record": {
+      "type": ["object", "null"],
+      "required": ["remote_confirmed"],
+      "additionalProperties": true,
+      "properties": {
+        "merge_path": {
+          "enum": ["gh_pr_merge", "api_fallback", "merged_by_other"],
+          "description": "How the merge landed: gh pr merge from a neutral cwd, the gh api PUT fallback for locally checked-out branches, or merged by someone else."
+        },
+        "remote_confirmed": {
+          "type": "boolean",
+          "description": "True only after a remote query (gh pr view --json merged,mergeCommit) confirmed the outcome."
+        },
+        "merge_commit_sha": {
+          "type": ["string", "null"]
+        },
+        "branch_deletion_outcome": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "review_source": {
+      "enum": ["independent_lane", "self_review"],
+      "description": "Source of the merge review. Only independent_lane satisfies the independent-review requirement."
+    },
+    "human_authorization": {
+      "type": "object",
+      "required": ["actor", "source"],
+      "additionalProperties": true,
+      "properties": {
+        "actor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "self_review_authorization": {
+      "type": "object",
+      "required": ["actor", "source", "scope"],
+      "additionalProperties": true,
+      "properties": {
+        "actor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
