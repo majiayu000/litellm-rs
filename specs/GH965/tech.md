@@ -340,11 +340,17 @@ writable scope **恰为** `src/core/providers/unified_provider_methods.rs` 与 `
 
 ```bash
 python3 - <<'PY'
+import hashlib
+import json
 import re
 from pathlib import Path
 
 MARKER = "SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError"
 ATTRIBUTE = "#[allow(deprecated)]"
+OUTSIDE_SHA256 = {
+    "T023a": "721c4930700167ebf9e9172f31d5f38f4e65d5dac6811c1cee973c3810ec380b",
+    "T023b": "cc062b0bdc847ee3033fb75b50e7f315e8d61b691ef8e82d0b4f2456a031a053",
+}
 PUNCT = set("{}()[].,:;|=<>?!&+-*/%^#@~$'")
 MULTI = ("::", "=>", "->", "..=", "...", "..", "&&", "||", "==", "!=", "<=", ">=",
          "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>")
@@ -381,7 +387,8 @@ def rust_lex(text, keep_comments=False):
             offset += raw.end()
             end = text.find(closing, offset)
             assert end >= 0, "unterminated raw string"
-            offset = end + len(closing); tokens.append(("LITERAL", start, offset)); continue
+            offset = end + len(closing)
+            tokens.append(((text[start:offset] if keep_comments else "LITERAL"), start, offset)); continue
         prefix = 1 if text.startswith(('b"', 'c"'), offset) else 0
         if text[offset + prefix:offset + prefix + 1] == '"':
             offset += prefix + 1
@@ -394,14 +401,15 @@ def rust_lex(text, keep_comments=False):
                 else:
                     offset += 1
             assert offset <= len(text) and text[offset - 1] == '"', "unterminated string"
-            tokens.append(("LITERAL", start, offset)); continue
+            tokens.append(((text[start:offset] if keep_comments else "LITERAL"), start, offset)); continue
         if text[offset] == "'" and offset + 2 < len(text) and (
             text[offset + 1] == "\\" or text[offset + 2] == "'"
         ):
             offset += 1
             offset += 2 if text[offset] == "\\" else 1
             assert offset < len(text) and text[offset] == "'", "unterminated char"
-            offset += 1; tokens.append(("LITERAL", start, offset)); continue
+            offset += 1
+            tokens.append(((text[start:offset] if keep_comments else "LITERAL"), start, offset)); continue
         match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[offset:])
         if not match:
             match = re.match(r"[0-9][A-Za-z0-9_.]*", text[offset:])
@@ -428,14 +436,6 @@ def matching_brace(tokens, open_index):
             depth -= 1
             if depth == 0: return index
     raise AssertionError("unclosed Rust block")
-def function_signatures(token_values):
-    signatures = []
-    for index, value in enumerate(token_values):
-        if value == "fn":
-            start = index - 1 if index and token_values[index - 1] == "pub" else index
-            end = token_values.index("{", start)
-            signatures.append(tuple(token_values[start:end]))
-    return sorted(signatures)
 def conversion_span(production):
     tokens = rust_lex(production)
     token_values = [value for value, _, _ in tokens]
@@ -489,39 +489,11 @@ def verify_source(source):
     normalized, phase = normalize_conversion(production[start:end])
     assert values(normalized, True) == values(EXPECTED, True), "conversion token shape changed"
     outside = production[:start] + production[end:]
-    tokens = rust_lex(outside)
-    token_values = [value for value, _, _ in tokens]
-    expected_functions = sorted(tuple(values(item)) for item in (
-        "fn from(error: crate::utils::error::gateway_error::GatewayError) -> Self",
-        "pub fn is_retryable(&self) -> bool", "pub fn is_auth_error(&self) -> bool",
-        "pub fn is_config_error(&self) -> bool"))
-    assert function_signatures(token_values) == expected_functions, (
-        "outside-conversion production function surface changed"
+    payload = json.dumps(values(outside, True), ensure_ascii=True, separators=(",", ":")).encode()
+    fingerprint = hashlib.sha256(payload).hexdigest()
+    assert fingerprint == OUTSIDE_SHA256[phase], (
+        f"outside-production fingerprint changed for {phase}: {fingerprint}"
     )
-    forbidden = {"const", "static", "async", "unsafe", "extern"} & set(token_values)
-    assert not forbidden, f"unexpected production surface: {sorted(forbidden)}"
-    bangs = [tuple(token_values[index - 1:index + 2])
-             for index, value in enumerate(token_values) if value == "!"]
-    assert bangs == [("matches", "!", "(")] * 3, "production macro surface changed"
-    enum_header = values("pub enum SDKError {")
-    enum_starts = subsequences(token_values, enum_header)
-    assert len(enum_starts) == 1, "expected exactly one public SDKError enum"
-    enum_open = enum_starts[0] + len(enum_header) - 1
-    enum_close = matching_brace(tokens, enum_open)
-    declarations = [i for i in range(enum_open + 1, enum_close) if token_values[i] == "ProviderError"]
-    assert len(declarations) == 1, "expected one SDKError::ProviderError enum variant declaration"
-    declaration = declarations[0]
-    assert token_values[declaration:declaration + 5] == [
-        "ProviderError", "(", "String", ")", ","], "legacy enum variant shape changed"
-    for index, value in enumerate(token_values):
-        if value != "ProviderError": continue
-        assert index + 1 >= len(token_values) or token_values[index + 1] != "::", (
-            "ProviderError::Variant classifier outside conversion"
-        )
-        if index == declaration: continue
-        assert index >= 2 and token_values[index - 2:index] == ["SDKError", "::"], (
-            "bare/core ProviderError type/helper/classifier outside conversion"
-        )
     return phase
 phase = verify_source(Path("src/sdk/errors.rs").read_text(encoding="utf-8"))
 print(f"ProviderError classifier guard passed: phase={phase}")
@@ -535,14 +507,17 @@ attribute/comment，以及换行形式的 `match\n redacted.to_string()`、第�
 `ProviderError::Variant` arm、额外 assignment/call 或 variant classifier 都失败；纯格式换行/缩进仍可通过。
 
 同一命令还要求唯一 `#[cfg(test)] mod tests` 边界，并只把该边界前缀视为 production；conversion 外的
-`fn` item signature multiset 必须恰为 Gateway `From::from` 与
-`SDKError::{is_retryable,is_auth_error,is_config_error}`，全部 `!` token 必须恰为三个 `matches!(`，且
-`const/static/async/unsafe/extern` 为零，因此任何新增 helper、static/const 或 macro classifier surface 都失败。
-此外 bare/core `ProviderError` 只能是唯一 `SDKError` enum variant 声明，其他 occurrence 必须精确为
-`SDKError::ProviderError` compatibility reference；任何 `ProviderError::Variant`、core type/import/helper 或
-string/parallel classifier 均 fail closed，而 tests 内 fixture 不产生误报。该命令不增加任何 production/test
-changed line。若实现后来使 D1E-a2a 超过 500 changed
-lines，必须在不删除/压缩安全 fixture 的前提下先减少实现 diff，禁止把验证命令伪装成 source 文件或放宽预算。
+完整 comment/literal-preserving token stream 经无歧义 JSON 编码后必须命中 phase-specific 固定 SHA-256。
+T023a digest 由 immutable `origin/main@2ff9bb2066adfb04d67b2e692ae9fbd9968fa9b5` 的
+`src/sdk/errors.rs` 去掉 conversion/tests 后、只加入编译所需精确
+`use crate::utils::error::ErrorCode;` 生成，禁止 outside decoration。T023b synthetic baseline 只再加入
+legacy variant 的 exact `#[deprecated(since = "0.6.0", note = "use the existing typed SDK categories returned by ProviderError conversion")]`
+以及 Gateway Unavailable arm、`SDKError::is_retryable` 紧邻的固定 marker +局部 allow；tests/completions 的
+其余 6 个 marker/allow（5 tests + 1 completions）继续由后文 9-site all-target guard 精确锁定。固定值只在 spec authoring 时以上述
+immutable baseline 和同一 lexer/JSON 算法生成；运行命令不调用 `git show`，不依赖 mutable/shallow Git 状态。
+因此任何 cfg/inline/custom attribute、body/helper/const/static/macro、comment/literal 或其他 production 变化
+都会改变 digest 并失败。该命令不增加 production/test changed line；若 D1E-a2a 超过 500 changed lines，必须
+在不删除/压缩安全 fixture 的前提下减少实现 diff，不得把验证命令伪装成 source 文件或放宽预算。
 
 2026-07-18 在原 D1E-a2 实现 worktree 上重新验证发现：给 legacy
 `SDKError::ProviderError(String)` 加真实 `#[deprecated(since = "0.6.0", ...)]` 后，strict Clippy 会把同一
