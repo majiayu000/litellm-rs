@@ -343,27 +343,127 @@ python3 - <<'PY'
 import re
 from pathlib import Path
 
-token_pattern = re.compile(
-    r"::|=>|->|[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[{}()\[\].,;|:=<>?!&+\-*/%]"
-)
+MARKER = "SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError"
+ATTRIBUTE = "#[allow(deprecated)]"
+PUNCT = set("{}()[].,:;|=<>?!&+-*/%^#@~$'")
+MULTI = ("::", "=>", "->", "..=", "...", "..", "&&", "||", "==", "!=", "<=", ">=",
+         "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>")
 
-def rust_tokens(text: str) -> list[str]:
+def rust_lex(text, keep_comments=False):
     tokens = []
     offset = 0
-    for match in token_pattern.finditer(text):
-        gap = text[offset:match.start()]
-        assert not gap.strip(), f"unrecognized Rust syntax: {gap!r}"
-        tokens.append(match.group(0))
-        offset = match.end()
-    tail = text[offset:]
-    assert not tail.strip(), f"unrecognized trailing Rust syntax: {tail!r}"
+    while offset < len(text):
+        if text[offset].isspace():
+            offset += 1; continue
+        start = offset
+        if text.startswith("//", offset):
+            offset = text.find("\n", offset)
+            if offset < 0:
+                offset = len(text)
+            if keep_comments:
+                tokens.append(("COMMENT:" + text[start:offset], start, offset))
+            continue
+        if text.startswith("/*", offset):
+            depth = 1; offset += 2
+            while offset < len(text) and depth:
+                if text.startswith("/*", offset):
+                    depth += 1; offset += 2
+                elif text.startswith("*/", offset):
+                    depth -= 1; offset += 2
+                else:
+                    offset += 1
+            assert depth == 0, "unterminated block comment"
+            if keep_comments:
+                tokens.append(("COMMENT:" + text[start:offset], start, offset))
+            continue
+        raw = re.match(r'(?:br|cr|r)(?P<h>#{0,255})"', text[offset:])
+        if raw:
+            closing = '"' + raw.group("h")
+            offset += raw.end()
+            end = text.find(closing, offset)
+            assert end >= 0, "unterminated raw string"
+            offset = end + len(closing); tokens.append(("LITERAL", start, offset)); continue
+        prefix = 1 if text.startswith(('b"', 'c"'), offset) else 0
+        if text[offset + prefix:offset + prefix + 1] == '"':
+            offset += prefix + 1
+            while offset < len(text):
+                if text[offset] == "\\":
+                    offset += 2
+                elif text[offset] == '"':
+                    offset += 1
+                    break
+                else:
+                    offset += 1
+            assert offset <= len(text) and text[offset - 1] == '"', "unterminated string"
+            tokens.append(("LITERAL", start, offset)); continue
+        if text[offset] == "'" and offset + 2 < len(text) and (
+            text[offset + 1] == "\\" or text[offset + 2] == "'"
+        ):
+            offset += 1
+            offset += 2 if text[offset] == "\\" else 1
+            assert offset < len(text) and text[offset] == "'", "unterminated char"
+            offset += 1; tokens.append(("LITERAL", start, offset)); continue
+        match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[offset:])
+        if not match:
+            match = re.match(r"[0-9][A-Za-z0-9_.]*", text[offset:])
+        if match:
+            offset += match.end(); tokens.append((text[start:offset], start, offset)); continue
+        operator = next((item for item in MULTI if text.startswith(item, offset)), None)
+        if operator:
+            offset += len(operator); tokens.append((operator, start, offset)); continue
+        assert text[offset] in PUNCT, f"unrecognized Rust syntax at {offset}: {text[offset:offset + 20]!r}"
+        offset += 1; tokens.append((text[start:offset], start, offset))
     return tokens
 
-source = Path("src/sdk/errors.rs").read_text(encoding="utf-8")
-start = source.index("impl From<crate::core::providers::ProviderError> for SDKError {")
-end = source.index("\n/// SDK result type", start)
-actual = rust_tokens(source[start:end])
-expected = rust_tokens("""
+def values(text, keep_comments=False):
+    return [value for value, _, _ in rust_lex(text, keep_comments)]
+def subsequences(haystack, needle):
+    return [index for index in range(len(haystack) - len(needle) + 1)
+            if haystack[index:index + len(needle)] == needle]
+
+def matching_brace(tokens, open_index):
+    assert tokens[open_index][0] == "{"
+    depth = 0
+    for index in range(open_index, len(tokens)):
+        if tokens[index][0] == "{":
+            depth += 1
+        elif tokens[index][0] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise AssertionError("unclosed Rust block")
+
+def conversion_span(production):
+    tokens = rust_lex(production)
+    token_values = [value for value, _, _ in tokens]
+    header = values("impl From<crate::core::providers::ProviderError> for SDKError {")
+    starts = subsequences(token_values, header)
+    assert len(starts) == 1, "expected exactly one ProviderError-to-SDKError conversion"
+    start = starts[0]
+    close = matching_brace(tokens, start + len(header) - 1)
+    return tokens[start][1], tokens[close][2]
+
+def normalize_conversion(block):
+    marker_line = "// " + MARKER
+    marker_count = block.count(marker_line)
+    attribute_count = block.count(ATTRIBUTE)
+    if marker_count == 0 and attribute_count == 0:
+        return block, "T023a"
+    assert marker_count == 1 and attribute_count == 1, "T023b decoration count mismatch"
+    decoration = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)" + re.escape(marker_line) + r"\r?\n"
+        r"(?P=indent)" + re.escape(ATTRIBUTE) + r"\r?\n"
+        r"(?P=indent)ErrorCode::Unavailable => SDKError::ProviderError\(message\),$"
+    )
+    matches = list(decoration.finditer(block))
+    assert len(matches) == 1, "T023b decoration is not on the exact Unavailable arm"
+    match = matches[0]
+    plain_arm = match.group("indent") + (
+        "ErrorCode::Unavailable => SDKError::ProviderError(message),"
+    )
+    return block[:match.start()] + plain_arm + block[match.end():], "T023b"
+
+EXPECTED = """
 impl From<crate::core::providers::ProviderError> for SDKError {
     fn from(error: crate::core::providers::ProviderError) -> Self {
         let redacted = error.redacted();
@@ -384,17 +484,67 @@ impl From<crate::core::providers::ProviderError> for SDKError {
         }
     }
 }
-""")
-assert actual == expected, "ProviderError conversion deviates from canonical-code-only token shape"
+"""
+
+def verify_source(source):
+    test_boundary = "\n#[cfg(test)]\nmod tests {"
+    assert source.count(test_boundary) == 1, (
+        "expected one #[cfg(test)] mod tests production/fixture boundary"
+    )
+    production = source.split(test_boundary, 1)[0]
+    start, end = conversion_span(production)
+    normalized, phase = normalize_conversion(production[start:end])
+    assert values(normalized, True) == values(EXPECTED, True), (
+        "ProviderError conversion deviates from canonical-code-only token shape"
+    )
+
+    outside = production[:start] + production[end:]
+    tokens = rust_lex(outside)
+    token_values = [value for value, _, _ in tokens]
+    enum_header = values("pub enum SDKError {")
+    enum_starts = subsequences(token_values, enum_header)
+    assert len(enum_starts) == 1, "expected exactly one public SDKError enum"
+    enum_open = enum_starts[0] + len(enum_header) - 1
+    enum_close = matching_brace(tokens, enum_open)
+    declarations = [
+        index for index in range(enum_open + 1, enum_close)
+        if token_values[index] == "ProviderError"
+    ]
+    assert len(declarations) == 1, "expected one SDKError::ProviderError enum variant declaration"
+    declaration = declarations[0]
+    assert token_values[declaration:declaration + 5] == [
+        "ProviderError", "(", "String", ")", ","
+    ], "legacy enum variant shape changed"
+
+    for index, value in enumerate(token_values):
+        if value != "ProviderError":
+            continue
+        assert index + 1 >= len(token_values) or token_values[index + 1] != "::", (
+            "ProviderError::Variant classifier outside conversion"
+        )
+        if index == declaration:
+            continue
+        assert index >= 2 and token_values[index - 2:index] == ["SDKError", "::"], (
+            "bare/core ProviderError type/helper/classifier outside conversion"
+        )
+    return phase
+phase = verify_source(Path("src/sdk/errors.rs").read_text(encoding="utf-8"))
+print(f"ProviderError classifier guard passed: phase={phase}")
 PY
 ```
 
-该命令不是 whitespace/text-count heuristic：它把 conversion 与批准形状都词法化，任何未识别的非空白 syntax
-先 fail closed，再要求**整个 token 序列逐项相等**。因此换行形式的 `match\n redacted.to_string()`、第二个
-`match`/`if`、字符串 helper、`ProviderError::Variant` arm、额外 assignment/call 或 variant classifier 都会改变
-token 序列并失败；纯格式换行/缩进仍可通过。它不增加任何 production/test changed line。若实现后来使
-D1E-a2a 超过 500 changed lines，必须在不删除/压缩安全 fixture 的前提下先减少实现 diff，禁止把验证命令
-伪装成 source 文件或放宽预算。
+该命令不是 whitespace/text-count heuristic。它先 fail closed 词法化并定位完整 conversion：T023a 只接受无
+decoration 的批准 token shape；T023b 只接受在 `ErrorCode::Unavailable` arm 紧邻、依次出现且各恰为一次的固定
+marker 与 `#[allow(deprecated)]`，精确剥离这两行后再要求**整个 token 序列逐项相等**。任何额外、错位或错误
+attribute/comment，以及换行形式的 `match\n redacted.to_string()`、第二个 `match`/`if`、字符串 helper、
+`ProviderError::Variant` arm、额外 assignment/call 或 variant classifier 都失败；纯格式换行/缩进仍可通过。
+
+同一命令还要求唯一 `#[cfg(test)] mod tests` 边界，并只把该边界前缀视为 production；conversion 外的
+production tokens 中，bare/core `ProviderError` 只能是唯一 `SDKError` enum variant 声明，其他 occurrence
+必须精确为 `SDKError::ProviderError` compatibility reference。任何 `ProviderError::Variant`、core
+`ProviderError` type/import/helper 或 string/parallel classifier 均 fail closed，而 tests 内的 exhaustive
+fixture 不产生误报。该命令不增加任何 production/test changed line。若实现后来使 D1E-a2a 超过 500 changed
+lines，必须在不删除/压缩安全 fixture 的前提下先减少实现 diff，禁止把验证命令伪装成 source 文件或放宽预算。
 
 2026-07-18 在原 D1E-a2 实现 worktree 上重新验证发现：给 legacy
 `SDKError::ProviderError(String)` 加真实 `#[deprecated(since = "0.6.0", ...)]` 后，strict Clippy 会把同一
