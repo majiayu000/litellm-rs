@@ -27,8 +27,8 @@ impl Validate for MonitoringConfig {
 
 impl Validate for CallbackConfig {
     fn validate(&self) -> Result<(), String> {
-        if self.queue_capacity == 0 {
-            return Err("Callback queue capacity must be greater than 0".to_string());
+        if self.queue_capacity < 2 {
+            return Err("Callback queue capacity must be at least 2".to_string());
         }
         if self.timeout_ms == 0 {
             return Err("Callback timeout must be greater than 0".to_string());
@@ -70,8 +70,8 @@ fn validate_callback_backend(backend: &CallbackBackendConfig) -> Result<(), Stri
             if config.api_key.trim().is_empty() {
                 return Err("Datadog callback api_key cannot be empty".to_string());
             }
-            if config.site.trim().is_empty() {
-                return Err("Datadog callback site cannot be empty".to_string());
+            if !crate::core::integrations::DataDogConfig::is_supported_site(&config.site) {
+                return Err("Datadog callback site is not a supported Datadog site".to_string());
             }
             if config.batch_size == 0 {
                 return Err("Datadog callback batch_size must be greater than 0".to_string());
@@ -185,14 +185,32 @@ mod tests {
     }
 
     #[test]
-    fn callback_config_rejects_zero_capacity() {
+    fn callback_config_rejects_capacity_below_lifecycle_pair() {
+        for queue_capacity in [0, 1] {
+            let config = CallbackConfig {
+                queue_capacity,
+                ..CallbackConfig::default()
+            };
+            assert_eq!(
+                validate_config(&config).unwrap_err(),
+                "Callback queue capacity must be at least 2"
+            );
+        }
+    }
+
+    #[test]
+    fn callback_config_rejects_datadog_site_host_confusion() {
         let config = CallbackConfig {
-            queue_capacity: 0,
+            backends: vec![CallbackBackendConfig::Datadog(
+                crate::core::integrations::DataDogConfig::new("test-api-key")
+                    .site("datadoghq.com@attacker.invalid"),
+            )],
             ..CallbackConfig::default()
         };
+
         assert_eq!(
             validate_config(&config).unwrap_err(),
-            "Callback queue capacity must be greater than 0"
+            "Datadog callback site is not a supported Datadog site"
         );
     }
 
