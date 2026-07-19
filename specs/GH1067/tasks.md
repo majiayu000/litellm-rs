@@ -11,15 +11,15 @@ GH-1067 / #1067
 
 ## Implementation Tasks
 
-- [ ] `SP1067-T1` Covers: P1, P10, security. Owner: coordinator. Dependencies: none. Done when: a dashboard route module serves the compile-time HTML, CSS, and JavaScript assets at the three declared exact paths with correct content types, `Cache-Control: no-store`, and the restrictive CSP; route assembly exposes no prefix fallback or filesystem serving. Verify: focused dashboard handler/route tests and `rg -n "ServeDir|ServeFile|NamedFile" src/server`.
+- [ ] `SP1067-T1` Covers: P1, P10, security. Owner: coordinator. Dependencies: none. Done when: a dashboard route module serves the compile-time HTML, CSS, and JavaScript assets at the three declared exact paths with correct content types, `Cache-Control: no-store`, and the restrictive CSP; route assembly exposes no prefix fallback or filesystem serving. Verify: focused dashboard handler/route tests and `rg -n "actix_files|Files::new|NamedFile|ServeDir|ServeFile" src/server`.
 
 - [ ] `SP1067-T2` Covers: P7, P9. Owner: coordinator. Dependencies: T1. Done when: the semantic HTML/CSS provides labeled login, key, team, and spend panels; keyboard navigation, visible focus, responsive tables, empty states, confirmation dialogs, and a live status/error region are present without external assets. Verify: dashboard asset contract tests and manual keyboard/narrow-viewport inspection.
 
-- [ ] `SP1067-T3` Covers: P2-P5. Owner: coordinator. Dependencies: T1-T2. Done when: memory-only admin login and sign-out call the existing auth contract; key list/create/revoke and team list/create/delete call only the declared existing APIs; mutation controls are confirmation-gated and disabled while pending; the one-time raw key lifecycle is explicit. Verify: asset contract/safety tests, focused existing auth/key/team route tests, and manual end-to-end interaction.
+- [ ] `SP1067-T3` Covers: P2-P5. Owner: coordinator. Dependencies: T1-T2. Done when: memory-only admin login and sign-out call the existing auth contract; every authenticated response is generation-checked before state/DOM commit and sign-out aborts all active requests; key list/create/revoke and team list/create/delete call only the declared existing APIs; key creation requires exactly one user/team owner plus non-wildcard model/endpoint permissions with `is_admin=false`; mutation controls are confirmation-gated and disabled while pending; the one-time raw key lifecycle is explicit. Verify: asset contract/safety tests, focused existing auth/key/team route tests, and the repeatable manual checklist.
 
-- [ ] `SP1067-T4` Covers: P6-P8. Owner: coordinator. Dependencies: T3. Done when: key and visible-team spend are rendered separately with finite numeric zero distinct from missing data; partial failures remain visible; abort/generation guards prevent stale refresh or post-sign-out writes. Verify: asset contract tests for formatter, row errors, `AbortController`, generation checks, and no key/team aggregate sum; manual slow/failure response inspection.
+- [ ] `SP1067-T4` Covers: P6-P8. Owner: coordinator. Dependencies: T3. Done when: key and visible-team spend are rendered separately with finite numeric zero distinct from missing data; partial failures remain visible; all-request abort/generation guards prevent stale refresh, mutation, one-time raw-key, or post-sign-out writes. Verify: deterministic asset contract tests for formatter, row errors, active-controller cleanup, session generation checks before commits, and no key/team aggregate sum; repeatable delayed/failing-response manual checklist.
 
-- [ ] `SP1067-T5` Covers: all. Owner: coordinator. Dependencies: T1-T4. Done when: focused Rust tests cover dashboard responses, exact route behavior, security headers, asset API contracts, accessibility hooks, forbidden browser storage/unsafe sinks/external URLs, and near-match path protection without weakening existing assertions. Verify: `cargo test admin_dashboard --lib`, the focused middleware helper test, focused key/team/auth tests, and `cargo fmt --check`.
+- [ ] `SP1067-T5` Covers: all. Owner: coordinator. Dependencies: T1-T4. Done when: focused Rust tests cover dashboard responses, exact route behavior, security headers, asset API contracts, safe key ownership/permissions, all-request session guards, accessibility hooks, forbidden browser storage/unsafe sinks/external URLs, and near-match path protection without weakening existing assertions. Verify: `cargo test admin_dashboard --lib`, the focused middleware helper test, focused key/team/auth tests, and `cargo fmt --check`.
 
 - [ ] `SP1067-T6` Covers: all. Owner: verification owner. Dependencies: T1-T5. Done when: one serialized full verification pass from this worktree succeeds and evidence is saved under `artifacts/logs/gh1067/`. Verify: commands in the Verification section.
 
@@ -75,7 +75,8 @@ gate serially, and merge only when its decision is `allowed`.
 - Only #1067 is in scope. Do not inspect, edit, comment on, or merge another
   issue or PR.
 - Do not add a frontend package manager, generated bundle, static filesystem
-  service, storage model, migration, or backend management API.
+  service (`actix_files`, `Files::new`, `NamedFile`, `ServeDir`, or
+  `ServeFile`), storage model, migration, or backend management API.
 - Anonymous responses contain inert compiled assets only. Existing key/team
   APIs remain the authorization authority.
 - Access/refresh tokens and raw API keys must never reach browser storage,

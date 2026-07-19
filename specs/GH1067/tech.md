@@ -29,7 +29,7 @@ constants and handlers:
 
 - `GET /admin/dashboard` → `text/html`
 - `GET /admin/dashboard/app.css` → `text/css`
-- `GET /admin/dashboard/app.js` → `application/javascript`
+- `GET /admin/dashboard/app.js` → `text/javascript`
 
 The source assets live under `src/server/routes/admin_dashboard/` and are
 included with `include_str!`. Responses set `Cache-Control: no-store` and a CSP
@@ -65,11 +65,15 @@ Use semantic HTML with login, key, team, and spend panels. JavaScript uses only
 DOM construction plus `textContent`; it does not use `innerHTML`, `eval`, or
 dynamic script/style injection.
 
-The state object holds the access token, current view, key/team page numbers,
-the latest successful key/team payloads, an `AbortController`, a monotonically
-increasing request generation, and per-mutation busy flags. Each refresh aborts
-the older refresh and validates the generation before committing results.
-Sign-out increments the generation so late responses are ignored.
+The state object holds the access token, authenticated admin ID, current view,
+key/team page numbers, the latest successful key/team payloads, a set of active
+`AbortController` values, a monotonically increasing session generation, and
+per-mutation busy flags. Every authenticated request, including each mutation,
+captures the token plus generation and registers its controller. Before any
+state or DOM commit, the response must still match both values. Sign-out aborts
+every active controller, increments the generation, clears protected state, and
+therefore prevents late list, usage, mutation, or one-time raw-key responses
+from repopulating the page.
 
 Existing contracts are used as follows:
 
@@ -87,7 +91,12 @@ formatted only after a finite-number check; missing, non-finite, rejected, or
 unavailable values render blank with a row-level error.
 
 Create-key submits only declared `CreateKeyRequest` fields used by the form:
-`name`, optional `description`, and optional `team_id`. The raw key response is
+`name`, optional `description`, exactly one ownership field, and explicit
+`permissions`. Selecting a team sends `team_id`; otherwise the authenticated
+admin's ID is sent as `user_id`, so the dashboard never creates an unowned key.
+The form requires non-empty comma-separated `allowed_models` and
+`allowed_endpoints`, rejects the unrestricted `*` value, and sends
+`is_admin=false` plus no custom management permissions. The raw key response is
 rendered into a one-time notice with an explicit copy button and is removed from
 page state when dismissed or on the next authentication-state transition.
 Create-team submits only `name`, optional `display_name`, and optional
@@ -99,12 +108,12 @@ disable the originating control until the request settles.
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | P1, P10 | dashboard route registration and exact public paths | Actix handler tests plus `is_public_route` positive and near-match negative tests |
-| P2, P3 | login/state code | asset contract tests for existing login shape, admin-role check, memory-only state, and forbidden storage/sink APIs |
-| P4 | key panel and request builder | asset contract tests for declared key endpoints/fields; focused existing key route tests |
+| P2, P3 | login/state code | asset contract tests for existing login shape, admin-role check, all-request generation/abort guards, memory-only state, and forbidden storage/sink APIs |
+| P4 | key panel and request builder | asset contract tests for declared key endpoints, exactly-one ownership, non-wildcard model/endpoint permissions, and `is_admin=false`; focused existing key route tests |
 | P5 | team panel and request builder | asset contract tests for declared team endpoints/fields; focused existing team route tests |
-| P6 | finite-value formatter and spend renderers | source-level unit contract assertions plus manual browser verification with zero/missing/failed fixtures |
-| P7, P8 | request generation, abort, status region, busy flags | source-level contract assertions and manual slow/failing-request verification |
-| P9 | semantic HTML and CSS | asset assertions for labels, landmarks, live region, focus styling, and no color-only status |
+| P6 | finite-value formatter and spend renderers | deterministic asset contract assertions plus repeatable manual browser verification with explicit zero/missing/failed fixtures |
+| P7, P8 | request generation, abort, status region, busy flags | deterministic all-request guard/abort contract assertions plus a repeatable slow/failing-request manual checklist |
+| P9 | semantic HTML and CSS | deterministic asset assertions for labels, landmarks, live region, focus styling, and no color-only status plus a keyboard checklist |
 | Security | CSP, no-store, safe DOM sinks | response-header tests and negative asset assertions for storage, `innerHTML`, `eval`, and external URLs |
 
 ## Data Flow
@@ -153,9 +162,11 @@ cross-origin call is added.
       route matching, asset safety/contract/accessibility assertions.
 - [ ] Focused tests: dashboard module, middleware public/admin route helpers,
       existing key handler tests, and existing team route tests.
-- [ ] Manual verification: admin login; key list/create/revoke; team
-      list/create/delete; zero/missing/failed spend; keyboard navigation; reload
-      clears auth and one-time key.
+- [ ] Manual verification checklist: admin and non-admin login; key
+      list/create/revoke; required safe key ownership/model/endpoint scope; team
+      list/create/delete; explicit zero/missing/failed spend; delayed
+      list/create responses followed by sign-out; keyboard-only navigation;
+      narrow viewport; reload clears auth and one-time key.
 - [ ] Deterministic verification: `cargo fmt --check`, `cargo check`,
       `cargo clippy --all-targets -- -D warnings`, full `cargo test`, SpecRail
       workflow/spec checks, scope guard, and overlap guard.

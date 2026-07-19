@@ -50,7 +50,10 @@ and can easily miss loading, empty, or permission failures.
    deliberately, and is not retained after its one-time notice is dismissed.
 4. The key view lists the existing key records with status, scope, creation or
    expiration information when available, and explicit pagination. An admin can
-   create a minimally scoped key and revoke an active key after confirmation.
+   create a key owned by their user or a selected team only after providing at
+   least one allowed model pattern and one allowed endpoint pattern; the
+   dashboard never creates an unowned, admin, or unrestricted-wildcard key. An
+   active key can be revoked after confirmation.
 5. The team view lists existing teams with status and available metadata. An
    admin can create a team and delete an existing team after confirmation.
 6. The spend view derives its values only from successful existing key and team
@@ -82,8 +85,10 @@ and can easily miss loading, empty, or permission failures.
       failed data.
 - [ ] Tokens and one-time raw keys are absent from browser storage and are
       cleared from page state at their documented lifecycle boundaries.
-- [ ] Route, content, authentication-state, API-contract, empty/error, and
-      accessibility behavior has deterministic test coverage.
+- [ ] Route registration, response headers, static content/API contracts, and
+      unsafe browser primitives have deterministic automated coverage;
+      authentication-state, empty/error, concurrency, and accessibility
+      behavior follow a repeatable manual verification checklist.
 
 ## Edge Cases
 
