@@ -109,7 +109,7 @@ async fn handle_embedding_internal(
     };
 
     let requested_model = core_request.model.clone();
-    let callback = CallbackLifecycle::start(
+    let callback = CallbackLifecycle::new(
         &state.callbacks,
         state.budgeted.pricing(),
         &requested_model,
@@ -142,12 +142,6 @@ async fn handle_embedding_internal(
                     &provider,
                     &selected_model,
                 );
-                callback.select_target(
-                    &budget_provider,
-                    &selected_model,
-                    &pricing_provider,
-                    &pricing_model,
-                );
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model.clone();
                 let reserve_pricing_service = pricing_service.clone();
@@ -159,6 +153,10 @@ async fn handle_embedding_internal(
                 let settle_pricing_provider = pricing_provider;
                 let settle_pricing_model = pricing_model;
                 let settle_key_manager = key_manager.clone();
+                let callback_provider = budget_provider.clone();
+                let callback_model = selected_model.clone();
+                let callback_pricing_provider = reserve_pricing_provider.clone();
+                let callback_pricing_model = reserve_pricing_model.clone();
                 budgeted
                     .for_selected_with_api_key_budget(
                         budget_provider.clone(),
@@ -179,7 +177,15 @@ async fn handle_embedding_internal(
                                 &core_request.input,
                             )
                         },
-                        || provider.create_embeddings(request_for_provider, context),
+                        || {
+                            callback.begin_provider_execution(
+                                callback_provider,
+                                callback_model,
+                                callback_pricing_provider,
+                                callback_pricing_model,
+                            );
+                            provider.create_embeddings(request_for_provider, context)
+                        },
                         |response, reservations, budget| {
                             let (budget_reservation, key_budget_reservation) =
                                 reservations.into_parts();

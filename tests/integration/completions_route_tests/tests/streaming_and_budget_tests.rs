@@ -266,3 +266,53 @@ async fn test_completions_success_records_budget_spend() {
 
     mock_server.shutdown().await;
 }
+
+#[tokio::test]
+async fn test_completions_budget_rejection_emits_no_callback_lifecycle() {
+    let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = build_callback_runtime(Arc::clone(&events)).await;
+    let state = build_test_app_state(&mock_server.base_url)
+        .await
+        .with_callbacks(runtime.dispatcher());
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+    );
+    state
+        .budget_limits
+        .providers
+        .record_provider_spend("openai", 2.0);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/completions")
+            .set_json(completion_request(None))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+    assert!(mock_server.requests().is_empty());
+    runtime
+        .shutdown()
+        .await
+        .expect("callback runtime should drain");
+    let events = events
+        .lock()
+        .expect("callback events should not be poisoned")
+        .clone();
+    assert!(
+        events.is_empty(),
+        "pre-provider budget rejection must not emit lifecycle callbacks"
+    );
+
+    mock_server.shutdown().await;
+}

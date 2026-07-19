@@ -21,8 +21,9 @@ struct CallbackLifecycleInner {
     dispatcher: CallbackDispatcher,
     pricing: Arc<PricingService>,
     request_id: String,
+    user_id: Option<String>,
     requested_model: String,
-    started_at: Instant,
+    started_at: Mutex<Option<Instant>>,
     target: Mutex<Option<CallbackTarget>>,
     terminal_emitted: AtomicBool,
 }
@@ -36,49 +37,65 @@ struct CallbackTarget {
 }
 
 impl CallbackLifecycle {
-    pub(super) fn start(
+    pub(super) fn new(
         dispatcher: &CallbackDispatcher,
         pricing: Arc<PricingService>,
         requested_model: impl Into<String>,
         context: &RequestContext,
     ) -> Self {
         let requested_model = requested_model.into();
-        let mut event = LlmStartEvent::new(&context.request_id, &requested_model);
-        event.user_id.clone_from(&context.user_id);
-        if let Err(dispatch_error) = dispatcher.emit_start(event) {
-            error!(
-                request_id = %context.request_id,
-                "Failed to enqueue callback start event: {}",
-                dispatch_error
-            );
-        }
-
         Self {
             inner: Arc::new(CallbackLifecycleInner {
                 dispatcher: dispatcher.clone(),
                 pricing,
                 request_id: context.request_id.clone(),
+                user_id: context.user_id.clone(),
                 requested_model,
-                started_at: Instant::now(),
+                started_at: Mutex::new(None),
                 target: Mutex::new(None),
                 terminal_emitted: AtomicBool::new(false),
             }),
         }
     }
 
-    pub(super) fn select_target(
+    pub(super) fn begin_provider_execution(
         &self,
         provider: impl Into<String>,
         model: impl Into<String>,
         pricing_provider: impl Into<String>,
         pricing_model: impl Into<String>,
     ) {
-        *self.inner.target.lock() = Some(CallbackTarget {
+        let target = CallbackTarget {
             provider: provider.into(),
             model: model.into(),
             pricing_provider: pricing_provider.into(),
             pricing_model: pricing_model.into(),
-        });
+        };
+        *self.inner.target.lock() = Some(target.clone());
+
+        let should_emit_start = {
+            let mut started_at = self.inner.started_at.lock();
+            if started_at.is_some() {
+                false
+            } else {
+                *started_at = Some(Instant::now());
+                true
+            }
+        };
+        if !should_emit_start {
+            return;
+        }
+
+        let mut event =
+            LlmStartEvent::new(&self.inner.request_id, &target.model).provider(target.provider);
+        event.user_id.clone_from(&self.inner.user_id);
+        if let Err(dispatch_error) = self.inner.dispatcher.emit_start(event) {
+            error!(
+                request_id = %self.inner.request_id,
+                "Failed to enqueue callback start event: {}",
+                dispatch_error
+            );
+        }
     }
 
     pub(super) fn complete_usage(
@@ -95,6 +112,9 @@ impl CallbackLifecycle {
     }
 
     pub(super) fn fail(&self, _message: impl Into<String>, error_type: &'static str) {
+        if !self.has_started() {
+            return;
+        }
         if !self.claim_terminal() {
             return;
         }
@@ -110,10 +130,7 @@ impl CallbackLifecycle {
             safe_callback_error_message(error_type),
         )
         .error_type(error_type)
-        .metadata(
-            "latency_ms",
-            serde_json::json!(self.inner.started_at.elapsed().as_millis() as u64),
-        );
+        .metadata("latency_ms", serde_json::json!(self.elapsed_ms()));
         if let Some(target) = target {
             event = event.provider(target.provider);
         }
@@ -132,6 +149,9 @@ impl CallbackLifecycle {
         pricing_usage: Option<&PricingUsage>,
         outcome: &'static str,
     ) {
+        if !self.has_started() {
+            return;
+        }
         if !self.claim_terminal() {
             return;
         }
@@ -142,7 +162,7 @@ impl CallbackLifecycle {
             .map(|target| target.model.as_str())
             .unwrap_or(&self.inner.requested_model);
         let mut event = LlmEndEvent::new(&self.inner.request_id, model)
-            .latency(self.inner.started_at.elapsed().as_millis() as u64)
+            .latency(self.elapsed_ms())
             .metadata("outcome", serde_json::json!(outcome));
         if let Some((input_tokens, output_tokens)) = tokens {
             event = event.tokens(input_tokens, output_tokens);
@@ -184,6 +204,19 @@ impl CallbackLifecycle {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
+
+    fn has_started(&self) -> bool {
+        self.inner.started_at.lock().is_some()
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        self.inner
+            .started_at
+            .lock()
+            .as_ref()
+            .map(|started_at| started_at.elapsed().as_millis() as u64)
+            .unwrap_or_default()
+    }
 }
 
 fn safe_callback_error_message(error_type: &str) -> &'static str {
@@ -212,6 +245,7 @@ mod tests {
     type RecordedErrors = Arc<parking_lot::Mutex<Vec<(Option<String>, String)>>>;
 
     struct TerminalCounter {
+        start_count: Arc<AtomicUsize>,
         end_count: Arc<AtomicUsize>,
         error_count: Arc<AtomicUsize>,
         errors: RecordedErrors,
@@ -228,6 +262,7 @@ mod tests {
         }
 
         async fn on_llm_start(&self, _event: &LlmStartEvent) -> IntegrationResult<()> {
+            self.start_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -255,6 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn lifecycle_emits_exactly_one_terminal_event() {
+        let start_count = Arc::new(AtomicUsize::new(0));
         let end_count = Arc::new(AtomicUsize::new(0));
         let error_count = Arc::new(AtomicUsize::new(0));
         let errors = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -263,6 +299,7 @@ mod tests {
         ));
         manager
             .register(Arc::new(TerminalCounter {
+                start_count: Arc::clone(&start_count),
                 end_count: Arc::clone(&end_count),
                 error_count: Arc::clone(&error_count),
                 errors,
@@ -274,16 +311,19 @@ mod tests {
         };
         let pricing = Arc::new(PricingService::new(None));
         let context = RequestContext::default();
-        let lifecycle = CallbackLifecycle::start(&runtime.dispatcher(), pricing, "model", &context);
+        let lifecycle = CallbackLifecycle::new(&runtime.dispatcher(), pricing, "model", &context);
+        lifecycle.begin_provider_execution("provider", "model", "provider", "model");
         lifecycle.complete_usage(None, "success");
         lifecycle.fail("late error", "provider_error");
         assert!(runtime.shutdown().await.is_ok());
+        assert_eq!(start_count.load(Ordering::SeqCst), 1);
         assert_eq!(end_count.load(Ordering::SeqCst), 1);
         assert_eq!(error_count.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn streaming_terminal_failure_kinds_are_safe_and_terminal_once() {
+        let start_count = Arc::new(AtomicUsize::new(0));
         let end_count = Arc::new(AtomicUsize::new(0));
         let error_count = Arc::new(AtomicUsize::new(0));
         let errors = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -292,6 +332,7 @@ mod tests {
         ));
         manager
             .register(Arc::new(TerminalCounter {
+                start_count: Arc::clone(&start_count),
                 end_count: Arc::clone(&end_count),
                 error_count: Arc::clone(&error_count),
                 errors: Arc::clone(&errors),
@@ -311,17 +352,19 @@ mod tests {
             "serialization_error",
             "client_disconnect",
         ] {
-            let lifecycle = CallbackLifecycle::start(
+            let lifecycle = CallbackLifecycle::new(
                 &dispatcher,
                 Arc::clone(&pricing),
                 "model",
                 &RequestContext::default(),
             );
+            lifecycle.begin_provider_execution("provider", "model", "provider", "model");
             lifecycle.fail("upstream-secret-must-not-leak", error_type);
             lifecycle.complete_usage(None, "late_success");
         }
         assert!(runtime.shutdown().await.is_ok());
 
+        assert_eq!(start_count.load(Ordering::SeqCst), 5);
         assert_eq!(end_count.load(Ordering::SeqCst), 0);
         assert_eq!(error_count.load(Ordering::SeqCst), 5);
         let errors = errors.lock();
@@ -331,5 +374,39 @@ mod tests {
                 && !message.contains("prompt")
                 && !message.contains("output")
         }));
+    }
+
+    #[tokio::test]
+    async fn pre_provider_rejection_emits_no_lifecycle_events() {
+        let start_count = Arc::new(AtomicUsize::new(0));
+        let end_count = Arc::new(AtomicUsize::new(0));
+        let error_count = Arc::new(AtomicUsize::new(0));
+        let manager = Arc::new(IntegrationManager::new(
+            IntegrationManagerConfig::default().parallel(false),
+        ));
+        manager
+            .register(Arc::new(TerminalCounter {
+                start_count: Arc::clone(&start_count),
+                end_count: Arc::clone(&end_count),
+                error_count: Arc::clone(&error_count),
+                errors: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            }))
+            .await;
+        let runtime = match CallbackRuntime::new(manager, 4) {
+            Ok(runtime) => runtime,
+            Err(error) => panic!("callback runtime should start: {error}"),
+        };
+
+        let lifecycle = CallbackLifecycle::new(
+            &runtime.dispatcher(),
+            Arc::new(PricingService::new(None)),
+            "model",
+            &RequestContext::default(),
+        );
+        lifecycle.fail("budget rejected before provider call", "provider_error");
+        assert!(runtime.shutdown().await.is_ok());
+        assert_eq!(start_count.load(Ordering::SeqCst), 0);
+        assert_eq!(end_count.load(Ordering::SeqCst), 0);
+        assert_eq!(error_count.load(Ordering::SeqCst), 0);
     }
 }

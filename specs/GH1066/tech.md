@@ -85,14 +85,14 @@ Add an AI-route lifecycle helper that owns request ID, requested model, start
 instant, dispatcher, and a synchronized final selected target. It emits
 metadata-only canonical events and centralizes terminal-once behavior.
 
-- Unary chat/completion/response and embeddings: enqueue start immediately
-  before provider selection; record the selected provider/pricing identity
-  inside the retryable operation; enqueue success after settlement and error
-  on the returned gateway error.
-- Streaming chat/completion/response: enqueue start before stream creation;
-  move the lifecycle into the existing stream worker; enqueue one success after
-  final usage settlement, or one error on upstream error, idle timeout,
-  conversion/serialization failure, or disconnect.
+- Unary chat/completion/response and embeddings: create a lazy lifecycle before
+  selection, then atomically record the selected provider/pricing identity and
+  enqueue start only inside the provider-call closure after budget admission;
+  enqueue success after settlement and error on a returned provider error.
+- Streaming chat/completion/response: enqueue start in the admitted provider
+  stream-call closure, then move the lifecycle into the existing stream worker;
+  enqueue one success after final usage settlement, or one error on upstream
+  error, idle timeout, conversion/serialization failure, or disconnect.
 - Cache hits return before lifecycle creation and do not fabricate a provider
   callback.
 

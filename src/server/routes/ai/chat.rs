@@ -114,7 +114,7 @@ async fn handle_chat_completion_internal(
         return Ok(cached);
     }
     let requested_model = core_request.model.clone();
-    let callback = CallbackLifecycle::start(
+    let callback = CallbackLifecycle::new(
         &state.callbacks,
         state.budgeted.pricing(),
         &requested_model,
@@ -153,12 +153,6 @@ async fn handle_chat_completion_internal(
                     &provider,
                     &selected_model,
                 );
-                callback.select_target(
-                    &provider_name,
-                    &selected_model,
-                    &pricing_provider,
-                    &pricing_model,
-                );
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
                     &provider_name,
@@ -181,6 +175,10 @@ async fn handle_chat_completion_internal(
                 let settle_pricing_provider = pricing_provider;
                 let settle_pricing_model = pricing_model;
                 let settle_key_manager = key_manager.clone();
+                let callback_provider = provider_name.clone();
+                let callback_model = selected_model.clone();
+                let callback_pricing_provider = reserve_pricing_provider.clone();
+                let callback_pricing_model = reserve_pricing_model.clone();
                 budgeted
                     .for_selected_with_api_key_budget(
                         provider_name.clone(),
@@ -201,7 +199,15 @@ async fn handle_chat_completion_internal(
                                 request_for_budget,
                             )
                         },
-                        || provider.chat_completion(request_for_provider, provider_context),
+                        || {
+                            callback.begin_provider_execution(
+                                callback_provider,
+                                callback_model,
+                                callback_pricing_provider,
+                                callback_pricing_model,
+                            );
+                            provider.chat_completion(request_for_provider, provider_context)
+                        },
                         |response, reservations, budget| {
                             let (budget_reservation, key_budget_reservation) =
                                 reservations.into_parts();
