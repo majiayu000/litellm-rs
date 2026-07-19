@@ -18,7 +18,7 @@ See `specs/GH1067/product.md` (invariants P1-P10).
 | Login | `src/server/routes/auth/login.rs`, `src/server/routes/auth/models.rs` | `POST /auth/login` returns `ApiResponse<LoginResponse>` with JWTs and user role | Reuse the existing contract and accept only an admin response |
 | Key management | `src/server/routes/keys/{mod.rs,handlers.rs,types.rs}` | `/v1/keys` supports admin list/create and per-key revoke; `KeyInfo` already includes masked identity and usage totals | Drive the minimum key workflow without a new backend API |
 | Team management | `src/server/routes/teams.rs` | `/v1/teams` supports admin list/create/delete and per-team usage | Drive the minimum team and spend workflow without a new backend API |
-| Frontend assets | none | No HTML, CSS, JavaScript, build pipeline, or static file service exists | Add small compile-time embedded assets instead of a second toolchain |
+| Frontend assets | `src/server/routes/admin_dashboard/{index.html,app.css,app.js}` | Compile-time embedded HTML/CSS/JavaScript now exists; Rust/source assertions do not execute the browser state machine | Add an isolated test-only executable DOM harness without a runtime frontend toolchain |
 
 ## Proposed Design
 
@@ -42,8 +42,10 @@ base-uri 'none'; form-action 'self'; frame-ancestors 'none'
 ```
 
 The route module is registered from the existing route assembly. No filesystem
-path, directory traversal surface, frontend package manager, runtime asset
-directory, or new dependency is introduced.
+path, directory traversal surface, runtime frontend bundle, runtime package
+manager, deployed frontend toolchain, or runtime dependency is introduced. An
+isolated, locked, test-only Node/jsdom harness is allowed and is never shipped
+with or executed by the gateway runtime.
 
 ### Authentication boundary
 
@@ -103,6 +105,69 @@ Create-team submits only `name`, optional `display_name`, and optional
 `description`. Destructive operations use an explicit confirmation dialog and
 disable the originating control until the request settles.
 
+## 可执行 DOM 验证增补（B1-B6）
+
+`tests/admin_dashboard/admin_dashboard_dom.test.mjs` 必须读取并执行真实的
+`src/server/routes/admin_dashboard/app.js`，而不是复制或重写一份 dashboard
+状态机。harness 使用精确版本 Node `24.14.0`、精确版本 jsdom `29.1.1`、
+Node 内建 `node:test` 与 `node:assert/strict`。依赖只允许安装在隔离的测试目录：
+
+```bash
+(cd tests/admin_dashboard && npm ci --ignore-scripts)
+node --test tests/admin_dashboard/admin_dashboard_dom.test.mjs
+```
+
+`package.json` 与已提交的 `package-lock.json` 必须锁定 jsdom `29.1.1`；
+`npm ci --ignore-scripts` 禁止 dependency lifecycle scripts。harness 可控地 mock
+`fetch`、`confirm`、clipboard、delayed promises 与 `AbortController`，并为
+`B1`-`B6` 分别提供确定性断言：乱序 generation/operation guard、controller
+全路径 cleanup、raw-key 一次性生命周期、partial usage failure 与真实 zero、
+affirmative confirmation gate，以及 sign-out 后所有旧 generation 响应失效。
+
+本次后续实现的完整文件清单是：
+
+```yaml
+implementation_manifest:
+  complete: true
+  planned_paths:
+    - tests/admin_dashboard/package.json
+    - tests/admin_dashboard/package-lock.json
+    - tests/admin_dashboard/admin_dashboard_dom.test.mjs
+    - scripts/verify-gh1067.sh
+    - .github/workflows/admin-dashboard-verification.yml
+    - .gitignore
+```
+
+`src/server/routes/admin_dashboard/app.js` 明确不在本清单内。如果可执行测试首先
+暴露真实实现缺陷，实施者必须停止，先用新的 spec-only amendment 更新清单与
+相关不变量，再修改应用代码；不得借本清单静默扩展实现范围。
+
+### CI 与证据契约
+
+`.github/workflows/admin-dashboard-verification.yml` 在 pull request 的 exact
+head SHA 上使用 `actions/checkout@v4`，使用 `actions/setup-node@v4` 安装
+Node `24.14.0`，并运行 `bash scripts/verify-gh1067.sh`。workflow 必须以
+`github.event.pull_request.head.sha`（非可能变化的 merge ref）作为 PR checkout
+目标，并使用 `actions/upload-artifact@v4` 上传验证证据。
+
+本地脚本以 `git rev-parse HEAD` 得到 `HEAD_SHA`，只在
+`artifacts/logs/gh1067/<HEAD_SHA>/` 写入：
+
+- `manifest.json`
+- `admin_dashboard_dom.log`
+- `checksums.sha256`
+- `_SUCCESS`（仅全部命令成功后生成）
+
+`.gitignore` 必须忽略 `/artifacts/logs/gh1067/`，并以
+`!tests/admin_dashboard/package-lock.json` 覆盖仓库现有的全局 lockfile 忽略
+规则；`node_modules/` 继续保持忽略。本地 SHA-scoped manifest、log、checksum
+与 `_SUCCESS` 永不提交。远端证据是 GitHub Actions run URL 与该 run 上传的
+artifact 名称/URL。
+
+以上 workflow 只能描述为“current-head check evidence/check rollup”。它是否
+成为 required 或 blocking check 由可变的 branch-protection 设置决定，本规格
+不声称、也不要求它已经是 required/blocking check。
+
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
@@ -115,6 +180,12 @@ disable the originating control until the request settles.
 | P7, P8 | request generation, abort, status region, busy flags | deterministic all-request guard/abort contract assertions plus a repeatable slow/failing-request manual checklist |
 | P9 | semantic HTML and CSS | deterministic asset assertions for labels, landmarks, live region, focus styling, and no color-only status plus a keyboard checklist |
 | Security | CSP, no-store, safe DOM sinks | response-header tests and negative asset assertions for storage, `innerHTML`, `eval`, and external URLs |
+| B1 | executable DOM generation and operation-order guards | delayed and out-of-order `fetch` resolutions prove that only the current session/operation commits |
+| B2 | active `AbortController` registry and request finalization | success, failure, cancellation, and sign-out paths leave no stale controller; sign-out aborts all active requests |
+| B3 | raw-key notice, copy, dismissal, and auth transition | the real DOM exposes the raw key once, copies only on explicit action, and cannot recover it after dismissal/auth transition |
+| B4 | per-row usage rendering and partial-failure handling | mixed successful/failed usage responses retain successful rows, preserve numeric zero, and leave only failed/unavailable values blank with row errors |
+| B5 | destructive-operation confirmation gates | `confirm=true` issues the declared request; `confirm=false` issues no request and makes no optimistic destructive DOM change |
+| B6 | logout generation invalidation | resolve delayed login/list/usage/mutation/raw-key operations after sign-out and assert no credential, protected DOM/state, status, or secret is restored |
 
 ## Data Flow
 
@@ -124,17 +195,20 @@ token → same-origin authenticated key/team requests → existing server-side
 authorization and persistence → JSON response → safe DOM rendering.
 
 No dashboard request bypasses the existing key/team authorization checks. No
-new persistence, schema, migration, generated file, external service, or
-cross-origin call is added.
+new persistence, schema, migration, runtime frontend bundle/toolchain,
+external service, or cross-origin call is added. Test-only Node dependencies
+stay under `tests/admin_dashboard/` and never enter the deployment data flow.
 
 ## Alternatives Considered
 
 - Separate SPA repository and deployment: rejected because the issue requests a
   minimum built-in surface and provides no cross-repository ownership or
   deployment contract.
-- Add React/Vite or another build tool: rejected because it adds dependency,
-  release, and generated-asset workflows disproportionate to the bounded
-  feature.
+- Add React/Vite or another runtime/deployment build tool: rejected because it
+  adds runtime dependency, release, and generated-asset workflows
+  disproportionate to the bounded feature. The isolated, locked,
+  test-only `node:test` + jsdom harness is accepted because it executes the
+  real embedded source without producing or shipping a frontend bundle.
 - Put a token in a URL, browser storage, or embedded HTML: rejected because it
   leaks credentials through history, storage, logs, or source.
 - Make management APIs public or proxy them through dashboard-only endpoints:
@@ -153,8 +227,9 @@ cross-origin call is added.
 - Performance: spend loads usage only for teams on the visible page and aborts
   stale refreshes; it does not fan out across the entire database.
 - Maintenance: frontend contracts can drift from Rust response types; named API
-  paths/fields and route tests make drift visible, while the scope avoids a
-  second dependency ecosystem.
+  paths/fields, route tests, and a locked executable DOM harness make drift
+  visible. The Node/jsdom dependency set is exact and test-only, so it does not
+  create a second runtime dependency ecosystem.
 
 ## Test Plan
 
@@ -162,11 +237,19 @@ cross-origin call is added.
       route matching, asset safety/contract/accessibility assertions.
 - [ ] Focused tests: dashboard module, middleware public/admin route helpers,
       existing key handler tests, and existing team route tests.
+- [ ] Executable DOM tests: Node `24.14.0`, jsdom `29.1.1`,
+      `(cd tests/admin_dashboard && npm ci --ignore-scripts)`, then
+      `node --test tests/admin_dashboard/admin_dashboard_dom.test.mjs` covers
+      each of `B1`-`B6` against the real embedded JavaScript source.
+- [ ] Evidence workflow: `bash scripts/verify-gh1067.sh` writes the ignored
+      SHA-scoped manifest/log/checksum/`_SUCCESS`; exact-head Actions checkout
+      uploads it with `actions/upload-artifact@v4`.
 - [ ] Manual verification checklist: admin and non-admin login; key
       list/create/revoke; required safe key ownership/model/endpoint scope; team
       list/create/delete; explicit zero/missing/failed spend; delayed
-      list/create responses followed by sign-out; keyboard-only navigation;
-      narrow viewport; reload clears auth and one-time key.
+      list/create responses followed by sign-out; reload clears auth and
+      one-time key. Keyboard-only navigation, narrow-layout behavior, and
+      real-browser visual rendering remain manual.
 - [ ] Deterministic verification: `cargo fmt --check`, `cargo check`,
       `cargo clippy --all-targets -- -D warnings`, full `cargo test`, SpecRail
       workflow/spec checks, scope guard, and overlap guard.
