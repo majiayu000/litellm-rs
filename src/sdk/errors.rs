@@ -600,7 +600,6 @@ mod tests {
     #[rustfmt::skip]
     mod legacy_guard {
     use super::*;
-
     #[derive(Default)]
     struct Guard {
         owner: String,
@@ -609,7 +608,6 @@ mod tests {
         attrs: BTreeMap<String, usize>,
         errors: Vec<String>,
     }
-
     fn type_name(ty: &Type) -> String {
         match ty { Type::Path(path) => path.path.segments.last().map(|s| s.ident.unraw().to_string()).unwrap_or_default(), _ => String::new() }
     }
@@ -634,7 +632,7 @@ mod tests {
     fn macro_suppresses(text: &str) -> bool {
         let mut code = String::new(); let mut quoted = false; let mut escaped = false; for c in text.chars() { if quoted { if escaped { escaped = false; } else if c == '\\' { escaped = true; } else if c == '"' { quoted = false; } } else if c == '"' { quoted = true; } else { code.push(c); } }
         let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-        ["#[allow(", "#![allow(", "#[expect(", "#![expect("].iter().any(|start| compact.match_indices(start).any(|(at, _)| { let body = &compact[at + start.len()..]; body.find(")]").is_some_and(|end| body[..end].split(|c: char| !c.is_alphanumeric() && c != '_').any(|lint| matches!(lint, "deprecated" | "warnings"))) }))
+        [("#[allow(", false), ("#![allow(", false), ("#[expect(", false), ("#![expect(", false), ("#[cfg_attr(", true), ("#![cfg_attr(", true)].iter().any(|(start, nested)| compact.match_indices(start).any(|(at, _)| { let body = &compact[at + start.len()..]; body.find(")]").is_some_and(|end| { let body = &body[..end]; (!nested || body.contains("allow(") || body.contains("expect(")) && body.split(|c: char| !c.is_alphanumeric() && c != '_').any(|lint| matches!(lint, "deprecated" | "warnings")) }) }))
     }
     impl Guard {
         fn record(&mut self, count: usize, alternate: bool) {
@@ -663,17 +661,19 @@ mod tests {
             let text = node.tokens.to_string();
             let (count, alternate) = token_refs(&text);
             self.record(count, alternate);
-            let name = node.path.segments.last().map(|s| s.ident.unraw().to_string()).unwrap_or_default(); let pattern = name == "matches" || (name == "assert" && text.split_whitespace().collect::<Vec<_>>().windows(2).any(|w| w == ["matches", "!"]));
+            let name = node.path.segments.last().map(|s| s.ident.unraw().to_string()).unwrap_or_default(); let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect(); let pattern = (name == "matches" && compact == "self,SDKError::NetworkError(_)|SDKError::RateLimitError(_)|SDKError::ProviderError(_)") || (name == "assert" && compact == "matches!(sdk_error,SDKError::ProviderError(_))");
             if count > 0 && !pattern { self.errors.push("legacy macro alias".into()); }
             if macro_suppresses(&text) { self.errors.push("macro lint suppression".into()); }
         }
         fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
-            if matches!(node.path().get_ident().map(|id| id.unraw().to_string()).as_deref(), Some("allow" | "expect")) {
-                let body = match &node.meta { Meta::List(list) => list.tokens.to_string(), _ => String::new() };
+            let mut metas = vec![node.meta.clone()]; while let Some(meta) = metas.pop() {
+                let Meta::List(list) = meta else { continue; };
+                if list.path.is_ident("cfg_attr") { let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated; if let Ok(items) = syn::parse::Parser::parse2(parser, list.tokens) { metas.extend(items); } continue; }
+                if !matches!(list.path.get_ident().map(|id| id.unraw().to_string()).as_deref(), Some("allow" | "expect")) { continue; } let body = list.tokens.to_string();
                 if body.split(|c: char| !c.is_alphanumeric() && c != '_').any(|word| word == "warnings") { self.errors.push("warnings lint suppression".into()); }
                 if body.split(|c: char| !c.is_alphanumeric() && c != '_').any(|word| word == "deprecated") {
                     *self.attrs.entry(self.owner.clone()).or_default() += 1;
-                    if !node.path().is_ident("allow") || body.trim() != "deprecated" { self.errors.push("expanded deprecated suppression".into()); }
+                    if !list.path.is_ident("allow") || body.trim() != "deprecated" { self.errors.push("expanded deprecated suppression".into()); }
                 }
             }
             visit::visit_attribute(self, node);
@@ -777,13 +777,13 @@ mod tests {
         for base in &roots { for dir in ["src", "tests", "examples", "benches"] { walk(&base.join(dir), true, &mut rust_files).unwrap(); } if base.join("build.rs").exists() { rust_files.insert(base.join("build.rs").canonicalize().unwrap()); } }
         let mut sources = BTreeMap::new(); for path in rust_files { let label = path.strip_prefix(&root).map_or_else(|_| path.display().to_string(), |rel| rel.to_string_lossy().replace('\\', "/")); sources.insert(label, fs::read_to_string(path).unwrap()); }
         verify_sources(&sources).expect("legacy deprecation source guard");
-        let errors = &sources["src/sdk/errors.rs"]; let legacy = format!("{}{}", "SDKError::", "ProviderError"); let constructor = format!("let error = {legacy}(\"API unavailable\".to_string());"); let tests_mod = format!("{}{}", "#[cfg(test)]\nmod tests ", "{"); let marker = format!("SP965-T010 links 0.7 removal follow-up for {legacy}"); let allow = format!("#[allow{}]", "(deprecated)"); let marker_site = format!("// {marker}\n    {allow}\n    #[test]\n    fn test_sdk_error_provider_error() {{");
+        let errors = &sources["src/sdk/errors.rs"]; let legacy = format!("{}{}", "SDKError::", "ProviderError"); let constructor = format!("let error = {legacy}(\"API unavailable\".to_string());"); let provider_assert = format!("assert!(matches!(sdk_error, {legacy}(_)));" ); let tests_mod = format!("{}{}", "#[cfg(test)]\nmod tests ", "{"); let marker = format!("SP965-T010 links 0.7 removal follow-up for {legacy}"); let allow = format!("#[allow{}]", "(deprecated)"); let marker_site = format!("// {marker}\n    {allow}\n    #[test]\n    fn test_sdk_error_provider_error() {{");
         for (label, old, new) in [
             ("value alias", constructor.as_str(), format!("let make = {legacy}; let error = make(\"API unavailable\".to_string());")),
-            ("allow warnings", tests_mod.as_str(), format!("{tests_mod} #![allow(warnings)]")),
+            ("allow warnings", tests_mod.as_str(), format!("{tests_mod} #![allow(warnings)]")), ("cfg_attr warnings", tests_mod.as_str(), format!("{tests_mod} #![cfg_attr(all(), allow(warnings))]")),
             ("qualified path", constructor.as_str(), constructor.replace(&legacy, "<SDKError>::ProviderError")),
             ("raw path", constructor.as_str(), constructor.replace(&legacy, "SDKError::r#ProviderError")),
-            ("macro alias", constructor.as_str(), format!("macro_rules! make {{ ($v:expr) => {{ {legacy}($v) }} }} let error = make!(\"API unavailable\".to_string());")), ("generic macro composition", constructor.as_str(), "macro_rules! make { ($ty:path, $variant:ident, $value:expr) => { $ty::$variant($value) }; } let error = make!(SDKError, ProviderError, \"API unavailable\".to_string());".into()), ("split constructor macro", constructor.as_str(), format!("macro_rules! bind {{ ($name:ident = $ctor:path) => {{ let $name = $ctor; }}; }} bind!(make = {legacy}); let error = make(\"one\".into()); let extra = make(\"two\".into());")), ("split variant macro", constructor.as_str(), "macro_rules! make_sdk { ($variant:ident, $value:expr) => { SDKError::$variant($value) }; } let error = make_sdk!(ProviderError, \"extra\".into());".into()), ("macro lint suppression", tests_mod.as_str(), format!("{tests_mod} macro_rules! allow_legacy {{ ($expr:expr) => {{ #[allow(deprecated)] $expr }} }} let _ = allow_legacy!({legacy}(\"x\".into()));")), ("marker relocation", marker_site.as_str(), format!("{allow}\n    #[test]\n    fn test_sdk_error_provider_error() {{\n        // {marker}")),
+            ("macro alias", constructor.as_str(), format!("macro_rules! make {{ ($v:expr) => {{ {legacy}($v) }} }} let error = make!(\"API unavailable\".to_string());")), ("generic macro composition", constructor.as_str(), "macro_rules! make { ($ty:path, $variant:ident, $value:expr) => { $ty::$variant($value) }; } let error = make!(SDKError, ProviderError, \"API unavailable\".to_string());".into()), ("split constructor macro", constructor.as_str(), format!("macro_rules! bind {{ ($name:ident = $ctor:path) => {{ let $name = $ctor; }}; }} bind!(make = {legacy}); let error = make(\"one\".into()); let extra = make(\"two\".into());")), ("split variant macro", constructor.as_str(), "macro_rules! make_sdk { ($variant:ident, $value:expr) => { SDKError::$variant($value) }; } let error = make_sdk!(ProviderError, \"extra\".into());".into()), ("macro lint suppression", tests_mod.as_str(), format!("{tests_mod} macro_rules! allow_legacy {{ ($expr:expr) => {{ #[allow(deprecated)] $expr }} }} let _ = allow_legacy!({legacy}(\"x\".into()));")), ("macro cfg_attr suppression", tests_mod.as_str(), format!("{tests_mod} macro_rules! allow_legacy {{ ($expr:expr) => {{ #[cfg_attr(all(), allow(deprecated))] $expr }} }} let _ = allow_legacy!({legacy}(\"x\".into()));")), ("assert macro smuggle", provider_assert.as_str(), format!("assert!({{ let make = {legacy}; let _extra = make(\"extra\".into()); matches!(sdk_error, _) }});")), ("marker relocation", marker_site.as_str(), format!("{allow}\n    #[test]\n    fn test_sdk_error_provider_error() {{\n        // {marker}")),
         ] { assert_eq!(errors.matches(old).count(), 1); let mut changed = sources.clone(); changed.insert("src/sdk/errors.rs".into(), errors.replacen(old, &new, 1)); assert!(verify_sources(&changed).is_err(), "mutation accepted: {label}"); }
         for (label, path, old, new) in [("server anchor", "src/server/routes/mod.rs", "#[allow(deprecated)]\n    fn test_api_response_to_http_response_remains_compatibility_shim() {", "fn test_api_response_to_http_response_remains_compatibility_shim() {\n        #[allow(deprecated)]"), ("subtrait anchor", "src/core/traits/provider/llm_provider/sub_traits.rs", "#[allow(deprecated)]\nimpl<T: LLMProvider> LLMChat for T {", "impl<T: LLMProvider> LLMChat for T {\n    #[allow(deprecated)]"), ("inner router anchor", "src/core/router/tests/execution_tests.rs", "#![allow(deprecated)]\n\nuse ", "#[allow(deprecated)]\nuse ")] { let source = &sources[path]; assert_eq!(source.matches(old).count(), 1); let mut changed = sources.clone(); changed.insert(path.into(), source.replacen(old, new, 1)); assert!(syn::parse_file(&source.replacen(old, new, 1)).is_ok(), "invalid mutation: {label}"); assert!(verify_sources(&changed).is_err(), "mutation accepted: {label}"); } let mut packaged = sources.clone(); packaged.remove("tests/integration/router_tests.rs"); verify_sources(&packaged).expect("packaged source baseline");
         for base in &roots { for dir in [".cargo", ".github/workflows", "scripts", "checks", "xtask"] { walk(&base.join(dir), false, &mut lint_files).unwrap(); } for entry in fs::read_dir(base).unwrap().flatten() { let path = entry.path(); let name = path.file_name().and_then(|n| n.to_str()).unwrap_or(""); if path.is_file() && (name.starts_with("Makefile") || name.starts_with("justfile") || name.starts_with("rust-toolchain") || name == "clippy.toml") { lint_files.insert(path.canonicalize().unwrap()); } } }
