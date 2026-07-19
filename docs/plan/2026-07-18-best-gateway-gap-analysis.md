@@ -5,6 +5,17 @@
 > 再对标业界最佳实践。外部对标来自模型训练知识（截至 2026-01），已在文末按"事实/推断/建议"分离标注。
 > 本文是**前瞻 roadmap**，不是 bug 清单；已有 issue（#519/#837/#838/#965）的项只做交叉引用，不重复开工。
 
+## Roadmap lifecycle
+
+- PR #1068 delivered this repository-backed analysis for parent roadmap #1064.
+- Implementation remains owned by focused issues: existing work stays under
+  #519/#837/#838/#965, while newly identified gaps use #1065/#1066/#1067.
+- Closing #1064 means the roadmap, gap ownership, and planning handoff are
+  complete. It does **not** mean the linked implementation issues are complete,
+  and it does not change their state or acceptance criteria.
+- Future implementation-sized discoveries must receive focused issue/spec
+  coverage instead of accumulating under the closed parent roadmap.
+
 ---
 
 ## 0. 一句话结论
