@@ -93,6 +93,9 @@ pub fn is_public_route(path: &str) -> bool {
         "/auth/forgot-password",
         "/auth/reset-password",
         "/auth/verify-email",
+        "/admin/dashboard",
+        "/admin/dashboard/app.css",
+        "/admin/dashboard/app.js",
         "/docs",
         "/openapi.json",
     ];

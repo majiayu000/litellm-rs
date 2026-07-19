@@ -3,6 +3,7 @@
 //! This module contains all HTTP route handlers organized by functionality.
 
 pub mod admin;
+pub mod admin_dashboard;
 pub mod ai;
 pub mod auth;
 pub mod budget;

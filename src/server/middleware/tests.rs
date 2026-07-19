@@ -92,10 +92,16 @@ fn test_is_public_route() {
     assert!(is_public_route("/health"));
     assert!(is_public_route("/auth/login"));
     assert!(is_public_route("/auth/login/callback"));
+    assert!(is_public_route("/admin/dashboard"));
+    assert!(is_public_route("/admin/dashboard/app.css"));
+    assert!(is_public_route("/admin/dashboard/app.js"));
     // /metrics requires authentication (not in PUBLIC_ROUTES)
     assert!(!is_public_route("/metrics"));
     // Prefix bypass must be prevented
     assert!(!is_public_route("/auth/login_evil"));
+    assert!(!is_public_route("/admin/dashboard/"));
+    assert!(!is_public_route("/admin/dashboard/private"));
+    assert!(!is_public_route("/admin/dashboard/app.js.map"));
     assert!(!is_public_route("/healthz"));
     assert!(!is_public_route("/api/users"));
     assert!(!is_public_route("/v1/chat/completions"));

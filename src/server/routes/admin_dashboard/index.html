@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>LiteLLM-RS Admin</title>
+  <link rel="stylesheet" href="/admin/dashboard/app.css">
+  <script src="/admin/dashboard/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">LiteLLM-RS</p>
+      <h1>Admin dashboard</h1>
+    </div>
+    <div class="session-actions">
+      <span id="session-label">Signed out</span>
+      <button id="sign-out" class="secondary" type="button" hidden>Sign out</button>
+    </div>
+  </header>
+
+  <main id="main-content">
+    <section id="login-panel" class="auth-card" aria-labelledby="login-title">
+      <div>
+        <p class="eyebrow">Secure access</p>
+        <h2 id="login-title">Sign in as an administrator</h2>
+        <p>Credentials are sent to the existing gateway login endpoint. Tokens
+          stay in this tab's memory and are cleared on reload.</p>
+      </div>
+      <form id="login-form">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password"
+               autocomplete="current-password" required>
+        <button type="submit">Sign in</button>
+      </form>
+    </section>
+
+    <section id="dashboard-shell" hidden>
+      <nav class="tabs" aria-label="Dashboard sections">
+        <button class="tab active" type="button" data-view="keys"
+                aria-controls="keys-panel" aria-selected="true">API keys</button>
+        <button class="tab" type="button" data-view="teams"
+                aria-controls="teams-panel" aria-selected="false">Teams</button>
+        <button class="tab" type="button" data-view="spend"
+                aria-controls="spend-panel" aria-selected="false">Spend</button>
+      </nav>
+
+      <section id="keys-panel" class="panel" aria-labelledby="keys-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Credentials</p>
+            <h2 id="keys-title">API keys</h2>
+          </div>
+          <button id="refresh-keys" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <details class="create-card">
+          <summary>Create a scoped key</summary>
+          <form id="create-key-form" class="form-grid">
+            <label for="key-name">Name</label>
+            <input id="key-name" name="name" required maxlength="120">
+            <label for="key-description">Description</label>
+            <input id="key-description" name="description" maxlength="500">
+            <label for="key-team">Owner</label>
+            <select id="key-team" name="team_id">
+              <option value="">My administrator user</option>
+            </select>
+            <label for="key-models">Allowed model patterns</label>
+            <input id="key-models" name="allowed_models" required
+                   placeholder="gpt-4o, claude-*"
+                   aria-describedby="key-scope-help">
+            <label for="key-endpoints">Allowed endpoint patterns</label>
+            <input id="key-endpoints" name="allowed_endpoints" required
+                   placeholder="/v1/chat/completions, /v1/embeddings"
+                   aria-describedby="key-scope-help">
+            <p id="key-scope-help" class="field-help">Comma-separated values are
+              required. The unrestricted <code>*</code> value is not accepted.</p>
+            <button type="submit">Create key</button>
+          </form>
+        </details>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Keys visible to the signed-in administrator</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Prefix</th>
+                <th scope="col">Owner</th>
+                <th scope="col">Status</th>
+                <th scope="col">Created</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody id="keys-body"></tbody>
+          </table>
+        </div>
+        <p id="keys-empty" class="empty-state" hidden>No API keys found.</p>
+        <div class="pagination" aria-label="API key pages">
+          <button id="keys-previous" class="secondary" type="button">Previous</button>
+          <span id="keys-page">Page 1</span>
+          <button id="keys-next" class="secondary" type="button">Next</button>
+        </div>
+      </section>
+
+      <section id="teams-panel" class="panel" aria-labelledby="teams-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Ownership</p>
+            <h2 id="teams-title">Teams</h2>
+          </div>
+          <button id="refresh-teams" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <details class="create-card">
+          <summary>Create a team</summary>
+          <form id="create-team-form" class="form-grid">
+            <label for="team-name">Unique name</label>
+            <input id="team-name" name="name" required
+                   pattern="[A-Za-z0-9_-]+" maxlength="120">
+            <label for="team-display-name">Display name</label>
+            <input id="team-display-name" name="display_name" maxlength="120">
+            <label for="team-description">Description</label>
+            <input id="team-description" name="description" maxlength="500">
+            <button type="submit">Create team</button>
+          </form>
+        </details>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Teams visible to the signed-in administrator</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Display name</th>
+                <th scope="col">Status</th>
+                <th scope="col">Members</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody id="teams-body"></tbody>
+          </table>
+        </div>
+        <p id="teams-empty" class="empty-state" hidden>No teams found.</p>
+        <div class="pagination" aria-label="Team pages">
+          <button id="teams-previous" class="secondary" type="button">Previous</button>
+          <span id="teams-page">Page 1</span>
+          <button id="teams-next" class="secondary" type="button">Next</button>
+        </div>
+      </section>
+
+      <section id="spend-panel" class="panel" aria-labelledby="spend-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Current pages</p>
+            <h2 id="spend-title">Usage and spend</h2>
+            <p>Key and team scopes are shown separately to avoid double-counting.</p>
+          </div>
+          <button id="refresh-spend" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <div class="spend-grid">
+          <div class="table-wrap">
+            <table>
+              <caption>Spend for API keys on the current key page</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Key</th>
+                  <th scope="col">Today</th>
+                  <th scope="col">Total</th>
+                  <th scope="col">Requests</th>
+                  <th scope="col">Tokens</th>
+                </tr>
+              </thead>
+              <tbody id="key-spend-body"></tbody>
+            </table>
+          </div>
+          <p id="key-spend-empty" class="empty-state" hidden>
+            No API keys on the current page.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <caption>Spend for teams on the current team page</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Team</th>
+                  <th scope="col">Today</th>
+                  <th scope="col">Total</th>
+                  <th scope="col">Requests</th>
+                  <th scope="col">Tokens</th>
+                </tr>
+              </thead>
+              <tbody id="team-spend-body"></tbody>
+            </table>
+          </div>
+          <p id="team-spend-empty" class="empty-state" hidden>
+            No teams on the current page.
+          </p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="status-region" class="status" aria-live="polite"></div>
+  <div id="error-region" class="error" role="alert" hidden></div>
+
+  <dialog id="raw-key-dialog" aria-labelledby="raw-key-title">
+    <h2 id="raw-key-title">Copy this key now</h2>
+    <p>The raw key is shown once and is not retained after this dialog closes.</p>
+    <pre id="raw-key-value" tabindex="0"></pre>
+    <div class="dialog-actions">
+      <button id="copy-raw-key" type="button">Copy key</button>
+      <button id="dismiss-raw-key" class="secondary" type="button">Dismiss</button>
+    </div>
+  </dialog>
+</body>
+</html>

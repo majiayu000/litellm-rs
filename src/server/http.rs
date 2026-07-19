@@ -238,6 +238,7 @@ impl HttpServer {
             .configure(routes::teams::configure_routes)
             .configure(routes::budget::configure_budget_routes)
             .configure(routes::admin::configure_routes)
+            .configure(routes::admin_dashboard::configure_routes)
             .configure(routes::ai::configure_routes)
             .configure(routes::pricing::configure_pricing_routes)
     }
