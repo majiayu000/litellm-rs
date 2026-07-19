@@ -91,6 +91,7 @@ impl<'ast> Visit<'ast> for SourceVisitor<'_> {
             item.attrs.iter().for_each(|attr| this.visit_attribute(attr)); this.visit_block(&item.block);
         });
     }
+    fn visit_arm(&mut self, item: &'ast syn::Arm) { if matches!(item.pat, syn::Pat::Wild(_)) { self.owned(format!("wildcard-arm@{}", self.owner), |this| visit::visit_arm(this, item)); } else { visit::visit_arm(self, item); } }
     fn visit_expr_closure(&mut self, item: &'ast syn::ExprClosure) { self.owned(format!("closure@{}", self.owner), |this| visit::visit_expr_closure(this, item)); }
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
         self.owned(format!("mod:{}", id(&item.ident)), |this| {
@@ -205,7 +206,7 @@ fn expected_findings() -> Vec<Finding> {
         (errors.clone(), "test_sdk_error_provider_error".into(), "construct".into()), (errors.clone(), "test_is_retryable_provider_error".into(), "construct".into()),
         (errors.clone(), "test_from_gateway_error_provider_unavailable".into(), "macro".into()),
         (errors, "test_sdk_error_empty_message".into(), "construct".into()),
-        ("src/sdk/client/completions.rs".into(), "execute_chat_request@LLMClient".into(), "construct".into()),
+        ("src/sdk/client/completions.rs".into(), "wildcard-arm@execute_chat_request@LLMClient".into(), "construct".into()),
     ]; expected.sort(); expected
 }
 fn expected_attrs(sources: &Sources) -> BTreeMap<String, usize> {
@@ -289,10 +290,9 @@ fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
     }
     mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        println!(\"ProviderError\"); // ProviderError")); assert!(verify(&mutated, &lint).is_ok());
     let completions = &sources["src/sdk/client/completions.rs"];
-    mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(),
-        format!("macro_rules! relocated {{ () => {{ SDKError::ProviderError(String::new()) }}; }}\n{}",
-            replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => Err(SDKError::Internal(format!(")));
-    rejected("macro owner", &mutated, &lint);
+    mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), format!("macro_rules! relocated {{ () => {{ SDKError::ProviderError(String::new()) }}; }}\n{}", replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => Err(SDKError::Internal(format!("))); rejected("macro owner", &mutated, &lint);
+    let relocated = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "crate::sdk::config::ProviderType::Azure => Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),\n            _ => Err(SDKError::Internal(String::new())),"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), relocated); rejected("fallback arm relocation", &mutated, &lint);
+    let smuggled = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => { macro_rules! legacy { ($ty:ident, $variant:ident, $message:expr) => { $ty::$variant($message) }; } let _ = legacy!(SDKError, ProviderError, String::new()); Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            )))\n            },"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), smuggled); rejected("generic macro smuggle", &mutated, &lint);
     mutated = sources.clone(); mutated.remove("tests/integration/router_tests.rs");
     verify(&mutated, &lint).unwrap(); assert!(lint_ok("RUSTFLAGS='--cap-lints allow'", "mutation").is_err());
 }
