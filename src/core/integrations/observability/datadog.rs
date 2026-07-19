@@ -6,10 +6,10 @@ use crate::config::models::defaults::default_true;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info};
 
 use crate::core::traits::integration::{
@@ -230,11 +230,26 @@ enum BufferedEvent {
     Log(DataDogLogRecord),
 }
 
+#[derive(Debug, Default)]
+struct EventBuffer {
+    pending: VecDeque<BufferedEvent>,
+    in_flight: Vec<BufferedEvent>,
+}
+
+impl EventBuffer {
+    fn len(&self) -> usize {
+        self.pending.len() + self.in_flight.len()
+    }
+}
+
 /// DataDog APM Integration
 pub struct DataDogIntegration {
     config: DataDogConfig,
     http_client: Client,
-    buffer: Arc<RwLock<Vec<BufferedEvent>>>,
+    metrics_url: String,
+    logs_url: String,
+    buffer: Arc<RwLock<EventBuffer>>,
+    flush_lock: Mutex<()>,
     enabled: bool,
 }
 
@@ -272,9 +287,12 @@ impl DataDogIntegration {
         );
 
         Ok(Self {
+            metrics_url: config.metrics_url(),
+            logs_url: config.logs_url(),
             config,
             http_client,
-            buffer: Arc::new(RwLock::new(Vec::new())),
+            buffer: Arc::new(RwLock::new(EventBuffer::default())),
+            flush_lock: Mutex::new(()),
             enabled: true,
         })
     }
@@ -353,12 +371,8 @@ impl DataDogIntegration {
             unit: unit.map(String::from),
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(BufferedEvent::Metric(metric));
-
-        if buffer.len() >= self.config.batch_size {
-            drop(buffer);
-            self.flush().await?;
+        if self.enqueue(BufferedEvent::Metric(metric)).await? {
+            self.flush_batch(false).await?;
         }
         Ok(())
     }
@@ -388,14 +402,30 @@ impl DataDogIntegration {
             timestamp: Some(Self::current_timestamp() * 1000), // milliseconds
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(BufferedEvent::Log(log));
-
-        if buffer.len() >= self.config.batch_size {
-            drop(buffer);
-            self.flush().await?;
+        if self.enqueue(BufferedEvent::Log(log)).await? {
+            self.flush_batch(false).await?;
         }
         Ok(())
+    }
+
+    fn batch_size(&self) -> usize {
+        self.config.batch_size.max(1)
+    }
+
+    fn buffer_capacity(&self) -> usize {
+        self.batch_size().saturating_mul(2)
+    }
+
+    async fn enqueue(&self, event: BufferedEvent) -> IntegrationResult<bool> {
+        let mut buffer = self.buffer.write().await;
+        if buffer.len() >= self.buffer_capacity() {
+            return Err(IntegrationError::other(format!(
+                "DataDog event buffer is full (capacity {})",
+                self.buffer_capacity()
+            )));
+        }
+        buffer.pending.push_back(event);
+        Ok(buffer.in_flight.is_empty() && buffer.pending.len() >= self.batch_size())
     }
 
     /// Send metrics to DataDog
@@ -408,7 +438,7 @@ impl DataDogIntegration {
 
         let response = self
             .http_client
-            .post(self.config.metrics_url())
+            .post(&self.metrics_url)
             .header("DD-API-KEY", &self.config.api_key)
             .header("Content-Type", "application/json")
             .json(&payload)
@@ -435,7 +465,7 @@ impl DataDogIntegration {
 
         let response = self
             .http_client
-            .post(self.config.logs_url())
+            .post(&self.logs_url)
             .header("DD-API-KEY", &self.config.api_key)
             .header("Content-Type", "application/json")
             .json(&logs)
@@ -452,6 +482,59 @@ impl DataDogIntegration {
         }
 
         Ok(())
+    }
+
+    async fn flush_batch(&self, retry_failed: bool) -> IntegrationResult<()> {
+        let _flush = self.flush_lock.lock().await;
+        let events = {
+            let mut buffer = self.buffer.write().await;
+            if !retry_failed && !buffer.in_flight.is_empty() {
+                return Ok(());
+            }
+            if buffer.in_flight.is_empty() {
+                let count = self.batch_size().min(buffer.pending.len());
+                buffer.in_flight = buffer.pending.drain(..count).collect();
+            }
+            buffer.in_flight.clone()
+        };
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        debug!("DataDog: Flushing {} events", events.len());
+        let mut metrics = Vec::new();
+        let mut logs = Vec::new();
+        for event in &events {
+            match event {
+                BufferedEvent::Metric(metric) => metrics.push(metric.clone()),
+                BufferedEvent::Log(log) => logs.push(log.clone()),
+            }
+        }
+        let (metrics_result, logs_result) =
+            tokio::join!(self.send_metrics(metrics), self.send_logs(logs));
+        let retry_metrics = metrics_result.is_err();
+        let retry_logs = logs_result.is_err();
+        self.buffer
+            .write()
+            .await
+            .in_flight
+            .retain(|event| match event {
+                BufferedEvent::Metric(_) => retry_metrics,
+                BufferedEvent::Log(_) => retry_logs,
+            });
+
+        let mut errors = Vec::new();
+        if let Err(error) = metrics_result {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = logs_result {
+            errors.push(error.to_string());
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(IntegrationError::other(errors.join("; ")))
+        }
     }
 }
 
@@ -642,59 +725,14 @@ impl Integration for DataDogIntegration {
     }
 
     async fn flush(&self) -> IntegrationResult<()> {
-        let events = {
-            let mut buffer = self.buffer.write().await;
-            std::mem::take(&mut *buffer)
+        let batch_count = {
+            let buffer = self.buffer.read().await;
+            buffer.len().div_ceil(self.batch_size())
         };
-
-        if events.is_empty() {
-            return Ok(());
+        for _ in 0..batch_count {
+            self.flush_batch(true).await?;
         }
-
-        debug!("DataDog: Flushing {} events", events.len());
-
-        let mut metrics = Vec::new();
-        let mut logs = Vec::new();
-
-        for event in events {
-            match event {
-                BufferedEvent::Metric(m) => metrics.push(m),
-                BufferedEvent::Log(l) => logs.push(l),
-            }
-        }
-
-        let retry_metrics = metrics
-            .iter()
-            .cloned()
-            .map(BufferedEvent::Metric)
-            .collect::<Vec<_>>();
-        let retry_logs = logs
-            .iter()
-            .cloned()
-            .map(BufferedEvent::Log)
-            .collect::<Vec<_>>();
-
-        let (metrics_result, logs_result) =
-            tokio::join!(self.send_metrics(metrics), self.send_logs(logs));
-
-        let mut retry_events = Vec::new();
-        let mut errors = Vec::new();
-        if let Err(error) = metrics_result {
-            retry_events.extend(retry_metrics);
-            errors.push(error.to_string());
-        }
-        if let Err(error) = logs_result {
-            retry_events.extend(retry_logs);
-            errors.push(error.to_string());
-        }
-        if !retry_events.is_empty() {
-            self.buffer.write().await.extend(retry_events);
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(IntegrationError::other(errors.join("; ")))
-        }
+        Ok(())
     }
 
     async fn shutdown(&self) -> IntegrationResult<()> {

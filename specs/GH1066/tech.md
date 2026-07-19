@@ -114,6 +114,14 @@ remain null and headers are never copied.
 | P8 | canonical event fixtures + Langfuse adapter | negative assertions for prompt/output/header/secret values |
 | Shutdown | `HttpServer::start` + callback runtime | deterministic drain/flush/shutdown unit test |
 
+### Post-merge remediation mapping
+
+| Task | Implementation boundary | Verification and closure |
+| --- | --- | --- |
+| `SP1066-T7a` / PR #1081 | Datadog exact-site validation plus a cancellation-safe, bounded two-batch pending/in-flight exporter state machine; no detached retry task | manager timeout/cancellation retention, mixed metric/log non-2xx partial failure, successful-category removal, retry, saturation, focused/build/Clippy/SpecRail/scope/overlap, exact-head review and PR gate |
+| `SP1066-T7b` / final PR | callback start/terminal pairing, joined OpenTelemetry and Langfuse delivery semantics, and complete embedding hook coverage | deterministic pair, backend delivery, embedding success/error/cancellation, full repository, review, CI and PR-gate evidence |
+| `SP1066-T6` closure | depends on both T7a and T7b | only the T7b final `mixed_impl` PR closes #1066 after current review-thread, CI, merge-state and gate evidence |
+
 ## Data Flow
 
 `GatewayConfig` → validate callback config → construct enabled backends →

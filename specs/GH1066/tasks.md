@@ -21,7 +21,11 @@ GH-1066 / #1066
 
 - [x] `SP1066-T5` Covers: all. Owner: verification owner. Dependencies: T1-T4. Done when: focused tests, formatting, build, strict clippy, full test suite, SpecRail workflow/spec checks, scope guard, and overlap guard pass from this worktree with evidence saved under `artifacts/logs/gh1066/`. Verify: commands listed below.
 
-- [ ] `SP1066-T6` Covers: all acceptance criteria. Owner: coordinator and independent reviewer. Dependencies: T5. Done when: one final-slice `mixed_impl` PR closes #1066; independent exact-head review has no blocking findings; blocking CI wait, GraphQL review-thread query, merge-state check, and `pr_gate.py` are current and green; merge and issue closure are remotely confirmed. Verify: PR/check/gate/merge evidence recorded in the runtime checkpoint.
+- [x] `SP1066-T7a` Covers: P2-P4, P9. Owner: Datadog remediation owner. Dependencies: T5. Done when: PR #1081 keeps Datadog site selection on the exact approved hostname allowlist and makes exporter batching cancellation-safe with a bounded two-batch pending/in-flight state machine; manager timeout, non-2xx mixed metric/log partial failure, successful-category removal, retry, and saturation fixtures pass without detached tasks or silent loss. Verify: focused Datadog tests, formatting, build, strict clippy, SpecRail checks, scope, overlap, exact-head review, CI, and PR gate.
+
+- [ ] `SP1066-T7b` Covers: P3-P8. Owner: final callback remediation owner. Dependencies: T7a. Done when: a later final PR hardens callback start/terminal pairing, joins OpenTelemetry and Langfuse delivery semantics, and completes embedding hook coverage with deterministic success/error/cancellation fixtures. Verify: focused callback pair, OpenTelemetry, Langfuse, embedding lifecycle, full repository, review, CI, and PR-gate evidence.
+
+- [ ] `SP1066-T6` Covers: all acceptance criteria. Owner: coordinator and independent reviewer. Dependencies: T5, T7a, T7b. Done when: the T7b final-slice `mixed_impl` PR closes #1066; independent exact-head review has no blocking findings; blocking CI wait, GraphQL review-thread query, merge-state check, and `pr_gate.py` are current and green; merge and issue closure are remotely confirmed. Verify: PR/check/gate/merge evidence recorded in the runtime checkpoint.
 
 ## Parallelization
 
