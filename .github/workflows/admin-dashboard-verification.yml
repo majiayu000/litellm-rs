@@ -1,0 +1,41 @@
+name: Admin dashboard DOM verification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/admin-dashboard-verification.yml"
+      - ".gitignore"
+      - "scripts/verify-gh1067.sh"
+      - "src/server/routes/admin_dashboard/**"
+      - "tests/admin_dashboard/**"
+
+permissions:
+  contents: read
+
+jobs:
+  executable-dom:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up locked Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+          cache-dependency-path: tests/admin_dashboard/package-lock.json
+
+      - name: Run GH-1067 verification
+        run: bash scripts/verify-gh1067.sh
+
+      - name: Upload exact-head evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh1067-admin-dashboard-dom-${{ github.event.pull_request.head.sha }}
+          path: artifacts/logs/gh1067/${{ github.event.pull_request.head.sha }}
+          if-no-files-found: error

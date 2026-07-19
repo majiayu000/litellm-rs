@@ -1,0 +1,11 @@
+{
+  "name": "litellm-rs-admin-dashboard-tests",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.14.0"
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1"
+  }
+}

@@ -157,7 +157,11 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 package-lock.json
+!tests/admin_dashboard/package-lock.json
 yarn.lock
+
+# GH-1067 executable DOM verification evidence
+/artifacts/logs/gh1067/
 
 # =============================================================================
 # BACKUP AND TEMPORARY FILES
