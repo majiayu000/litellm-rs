@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-
 const indexHtml = await readFile(
   new URL("../../src/server/routes/admin_dashboard/index.html", import.meta.url),
   "utf8",
@@ -11,15 +10,12 @@ const appSource = await readFile(
   new URL("../../src/server/routes/admin_dashboard/app.js", import.meta.url),
   "utf8",
 );
-
 const immediate = () => new Promise((resolve) => setImmediate(resolve));
-
 async function settle(turns = 8) {
   for (let index = 0; index < turns; index += 1) {
     await immediate();
   }
 }
-
 async function waitFor(predicate, message) {
   for (let index = 0; index < 80; index += 1) {
     if (predicate()) {
@@ -29,7 +25,6 @@ async function waitFor(predicate, message) {
   }
   assert.fail(message);
 }
-
 function deferred() {
   let resolve;
   let reject;
@@ -39,7 +34,6 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
-
 function apiResponse(data, status = 200) {
   const success = status >= 200 && status < 300;
   return new Response(
@@ -49,7 +43,6 @@ function apiResponse(data, status = 200) {
     { status, headers: { "Content-Type": "application/json" } },
   );
 }
-
 function dashboard(options = {}) {
   const {
     keys = [],
@@ -70,20 +63,17 @@ function dashboard(options = {}) {
   const controllers = [];
   const clipboard = [];
   let confirm = () => true;
-
   class TrackingAbortController extends globalThis.AbortController {
     constructor() {
       super();
       this.abortCalls = 0;
       controllers.push(this);
     }
-
     abort(reason) {
       this.abortCalls += 1;
       super.abort(reason);
     }
   }
-
   Object.assign(window, {
     AbortController: TrackingAbortController,
     Headers,
@@ -115,7 +105,6 @@ function dashboard(options = {}) {
     },
   });
   window.confirm = (...args) => confirm(...args);
-
   const context = {
     window,
     calls,
@@ -125,7 +114,6 @@ function dashboard(options = {}) {
       confirm = typeof value === "function" ? value : () => value;
     },
   };
-
   window.fetch = (input, init = {}) => {
     const url = new URL(String(input), window.location.href);
     const call = {
@@ -178,7 +166,6 @@ function dashboard(options = {}) {
     }
     throw new Error(`Unexpected request: ${call.method} ${call.path}`);
   };
-
   window.eval(appSource);
   return context;
 }
@@ -214,6 +201,16 @@ function fillKeyForm(window, name) {
   window.document.getElementById("key-endpoints").value =
     "/v1/chat/completions";
 }
+
+async function assertCopyCleared(context) {
+  const before = [...context.clipboard];
+  context.window.document.getElementById("copy-raw-key").click();
+  await settle();
+  assert.deepEqual(context.clipboard, before);
+}
+
+const rowText = (window, selector) =>
+  [...window.document.querySelectorAll(selector)].map((row) => row.textContent);
 
 test("B1 request/session generation ordering keeps only the newest refresh", { concurrency: false }, async (t) => {
   const pending = [];
@@ -369,12 +366,14 @@ test("B3 raw keys are one-time across copy, dismiss, close, logout, and late cre
   window.document.getElementById("dismiss-raw-key").click();
   assert.equal(dialog.open, false);
   assert.equal(window.document.getElementById("raw-key-value").textContent, "");
+  await assertCopyCleared(context);
 
   fillKeyForm(window, "close-key");
   submit(window, window.document.getElementById("create-key-form"));
   await waitFor(() => dialog.open, "second raw key was not shown");
   dialog.close();
   assert.equal(window.document.getElementById("raw-key-value").textContent, "");
+  await assertCopyCleared(context);
 
   fillKeyForm(window, "logout-key");
   submit(window, window.document.getElementById("create-key-form"));
@@ -382,6 +381,7 @@ test("B3 raw keys are one-time across copy, dismiss, close, logout, and late cre
   window.document.getElementById("sign-out").click();
   assert.equal(dialog.open, false);
   assert.equal(window.document.getElementById("raw-key-value").textContent, "");
+  await assertCopyCleared(context);
 
   await signIn(context);
   useLateCreate = true;
@@ -451,10 +451,18 @@ test("B5 destructive actions require confirmation and disable exactly one pendin
   await signIn(context);
   const { window } = context;
   context.setConfirm(false);
+  const rowsBeforeCancel = [
+    rowText(window, "#keys-body tr"),
+    rowText(window, "#teams-body tr"),
+  ];
   window.document.querySelector("#keys-body button").click();
   window.document.querySelector("#teams-body button").click();
   await settle();
   assert.equal(pendingDeletes.length, 0);
+  assert.deepEqual(
+    [rowText(window, "#keys-body tr"), rowText(window, "#teams-body tr")],
+    rowsBeforeCancel,
+  );
 
   context.setConfirm(true);
   const revoke = window.document.querySelector("#keys-body button");
@@ -487,14 +495,24 @@ test("B5 destructive actions require confirmation and disable exactly one pendin
 });
 
 test("B6 late refresh/create/delete responses after logout restore no protected state", { concurrency: false }, async (t) => {
+  const lateLogin = deferred();
   const lateRefresh = deferred();
   const lateCreate = deferred();
   const lateDelete = deferred();
+  const lateUsage = deferred();
+  let loginPosts = 0;
   let keyGets = 0;
+  let usageGets = 0;
   const context = dashboard({
     keys: [{ id: "key-late", name: "visible-key", status: "active" }],
     teams: [{ id: "team-late", name: "visible-team", status: "active", member_count: 1 }],
     handler(call) {
+      if (call.url.pathname === "/auth/login" && call.method === "POST") {
+        loginPosts += 1;
+        if (loginPosts === 2) {
+          return lateLogin.promise;
+        }
+      }
       if (call.url.pathname === "/v1/keys" && call.method === "GET") {
         keyGets += 1;
         if (keyGets === 2) {
@@ -503,6 +521,15 @@ test("B6 late refresh/create/delete responses after logout restore no protected 
       }
       if (call.url.pathname === "/v1/keys" && call.method === "POST") {
         return lateCreate.promise;
+      }
+      if (
+        call.url.pathname === "/v1/teams/team-late/usage" &&
+        call.method === "GET"
+      ) {
+        usageGets += 1;
+        if (usageGets === 2) {
+          return lateUsage.promise;
+        }
       }
       if (
         call.url.pathname === "/v1/teams/team-late" &&
@@ -517,22 +544,24 @@ test("B6 late refresh/create/delete responses after logout restore no protected 
   await signIn(context);
   const { window } = context;
   context.setConfirm(true);
+  window.document.getElementById("refresh-teams").click();
+  await waitFor(() => usageGets === 2, "late usage request was not pending");
   window.document.getElementById("refresh-keys").click();
   fillKeyForm(window, "late-created-key");
   submit(window, window.document.getElementById("create-key-form"));
   window.document.querySelector("#teams-body button").click();
-  await waitFor(
-    () =>
-      context.calls.filter((call) =>
-        (call.url.pathname === "/v1/keys" &&
-          ["GET", "POST"].includes(call.method)) ||
-        (call.url.pathname === "/v1/teams/team-late" &&
-          call.method === "DELETE"),
-      ).length >= 4,
-    "late operations were not all pending",
-  );
+  window.document.getElementById("password").value = "late-password";
+  submit(window, window.document.getElementById("login-form"));
+  await waitFor(() => loginPosts === 2 && keyGets === 2, "late operations were not all pending");
 
   window.document.getElementById("sign-out").click();
+  const callsAtResolution = context.calls.length;
+  lateLogin.resolve(
+    apiResponse({
+      access_token: "late-session-token",
+      user: { id: "late-admin", username: "late-operator", role: "admin" },
+    }),
+  );
   lateRefresh.resolve(
     apiResponse({
       keys: [{ id: "restored", name: "must-not-return", status: "active" }],
@@ -541,15 +570,30 @@ test("B6 late refresh/create/delete responses after logout restore no protected 
   );
   lateCreate.resolve(apiResponse({ key: "sk-late-secret" }));
   lateDelete.resolve(apiResponse(null));
+  lateUsage.resolve(
+    apiResponse({
+      cost_today: 999,
+      total_cost: 999,
+      total_requests: 999,
+      total_tokens: 999,
+    }),
+  );
   await settle(12);
 
+  assert.equal(context.calls.length, callsAtResolution);
+  assert.equal(window.document.getElementById("password").value, "");
   assert.equal(window.document.getElementById("login-panel").hidden, false);
   assert.equal(window.document.getElementById("dashboard-shell").hidden, true);
+  assert.equal(window.document.getElementById("sign-out").hidden, true);
+  assert.equal(window.document.getElementById("session-label").textContent, "Signed out");
   assert.equal(window.document.querySelectorAll("#keys-body tr").length, 0);
   assert.equal(window.document.querySelectorAll("#teams-body tr").length, 0);
   assert.equal(window.document.getElementById("raw-key-dialog").open, false);
   assert.equal(window.document.getElementById("raw-key-value").textContent, "");
-  assert.doesNotMatch(window.document.body.textContent, /must-not-return|sk-late-secret/);
+  assert.doesNotMatch(
+    window.document.body.textContent,
+    /must-not-return|sk-late-secret|late-operator|\$999/,
+  );
   assert.match(
     window.document.getElementById("status-region").textContent,
     /^Signed out\./,
