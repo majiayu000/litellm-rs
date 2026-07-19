@@ -146,12 +146,10 @@ impl SDKError {
             SDKError::NetworkError(_) | SDKError::RateLimitError(_) | SDKError::ProviderError(_)
         )
     }
-
     /// Error
     pub fn is_auth_error(&self) -> bool {
         matches!(self, SDKError::AuthError(_))
     }
-
     /// Configuration
     pub fn is_config_error(&self) -> bool {
         matches!(
@@ -200,7 +198,6 @@ mod tests {
             SDKError::ParseError(_) => "parse_error",
         }
     }
-
     // ==================== SDKError Display Tests ====================
 
     #[test]
@@ -208,13 +205,11 @@ mod tests {
         let error = SDKError::ProviderNotFound("openai".to_string());
         assert_eq!(error.to_string(), "Provider not found: openai");
     }
-
     #[test]
     fn test_sdk_error_no_default_provider() {
         let error = SDKError::NoDefaultProvider;
         assert_eq!(error.to_string(), "No default provider configured");
     }
-
     // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
     #[allow(deprecated)]
     #[test]
@@ -222,25 +217,21 @@ mod tests {
         let error = SDKError::ProviderError("API unavailable".to_string());
         assert_eq!(error.to_string(), "Provider error: API unavailable");
     }
-
     #[test]
     fn test_sdk_error_config_error() {
         let error = SDKError::ConfigError("Missing API key".to_string());
         assert_eq!(error.to_string(), "Configuration error: Missing API key");
     }
-
     #[test]
     fn test_sdk_error_network_error() {
         let error = SDKError::NetworkError("Connection refused".to_string());
         assert_eq!(error.to_string(), "Network error: Connection refused");
     }
-
     #[test]
     fn test_sdk_error_auth_error() {
         let error = SDKError::AuthError("Invalid API key".to_string());
         assert_eq!(error.to_string(), "Authentication error: Invalid API key");
     }
-
     #[test]
     fn test_sdk_error_rate_limit_error() {
         let error = SDKError::RateLimitError("Too many requests".to_string());
@@ -636,7 +627,8 @@ mod tests {
         let words: Vec<_> = text.split_whitespace().map(|word| word.strip_prefix("r#").unwrap_or(word)).collect();
         let normal = words.windows(3).filter(|w| *w == ["SDKError", "::", "ProviderError"]).count();
         let qualified = words.windows(5).filter(|w| *w == ["<", "SDKError", ">", "::", "ProviderError"]).count();
-        (normal + qualified, raw || qualified > 0 || words.windows(3).any(|w| w == ["Self", "::", "ProviderError"]))
+        let composed = words.contains(&"SDKError") && words.contains(&"ProviderError");
+        (normal + qualified, raw || qualified > 0 || (composed && normal + qualified == 0) || words.windows(3).any(|w| w == ["Self", "::", "ProviderError"]))
     }
 
     impl Guard {
@@ -666,7 +658,7 @@ mod tests {
             let text = node.tokens.to_string();
             let (count, alternate) = token_refs(&text);
             self.record(count, alternate);
-            if text.split_whitespace().collect::<Vec<_>>().windows(3).any(|w| w == ["allow", "(", "warnings"] || w == ["expect", "(", "warnings"]) { self.errors.push("warnings lint suppression".into()); }
+            let words: Vec<_> = text.split_whitespace().collect(); if (count > 0 || alternate) && (words.contains(&"warnings") || (words.contains(&"deprecated") && (words.contains(&"allow") || words.contains(&"expect")))) { self.errors.push("macro lint suppression".into()); }
         }
         fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
             if matches!(node.path().get_ident().map(|id| id.unraw().to_string()).as_deref(), Some("allow" | "expect")) {
@@ -747,8 +739,10 @@ mod tests {
         let mut expected_attrs = BTreeMap::from([("src/core/traits/provider/llm_provider/sub_traits.rs", 9), ("src/sdk/client/completions.rs", 1), ("src/sdk/errors.rs", 8), ("src/server/routes/mod.rs", 1)]);
         for path in ["src/core/router/tests/concurrency_edge_case_tests.rs", "src/core/router/tests/execution_tests.rs", "src/core/router/tests/router_tests.rs", "src/core/router/tests/selection_tests.rs", "src/core/router/tests/strategy_tests.rs", "tests/integration/router_tests.rs"] { if sources.contains_key(path) { expected_attrs.insert(path, 1); } }
         if attr_counts != expected_attrs { return Err(format!("deprecated attribute baseline changed: {attr_counts:?}")); }
-        let marker = format!("SP965-T010 links 0.7 removal follow-up for {}{}", "SDKError::", "ProviderError");
-        if sources.values().map(|source| source.matches(&marker).count()).sum::<usize>() != 9 { return Err("T010 marker count changed".into()); }
+        let marker = format!("SP965-T010 links 0.7 removal follow-up for {}{}", "SDKError::", "ProviderError"); let allow = format!("#[allow{}]", "(deprecated)"); let errors = &sources["src/sdk/errors.rs"]; let completions = &sources["src/sdk/client/completions.rs"];
+        for (source, site) in [(errors, format!("// {marker}\n            {allow}\n            crate::utils::error::gateway_error::GatewayError::Unavailable(msg) =>")), (errors, format!("// {marker}\n            {allow}\n            ErrorCode::Unavailable =>")), (completions, format!("// {marker}\n            {allow}\n            _ => Err(SDKError::ProviderError"))] { if source.matches(&site).count() != 1 { return Err(format!("arm marker moved: {site}")); } } for (name, test, public) in [("is_retryable", false, true), ("sdk_variant", false, false), ("test_sdk_error_provider_error", true, false), ("test_is_retryable_provider_error", true, false), ("test_from_gateway_error_provider_unavailable", true, false), ("test_sdk_error_empty_message", true, false)] { let site = format!("// {marker}\n    {allow}\n{}    {}fn {name}", if test { "    #[test]\n" } else { "" }, if public { "pub " } else { "" }); if errors.matches(&site).count() != 1 { return Err(format!("function marker moved: {name}")); } } if sources.values().map(|source| source.matches(&marker).count()).sum::<usize>() != 9 { return Err("T010 marker count changed".into()); }
+        let baselines: [(&str, &[&str]); 2] = [("src/server/routes/mod.rs", &["fn test_api_response_to_http_response_remains_compatibility_shim"]), ("src/core/traits/provider/llm_provider/sub_traits.rs", &["impl<T: LLMProvider> LLMChat for T", "impl<T: LLMProvider> LLMEmbed for T", "impl<T: LLMProvider> LLMStream for T", "async fn test_llm_chat_blanket_impl", "async fn test_llm_embed_blanket_impl", "async fn test_llm_stream_blanket_impl", "fn _accepts_chat<T: LLMChat>", "fn _accepts_embed<T: LLMEmbed>", "fn _accepts_stream<T: LLMStream>"])]; for (path, anchors) in baselines { if let Some(source) = sources.get(path) { for anchor in anchors { let at = source.find(anchor).ok_or_else(|| format!("baseline anchor moved: {path}"))?; if !source[..at].trim_end().ends_with(&allow) { return Err(format!("broad allow moved: {path}: {anchor}")); } } } }
+        for path in ["src/core/router/tests/concurrency_edge_case_tests.rs", "src/core/router/tests/execution_tests.rs", "src/core/router/tests/router_tests.rs", "src/core/router/tests/selection_tests.rs", "src/core/router/tests/strategy_tests.rs"] { if let Some(source) = sources.get(path) { let at = source.find("use ").ok_or_else(|| format!("missing use anchor: {path}"))?; if !source[..at].trim_end().ends_with("#![allow(deprecated)]") { return Err(format!("inner allow moved: {path}")); } } } if let Some(source) = sources.get("tests/integration/router_tests.rs") && !source.contains("mod tests {\n    #![allow(deprecated)]\n") { return Err("integration allow moved".into()); }
         Ok(())
     }
 
@@ -776,15 +770,15 @@ mod tests {
         for base in &roots { for dir in ["src", "tests", "examples", "benches"] { walk(&base.join(dir), true, &mut rust_files).unwrap(); } if base.join("build.rs").exists() { rust_files.insert(base.join("build.rs").canonicalize().unwrap()); } }
         let mut sources = BTreeMap::new(); for path in rust_files { let label = path.strip_prefix(&root).map_or_else(|_| path.display().to_string(), |rel| rel.to_string_lossy().replace('\\', "/")); sources.insert(label, fs::read_to_string(path).unwrap()); }
         verify_sources(&sources).expect("legacy deprecation source guard");
-        let errors = &sources["src/sdk/errors.rs"]; let legacy = format!("{}{}", "SDKError::", "ProviderError"); let constructor = format!("let error = {legacy}(\"API unavailable\".to_string());"); let tests_mod = format!("{}{}", "mod tests ", "{");
+        let errors = &sources["src/sdk/errors.rs"]; let legacy = format!("{}{}", "SDKError::", "ProviderError"); let constructor = format!("let error = {legacy}(\"API unavailable\".to_string());"); let tests_mod = format!("{}{}", "#[cfg(test)]\nmod tests ", "{"); let marker = format!("SP965-T010 links 0.7 removal follow-up for {legacy}"); let allow = format!("#[allow{}]", "(deprecated)"); let marker_site = format!("// {marker}\n    {allow}\n    #[test]\n    fn test_sdk_error_provider_error() {{");
         for (label, old, new) in [
             ("value alias", constructor.as_str(), format!("let make = {legacy}; let error = make(\"API unavailable\".to_string());")),
             ("allow warnings", tests_mod.as_str(), format!("{tests_mod} #![allow(warnings)]")),
             ("qualified path", constructor.as_str(), constructor.replace(&legacy, "<SDKError>::ProviderError")),
             ("raw path", constructor.as_str(), constructor.replace(&legacy, "SDKError::r#ProviderError")),
-            ("macro alias", constructor.as_str(), format!("macro_rules! make {{ ($v:expr) => {{ {legacy}($v) }} }} let error = make!(\"API unavailable\".to_string());")),
+            ("macro alias", constructor.as_str(), format!("macro_rules! make {{ ($v:expr) => {{ {legacy}($v) }} }} let error = make!(\"API unavailable\".to_string());")), ("generic macro composition", constructor.as_str(), "macro_rules! make { ($ty:path, $variant:ident, $value:expr) => { $ty::$variant($value) }; } let error = make!(SDKError, ProviderError, \"API unavailable\".to_string());".into()), ("macro lint suppression", tests_mod.as_str(), format!("{tests_mod} macro_rules! allow_legacy {{ () => {{ #[allow(deprecated)] {legacy}(\"x\".into()) }} }}")), ("marker relocation", marker_site.as_str(), format!("{allow}\n    #[test]\n    fn test_sdk_error_provider_error() {{\n        // {marker}")),
         ] { assert_eq!(errors.matches(old).count(), 1); let mut changed = sources.clone(); changed.insert("src/sdk/errors.rs".into(), errors.replacen(old, &new, 1)); assert!(verify_sources(&changed).is_err(), "mutation accepted: {label}"); }
-        let mut packaged = sources.clone(); packaged.remove("tests/integration/router_tests.rs"); verify_sources(&packaged).expect("packaged source baseline");
+        for (label, path, old, new) in [("server anchor", "src/server/routes/mod.rs", "#[allow(deprecated)]\n    fn test_api_response_to_http_response_remains_compatibility_shim", "fn test_api_response_to_http_response_remains_compatibility_shim\n    #[allow(deprecated)]"), ("subtrait anchor", "src/core/traits/provider/llm_provider/sub_traits.rs", "#[allow(deprecated)]\nimpl<T: LLMProvider> LLMChat for T {", "impl<T: LLMProvider> LLMChat for T {\n    #[allow(deprecated)]"), ("inner router anchor", "src/core/router/tests/execution_tests.rs", "#![allow(deprecated)]\n\nuse ", "#[allow(deprecated)]\nuse ")] { let source = &sources[path]; assert_eq!(source.matches(old).count(), 1); let mut changed = sources.clone(); changed.insert(path.into(), source.replacen(old, new, 1)); assert!(verify_sources(&changed).is_err(), "mutation accepted: {label}"); } let mut packaged = sources.clone(); packaged.remove("tests/integration/router_tests.rs"); verify_sources(&packaged).expect("packaged source baseline");
         for base in &roots { for dir in [".cargo", ".github/workflows", "scripts", "checks", "xtask"] { walk(&base.join(dir), false, &mut lint_files).unwrap(); } for entry in fs::read_dir(base).unwrap().flatten() { let path = entry.path(); let name = path.file_name().and_then(|n| n.to_str()).unwrap_or(""); if path.is_file() && (name.starts_with("Makefile") || name.starts_with("justfile") || name.starts_with("rust-toolchain") || name == "clippy.toml") { lint_files.insert(path.canonicalize().unwrap()); } } }
         for path in lint_files { assert!(verify_lint(&fs::read_to_string(path).unwrap()), "lint downgrade"); }
         for sample in ["RUSTFLAGS='--cap-lints allow'", "rustflags=[\"--cap-lints=warn\"]", "-A deprecated", "-A warnings"] { assert!(!verify_lint(sample)); }
