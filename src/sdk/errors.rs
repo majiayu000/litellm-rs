@@ -166,7 +166,17 @@ mod tests {
     use super::*;
     use crate::core::providers::ProviderError;
     use crate::utils::error::gateway_error::GatewayError;
-    use std::process::Command;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+    };
+    use syn::{
+        Expr, GenericArgument, Meta, PathArguments, Type, UseTree,
+        ext::IdentExt,
+        visit::{self, Visit},
+    };
 
     // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
     #[allow(deprecated)]
@@ -596,198 +606,194 @@ mod tests {
         assert!(error.to_string().contains(&long_msg));
     }
 
+    #[rustfmt::skip]
+    mod legacy_guard {
+    use super::*;
+
+    #[derive(Default)]
+    struct Guard {
+        owner: String,
+        impl_owner: String,
+        refs: BTreeMap<String, usize>,
+        attrs: BTreeMap<String, usize>,
+        errors: Vec<String>,
+    }
+
+    fn type_name(ty: &Type) -> String {
+        match ty { Type::Path(path) => path.path.segments.last().map(|s| s.ident.unraw().to_string()).unwrap_or_default(), _ => String::new() }
+    }
+
+    fn legacy_path(qself: Option<&syn::QSelf>, path: &syn::Path) -> (bool, bool) {
+        let ids: Vec<_> = path.segments.iter().map(|s| s.ident.unraw().to_string()).collect();
+        let raw = path.segments.iter().any(|s| s.ident.to_string().starts_with("r#"));
+        let normal = ids.ends_with(&["SDKError".into(), "ProviderError".into()]);
+        let qualified = qself.is_some_and(|q| type_name(&q.ty) == "SDKError") && ids.last().is_some_and(|id| id == "ProviderError");
+        (normal || qualified, raw || qualified)
+    }
+
+    fn token_refs(text: &str) -> (usize, bool) {
+        let raw = text.contains("r#ProviderError") || text.contains("r#SDKError");
+        let words: Vec<_> = text.split_whitespace().map(|word| word.strip_prefix("r#").unwrap_or(word)).collect();
+        let normal = words.windows(3).filter(|w| *w == ["SDKError", "::", "ProviderError"]).count();
+        let qualified = words.windows(5).filter(|w| *w == ["<", "SDKError", ">", "::", "ProviderError"]).count();
+        (normal + qualified, raw || qualified > 0 || words.windows(3).any(|w| w == ["Self", "::", "ProviderError"]))
+    }
+
+    impl Guard {
+        fn record(&mut self, count: usize, alternate: bool) {
+            if count > 0 { *self.refs.entry(self.owner.clone()).or_default() += count; }
+            if alternate { self.errors.push("alternate legacy path".into()); }
+        }
+        fn probe(expr: &Expr) -> usize {
+            let mut guard = Guard { owner: "probe".into(), ..Guard::default() };
+            guard.visit_expr(expr);
+            guard.refs.values().sum()
+        }
+    }
+
+    impl<'ast> Visit<'ast> for Guard {
+        fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+            if node.qself.as_ref().is_some_and(|qself| legacy_path(Some(qself), &node.path).0) { self.record(1, true); }
+            visit::visit_expr_path(self, node);
+        }
+        fn visit_path(&mut self, node: &'ast syn::Path) {
+            let (legacy, alternate) = legacy_path(None, node); if legacy { self.record(1, alternate); }
+            let ids: Vec<_> = node.segments.iter().map(|s| s.ident.unraw().to_string()).collect();
+            if ids.ends_with(&["Self".into(), "ProviderError".into()]) { self.errors.push("Self alias".into()); }
+            visit::visit_path(self, node);
+        }
+        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+            let text = node.tokens.to_string();
+            let (count, alternate) = token_refs(&text);
+            self.record(count, alternate);
+            if text.split_whitespace().collect::<Vec<_>>().windows(3).any(|w| w == ["allow", "(", "warnings"] || w == ["expect", "(", "warnings"]) { self.errors.push("warnings lint suppression".into()); }
+        }
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            if matches!(node.path().get_ident().map(|id| id.unraw().to_string()).as_deref(), Some("allow" | "expect")) {
+                let body = match &node.meta { Meta::List(list) => list.tokens.to_string(), _ => String::new() };
+                if body.split(|c: char| !c.is_alphanumeric() && c != '_').any(|word| word == "warnings") { self.errors.push("warnings lint suppression".into()); }
+                if body.split(|c: char| !c.is_alphanumeric() && c != '_').any(|word| word == "deprecated") {
+                    *self.attrs.entry(self.owner.clone()).or_default() += 1;
+                    if !node.path().is_ident("allow") || body.trim() != "deprecated" { self.errors.push("expanded deprecated suppression".into()); }
+                }
+            }
+            visit::visit_attribute(self, node);
+        }
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            let old = std::mem::replace(&mut self.owner, format!("fn:{}", node.sig.ident.unraw()));
+            visit::visit_item_fn(self, node); self.owner = old;
+        }
+        fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+            let trait_ty = node.trait_.as_ref().and_then(|(_, path, _)| path.segments.last()).and_then(|s| match &s.arguments { PathArguments::AngleBracketed(args) => args.args.iter().find_map(|arg| match arg { GenericArgument::Type(ty) => Some(type_name(ty)), _ => None }), _ => None });
+            let old = std::mem::replace(&mut self.impl_owner, trait_ty.unwrap_or_else(|| type_name(&node.self_ty)));
+            visit::visit_item_impl(self, node); self.impl_owner = old;
+        }
+        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+            let old = std::mem::replace(&mut self.owner, format!("impl:{}:{}", self.impl_owner, node.sig.ident.unraw()));
+            visit::visit_impl_item_fn(self, node); self.owner = old;
+        }
+        fn visit_local(&mut self, node: &'ast syn::Local) {
+            if let Some(init) = &node.init {
+                let direct = matches!(init.expr.as_ref(), Expr::Call(call) if matches!(call.func.as_ref(), Expr::Path(path) if legacy_path(path.qself.as_ref(), &path.path) == (true, false)));
+                if Guard::probe(&init.expr) > 0 && !direct { self.errors.push("legacy value alias".into()); }
+            }
+            visit::visit_local(self, node);
+        }
+        fn visit_item_const(&mut self, node: &'ast syn::ItemConst) { if Guard::probe(&node.expr) > 0 { self.errors.push("legacy const alias".into()); } visit::visit_item_const(self, node); }
+        fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) { if Guard::probe(&node.expr) > 0 { self.errors.push("legacy static alias".into()); } visit::visit_item_static(self, node); }
+        fn visit_item_type(&mut self, node: &'ast syn::ItemType) { if type_name(&node.ty) == "SDKError" { self.errors.push("SDKError type alias".into()); } visit::visit_item_type(self, node); }
+        fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) { if token_refs(&node.mac.tokens.to_string()).0 > 0 { self.errors.push("legacy macro alias".into()); } visit::visit_item_macro(self, node); }
+        fn visit_item_use(&mut self, node: &'ast syn::ItemUse) { if risky_use(&node.tree, false) { self.errors.push("legacy import alias".into()); } visit::visit_item_use(self, node); }
+    }
+
+    fn risky_use(tree: &UseTree, sdk: bool) -> bool {
+        match tree {
+            UseTree::Path(path) => risky_use(&path.tree, sdk || path.ident.unraw() == "SDKError"),
+            UseTree::Name(name) => sdk && name.ident.unraw() == "ProviderError",
+            UseTree::Rename(rename) => sdk || rename.ident.unraw() == "SDKError",
+            UseTree::Glob(_) => sdk,
+            UseTree::Group(group) => group.items.iter().any(|item| risky_use(item, sdk)),
+        }
+    }
+
+    fn walk(directory: &Path, rust_only: bool, files: &mut BTreeSet<PathBuf>) -> std::io::Result<()> {
+        if !directory.exists() { return Ok(()); }
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?; let path = entry.path(); let kind = entry.file_type()?;
+            if kind.is_dir() && entry.file_name() != "__pycache__" { walk(&path, rust_only, files)?; }
+            else if kind.is_file() && (!rust_only || path.extension().is_some_and(|ext| ext == "rs")) { files.insert(path.canonicalize()?); }
+        }
+        Ok(())
+    }
+
+    fn verify_sources(sources: &BTreeMap<String, String>) -> std::result::Result<(), String> {
+        let expected = BTreeMap::from([
+            (("src/sdk/errors.rs", "impl:GatewayError:from"), 1), (("src/sdk/errors.rs", "impl:ProviderError:from"), 1),
+            (("src/sdk/errors.rs", "impl:SDKError:is_retryable"), 1), (("src/sdk/errors.rs", "fn:sdk_variant"), 1),
+            (("src/sdk/errors.rs", "fn:test_sdk_error_provider_error"), 1), (("src/sdk/errors.rs", "fn:test_is_retryable_provider_error"), 1),
+            (("src/sdk/errors.rs", "fn:test_from_gateway_error_provider_unavailable"), 1), (("src/sdk/errors.rs", "fn:test_sdk_error_empty_message"), 1),
+            (("src/sdk/client/completions.rs", "impl:LLMClient:execute_chat_request"), 1),
+        ]);
+        let mut refs = BTreeMap::new(); let mut owner_attrs = BTreeMap::new(); let mut attr_counts = BTreeMap::new();
+        for (path, source) in sources {
+            let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
+            let mut guard = Guard { owner: "outside".into(), ..Guard::default() }; guard.visit_file(&file);
+            if !guard.errors.is_empty() { return Err(format!("{path}: {:?}", guard.errors)); }
+            for (owner, count) in guard.refs { refs.insert((path.as_str(), owner.leak() as &str), count); }
+            for (owner, count) in guard.attrs { owner_attrs.insert((path.as_str(), owner.leak() as &str), count); *attr_counts.entry(path.as_str()).or_default() += count; }
+        }
+        if refs != expected { return Err(format!("legacy owner references changed: {refs:?}")); }
+        if owner_attrs.iter().filter(|((path, _), _)| path.starts_with("src/sdk/")).collect::<BTreeMap<_, _>>() != expected.iter().collect::<BTreeMap<_, _>>() { return Err(format!("legacy allow owners changed: {owner_attrs:?}")); }
+        let mut expected_attrs = BTreeMap::from([("src/core/traits/provider/llm_provider/sub_traits.rs", 9), ("src/sdk/client/completions.rs", 1), ("src/sdk/errors.rs", 8), ("src/server/routes/mod.rs", 1)]);
+        for path in ["src/core/router/tests/concurrency_edge_case_tests.rs", "src/core/router/tests/execution_tests.rs", "src/core/router/tests/router_tests.rs", "src/core/router/tests/selection_tests.rs", "src/core/router/tests/strategy_tests.rs", "tests/integration/router_tests.rs"] { if sources.contains_key(path) { expected_attrs.insert(path, 1); } }
+        if attr_counts != expected_attrs { return Err(format!("deprecated attribute baseline changed: {attr_counts:?}")); }
+        let marker = format!("SP965-T010 links 0.7 removal follow-up for {}{}", "SDKError::", "ProviderError");
+        if sources.values().map(|source| source.matches(&marker).count()).sum::<usize>() != 9 { return Err("T010 marker count changed".into()); }
+        Ok(())
+    }
+
+    fn verify_lint(text: &str) -> bool {
+        let normalized: String = text.to_ascii_lowercase().chars().map(|c| if "\"'=,[]".contains(c) { ' ' } else { c }).collect();
+        let words: Vec<_> = normalized.split_whitespace().collect();
+        !words.iter().enumerate().any(|(i, word)| matches!(*word, "-adeprecated" | "-awarnings") || matches!(words.get(i..i + 2), Some(["-a", "deprecated"] | ["-a", "warnings"] | ["--allow", "deprecated"] | ["--allow", "warnings"] | ["--cap-lints", "allow"] | ["--cap-lints", "warn"])))
+    }
+
+    pub(super) fn run_legacy_provider_error_guard() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize().expect("manifest root");
+        let mut rust_files = BTreeSet::new();
+        if root.join(".git").exists() {
+            let output = Command::new("git").args(["ls-files", "*.rs"]).current_dir(&root).output().expect("git discovery");
+            assert!(output.status.success()); for path in String::from_utf8(output.stdout).unwrap().lines() { rust_files.insert(root.join(path).canonicalize().unwrap()); }
+        }
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let output = Command::new(cargo).args(["metadata", "--no-deps", "--format-version", "1"]).current_dir(&root).output().expect("cargo metadata");
+        assert!(output.status.success()); let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut roots = BTreeSet::from([root.clone(), PathBuf::from(metadata["workspace_root"].as_str().unwrap()).canonicalize().unwrap()]); let mut lint_files = BTreeSet::new();
+        for package in metadata["packages"].as_array().unwrap() {
+            let manifest = PathBuf::from(package["manifest_path"].as_str().unwrap()).canonicalize().unwrap(); lint_files.insert(manifest.clone()); roots.insert(manifest.parent().unwrap().into());
+            for target in package["targets"].as_array().unwrap() { rust_files.insert(PathBuf::from(target["src_path"].as_str().unwrap()).canonicalize().unwrap()); }
+        }
+        for base in &roots { for dir in ["src", "tests", "examples", "benches"] { walk(&base.join(dir), true, &mut rust_files).unwrap(); } if base.join("build.rs").exists() { rust_files.insert(base.join("build.rs").canonicalize().unwrap()); } }
+        let mut sources = BTreeMap::new(); for path in rust_files { let label = path.strip_prefix(&root).map_or_else(|_| path.display().to_string(), |rel| rel.to_string_lossy().replace('\\', "/")); sources.insert(label, fs::read_to_string(path).unwrap()); }
+        verify_sources(&sources).expect("legacy deprecation source guard");
+        let errors = &sources["src/sdk/errors.rs"]; let legacy = format!("{}{}", "SDKError::", "ProviderError"); let constructor = format!("let error = {legacy}(\"API unavailable\".to_string());"); let tests_mod = format!("{}{}", "mod tests ", "{");
+        for (label, old, new) in [
+            ("value alias", constructor.as_str(), format!("let make = {legacy}; let error = make(\"API unavailable\".to_string());")),
+            ("allow warnings", tests_mod.as_str(), format!("{tests_mod} #![allow(warnings)]")),
+            ("qualified path", constructor.as_str(), constructor.replace(&legacy, "<SDKError>::ProviderError")),
+            ("raw path", constructor.as_str(), constructor.replace(&legacy, "SDKError::r#ProviderError")),
+            ("macro alias", constructor.as_str(), format!("macro_rules! make {{ ($v:expr) => {{ {legacy}($v) }} }} let error = make!(\"API unavailable\".to_string());")),
+        ] { assert_eq!(errors.matches(old).count(), 1); let mut changed = sources.clone(); changed.insert("src/sdk/errors.rs".into(), errors.replacen(old, &new, 1)); assert!(verify_sources(&changed).is_err(), "mutation accepted: {label}"); }
+        let mut packaged = sources.clone(); packaged.remove("tests/integration/router_tests.rs"); verify_sources(&packaged).expect("packaged source baseline");
+        for base in &roots { for dir in [".cargo", ".github/workflows", "scripts", "checks", "xtask"] { walk(&base.join(dir), false, &mut lint_files).unwrap(); } for entry in fs::read_dir(base).unwrap().flatten() { let path = entry.path(); let name = path.file_name().and_then(|n| n.to_str()).unwrap_or(""); if path.is_file() && (name.starts_with("Makefile") || name.starts_with("justfile") || name.starts_with("rust-toolchain") || name == "clippy.toml") { lint_files.insert(path.canonicalize().unwrap()); } } }
+        for path in lint_files { assert!(verify_lint(&fs::read_to_string(path).unwrap()), "lint downgrade"); }
+        for sample in ["RUSTFLAGS='--cap-lints allow'", "rustflags=[\"--cap-lints=warn\"]", "-A deprecated", "-A warnings"] { assert!(!verify_lint(sample)); }
+    }
+
+    }
+
     #[test]
     fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
-        let status = Command::new("python3")
-            .args(["-c", r####"
-import json, re, subprocess
-from pathlib import Path
-
-root = Path.cwd().resolve(strict=True)
-def resolved(path): return Path(path).resolve(strict=True)
-def relative(path):
-    try: return path.relative_to(root).as_posix()
-    except ValueError: return str(path)
-
-tracked = []
-if (root / ".git").exists():
-    tracked = subprocess.run(
-        ["git", "ls-files", "*.rs"], cwd=root, check=True, capture_output=True, text=True
-    ).stdout.splitlines()
-rust_files = {resolved(root / path) for path in tracked}
-metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"],
-    cwd=root, check=True, capture_output=True, text=True).stdout)
-package_roots = {root, resolved(metadata["workspace_root"])}
-lint_files = set()
-for package in metadata["packages"]:
-    manifest = resolved(package["manifest_path"]); lint_files.add(manifest); package_roots.add(manifest.parent)
-    rust_files.update(resolved(target["src_path"]) for target in package["targets"])
-for package_root in package_roots:
-    for directory in ("src", "tests", "examples", "benches"):
-        rust_files.update(resolved(path) for path in package_root.glob(f"{directory}/**/*.rs") if path.is_file())
-    build = package_root / "build.rs"
-    if build.exists(): rust_files.add(resolved(build))
-sources = {relative(path): path.read_text(encoding="utf-8") for path in sorted(rust_files)}
-legacy = "SDKError::" + "ProviderError"
-marker = "SP965-T010 links 0.7 removal follow-up for " + legacy
-allow = "#[allow" + "(deprecated)]"
-punct = set("{}()[].,:;|=<>?!&+-*/%^#@~$'")
-def lex(text):
-    out, offset = [], 0
-    while offset < len(text):
-        if text[offset].isspace(): offset += 1; continue
-        start = offset
-        if text.startswith("//", offset):
-            offset = text.find("\n", offset); offset = len(text) if offset < 0 else offset; continue
-        if text.startswith("/*", offset):
-            depth = 1; offset += 2
-            while offset < len(text) and depth:
-                if text.startswith("/*", offset): depth += 1; offset += 2
-                elif text.startswith("*/", offset): depth -= 1; offset += 2
-                else: offset += 1
-            assert depth == 0, "unterminated block comment"; continue
-        raw = re.match(r'(?:br|cr|r)(?P<h>#{0,255})"', text[offset:])
-        if raw:
-            closing = '"' + raw.group("h"); offset += raw.end(); end = text.find(closing, offset)
-            assert end >= 0, "unterminated raw string"; offset = end + len(closing); out.append(("LITERAL", start, offset)); continue
-        prefix = 1 if text.startswith(('b"', 'c"'), offset) else 0
-        if text[offset + prefix:offset + prefix + 1] == '"':
-            offset += prefix + 1
-            while offset < len(text):
-                if text[offset] == "\\": offset += 2
-                elif text[offset] == '"': offset += 1; break
-                else: offset += 1
-            assert offset <= len(text) and text[offset - 1] == '"', "unterminated string"; out.append(("LITERAL", start, offset)); continue
-        if text[offset] == "'" and offset + 2 < len(text) and (text[offset + 1] == "\\" or text[offset + 2] == "'"):
-            offset += 1; offset += 2 if text[offset] == "\\" else 1
-            assert offset < len(text) and text[offset] == "'", "unterminated char"; offset += 1; out.append(("LITERAL", start, offset)); continue
-        match = re.match(r"[A-Za-z_][A-Za-z0-9_]*|[0-9][A-Za-z0-9_.]*", text[offset:])
-        if match: offset += match.end(); out.append((text[start:offset], start, offset)); continue
-        operator = next((item for item in ("::", "=>", "->", "..=", "...", "..") if text.startswith(item, offset)), None)
-        if operator: offset += len(operator); out.append((operator, start, offset)); continue
-        assert text[offset] in punct, f"unrecognized Rust syntax: {text[offset:offset + 20]!r}"
-        offset += 1; out.append((text[start:offset], start, offset))
-    return out
-def values(source): return [value for value, _, _ in lex(source)]
-def occurrences(items, needle): return sum(items[index:index + len(needle)] == needle for index in range(len(items) - len(needle) + 1))
-def matching(tokens, start, opening, closing):
-    depth = 0
-    for index in range(start, len(tokens)):
-        if tokens[index][0] == opening: depth += 1
-        elif tokens[index][0] == closing:
-            depth -= 1
-            if not depth: return index
-    raise AssertionError(f"unclosed {opening}")
-def function_source(source, name):
-    tokens = lex(source); items = [value for value, _, _ in tokens]
-    starts = [index for index in range(len(items) - 1) if items[index:index + 2] == ["fn", name]]
-    assert len(starts) == 1, f"function owner changed: {name}"
-    opening = next(index for index in range(starts[0] + 2, len(tokens)) if tokens[index][0] == "{"); return source[tokens[starts[0]][1]:tokens[matching(tokens, opening, "{", "}")][2]]
-def owned_arm(source, function, match_header, expected):
-    body = function_source(source, function); tokens = lex(body); items = [item[0] for item in tokens]
-    header, arm = values(match_header), values(expected)
-    matches = [i for i in range(len(items)) if items[i:i + len(header)] == header]
-    assert len(matches) == 1 and header[-1] == "{", f"match owner changed: {function}"
-    opening = matches[0] + len(header) - 1; closing = matching(tokens, opening, "{", "}")
-    depth, starts = 0, []
-    for index in range(opening + 1, closing):
-        if not depth and items[index:index + len(arm)] == arm: starts.append(index)
-        if items[index] in ("{", "(", "["): depth += 1
-        elif items[index] in ("}", ")", "]"): depth -= 1
-    assert len(starts) == 1, f"arm owner changed: {function}"
-    prefix = body[:tokens[starts[0]][1]]
-    decoration = rf"(?m)^[ \t]*// {re.escape(marker)}\r?\n[ \t]*{re.escape(allow)}\r?\n[ \t]*\Z"
-    assert re.search(decoration, prefix), f"arm decoration changed: {function}"
-def deprecated_attrs(source):
-    tokens = lex(source); items = [value for value, _, _ in tokens]; found = []
-    for index, value in enumerate(items):
-        cursor = index + 1
-        if value != "#": continue
-        if cursor < len(items) and items[cursor] == "!": cursor += 1
-        if cursor >= len(items) or items[cursor] != "[": continue
-        end = matching(tokens, cursor, "[", "]"); body = items[cursor + 1:end]
-        if "deprecated" in body and ("allow" in body or "expect" in body): found.append(source[tokens[index][1]:tokens[end][2]])
-    return found
-baselines = {"src/server/routes/mod.rs": ("fn test_api_response_to_http_response_remains_compatibility_shim",),
-    "src/core/traits/provider/llm_provider/sub_traits.rs": ("impl<T: LLMProvider> LLMChat for T", "impl<T: LLMProvider> LLMEmbed for T", "impl<T: LLMProvider> LLMStream for T",
-    "async fn test_llm_chat_blanket_impl", "async fn test_llm_embed_blanket_impl", "async fn test_llm_stream_blanket_impl", "fn _accepts_chat<T: LLMChat>", "fn _accepts_embed<T: LLMEmbed>", "fn _accepts_stream<T: LLMStream>")}
-inner_roots = ("src/core/router/tests/concurrency_edge_case_tests.rs",
-    "src/core/router/tests/execution_tests.rs", "src/core/router/tests/router_tests.rs", "src/core/router/tests/selection_tests.rs", "src/core/router/tests/strategy_tests.rs")
-def verify(candidate):
-    refs = {}
-    for path, source in candidate.items():
-        items = values(source); count = occurrences(items, ["SDKError", "::", "ProviderError"]); refs.update({path: count} if count else {})
-        assert not occurrences(items, ["Self", "::", "ProviderError"]), f"Self alias: {path}"
-        for index, value in enumerate(items):
-            if value not in ("type", "use"): continue
-            end = next((cursor for cursor in range(index, len(items)) if items[cursor] == ";"), len(items)); statement = items[index:end]
-            direct = [] if "=" not in statement else [item for item in statement[statement.index("=") + 1:] if item not in ("(", ")")]
-            if value == "type": assert not (direct and direct[-1] == "SDKError" and all(item == "::" or item.isidentifier() for item in direct)), f"SDKError alias: {path}"
-            if value == "use" and "SDKError" in statement: assert not ({"ProviderError", "*", "as"} & set(statement)), f"legacy import: {path}"
-    assert refs == {"src/sdk/client/completions.rs": 1, "src/sdk/errors.rs": 8}, refs
-    attrs = {path: found for path, source in candidate.items() if (found := deprecated_attrs(source))}
-    expected_attrs = {"src/core/traits/provider/llm_provider/sub_traits.rs": 9, "src/sdk/client/completions.rs": 1, "src/sdk/errors.rs": 8, "src/server/routes/mod.rs": 1}
-    expected_attrs.update({path: 1 for path in inner_roots + ("tests/integration/router_tests.rs",)})
-    assert {path: len(found) for path, found in attrs.items()} == expected_attrs, attrs
-    assert all(text in (allow, "#![allow(deprecated)]") for found in attrs.values() for text in found), attrs
-    for path, anchors in baselines.items():
-        assert all((offset := candidate[path].find(anchor)) >= 0 and candidate[path][:offset].rstrip().endswith(allow) for anchor in anchors), f"broad allow moved: {path}"
-    for path in inner_roots: assert re.fullmatch(r"(?s)(?://![^\n]*\n|\s)*#!\[allow\(deprecated\)\]\s*", candidate[path][:candidate[path].find("use ")])
-    assert "mod tests {\n    #![allow(deprecated)]\n" in candidate["tests/integration/router_tests.rs"]
-    errors = candidate["src/sdk/errors.rs"]; completions = candidate["src/sdk/client/completions.rs"]
-    assert sum(source.count(marker) for source in candidate.values()) == 9
-    functions = (("is_retryable", False, True), ("sdk_variant", False, False), ("test_sdk_error_provider_error", True, False), ("test_is_retryable_provider_error", True, False),
-        ("test_from_gateway_error_provider_unavailable", True, False), ("test_sdk_error_empty_message", True, False))
-    for name, test, public in functions:
-        prefix = (rf"(?m)^[ \t]*// {re.escape(marker)}\r?\n[ \t]*{re.escape(allow)}\r?\n" + (r"[ \t]*#\[test\]\r?\n" if test else "") + rf"[ \t]*{'pub ' if public else ''}fn {name}\b")
-        assert len(re.findall(prefix, errors)) == 1, f"owner decoration: {name}"
-        assert occurrences(values(function_source(errors, name)), ["SDKError", "::", "ProviderError"]) == 1, f"owner ref: {name}"
-    head = rf"(?m)^[ \t]*// {re.escape(marker)}\r?\n[ \t]*{re.escape(allow)}\r?\n[ \t]*"
-    arms = ((errors, r"crate::utils::error::gateway_error::GatewayError::Unavailable\(msg\)\s*=>\s*\{\s*SDKError\s*::\s*ProviderError\s*\(\s*msg\s*\)\s*\}"),
-        (errors, r"ErrorCode::Unavailable\s*=>\s*SDKError\s*::\s*ProviderError\s*\(\s*message\s*\)\s*,"))
-    for source, arm in arms: assert len(re.findall(head + arm, source)) == 1, f"arm owner: {arm}"
-    owned_arm(completions, "execute_chat_request", "match provider.provider_type {", '_ => Err(SDKError::ProviderError(format!("fallback", provider.provider_type))),')
-verify(sources)
-def replaced(source, old, new): assert source.count(old) == 1; return source.replace(old, new)
-def reject(label, mutated, path="src/sdk/errors.rs"):
-    try: verify({**sources, path: mutated})
-    except AssertionError: return
-    raise AssertionError(f"mutation accepted: {label}")
-errors = sources["src/sdk/errors.rs"]
-prefix = f"    // {marker}\n    {allow}\n    #[test]\n    fn test_sdk_error_provider_error() {{"
-relocated = f"    // {marker}\n    {allow}\n    const RELOCATED: fn(String) -> SDKError = {legacy};\n\n    #[test]\n    fn test_sdk_error_provider_error() {{"
-reject("relocated", replaced(replaced(errors, prefix, relocated), f'let error = {legacy}("API unavailable".to_string());', 'let error = RELOCATED("API unavailable".to_string());'))
-retry_line = f"SDKError::NetworkError(_) | SDKError::RateLimitError(_) | {legacy}(_)"
-reject("Self", replaced(errors, retry_line, retry_line + " | Self::ProviderError(_)"))
-constructor = f'let error = {legacy}("API unavailable".to_string());'
-reject("split", replaced(errors, constructor, constructor + "\n        let _ = SDKError::\n            ProviderError(String::new());"))
-reject("alias", replaced(errors, constructor, "type E = SDKError;\n        " + constructor + "\n        let _ = E::ProviderError(String::new());"))
-reject("attribute", replaced(errors, "mod tests {\n", "mod tests {\n    #![allow (deprecated, dead_code)]\n"))
-completions = sources["src/sdk/client/completions.rs"]
-fallback = f'            // {marker}\n            {allow}\n            _ => Err(SDKError::ProviderError(format!(\n                "Provider type {{:?}} is not implemented in SDK client",\n                provider.provider_type\n            ))),'
-replacement = '            _ => Err(SDKError::Internal(format!(\n                "Provider type {:?} is not implemented in SDK client",\n                provider.provider_type\n            ))),'
-macro = f'#[allow(unused_macros)]\nmacro_rules! relocated_provider_error_arm {{ () => {{\n    // {marker}\n    {allow}\n    _ => Err(SDKError::ProviderError(format!("Provider type {{:?}} is not implemented in SDK client", provider.provider_type))),\n}}; }}\n'
-reject("completion arm relocated into macro owner", macro + replaced(completions, fallback, replacement), "src/sdk/client/completions.rs")
-for package_root in package_roots:
-    for directory in (".cargo", ".github/workflows", "scripts", "checks", "xtask"):
-        path = package_root / directory
-        if path.exists(): lint_files.update(resolved(item) for item in path.rglob("*") if item.is_file() and "__pycache__" not in item.parts)
-    for item in package_root.iterdir():
-        if item.is_file() and (item.name.startswith(("Makefile", "justfile", "rust-toolchain")) or item.name == "clippy.toml"): lint_files.add(resolved(item))
-def verify_lint(text, label):
-    words = re.sub(r'''["'=,\[\]]''', " ", text.lower()).split()
-    bad = {("-a", "deprecated"), ("-a", "warnings"), ("--allow", "deprecated"), ("--allow", "warnings"), ("--cap-lints", "allow"), ("--cap-lints", "warn")}
-    for index, word in enumerate(words):
-        assert word not in ("-adeprecated", "-awarnings"), f"lint downgrade: {label}"; assert tuple(words[index:index + 2]) not in bad, f"lint downgrade: {label}"
-for path in sorted(lint_files): verify_lint(path.read_text(encoding="utf-8"), relative(path))
-for sample in ("RUSTFLAGS='--cap-lints allow'", 'rustflags=["--cap-lints=warn"]', "-A deprecated"):
-    try: verify_lint(sample, "mutation")
-    except AssertionError: pass
-    else: raise AssertionError(f"lint mutation accepted: {sample}")
-"####])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .status()
-            .expect("legacy deprecation guard must run");
-        assert!(status.success(), "legacy deprecation guard failed");
+        legacy_guard::run_legacy_provider_error_guard();
     }
 }
