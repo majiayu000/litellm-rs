@@ -62,16 +62,40 @@ pub struct OpenTelemetryIntegration {
 }
 
 impl OpenTelemetryIntegration {
-    /// Create a new OpenTelemetry integration
-    pub fn new(config: OpenTelemetryConfig) -> Self {
+    /// Create a new OpenTelemetry integration and surface client construction errors.
+    pub fn try_new(config: OpenTelemetryConfig) -> IntegrationResult<Self> {
         let http_client =
-            create_custom_client(Duration::from_millis(config.timeout_ms)).unwrap_or_default();
+            create_custom_client(Duration::from_millis(config.timeout_ms)).map_err(|error| {
+                IntegrationError::connection(format!(
+                    "Failed to create OpenTelemetry HTTP client: {error}"
+                ))
+            })?;
 
-        Self {
+        Ok(Self {
             config,
             active_spans: RwLock::new(HashMap::new()),
             pending_spans: RwLock::new(SpanBatch::new()),
             http_client,
+        })
+    }
+
+    /// Create a new OpenTelemetry integration
+    pub fn new(config: OpenTelemetryConfig) -> Self {
+        match Self::try_new(config.clone()) {
+            Ok(integration) => integration,
+            Err(error) => {
+                warn!(
+                    "OpenTelemetry custom HTTP client initialization failed; \
+                     using the legacy default client fallback: {}",
+                    error
+                );
+                Self {
+                    config,
+                    active_spans: RwLock::new(HashMap::new()),
+                    pending_spans: RwLock::new(SpanBatch::new()),
+                    http_client: reqwest::Client::new(),
+                }
+            }
         }
     }
 

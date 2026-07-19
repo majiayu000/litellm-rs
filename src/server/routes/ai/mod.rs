@@ -6,6 +6,7 @@
 mod audio;
 mod batches;
 pub(crate) mod budgeted;
+mod callbacks;
 mod chat;
 mod completions;
 mod context;

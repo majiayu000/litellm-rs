@@ -23,6 +23,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
+use super::callbacks::CallbackLifecycle;
 use super::openai_errors;
 #[path = "chat_delta.rs"]
 mod chat_delta;
@@ -113,6 +114,12 @@ async fn handle_chat_completion_internal(
         return Ok(cached);
     }
     let requested_model = core_request.model.clone();
+    let callback = CallbackLifecycle::start(
+        &state.callbacks,
+        state.budgeted.pricing(),
+        &requested_model,
+        context.as_ref(),
+    );
     let context_for_execution = Arc::clone(&context);
     let request_for_execution = Arc::clone(&request);
 
@@ -124,8 +131,9 @@ async fn handle_chat_completion_internal(
     let api_key_id = context.api_key_id();
     let api_key_budget_id = context.api_key_budget_id();
     let budgeted = state.budgeted.clone();
+    let callback_for_execution = callback.clone();
 
-    let core_response = run_unary(
+    let core_response = match run_unary(
         unified_router,
         &requested_model,
         ProviderCapability::ChatCompletion,
@@ -137,12 +145,19 @@ async fn handle_chat_completion_internal(
             let key_manager = key_manager.clone();
             let budgeted = budgeted.clone();
             let pricing_config = pricing_config.clone();
+            let callback = callback_for_execution.clone();
             async move {
                 let provider_name = provider.name().to_string();
                 let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
                     pricing_service.as_ref(),
                     &provider,
                     &selected_model,
+                );
+                callback.select_target(
+                    &provider_name,
+                    &selected_model,
+                    &pricing_provider,
+                    &pricing_model,
                 );
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
@@ -220,10 +235,24 @@ async fn handle_chat_completion_internal(
             }
         },
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            callback.fail(error.to_string(), "provider_error");
+            return Err(error);
+        }
+    };
 
     let response = convert_core_chat_response(core_response);
-    super::response_cache::store_chat(state, request.as_ref(), &response, context.as_ref()).await?;
+    if let Err(error) =
+        super::response_cache::store_chat(state, request.as_ref(), &response, context.as_ref())
+            .await
+    {
+        callback.fail(error.to_string(), "cache_error");
+        return Err(error);
+    }
+    callback.complete_usage(response.usage.as_ref(), "success");
     Ok(response)
 }
 

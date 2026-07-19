@@ -5,6 +5,7 @@
 use crate::config::Config;
 use crate::core::budget::{BudgetManager, UnifiedBudgetLimits};
 use crate::core::cache::{DualCacheConfig, LLMCache, LLMCacheConfig};
+use crate::core::integrations::CallbackDispatcher;
 use crate::core::keys::{DatabaseKeyRepository, KeyManager};
 use crate::core::pricing_service::PricingService;
 use crate::core::teams::TeamManager;
@@ -49,6 +50,8 @@ pub struct AppState {
     pub(crate) budgeted: BudgetedExecutor,
     /// Optional deterministic response cache for non-streaming chat and embeddings
     pub response_cache: Option<Arc<LLMCache>>,
+    /// Non-blocking external request lifecycle callback dispatcher
+    pub callbacks: CallbackDispatcher,
 }
 
 impl AppState {
@@ -87,7 +90,14 @@ impl AppState {
             key_manager,
             budgeted,
             response_cache,
+            callbacks: CallbackDispatcher::disabled(),
         }
+    }
+
+    /// Attach a configured callback dispatcher.
+    pub fn with_callbacks(mut self, callbacks: CallbackDispatcher) -> Self {
+        self.callbacks = callbacks;
+        self
     }
 
     /// Load a snapshot of the current gateway configuration.

@@ -56,6 +56,7 @@
 
 pub mod client;
 pub mod config;
+pub mod integration;
 pub mod logger;
 #[cfg(feature = "gateway")]
 pub mod middleware;
@@ -64,6 +65,7 @@ pub mod types;
 // Re-export main types
 pub use client::{BatchSender, LangfuseClient, LangfuseError};
 pub use config::LangfuseConfig;
+pub use integration::LangfuseIntegration;
 pub use logger::{LangfuseLogger, LlmCallback, LlmError, LlmRequest, LlmResponse};
 #[cfg(feature = "gateway")]
 pub use middleware::{

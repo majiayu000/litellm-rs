@@ -3,7 +3,11 @@ use super::*;
 #[tokio::test]
 async fn test_completions_provider_failure_maps_to_rate_limit() {
     let mock_server = MockOpenAIServer::start(MockScenario::RateLimitFailure).await;
-    let state = build_test_app_state(&mock_server.base_url).await;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = build_callback_runtime(Arc::clone(&events)).await;
+    let state = build_test_app_state(&mock_server.base_url)
+        .await
+        .with_callbacks(runtime.dispatcher());
 
     let app = test::init_service(
         App::new()
@@ -35,6 +39,21 @@ async fn test_completions_provider_failure_maps_to_rate_limit() {
     let requests = mock_server.requests();
     assert!(!requests.is_empty());
     assert!(requests.iter().all(|request| request["model"] == "gpt-4o"));
+    runtime
+        .shutdown()
+        .await
+        .expect("callback runtime should drain");
+    let events = events
+        .lock()
+        .expect("callback events should not be poisoned")
+        .clone();
+    assert_eq!(events.len(), 2);
+    let RecordedCallback::Error(error) = &events[1] else {
+        panic!("provider failure should emit one terminal error callback");
+    };
+    assert_eq!(error.error_type.as_deref(), Some("provider_error"));
+    assert_eq!(error.error_message, "provider request failed");
+    assert!(!error.error_message.contains("sk-completion-secret"));
 
     mock_server.shutdown().await;
 }
@@ -76,7 +95,11 @@ async fn test_completions_streaming_echo_prefixes_prompt_once() {
 #[tokio::test]
 async fn test_completions_stream_timeout_before_output_does_not_record_spend() {
     let mock_server = MockOpenAIServer::start(MockScenario::StreamingIdle).await;
-    let state = build_test_app_state_with_idle_timeout(&mock_server.base_url, Some(1)).await;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = build_callback_runtime(Arc::clone(&events)).await;
+    let state = build_test_app_state_with_idle_timeout(&mock_server.base_url, Some(1))
+        .await
+        .with_callbacks(runtime.dispatcher());
     state.budget_limits.providers.set_provider_limit(
         "openai",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -119,6 +142,21 @@ async fn test_completions_stream_timeout_before_output_does_not_record_spend() {
         .unwrap_or(0.0);
     assert_eq!(provider_spend, 0.0);
     assert_eq!(model_spend, 0.0);
+    runtime
+        .shutdown()
+        .await
+        .expect("callback runtime should drain");
+    let events = events
+        .lock()
+        .expect("callback events should not be poisoned")
+        .clone();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0], RecordedCallback::Start(_)));
+    let RecordedCallback::Error(error) = &events[1] else {
+        panic!("stream timeout should emit one terminal error callback");
+    };
+    assert_eq!(error.error_type.as_deref(), Some("timeout"));
+    assert_eq!(error.error_message, "provider request timed out");
 
     mock_server.shutdown().await;
 }
@@ -126,7 +164,11 @@ async fn test_completions_stream_timeout_before_output_does_not_record_spend() {
 #[tokio::test]
 async fn test_completions_streaming_response_sends_sse_and_done() {
     let mock_server = MockOpenAIServer::start(MockScenario::StreamingSuccess).await;
-    let state = build_test_app_state(&mock_server.base_url).await;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = build_callback_runtime(Arc::clone(&events)).await;
+    let state = build_test_app_state(&mock_server.base_url)
+        .await
+        .with_callbacks(runtime.dispatcher());
 
     let app = test::init_service(
         App::new()
@@ -160,6 +202,17 @@ async fn test_completions_streaming_response_sends_sse_and_done() {
     let requests = mock_server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["stream"], true);
+    runtime
+        .shutdown()
+        .await
+        .expect("callback runtime should drain");
+    let events = events
+        .lock()
+        .expect("callback events should not be poisoned")
+        .clone();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0], RecordedCallback::Start(_)));
+    assert!(matches!(events[1], RecordedCallback::End(_)));
 
     mock_server.shutdown().await;
 }

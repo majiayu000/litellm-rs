@@ -47,6 +47,7 @@
 //! manager.on_llm_start(&event).await?;
 //! ```
 
+pub mod callback_runtime;
 pub mod langfuse;
 pub mod manager;
 pub mod observability;
@@ -55,7 +56,8 @@ pub mod observability;
 #[cfg(feature = "gateway")]
 pub use langfuse::LangfuseTracing;
 pub use langfuse::{
-    LangfuseConfig, LangfuseLogger, LlmCallback, LlmError, LlmRequest, LlmResponse,
+    LangfuseConfig, LangfuseIntegration, LangfuseLogger, LlmCallback, LlmError, LlmRequest,
+    LlmResponse,
 };
 pub use manager::{IntegrationManager, IntegrationManagerConfig};
 pub use observability::{
@@ -69,3 +71,4 @@ pub use crate::core::traits::integration::{
     BoxedIntegration, CacheHitEvent, EmbeddingEndEvent, EmbeddingStartEvent, Integration,
     IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
+pub use callback_runtime::{CallbackDispatchError, CallbackDispatcher, CallbackRuntime};

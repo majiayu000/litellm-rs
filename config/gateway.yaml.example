@@ -135,6 +135,12 @@ monitoring:
     path: "/health"
     detailed: true
   logging: null
+  # External request lifecycle exporters are opt-in. Backend secrets should be
+  # supplied through environment substitution, never committed literally.
+  callbacks:
+    queue_capacity: 1024
+    timeout_ms: 5000
+    backends: []
 
 cache:
   # NOT YET IMPLEMENTED: the response cache is not wired into the request

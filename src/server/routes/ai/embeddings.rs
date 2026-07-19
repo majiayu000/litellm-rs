@@ -12,6 +12,7 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use tracing::info;
 
 use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
+use super::callbacks::CallbackLifecycle;
 use super::context::handle_ai_request;
 
 fn parse_embedding_input(input: &serde_json::Value) -> Result<EmbeddingInput, GatewayError> {
@@ -108,6 +109,12 @@ async fn handle_embedding_internal(
     };
 
     let requested_model = core_request.model.clone();
+    let callback = CallbackLifecycle::start(
+        &state.callbacks,
+        state.budgeted.pricing(),
+        &requested_model,
+        &context,
+    );
     let context_for_execution = context.clone();
     let api_key_id = context.api_key_id();
     let api_key_budget_id = context.api_key_budget_id();
@@ -115,7 +122,8 @@ async fn handle_embedding_internal(
     let key_manager = budgeted.key_manager();
     let pricing_service = budgeted.pricing();
     let pricing_config = state.config().gateway.pricing.clone();
-    let core_response = run_unary(
+    let callback_for_execution = callback.clone();
+    let core_response = match run_unary(
         &state.unified_router,
         &requested_model,
         ProviderCapability::Embeddings,
@@ -126,12 +134,19 @@ async fn handle_embedding_internal(
             let key_manager = key_manager.clone();
             let pricing_service = pricing_service.clone();
             let pricing_config = pricing_config.clone();
+            let callback = callback_for_execution.clone();
             async move {
                 let budget_provider = provider.name().to_string();
                 let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
                     pricing_service.as_ref(),
                     &provider,
                     &selected_model,
+                );
+                callback.select_target(
+                    &budget_provider,
+                    &selected_model,
+                    &pricing_provider,
+                    &pricing_model,
                 );
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model.clone();
@@ -216,9 +231,17 @@ async fn handle_embedding_internal(
             }
         },
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            callback.fail(error.to_string(), "provider_error");
+            return Err(error);
+        }
+    };
 
     // Convert core response to OpenAI format
+    let callback_usage = core_response.usage.clone();
     let response = EmbeddingResponse {
         object: core_response.object,
         data: core_response
@@ -245,7 +268,13 @@ async fn handle_embedding_internal(
         },
     };
 
-    super::response_cache::store_embedding(state, &request_for_cache, &response, &context).await?;
+    if let Err(error) =
+        super::response_cache::store_embedding(state, &request_for_cache, &response, &context).await
+    {
+        callback.fail(error.to_string(), "cache_error");
+        return Err(error);
+    }
+    callback.complete_usage(callback_usage.as_ref(), "success");
     Ok(response)
 }
 

@@ -5,6 +5,7 @@
 use crate::config::models::server::{CorsConfig, ServerConfig};
 use crate::config::{Config, Validate};
 use crate::core::budget::UnifiedBudgetLimits;
+use crate::core::integrations::CallbackRuntime;
 use crate::core::pricing_service::PricingService;
 use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter_with_redis};
 use crate::server::middleware::{
@@ -35,6 +36,8 @@ pub struct HttpServer {
     state: AppState,
     /// Background worker that drains budget persistence events on shutdown.
     budget_persistence_task: Option<JoinHandle<()>>,
+    /// Background worker that delivers configured callback events.
+    callback_runtime: CallbackRuntime,
 }
 
 impl HttpServer {
@@ -48,6 +51,12 @@ impl HttpServer {
             .cache
             .validate()
             .map_err(|e| GatewayError::Config(format!("Invalid cache configuration: {}", e)))?;
+        config
+            .gateway
+            .monitoring
+            .callbacks
+            .validate()
+            .map_err(|e| GatewayError::Config(format!("Invalid callback configuration: {}", e)))?;
         start_auth_rate_limiter_cleanup_task();
 
         let storage = crate::storage::StorageLayer::new(&config.gateway.storage).await?;
@@ -140,6 +149,9 @@ impl HttpServer {
             ))
         })?;
 
+        let callback_runtime =
+            crate::server::callbacks::build_callback_runtime(&config.gateway.monitoring.callbacks)
+                .await;
         let state = AppState::new_with_unified_router(
             config.clone(),
             auth,
@@ -147,12 +159,14 @@ impl HttpServer {
             storage,
             pricing,
             budget_limits,
-        );
+        )
+        .with_callbacks(callback_runtime.dispatcher());
 
         Ok(Self {
             config: config.gateway.server.clone(),
             state,
             budget_persistence_task,
+            callback_runtime,
         })
     }
 
@@ -300,6 +314,8 @@ impl HttpServer {
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
         let port = self.config.port;
         let budget_persistence_task = self.budget_persistence_task.take();
+        let callback_runtime =
+            std::mem::replace(&mut self.callback_runtime, CallbackRuntime::disabled());
 
         info!("Starting HTTP server on {}", bind_addr);
 
@@ -360,6 +376,11 @@ impl HttpServer {
             if let Err(e) = task.await {
                 warn!("Budget persistence worker join failed: {}", e);
             }
+        }
+
+        info!("Draining external callback worker");
+        if let Err(e) = callback_runtime.shutdown().await {
+            warn!("Callback worker shutdown reported an error: {}", e);
         }
 
         info!("Closing storage layer");
@@ -511,6 +532,30 @@ mod tests {
         };
 
         assert!(server.state().response_cache.is_some());
+    }
+
+    #[tokio::test]
+    async fn new_wires_configured_callback_backend() {
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+        config.gateway.monitoring.callbacks.backends = vec![
+            crate::config::models::monitoring::CallbackBackendConfig::OpenTelemetry(
+                crate::core::integrations::OpenTelemetryConfig::default(),
+            ),
+        ];
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("configured callbacks should wire at startup: {error}"),
+        };
+
+        assert!(server.state().callbacks.is_enabled());
+        assert_eq!(
+            server.state().callbacks.registered_integrations().await,
+            vec!["opentelemetry"]
+        );
     }
 
     /// In-memory budget snapshots load succeeds (returns empty) on sqlite, so

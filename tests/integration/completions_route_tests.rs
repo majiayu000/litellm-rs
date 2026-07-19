@@ -11,6 +11,10 @@ mod tests {
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::core::integrations::{
+        CallbackRuntime, Integration, IntegrationManager, IntegrationResult, LlmEndEvent,
+        LlmErrorEvent, LlmStartEvent,
+    };
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::core::types::context::RequestContext;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
@@ -19,6 +23,60 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    #[derive(Clone)]
+    enum RecordedCallback {
+        Start(LlmStartEvent),
+        End(LlmEndEvent),
+        Error(LlmErrorEvent),
+    }
+
+    struct RecordingCallback {
+        events: Arc<Mutex<Vec<RecordedCallback>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Integration for RecordingCallback {
+        fn name(&self) -> &'static str {
+            "route-test-recorder"
+        }
+
+        fn is_enabled(&self) -> bool {
+            true
+        }
+
+        async fn on_llm_start(&self, event: &LlmStartEvent) -> IntegrationResult<()> {
+            self.events
+                .lock()
+                .expect("callback events should not be poisoned")
+                .push(RecordedCallback::Start(event.clone()));
+            Ok(())
+        }
+
+        async fn on_llm_end(&self, event: &LlmEndEvent) -> IntegrationResult<()> {
+            self.events
+                .lock()
+                .expect("callback events should not be poisoned")
+                .push(RecordedCallback::End(event.clone()));
+            Ok(())
+        }
+
+        async fn on_llm_error(&self, event: &LlmErrorEvent) -> IntegrationResult<()> {
+            self.events
+                .lock()
+                .expect("callback events should not be poisoned")
+                .push(RecordedCallback::Error(event.clone()));
+            Ok(())
+        }
+
+        async fn flush(&self) -> IntegrationResult<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&self) -> IntegrationResult<()> {
+            Ok(())
+        }
+    }
 
     #[derive(Clone, Copy)]
     enum MockScenario {
@@ -201,6 +259,14 @@ mod tests {
         server.state().clone()
     }
 
+    async fn build_callback_runtime(events: Arc<Mutex<Vec<RecordedCallback>>>) -> CallbackRuntime {
+        let manager = Arc::new(IntegrationManager::with_defaults());
+        manager
+            .register(Arc::new(RecordingCallback { events }))
+            .await;
+        CallbackRuntime::new(manager, 8).expect("callback runtime should initialize")
+    }
+
     fn completion_request(stream: Option<bool>) -> Value {
         json!({
             "model": "gpt-4o",
@@ -278,6 +344,56 @@ mod tests {
         assert_eq!(requests[0]["messages"][0]["content"], "Hello");
         assert!(requests[0].get("stream").is_none());
         assert!(requests[0].get("stream_options").is_none());
+
+        mock_server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_completions_route_emits_metadata_only_callback_lifecycle() {
+        let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let runtime = build_callback_runtime(Arc::clone(&events)).await;
+        let state = build_test_app_state(&mock_server.base_url)
+            .await
+            .with_callbacks(runtime.dispatcher());
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let request = test::TestRequest::post()
+            .uri("/v1/completions")
+            .set_json(completion_request(None))
+            .to_request();
+
+        let response = test::call_service(&app, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let _: Value = test::read_body_json(response).await;
+        runtime
+            .shutdown()
+            .await
+            .expect("callback runtime should drain");
+
+        let events = events
+            .lock()
+            .expect("callback events should not be poisoned")
+            .clone();
+        assert_eq!(events.len(), 2);
+        let (RecordedCallback::Start(start), RecordedCallback::End(end)) = (&events[0], &events[1])
+        else {
+            panic!("route should emit one ordered start/end callback pair");
+        };
+        assert_eq!(start.request_id, end.request_id);
+        assert_eq!(start.model, "gpt-4o");
+        assert_eq!(start.input, Value::Null);
+        assert_eq!(end.output, Value::Null);
+        assert_eq!(end.provider.as_deref(), Some("openai"));
+        assert_eq!(end.input_tokens, Some(10));
+        assert_eq!(end.output_tokens, Some(6));
+        assert!(end.cost_usd.is_some());
+        assert!(end.metadata.contains_key("outcome"));
 
         mock_server.shutdown().await;
     }

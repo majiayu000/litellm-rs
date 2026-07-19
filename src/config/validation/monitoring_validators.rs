@@ -6,8 +6,10 @@
 
 use super::trait_def::Validate;
 use crate::config::models::monitoring::{
-    HealthConfig, MetricsConfig, MonitoringConfig, TracingConfig,
+    CallbackBackendConfig, CallbackConfig, HealthConfig, MetricsConfig, MonitoringConfig,
+    TracingConfig,
 };
+use std::collections::HashSet;
 use tracing::debug;
 
 impl Validate for MonitoringConfig {
@@ -17,9 +19,94 @@ impl Validate for MonitoringConfig {
         self.metrics.validate()?;
         self.tracing.validate()?;
         self.health.validate()?;
+        self.callbacks.validate()?;
 
         Ok(())
     }
+}
+
+impl Validate for CallbackConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.queue_capacity == 0 {
+            return Err("Callback queue capacity must be greater than 0".to_string());
+        }
+        if self.timeout_ms == 0 {
+            return Err("Callback timeout must be greater than 0".to_string());
+        }
+
+        let mut kinds = HashSet::new();
+        for backend in &self.backends {
+            if !kinds.insert(backend.kind()) {
+                return Err(format!("Duplicate callback backend: {}", backend.kind()));
+            }
+            validate_callback_backend(backend)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_callback_backend(backend: &CallbackBackendConfig) -> Result<(), String> {
+    match backend {
+        CallbackBackendConfig::OpenTelemetry(config) => {
+            if !config.enabled {
+                return Err("Configured OpenTelemetry callback backend must be enabled".to_string());
+            }
+            validate_http_endpoint("OpenTelemetry callback endpoint", &config.endpoint)?;
+            if config.timeout_ms == 0 {
+                return Err("OpenTelemetry callback timeout must be greater than 0".to_string());
+            }
+            if config.max_batch_size == 0 {
+                return Err(
+                    "OpenTelemetry callback max_batch_size must be greater than 0".to_string(),
+                );
+            }
+            if !config.sampling_ratio.is_finite() || !(0.0..=1.0).contains(&config.sampling_ratio) {
+                return Err(
+                    "OpenTelemetry callback sampling_ratio must be between 0.0 and 1.0".to_string(),
+                );
+            }
+        }
+        CallbackBackendConfig::Datadog(config) => {
+            if config.api_key.trim().is_empty() {
+                return Err("Datadog callback api_key cannot be empty".to_string());
+            }
+            if config.site.trim().is_empty() {
+                return Err("Datadog callback site cannot be empty".to_string());
+            }
+            if config.batch_size == 0 {
+                return Err("Datadog callback batch_size must be greater than 0".to_string());
+            }
+            if config.flush_interval_ms == 0 {
+                return Err("Datadog callback flush_interval_ms must be greater than 0".to_string());
+            }
+        }
+        CallbackBackendConfig::Langfuse(config) => {
+            if !config.is_valid() {
+                return Err(
+                    "Langfuse callback requires enabled=true plus public_key and secret_key"
+                        .to_string(),
+                );
+            }
+            validate_http_endpoint("Langfuse callback host", &config.host)?;
+            if config.batch_size == 0 {
+                return Err("Langfuse callback batch_size must be greater than 0".to_string());
+            }
+            if config.flush_interval_ms == 0 {
+                return Err(
+                    "Langfuse callback flush_interval_ms must be greater than 0".to_string()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_http_endpoint(label: &str, value: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(value).map_err(|error| format!("{label} is invalid: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("{label} must use http or https"));
+    }
+    Ok(())
 }
 
 impl Validate for MetricsConfig {
@@ -76,6 +163,37 @@ mod tests {
     // Helper to call the Validate trait method explicitly
     fn validate_config<T: Validate>(config: &T) -> Result<(), String> {
         Validate::validate(config)
+    }
+
+    #[test]
+    fn callback_config_rejects_duplicate_backends() {
+        let config = CallbackConfig {
+            backends: vec![
+                CallbackBackendConfig::OpenTelemetry(
+                    crate::core::integrations::OpenTelemetryConfig::default(),
+                ),
+                CallbackBackendConfig::OpenTelemetry(
+                    crate::core::integrations::OpenTelemetryConfig::default(),
+                ),
+            ],
+            ..CallbackConfig::default()
+        };
+        assert_eq!(
+            validate_config(&config).unwrap_err(),
+            "Duplicate callback backend: opentelemetry"
+        );
+    }
+
+    #[test]
+    fn callback_config_rejects_zero_capacity() {
+        let config = CallbackConfig {
+            queue_capacity: 0,
+            ..CallbackConfig::default()
+        };
+        assert_eq!(
+            validate_config(&config).unwrap_err(),
+            "Callback queue capacity must be greater than 0"
+        );
     }
 
     // ==================== MetricsConfig Validation Tests ====================

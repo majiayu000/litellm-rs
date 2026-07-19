@@ -3,6 +3,7 @@
 //! Unified configuration for metrics, tracing, health checks, and logging.
 
 use super::*;
+use crate::core::integrations::{DataDogConfig, LangfuseConfig, OpenTelemetryConfig};
 use serde::{Deserialize, Serialize};
 
 /// Monitoring configuration
@@ -21,6 +22,9 @@ pub struct MonitoringConfig {
     /// Logging configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logging: Option<LoggingConfig>,
+    /// External callback exporter configuration
+    #[serde(default)]
+    pub callbacks: CallbackConfig,
 }
 
 impl MonitoringConfig {
@@ -32,7 +36,72 @@ impl MonitoringConfig {
         if other.logging.is_some() {
             self.logging = other.logging;
         }
+        self.callbacks = self.callbacks.merge(other.callbacks);
         self
+    }
+}
+
+/// Non-blocking external callback dispatcher configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallbackConfig {
+    /// Maximum lifecycle events waiting for exporter delivery.
+    #[serde(default = "default_callback_queue_capacity")]
+    pub queue_capacity: usize,
+    /// Timeout for each integration callback in milliseconds.
+    #[serde(default = "default_callback_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Enabled callback backends.
+    #[serde(default)]
+    pub backends: Vec<CallbackBackendConfig>,
+}
+
+impl Default for CallbackConfig {
+    fn default() -> Self {
+        Self {
+            queue_capacity: default_callback_queue_capacity(),
+            timeout_ms: default_callback_timeout_ms(),
+            backends: Vec::new(),
+        }
+    }
+}
+
+impl CallbackConfig {
+    /// Merge callback settings, preferring explicitly non-default overlay values.
+    pub fn merge(mut self, other: Self) -> Self {
+        if other.queue_capacity != default_callback_queue_capacity() {
+            self.queue_capacity = other.queue_capacity;
+        }
+        if other.timeout_ms != default_callback_timeout_ms() {
+            self.timeout_ms = other.timeout_ms;
+        }
+        if !other.backends.is_empty() {
+            self.backends = other.backends;
+        }
+        self
+    }
+}
+
+/// A configured built-in callback backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config", rename_all = "snake_case")]
+pub enum CallbackBackendConfig {
+    /// OTLP exporter backed by the existing OpenTelemetry integration.
+    #[serde(rename = "opentelemetry")]
+    OpenTelemetry(OpenTelemetryConfig),
+    /// Datadog metrics, trace, and log exporter.
+    Datadog(DataDogConfig),
+    /// Langfuse LLM observability exporter.
+    Langfuse(LangfuseConfig),
+}
+
+impl CallbackBackendConfig {
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::OpenTelemetry(_) => "opentelemetry",
+            Self::Datadog(_) => "datadog",
+            Self::Langfuse(_) => "langfuse",
+        }
     }
 }
 
@@ -222,6 +291,14 @@ fn default_interval_seconds() -> u64 {
     15
 }
 
+fn default_callback_queue_capacity() -> usize {
+    1024
+}
+
+fn default_callback_timeout_ms() -> u64 {
+    5000
+}
+
 fn default_sampling_rate() -> f64 {
     0.1
 }
@@ -247,6 +324,46 @@ mod tests {
         assert_eq!(config.port, 9090);
         assert_eq!(config.path, "/metrics");
         assert_eq!(config.interval_seconds, 15);
+    }
+
+    #[test]
+    fn callback_config_defaults_to_disabled_backends() {
+        let config = CallbackConfig::default();
+        assert_eq!(config.queue_capacity, 1024);
+        assert_eq!(config.timeout_ms, 5000);
+        assert!(config.backends.is_empty());
+    }
+
+    #[test]
+    fn callback_config_deserializes_tagged_existing_backend_configs() {
+        let yaml = r#"
+queue_capacity: 64
+timeout_ms: 250
+backends:
+  - type: opentelemetry
+    config:
+      enabled: true
+      endpoint: http://collector:4318
+      service_name: gateway
+      service_version: null
+      environment: test
+      resource_attributes: {}
+      export_traces: true
+      export_metrics: false
+      batch_interval_ms: 100
+      max_batch_size: 8
+      timeout_ms: 200
+      sampling_ratio: 1.0
+      headers: {}
+"#;
+        let config: CallbackConfig = match serde_yml::from_str(yaml) {
+            Ok(config) => config,
+            Err(error) => panic!("callback config should deserialize: {error}"),
+        };
+        assert_eq!(config.queue_capacity, 64);
+        assert_eq!(config.timeout_ms, 250);
+        assert_eq!(config.backends.len(), 1);
+        assert_eq!(config.backends[0].kind(), "opentelemetry");
     }
 
     #[test]
