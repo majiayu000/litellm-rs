@@ -510,10 +510,10 @@ impl DataDogIntegration {
         debug!("DataDog: Flushing {} events", events.len());
         let mut metrics = Vec::new();
         let mut logs = Vec::new();
-        for event in &events {
+        for event in events {
             match event {
-                BufferedEvent::Metric(metric) => metrics.push(metric.clone()),
-                BufferedEvent::Log(log) => logs.push(log.clone()),
+                BufferedEvent::Metric(metric) => metrics.push(metric),
+                BufferedEvent::Log(log) => logs.push(log),
             }
         }
         let metrics_result = self.send_metrics(metrics).await;
