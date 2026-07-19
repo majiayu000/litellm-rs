@@ -51,7 +51,7 @@ impl<'ast> Visit<'ast> for AliasVisitor<'_> {
         for (path, local) in uses { if path.last().is_some_and(|name| self.0.contains(name)) { self.0.insert(local); } }
     }
 }
-struct SourceVisitor<'a> { file: &'a str, aliases: BTreeSet<String>, macros: BTreeSet<String>, owner: String, impl_owner: String, findings: Vec<Finding>, attrs: Vec<String> }
+struct SourceVisitor<'a> { file: &'a str, aliases: BTreeSet<String>, macros: BTreeMap<String, u8>, owner: String, impl_owner: String, findings: Vec<Finding>, attrs: Vec<String> }
 fn token_idents(mut cursor: syn::buffer::Cursor<'_>, out: &mut BTreeSet<String>) {
     while !cursor.eof() { if let Some((ident, rest)) = cursor.ident() { out.insert(id(&ident)); cursor = rest; } else if let Some((inside, _, _, rest)) = cursor.any_group() { token_idents(inside, out); cursor = rest; } else if let Some((_, rest)) = cursor.token_tree() { cursor = rest; } else { break; } }
 }
@@ -65,12 +65,12 @@ impl SourceVisitor<'_> {
     fn hit(&mut self, role: &str) { self.findings.push((self.file.into(), self.owner.clone(), role.into())); }
     fn owned(&mut self, owner: String, run: impl FnOnce(&mut Self)) { let old = std::mem::replace(&mut self.owner, owner); run(self); self.owner = old; }
     fn macro_tokens(&mut self, item: &syn::Macro) {
-        let source = item.tokens.to_string(); let compact = source.split('"').step_by(2).collect::<String>().replace(' ', "");
+        let source = item.tokens.to_string(); let compact = source.split('"').step_by(2).collect::<String>().replace(' ', "").replace("r#", "");
         if ["allow(warnings)", "expect(warnings)", "allow(deprecated)", "expect(deprecated)"].iter().any(|item| compact.contains(item)) { self.attrs.push("macro:suppression".into()); }
         let tokens = syn::buffer::TokenBuffer::new2(item.tokens.clone()); let mut words = BTreeSet::new(); token_idents(tokens.begin(), &mut words);
         let sdk = words.iter().any(|word| self.aliases.contains(word) || (word == "Self" && self.impl_owner == "SDKError"));
-        let known = item.path.segments.last().is_some_and(|part| self.macros.contains(&id(&part.ident)));
-        if words.contains("ProviderError") && (sdk || known) { self.hit("macro"); }
+        let known = item.path.segments.last().and_then(|part| self.macros.get(&id(&part.ident))).is_some_and(|mode| match mode { 1 => words.contains("ProviderError"), 2 => sdk, _ => sdk && words.contains("ProviderError") });
+        let direct = self.aliases.iter().any(|alias| compact.contains(&format!("{alias}::ProviderError")) || compact.contains(&format!("{alias}>::ProviderError"))) || (self.impl_owner == "SDKError" && (compact.contains("Self::ProviderError") || compact.contains("Self>::ProviderError"))); if direct || known { self.hit("macro"); }
     }
 }
 impl<'ast> Visit<'ast> for SourceVisitor<'_> {
@@ -91,6 +91,7 @@ impl<'ast> Visit<'ast> for SourceVisitor<'_> {
             item.attrs.iter().for_each(|attr| this.visit_attribute(attr)); this.visit_block(&item.block);
         });
     }
+    fn visit_expr_match(&mut self, item: &'ast syn::ExprMatch) { let target = matches!(&*item.expr, Expr::Field(field) if matches!(&*field.base, Expr::Path(path) if path.path.is_ident("provider")) && matches!(&field.member, syn::Member::Named(name) if id(name) == "provider_type")); if target || self.owner.contains("match:provider.provider_type@") { self.owned(format!("match:{}@{}", if target { "provider.provider_type" } else { "other" }, self.owner), |this| visit::visit_expr_match(this, item)); } else { visit::visit_expr_match(self, item); } }
     fn visit_arm(&mut self, item: &'ast syn::Arm) { if matches!(item.pat, syn::Pat::Wild(_)) { self.owned(format!("wildcard-arm@{}", self.owner), |this| visit::visit_arm(this, item)); } else { visit::visit_arm(self, item); } }
     fn visit_expr_closure(&mut self, item: &'ast syn::ExprClosure) { self.owned(format!("closure@{}", self.owner), |this| visit::visit_expr_closure(this, item)); }
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
@@ -127,8 +128,8 @@ impl<'ast> Visit<'ast> for SourceVisitor<'_> {
         })) { self.hit("import"); }
     }
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
-        let tokens = syn::buffer::TokenBuffer::new2(item.mac.tokens.clone()); let mut words = BTreeSet::new(); token_idents(tokens.begin(), &mut words);
-        item.attrs.iter().for_each(|attr| self.visit_attribute(attr)); if item.mac.path.is_ident("macro_rules") && words.iter().any(|word| self.aliases.contains(word)) && let Some(name) = &item.ident { self.macros.insert(id(name)); } self.macro_tokens(&item.mac);
+        let compact = item.mac.tokens.to_string().replace(' ', "").replace("r#", ""); let fixed = self.aliases.iter().any(|alias| compact.contains(&format!("{alias}::$"))) || (self.impl_owner == "SDKError" && compact.contains("Self::$"));
+        let mode = if fixed { 1 } else if compact.contains("::ProviderError") && compact.contains('$') { 2 } else if compact.contains("::$") { 3 } else { 0 }; item.attrs.iter().for_each(|attr| self.visit_attribute(attr)); if item.mac.path.is_ident("macro_rules") && mode > 0 && let Some(name) = &item.ident { self.macros.insert(id(name), mode); } self.macro_tokens(&item.mac);
     }
     fn visit_macro(&mut self, item: &'ast syn::Macro) { self.macro_tokens(item); }
 }
@@ -136,7 +137,7 @@ fn scan(path: &str, source: &str) -> Result<(Vec<Finding>, Vec<String>), String>
     let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
     let mut aliases = BTreeSet::from(["SDKError".into()]);
     loop { let count = aliases.len(); AliasVisitor(&mut aliases).visit_file(&file); if aliases.len() == count { break; } }
-    let mut visitor = SourceVisitor { file: path, aliases, macros: BTreeSet::new(), owner: "<module>".into(), impl_owner: String::new(), findings: Vec::new(), attrs: Vec::new() };
+    let mut visitor = SourceVisitor { file: path, aliases, macros: BTreeMap::new(), owner: "<module>".into(), impl_owner: String::new(), findings: Vec::new(), attrs: Vec::new() };
     file.attrs.iter().for_each(|attr| visitor.visit_attribute(attr));
     file.items.iter().for_each(|item| visitor.visit_item(item));
     Ok((visitor.findings, visitor.attrs))
@@ -206,7 +207,7 @@ fn expected_findings() -> Vec<Finding> {
         (errors.clone(), "test_sdk_error_provider_error".into(), "construct".into()), (errors.clone(), "test_is_retryable_provider_error".into(), "construct".into()),
         (errors.clone(), "test_from_gateway_error_provider_unavailable".into(), "macro".into()),
         (errors, "test_sdk_error_empty_message".into(), "construct".into()),
-        ("src/sdk/client/completions.rs".into(), "wildcard-arm@execute_chat_request@LLMClient".into(), "construct".into()),
+        ("src/sdk/client/completions.rs".into(), "wildcard-arm@match:provider.provider_type@execute_chat_request@LLMClient".into(), "construct".into()),
     ]; expected.sort(); expected
 }
 fn expected_attrs(sources: &Sources) -> BTreeMap<String, usize> {
@@ -257,9 +258,7 @@ fn verify(sources: &Sources, lint: &[(String, String)]) -> Result<(), String> {
     }
     for (path, source) in lint { lint_ok(source, path)?; } Ok(())
 }
-fn replace_once(source: &str, old: &str, new: &str) -> String {
-    assert_eq!(source.matches(old).count(), 1, "mutation anchor: {old}"); source.replacen(old, new, 1)
-}
+fn replace_once(source: &str, old: &str, new: &str) -> String { assert_eq!(source.matches(old).count(), 1, "mutation anchor: {old}"); source.replacen(old, new, 1) }
 fn rejected(label: &str, sources: &Sources, lint: &[(String, String)]) { assert!(verify(sources, lint).is_err(), "mutation accepted: {label}"); }
 #[test]
 fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
@@ -288,10 +287,11 @@ fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
     ] {
         mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());", replacement)); rejected(label, &mutated, &lint);
     }
-    mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        println!(\"ProviderError\"); // ProviderError")); assert!(verify(&mutated, &lint).is_ok());
+    mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        let unrelated = matches!((error, provider), (SDKError::Internal(_), ProviderError::Timeout(_)));")); assert!(verify(&mutated, &lint).is_ok());
     let completions = &sources["src/sdk/client/completions.rs"];
     mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), format!("macro_rules! relocated {{ () => {{ SDKError::ProviderError(String::new()) }}; }}\n{}", replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => Err(SDKError::Internal(format!("))); rejected("macro owner", &mutated, &lint);
     let relocated = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "crate::sdk::config::ProviderType::Azure => Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),\n            _ => Err(SDKError::Internal(String::new())),"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), relocated); rejected("fallback arm relocation", &mutated, &lint);
+    let nested = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "crate::sdk::config::ProviderType::Azure => match () { _ => Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))) },\n            _ => Err(SDKError::Internal(String::new())),"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), nested); rejected("nested fallback arm relocation", &mutated, &lint);
     let smuggled = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => { macro_rules! legacy { ($ty:ident, $variant:ident, $message:expr) => { $ty::$variant($message) }; } let _ = legacy!(SDKError, ProviderError, String::new()); Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            )))\n            },"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), smuggled); rejected("generic macro smuggle", &mutated, &lint);
     mutated = sources.clone(); mutated.remove("tests/integration/router_tests.rs");
     verify(&mutated, &lint).unwrap(); assert!(lint_ok("RUSTFLAGS='--cap-lints allow'", "mutation").is_err());
