@@ -51,8 +51,10 @@ impl<'ast> Visit<'ast> for AliasVisitor<'_> {
         for (path, local) in uses { if path.last().is_some_and(|name| self.0.contains(name)) { self.0.insert(local); } }
     }
 }
-struct SourceVisitor<'a> { file: &'a str, aliases: BTreeSet<String>, owner: String,
-    impl_owner: String, findings: Vec<Finding>, attrs: Vec<String> }
+struct SourceVisitor<'a> { file: &'a str, aliases: BTreeSet<String>, macros: BTreeSet<String>, owner: String, impl_owner: String, findings: Vec<Finding>, attrs: Vec<String> }
+fn token_idents(mut cursor: syn::buffer::Cursor<'_>, out: &mut BTreeSet<String>) {
+    while !cursor.eof() { if let Some((ident, rest)) = cursor.ident() { out.insert(id(&ident)); cursor = rest; } else if let Some((inside, _, _, rest)) = cursor.any_group() { token_idents(inside, out); cursor = rest; } else if let Some((_, rest)) = cursor.token_tree() { cursor = rest; } else { break; } }
+}
 impl SourceVisitor<'_> {
     fn legacy(&self, path: &syn::Path, qself: Option<&syn::QSelf>) -> bool {
         let alias = |name: &str| self.aliases.contains(name) || (name == "Self" && self.impl_owner == "SDKError");
@@ -61,19 +63,14 @@ impl SourceVisitor<'_> {
                 || qself.and_then(|value| ty_name(&value.ty)).is_some_and(|name| alias(&name)))
     }
     fn hit(&mut self, role: &str) { self.findings.push((self.file.into(), self.owner.clone(), role.into())); }
-    fn owned(&mut self, owner: String, run: impl FnOnce(&mut Self)) {
-        let old = std::mem::replace(&mut self.owner, owner); run(self); self.owner = old;
-    }
-    fn macro_tokens(&mut self, source: &str) {
-        let compact = source.split('"').step_by(2).collect::<String>().replace(' ', "");
+    fn owned(&mut self, owner: String, run: impl FnOnce(&mut Self)) { let old = std::mem::replace(&mut self.owner, owner); run(self); self.owner = old; }
+    fn macro_tokens(&mut self, item: &syn::Macro) {
+        let source = item.tokens.to_string(); let compact = source.split('"').step_by(2).collect::<String>().replace(' ', "");
         if ["allow(warnings)", "expect(warnings)", "allow(deprecated)", "expect(deprecated)"].iter().any(|item| compact.contains(item)) { self.attrs.push("macro:suppression".into()); }
-        let words: Vec<_> = source.split_whitespace().map(|word| word.trim_start_matches("r#")).collect();
-        for index in 2..words.len() {
-            if words[index] == "ProviderError" && words[index - 1] == "::"
-                && words[index.saturating_sub(8)..index - 1].iter().any(|word| {
-                    self.aliases.contains(*word) || (*word == "Self" && self.impl_owner == "SDKError")
-                }) { self.hit("macro"); }
-        }
+        let tokens = syn::buffer::TokenBuffer::new2(item.tokens.clone()); let mut words = BTreeSet::new(); token_idents(tokens.begin(), &mut words);
+        let sdk = words.iter().any(|word| self.aliases.contains(word) || (word == "Self" && self.impl_owner == "SDKError"));
+        let known = item.path.segments.last().is_some_and(|part| self.macros.contains(&id(&part.ident)));
+        if words.contains("ProviderError") && (sdk || known) { self.hit("macro"); }
     }
 }
 impl<'ast> Visit<'ast> for SourceVisitor<'_> {
@@ -128,16 +125,17 @@ impl<'ast> Visit<'ast> for SourceVisitor<'_> {
             part == ["SDKError", "ProviderError"] || part == ["SDKError", "*"]
         })) { self.hit("import"); }
     }
-    fn visit_macro(&mut self, item: &'ast syn::Macro) { self.macro_tokens(&item.tokens.to_string()); }
+    fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+        let tokens = syn::buffer::TokenBuffer::new2(item.mac.tokens.clone()); let mut words = BTreeSet::new(); token_idents(tokens.begin(), &mut words);
+        item.attrs.iter().for_each(|attr| self.visit_attribute(attr)); if item.mac.path.is_ident("macro_rules") && words.iter().any(|word| self.aliases.contains(word)) && let Some(name) = &item.ident { self.macros.insert(id(name)); } self.macro_tokens(&item.mac);
+    }
+    fn visit_macro(&mut self, item: &'ast syn::Macro) { self.macro_tokens(item); }
 }
 fn scan(path: &str, source: &str) -> Result<(Vec<Finding>, Vec<String>), String> {
     let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
     let mut aliases = BTreeSet::from(["SDKError".into()]);
     loop { let count = aliases.len(); AliasVisitor(&mut aliases).visit_file(&file); if aliases.len() == count { break; } }
-    let mut visitor = SourceVisitor {
-        file: path, aliases, owner: "<module>".into(), impl_owner: String::new(),
-        findings: Vec::new(), attrs: Vec::new(),
-    };
+    let mut visitor = SourceVisitor { file: path, aliases, macros: BTreeSet::new(), owner: "<module>".into(), impl_owner: String::new(), findings: Vec::new(), attrs: Vec::new() };
     file.attrs.iter().for_each(|attr| visitor.visit_attribute(attr));
     file.items.iter().for_each(|item| visitor.visit_item(item));
     Ok((visitor.findings, visitor.attrs))
@@ -202,12 +200,9 @@ fn lint_ok(source: &str, path: &str) -> Result<(), String> {
 fn expected_findings() -> Vec<Finding> {
     let errors = "src/sdk/errors.rs".to_string();
     let mut expected = vec![
-        (errors.clone(), "from@GatewayError".into(), "construct".into()),
-        (errors.clone(), "from@ProviderError".into(), "construct".into()),
-        (errors.clone(), "is_retryable@SDKError".into(), "macro".into()),
-        (errors.clone(), "sdk_variant".into(), "pattern".into()),
-        (errors.clone(), "test_sdk_error_provider_error".into(), "construct".into()),
-        (errors.clone(), "test_is_retryable_provider_error".into(), "construct".into()),
+        (errors.clone(), "from@GatewayError".into(), "construct".into()), (errors.clone(), "from@ProviderError".into(), "construct".into()),
+        (errors.clone(), "is_retryable@SDKError".into(), "macro".into()), (errors.clone(), "sdk_variant".into(), "pattern".into()),
+        (errors.clone(), "test_sdk_error_provider_error".into(), "construct".into()), (errors.clone(), "test_is_retryable_provider_error".into(), "construct".into()),
         (errors.clone(), "test_from_gateway_error_provider_unavailable".into(), "macro".into()),
         (errors, "test_sdk_error_empty_message".into(), "construct".into()),
         ("src/sdk/client/completions.rs".into(), "execute_chat_request@LLMClient".into(), "construct".into()),
@@ -264,9 +259,7 @@ fn verify(sources: &Sources, lint: &[(String, String)]) -> Result<(), String> {
 fn replace_once(source: &str, old: &str, new: &str) -> String {
     assert_eq!(source.matches(old).count(), 1, "mutation anchor: {old}"); source.replacen(old, new, 1)
 }
-fn rejected(label: &str, sources: &Sources, lint: &[(String, String)]) {
-    assert!(verify(sources, lint).is_err(), "mutation accepted: {label}");
-}
+fn rejected(label: &str, sources: &Sources, lint: &[(String, String)]) { assert!(verify(sources, lint).is_err(), "mutation accepted: {label}"); }
 #[test]
 fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
     let (sources, lint) = inventory().unwrap(); verify(&sources, &lint).unwrap();
@@ -284,10 +277,17 @@ fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
     mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"unavailable\".to_string());",
         "let make = |message| SDKError::ProviderError(message);\n        let error = make(\"unavailable\".to_string());"));
     rejected("closure alias", &mutated, &lint);
-    mutated.insert("src/sdk/errors.rs".into(), replace_once(errors,
-        "let error = SDKError::ProviderError(\"API unavailable\".to_string());",
+    mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());",
         "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        let _ = <SDKError>::ProviderError(String::new());\n        let _ = SDKError::r#ProviderError(String::new());"));
     rejected("qself/raw paths", &mutated, &lint);
+    for (label, replacement) in [
+        ("generic macro composition", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        macro_rules! make { ($ty:path, $variant:ident, $value:expr) => { $ty::$variant($value) }; }\n        let extra = make!(SDKError, ProviderError, \"extra\".to_string());"),
+        ("split constructor macro", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        macro_rules! bind { ($name:ident = $ctor:path) => { let $name = $ctor; }; }\n        bind!(make = SDKError::ProviderError);\n        let extra = make(\"extra\".into());"),
+        ("split variant macro", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        macro_rules! make_sdk { ($variant:ident, $value:expr) => { SDKError::$variant($value) }; }\n        let extra = make_sdk!(ProviderError, \"extra\".into());"),
+    ] {
+        mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());", replacement)); rejected(label, &mutated, &lint);
+    }
+    mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        println!(\"ProviderError\"); // ProviderError")); assert!(verify(&mutated, &lint).is_ok());
     let completions = &sources["src/sdk/client/completions.rs"];
     mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(),
         format!("macro_rules! relocated {{ () => {{ SDKError::ProviderError(String::new()) }}; }}\n{}",
