@@ -91,7 +91,7 @@ impl<'ast> Visit<'ast> for SourceVisitor<'_> {
             item.attrs.iter().for_each(|attr| this.visit_attribute(attr)); this.visit_block(&item.block);
         });
     }
-    fn visit_expr_match(&mut self, item: &'ast syn::ExprMatch) { let target = matches!(&*item.expr, Expr::Field(field) if matches!(&*field.base, Expr::Path(path) if path.path.is_ident("provider")) && matches!(&field.member, syn::Member::Named(name) if id(name) == "provider_type")); if target || self.owner.contains("match:provider.provider_type@") { self.owned(format!("match:{}@{}", if target { "provider.provider_type" } else { "other" }, self.owner), |this| visit::visit_expr_match(this, item)); } else { visit::visit_expr_match(self, item); } }
+    fn visit_expr_match(&mut self, item: &'ast syn::ExprMatch) { let target = matches!(&*item.expr, Expr::Field(field) if matches!(&*field.base, Expr::Path(path) if path.path.is_ident("provider")) && matches!(&field.member, syn::Member::Named(name) if id(name) == "provider_type")); if target && self.file == "src/sdk/client/completions.rs" && self.owner == "execute_chat_request@LLMClient" { self.hit("provider-type-match"); } if target || self.owner.contains("match:provider.provider_type@") { self.owned(format!("match:{}@{}", if target { "provider.provider_type" } else { "other" }, self.owner), |this| visit::visit_expr_match(this, item)); } else { visit::visit_expr_match(self, item); } }
     fn visit_arm(&mut self, item: &'ast syn::Arm) { if matches!(item.pat, syn::Pat::Wild(_)) { self.owned(format!("wildcard-arm@{}", self.owner), |this| visit::visit_arm(this, item)); } else { visit::visit_arm(self, item); } }
     fn visit_expr_closure(&mut self, item: &'ast syn::ExprClosure) { self.owned(format!("closure@{}", self.owner), |this| visit::visit_expr_closure(this, item)); }
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
@@ -207,7 +207,7 @@ fn expected_findings() -> Vec<Finding> {
         (errors.clone(), "test_sdk_error_provider_error".into(), "construct".into()), (errors.clone(), "test_is_retryable_provider_error".into(), "construct".into()),
         (errors.clone(), "test_from_gateway_error_provider_unavailable".into(), "macro".into()),
         (errors, "test_sdk_error_empty_message".into(), "construct".into()),
-        ("src/sdk/client/completions.rs".into(), "wildcard-arm@match:provider.provider_type@execute_chat_request@LLMClient".into(), "construct".into()),
+        ("src/sdk/client/completions.rs".into(), "execute_chat_request@LLMClient".into(), "provider-type-match".into()), ("src/sdk/client/completions.rs".into(), "wildcard-arm@match:provider.provider_type@execute_chat_request@LLMClient".into(), "construct".into()),
     ]; expected.sort(); expected
 }
 fn expected_attrs(sources: &Sources) -> BTreeMap<String, usize> {
@@ -260,8 +260,7 @@ fn verify(sources: &Sources, lint: &[(String, String)]) -> Result<(), String> {
 }
 fn replace_once(source: &str, old: &str, new: &str) -> String { assert_eq!(source.matches(old).count(), 1, "mutation anchor: {old}"); source.replacen(old, new, 1) }
 fn rejected(label: &str, sources: &Sources, lint: &[(String, String)]) { assert!(verify(sources, lint).is_err(), "mutation accepted: {label}"); }
-#[test]
-fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
+#[test] fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
     let (sources, lint) = inventory().unwrap(); verify(&sources, &lint).unwrap();
     let errors = &sources["src/sdk/errors.rs"]; let mut mutated = sources.clone();
     mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "mod tests {\n", "mod tests {\n    #![allow(warnings)]\n"));
@@ -292,6 +291,7 @@ fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
     mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), format!("macro_rules! relocated {{ () => {{ SDKError::ProviderError(String::new()) }}; }}\n{}", replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => Err(SDKError::Internal(format!("))); rejected("macro owner", &mutated, &lint);
     let relocated = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "crate::sdk::config::ProviderType::Azure => Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),\n            _ => Err(SDKError::Internal(String::new())),"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), relocated); rejected("fallback arm relocation", &mutated, &lint);
     let nested = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "crate::sdk::config::ProviderType::Azure => match () { _ => Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))) },\n            _ => Err(SDKError::Internal(String::new())),"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), nested); rejected("nested fallback arm relocation", &mutated, &lint);
+    let duplicated = replace_once(completions, "match provider.provider_type {\n            crate::sdk::config::ProviderType::Anthropic", "if false { match provider.provider_type { _ => {} } }\n        match provider.provider_type {\n            crate::sdk::config::ProviderType::Anthropic"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), duplicated); rejected("duplicate provider-type match", &mutated, &lint);
     let smuggled = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => { macro_rules! legacy { ($ty:ident, $variant:ident, $message:expr) => { $ty::$variant($message) }; } let _ = legacy!(SDKError, ProviderError, String::new()); Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            )))\n            },"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), smuggled); rejected("generic macro smuggle", &mutated, &lint);
     mutated = sources.clone(); mutated.remove("tests/integration/router_tests.rs");
     verify(&mutated, &lint).unwrap(); assert!(lint_ok("RUSTFLAGS='--cap-lints allow'", "mutation").is_err());
