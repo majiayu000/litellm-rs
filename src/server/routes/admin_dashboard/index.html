@@ -121,7 +121,11 @@
           <form id="create-team-form" class="form-grid">
             <label for="team-name">Unique name</label>
             <input id="team-name" name="name" required
-                   pattern="[A-Za-z0-9_-]+" maxlength="120">
+                   pattern="[A-Za-z0-9_-]+" maxlength="120"
+                   aria-describedby="team-name-help"
+                   title="Use only letters, numbers, underscores, and hyphens.">
+            <p id="team-name-help" class="field-help">Use only letters, numbers,
+              underscores, and hyphens.</p>
             <label for="team-display-name">Display name</label>
             <input id="team-display-name" name="display_name" maxlength="120">
             <label for="team-description">Description</label>

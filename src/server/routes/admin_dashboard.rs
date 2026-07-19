@@ -142,6 +142,11 @@ mod tests {
         assert!(APP_JS.contains("requestVersion !== state.usageRequestVersion"));
         assert!(APP_JS.contains("teams.some((team, index)"));
         assert!(APP_JS.contains("async function logoutRequest"));
+        assert!(APP_JS.contains("response.status === 401"));
+        assert!(APP_JS.contains("Protected dashboard data was cleared"));
+        assert!(APP_JS.contains("payload?.error?.message"));
+        assert!(APP_JS.contains("text.trim()"));
+        assert!(APP_JS.contains("navigator.clipboard?.writeText"));
         assert!(APP_JS.contains("is_admin: false"));
         assert!(APP_JS.contains("value === \"*\""));
         assert!(APP_JS.contains("user_id: state.adminId"));
@@ -163,6 +168,8 @@ mod tests {
             "id=\"sign-out\"",
             "id=\"key-spend-empty\"",
             "id=\"team-spend-empty\"",
+            "aria-describedby=\"team-name-help\"",
+            "id=\"team-name-help\"",
         ] {
             assert!(INDEX_HTML.contains(marker), "missing HTML marker {marker}");
         }

@@ -1,5 +1,4 @@
 "use strict";
-
 const PAGE_SIZE = 20;
 const state = {
   token: null,
@@ -21,28 +20,23 @@ const state = {
   teamRequestVersion: 0,
   usageRequestVersion: 0,
 };
-
 const byId = (id) => document.getElementById(id);
 const loginPanel = byId("login-panel");
 const dashboardShell = byId("dashboard-shell");
 const errorRegion = byId("error-region");
 const statusRegion = byId("status-region");
 const rawKeyDialog = byId("raw-key-dialog");
-
 function setStatus(message) {
   statusRegion.textContent = message || "";
 }
-
 function setError(error) {
   const message = error instanceof Error ? error.message : String(error || "");
   errorRegion.textContent = message;
   errorRegion.hidden = !message;
 }
-
 function clearError() {
   setError("");
 }
-
 function reportRequestError(error, message) {
   if (error?.name === "AbortError") {
     return;
@@ -50,21 +44,18 @@ function reportRequestError(error, message) {
   setError(error);
   setStatus(message);
 }
-
 function abortActiveRequests() {
   for (const controller of state.controllers) {
     controller.abort();
   }
   state.controllers.clear();
 }
-
 function captureSession() {
   if (!state.token || !state.adminId) {
     throw new Error("Administrator authentication is required.");
   }
   return { token: state.token, generation: state.generation };
 }
-
 function ensureCurrent(session) {
   if (
     session.token !== state.token ||
@@ -73,7 +64,6 @@ function ensureCurrent(session) {
     throw new DOMException("Stale dashboard response", "AbortError");
   }
 }
-
 function resetProtectedState() {
   state.keys = [];
   state.teams = [];
@@ -85,7 +75,6 @@ function resetProtectedState() {
   renderTeams();
   renderSpend();
 }
-
 function endSession(message = "Signed out") {
   abortActiveRequests();
   state.generation += 1;
@@ -100,7 +89,6 @@ function endSession(message = "Signed out") {
   byId("session-label").textContent = message;
   byId("password").value = "";
 }
-
 async function decodeResponse(response) {
   const text = await response.text();
   let payload = null;
@@ -108,15 +96,27 @@ async function decodeResponse(response) {
     try {
       payload = JSON.parse(text);
     } catch {
+      if (!response.ok) {
+        throw new Error(text.trim() || `Gateway request failed (${response.status}).`);
+      }
       throw new Error(`Gateway returned invalid JSON (${response.status}).`);
     }
   }
   if (!response.ok || payload?.success === false) {
-    throw new Error(payload?.error || `Gateway request failed (${response.status}).`);
+    const structuredError =
+      typeof payload?.error === "string"
+        ? payload.error
+        : typeof payload?.error?.message === "string"
+          ? payload.error.message
+          : typeof payload?.message === "string"
+            ? payload.message
+            : null;
+    throw new Error(
+      structuredError || `Gateway request failed (${response.status}).`,
+    );
   }
   return payload?.data ?? payload;
 }
-
 async function publicRequest(path, options, generation) {
   const controller = new AbortController();
   state.controllers.add(controller);
@@ -130,7 +130,6 @@ async function publicRequest(path, options, generation) {
     state.controllers.delete(controller);
   }
 }
-
 async function apiRequest(path, options = {}, session = captureSession()) {
   const controller = new AbortController();
   state.controllers.add(controller);
@@ -146,6 +145,13 @@ async function apiRequest(path, options = {}, session = captureSession()) {
       headers,
       signal: controller.signal,
     });
+    if (response.status === 401) {
+      ensureCurrent(session);
+      endSession("Session expired");
+      setError("Your administrator session expired. Sign in again.");
+      setStatus("Session expired. Protected dashboard data was cleared.");
+      throw new DOMException("Administrator session expired", "AbortError");
+    }
     const data = await decodeResponse(response);
     ensureCurrent(session);
     return data;
@@ -153,7 +159,6 @@ async function apiRequest(path, options = {}, session = captureSession()) {
     state.controllers.delete(controller);
   }
 }
-
 async function logoutRequest(token, generation) {
   const controller = new AbortController();
   state.controllers.add(controller);
@@ -173,7 +178,6 @@ async function logoutRequest(token, generation) {
     state.controllers.delete(controller);
   }
 }
-
 function beginBusy(key, button) {
   if (state.busy.has(key)) {
     return false;
@@ -184,14 +188,12 @@ function beginBusy(key, button) {
   }
   return true;
 }
-
 function endBusy(key, button) {
   state.busy.delete(key);
   if (button) {
     button.disabled = false;
   }
 }
-
 function splitScope(value, label) {
   const values = value
     .split(",")
@@ -205,13 +207,11 @@ function splitScope(value, label) {
   }
   return values;
 }
-
 function textCell(value) {
   const cell = document.createElement("td");
   cell.textContent = value == null ? "" : String(value);
   return cell;
 }
-
 function actionCell(button) {
   const cell = document.createElement("td");
   if (button) {
@@ -219,7 +219,6 @@ function actionCell(button) {
   }
   return cell;
 }
-
 function formatDate(value) {
   if (!value) {
     return "";
@@ -227,7 +226,6 @@ function formatDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
 }
-
 function formatNumber(value) {
   if (value == null || value === "") {
     return "";
@@ -235,7 +233,6 @@ function formatNumber(value) {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? number.toLocaleString() : "";
 }
-
 function formatMoney(value) {
   if (value == null || value === "") {
     return "";
@@ -243,7 +240,6 @@ function formatMoney(value) {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? `$${number.toFixed(4)}` : "";
 }
-
 function keyOwner(key) {
   if (key.team_id) {
     return `Team ${key.team_id}`;
@@ -253,7 +249,6 @@ function keyOwner(key) {
   }
   return "";
 }
-
 function createAction(label, className, handler) {
   const button = document.createElement("button");
   button.type = "button";
@@ -262,7 +257,6 @@ function createAction(label, className, handler) {
   button.addEventListener("click", handler);
   return button;
 }
-
 function renderKeys() {
   const body = byId("keys-body");
   body.replaceChildren();
@@ -291,7 +285,6 @@ function renderKeys() {
   byId("keys-previous").disabled = !state.keyPagination.has_prev;
   byId("keys-next").disabled = !state.keyPagination.has_next;
 }
-
 function renderTeams() {
   const body = byId("teams-body");
   body.replaceChildren();
@@ -317,7 +310,6 @@ function renderTeams() {
   byId("teams-next").disabled = !state.teamPagination.has_next;
   renderTeamOptions();
 }
-
 function renderTeamOptions() {
   const select = byId("key-team");
   const selected = select.value;
@@ -336,7 +328,6 @@ function renderTeamOptions() {
     select.value = selected;
   }
 }
-
 function usageRow(label, usage, error) {
   const row = document.createElement("tr");
   row.append(textCell(label));
@@ -355,7 +346,6 @@ function usageRow(label, usage, error) {
   );
   return row;
 }
-
 function renderSpend() {
   const keyBody = byId("key-spend-body");
   keyBody.replaceChildren(
@@ -371,7 +361,6 @@ function renderSpend() {
   );
   byId("team-spend-empty").hidden = state.teams.length !== 0;
 }
-
 async function loadKeys(session = captureSession()) {
   const requestVersion = ++state.keyRequestVersion;
   const requestedPage = state.keyPage;
@@ -392,7 +381,6 @@ async function loadKeys(session = captureSession()) {
   renderKeys();
   renderSpend();
 }
-
 async function loadTeams(session = captureSession()) {
   const requestVersion = ++state.teamRequestVersion;
   const requestedPage = state.teamPage;
@@ -415,7 +403,6 @@ async function loadTeams(session = captureSession()) {
   renderTeams();
   renderSpend();
 }
-
 async function loadTeamUsage(session = captureSession()) {
   const requestVersion = ++state.usageRequestVersion;
   const teams = [...state.teams];
@@ -450,7 +437,6 @@ async function loadTeamUsage(session = captureSession()) {
   state.teamUsage = usage;
   renderSpend();
 }
-
 async function refreshDashboard() {
   const session = captureSession();
   clearError();
@@ -468,7 +454,6 @@ async function refreshDashboard() {
     }
   }
 }
-
 async function signIn(event) {
   event.preventDefault();
   const button = event.submitter;
@@ -521,7 +506,6 @@ async function signIn(event) {
     endBusy("login", button);
   }
 }
-
 function signOut() {
   const token = state.token;
   endSession("Signed out");
@@ -538,7 +522,6 @@ function signOut() {
       });
   }
 }
-
 async function createKey(event) {
   event.preventDefault();
   const button = event.submitter;
@@ -585,7 +568,6 @@ async function createKey(event) {
     endBusy("create-key", button);
   }
 }
-
 async function revokeKey(key, button) {
   if (!window.confirm(`Revoke API key “${key.name}”?`)) {
     return;
@@ -614,7 +596,6 @@ async function revokeKey(key, button) {
     endBusy(busyKey, button);
   }
 }
-
 async function createTeam(event) {
   event.preventDefault();
   const button = event.submitter;
@@ -648,7 +629,6 @@ async function createTeam(event) {
     endBusy("create-team", button);
   }
 }
-
 async function deleteTeam(team, button) {
   if (!window.confirm(`Delete team “${team.display_name || team.name}”?`)) {
     return;
@@ -678,7 +658,6 @@ async function deleteTeam(team, button) {
     endBusy(busyKey, button);
   }
 }
-
 function showRawKey(value) {
   if (!value) {
     throw new Error("Gateway did not return the new raw key.");
@@ -688,7 +667,6 @@ function showRawKey(value) {
   byId("raw-key-value").textContent = state.rawKey;
   rawKeyDialog.showModal();
 }
-
 function clearRawKey() {
   state.rawKey = null;
   byId("raw-key-value").textContent = "";
@@ -696,9 +674,12 @@ function clearRawKey() {
     rawKeyDialog.close();
   }
 }
-
 async function copyRawKey() {
   if (!state.rawKey) {
+    return;
+  }
+  if (!navigator.clipboard?.writeText) {
+    setError("Clipboard access is unavailable. Select and copy the key manually.");
     return;
   }
   try {
@@ -708,7 +689,6 @@ async function copyRawKey() {
     setError(`Could not copy the key: ${error.message}`);
   }
 }
-
 function showView(view) {
   state.currentView = view;
   for (const button of document.querySelectorAll("[data-view]")) {
@@ -723,7 +703,6 @@ function showView(view) {
     void refreshDashboard();
   }
 }
-
 byId("login-form").addEventListener("submit", (event) => void signIn(event));
 byId("sign-out").addEventListener("click", signOut);
 byId("create-key-form").addEventListener("submit", (event) => void createKey(event));
@@ -776,5 +755,4 @@ rawKeyDialog.addEventListener("close", clearRawKey);
 for (const button of document.querySelectorAll("[data-view]")) {
   button.addEventListener("click", () => showView(button.dataset.view));
 }
-
 endSession();
