@@ -60,7 +60,7 @@
 //!     url: "https://example.com/webhook".to_string(),
 //!     severities: vec![AlertSeverity::Critical],
 //!     ..Default::default()
-//! }).await;
+//! }).await?;
 //! ```
 
 mod alerts;
@@ -87,7 +87,7 @@ mod tracker_tests;
 mod types_tests;
 
 // Re-export public types
-pub use alerts::{AlertConfig, AlertStats, BudgetAlertManager, WebhookConfig};
+pub use alerts::{AlertConfig, AlertStats, BudgetAlertManager, BudgetWebhookError, WebhookConfig};
 pub use config::{
     BudgetConfig, BudgetLimitKind, BudgetLimitSnapshot, BudgetPersistenceEvent,
     BudgetPersistenceSender, ModelLimitConfig, ProviderLimitConfig,

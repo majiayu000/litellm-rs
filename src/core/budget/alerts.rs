@@ -5,9 +5,8 @@
 
 use super::tracker::SpendResult;
 use super::types::{AlertSeverity, Budget, BudgetAlert, BudgetAlertType};
-use crate::core::http::outbound::default_outbound_client;
-use crate::utils::net::http::create_custom_client;
-use reqwest::Client;
+use crate::core::net::ProviderEndpointPolicy;
+use crate::utils::net::http::ProviderHttpClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,11 +19,15 @@ pub struct BudgetAlertManager {
     /// Alert storage
     alerts: Arc<RwLock<AlertStorage>>,
     /// Webhook clients for notifications
-    webhooks: Arc<RwLock<Vec<WebhookConfig>>>,
-    /// HTTP client for webhook requests
-    client: Client,
+    webhooks: Arc<RwLock<Vec<RegisteredWebhook>>>,
     /// Configuration
     config: Arc<RwLock<AlertConfig>>,
+}
+
+#[derive(Clone)]
+struct RegisteredWebhook {
+    config: WebhookConfig,
+    client: ProviderHttpClient,
 }
 
 /// Alert storage structure
@@ -111,6 +114,17 @@ impl Default for WebhookConfig {
     }
 }
 
+/// Error returned when a budget alert webhook cannot be admitted safely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum BudgetWebhookError {
+    /// The URL is malformed or disallowed by the public-only outbound policy.
+    #[error("Budget webhook URL is invalid or disallowed by outbound policy")]
+    InvalidUrl,
+    /// The policy-bound client could not be constructed.
+    #[error("Failed to create policy-bound budget webhook client")]
+    ClientConstruction,
+}
+
 /// Alert manager configuration
 #[derive(Debug, Clone)]
 pub struct AlertConfig {
@@ -151,8 +165,6 @@ impl BudgetAlertManager {
         Self {
             alerts: Arc::new(RwLock::new(AlertStorage::new(config.max_history_size))),
             webhooks: Arc::new(RwLock::new(Vec::new())),
-            client: create_custom_client(Duration::from_secs(30))
-                .unwrap_or_else(|_| default_outbound_client().clone()),
             config: Arc::new(RwLock::new(config)),
         }
     }
@@ -162,16 +174,45 @@ impl BudgetAlertManager {
         Self {
             alerts: Arc::new(RwLock::new(AlertStorage::new(config.max_history_size))),
             webhooks: Arc::new(RwLock::new(Vec::new())),
-            client: create_custom_client(Duration::from_secs(30))
-                .unwrap_or_else(|_| default_outbound_client().clone()),
             config: Arc::new(RwLock::new(config)),
         }
     }
 
     /// Add a webhook for alert notifications
-    pub async fn add_webhook(&self, config: WebhookConfig) {
+    pub async fn add_webhook(&self, config: WebhookConfig) -> Result<(), BudgetWebhookError> {
+        let timeout = Duration::from_secs(config.timeout_secs);
+        let client =
+            ProviderHttpClient::no_redirect(ProviderEndpointPolicy::public_only(), timeout)
+                .map_err(|_| BudgetWebhookError::ClientConstruction)?;
+        self.add_webhook_with_client(config, client).await
+    }
+
+    async fn add_webhook_with_client(
+        &self,
+        mut config: WebhookConfig,
+        client: ProviderHttpClient,
+    ) -> Result<(), BudgetWebhookError> {
+        let url = reqwest::Url::parse(&config.url).map_err(|_| BudgetWebhookError::InvalidUrl)?;
+        if !matches!(url.scheme(), "http" | "https")
+            || ProviderEndpointPolicy::public_only()
+                .validate_url_without_resolution(&url)
+                .is_err()
+        {
+            return Err(BudgetWebhookError::InvalidUrl);
+        }
+        config.url = url.to_string();
         let mut webhooks = self.webhooks.write().await;
-        webhooks.push(config);
+        webhooks.push(RegisteredWebhook { config, client });
+        Ok(())
+    }
+
+    #[cfg(test)]
+    async fn add_webhook_with_client_for_test(
+        &self,
+        config: WebhookConfig,
+        client: ProviderHttpClient,
+    ) -> Result<(), BudgetWebhookError> {
+        self.add_webhook_with_client(config, client).await
     }
 
     /// Remove all webhooks
@@ -259,11 +300,11 @@ impl BudgetAlertManager {
         let webhooks = self.webhooks.read().await;
 
         for webhook in webhooks.iter() {
-            if !webhook.enabled {
+            if !webhook.config.enabled {
                 continue;
             }
 
-            if !webhook.severities.contains(&alert.severity) {
+            if !webhook.config.severities.contains(&alert.severity) {
                 continue;
             }
 
@@ -272,7 +313,7 @@ impl BudgetAlertManager {
     }
 
     /// Send a single webhook notification
-    async fn send_single_webhook(&self, webhook: &WebhookConfig, alert: &BudgetAlert) {
+    async fn send_single_webhook(&self, webhook: &RegisteredWebhook, alert: &BudgetAlert) {
         let payload = serde_json::json!({
             "type": "budget_alert",
             "alert": {
@@ -290,47 +331,46 @@ impl BudgetAlertManager {
         });
 
         let mut retries = 0;
-        let max_retries = webhook.max_retries;
+        let max_retries = webhook.config.max_retries;
 
         loop {
-            let mut request = self
-                .client
-                .post(&webhook.url)
-                .timeout(Duration::from_secs(webhook.timeout_secs))
-                .json(&payload);
+            let mut request = match webhook.client.post(&webhook.config.url) {
+                Ok(request) => request.json(&payload),
+                Err(_) => {
+                    error!("Budget alert webhook rejected by outbound endpoint policy");
+                    return;
+                }
+            };
 
             // Add custom headers
-            for (key, value) in &webhook.headers {
+            for (key, value) in &webhook.config.headers {
                 request = request.header(key, value);
             }
 
             match request.send().await {
                 Ok(response) => {
                     if response.status().is_success() {
-                        debug!("Successfully sent budget alert webhook to {}", webhook.url);
+                        debug!("Successfully sent budget alert webhook");
                         return;
                     } else {
                         warn!(
-                            "Budget alert webhook returned error status {}: {}",
-                            response.status(),
-                            webhook.url
+                            status = response.status().as_u16(),
+                            "Budget alert webhook returned error status"
                         );
                     }
                 }
-                Err(e) => {
-                    error!(
-                        "Failed to send budget alert webhook to {}: {}",
-                        webhook.url, e
-                    );
+                Err(error) => {
+                    if ProviderHttpClient::request_error_is_endpoint_policy(&error) {
+                        error!("Budget alert webhook rejected by outbound endpoint policy");
+                    } else {
+                        error!("Budget alert webhook transport request failed");
+                    }
                 }
             }
 
             retries += 1;
             if retries >= max_retries {
-                error!(
-                    "Exhausted retries for budget alert webhook: {}",
-                    webhook.url
-                );
+                error!("Exhausted retries for budget alert webhook");
                 return;
             }
 
