@@ -19,7 +19,7 @@ GH-1066 / #1066
 
 - [x] `SP1066-T4` Covers: P3-P8. Owner: coordinator. Dependencies: T2-T3. Done when: provider-backed chat, completion, response, and embedding unary/streaming paths emit metadata-only start plus exactly one terminal event with selected target, latency, usage/cost when available, and explicit error/disconnect outcomes; cache hits do not fabricate provider events. Verify: focused lifecycle unit tests and real mock-provider route tests for success, provider error, stream completion, stream error, timeout, and disconnect.
 
-- [ ] `SP1066-T5` Covers: all. Owner: verification owner. Dependencies: T1-T4. Done when: focused tests, formatting, build, strict clippy, full test suite, SpecRail workflow/spec checks, scope guard, and overlap guard pass from this worktree with evidence saved under `artifacts/logs/gh1066/`. Verify: commands listed below.
+- [x] `SP1066-T5` Covers: all. Owner: verification owner. Dependencies: T1-T4. Done when: focused tests, formatting, build, strict clippy, full test suite, SpecRail workflow/spec checks, scope guard, and overlap guard pass from this worktree with evidence saved under `artifacts/logs/gh1066/`. Verify: commands listed below.
 
 - [ ] `SP1066-T6` Covers: all acceptance criteria. Owner: coordinator and independent reviewer. Dependencies: T5. Done when: one final-slice `mixed_impl` PR closes #1066; independent exact-head review has no blocking findings; blocking CI wait, GraphQL review-thread query, merge-state check, and `pr_gate.py` are current and green; merge and issue closure are remotely confirmed. Verify: PR/check/gate/merge evidence recorded in the runtime checkpoint.
 
