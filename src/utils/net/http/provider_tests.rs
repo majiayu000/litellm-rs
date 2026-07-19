@@ -251,11 +251,10 @@ impl ProviderHttpClient {
         tripwire: SocketAddr,
     ) -> Result<Self, ProviderHttpClientError> {
         let policy = ProviderEndpointPolicy::public_only();
-        let mut answers = vec![vec![blocked_address]; 3];
-        answers.insert(
-            0,
-            vec![SocketAddr::from(([93, 184, 216, 34], tripwire.port()))],
-        );
+        let public_address = SocketAddr::from(([93, 184, 216, 34], tripwire.port()));
+        let mut answers = vec![vec![public_address]; 4];
+        answers[1] = vec![blocked_address];
+        answers[3] = vec![blocked_address];
         let resolver = Arc::new(SequenceResolver::new(answers));
         let priming_resolver = PolicyDnsResolver {
             access: policy.access(),

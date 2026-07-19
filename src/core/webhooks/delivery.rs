@@ -119,6 +119,8 @@ impl WebhookManager {
         config: &WebhookConfig,
     ) -> Result<()> {
         let start_time = std::time::Instant::now();
+        delivery.response_status = None;
+        delivery.response_body = None;
 
         // Prepare request
         let mut request = self

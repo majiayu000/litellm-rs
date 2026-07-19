@@ -289,16 +289,11 @@ async fn redirect_is_not_followed_and_status_is_recorded() {
     let delivery = manager.get_delivery_history(Some(1)).await.remove(0);
     assert_eq!(delivery.response_status, Some(302));
     assert_eq!(delivery.response_body.as_deref(), Some(""));
-    let stats = manager.get_stats().await;
-    assert_eq!(stats.failed_deliveries, 1);
+    assert_eq!(manager.get_stats().await.failed_deliveries, 1);
     let logs = String::from_utf8(bytes.lock().expect("log lock").clone()).unwrap();
-    assert!(
-        logs.contains("Webhook delivery failed permanently"),
-        "{logs}"
-    );
+    assert!(logs.contains("failed permanently"), "{logs}");
     for secret in ["source-user", "source-password", "source-secret", "token="] {
         assert!(!logs.contains(secret), "{logs}");
-        assert!(!delivery.response_body.as_deref().unwrap().contains(secret));
     }
 }
 
@@ -321,6 +316,14 @@ async fn retries_revalidate_rebinding_and_never_reach_tripwire() {
         )
         .await
         .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = tripwire.accept().await?;
+            let _request = read_http_request(&mut stream).await?;
+            stream
+                .write_all(b"HTTP/1.1 503 X\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx")
+                .await?;
+            Ok::<_, io::Error>(tripwire)
+        });
         let manager = WebhookManager::with_client_for_test(client);
         let secret_url = format!(
             "http://rebind-user:rebind-password@rebind.test:{}/hook?token=rebind-secret",
@@ -354,25 +357,27 @@ async fn retries_revalidate_rebinding_and_never_reach_tripwire() {
             assert!(!error.to_string().contains(secret), "{error}");
         }
         manager.process_delivery_queue().await.unwrap();
+        let tripwire = server.await.unwrap().unwrap();
         let retrying = manager.get_delivery_history(Some(1)).await.remove(0);
         assert_eq!(
             retrying.status,
             super::types::WebhookDeliveryStatus::Retrying
         );
         assert_eq!(retrying.attempts, 1);
+        assert_eq!(retrying.response_status, Some(503));
+        assert_eq!(retrying.response_body.as_deref(), Some("x"));
         assert_eq!(manager.get_stats().await.failed_deliveries, 0);
         manager.process_delivery_queue().await.unwrap();
         assert_listener_did_not_accept(&tripwire, "rebinding retry target").await;
         let delivery = manager.get_delivery_history(Some(1)).await.remove(0);
         assert_eq!(delivery.status, super::types::WebhookDeliveryStatus::Failed);
         assert_eq!(delivery.attempts, 2);
+        assert_eq!(delivery.response_status, None);
+        assert_eq!(delivery.response_body, None);
         assert_eq!(manager.get_stats().await.failed_deliveries, 1);
     }
     let logs = String::from_utf8(bytes.lock().expect("log lock").clone()).unwrap();
-    assert!(
-        logs.contains("Webhook delivery failed permanently"),
-        "{logs}"
-    );
+    assert!(logs.contains("failed permanently"), "{logs}");
     for secret in ["rebind-user", "rebind-password", "rebind-secret", "token="] {
         assert!(!logs.contains(secret), "{logs}");
     }
