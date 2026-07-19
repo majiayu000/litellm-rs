@@ -1,42 +1,88 @@
 use super::*;
 
+async fn request_path(socket: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+
+    let mut request = Vec::new();
+    loop {
+        let mut chunk = [0_u8; 1024];
+        let count = socket.read(&mut chunk).await.unwrap();
+        if count == 0 {
+            break;
+        }
+        request.extend_from_slice(&chunk[..count]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8(request)
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_string()
+}
+
+async fn write_status(socket: &mut tokio::net::TcpStream, status: u16) {
+    use tokio::io::AsyncWriteExt;
+
+    let response =
+        format!("HTTP/1.1 {status} test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    socket.write_all(response.as_bytes()).await.unwrap();
+}
+
 async fn response_server(
     responses: Vec<(&'static str, u16)>,
 ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let mut paths = Vec::new();
         for _ in 0..responses.len() {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            loop {
-                let mut chunk = [0_u8; 1024];
-                let count = socket.read(&mut chunk).await.unwrap();
-                if count == 0 {
-                    break;
-                }
-                request.extend_from_slice(&chunk[..count]);
-                if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let request = String::from_utf8(request).unwrap();
-            let path = request.split_whitespace().nth(1).unwrap().to_string();
+            let path = request_path(&mut socket).await;
             let status = responses
                 .iter()
                 .find_map(|(expected, status)| (*expected == path).then_some(*status))
                 .unwrap();
-            let response =
-                format!("HTTP/1.1 {status} test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            socket.write_all(response.as_bytes()).await.unwrap();
+            write_status(&mut socket, status).await;
             paths.push(path);
         }
         paths
     });
     (format!("http://{address}"), server)
+}
+
+async fn partial_timeout_server() -> (
+    String,
+    Arc<tokio::sync::Mutex<Vec<String>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let paths = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let recorded_paths = paths.clone();
+    let log_attempts = Arc::new(AtomicUsize::new(0));
+    let server = tokio::spawn(async move {
+        let mut handlers = tokio::task::JoinSet::new();
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let paths = recorded_paths.clone();
+            let log_attempts = log_attempts.clone();
+            handlers.spawn(async move {
+                let path = request_path(&mut socket).await;
+                paths.lock().await.push(path.clone());
+                if path == "/logs" && log_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    std::future::pending::<()>().await;
+                } else {
+                    write_status(&mut socket, 202).await;
+                }
+            });
+        }
+    });
+    (format!("http://{address}"), paths, server)
 }
 
 #[test]
@@ -142,7 +188,7 @@ async fn test_datadog_auto_flush_requeues_failed_batch() {
 
     assert!(result.is_err());
     assert_eq!(
-        integration.buffer.read().await.len(),
+        integration.buffer.lock().unwrap().len(),
         1,
         "failed automatic flush must retain the event for a later retry"
     );
@@ -150,7 +196,7 @@ async fn test_datadog_auto_flush_requeues_failed_batch() {
         .record_metric("test.metric.two", 2.0, 1, &[], None)
         .await
         .expect("an existing failed batch must not be retried by every event");
-    assert_eq!(integration.buffer.read().await.len(), 2);
+    assert_eq!(integration.buffer.lock().unwrap().len(), 2);
     assert!(
         integration
             .record_metric("test.metric.three", 3.0, 1, &[], None)
@@ -196,10 +242,58 @@ async fn test_datadog_manager_timeout_preserves_in_flight_batch() {
 
     assert!(result.is_err(), "the controlled exporter must time out");
     assert_eq!(
-        integration.buffer.read().await.len(),
+        integration.buffer.lock().unwrap().len(),
         1,
         "manager cancellation must not discard the in-flight batch"
     );
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn test_datadog_timeout_durably_acknowledges_completed_metric_endpoint() {
+    use crate::core::integrations::{IntegrationManager, IntegrationManagerConfig};
+
+    let (base_url, paths, server) = partial_timeout_server().await;
+    let mut config = DataDogConfig::new("test-api-key");
+    config.batch_size = 2;
+    let mut integration = DataDogIntegration::new(config).unwrap();
+    integration.metrics_url = format!("{base_url}/metrics");
+    integration.logs_url = format!("{base_url}/logs");
+    let integration = Arc::new(integration);
+    let manager = IntegrationManager::new(
+        IntegrationManagerConfig::new()
+            .parallel(false)
+            .fail_fast(true)
+            .timeout_ms(200),
+    );
+    manager.register(integration.clone()).await;
+
+    let result = manager
+        .on_llm_start(&LlmStartEvent::new("request-id", "test-model"))
+        .await;
+
+    assert!(result.is_err(), "the first log request must time out");
+    {
+        let buffer = integration.buffer.lock().unwrap();
+        assert_eq!(buffer.in_flight.len(), 1);
+        assert!(matches!(buffer.in_flight[0], BufferedEvent::Log(_)));
+    }
+    integration.flush().await.unwrap();
+    let paths = paths.lock().await.clone();
+    assert_eq!(
+        paths
+            .iter()
+            .filter(|path| path.as_str() == "/metrics")
+            .count(),
+        1,
+        "a completed metrics request must never be duplicated"
+    );
+    assert_eq!(
+        paths.iter().filter(|path| path.as_str() == "/logs").count(),
+        2
+    );
+    assert_eq!(integration.buffer.lock().unwrap().len(), 0);
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
 }
@@ -228,7 +322,7 @@ async fn test_datadog_mixed_batch_retries_only_non_successful_endpoint() {
     paths.sort();
     assert_eq!(paths, ["/logs", "/metrics"]);
     {
-        let buffer = integration.buffer.read().await;
+        let buffer = integration.buffer.lock().unwrap();
         assert!(buffer.pending.is_empty());
         assert_eq!(buffer.in_flight.len(), 1);
         assert!(matches!(buffer.in_flight[0], BufferedEvent::Log(_)));
@@ -239,7 +333,7 @@ async fn test_datadog_mixed_batch_retries_only_non_successful_endpoint() {
     integration.flush().await.unwrap();
 
     assert_eq!(retry_server.await.unwrap(), ["/logs"]);
-    assert_eq!(integration.buffer.read().await.len(), 0);
+    assert_eq!(integration.buffer.lock().unwrap().len(), 0);
 }
 
 #[test]
