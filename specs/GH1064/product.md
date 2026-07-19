@@ -26,8 +26,8 @@ issues.
 
 - Implementing any runtime, API, UI, security, provider, or architecture change.
 - Changing, closing, relabeling, or reprioritizing any child or pre-existing issue.
-- Claiming that the gaps tracked by #519, #837, #838, #965, or #1065–#1067
-  have shipped.
+- Claiming that the gaps tracked by #519, #837, #838, #965, #1065, #1066, or
+  #1067 have shipped.
 - Re-running the external competitor survey as part of this closure tranche.
 
 ## Behavior Invariants

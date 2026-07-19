@@ -37,7 +37,7 @@ spec packet changes.
 | P2: focused implementation ownership | GH1064 packet and roadmap closure section | Confirm linked ownership is descriptive and no child files/issues are changed. |
 | P3: parent closure does not imply child completion | Explicit closure semantics | Independent review of the diff and PR body. |
 | P4: future gaps use focused issues | Product invariant and roadmap guidance | Independent review. |
-| P5: documentation-only behavior | Git diff scope | `git diff --name-only origin/main...HEAD` contains only GH1064 docs/spec files. |
+| P5: documentation-only behavior | Git diff scope | `git diff --name-only origin/main...HEAD` contains only `docs/plan/2026-07-18-best-gateway-gap-analysis.md` and the three files under `specs/GH1064/`. |
 
 ## Data Flow
 
