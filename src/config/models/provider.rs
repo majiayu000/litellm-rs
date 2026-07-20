@@ -7,6 +7,83 @@ use url::Url;
 
 use crate::core::net::ProviderEndpointAccess;
 
+/// A single entry in a provider's `models` list.
+///
+/// Two forms are accepted. A plain string means the user-facing model group and
+/// the upstream model name are identical. The mapped form lets one provider serve
+/// a shared group under its own upstream name, which is what makes it possible for
+/// Vercel to answer `apex-verify` with `xai/grok-4.3` while OpenRouter answers the
+/// same group with `x-ai/grok-4.3`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderModelEntry {
+    /// `- "anthropic/claude-opus-4.7"`
+    Plain(String),
+    /// `- { group: "apex-verify", upstream: "x-ai/grok-4.3" }`
+    Mapped {
+        /// User-facing model group used for routing lookups.
+        group: String,
+        /// Model name actually sent to this provider.
+        upstream: String,
+    },
+}
+
+impl ProviderModelEntry {
+    /// User-facing model group this entry serves.
+    pub fn group(&self) -> &str {
+        match self {
+            Self::Plain(name) => name,
+            Self::Mapped { group, .. } => group,
+        }
+    }
+
+    /// Model name to send upstream to the provider.
+    pub fn upstream(&self) -> &str {
+        match self {
+            Self::Plain(name) => name,
+            Self::Mapped { upstream, .. } => upstream,
+        }
+    }
+}
+
+impl From<String> for ProviderModelEntry {
+    fn from(name: String) -> Self {
+        Self::Plain(name)
+    }
+}
+
+impl From<&str> for ProviderModelEntry {
+    fn from(name: &str) -> Self {
+        Self::Plain(name.to_string())
+    }
+}
+
+impl std::fmt::Display for ProviderModelEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.group())
+    }
+}
+
+/// Entries compare against the user-facing group, so existing `models.iter().any(|m| m == requested)`
+/// checks keep matching on what the caller actually asked for.
+impl PartialEq<str> for ProviderModelEntry {
+    fn eq(&self, other: &str) -> bool {
+        self.group() == other
+    }
+}
+
+impl PartialEq<&str> for ProviderModelEntry {
+    fn eq(&self, other: &&str) -> bool {
+        self.group() == *other
+    }
+}
+
+impl PartialEq<String> for ProviderModelEntry {
+    fn eq(&self, other: &String) -> bool {
+        self.group() == other.as_str()
+    }
+}
+
 /// Provider configuration
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,7 +134,7 @@ pub struct ProviderConfig {
     pub settings: HashMap<String, serde_json::Value>,
     /// Supported models
     #[serde(default)]
-    pub models: Vec<String>,
+    pub models: Vec<ProviderModelEntry>,
     /// Tags for grouping providers
     #[serde(default)]
     pub tags: Vec<String>,
@@ -121,6 +198,22 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
+    /// User-facing model groups this provider serves.
+    pub fn model_groups(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .map(|entry| entry.group().to_string())
+            .collect()
+    }
+
+    /// Upstream model names this provider is addressed with.
+    pub fn upstream_models(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .map(|entry| entry.upstream().to_string())
+            .collect()
+    }
+
     pub(crate) fn configured_endpoint(&self) -> Option<&str> {
         let provider_selector = if self.provider_type.trim().is_empty() {
             self.name.as_str()
@@ -432,7 +525,7 @@ mod tests {
             retry: RetryConfig::default(),
             health_check: ProviderHealthCheckConfig::default(),
             settings: HashMap::new(),
-            models: vec!["gpt-4".to_string()],
+            models: vec!["gpt-4".into()],
             tags: vec!["production".to_string()],
             enabled: true,
         };
@@ -517,7 +610,7 @@ mod tests {
             retry: RetryConfig::default(),
             health_check: ProviderHealthCheckConfig::default(),
             settings: HashMap::new(),
-            models: vec!["claude-3".to_string()],
+            models: vec!["claude-3".into()],
             tags: vec!["backup".to_string()],
             enabled: true,
         };
@@ -594,9 +687,9 @@ mod tests {
     fn test_provider_config_with_models() {
         let config = ProviderConfig {
             models: vec![
-                "gpt-4".to_string(),
-                "gpt-4-turbo".to_string(),
-                "gpt-3.5-turbo".to_string(),
+                "gpt-4".into(),
+                "gpt-4-turbo".into(),
+                "gpt-3.5-turbo".into(),
             ],
             ..ProviderConfig::default()
         };

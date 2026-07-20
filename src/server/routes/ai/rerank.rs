@@ -319,7 +319,7 @@ fn rerank_router_models(providers: &[ProviderConfig], requested_model: &str) -> 
 
         for model in &provider.models {
             if model == requested_model || model == served_model {
-                push_unique_model(&mut router_models, model);
+                push_unique_model(&mut router_models, model.group());
             }
         }
     }
@@ -488,7 +488,7 @@ mod tests {
             name: name.to_string(),
             provider_type: provider_type.to_string(),
             api_key: "test-key".to_string(),
-            models: models.into_iter().map(ToString::to_string).collect(),
+            models: models.into_iter().map(Into::into).collect(),
             ..ProviderConfig::default()
         }
     }

@@ -64,14 +64,19 @@ impl Router {
                     ))
                 })?;
 
-            // Determine which models this deployment serves
-            let models: Vec<String> = if !provider_config.models.is_empty() {
-                provider_config.models.clone()
+            // Determine which models this deployment serves, as (group, upstream) pairs.
+            // Discovered models are their own group, same as a plain config entry.
+            let models: Vec<(String, String)> = if !provider_config.models.is_empty() {
+                provider_config
+                    .models
+                    .iter()
+                    .map(|entry| (entry.group().to_string(), entry.upstream().to_string()))
+                    .collect()
             } else {
                 provider
                     .list_models()
                     .iter()
-                    .map(|m| m.id.clone())
+                    .map(|m| (m.id.clone(), m.id.clone()))
                     .collect()
             };
 
@@ -82,17 +87,19 @@ impl Router {
                     &provider_config.name,
                     provider.clone(),
                     &provider_config.name,
+                    &provider_config.name,
                     provider_config,
                 )?;
                 router.add_deployment(deployment);
             } else {
                 // Create one deployment per model
-                for model in models {
-                    let deployment_id = format!("{}-{}", provider_config.name, model);
+                for (group, upstream) in models {
+                    let deployment_id = format!("{}-{}", provider_config.name, group);
                     let deployment = create_deployment_from_config(
                         &deployment_id,
                         provider.clone(),
-                        &model,
+                        &group,
+                        &upstream,
                         provider_config,
                     )?;
                     router.add_deployment(deployment);
@@ -109,7 +116,8 @@ impl Router {
 fn create_deployment_from_config(
     deployment_id: &str,
     provider: Provider,
-    model: &str,
+    group: &str,
+    upstream: &str,
     config: &ProviderConfig,
 ) -> Result<Deployment, RouterError> {
     let deployment_config = deployment_config_from_provider(config)?;
@@ -117,8 +125,8 @@ fn create_deployment_from_config(
     Ok(Deployment::new(
         deployment_id.to_string(),
         provider,
-        model.to_string(),
-        model.to_string(),
+        upstream.to_string(),
+        group.to_string(),
     )
     .with_config(deployment_config)
     .with_tags(config.tags.clone()))

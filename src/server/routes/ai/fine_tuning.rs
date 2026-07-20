@@ -343,7 +343,7 @@ fn fine_tuning_route_provider(
             api_base: Some(fine_tuning_api_base(provider)?),
             endpoint_access: provider.endpoint_access,
             organization_id: provider.organization.clone(),
-            supported_models: provider.models.clone(),
+            supported_models: provider.model_groups(),
             timeout_seconds: provider.timeout,
             headers: fine_tuning_provider_headers(provider)?,
         },

@@ -339,6 +339,18 @@ impl Router {
         self.update_routing_snapshot(|snapshot| snapshot.insert_deployment(deployment));
     }
 
+    /// Replace the model alias table.
+    ///
+    /// Aliases map a request-facing model name onto a model group (or onto
+    /// another alias; chains are resolved at lookup time with a hop limit).
+    /// Installed through the same snapshot swap as deployments so readers never
+    /// observe a mixed alias/index generation.
+    pub fn set_model_aliases(&self, aliases: HashMap<String, String>) {
+        self.update_routing_snapshot(|snapshot| {
+            snapshot.model_aliases = aliases;
+        });
+    }
+
     /// Remove a deployment from the router
     pub fn remove_deployment(&self, id: &str) -> Option<Deployment> {
         self.update_routing_snapshot(|snapshot| snapshot.remove_deployment(id))

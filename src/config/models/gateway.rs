@@ -224,7 +224,7 @@ fn load_providers_from_env() -> crate::utils::error::gateway_error::Result<Vec<P
             provider.enabled = enabled;
         }
         if let Some(models) = parse_env_list(&provider_env_name(&name, "MODELS")) {
-            provider.models = models;
+            provider.models = models.into_iter().map(Into::into).collect();
         }
         if let Some(tags) = parse_env_list(&provider_env_name(&name, "TAGS")) {
             provider.tags = tags;
@@ -483,6 +483,25 @@ pub struct GatewayConfig {
     /// Pricing configuration
     #[serde(default)]
     pub pricing: GatewayPricingConfig,
+    /// Model aliases: request-facing name -> target model (or another alias).
+    ///
+    /// The router already resolves aliases at lookup time, including multi-hop
+    /// chains and cycle detection (see `RoutingSnapshot::resolve_model_name`).
+    /// This field is what makes that capability reachable from configuration:
+    ///
+    /// ```yaml
+    /// model_aliases:
+    ///   fast: "gpt-4o-mini"
+    ///   smart: "anthropic/claude-opus-4.7"
+    /// ```
+    ///
+    /// Aliases resolve to a *model group*, so a single alias can fan out over
+    /// several weighted deployments that serve the same model, which is how
+    /// load balancing across providers is expressed.
+    ///
+    /// Defaults to empty, so existing configurations are unaffected.
+    #[serde(default)]
+    pub model_aliases: HashMap<String, String>,
 }
 
 fn default_schema_version() -> String {
@@ -503,6 +522,7 @@ impl Default for GatewayConfig {
             rate_limit: RateLimitConfig::default(),
             enterprise: EnterpriseConfig::default(),
             pricing: GatewayPricingConfig::default(),
+            model_aliases: HashMap::new(),
         }
     }
 }

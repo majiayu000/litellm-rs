@@ -785,3 +785,148 @@ fn test_gateway_config_from_env_invalid_cache_enabled() {
 
     clear_test_env();
 }
+
+#[cfg(test)]
+mod model_alias_config_tests {
+    use crate::config::models::gateway::GatewayConfig;
+    use std::collections::HashMap;
+
+    /// A config without `model_aliases` must still parse: the field defaults to
+    /// empty, so existing deployments are unaffected by the new schema entry.
+    #[test]
+    fn config_without_aliases_defaults_to_empty() {
+        let cfg = GatewayConfig::default();
+        assert!(cfg.model_aliases.is_empty());
+    }
+
+    /// `GatewayConfig` sets `deny_unknown_fields`, so before this field existed
+    /// a `model_aliases:` block was a hard parse error. Round-tripping proves
+    /// the key is now both emitted and accepted, including a chained alias
+    /// (alias -> alias -> model), which the router resolves at lookup time
+    /// under `MAX_ALIAS_HOPS`.
+    #[test]
+    fn model_aliases_round_trip_through_yaml() {
+        let mut cfg = GatewayConfig::default();
+        cfg.model_aliases = HashMap::from([
+            ("apex-code".to_string(), "anthropic/claude-opus-4.7".to_string()),
+            ("fast".to_string(), "apex-code".to_string()),
+        ]);
+
+        let yaml = serde_yml::to_string(&cfg).expect("config should serialize");
+        assert!(yaml.contains("model_aliases"), "alias key must be emitted");
+
+        let parsed: GatewayConfig =
+            serde_yml::from_str(&yaml).expect("config with model_aliases should parse");
+        assert_eq!(
+            parsed.model_aliases.get("apex-code").map(String::as_str),
+            Some("anthropic/claude-opus-4.7")
+        );
+        assert_eq!(
+            parsed.model_aliases.get("fast").map(String::as_str),
+            Some("apex-code")
+        );
+    }
+}
+
+/// A provider's `models` list accepts either a plain string (group == upstream)
+/// or an explicit `{group, upstream}` mapping. The mapped form exists because
+/// Vercel and OpenRouter serve the same model group under different upstream
+/// IDs, which a flat alias -> model map cannot express.
+mod provider_model_entry_tests {
+    use crate::config::models::gateway::GatewayConfig;
+    use crate::config::models::provider::{ProviderConfig, ProviderModelEntry};
+
+    fn provider_with_models(models: &str) -> ProviderConfig {
+        let yaml = format!(
+            r#"
+name: openrouter
+provider_type: openai
+api_key: sk-test-key
+models:
+{models}
+"#
+        );
+        serde_yml::from_str(&yaml).expect("provider config should parse")
+    }
+
+    /// Top priority: configs written before this change must behave identically.
+    #[test]
+    fn plain_string_entry_keeps_group_and_upstream_identical() {
+        let provider = provider_with_models("  - \"anthropic/claude-opus-4.7\"");
+        let entry = &provider.models[0];
+
+        assert_eq!(entry, &ProviderModelEntry::Plain("anthropic/claude-opus-4.7".to_string()));
+        assert_eq!(entry.group(), "anthropic/claude-opus-4.7");
+        assert_eq!(entry.upstream(), "anthropic/claude-opus-4.7");
+    }
+
+    /// The mapped form is what lets OpenRouter answer the `apex-verify` group
+    /// with its own `x-ai/grok-4.3` spelling.
+    #[test]
+    fn mapped_entry_parses_group_and_upstream_separately() {
+        let provider =
+            provider_with_models("  - { group: \"apex-verify\", upstream: \"x-ai/grok-4.3\" }");
+        let entry = &provider.models[0];
+
+        assert_eq!(entry.group(), "apex-verify");
+        assert_eq!(entry.upstream(), "x-ai/grok-4.3");
+    }
+
+    /// Both forms must be mixable inside a single provider, since only 5 of the
+    /// 29 real aliases need the explicit mapping.
+    #[test]
+    fn plain_and_mapped_entries_coexist_in_one_provider() {
+        let provider = provider_with_models(
+            "  - \"anthropic/claude-opus-4.7\"\n  - { group: \"lean-code\", upstream: \"qwen/qwen3.7-plus\" }",
+        );
+
+        assert_eq!(provider.models.len(), 2);
+        assert_eq!(
+            provider.model_groups(),
+            vec!["anthropic/claude-opus-4.7".to_string(), "lean-code".to_string()]
+        );
+        assert_eq!(
+            provider.upstream_models(),
+            vec!["anthropic/claude-opus-4.7".to_string(), "qwen/qwen3.7-plus".to_string()]
+        );
+    }
+
+    /// `GatewayConfig` sets `deny_unknown_fields`, so an untagged enum that
+    /// emitted a wrapper key would break re-parsing. Round-tripping proves both
+    /// forms survive serialize -> deserialize.
+    #[test]
+    fn model_entries_round_trip_through_yaml() {
+        let mut cfg = GatewayConfig::default();
+        cfg.providers = vec![ProviderConfig {
+            name: "vercel".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test-key".to_string(),
+            models: vec![
+                ProviderModelEntry::Plain("anthropic/claude-opus-4.7".to_string()),
+                ProviderModelEntry::Mapped {
+                    group: "core-generalist".to_string(),
+                    upstream: "zai/glm-5.2".to_string(),
+                },
+            ],
+            ..ProviderConfig::default()
+        }];
+
+        let yaml = serde_yml::to_string(&cfg).expect("config should serialize");
+        let parsed: GatewayConfig =
+            serde_yml::from_str(&yaml).expect("config with model entries should parse");
+        assert_eq!(parsed.providers[0].models, cfg.providers[0].models);
+    }
+
+    /// Existing `models.iter().any(|m| m == requested)` checks compare against
+    /// the user-facing group, not the upstream name.
+    #[test]
+    fn entries_compare_equal_to_their_group() {
+        let mapped = ProviderModelEntry::Mapped {
+            group: "apex-verify".to_string(),
+            upstream: "x-ai/grok-4.3".to_string(),
+        };
+
+        assert!(mapped == *"apex-verify");
+        assert!(mapped != *"x-ai/grok-4.3");
+    }
+}

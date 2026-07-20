@@ -180,7 +180,7 @@ mod tests {
             api_key: "test-key".to_string(),
             base_url: None,
             endpoint_access: Default::default(),
-            models: vec!["gpt-4".to_string()],
+            models: vec!["gpt-4".into()],
             timeout: 30,
             max_retries: 3,
             organization: None,

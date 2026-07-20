@@ -227,7 +227,12 @@ pub async fn create_provider(
     if !models.is_empty() {
         factory_config.insert(
             "models".to_string(),
-            Value::Array(models.into_iter().map(Value::String).collect()),
+            Value::Array(
+                models
+                    .into_iter()
+                    .map(|entry| Value::String(entry.upstream().to_string()))
+                    .collect(),
+            ),
         );
     }
 

@@ -128,7 +128,7 @@ impl ProviderConfigBuilder {
             retry: crate::config::models::provider::RetryConfig::default(),
             health_check: crate::config::models::provider::ProviderHealthCheckConfig::default(),
             settings: std::collections::HashMap::new(),
-            models: self.models,
+            models: self.models.into_iter().map(Into::into).collect(),
             enabled: self.enabled,
             tags: Vec::new(),
         })
@@ -447,7 +447,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(config.models.len(), 2);
-        assert!(config.models.contains(&"gpt-4".to_string()));
+        assert!(config.model_groups().contains(&"gpt-4".to_string()));
     }
 
     #[test]

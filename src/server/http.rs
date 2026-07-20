@@ -149,6 +149,14 @@ impl HttpServer {
             ))
         })?;
 
+        // Install configured model aliases. The router resolves these at lookup
+        // time (including chains, bounded by MAX_ALIAS_HOPS); this is what makes
+        // that existing capability reachable from `gateway.yaml`. Empty by
+        // default, so configurations without aliases are unaffected.
+        if !config.gateway.model_aliases.is_empty() {
+            unified_router.set_model_aliases(config.gateway.model_aliases.clone());
+        }
+
         let callback_runtime =
             crate::server::callbacks::build_callback_runtime(&config.gateway.monitoring.callbacks)
                 .await;

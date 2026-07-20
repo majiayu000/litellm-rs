@@ -76,6 +76,7 @@ impl GatewayConfigBuilder {
             rate_limit: crate::config::models::rate_limit::RateLimitConfig::default(),
             enterprise: crate::config::models::enterprise::EnterpriseConfig::default(),
             pricing: crate::config::models::gateway::GatewayPricingConfig::default(),
+            model_aliases: HashMap::new(),
         };
 
         let config = Config { gateway };
