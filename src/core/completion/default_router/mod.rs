@@ -6,7 +6,8 @@ use super::{
     convert_to_chat_completion_request, stream,
 };
 
-use crate::core::providers::{Provider, ProviderRegistry, ProviderType};
+use crate::core::providers::{Provider, ProviderRegistry};
+use crate::core::router::{RuntimeBinding, default_runtime};
 use crate::core::types::{chat::ChatRequest, context::RequestContext};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use async_trait::async_trait;
@@ -15,12 +16,15 @@ use std::sync::Arc;
 use tokio::sync::OnceCell;
 use tracing::debug;
 
+#[allow(dead_code, unused_imports)]
+// D2 disconnects unary helpers; D3 removes them with streaming migration.
 mod dynamic_providers;
 mod router_impl;
 
 /// Default router implementation using the provider registry
 pub struct DefaultRouter {
     provider_registry: Arc<ProviderRegistry>,
+    runtime_binding: Option<RuntimeBinding>,
 }
 
 impl DefaultRouter {
@@ -165,7 +169,17 @@ impl DefaultRouter {
 
         Ok(Self {
             provider_registry: Arc::new(provider_registry),
+            runtime_binding: None,
         })
+    }
+
+    /// Create a completion facade backed by an explicit canonical runtime.
+    pub fn from_runtime(runtime: RuntimeBinding) -> Self {
+        Self {
+            // Retained only for the streaming compatibility path until D3.
+            provider_registry: Arc::new(ProviderRegistry::new()),
+            runtime_binding: Some(runtime),
+        }
     }
 }
 
@@ -224,9 +238,8 @@ pub async fn completion(
     messages: Vec<Message>,
     options: Option<CompletionOptions>,
 ) -> Result<CompletionResponse> {
-    let router = get_global_router().await;
-    router
-        .complete(model, messages, options.unwrap_or_default())
+    let handle = default_runtime().map_err(GatewayError::from)?;
+    router_impl::complete_with_runtime_handle(&handle, model, messages, options.unwrap_or_default())
         .await
 }
 

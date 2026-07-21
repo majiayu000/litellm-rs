@@ -4,6 +4,68 @@ use super::*;
 use crate::core::providers::registry::{
     ProviderRouteSurface, canonical_selector, provider_surface_matrix,
 };
+use crate::core::router::RuntimeHandle;
+use crate::core::router::execution::router_error_to_provider_error;
+
+pub(super) async fn complete_with_runtime_handle(
+    handle: &RuntimeHandle,
+    model: &str,
+    messages: Vec<Message>,
+    options: CompletionOptions,
+) -> Result<CompletionResponse> {
+    let chat_messages = convert_messages_to_chat_messages(messages);
+    let chat_request = convert_to_chat_completion_request(model, chat_messages, options.clone())?;
+
+    if let Some(selector) = DefaultRouter::unsupported_explicit_completion_selector(
+        model,
+        ProviderRouteSurface::CompletionChat,
+        false,
+    ) {
+        return Err(GatewayError::invalid_request(format!(
+            "completion() chat is not supported for provider route '{}'",
+            selector
+        )));
+    }
+
+    if options.api_key.is_some()
+        || options.api_base.is_some()
+        || options.api_version.is_some()
+        || options.organization.is_some()
+        || options.headers.is_some()
+        || options.timeout.is_some()
+    {
+        return Err(GatewayError::from(
+            crate::core::providers::ProviderError::invalid_request(
+                "completion",
+                "request-level provider overrides require a matching canonical runtime deployment",
+            ),
+        ));
+    }
+
+    let context = RequestContext::new();
+    let execution = handle
+        .execute_with_selected_deployment(model, move |deployment| {
+            let mut request = chat_request.clone();
+            let context = context.clone();
+            async move {
+                request.model = deployment.model.clone();
+                let response = deployment
+                    .provider
+                    .chat_completion(request, context)
+                    .await?;
+                let tokens = response
+                    .usage
+                    .as_ref()
+                    .map(|usage| u64::from(usage.total_tokens))
+                    .unwrap_or_default();
+                Ok((response, tokens))
+            }
+        })
+        .await
+        .map_err(|error| GatewayError::from(router_error_to_provider_error(error)))?;
+
+    convert_from_chat_completion_response(execution.result)
+}
 
 fn bedrock_execution_model_id(model: &str) -> String {
     crate::core::providers::bedrock::parse_bedrock_model_id(model).execution_model_id
@@ -178,164 +240,11 @@ impl Router for DefaultRouter {
         messages: Vec<Message>,
         options: CompletionOptions,
     ) -> Result<CompletionResponse> {
-        // Convert to internal types
-        let chat_messages = convert_messages_to_chat_messages(messages);
-        let chat_request =
-            convert_to_chat_completion_request(model, chat_messages, options.clone())?;
-
-        if let Some(selector) = Self::unsupported_explicit_completion_selector(
-            model,
-            ProviderRouteSurface::CompletionChat,
-            options.api_base.is_some(),
-        ) {
-            return Err(GatewayError::invalid_request(format!(
-                "completion() chat is not supported for provider route '{}'",
-                selector
-            )));
-        }
-
-        // Create request context with override parameters from options
-        let mut context = RequestContext::new();
-
-        // Check for dynamic provider configuration overrides
-        if let Some(api_base) = &options.api_base {
-            context.metadata.insert(
-                "api_base_override".to_string(),
-                serde_json::Value::String(api_base.clone()),
-            );
-        }
-
-        if let Some(api_key) = &options.api_key {
-            context.metadata.insert(
-                "api_key_override".to_string(),
-                serde_json::Value::String(api_key.clone()),
-            );
-        }
-
-        if let Some(organization) = &options.organization {
-            context.metadata.insert(
-                "organization_override".to_string(),
-                serde_json::Value::String(organization.clone()),
-            );
-        }
-
-        if let Some(api_version) = &options.api_version {
-            context.metadata.insert(
-                "api_version_override".to_string(),
-                serde_json::Value::String(api_version.clone()),
-            );
-        }
-
-        if let Some(headers) = &options.headers {
-            context.metadata.insert(
-                "headers_override".to_string(),
-                serde_json::to_value(headers).unwrap_or_default(),
-            );
-        }
-
-        if let Some(timeout) = options.timeout {
-            context.metadata.insert(
-                "timeout_override".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(timeout)),
-            );
-        }
-
-        if dynamic_providers::is_named_dynamic_provider_route(&chat_request.model, &options)
-            && let Some(response) = self
-                .try_dynamic_provider_creation(&chat_request, context.clone(), &options)
-                .await?
-        {
-            return Ok(response);
-        }
-
-        // Check if user provided custom api_base (Python LiteLLM compatibility)
-        if let Some(api_base) = &options.api_base {
-            use crate::core::providers::base::BaseConfig;
-            use crate::core::providers::openai::OpenAIProvider;
-            use crate::core::providers::openai::config::OpenAIConfig;
-            use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-
-            let api_key = options
-                .api_key
-                .clone()
-                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-                .unwrap_or_else(|| "dummy-key-for-local".to_string());
-
-            let config = OpenAIConfig {
-                base: BaseConfig {
-                    api_key: Some(api_key),
-                    api_base: Some(api_base.clone()),
-                    timeout: options.timeout.unwrap_or(60),
-                    headers: options.headers.clone().unwrap_or_default(),
-                    organization: options.organization.clone(),
-                    ..Default::default()
-                },
-                organization: options.organization.clone(),
-                ..Default::default()
-            };
-
-            match OpenAIProvider::new(config).await {
-                Ok(temp_provider) => {
-                    let response = temp_provider
-                        .chat_completion(chat_request, context)
-                        .await
-                        .map_err(|e| GatewayError::internal(format!("Provider error: {}", e)))?;
-                    return convert_from_chat_completion_response(response);
-                }
-                Err(e) => {
-                    return Err(GatewayError::internal(format!(
-                        "Failed to create provider with custom api_base: {}",
-                        e
-                    )));
-                }
-            }
-        }
-
-        // Dynamic provider creation (Python LiteLLM style)
-        if let Some(response) = self
-            .try_dynamic_provider_creation(&chat_request, context.clone(), &options)
-            .await?
-        {
-            return Ok(response);
-        }
-
-        // Fallback to static provider registry
-        let providers = self.provider_registry.all();
-
-        // Check if model explicitly specifies a provider
-        let mut selected_provider = Self::select_static_provider(&providers, model, &chat_request);
-
-        // Handle special cases
-        if selected_provider.is_none() {
-            if model.starts_with("openai/") || model.starts_with("azure/") {
-                for provider in providers.iter() {
-                    if provider.provider_type() == ProviderType::OpenAI
-                        && provider.supports_model(model)
-                    {
-                        selected_provider = Some((provider, chat_request.clone()));
-                        break;
-                    }
-                }
-            } else {
-                // No explicit provider, try to find one that supports the model
-                for provider in providers.iter() {
-                    if provider.supports_model(model) {
-                        selected_provider = Some((provider, chat_request.clone()));
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Use static provider if found
-        if let Some((provider, request)) = selected_provider {
-            let response = provider.chat_completion(request, context).await?;
-            return convert_from_chat_completion_response(response);
-        }
-
-        Err(GatewayError::internal(
-            "No suitable provider found for model",
-        ))
+        let handle = match &self.runtime_binding {
+            Some(binding) => binding.bind(),
+            None => default_runtime().map_err(GatewayError::from)?,
+        };
+        complete_with_runtime_handle(&handle, model, messages, options).await
     }
 
     async fn complete_stream(
