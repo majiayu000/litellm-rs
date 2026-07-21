@@ -381,7 +381,7 @@ impl Router {
             .take(max_models)
             .collect();
 
-        let mut last_error = None;
+        let mut last_error: Option<ProviderError> = None;
         let mut total_attempts = 0;
 
         for (model_idx, model) in models_to_try.iter().enumerate() {
@@ -394,7 +394,7 @@ impl Router {
                     original_model = %model_name,
                     fallback_model = %model,
                     fallback_index = model_idx,
-                    error_type = %last_error.as_ref().map_or("unknown".to_string(), |e| format!("{e}")),
+                    error_type = %last_error.as_ref().map_or("unknown".to_string(), |e| e.redacted().to_string()),
                     "fallback triggered, trying next model"
                 );
             }
