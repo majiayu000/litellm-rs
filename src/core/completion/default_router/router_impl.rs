@@ -5,7 +5,6 @@ use crate::core::providers::registry::{
     ProviderRouteSurface, canonical_selector, provider_surface_matrix,
 };
 use crate::core::router::RuntimeHandle;
-use crate::core::router::execution::router_error_to_provider_error;
 
 pub(super) async fn complete_with_runtime_handle(
     handle: &RuntimeHandle,
@@ -15,17 +14,6 @@ pub(super) async fn complete_with_runtime_handle(
 ) -> Result<CompletionResponse> {
     let chat_messages = convert_messages_to_chat_messages(messages);
     let chat_request = convert_to_chat_completion_request(model, chat_messages, options.clone())?;
-
-    if let Some(selector) = DefaultRouter::unsupported_explicit_completion_selector(
-        model,
-        ProviderRouteSurface::CompletionChat,
-        false,
-    ) {
-        return Err(GatewayError::invalid_request(format!(
-            "completion() chat is not supported for provider route '{}'",
-            selector
-        )));
-    }
 
     if options.api_key.is_some()
         || options.api_base.is_some()
@@ -44,7 +32,7 @@ pub(super) async fn complete_with_runtime_handle(
 
     let context = RequestContext::new();
     let execution = handle
-        .execute_with_selected_deployment(model, move |deployment| {
+        .execute_with_selected_deployment_typed(model, move |deployment| {
             let mut request = chat_request.clone();
             let context = context.clone();
             async move {
@@ -62,7 +50,7 @@ pub(super) async fn complete_with_runtime_handle(
             }
         })
         .await
-        .map_err(|error| GatewayError::from(router_error_to_provider_error(error)))?;
+        .map_err(GatewayError::from)?;
 
     convert_from_chat_completion_response(execution.result)
 }

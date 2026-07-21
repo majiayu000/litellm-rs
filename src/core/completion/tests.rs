@@ -99,11 +99,14 @@ async fn explicit_completion_facade_executes_selected_runtime_deployment() {
         "canonical-model".to_string(),
         "facade-model".to_string(),
     ));
+    runtime
+        .add_model_alias("google/facade-alias", "facade-model")
+        .expect("prefix-looking alias should publish");
     let facade = DefaultRouter::from_runtime(RuntimeBinding::new(runtime));
 
     let response = facade
         .complete(
-            "facade-model",
+            "google/facade-alias",
             vec![user_message("hello")],
             CompletionOptions::default(),
         )
@@ -113,6 +116,49 @@ async fn explicit_completion_facade_executes_selected_runtime_deployment() {
     assert_eq!(response.id, "chatcmpl-runtime");
     assert_eq!(response.model, "canonical-model");
     upstream.await.expect("mock provider should finish");
+}
+
+#[tokio::test]
+async fn terminal_provider_error_preserves_type_and_redacts_gateway_copy() {
+    let provider = OpenAIProvider::new(OpenAIConfig {
+        base: BaseConfig {
+            api_key: Some("sk-unused-test-key".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .await
+    .expect("provider should build");
+    let runtime = Arc::new(UnifiedRouter::default());
+    runtime.add_deployment(Deployment::new(
+        "authentication-deployment".to_string(),
+        Provider::OpenAI(provider),
+        "canonical-model".to_string(),
+        "auth-model".to_string(),
+    ));
+    let handle = RuntimeBinding::new(runtime).bind();
+    let error = handle
+        .execute_with_selected_deployment_typed("auth-model", |_| async {
+            Err::<((), u64), _>(ProviderError::authentication(
+                "openai",
+                "authorization: Bearer sk-terminal-secret",
+            ))
+        })
+        .await
+        .expect_err("typed runtime boundary should preserve authentication failure");
+    let error = GatewayError::from(error);
+
+    match error {
+        GatewayError::Provider(ref error @ ProviderError::Authentication { ref message, .. }) => {
+            assert_eq!(
+                error.canonical_code(),
+                crate::utils::error::ErrorCode::Authentication
+            );
+            assert!(!message.contains("sk-terminal-secret"));
+            assert!(message.contains("[REDACTED]"));
+        }
+        other => panic!("expected typed authentication error, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -155,13 +201,15 @@ fn unary_completion_source_has_no_legacy_execution_fallback() {
         "try_dynamic_provider_creation",
         "OpenAIProvider::new",
         "select_static_provider",
+        "unsupported_explicit_completion_selector",
+        "router_error_to_provider_error",
     ] {
         assert!(
             !unary.contains(forbidden),
             "unary completion must not contain legacy fallback: {forbidden}"
         );
     }
-    assert!(unary.contains("execute_with_selected_deployment"));
+    assert!(unary.contains("execute_with_selected_deployment_typed"));
 
     let facade = include_str!("default_router/mod.rs");
     let start = facade
