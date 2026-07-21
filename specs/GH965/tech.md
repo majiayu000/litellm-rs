@@ -187,33 +187,25 @@ runtime policy 上限；缺失时使用 selected deployment timeout。验证失�
 | `api_version`, `organization` | 与 `api_key`/`api_base` **同类处理**：0.6.0 `#[deprecated]`，只作为 legacy selector 的 match 维度参与 deployment 唯一匹配，绝不构造或改写 request-scoped provider config；0.7.0 与 selector 一并删除。 |
 | `extra_params`, `metadata` 及其余 model 参数 | 不是 provider selection/config override，按现状继续随 canonical request 传给 selected provider。 |
 
-`api_version`/`organization` 归入 legacy selector 是本 amendment 的新增判定（`HD-002` 的自然延伸，不改变其
-0.6→0.7 窗口）。若维护者认为两者应长期保留为 validated context，需要显式修订 `HD-002` 后再实现。
+`api_version`/`organization` 归入 legacy selector 是本 amendment 对 `HD-002` 的自然延伸，不改变 0.6→0.7 窗口；若维护者希望长期保留为 validated context，必须先显式修订 `HD-002`。0.6.0 中 `api_key`/`api_base`/`api_version`/`organization` 均带 `#[deprecated(since = "0.6.0", note = "configure a canonical runtime deployment")]`，0.7.0 与 selector 一并删除。
 
-0.6.0 中 `api_key`/`api_base`/`api_version`/`organization` 带 `#[deprecated(since = "0.6.0", note = "configure a canonical runtime deployment")]`。
-legacy selector 只在当前 handle 的 immutable deployment snapshot 中做 policy match：提供的每个字段都必须与
-同一 deployment 的 canonical config 相符，且结果必须恰好一个；零/多匹配分别返回 typed not-found/
-invalid-configuration。`LegacyRuntimeSelector` 不实现 `Display`，其手写 `Debug` 永远把 `api_key` 与
-`api_base` 的 present value 输出为 `[REDACTED]`（不得保留 URL userinfo、path、query 或 fragment）；raw secret、
-signed query 与 private endpoint 只存在于 request-local memory，不进入 identity、trace、error 或 log；
-resolver 不得调用 factory、`add_deployment`、client constructor 或 env。0.7.0 删除字段与 selector。
+legacy selector 只在当前 handle 的 immutable deployment snapshot 中做 policy match：所有已提供字段必须匹配同一 deployment 的 canonical config，且结果必须恰好一个；零/多匹配分别返回 typed not-found/invalid-configuration。`LegacyRuntimeSelector` 不实现 `Display`，手写 `Debug` 始终把 `api_key`/`api_base` present value 输出为 `[REDACTED]`，不得保留 URL userinfo、path、query 或 fragment。raw secret、signed query 与 private endpoint 只存在于 request-local memory，不进入 identity、trace、error 或 log；resolver 不得调用 factory、`add_deployment`、client constructor 或 env。
 
-credential match **不得直接使用现有 `utils::auth::crypto::hmac::constant_time_eq`**（`hmac.rs:26`）：该函数
-对不等长输入提前 `return false`（`:27-29`），泄漏候选 credential 的长度，且比较耗时随长度变化。API key 熵较高
-使其可利用性有限，但 legacy selector 恰好是把用户提供的 raw secret 与 deployment 配置逐个比对的放大场景。
-D3C 的做法是在 canonical deployment config 归一化/发布时，把每个 stored credential **预计算**为不透明、
-不可序列化且 `Debug` 恒为 `[REDACTED]` 的 `[u8; 32]` SHA-256 digest，并随 immutable routing snapshot 的
-legacy-selector metadata 保存；raw stored credential 不进入该 metadata。request selector 的 raw key 每请求只
-计算一次 digest，随后对每个候选只做两个定长 32 字节值的 constant-time 比较。禁止在 candidate loop 内重新
-hash stored credential；否则耗时仍随每个候选 secret 长度变化，不能满足 length-independent match。
-`sha2` 已在 `Cargo.toml:97`，因此不引入新依赖，也不改动 `verify_hmac_signature` 等既有 HMAC 调用方的行为
-（那些输入长度本就由算法固定）。
+credential match **不得直接使用现有 `utils::auth::crypto::hmac::constant_time_eq`**（`hmac.rs:26`），因为该函数对不等长输入提前 `return false`（`:27-29`），会泄漏候选 credential 长度。D3C 必须在 canonical deployment config 归一化/发布时，将 stored credential **预计算**为不透明、不可序列化且 `Debug` 恒为 `[REDACTED]` 的 `[u8; 32]` SHA-256 digest，并随 immutable routing snapshot 的 legacy-selector metadata 保存；raw stored credential 不进入 metadata。request selector 的 raw key 每请求只计算一次 digest，候选循环只比较两个定长 32 字节值；禁止在循环中重新 hash stored credential。`sha2` 已在 `Cargo.toml:97`，不引入依赖，也不改变 `verify_hmac_signature` 等固定长度 HMAC 调用方。
 
-先让现有 free functions 和经 `HD-003` 保留的 trait/type 委托给批准的 runtime binding，再逐段删除
-`DefaultRouter` 的 env bootstrap、static prefix selection、dynamic provider construction 和直接 provider
-execution。按已解决的 `HD-002`，`headers`/`timeout` 只能通过 `RuntimeRequestContext::validate` 进入 selected
-provider 的安全 execution API；`api_key`/`api_base` 只在 0.6.0 legacy selector 窗口存在并按 0.7.0 删除，
-不得由实现者重新选择保留或弃用。迁移期间 facade 不能在 runtime 失败时回到旧 registry。
+先让现有 free functions 和 `HD-003` 保留的 trait/type 委托给批准的 runtime binding，再删除 `DefaultRouter` 的 env bootstrap、static prefix selection、dynamic provider construction 和直接 provider execution。按 `HD-002`，`headers`/`timeout` 只能经 `RuntimeRequestContext::validate` 进入 selected provider；`api_key`/`api_base` 仅存在于 0.6.0 legacy selector 窗口。迁移期间 facade 不得在 runtime 失败后回到旧 registry。
+
+2026-07-21 的 D2 exact-head independent review 发现两条不可延期的违规路径：`RuntimeHandle::execute_with_selected_deployment` 虽 pin 住 snapshot，却在 fallback 终止时把 terminal `ProviderError` 转成 `RouterError`，completion adapter 再转回 `ProviderError`，导致 authentication、timeout、API status、unsupported、cancel、parsing、content-filter 等被压扁为 `ProviderUnavailable`（违反 B-006）；adapter 在 runtime alias 解析前调用 `unsupported_explicit_completion_selector`，会按文本前缀拒绝形如 `google/...` 的合法 alias（违反 B-002/B-005）。
+
+D2 因此允许在 `src/core/router/execute_impl.rs` 做最小 typed-boundary refactor，exact contract 如下：
+
+- 新增 crate-private `RuntimeHandle::execute_with_selected_deployment_typed`：只消费 handle 已 pin 的 `RoutingSnapshot`，返回 `Result<ExecutionResult<T>, ProviderError>`；不得重新 load snapshot 或暴露 binding/router accessor。
+- 抽取唯一的 in-snapshot typed implementation，复用 selection、retry/fallback、lease settlement 与 attempt accounting。现有 `RouterError` compatibility API 仅在最外层委托后做一次 `provider_error_to_router_error`；禁止复制 routing loop、增加平行 error enum/classifier 或 adapter side-channel。
+- completion unary 只调用 typed handle API，将 terminal `ProviderError` 直接映射为 `GatewayError`；禁止 `ProviderError -> RouterError -> ProviderError` 往返。
+- completion adapter 删除 unary textual provider-prefix gate；alias 必须先由 pinned snapshot 解析，surface unsupported 由 selected canonical provider 返回 typed `NotSupported`/`NotImplemented`，不得伪装为 `InvalidRequest`。
+- focused fixtures 覆盖 prefix-looking runtime alias 成功、至少一个非 rate-limit/model-not-found terminal provider error 保持原 variant/canonical code 且 redaction 生效，并用 source guard 拒绝 unary helper 中的 `unsupported_explicit_completion_selector`、`router_error_to_provider_error` 和 legacy fallback。
+
+该 amendment 仅修复已批准的 `HD-003/004` 执行边界：不新增公开 API、不改变 retry/fallback policy、不把 D3 validated headers/timeout 或 legacy selector 提前到 D2。D2 仍限最多 8 个实际非文档文件/500 changed lines；候选 allowlist 增加一个 router 文件，但实现 PR 只能使用完成 typed boundary 所需的子集。
 
 ### 3. SDK migration and retained facade API
 
@@ -691,7 +683,7 @@ map/config scan/local routing counters/client construction。
 | D1E-a2b legacy SDK error deprecation | `src/sdk/errors.rs`, `src/sdk/client/completions.rs`, new `src/sdk/provider_error_deprecation_guard_tests.rs` | 3 files / ≤350；依赖 D1E-a2a merged；只增加 true deprecation、9 个局部 allow + T010-linked 0.7 follow-up marker，以及 Rust-only `syn::Visit` owner/role exact-allowlist guard；支持 package checkout 且不依赖 Git/Python，无运行行为改动；`Refs #965`。 |
 | D1E-b response emitters + redaction | `src/utils/error/gateway_error/response.rs`, `src/utils/error/gateway_error/conversions.rs`, `src/server/routes/ai/openai_errors.rs`, `src/utils/error/gateway_error/response_tests.rs` | 4 files / ≤500；Gateway wrapper 与真实响应出口都只携带 `redacted()` copy；`Refs #965`。 |
 | D1E-c legacy retry helper deprecation | `src/core/providers/contextual_error.rs`, `src/core/providers/unified_provider_methods.rs`, `src/core/types/errors/traits.rs`, `src/core/router/execution.rs`, `src/utils/error/utils/retry.rs`, `src/sdk/errors.rs`, `src/server/routes/ai/batches.rs`, `src/server/routes/ai/fine_tuning.rs` | 8 files / ≤500；六个 provider-specific helper 保留 0.6 行为、deprecated、production 零消费；canonical coarse helpers 明确 grandfather；`Refs #965`。 |
-| D2 completion facade | `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；只迁移 binding + unary；`Refs #965`。 |
+| D2 completion facade | `src/core/router/execute_impl.rs`, `src/core/completion/mod.rs`, `router_trait.rs`, `types.rs`, `conversion.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `src/core/completion/tests.rs`, `tests/e2e/chat_completion.rs` | 实际最多 8 files / ≤500；只迁移 pinned typed execution boundary + binding + unary；候选路径 9 个但 PR 必须取所需子集；`Refs #965`。 |
 | D3C credential compare hardening | `src/core/router/unified.rs`, `deployment.rs`, `gateway_config.rs`, `src/utils/auth/crypto/hmac.rs`, `src/utils/auth/crypto/tests.rs` | 5 files / ≤500；deployment publication 预计算并存储定长 digest，request path 每请求只 hash 一次后定长比较；`Refs #965`。 |
 | D3 completion stream/override cleanup | `src/core/completion/stream.rs`, `src/core/completion/types.rs`, `default_router/mod.rs`, `default_router/router_impl.rs`, `default_router/dynamic_providers.rs`, `default_router/dynamic_providers/routes.rs`, `default_router/dynamic_providers/tests.rs`, `tests/e2e/chat_completion.rs` | 8 files / ≤500；依 `HD-002/003`；含全部 override 字段分类与 `#[deprecated]`；`Refs #965`。 |
 | D4 SDK runtime binding | `src/sdk/config.rs`, `errors.rs`, `client/llm_client.rs`, `client/routing.rs`, `client/types.rs`, `client/tests.rs`, `src/sdk/mod.rs` | 7 files / ≤500；仅 construction/selection；`Refs #965`。 |
@@ -744,7 +736,7 @@ hash 变长 stored secret，不能满足本 contract。
 | B-003 | D2-D7 adapter cleanup | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::single_sender`；production source guard。 |
 | B-004 | D1/D2/D4 config normalization | `cargo test --all-features --locked --test lib integration::router_runtime_conformance::invalid_and_empty_config`。 |
 | B-005 | canonical alias/surface selection | `cargo test --all-features --locked support_matrix` 加 conformance `alias_and_unsupported` fixture。 |
-| B-006 | D1E-a1 删除 `ProviderFailureKind` 并保留 typed facts；D1E-a2a 收敛 provider redaction/SDK existing-category mapping；D1E-a2b 增加 legacy SDK error deprecation 与兼容 guard；D1E-b 收敛 Gateway wrapper/响应出口；D1E-c 隔离旧 bool helpers | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output；tech §5 deterministic command 证明 a2a canonical-code-only conversion；`legacy_provider_error_deprecation_allowlist_does_not_grow` 扫描所有 Rust target/source，锁定 D1E-a2b 的局部兼容站点并拒绝 lint downgrade 或 allow/callsite 增长。 |
+| B-006 | D1E-a1 删除 `ProviderFailureKind` 并保留 typed facts；D1E-a2a 收敛 provider redaction/SDK existing-category mapping；D1E-a2b 增加 legacy SDK error deprecation 与兼容 guard；D1E-b 收敛 Gateway wrapper/响应出口；D1E-c 隔离旧 bool helpers；D2 以 pinned typed handle boundary 把 terminal `ProviderError` 原样交给 completion adapter | conformance `error_class_mapping` table覆盖全部 `ProviderError` variants，并检查 0.6 existing SDK category/Gateway typed wrapper、secret redaction/retryability/cancellation；`RetryPolicy::decide` 按 `RetryContext` 逐 variant 断言 pre/post-output；tech §5 deterministic command 证明 a2a canonical-code-only conversion；`legacy_provider_error_deprecation_allowlist_does_not_grow` 扫描所有 Rust target/source，锁定 D1E-a2b 的局部兼容站点并拒绝 lint downgrade 或 allow/callsite 增长；D2 focused completion fixture 证明 terminal provider variant/canonical code 不经 `RouterError` 往返。 |
 | B-007 | deployment lease/state + SDK stats view | conformance `exactly_once_state` fixture比较 attempt trace 与 counter delta。 |
 | B-008 | runtime retry/fallback | conformance `retry_and_fallback` fixture证明 adapter request count 与 runtime attempts 相等。 |
 | B-009 | immutable generation replacement | conformance `snapshot_replacement` 并发双 listener/key fixture。 |
