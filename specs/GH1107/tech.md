@@ -118,8 +118,9 @@ match 点，但范围严格限于：
 - lifecycle 只补齐新增 optional wire 字段的构造与穷尽匹配，T1 不改变 previous response
   的 call/output 恢复语义。
 
-T1 禁止新增 `CodexTurn`、call ledger、projection map 或 provider-facing tool/message；这些
-仍分别属于严格串行的 T2、T3 和 T4。
+T1 禁止新增 `CodexTurn`、call ledger、projection map、provider-facing tool/message 或
+previous-response call 恢复：`CodexTurn` 与 call ledger 属于 T2，projection map 与
+provider-facing tool/message 属于 T3，previous-response call 恢复属于 T4。
 
 ### 2. Canonical Codex turn
 
@@ -202,13 +203,13 @@ completed。现有 `[DONE]` 行为由 fixture 锁定。
 
 新增 `codex_compatibility_error` 构造器，通过现有 OpenAI envelope 返回：
 
-- status: 400 或 422（由现有仓库错误政策确定一种并 fixture 固定）；
+- status: 400；
 - type: `invalid_request_error`；
 - code: `unsupported_codex_feature`、`invalid_codex_call_graph` 或
   `codex_stream_state_error`；
 - message: 仅 feature/provider/model/call-id digest，不含 credential、tool output
-  全文或 upstream body；若 wire gate 在选择 provider 前拒绝，provider context 固定为
-  `unselected`，不得为了生成错误消息提前触发 provider 选择。
+  全文或 upstream body；若 wire gate 在选择 provider 前拒绝，message 中的 provider
+  context 固定为 `provider=unselected`，不得为了生成错误消息提前触发 provider 选择。
 
 日志只记录 request id、feature、provider/model 和 call 数量。SEC-11 要求
 `openai_errors.rs`、payload redaction 与任何 header/URL 修改接受人工安全审查。
@@ -321,13 +322,16 @@ Codex /v1/responses JSON
 
 ## 实施分段
 
-- **D1 Wire + ledger**：DTO、CodexTurn、验证、错误；不接 provider。
-- **D2 Sync projection**：function/custom sync loop、capability preflight、lifecycle。
-- **D3 Streaming**：shared projector、SSE state machine、disconnect/settlement。
-- **D4 Provider conformance**：三类 adapter loopback matrix 与 support surface。
-- **D5 Docs + closure**：文档、全量 regression、人工安全 review。
+- **D1 / T1 Wire**：DTO、unknown redaction、pre-provider wire error；不接 provider。
+- **D2 / T2 Canonical ledger**：CodexTurn、call ledger、execution requirements；不接 provider。
+- **D3 / T3 Sync projection**：function/custom sync loop 与 capability preflight。
+- **D4 / T4 Lifecycle**：previous-response call/output context 与 storage regression。
+- **D5 / T5 Streaming**：shared projector、SSE state machine、disconnect/settlement。
+- **D6 / T6 Provider conformance**：三类 adapter loopback matrix 与 support surface。
+- **D7 / T7 Docs**：配置、smoke、支持矩阵与恢复文档。
+- **D8 / T8 Closure**：merged-main 全量 regression 与独立人工安全 review。
 
-D1→D2→D3 严格串行；D4 只能在 D3 语义稳定后写 conformance；D5 最后。每个 tranche
+D1→D2→D3→D4→D5→D6→D7→D8 按 `tasks.md` 的依赖严格串行。每个 tranche
 使用独立 implementation PR、`Refs #1107`，最终 closure PR 才使用
 `Fixes #1107`。实现前必须由维护者把 issue 转为 `ready_to_implement`。
 
