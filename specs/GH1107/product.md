@@ -75,8 +75,10 @@ Tier 2 可以在同一 issue 的后续 tranche 中实现；在实现前必须返
 5. **B-005** 当一次请求含多个并行 call 时，call/output 按 `call_id` 关联，
    output item 按模型产生的稳定顺序返回；并发完成顺序不得造成串线或覆盖。
 6. **B-006** Tier 2 或未知 item/tool 必须在上游调用前返回 4xx
-   `unsupported_codex_feature`，并指出 feature、selected provider 和 model；
-   不得通过 `serde(other)`、空消息、warning 或普通文本 fallback 表示成功。
+   `unsupported_codex_feature`，并指出 feature、model 和 provider context：若 provider
+   已选择则给出 selected provider；若请求在 provider 选择前被 wire gate 拒绝，则明确
+   返回 `provider=unselected`，不得为补齐错误文本而触发 provider 选择。不得通过
+   `serde(other)`、空消息、warning 或普通文本 fallback 表示成功。
 7. **B-007** 只有同时满足请求所需 transport、streaming 与 tool capability 的
    provider/model 才可执行；能力声明缺失或不一致时按不支持处理，不尝试未声明
    的降级路径。

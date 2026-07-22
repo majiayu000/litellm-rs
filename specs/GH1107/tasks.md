@@ -15,7 +15,7 @@ GH-1107 / #1107
 
 ## 实现任务
 
-- [ ] `SP1107-T1` Covers: B-002, B-006, B-015, B-018. Owner: responses wire owner. Dependencies: spec approved + `ready_to_implement`. Files: `src/core/models/openai/responses_api.rs`, `src/server/routes/ai/responses/codex_compat_tests.rs`. Done when: Tier 1/Tier 2/unknown wire types 按 tech contract 可解析或返回稳定错误，output union 的 string/structured form round-trip，fixtures 固定 Codex commit，正负例均 schema valid. Verify: `cargo test --locked codex_wire`，fixture source/count guard，fmt/check。
+- [ ] `SP1107-T1` Covers: B-002, B-006, B-015, B-018. Owner: responses wire owner. Dependencies: spec approved + `ready_to_implement`. Files: `src/core/models/openai/responses_api.rs`, `src/server/routes/ai/openai_errors.rs`, `src/server/routes/ai/responses.rs`, `src/server/routes/ai/responses/codex_compat_tests.rs`, `src/server/routes/ai/responses/lifecycle.rs`, `src/server/routes/ai/responses/lifecycle_tests.rs`. Done when: Tier 1/Tier 2/unknown wire types 按 tech contract 可解析；Tier 1 的 `id`/`call_id`/`name`/`namespace`/payload 与 string/structured output form round-trip；unknown 只保留 metadata allowlist；非 message item、custom/Tier 2/unknown tool 和 `additional_tools` 在 call ledger 合并前统一返回 400 `unsupported_codex_feature`（message 含 feature/model/`provider=unselected`），且不进入 provider 执行路径。route/lifecycle 改动仅用于 fail-closed 与新增 optional 字段的编译适配，不得加入 call ledger、provider projection 或 previous-response call 恢复。fixtures 固定 Codex commit，正负例均 schema valid. Verify: `cargo test --locked codex_wire`，HTTP error envelope/upstream=0、missing/null/empty、unknown redaction、fixture source/count guard，fmt/check/strict Clippy。
 
 - [ ] `SP1107-T2` Covers: B-002, B-003, B-005, B-006, B-015, B-018, B-020. Owner: canonical turn owner. Dependencies: SP1107-T1 merged. Files: `src/core/types/codex.rs`, `src/core/types/mod.rs`, `src/server/routes/ai/responses/codex_compat.rs`, `src/server/routes/ai/responses/codex_compat_tests.rs`. Done when: ordered CodexTurn、closed call kind、call ledger 和 execution requirements 完成，unknown/duplicate/missing/type mismatch 在 provider 前拒绝，且没有新 router 或 tool executor. Verify: `cargo test --locked codex_turn codex_call_ledger`，property/negative tests、source guard、fmt/check/Clippy。
 
@@ -34,6 +34,8 @@ GH-1107 / #1107
 ## 并行拆分
 
 - SP1107-T1 → T2 → T3 严格串行，共同定义 wire/canonical/sync 语义。
+- T1 与后续 T3/T4 会串行触碰 `responses.rs` / lifecycle；T1 仅做 enum 编译适配和
+  pre-provider fail-closed，禁止提前实现后续 owner 的 projection 或 context 行为。
 - T4 与 T5 都依赖 T3；T5 还依赖 T4 的 context contract，因此默认串行，避免共享 `codex_compat.rs`。
 - T6 在 T5 后只写 matrix + integration fixture。
 - T7 在 T6 exact behavior 稳定后由 docs owner 独立写，不与 production owner 共享文件。

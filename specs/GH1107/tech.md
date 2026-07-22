@@ -93,13 +93,33 @@ amendment；不得边实现边扩大 allowlist。
 
 - Tier 1 使用强类型 variant，所有 machine-facing 字段保持 snake_case。
 - Tier 2 使用强类型“recognized but unsupported” variant，不能直接丢弃。
-- 真正未知类型由自定义反序列化保留 `type` 和受限元数据；不保留/记录完整敏感
-  payload。route 返回 `unsupported_codex_feature`。
+- Tier 1 完整保留当前 Codex wire 的 `id`、`call_id`、`name`、`namespace`、
+  `status` 和 payload；structured tool output 覆盖 `input_text`、`input_image`、
+  `input_audio` 与 `encrypted_content`。
+- 真正未知类型由自定义反序列化只保留 `type` 以及 allowlist 元数据
+  `id` / `call_id` / `name` / `namespace` / `status`；其他字段在 DTO 边界丢弃，
+  不保留/记录完整敏感 payload。route 返回 `unsupported_codex_feature`。
 - `function_call_output.output` 与 `custom_tool_call_output.output` 支持 Codex
   当前 wire 的 string 或 structured content items，规范化时保留原始 form。
 
 这里不使用 `serde(other)`，因为它无法携带原始 type，也会把 schema 合法的未来
 类型伪装成空 variant。
+
+#### T1 落地边界
+
+Rust enum 的新增 variant 会使 crate 内既有穷尽匹配无法编译，因此 T1 除 DTO 与 fixture
+外，允许修改 `responses.rs`、`openai_errors.rs` 和 lifecycle 的 struct construction /
+match 点，但范围严格限于：
+
+- 新 wire variant 在 canonical call ledger 合并前一律 fail closed，不投影为
+  assistant/tool chat message，也不发送 provider 请求；
+- 使用现有 OpenAI error envelope 返回 400、code=`unsupported_codex_feature`，message
+  只含 feature、model 与 `provider=unselected`；
+- lifecycle 只补齐新增 optional wire 字段的构造与穷尽匹配，T1 不改变 previous response
+  的 call/output 恢复语义。
+
+T1 禁止新增 `CodexTurn`、call ledger、projection map 或 provider-facing tool/message；这些
+仍分别属于严格串行的 T2、T3 和 T4。
 
 ### 2. Canonical Codex turn
 
@@ -187,7 +207,8 @@ completed。现有 `[DONE]` 行为由 fixture 锁定。
 - code: `unsupported_codex_feature`、`invalid_codex_call_graph` 或
   `codex_stream_state_error`；
 - message: 仅 feature/provider/model/call-id digest，不含 credential、tool output
-  全文或 upstream body。
+  全文或 upstream body；若 wire gate 在选择 provider 前拒绝，provider context 固定为
+  `unselected`，不得为了生成错误消息提前触发 provider 选择。
 
 日志只记录 request id、feature、provider/model 和 call 数量。SEC-11 要求
 `openai_errors.rs`、payload redaction 与任何 header/URL 修改接受人工安全审查。
@@ -225,11 +246,11 @@ redaction。负例必须 schema 合法且到达业务 gate，不能只测试 ser
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | existing Chat/Responses delegate paths | `cargo test --locked responses_api chat_completion` 加 snapshot regression；现有 request fixture 输出不变。 |
-| B-002 | Responses DTO + `CodexTurn` | unit fixtures round-trip 每个 Tier 1 字段，并分别覆盖 missing/null/empty。 |
+| B-002 | Responses DTO + `CodexTurn` | unit fixtures round-trip 每个 Tier 1 字段（含 output `id`、custom `namespace`、`input_audio`），并分别覆盖 missing/null/empty。 |
 | B-003 | `CodexCallLedger` | negative fixtures: unknown、duplicate、missing、kind mismatch call_id 均在 upstream request count=0 时 4xx。 |
 | B-004 | custom projection/projector | round-trip property test：任意合法 name/namespace/input 经 provider envelope 后恢复相同 custom item。 |
 | B-005 | ledger + output ordering | parallel two-call fixture 逆序 provider chunks 后仍按稳定 output_index 且 call_id 不串线。 |
-| B-006 | custom DTO deserialize + compatibility gate | 每个 Tier 2/unknown schema-valid fixture 返回 `unsupported_codex_feature`，mock upstream requests=0。 |
+| B-006 | custom DTO deserialize + compatibility gate | 每个 Tier 2/unknown schema-valid fixture 返回 `unsupported_codex_feature`，wire-stage error 固定 `provider=unselected`，unknown 非 allowlist payload 不出现在 error/round-trip，mock upstream requests=0。 |
 | B-007 | capability preflight + support matrix | provider/model capability table test；缺 ToolCalling 或 stream capability 的 deployment 被拒绝。 |
 | B-008 | selected-attempt preflight | mock budget/callback/upstream counters 全为零的 unsupported fixture。 |
 | B-009 | event state machine | table-driven allowed/illegal transitions；terminal count=1；index-before-added 失败。 |
