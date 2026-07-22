@@ -100,7 +100,10 @@ impl RoutingSnapshot {
             model_index: HashMap::new(),
             model_order: Vec::new(),
             model_aliases: previous.model_aliases.clone(),
-            legacy_selector_metadata: previous.legacy_selector_metadata.clone(),
+            // A bulk replacement carries no fresh credential provenance. Runtime
+            // state may follow a stable deployment ID, but selector metadata may
+            // not: retaining it would accept an old credential after rotation.
+            legacy_selector_metadata: HashMap::new(),
         };
 
         for mut deployment in deployments {
@@ -109,10 +112,6 @@ impl RoutingSnapshot {
             }
             snapshot.insert_deployment(deployment);
         }
-        snapshot
-            .legacy_selector_metadata
-            .retain(|id, _| snapshot.deployments.contains_key(id));
-
         // Duplicate deployment IDs retain their existing last-wins behavior.
         // Reapply input group order after indexing so a temporary empty group
         // cannot move behind groups that first appeared later in the input.

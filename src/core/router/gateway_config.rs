@@ -14,6 +14,25 @@ use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
 use crate::core::providers::{Provider, create_provider};
 
+/// Return the only credential provenance audited for the conservative D3Ca
+/// intermediate state.
+///
+/// The canonical OpenAI factory inserts a non-empty top-level `api_key` before
+/// merging settings and its builder consumes that exact value. Aliases,
+/// settings-sourced credentials, catalog dispatch and provider-specific/env
+/// fallbacks remain intentionally unpublishable until D3Cb normalizes them at
+/// the construction boundary.
+fn proven_top_level_legacy_credential(config: &ProviderConfig) -> Option<&str> {
+    let selector = config.provider_type.trim();
+    let credential = config.api_key.as_str();
+    let has_competing_source = ["api_key", "api_token", "google_api_key", "gemini_api_key"]
+        .into_iter()
+        .any(|key| config.settings.contains_key(key));
+
+    (selector == "openai" && !credential.trim().is_empty() && !has_competing_source)
+        .then_some(credential)
+}
+
 /// Build runtime router config from gateway YAML router config.
 pub fn runtime_router_config_from_gateway(
     config: &GatewayRouterConfig,
@@ -65,8 +84,8 @@ impl Router {
                         provider_config.name, e
                     ))
                 })?;
-            let legacy_metadata =
-                LegacySelectorMetadata::from_stored_credential(&provider_config.api_key);
+            let legacy_metadata = proven_top_level_legacy_credential(provider_config)
+                .map(LegacySelectorMetadata::from_stored_credential);
 
             // Determine which models this deployment serves
             let models: Vec<String> = if !provider_config.models.is_empty() {
@@ -88,7 +107,10 @@ impl Router {
                     &provider_config.name,
                     provider_config,
                 )?;
-                router.add_gateway_deployment(deployment, legacy_metadata);
+                match legacy_metadata {
+                    Some(metadata) => router.add_gateway_deployment(deployment, metadata),
+                    None => router.add_deployment(deployment),
+                }
             } else {
                 // Create one deployment per model
                 for model in models {
@@ -99,7 +121,10 @@ impl Router {
                         &model,
                         provider_config,
                     )?;
-                    router.add_gateway_deployment(deployment, legacy_metadata.clone());
+                    match legacy_metadata.clone() {
+                        Some(metadata) => router.add_gateway_deployment(deployment, metadata),
+                        None => router.add_deployment(deployment),
+                    }
                 }
             }
         }
@@ -184,7 +209,33 @@ mod tests {
     use crate::core::providers::unified_provider::ProviderError;
     use crate::utils::auth::crypto::hmac::CredentialDigest;
     use std::cell::Cell;
-    use syn::{Fields, Item, Type};
+    use std::mem::size_of;
+
+    macro_rules! assert_not_impl_any {
+        ($type:ty: $($trait:path),+ $(,)?) => {
+            const _: fn() = || {
+                trait AmbiguousIfImpl<A> {
+                    fn marker() {}
+                }
+                impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+                $({
+                    struct Invalid;
+                    impl<T: ?Sized + $trait> AmbiguousIfImpl<Invalid> for T {}
+                })+
+                <$type as AmbiguousIfImpl<_>>::marker();
+            };
+        };
+    }
+
+    // Compile-time proof replaces the former source-AST meta-test.
+    const _: [(); 32] = [(); size_of::<CredentialDigest>()];
+    const _: [(); size_of::<CredentialDigest>()] = [(); size_of::<LegacySelectorMetadata>()];
+    assert_not_impl_any!(
+        CredentialDigest: std::fmt::Display, serde::Serialize, serde::de::DeserializeOwned
+    );
+    assert_not_impl_any!(
+        LegacySelectorMetadata: std::fmt::Display, serde::Serialize, serde::de::DeserializeOwned
+    );
 
     fn credential_test_provider(name: &str, api_key: &str) -> ProviderConfig {
         ProviderConfig {
@@ -194,6 +245,24 @@ mod tests {
             models: vec!["credential-model".to_string()],
             ..ProviderConfig::default()
         }
+    }
+
+    #[test]
+    fn conservative_provenance_rejects_alias_catalog_and_env_fallback_candidates() {
+        let canonical = credential_test_provider("canonical", "sk-canonical");
+        assert_eq!(
+            proven_top_level_legacy_credential(&canonical),
+            Some("sk-canonical")
+        );
+
+        for provider_type in ["azure-openai", "openrouter", "cohere"] {
+            let mut unproven = credential_test_provider("unproven", "sk-unproven");
+            unproven.provider_type = provider_type.to_string();
+            assert_eq!(proven_top_level_legacy_credential(&unproven), None);
+        }
+
+        let empty_top_level = credential_test_provider("env-fallback", "");
+        assert_eq!(proven_top_level_legacy_credential(&empty_top_level), None);
     }
 
     #[test]
@@ -407,13 +476,12 @@ mod tests {
             .map(|deployment| deployment.as_ref().clone())
             .collect();
         router.set_model_list(replacement);
-        match router
-            .load_routing_snapshot()
-            .resolve_legacy_credential("credential-model", short_secret)
-        {
-            Ok(deployment_id) => assert_eq!(deployment_id, "short-credential-model"),
-            Err(error) => panic!("snapshot replacement must retain credential metadata: {error}"),
-        }
+        assert!(matches!(
+            router
+                .load_routing_snapshot()
+                .resolve_legacy_credential("credential-model", short_secret),
+            Err(ProviderError::ModelNotFound { .. })
+        ));
 
         let duplicates = [
             credential_test_provider("duplicate-a", "sk-duplicate-secret"),
@@ -447,103 +515,40 @@ mod tests {
         assert!(metadata_debug.contains("[REDACTED]"));
     }
 
-    #[test]
-    fn credential_metadata_source_has_no_raw_or_serializable_surface() {
-        let deployment_source = include_str!("deployment.rs");
-        let digest_source = include_str!("../../utils/auth/crypto/hmac.rs");
-        let deployment_file = syn::parse_file(deployment_source)
-            .expect("deployment source must remain valid Rust syntax");
-        let digest_file =
-            syn::parse_file(digest_source).expect("digest source must remain valid Rust syntax");
-
-        let metadata = deployment_file
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Struct(item) if item.ident == "LegacySelectorMetadata" => Some(item),
-                _ => None,
-            })
-            .expect("LegacySelectorMetadata must exist");
-        let metadata_fields = match &metadata.fields {
-            Fields::Named(fields) => &fields.named,
-            _ => panic!("LegacySelectorMetadata must use one named digest field"),
+    #[tokio::test]
+    async fn unproven_gateway_credentials_do_not_publish_selector_metadata() {
+        let mut settings_only = credential_test_provider("settings-only", "");
+        settings_only
+            .settings
+            .insert("api_key".to_string(), serde_json::json!("sk-settings-only"));
+        let settings_router = match Router::from_gateway_config(&[settings_only], None).await {
+            Ok(router) => router,
+            Err(error) => panic!("settings-backed provider should build: {error}"),
         };
-        assert_eq!(metadata_fields.len(), 1);
-        let metadata_field = &metadata_fields[0];
-        assert_eq!(
-            metadata_field.ident.as_ref().map(ToString::to_string),
-            Some("credential_digest".to_string())
-        );
         assert!(matches!(
-            &metadata_field.ty,
-            Type::Path(path)
-                if path.path.segments.last().is_some_and(|segment| segment.ident == "CredentialDigest")
+            settings_router
+                .load_routing_snapshot()
+                .resolve_legacy_credential("credential-model", "sk-settings-only"),
+            Err(ProviderError::ModelNotFound { .. })
         ));
 
-        let digest = digest_file
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Struct(item) if item.ident == "CredentialDigest" => Some(item),
-                _ => None,
-            })
-            .expect("CredentialDigest must exist");
-        let digest_fields = match &digest.fields {
-            Fields::Unnamed(fields) => &fields.unnamed,
-            _ => panic!("CredentialDigest must remain a private tuple newtype"),
+        let mut cloudflare = credential_test_provider("cloudflare-conflict", "top-level-key");
+        cloudflare.provider_type = "cloudflare".to_string();
+        cloudflare.organization = Some("test-account".to_string());
+        cloudflare
+            .settings
+            .insert("api_token".to_string(), serde_json::json!("settings-token"));
+        let cloudflare_router = match Router::from_gateway_config(&[cloudflare], None).await {
+            Ok(router) => router,
+            Err(error) => panic!("Cloudflare conflict fixture should build: {error}"),
         };
-        assert_eq!(digest_fields.len(), 1);
-        assert!(matches!(
-            &digest_fields[0].ty,
-            Type::Array(array)
-                if matches!(&*array.elem, Type::Path(path) if path.path.is_ident("u8"))
-                    && matches!(&array.len, syn::Expr::Lit(expr) if matches!(&expr.lit, syn::Lit::Int(length) if length.base10_digits() == "32"))
-        ));
-
-        for (attributes, type_name) in [
-            (&metadata.attrs, "LegacySelectorMetadata"),
-            (&digest.attrs, "CredentialDigest"),
-        ] {
-            for attribute in attributes {
-                if attribute.path().is_ident("derive")
-                    && let syn::Meta::List(derives) = &attribute.meta
-                {
-                    let derives = derives.tokens.to_string();
-                    assert!(
-                        !derives.contains("Serialize"),
-                        "{type_name} must not derive Serialize"
-                    );
-                    assert!(
-                        !derives.contains("Deserialize"),
-                        "{type_name} must not derive Deserialize"
-                    );
-                }
-            }
-        }
-
-        for (file, type_name) in [
-            (&deployment_file, "LegacySelectorMetadata"),
-            (&digest_file, "CredentialDigest"),
-        ] {
-            for item in &file.items {
-                if let Item::Impl(item_impl) = item
-                    && let Type::Path(self_type) = &*item_impl.self_ty
-                    && self_type.path.is_ident(type_name)
-                    && let Some((_, trait_path, _)) = &item_impl.trait_
-                {
-                    let trait_name = trait_path
-                        .segments
-                        .last()
-                        .map(|segment| segment.ident.to_string());
-                    assert!(
-                        !matches!(
-                            trait_name.as_deref(),
-                            Some("Display" | "Serialize" | "Deserialize")
-                        ),
-                        "{type_name} must not implement a formatting or serialization trait"
-                    );
-                }
-            }
+        for unproven_credential in ["top-level-key", "settings-token"] {
+            assert!(matches!(
+                cloudflare_router
+                    .load_routing_snapshot()
+                    .resolve_legacy_credential("credential-model", unproven_credential),
+                Err(ProviderError::ModelNotFound { .. })
+            ));
         }
     }
 }
