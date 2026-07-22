@@ -109,8 +109,9 @@ amendment；不得边实现边扩大 allowlist。
 
 Rust enum 的新增 variant 会使 crate 内既有穷尽匹配无法编译；完整 wire serde 若继续
 内联到已接近 hard ceiling 的 `responses_api.rs`，也会违反文件大小约束。因此 T1 允许
-使用 `core/types/codex.rs` 只承载 wire DTO/serde helper，并通过 `core/types/mod.rs`
-导出；同时允许修改 `responses.rs`、`openai_errors.rs` 和 lifecycle 的 struct
+使用 `core/types/codex.rs` 作为 Codex 类型命名空间，并在其中建立独立的 `wire`
+子模块，只承载 wire DTO/serde helper，再通过 `core/types/mod.rs` 导出；同时允许修改
+`responses.rs`、`openai_errors.rs` 和 lifecycle 的 struct
 construction / match 点，但范围严格限于：
 
 - 新 wire variant 在 canonical call ledger 合并前一律 fail closed，不投影为
@@ -120,14 +121,16 @@ construction / match 点，但范围严格限于：
 - lifecycle 只补齐新增 optional wire 字段的构造与穷尽匹配，T1 不改变 previous response
   的 call/output 恢复语义。
 
-T1 的 `core/types/codex.rs` 只能包含 wire struct、受限 unknown metadata 与 serde/error
-helper；禁止新增 `CodexTurn`、call ledger、projection map、provider-facing tool/message
-或 previous-response call 恢复。`CodexTurn` 与 call ledger 属于 T2，projection map 与
-provider-facing tool/message 属于 T3，previous-response call 恢复属于 T4。
+T1 的 `core/types/codex.rs` 只能包含独立 `wire` 子模块；该子模块只含 wire struct、
+受限 unknown metadata 与 serde/error helper。禁止新增 `CodexTurn`、call ledger、
+projection map、provider-facing tool/message 或 previous-response call 恢复。T2 在同一
+命名空间下新增独立 `domain` 子模块承载 `CodexTurn` 与 call ledger，且 domain 类型不得
+混入 `wire` 子模块。projection map 与 provider-facing tool/message 属于 T3，
+previous-response call 恢复属于 T4。
 
 ### 2. Canonical Codex turn
 
-新增 crate-private `src/core/types/codex.rs`，包含：
+在 crate-private `src/core/types/codex.rs` 的独立 `domain` 子模块中新增：
 
 - `CodexTurn`：有序 input items、tools、request flags 与来源 contract version。
 - `CodexCallKind`：`Function` / `Custom` 闭集。
