@@ -54,6 +54,11 @@ GH-838 / #838
    已能正确执行 0.x breaking release 后，才可在 0.7.0 删除 `BatchProcessor`。
 9. Batch removal 仅覆盖从未接入 gateway 的 `BatchProcessor` 持久化入口；`AsyncBatchExecutor`、共享 batch 类型、
    database schema 与历史记录不随之删除，除非后续 spec 另行批准。
+10. 0.7.0 的预定删除仅适用于已批准矩阵中标记为 `remove` 的行；`experimental-gate` 行在 0.7.0 之后仍保持
+    default-off feature gate，除非后续独立 spec 再批准删除。
+11. `user_management` 改为 default-off gate 之前，必须先迁移或重构 storage/SeaORM 对 legacy `User`/`Team`/
+    `Organization` 类型的无条件依赖，且不得丢失现有 legacy/canonical 数据同步语义；默认 SQLite/storage build
+    必须继续可编译。
 
 ## 验收标准
 
@@ -72,6 +77,10 @@ GH-838 / #838
   0.6.x 保留行为的 deprecation 窗口；`/v1/batches` provider proxy 不属于 removal，必须保持现有行为。
 - 0.7.0 removal 不得顺带删除 `AsyncBatchExecutor`、共享 batch 类型、database schema 或历史记录；这些对象若需处置，
   必须先有独立 spec 决策。
+- `user_management` 并非孤立模块：默认 `sqlite` 通过 `storage` 无条件编译 SeaORM 兼容桥接。在将模块改为
+  default-off 前，必须先解耦这些类型导入并保留数据同步行为。
+- `analytics` removal 同时是 Cargo 公开 feature surface 变更：除了模块与配置 knob，还必须删除
+  `analytics` feature、其在 `enterprise`/`full` 中的成员资格、docs.rs feature 发布面，并提供迁移说明。
 - `.specrail/runtime`、`docs/` 中引用这些子系统的历史文档：不追溯修改，只改能力宣传文档。
 
 ## 发布说明
@@ -79,4 +88,5 @@ GH-838 / #838
 若选择 remove/gate，CHANGELOG 需标注能力宣传的收缩；若被处理模块仍通过 `src/lib.rs` → `pub mod core`
 对外可导入，还需记录 semver/deprecation/迁移影响。即使 gateway 运行时路径原本不可达，也可能破坏下游
 库用户的 `litellm_rs::core::<module>` import。`BatchProcessor` 因此在 0.6.x 只做保留行为的 deprecation，
-并在版本工作流 breaking-release gate 与已验证 0.6 release 均满足后，才于 0.7.0 删除。
+并在版本工作流 breaking-release gate 与已验证 0.6 release 均满足后，才于 0.7.0 删除。其他 0.7.0 removal
+仅覆盖矩阵中的 `remove` 行；`experimental-gate` 行保持 default-off，后续若删除需另立 spec。

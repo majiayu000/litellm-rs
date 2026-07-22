@@ -82,26 +82,32 @@ git log --since=2026-04-06 --format='%h' -- src/core/<module>
 | mcp / a2a / realtime | experimental-gate（default-off） | 实现大、无路由，产品化是独立决策；realtime 在 feature 启用时保留 websockets |
 | webhooks | experimental-gate（default-off） | 已有 subscription / delivery processor / signing / HTTP POST 能力，但尚未挂 gateway event path |
 | semantic_cache | remove | 默认路径不可达，且现有 knob 不得继续成为 no-op 配置 |
-| analytics | remove | 默认路径不可达，且现有 knob 不得继续成为 no-op 配置 |
+| analytics | remove | 默认路径不可达；模块、knob、`analytics` Cargo feature、`enterprise`/`full` 成员资格与 docs.rs feature surface 必须成组清理 |
 | virtual_keys | wire | 已有迁移与 storage-backed CRUD，接入 gateway 管理/API 路径 |
-| audit logging | wire（默认关） | `AuditLogger` / `AuditMiddleware` 与配置必须真实挂入 runtime，默认不开启 |
-| user_management | experimental-gate（default-off） | storage-backed 用户/团队/组织域能力在产品化前不进入默认 gateway surface |
+| audit logging | wire（默认关） | `enterprise.audit_logging` 是 runtime enablement knob；启用时必须真实挂入 `AuditLogger` / `AuditMiddleware`，默认关闭时不执行 |
+| user_management | experimental-gate（default-off） | gate 前先迁移/重构 SeaORM 对 legacy `User`/`Team`/`Organization` 的无条件导入，保留 legacy/canonical 同步并确保默认 SQLite/storage build |
 
-仅 gate/remove 处置影响的 public surface 在 0.6.0 deprecated、0.7.0 removed；0.7.0 breaking removal 必须先通过
-version-workflow gate，并以已验证的 0.6 release/deprecation artifact 为前置证据。
+`remove` 行影响的 public surface 在 0.6.0 deprecated、0.7.0 removed；0.7.0 breaking removal 必须先通过
+version-workflow gate，并以已验证的 0.6 release/deprecation artifact 为前置证据。`experimental-gate` 行不在
+0.7.0 removal scope，它们保持 default-off gate，直到后续独立 spec 批准删除。
 
 **Phase 3 — 执行**
 
 - wire lane：每子系统一个 PR：`GatewayConfig` 字段 + `Default` + 校验 → 启动初始化（builder.rs）→
   中间件/路由挂载 → 行为测试（U-26 checklist 全项 + 子系统真实执行）。guardrails PR 必须用恶意输入/输出证明
-  engine 被调用并 enforcement；ip_access PR 必须用 sentinel handler/provider 证明 denied IP 不会执行下游副作用。
+  engine 被调用并 enforcement；ip_access PR 必须用 sentinel handler/provider 证明 denied IP 不会执行下游副作用；
+  audit logging PR 必须证明 `enterprise.audit_logging=true` 会构造并执行 `AuditLogger`/`AuditMiddleware`，false 仍是默认且不执行。
 - gate lane：`Cargo.toml` 真 default-off feature（`mcp = []` → gate `core/mcp` 的 `pub mod`，且不被 default
   features 间接启用；`storage` / `sqlite` 等默认或支持性 feature 不算 experimental gate）+ README/docs
   experimental 段；相关 config schema/env/example 同步 gate 或返回显式 validation error，避免用户配置 no-op knob；
-  若 public import 改变，同步 semver、CHANGELOG、deprecation/迁移说明。
+  若 public import 改变，同步 semver、CHANGELOG、deprecation/迁移说明。`user_management` gate 开始前必须先解耦
+  `src/storage/database/seaorm_db/{user_ops.rs,user_management_ops.rs,team_repository/**}` 及相关测试对 legacy 域类型的
+  无条件导入，迁移或重构兼容桥接而不得静默丢弃数据同步，并在 gate 关闭时保持默认 SQLite/storage build。
 - remove lane：删除模块 + `core/mod.rs` 清理 + README/CLAUDE.md/`docs/` 同步；若 public import 改变，
   同步删除/拒绝相关 config knobs（如 `cache.semantic_cache`、`enterprise.advanced_analytics`）并更新 examples，
-  同步 semver、CHANGELOG、deprecation/迁移说明。
+  同步 semver、CHANGELOG、deprecation/迁移说明。`analytics` removal 还必须删除 `Cargo.toml` 中的 `analytics`
+  feature，将其从 `enterprise`、`full`、`package.metadata.docs.rs.features` 移除，并在迁移说明中告知下游
+  用户停止传入 `--features analytics`。
 - batch remove lane 严格拆分：0.6.x tranche 只为公开 `BatchProcessor` 增加 deprecation/migration 说明，保持
   签名与行为不变，且不改 `/v1/batches` provider proxy；0.7.0 tranche 仅删除 `BatchProcessor` 公开入口与其
   专属实现，并以 version-workflow breaking-release fixture 和已验证 0.6 release 为硬依赖。
@@ -123,8 +129,8 @@ features 启用的支持 feature（例如 storage-backed cfg）仍按 gateway-fa
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | P2 wire 三要件 | config + builder + http.rs + request path | U-26 checklist 单测 + 子系统真实行为测试 |
-| P3 remove 干净 | core/mod.rs + README/CLAUDE.md/`docs/` + CHANGELOG | `cargo check --all-features` + 全量测试 + public import/semver 记录；batch 另需 0.6 release 与 0.7 workflow gate |
-| P4 gate 真实 | Cargo.toml + cfg + docs.rs feature 列表 + CHANGELOG | default-off feature 组合验证 + deprecation/迁移说明 |
+| P3 remove 干净 | core/mod.rs + Cargo.toml + README/CLAUDE.md/`docs/` + CHANGELOG | `cargo check --all-features` + 全量测试 + public import/semver 记录；analytics feature/bundle/docs.rs 清理；batch 另需 0.6 release 与 0.7 workflow gate |
+| P4 gate 真实 | Cargo.toml + cfg + docs.rs feature 列表 + CHANGELOG | default-off feature 组合验证 + deprecation/迁移说明 + user_management 默认 SQLite/storage 兼容测试 |
 | P5 安全默认 | guardrails/ip_access 配置 | 默认配置下中间件生效的集成测试 |
 | P6 守护常驻 | CI 检查 | 人为添加未接线模块的负测试 + library-only 模块正测试 |
 
@@ -148,6 +154,8 @@ observability 初始化必须在 server 启动前完成（tracing 全局注册�
 - Security: guardrails/ip_access 接线后默认开启可能改变现有部署行为——配置逃生门 + CHANGELOG。
 - Compatibility: gate/remove 改变 `--all-features` 的模块集合或 `litellm_rs::core::<module>` public import，
   需同步 semver、CHANGELOG、docs.rs feature 列表（Cargo.toml 已有先例）与 deprecation/迁移说明。
+- Compatibility: `user_management` 被 storage/SeaORM 兼容桥接无条件引用；直接 gate 会破坏默认 SQLite build
+  或丢失 legacy/canonical 数据同步，必须先迁移依赖。
 - Performance: wire lane 新增中间件在热路径上，需按 #842 的分配纪律实现。
 - Maintenance: 处置矩阵是一次性决策，守护检查防回归。
 
@@ -158,6 +166,9 @@ observability 初始化必须在 server 启动前完成（tracing 全局注册�
       batch 0.6 compatibility fixture 证明 `BatchProcessor` 行为不变，proxy fixture 证明 `/v1/batches` 仍走既有 provider upstream。
 - [ ] Observability integration tests: 对一条真实 chat/completion 请求注入 test integration，断言
       `on_llm_start` 与 `on_llm_end`/`on_llm_error` 被调用；`/metrics` 只能作为 HTTP middleware 辅助检查。
+- [ ] Audit logging integration tests: `enterprise.audit_logging=true` 时请求真实经过 audit logger/middleware，false 时不执行。
+- [ ] Gate/remove compatibility tests: `user_management` 关闭时默认 SQLite/storage 组合可编译且兼容桥接行为不丢失；
+      analytics removal 后 Cargo 不再宣告 `analytics` feature，`enterprise`/`full`/docs.rs 不再间接启用它。
 - [ ] Manual verification: `curl` 冒烟被 wire 的路由；Langfuse/OTel 或 test integration 记录请求生命周期事件。
 
 ## 回滚方案
