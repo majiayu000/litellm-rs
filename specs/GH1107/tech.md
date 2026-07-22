@@ -107,9 +107,11 @@ amendment；不得边实现边扩大 allowlist。
 
 #### T1 落地边界
 
-Rust enum 的新增 variant 会使 crate 内既有穷尽匹配无法编译，因此 T1 除 DTO 与 fixture
-外，允许修改 `responses.rs`、`openai_errors.rs` 和 lifecycle 的 struct construction /
-match 点，但范围严格限于：
+Rust enum 的新增 variant 会使 crate 内既有穷尽匹配无法编译；完整 wire serde 若继续
+内联到已接近 hard ceiling 的 `responses_api.rs`，也会违反文件大小约束。因此 T1 允许
+使用 `core/types/codex.rs` 只承载 wire DTO/serde helper，并通过 `core/types/mod.rs`
+导出；同时允许修改 `responses.rs`、`openai_errors.rs` 和 lifecycle 的 struct
+construction / match 点，但范围严格限于：
 
 - 新 wire variant 在 canonical call ledger 合并前一律 fail closed，不投影为
   assistant/tool chat message，也不发送 provider 请求；
@@ -118,8 +120,9 @@ match 点，但范围严格限于：
 - lifecycle 只补齐新增 optional wire 字段的构造与穷尽匹配，T1 不改变 previous response
   的 call/output 恢复语义。
 
-T1 禁止新增 `CodexTurn`、call ledger、projection map、provider-facing tool/message 或
-previous-response call 恢复：`CodexTurn` 与 call ledger 属于 T2，projection map 与
+T1 的 `core/types/codex.rs` 只能包含 wire struct、受限 unknown metadata 与 serde/error
+helper；禁止新增 `CodexTurn`、call ledger、projection map、provider-facing tool/message
+或 previous-response call 恢复。`CodexTurn` 与 call ledger 属于 T2，projection map 与
 provider-facing tool/message 属于 T3，previous-response call 恢复属于 T4。
 
 ### 2. Canonical Codex turn
