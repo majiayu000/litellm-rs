@@ -18,18 +18,33 @@ use crate::core::providers::{Provider, create_provider};
 /// intermediate state.
 ///
 /// The canonical OpenAI factory inserts a non-empty top-level `api_key` before
-/// merging settings and its builder consumes that exact value. Aliases,
+/// merging settings and its builder consumes that exact value. A custom
+/// Authorization header makes the upstream credential ambiguous. Aliases,
 /// settings-sourced credentials, catalog dispatch and provider-specific/env
 /// fallbacks remain intentionally unpublishable until D3Cb normalizes them at
 /// the construction boundary.
 fn proven_top_level_legacy_credential(config: &ProviderConfig) -> Option<&str> {
     let selector = config.provider_type.trim();
     let credential = config.api_key.as_str();
-    let has_competing_source = ["api_key", "api_token", "google_api_key", "gemini_api_key"]
+    let has_competing_credential = ["api_key", "api_token", "google_api_key", "gemini_api_key"]
         .into_iter()
         .any(|key| config.settings.contains_key(key));
+    let has_custom_authorization = ["headers", "custom_headers"].into_iter().any(|key| {
+        config
+            .settings
+            .get(key)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|headers| {
+                headers.iter().any(|(name, value)| {
+                    name.eq_ignore_ascii_case("authorization") && value.is_string()
+                })
+            })
+    });
 
-    (selector == "openai" && !credential.trim().is_empty() && !has_competing_source)
+    (selector == "openai"
+        && !credential.trim().is_empty()
+        && !has_competing_credential
+        && !has_custom_authorization)
         .then_some(credential)
 }
 
@@ -531,6 +546,27 @@ mod tests {
                 .resolve_legacy_credential("credential-model", "sk-settings-only"),
             Err(ProviderError::ModelNotFound { .. })
         ));
+
+        for (setting_key, authorization_header) in [
+            ("headers", "Authorization"),
+            ("custom_headers", "aUtHoRiZaTiOn"),
+        ] {
+            let mut custom_authorization = credential_test_provider(setting_key, "sk-top-level");
+            custom_authorization.settings.insert(
+                setting_key.to_string(),
+                serde_json::json!({authorization_header: "Bearer sk-custom-header"}),
+            );
+            let router = match Router::from_gateway_config(&[custom_authorization], None).await {
+                Ok(router) => router,
+                Err(error) => panic!("custom Authorization provider should build: {error}"),
+            };
+            assert!(matches!(
+                router
+                    .load_routing_snapshot()
+                    .resolve_legacy_credential("credential-model", "sk-top-level"),
+                Err(ProviderError::ModelNotFound { .. })
+            ));
+        }
 
         let mut cloudflare = credential_test_provider("cloudflare-conflict", "top-level-key");
         cloudflare.provider_type = "cloudflare".to_string();
