@@ -59,6 +59,10 @@ GH-838 / #838
 11. `user_management` 改为 default-off gate 之前，必须先迁移或重构 storage/SeaORM 对 legacy `User`/`Team`/
     `Organization` 类型的无条件依赖，且不得丢失现有 legacy/canonical 数据同步语义；默认 SQLite/storage build
     必须继续可编译。
+12. `semantic_cache` 与 `analytics` 必须先经过 0.6.x compatibility/deprecation tranche：保留现有 public import、
+    config 行为与 `analytics` Cargo feature/bundle/docs.rs 行为，同时增加 deprecation、CHANGELOG 与迁移证据。
+    只有在 `SP838-T7v` 版本工作流验证通过且该 deprecation 已有可验证 0.6 release artifact 后，
+    才可于 0.7.0 删除。
 
 ## 验收标准
 
@@ -81,6 +85,8 @@ GH-838 / #838
   default-off 前，必须先解耦这些类型导入并保留数据同步行为。
 - `analytics` removal 同时是 Cargo 公开 feature surface 变更：除了模块与配置 knob，还必须删除
   `analytics` feature、其在 `enterprise`/`full` 中的成员资格、docs.rs feature 发布面，并提供迁移说明。
+- `semantic_cache` / `analytics` 的 0.6.x tranche 不得预先删除公开模块、改变现有 config rejection/runtime 行为，
+  或让 `--features analytics`、`enterprise`、`full`、docs.rs 不再编译原有 analytics surface。
 - `.specrail/runtime`、`docs/` 中引用这些子系统的历史文档：不追溯修改，只改能力宣传文档。
 
 ## 发布说明
@@ -89,4 +95,5 @@ GH-838 / #838
 对外可导入，还需记录 semver/deprecation/迁移影响。即使 gateway 运行时路径原本不可达，也可能破坏下游
 库用户的 `litellm_rs::core::<module>` import。`BatchProcessor` 因此在 0.6.x 只做保留行为的 deprecation，
 并在版本工作流 breaking-release gate 与已验证 0.6 release 均满足后，才于 0.7.0 删除。其他 0.7.0 removal
-仅覆盖矩阵中的 `remove` 行；`experimental-gate` 行保持 default-off，后续若删除需另立 spec。
+仅覆盖矩阵中的 `remove` 行，且同样以 `SP838-T7v` 与含相应 deprecation 的已验证 0.6 release artifact
+为前置；`experimental-gate` 行保持 default-off，后续若删除需另立 spec。
