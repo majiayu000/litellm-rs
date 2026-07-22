@@ -41,7 +41,7 @@ GH-1107 / #1107
 - T7 在 T6 exact behavior 稳定后由 docs owner 独立写，不与 production owner 共享文件。
 - T8 是只读 reviewer/coordinator lane，不写 production/spec 文件。
 - 每个 writable task 使用独立 worktree 和单一 owner。若必须多 agent，文件所有权严格按 Files 列表分离；共享文件出现时改为串行。
-- 任一 tranche 超过 10 个非文档文件或 500 changed lines，先合并 spec amendment，禁止删除测试、压缩断言或扩大 allowlist 规避。
+- 任一 tranche 超过 10 个非文档文件或 500 changed lines，先合并 spec amendment，禁止删除测试、压缩断言或扩大 allowlist 规避。SP1107-T1 因独立复审新增完整 Tier 2 handler matrix 与 provider-dispatch=0 证据，并恢复正常 rustfmt、独立断言及注释，单独批准至最多 550 changed lines；仍限既有 8 个文件，且不得借此实现 T2/T3/T4 行为。
 
 ## 验证
 
