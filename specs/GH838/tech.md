@@ -18,6 +18,7 @@ Link to `product.md`.
 | 未接线子系统 | `src/core/{guardrails,ip_access,mcp,a2a,realtime,webhooks,semantic_cache,analytics,virtual_keys,observability,integrations,audit}` | 完整实现 + 测试，server/main 零引用 | 处置对象 |
 | 合法库 API | `src/lib.rs`、`src/core/{completion,function_calling,traits,secret_managers}` | 通过 `pub mod core`、prelude 或 provider 内部 trait 使用暴露，不需要 server 路由 | guard 必须区分 library-only 与 gateway-facing |
 | 公共模块导出 | `src/lib.rs`、`src/core/mod.rs` | `pub mod core` 暴露 `mcp`、`a2a`、`realtime` 等候选模块 | remove/gate 会影响下游 import，需 semver/CHANGELOG/deprecation |
+| 子系统 registry | `src/core/subsystem_registry.rs`、`src/core/subsystem_registry/tests.rs` | 登记 gateway-facing 决策、runtime path 与豁免/guard 期望 | gate/remove 后必须防止 stale registry/export claims |
 | Batch 半接线 | `src/server/routes/ai/batches.rs:41-95` vs `src/core/batch/processor/core.rs:71,143,181` | 路由纯透传；`BatchProcessor` 从未构造 | 半接线样本 |
 | 版本工作流 | `.github/workflows/version-bump.yml` | breaking commit 统一执行 major bump，0.x 会错误跨到 1.0.0；`git log --oneline` 不能可靠检测 commit body 中的 `BREAKING CHANGE:` | 所有 0.7.0 removal 的强制前置 |
 | virtual_keys | `src/core/virtual_keys/*`、`src/storage/database/migration/m20240301_000003_create_virtual_keys_table.rs`、`src/storage/database/seaorm_db/virtual_key_ops.rs` | 有迁移、manager 与 SeaORM CRUD；`src/core/mod.rs:49` 的 stub 注释已过期 | 应按「已实现但未挂 gateway」处置 |
@@ -101,11 +102,16 @@ version-workflow gate，并以已验证的 0.6 release/deprecation artifact 为�
 - gate lane：`Cargo.toml` 真 default-off feature（`mcp = []` → gate `core/mcp` 的 `pub mod`，且不被 default
   features 间接启用；`storage` / `sqlite` 等默认或支持性 feature 不算 experimental gate）+ README/docs
   experimental 段；相关 config schema/env/example 同步 gate 或返回显式 validation error，避免用户配置 no-op knob；
+  对 README.md、CLAUDE.md、`docs/README.md`、现存 `docs/protocols/**` 与 config surfaces 同时扫描
+  `mcp|a2a|realtime|webhooks|user_management`，每个命中都必须与 default-off experimental 处置一致，
+  不得继续宣称为默认或稳定能力；
   若 public import 改变，同步 semver、CHANGELOG、deprecation/迁移说明。`user_management` gate 开始前必须先解耦
   `src/storage/database/seaorm_db/{user_ops.rs,user_management_ops.rs,team_repository/**}` 及相关测试对 legacy 域类型的
   无条件导入，迁移或重构兼容桥接而不得静默丢弃数据同步，并在 gate 关闭时保持默认 SQLite/storage build。
 - remove lane：删除模块 + `core/mod.rs` 清理 + README/CLAUDE.md/`docs/` 同步；若 public import 改变，
   同步删除/拒绝相关 config knobs（如 `cache.semantic_cache`、`enterprise.advanced_analytics`）并更新 examples，
+  对 batch、`semantic_cache`、`analytics` 同步更新 `src/core/subsystem_registry.rs` 及对应 tests/exemptions，
+  删除或改写已不真实的 decision/runtime/export claims，并用 guard regression 证明无 stale registry entry；
   同步 semver、CHANGELOG、deprecation/迁移说明。`analytics` removal 还必须删除 `Cargo.toml` 中的 `analytics`
   feature，将其从 `enterprise`、`full`、`package.metadata.docs.rs.features` 移除，并在迁移说明中告知下游
   用户停止传入 `--features analytics`。
@@ -121,6 +127,7 @@ version-workflow gate，并以已验证的 0.6 release/deprecation artifact 为�
 - batch remove lane 严格拆分：0.6.x tranche 只为公开 `BatchProcessor` 增加 deprecation/migration 说明，保持
   签名与行为不变，且不改 `/v1/batches` provider proxy；0.7.0 tranche 仅删除 `BatchProcessor` 公开入口与其
   专属实现，并以 `SP838-T7v` breaking-release fixture 和已验证 0.6 release 为硬依赖。
+  0.7.0 tranche 还必须同步移除/改写 subsystem registry 中 `BatchProcessor` 的 stale runtime/export claim 并更新 guard tests。
   `AsyncBatchExecutor`、共享 batch 类型、database schema/history 不在该删除范围，除非独立 spec 另行批准。
 
 **Phase 4 — 守护检查**
@@ -139,7 +146,7 @@ features 启用的支持 feature（例如 storage-backed cfg）仍按 gateway-fa
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | P2 wire 三要件 | config + builder + http.rs + request path | U-26 checklist 单测 + 子系统真实行为测试 |
-| P3 remove 干净 | core/mod.rs + Cargo.toml + README/CLAUDE.md/`docs/` + CHANGELOG + version workflow | 0.6 public/config/feature compatibility fixtures + 0.6 release artifact + `SP838-T7v` + 0.7 removal 回归；analytics feature/bundle/docs.rs 清理 |
+| P3 remove 干净 | core/mod.rs + subsystem registry/guards + Cargo.toml + README/CLAUDE.md/`docs/` + CHANGELOG + version workflow | 0.6 public/config/feature compatibility fixtures + 0.6 release artifact + `SP838-T7v` + 0.7 removal/registry 回归；analytics feature/bundle/docs.rs 清理 |
 | P4 gate 真实 | Cargo.toml + cfg + docs.rs feature 列表 + CHANGELOG | default-off feature 组合验证 + deprecation/迁移说明 + user_management 默认 SQLite/storage 兼容测试 |
 | P5 安全默认 | guardrails/ip_access 配置 | 默认配置下中间件生效的集成测试 |
 | P6 守护常驻 | CI 检查 | 人为添加未接线模块的负测试 + library-only 模块正测试 |

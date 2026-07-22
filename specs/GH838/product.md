@@ -42,7 +42,9 @@ GH-838 / #838
    三者缺一即 CI 失败。
 3. 「remove」处置的子系统：删除后 `cargo check --all-features` 与全量测试通过，文档同步更新。
 4. 「experimental-gate」处置的子系统：模块被真实 default-off feature gate（默认不编译），README 标注
-   experimental 且不再出现在能力列表主表；`storage`、`sqlite` 等默认/支持性 feature 不能冒充实验 gate。
+   experimental 且不再出现在能力列表主表；`mcp`、`a2a`、`realtime`、`webhooks`、`user_management`
+   必须在 README.md、CLAUDE.md 与现存 docs/config 能力面统一标记 default-off experimental；`storage`、`sqlite`
+   等默认/支持性 feature 不能冒充实验 gate。
 5. 安全语义类子系统（guardrails、ip_access）若保留，必须默认接线或在配置显式关闭——不允许
    「代码在但从不执行」的中间态。
 6. remove/gate 若影响 `src/lib.rs` 暴露的 `pub mod core` 下公共模块，必须按 public API 变更处理：
@@ -63,6 +65,8 @@ GH-838 / #838
     config 行为与 `analytics` Cargo feature/bundle/docs.rs 行为，同时增加 deprecation、CHANGELOG 与迁移证据。
     只有在 `SP838-T7v` 版本工作流验证通过且该 deprecation 已有可验证 0.6 release artifact 后，
     才可于 0.7.0 删除。
+13. batch、`semantic_cache`、`analytics` 的 0.7 removal 必须同步更新 `src/core/subsystem_registry.rs`
+    与对应 guard tests/exemptions，删除或改写 stale registry/export claims；仅删模块而保留过期登记不算完成。
 
 ## 验收标准
 
