@@ -179,7 +179,9 @@ observability 初始化必须在 server 启动前完成（tracing 全局注册�
 - [ ] Audit logging integration tests: `enterprise.audit_logging=true` 时请求真实经过 audit logger/middleware，false 时不执行。
 - [ ] Gate/remove compatibility tests: `user_management` 关闭时默认 SQLite/storage 组合可编译且兼容桥接行为不丢失；
       analytics removal 后 Cargo 不再宣告 `analytics` feature，`enterprise`/`full`/docs.rs 不再间接启用它。
-- [ ] 0.6 remove-row compatibility tests: semantic_cache/analytics public import 可编译，config 行为不变，
+- [ ] 0.6 remove-row compatibility tests: semantic_cache/analytics public import assertions 在
+      `cargo test --test public_api_compat --features "providers-extended,analytics"` 下必须真实编译并执行，
+      不得再被模块级或测试级其他 `cfg` 剔除；config 行为不变，
       `cargo check --no-default-features --features analytics`、`cargo check --features enterprise`、`cargo check --features full` 通过。
 - [ ] Version policy fixtures: breaking `0.5.0 → 0.6.0`、`0.6.0 → 0.7.0`、`1.2.3 → 2.0.0`，并覆盖
       bang subject 与 `BREAKING CHANGE:` footer detection。
