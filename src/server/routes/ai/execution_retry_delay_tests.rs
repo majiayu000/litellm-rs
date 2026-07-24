@@ -226,6 +226,7 @@ async fn budget_fallback_ignores_retry_limit_and_keeps_same_provider_candidates(
 
 #[tokio::test]
 async fn unpriced_model_fallback_skips_candidate_without_recording_failure() {
+    let _metrics_guard = crate::server::middleware::MetricsMiddleware::test_lock().await;
     crate::server::middleware::reset_unpriced_metrics_for_tests();
     let router = build_same_provider_budget_fallback_router(0).await;
     let attempts = Arc::new(Mutex::new(Vec::new()));

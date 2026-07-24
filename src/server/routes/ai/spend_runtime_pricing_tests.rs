@@ -377,8 +377,9 @@ fn reserve_completion_budget_rejects_missing_pricing_when_budget_manager_disable
     assert!(super::is_model_not_priced_error(&error));
 }
 
-#[test]
-fn reserve_completion_budget_reject_records_unpriced_metric() {
+#[tokio::test]
+async fn reserve_completion_budget_reject_records_unpriced_metric() {
+    let _metrics_guard = crate::server::middleware::MetricsMiddleware::test_lock().await;
     crate::server::middleware::reset_unpriced_metrics_for_tests();
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
@@ -433,6 +434,7 @@ fn reserve_completion_budget_allow_unpriced_uses_fallback_per_1k_units() {
 
 #[tokio::test]
 async fn settle_unpriced_usage_records_unpriced_spend_metric() {
+    let _metrics_guard = crate::server::middleware::MetricsMiddleware::test_lock().await;
     crate::server::middleware::reset_unpriced_metrics_for_tests();
     let budget = UnifiedBudgetLimits::new();
     let keys = KeyManager::new(InMemoryKeyRepository::new());
