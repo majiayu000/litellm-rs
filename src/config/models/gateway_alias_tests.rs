@@ -49,11 +49,14 @@ fn model_aliases_default_and_serde_are_backward_compatible() {
 
 #[test]
 fn model_alias_merge_is_key_wise_with_overlay_wins() {
-    let mut base = GatewayConfig::default();
-    base.model_aliases = alias_map(&[("stable", "model-v1"), ("base-only", "base-model")]);
-
-    let mut overlay = GatewayConfig::default();
-    overlay.model_aliases = alias_map(&[("stable", "model-v2"), ("overlay-only", "overlay-model")]);
+    let base = GatewayConfig {
+        model_aliases: alias_map(&[("stable", "model-v1"), ("base-only", "base-model")]),
+        ..Default::default()
+    };
+    let overlay = GatewayConfig {
+        model_aliases: alias_map(&[("stable", "model-v2"), ("overlay-only", "overlay-model")]),
+        ..Default::default()
+    };
 
     let merged = base.clone().merge(overlay);
     assert_eq!(

@@ -268,7 +268,7 @@ impl Router {
             );
         }
         let mut aliases = normalized_aliases.iter().collect::<Vec<_>>();
-        aliases.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        aliases.sort_unstable_by_key(|(alias, _)| *alias);
         for (alias, target) in aliases {
             router.add_model_alias(alias, target)?;
             #[cfg(test)]
