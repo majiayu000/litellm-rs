@@ -5,8 +5,9 @@
 GH-1108 / #1108
 
 - `complexity: large`
-- `spec_approval: auto_draft`
-- `approval_source: 2026-07-26 current conversation ("implxauto解决所有的issue和prs")`
+- `spec_approval: pending_maintainer`
+- `draft_source: 2026-07-26 current conversation ("implxauto解决所有的issue和prs")`
+- `required_approval: maintainer approval bound to the final spec head`
 
 ## 用户问题
 
@@ -31,9 +32,12 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   <https://ai.google.dev/gemini-api/docs/changelog>
 - exact IDs、1,048,576 input limit、65,536 output limit、采样参数迁移与 prefill 约束：
   <https://ai.google.dev/gemini-api/docs/latest-model>
+- 两个模型的 exact model page 与能力证据：
+  <https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash>、
+  <https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite>
 - 当前 lifecycle/shutdown 状态：
   <https://ai.google.dev/gemini-api/docs/deprecations>
-- Developer API 定价：
+- Gemini Developer API 定价（paid Standard tier）：
   <https://ai.google.dev/gemini-api/docs/pricing>
 
 证据只证明 Gemini Developer API，不证明 Vertex AI availability。
@@ -55,6 +59,8 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 - 不实现 GH1112 的共享 Google catalog ownership、Vertex overlay 或认证收敛。
 - 不实现 GH1111 的完整 `ToolUse` / `ToolResult` 回路。
 - 不实现 GH1113 的 pricing authority、unknown-cost 或 spend/budget 语义收敛。
+- 不把 Gemini Developer API paid Standard 的价格推断为 Batch、Flex 或 Priority tier
+  价格，也不在本 issue 增加这些 tier 的计费契约。
 - 不自动联网刷新目录，不在正常构建、测试或运行时隐式执行 live smoke。
 
 ## Behavior Invariants
@@ -63,9 +69,11 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    公开 `gemini-3.6-flash` 与 `gemini-3.5-flash-lite`；前后缀、大小写变体或相似名称
    不得命中这两个模型。
 2. **B-002** `gemini-3.6-flash` 必须公开 1,048,576 input token limit、65,536 output
-   token limit、每百万 input tokens 1.50 USD、每百万 output tokens 7.50 USD；
+   token limit、Gemini Developer API paid Standard tier 每百万 input tokens 1.50 USD、
+   每百万 output tokens 7.50 USD；
    `gemini-3.5-flash-lite` 必须公开相同 token limits、0.30 USD input 与 2.50 USD
-   output。价格单位必须明确为每百万 tokens，不能与 per-token 值混用。
+   output。价格单位必须明确为每百万 tokens，不能与 per-token 值混用；Batch、Flex、
+   Priority 或其他 tier 不得复用这些值并宣称已由本 invariant 验证。
 3. **B-003** 一个 Developer API chat model 只有在 exact ID、当前 lifecycle 和通用
    chat 入口均有 Google 官方正证据时才可被公开；retired、shutdown、unverified、
    仅属于其他产品或只有近似名称的条目必须 fail closed 为不公开。
@@ -74,15 +82,21 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    缺失、冲突或过期到已越过 shutdown date 的证据不得降级为“继续沿用旧目录”。
 5. **B-005** 对 `gemini-3.6-flash`、`gemini-3.5-flash-lite` 以及显式声明采用同一后续
    契约的模型，supported params 不得包含 `temperature`、`top_p`、`top_k`；
-   用户显式提供这些参数时必须在网络前返回稳定的 OpenAI-compatible
-   invalid-request 错误，不得静默删除、忽略或透传。
+   请求省略字段或显式 JSON `null` 经现有 `Option` DTO 反序列化后均视为 absent，允许
+   继续且最终 upstream body 必须省略字段；任何 non-null 值（包括看似默认的数值）
+   必须在网络前返回稳定的 OpenAI-compatible invalid-request 错误，不得静默删除、
+   忽略或透传。
 6. **B-006** 对 B-005 模型，最后一个非空 conversation turn 为 `model`/assistant
    turn 时必须在网络前拒绝；尾部空内容不得改变“最后一个非空 turn”的判定，
-   合法 user/tool turn 结尾保持可调用。
+   user/tool turn 结尾不得被本 issue 新增的 prefill gate 拒绝。既有 Gemini
+   `ToolUse`/`ToolResult` 序列化与完整 tool-loop callability 仍归 GH1111，不是本
+   invariant 的通过条件，也不是 GH1108 implementation dependency。
 7. **B-007** provider 公布的 supported params、preflight validation 和最终 upstream
    request body 必须一致；任何一层不能重新加入已拒绝字段，也不能绕过 prefill gate。
 8. **B-008** 新模型的 pricing/cost lookup 必须返回 B-002 的确定值并保持单位一致；
-   其他 unknown model 的全局 pricing 行为不得由本 issue 改写或伪装为已知零成本。
+   这些值只代表 Gemini Developer API paid Standard tier；Batch、Flex、Priority 与
+   其他 unknown model/tier 的全局 pricing 行为不得由本 issue 改写、复用或伪装为
+   已知零成本。
 9. **B-009** catalog 列表必须稳定排序、无重复；同一不可变证据输入在重复或并发读取时
    返回相同 ID、metadata、价格和请求契约。
 10. **B-010** live smoke 默认关闭，只能由文档声明的单一显式 opt-in 环境变量开启；
@@ -104,17 +118,28 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 16. **B-016** catalog refresh 必须保留 evidence reviewed-at 与官方 source URL；官方
     页面互相冲突、来源不可访问或模型只存在于非官方二手资料时按 B-003 fail closed，
     不能以 live smoke 单次成功替代 lifecycle/source 记录。
+17. **B-017** 两个新模型公开的 `ModelInfo.capabilities` 必须恰为闭合集
+    `{ChatCompletion, ChatCompletionStream, ToolCalling, FunctionCalling}`；model feature
+    flags 必须恰为闭合集
+    `{MultimodalSupport, ToolCalling, FunctionCalling, StreamingSupport, ContextCaching,
+    SystemInstructions, JsonMode, SearchGrounding, VideoUnderstanding,
+    AudioUnderstanding}`。任何集合外能力均 fail closed 为不广告，尤其包括
+    CodeExecution、BatchProcessing、Realtime API/streaming、Computer Use、audio/image
+    generation、Live 与 Interactions；`AudioUnderstanding`/`VideoUnderstanding` 不能被
+    解释为 generation 能力。
 
 ## 验收标准
 
-- [ ] 两个新 exact model ID 的 Developer API metadata、limits、能力与价格符合
-      B-001/B-002，并有 registry 与 cost 行为测试。
+- [ ] 两个新 exact model ID 的 Developer API metadata、limits、能力闭合集与 paid
+      Standard 价格符合 B-001/B-002/B-017，并有 registry 与 cost 行为测试；Batch/Flex/
+      Priority 不在该价格断言范围内。
 - [ ] 当前 Developer chat catalog 的每个公开 ID 都有 B-004 disposition；shutdown、
       unverified 与 other-product fixture 不被公开。
-- [ ] 新契约模型的 supported params 与最终请求体均不含三项废弃采样参数，显式输入时
-      在网络前得到稳定错误。
-- [ ] model-turn prefill 的空/非空、合法 user/tool 结尾和 direct-client/provider
-      入口均由无网络负例覆盖。
+- [ ] 新契约模型的 supported params 与最终请求体均不含三项废弃采样参数；省略或显式
+      JSON `null` 视为 absent，任何 non-null 输入在网络前得到稳定错误。
+- [ ] model-turn prefill 的空/非空、user/tool 结尾不被新增 gate 拒绝，以及
+      direct-client/provider 入口均由无网络 fixture 覆盖；完整 tool-loop callability
+      明确不作为 GH1108 acceptance。
 - [ ] catalog 重复/并发读取稳定排序且 metadata/price/contract 一致。
 - [ ] opt-in live smoke 对 list/get/minimal-call 三层结果产生 typed artifact，失败分类
       闭合，取消/中断不产生伪成功。
@@ -137,16 +162,17 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 | Concurrency / race / ordering | covered: B-009。目录与契约为稳定不可变快照。 |
 | Retry / repetition / idempotency | covered: B-009、B-014。重复目录读取幂等，smoke retry 不复用部分成功。 |
 | Illegal state transitions | covered: B-003、B-004、B-011。无证据/部分 smoke 不能变为 advertised/passed。 |
-| Compatibility / migration | covered: B-005、B-007、B-015。明确行为收紧，其余模型与入口保持兼容。 |
-| Degradation / fallback | covered: B-003、B-005、B-016。旧目录、silent drop、二手资料和近似 ID 均不能冒充成功。 |
-| Evidence and audit integrity | covered: B-004、B-011、B-012、B-016。每个公开 ID 与 smoke 结论都绑定可审计证据。 |
+| Compatibility / migration | covered: B-005、B-007、B-015、B-017。明确行为收紧与新模型能力闭合集，其余模型与入口保持兼容。 |
+| Degradation / fallback | covered: B-003、B-005、B-016、B-017。旧目录、silent drop、二手资料、近似 ID 和未兑现能力均不能冒充成功。 |
+| Evidence and audit integrity | covered: B-004、B-011、B-012、B-016、B-017。每个公开 ID、能力与 smoke 结论都绑定可审计证据。 |
 | Cancellation / interruption / partial completion | covered: B-014。中断 smoke 保留部分事实但整体不通过。 |
 
 ## 边界情况
 
 - `gemini-3.6-flash-preview`、`Gemini-3.6-Flash` 与
   `foo-gemini-3.6-flash` 均不能命中 stable exact ID。
-- 用户显式提供值为 `null`、默认值或非默认值的废弃采样参数时，均按 B-005 处理；
+- 省略废弃采样字段或显式提供 JSON `null` 在现有 `Option` DTO 中均视为 absent，最终
+  upstream body 省略该字段；默认或非默认的任何 non-null 数值均按 B-005 拒绝，
   “值看起来无害”不能恢复支持。
 - 多个尾部空 turn 之后仍以最近的非空 `model` turn 判定 prefill。
 - list-models 出现但 lifecycle 页面未提供通用 chat 正证据时保持不公开，并记录冲突。
