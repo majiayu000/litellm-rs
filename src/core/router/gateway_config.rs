@@ -262,13 +262,25 @@ impl Router {
                 Some(metadata) => router.add_gateway_deployment(deployment, metadata),
                 None => router.add_deployment(deployment),
             }
+            #[cfg(test)]
+            gateway_alias_tests::observe_construction(
+                gateway_alias_tests::ConstructionEvent::RoutingSnapshotPublication,
+            );
         }
         let mut aliases = normalized_aliases.iter().collect::<Vec<_>>();
         aliases.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         for (alias, target) in aliases {
             router.add_model_alias(alias, target)?;
+            #[cfg(test)]
+            gateway_alias_tests::observe_construction(
+                gateway_alias_tests::ConstructionEvent::RoutingSnapshotPublication,
+            );
         }
 
+        #[cfg(test)]
+        gateway_alias_tests::observe_construction(
+            gateway_alias_tests::ConstructionEvent::HealthCheckPhaseEntry,
+        );
         router.start_configured_health_checks()?;
         Ok(router)
     }
