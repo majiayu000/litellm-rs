@@ -29,6 +29,8 @@ providers:
     api_key: "${OPENAI_API_KEY}"
     base_url: "https://api.openai.com/v1"
     weight: 10.0
+    # Lower values win when router.strategy is priority_based.
+    priority: 0
     rpm: 1000
     tpm: 100000
     max_concurrent_requests: 100
@@ -52,6 +54,19 @@ providers:
     tags: ["primary", "production"]
     enabled: true
 
+  # Serves the same canonical models as the primary deployment, but is only
+  # selected after priority-0 deployments are unavailable.
+  - name: "openai-fallback"
+    provider_type: "openai"
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    priority: 10
+    models:
+      - "gpt-4o"
+      - "gpt-4.1-mini"
+    tags: ["fallback", "production"]
+    enabled: true
+
   - name: "anthropic-backup"
     provider_type: "anthropic"
     api_key: "${ANTHROPIC_API_KEY}"
@@ -67,8 +82,14 @@ providers:
     tags: ["backup"]
     enabled: true
 
+# Public names may target a canonical model or another alias. Valid chains are
+# flattened to their final enabled canonical model during startup.
+model_aliases:
+  production-chat: "gpt-4o"
+  stable-chat: "production-chat"
+
 router:
-  strategy: "latency_based"
+  strategy: "priority_based"
   circuit_breaker:
     failure_threshold: 5
     recovery_timeout: 60

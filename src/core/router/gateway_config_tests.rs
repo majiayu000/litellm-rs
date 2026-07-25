@@ -230,6 +230,6 @@ fn credential_resolver_and_construction_source_guards() {
         }
     }
     let gateway = include_str!("gateway_config.rs");
-    let construction = function(gateway, "pub async fn from_gateway_config(");
+    let construction = function(gateway, "pub async fn from_gateway_config_with_aliases(");
     assert_eq!(construction.matches("create_provider(").count(), 1);
 }

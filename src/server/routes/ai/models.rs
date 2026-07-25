@@ -5,6 +5,7 @@ use crate::core::router::UnifiedRouter;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpResponse, Result as ActixResult, web};
+use std::collections::BTreeSet;
 use tracing::{debug, error};
 
 use super::openai_errors;
@@ -58,8 +59,13 @@ pub async fn get_model(
 /// Get all models from UnifiedRouter
 pub async fn get_models_from_router(router: &UnifiedRouter) -> Result<Vec<Model>, GatewayError> {
     let mut models = Vec::new();
+    let model_names = router
+        .list_models()
+        .into_iter()
+        .chain(router.model_aliases().into_keys())
+        .collect::<BTreeSet<_>>();
 
-    for model_name in router.list_models() {
+    for model_name in model_names {
         let owned_by = router
             .get_deployments_for_model(&model_name)
             .into_iter()
@@ -78,7 +84,6 @@ pub async fn get_models_from_router(router: &UnifiedRouter) -> Result<Vec<Model>
         });
     }
 
-    models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
 }
 
@@ -102,4 +107,48 @@ pub async fn get_model_from_router(
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::models::provider::ProviderConfig;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn model_inventory_contains_sorted_unique_aliases_and_canonical_models() {
+        let provider = ProviderConfig {
+            name: "primary".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["gpt-4o".to_string()],
+            ..ProviderConfig::default()
+        };
+        let aliases = HashMap::from([
+            ("stable-chat".to_string(), "gpt-4o".to_string()),
+            ("chat".to_string(), "stable-chat".to_string()),
+        ]);
+        let router = UnifiedRouter::from_gateway_config_with_aliases(&[provider], None, &aliases)
+            .await
+            .expect("inventory fixture router should build");
+
+        let models = get_models_from_router(&router)
+            .await
+            .expect("model inventory should build");
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["chat", "gpt-4o", "stable-chat"]
+        );
+        assert!(models.iter().all(|model| model.owned_by == "primary"));
+
+        let alias = get_model_from_router(&router, "chat")
+            .await
+            .expect("alias lookup should succeed")
+            .expect("configured alias should be discoverable");
+        assert_eq!(alias.id, "chat");
+        assert_eq!(alias.owned_by, "primary");
+    }
 }
