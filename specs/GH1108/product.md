@@ -103,7 +103,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    按 B-005 排除；当前 serializer 未兑现的 `tools`、`tool_choice`、`response_format`
    与 `max_completion_tokens` 同样排除。provider 公布值、preflight、parameter mapping
    与 serializer/transport disposition 必须对该闭集相等，不能仅保持彼此一致却全部
-   拒绝，也不能把 map passthrough 冒充实际支持。
+   拒绝，也不能把 map passthrough 冒充实际支持。`stream_options` 不是模型参数，而是
+   gateway streaming settlement metadata：只有 `stream=true` 时才允许出现，gateway
+   必须在 provider allowlist 前按闭合 wire shape 识别并消费它，生成
+   `include_usage=true` 的 canonical settlement metadata；它不得加入上述 positive
+   allowlist，也不得进入 Gemini upstream body。未知字段、非 boolean `include_usage`、
+   与非 streaming 请求并存或内部 canonical metadata 不一致时均必须在网络前 fail
+   closed，非 streaming 请求不得借此绕过 provider contract。
 8. **B-008** 新模型的 pricing/cost lookup 必须返回 B-002 的确定值并保持单位一致；
    这些值只代表 Gemini Developer API paid Standard tier；Batch、Flex、Priority 与
    其他 unknown model/tier 的全局 pricing 行为不得由本 issue 改写、复用或伪装为
@@ -121,7 +127,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     `{auth, quota, not_found, protocol, network}`。已发出的 transport 请求达到 deadline
     timeout 必须是 `status=failed`、`error_class=network`，并记录 timeout termination；
     任一必需步骤未执行必须是 `status=failed`、`error_class=protocol`，并记录
-    missing-step termination，不得报告整体通过。
+    missing-step termination，不得报告整体通过。每个 step 还必须保存 credential-free、
+    closed typed `observation`，而不是只保存 verdict/status 或不可复原的 hash：静态
+    observation 记录 exact ID、catalog/lifecycle、limits、paid Standard pricing、
+    capabilities/features 与 evidence；list/get observation 记录请求 exact ID、远端
+    exact match/resource/methods/limits；minimal-call observation 记录请求 exact ID、
+    response model version、candidate/finish/text 与 usage token facts。passed record 缺少
+    对应 step 的必需 observation 字段时必须按 protocol failure 处理。
 12. **B-012** live smoke、错误、Debug/Display、命令回显和持久化 artifact 均不得包含
     API key 或其他 credential；redaction 负例必须安装 captured tracing subscriber，
     并用 sentinel 凭证证明 tracing、stdout、stderr、error、Debug 与 artifact 所有
@@ -131,10 +143,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     Developer API 正证据，也不能由本 spec 改变 Vertex 行为。
 14. **B-014** live smoke 被取消、中断或部分完成时必须保留已完成步骤与终止原因，
     typed artifact 每条记录必须包含同一 invocation 的 non-empty `run_id` 和可审计的
-    `termination_reason`。只有外部 cancel/interruption 为
+    `termination_reason`，以及 B-011 的 typed `observation` 与
+    `observation_sha256` canonical digest；digest 不能替代 observation。只有外部
+    cancel/interruption 为
     `status=incomplete` 且 `error_class` 缺失；transport deadline 按 B-011 归
     `failed/network`。每次重试必须生成不同 run_id，不得复用旧凭证输出或把先前部分
-    成功冒充当前完整通过。
+    成功冒充当前完整通过。任一 observation fact 不同都必须产生不同 canonical
+    observation/digest，不能落成相同的成功记录。
 15. **B-015** 除明确列出的新模型、evidence disposition 和新请求契约外，已有仍受支持
     模型的 exact ID、能力、合法参数、认证、endpoint 与响应转换保持兼容；不因刷新
     意外删除或改变无关模型。
@@ -142,14 +157,17 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     页面互相冲突、来源不可访问或模型只存在于非官方二手资料时按 B-003 fail closed，
     不能以 live smoke 单次成功替代 lifecycle/source 记录。
 17. **B-017** 两个新模型公开的 `ModelInfo.capabilities` 必须恰为闭合集
-    `{ChatCompletion, ChatCompletionStream, ToolCalling, FunctionCalling}`；model feature
+    `{ChatCompletion, ChatCompletionStream}`，`supports_tools=false`；model feature
     flags 必须恰为闭合集
-    `{MultimodalSupport, ToolCalling, FunctionCalling, StreamingSupport, ContextCaching,
-    SystemInstructions, JsonMode, SearchGrounding, VideoUnderstanding,
-    AudioUnderstanding}`。任何集合外能力均 fail closed 为不广告，尤其包括
-    CodeExecution、BatchProcessing、Realtime API/streaming、Computer Use、audio/image
-    generation、Live 与 Interactions；`AudioUnderstanding`/`VideoUnderstanding` 不能被
-    解释为 generation 能力。
+    `{MultimodalSupport, StreamingSupport, ContextCaching, SystemInstructions,
+    SearchGrounding, VideoUnderstanding, AudioUnderstanding}`。公开 metadata 只能反映
+    本 provider 当前可调用面，Google 产品页面声明能力不能替代本 provider serializer/
+    transport 证据。由于当前 transformer 不消费 `tools`、`tool_choice` 或
+    `response_format`，两个新模型不得广告 ToolCalling、FunctionCalling 或 JsonMode；
+    这些能力留给 GH1111 或后续契约完成后再独立启用。任何其他集合外能力也 fail closed
+    为不广告，尤其包括 CodeExecution、BatchProcessing、Realtime API/streaming、
+    Computer Use、audio/image generation、Live 与 Interactions；
+    `AudioUnderstanding`/`VideoUnderstanding` 不能被解释为 generation 能力。
 
 ## 验收标准
 
@@ -168,14 +186,18 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 - [ ] 两个新模型的 positive parameter allowlist 精确等于
       `{max_tokens, stop, stream}`；tools/tool_choice/response_format/max_completion_tokens
       与三项 deprecated sampling params 均不在集合，provider/preflight/map/serializer
-      fixture 对集合和值去向完全一致。
+      fixture 对集合和值去向完全一致；gateway `stream_options.include_usage=true` 在
+      allowlist 前被消费并到达 streaming transport、从不进入 upstream body，非法/
+      不一致 metadata 与 non-stream 组合均 pre-network 拒绝。
 - [ ] catalog 重复/并发读取稳定排序且 metadata/price/contract 一致。
 - [ ] live opt-in/credential 2×2 fixture 精确覆盖双缺失、仅 sentinel
       `GEMINI_API_KEY`、仅 `LITELLM_RS_LIVE_GEMINI=1` 且所有 Developer credential
       aliases unset，三个组合均 network counter=0；双满足才可进入 fake/显式真实
       transport。
 - [ ] opt-in live smoke 对 list/get/minimal-call 三层结果产生含 `run_id`、
-      `termination_reason` 的 closed typed artifact；transport timeout 为
+      `termination_reason`、step-specific typed `observation` 及 canonical digest 的
+      closed typed artifact；静态/list/get/minimal-call 的实际 facts 均可审计且不是
+      hash-only，不同 observation 不产生相同成功记录；transport timeout 为
       failed/network，外部 cancel/interruption 为无 error_class 的 incomplete，重试
       使用新 run_id。
 - [ ] captured tracing subscriber 下，sentinel 凭证在 tracing、stdout、stderr、错误、
@@ -199,7 +221,7 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 | Illegal state transitions | covered: B-003、B-004、B-011。无证据/部分 smoke 不能变为 advertised/passed。 |
 | Compatibility / migration | covered: B-005、B-007、B-015、B-017。明确行为收紧与新模型能力闭合集，其余模型与入口保持兼容。 |
 | Degradation / fallback | covered: B-003、B-005、B-016、B-017。旧目录、silent drop、二手资料、近似 ID 和未兑现能力均不能冒充成功。 |
-| Evidence and audit integrity | covered: B-004、B-011、B-012、B-016、B-017。每个公开 ID、能力与 smoke 结论都绑定可审计证据。 |
+| Evidence and audit integrity | covered: B-004、B-011、B-012、B-014、B-016、B-017。每个公开 ID、能力与 smoke 结论都绑定可审计、可复原的 typed observation；hash-only 不构成证据。 |
 | Cancellation / interruption / partial completion | covered: B-011、B-014。transport timeout 为 failed/network；只有外部 cancel/interruption 为无 error_class incomplete。 |
 
 ## 边界情况
@@ -217,10 +239,15 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   user+system 产生 user contents + systemInstruction，可通过 prefill gate。
 - `max_tokens`/`stop` 的 body mapping 与 `stream` transport selection 是新模型仅有的三项
   positive params；tools/tool_choice 的 passthrough、response_format/max_completion_tokens
-  的字段存在都不能冒充 serializer support。
+  的字段存在都不能冒充 serializer support。`stream_options` 是 gateway metadata 而非
+  第四个 provider param；stream=true 的 canonical include_usage=true 可到达 stream
+  transport 但不得进入 upstream body，non-stream + stream_options 必须拒绝。
 - opt-in=1 但 key unset 与 key set 但 opt-in unset 均必须零网络；transport deadline
   timeout 记录 failed/network，新 retry 使用新 run_id；外部 cancel/interruption 才是
   无 error_class incomplete。
+- live artifact 必须保存 static/list/get/minimal-call 的 typed facts；只保存
+  passed/failed、只保存 digest，或把两个不同 response observations canonicalize 成同一
+  成功记录均失败。
 - list-models 出现但 lifecycle 页面未提供通用 chat 正证据时保持不公开，并记录冲突。
 - live minimal call 成功但静态价格/limits 不匹配时 smoke 整体失败，不能用连通性覆盖
   metadata 漂移。
