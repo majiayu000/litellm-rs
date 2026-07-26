@@ -465,6 +465,9 @@ pub struct GatewayConfig {
     pub server: ServerConfig,
     /// Provider configurations
     pub providers: Vec<ProviderConfig>,
+    /// Public model aliases resolved by the runtime router
+    #[serde(default)]
+    pub model_aliases: HashMap<String, String>,
     /// Router configuration
     pub router: GatewayRouterConfig,
     /// Storage configuration
@@ -507,6 +510,7 @@ impl Default for GatewayConfig {
             schema_version: default_schema_version(),
             server: ServerConfig::default(),
             providers: Vec::new(),
+            model_aliases: HashMap::new(),
             router: GatewayRouterConfig::default(),
             storage: StorageConfig::default(),
             auth: AuthConfig::default(),
@@ -645,6 +649,7 @@ impl GatewayConfig {
         }
 
         self.providers = provider_map.into_values().collect();
+        self.model_aliases.extend(other.model_aliases);
         self.router = self.router.merge(other.router);
         self.storage = self.storage.merge(other.storage);
         self.auth = self.auth.merge(other.auth);
@@ -786,3 +791,7 @@ mod tests;
 #[cfg(test)]
 #[path = "gateway_pricing_tests.rs"]
 mod pricing_tests;
+
+#[cfg(test)]
+#[path = "gateway_alias_tests.rs"]
+mod alias_tests;

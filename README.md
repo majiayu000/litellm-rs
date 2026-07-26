@@ -87,6 +87,38 @@ The gateway router config maps these fields into the runtime router:
 
 `router.load_balancer.sticky_sessions` and `router.load_balancer.session_timeout` are reserved for future session affinity. Non-default values fail config validation until runtime affinity is implemented.
 
+Gateway YAML can publish stable model names and deterministic primary/fallback
+tiers:
+
+```yaml
+providers:
+  - name: openai-primary
+    provider_type: openai
+    api_key: "${OPENAI_API_KEY}"
+    models: [gpt-4o]
+    priority: 0
+  - name: openai-fallback
+    provider_type: openai
+    api_key: "${OPENAI_API_KEY}"
+    models: [gpt-4o]
+    priority: 10
+
+model_aliases:
+  production-chat: gpt-4o
+  stable-chat: production-chat
+
+router:
+  strategy: priority_based
+```
+
+Alias chains are validated and flattened at startup; empty values, cycles,
+canonical-name collisions, and targets without an enabled deployment fail
+startup. Alias names appear in `/v1/models` alongside canonical models. Lower
+numeric `priority` wins under `priority_based`; omitted provider priorities
+default to `0`. When rolling back to a binary that predates these fields,
+remove `model_aliases` and `priority` from YAML before rolling back the binary,
+because unknown fields are rejected.
+
 #### Core Subsystem Runtime Status
 
 Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src/core/subsystem_registry.rs), and tests assert that every module exported from `src/core/mod.rs` is either referenced by the gateway runtime or explicitly classified. The current issue-838 subsystem decisions are:

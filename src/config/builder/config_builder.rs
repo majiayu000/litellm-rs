@@ -70,6 +70,7 @@ impl GatewayConfigBuilder {
             auth: self.auth.unwrap_or_default(),
             storage: self.storage.unwrap_or_default(),
             providers: self.providers,
+            model_aliases: HashMap::new(),
             router: crate::config::models::router::GatewayRouterConfig::default(),
             monitoring: crate::config::models::monitoring::MonitoringConfig::default(),
             cache: crate::config::models::cache::CacheConfig::default(),

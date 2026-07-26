@@ -73,8 +73,9 @@ async fn proxy_moderation(
     req: &HttpRequest,
     mut request: Value,
 ) -> Result<HttpResponse, GatewayError> {
-    let resolved_model = validate_moderation_request(&request)?;
-    super::context::enforce_api_key_model_and_token_limits(req, &resolved_model, None)?;
+    let requested_model = validate_moderation_request(&request)?;
+    super::context::enforce_api_key_model_and_token_limits(req, &requested_model, None)?;
+    let resolved_model = state.unified_router.resolve_model_name(&requested_model);
     apply_resolved_moderation_model(&mut request, &resolved_model);
     ensure_moderation_proxy_candidate_configured(
         state.config().gateway.providers.as_slice(),

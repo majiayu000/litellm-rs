@@ -352,12 +352,16 @@ pub(crate) fn gemini_body_without_generation_config() -> Value {
 }
 
 pub(crate) fn api_key_with_max_tokens_per_request(limit: u32) -> ApiKey {
+    api_key_with_allowed_model_and_max_tokens("gemini-*", limit)
+}
+
+pub(crate) fn api_key_with_allowed_model_and_max_tokens(allowed_model: &str, limit: u32) -> ApiKey {
     let mut metadata = Metadata::new();
     metadata.extra.insert(
         "__core_keys".to_string(),
         json!({
             "permissions": {
-                "allowed_models": ["gemini-*"],
+                "allowed_models": [allowed_model],
                 "allowed_endpoints": [],
                 "max_tokens_per_request": limit,
                 "custom_permissions": []

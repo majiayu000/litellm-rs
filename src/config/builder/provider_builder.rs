@@ -120,6 +120,7 @@ impl ProviderConfigBuilder {
             organization: None,
             project: None,
             weight: self.weight.map(|w| w.get() as f32).unwrap_or(1.0),
+            priority: 0,
             rpm: self.max_requests_per_minute.unwrap_or(1000),
             tpm: 100000, // Default TPM
             max_concurrent_requests: 10,
@@ -336,6 +337,7 @@ mod tests {
         assert_eq!(config.name, "test-provider");
         assert_eq!(config.provider_type, "openai");
         assert_eq!(config.api_key, "test-key");
+        assert_eq!(config.priority, 0);
     }
 
     #[test]

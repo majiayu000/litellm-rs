@@ -47,6 +47,10 @@ impl HttpServer {
     pub async fn new(config: &Config) -> Result<Self> {
         info!("Creating HTTP server");
 
+        crate::config::models::gateway::GatewayConfig::validate_model_alias_map(
+            &config.gateway.model_aliases,
+        )
+        .map_err(|error| GatewayError::Config(format!("Invalid model aliases: {error}")))?;
         Self::validate_cors_config(&config.gateway.server.cors)?;
         config
             .gateway
@@ -139,9 +143,10 @@ impl HttpServer {
             )
             .map_err(|e| GatewayError::Config(format!("Invalid router config: {}", e)))?;
 
-        let unified_router = crate::core::router::UnifiedRouter::from_gateway_config(
+        let unified_router = crate::core::router::UnifiedRouter::from_gateway_config_with_aliases(
             &config.gateway.providers,
             Some(runtime_router_config),
+            &config.gateway.model_aliases,
         )
         .await
         .map_err(|e| {

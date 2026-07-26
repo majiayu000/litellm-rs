@@ -74,6 +74,41 @@ async fn moderation_route_proxies_request_with_provider_headers() {
 }
 
 #[tokio::test]
+async fn moderation_route_resolves_alias_to_provider_fallback_model() {
+    let mock = MockModerationServer::start_moderation_mock().await;
+    let state = build_test_app_state(vec![moderation_provider(&mock.base_url)]).await;
+    state
+        .unified_router
+        .add_model_alias("public-moderation", "mock-openai-compatible")
+        .expect("provider fallback alias should install");
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    let resp = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/moderations")
+            .set_json(json!({
+                "model": "public-moderation",
+                "input": "moderate this text"
+            }))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body["model"], "mock-openai-compatible");
+
+    mock.stop_moderation_mock().await;
+}
+
+#[tokio::test]
 async fn root_moderation_alias_proxies_request() {
     let mock = MockModerationServer::start_moderation_mock().await;
     let state = build_test_app_state(vec![moderation_provider(&mock.base_url)]).await;

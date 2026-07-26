@@ -12,8 +12,56 @@ use crate::core::net::{
     validate_provider_endpoint_url_without_resolution,
 };
 use crate::core::providers::factory::{endpoint_keys_for_selector, invalid_endpoint};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::debug;
+
+impl GatewayConfig {
+    /// Validate alias shape and graph structure without consulting provider models.
+    pub(crate) fn validate_model_alias_map(
+        model_aliases: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        let mut alias_names = model_aliases.keys().map(String::as_str).collect::<Vec<_>>();
+        alias_names.sort_unstable();
+
+        for alias in &alias_names {
+            let target = &model_aliases[*alias];
+            if alias.trim().is_empty() {
+                return Err("Model alias name cannot be empty".to_string());
+            }
+            if *alias != alias.trim() {
+                return Err(format!(
+                    "Model alias name '{alias}' cannot contain leading or trailing whitespace"
+                ));
+            }
+            if target.trim().is_empty() {
+                return Err(format!("Model alias '{alias}' target cannot be empty"));
+            }
+            if alias.trim() == target.trim() {
+                return Err(format!("Model alias '{alias}' cannot target itself"));
+            }
+        }
+
+        for alias in alias_names {
+            let mut current = alias;
+            let mut visited = HashSet::new();
+            let mut path = Vec::new();
+
+            loop {
+                if !visited.insert(current) {
+                    path.push(current);
+                    return Err(format!("Model alias cycle detected: {}", path.join(" -> ")));
+                }
+                path.push(current);
+                let Some(next) = model_aliases.get(current) else {
+                    break;
+                };
+                current = next;
+            }
+        }
+
+        Ok(())
+    }
+}
 
 impl Validate for GatewayConfig {
     fn validate(&self) -> Result<(), String> {
@@ -51,6 +99,7 @@ impl Validate for GatewayConfig {
             Validate::validate(provider)?;
         }
 
+        Self::validate_model_alias_map(&self.model_aliases)?;
         Validate::validate(&self.router)?;
         Validate::validate(&self.storage)?;
         Validate::validate(&self.auth)?;
@@ -422,6 +471,77 @@ impl Validate for ProviderHealthCheckConfig {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod model_alias_validation_tests {
+    use super::*;
+
+    fn aliases(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(alias, target)| ((*alias).to_string(), (*target).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn phase_a_rejects_empty_self_and_cyclic_aliases() {
+        for (entries, expected) in [
+            (vec![("", "model")], "name cannot be empty"),
+            (vec![("alias", " ")], "target cannot be empty"),
+            (vec![("alias", "alias")], "cannot target itself"),
+            (vec![("alias", " alias ")], "cannot target itself"),
+            (vec![("a", "b"), ("b", "a")], "cycle detected"),
+            (vec![("a", "b"), ("b", "c"), ("c", "a")], "cycle detected"),
+        ] {
+            let error = GatewayConfig::validate_model_alias_map(&aliases(&entries))
+                .expect_err("invalid alias graph must fail");
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn phase_a_rejects_alias_names_with_surrounding_whitespace() {
+        for alias in [" public", "public ", " public "] {
+            let error = GatewayConfig::validate_model_alias_map(&aliases(&[(alias, "gpt-4o")]))
+                .expect_err("alias names must not contain surrounding whitespace");
+            assert!(
+                error.contains("cannot contain leading or trailing whitespace"),
+                "{error}"
+            );
+        }
+
+        assert!(GatewayConfig::validate_model_alias_map(&aliases(&[("public", "gpt-4o")])).is_ok());
+    }
+
+    #[test]
+    fn phase_a_accepts_order_independent_long_chains_without_model_lookup() {
+        let forward = aliases(&[
+            ("public", "internal"),
+            ("internal", "future-provider-model"),
+        ]);
+        let reverse = aliases(&[
+            ("internal", "future-provider-model"),
+            ("public", "internal"),
+        ]);
+
+        assert!(GatewayConfig::validate_model_alias_map(&forward).is_ok());
+        assert!(GatewayConfig::validate_model_alias_map(&reverse).is_ok());
+
+        let long_chain = (0..20)
+            .map(|index| {
+                (
+                    format!("alias-{index}"),
+                    if index == 19 {
+                        "canonical".to_string()
+                    } else {
+                        format!("alias-{}", index + 1)
+                    },
+                )
+            })
+            .collect();
+        assert!(GatewayConfig::validate_model_alias_map(&long_chain).is_ok());
     }
 }
 
