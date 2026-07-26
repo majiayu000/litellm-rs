@@ -257,25 +257,26 @@ impl Router {
         }
 
         let normalized_aliases = normalize_model_aliases(model_aliases, &canonical_models)?;
-        for (deployment, legacy_metadata) in staged {
-            match legacy_metadata {
-                Some(metadata) => router.add_gateway_deployment(deployment, metadata),
-                None => router.add_deployment(deployment),
-            }
-            #[cfg(test)]
-            gateway_alias_tests::observe_construction(
-                gateway_alias_tests::ConstructionEvent::RoutingSnapshotPublication,
-            );
-        }
         let mut aliases = normalized_aliases.iter().collect::<Vec<_>>();
         aliases.sort_unstable_by_key(|(alias, _)| *alias);
-        for (alias, target) in aliases {
-            router.add_model_alias(alias, target)?;
-            #[cfg(test)]
-            gateway_alias_tests::observe_construction(
-                gateway_alias_tests::ConstructionEvent::RoutingSnapshotPublication,
-            );
-        }
+        router.try_update_routing_snapshot(move |snapshot| {
+            for (deployment, legacy_metadata) in staged {
+                match legacy_metadata {
+                    Some(metadata) => {
+                        snapshot.insert_deployment_with_legacy_metadata(deployment, metadata);
+                    }
+                    None => snapshot.insert_deployment(deployment),
+                }
+            }
+            for (alias, target) in aliases {
+                snapshot.add_model_alias(alias, target)?;
+            }
+            Ok::<(), RouterError>(())
+        })?;
+        #[cfg(test)]
+        gateway_alias_tests::observe_construction(
+            gateway_alias_tests::ConstructionEvent::RoutingSnapshotPublication,
+        );
 
         #[cfg(test)]
         gateway_alias_tests::observe_construction(

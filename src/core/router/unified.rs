@@ -123,7 +123,7 @@ impl RoutingSnapshot {
         snapshot
     }
 
-    fn insert_deployment(&mut self, mut deployment: Deployment) {
+    pub(super) fn insert_deployment(&mut self, mut deployment: Deployment) {
         let model_name = deployment.model_name.clone();
         let deployment_id = deployment.id.clone();
         if let Some(old) = self.deployments.get(&deployment_id) {
@@ -148,7 +148,7 @@ impl RoutingSnapshot {
         }
     }
 
-    fn insert_deployment_with_legacy_metadata(
+    pub(super) fn insert_deployment_with_legacy_metadata(
         &mut self,
         deployment: Deployment,
         metadata: LegacySelectorMetadata,
@@ -243,7 +243,7 @@ impl RoutingSnapshot {
         }
     }
 
-    fn add_model_alias(
+    pub(super) fn add_model_alias(
         &mut self,
         alias: &str,
         model_name: &str,
@@ -385,7 +385,7 @@ impl Router {
         result
     }
 
-    fn try_update_routing_snapshot<T, E>(
+    pub(super) fn try_update_routing_snapshot<T, E>(
         &self,
         update: impl FnOnce(&mut RoutingSnapshot) -> Result<T, E>,
     ) -> Result<T, E> {
@@ -410,16 +410,6 @@ impl Router {
         self.update_routing_snapshot(|snapshot| {
             snapshot.legacy_selector_metadata.remove(&deployment.id);
             snapshot.insert_deployment(deployment)
-        });
-    }
-
-    pub(crate) fn add_gateway_deployment(
-        &self,
-        deployment: Deployment,
-        metadata: LegacySelectorMetadata,
-    ) {
-        self.update_routing_snapshot(|snapshot| {
-            snapshot.insert_deployment_with_legacy_metadata(deployment, metadata)
         });
     }
 

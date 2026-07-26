@@ -31,7 +31,7 @@ impl GatewayConfig {
             if target.trim().is_empty() {
                 return Err(format!("Model alias '{alias}' target cannot be empty"));
             }
-            if *alias == target {
+            if alias.trim() == target.trim() {
                 return Err(format!("Model alias '{alias}' cannot target itself"));
             }
         }
@@ -486,6 +486,7 @@ mod model_alias_validation_tests {
             (vec![("", "model")], "name cannot be empty"),
             (vec![("alias", " ")], "target cannot be empty"),
             (vec![("alias", "alias")], "cannot target itself"),
+            (vec![(" alias ", "alias")], "cannot target itself"),
             (vec![("a", "b"), ("b", "a")], "cycle detected"),
             (vec![("a", "b"), ("b", "c"), ("c", "a")], "cycle detected"),
         ] {
