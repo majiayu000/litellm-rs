@@ -88,15 +88,22 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    值（包括看似默认的数值）必须在网络前返回稳定的 OpenAI-compatible
    invalid-request 错误；最终 upstream body 不得包含 `temperature`、`topP`、`top_k`
    或 `topK`，不得静默透传。
-6. **B-006** 对 B-005 模型，系统必须一次性移除尾部所有 semantically-empty turns，
-   保持其余 turn 的原顺序与内容，并让 prefill gate 和最终 serializer 使用同一份
-   normalized sequence。若该序列为空，或最后一个 retained turn 为非空
-   `model`/assistant，必须在网络前拒绝；若 meaningful user/tool turn 后只有 empty
-   assistant turns，则这些 empty turns 不得序列化，最终 body 不得以 `model` role
-   结尾。既有 Gemini `ToolUse`/`ToolResult` 序列化与完整 tool-loop callability 仍归
-   GH1111，不是本 invariant 的通过条件，也不是 GH1108 implementation dependency。
-7. **B-007** provider 公布的 supported params、preflight validation 和最终 upstream
-   request body 必须一致；任何一层不能重新加入已拒绝字段，也不能绕过 prefill gate。
+6. **B-006** 对 B-005 模型，系统必须一次性把原 messages 规范化为实际提交给 Gemini
+   的 `contents` 与独立 `systemInstruction`；prefill gate 和 serializer 必须消费这同一
+   结果，不能再依据 raw role 列表二次推导。System turn 移入 `systemInstruction`、
+   Developer turn 不进入 `contents`、trailing semantically-empty turn 不进入
+   `contents`，但这些移除均不能遮蔽此前 terminal model：最终 `contents` 为空或末项
+   role 为 `model` 时必须在网络前拒绝。因此 assistant+system、assistant+developer、
+   all-system/developer 和 all-empty 均拒绝；user+system 保留 user contents 可通过。
+   既有 Gemini `ToolUse`/`ToolResult` 序列化与完整 tool-loop callability 仍归 GH1111，
+   不是本 invariant 的通过条件，也不是 GH1108 implementation dependency。
+7. **B-007** 两个新模型的 OpenAI-compatible positive parameter allowlist 必须恰为闭集
+   `{max_tokens, stop, stream}`：`max_tokens`/`stop` 进入既有 Gemini generation body，
+   `stream` 只选择 streaming transport、不进入 body。`temperature`、`top_p`、`top_k`
+   按 B-005 排除；当前 serializer 未兑现的 `tools`、`tool_choice`、`response_format`
+   与 `max_completion_tokens` 同样排除。provider 公布值、preflight、parameter mapping
+   与 serializer/transport disposition 必须对该闭集相等，不能仅保持彼此一致却全部
+   拒绝，也不能把 map passthrough 冒充实际支持。
 8. **B-008** 新模型的 pricing/cost lookup 必须返回 B-002 的确定值并保持单位一致；
    这些值只代表 Gemini Developer API paid Standard tier；Batch、Flex、Priority 与
    其他 unknown model/tier 的全局 pricing 行为不得由本 issue 改写、复用或伪装为
@@ -104,18 +111,30 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 9. **B-009** catalog 列表必须稳定排序、无重复；同一不可变证据输入在重复或并发读取时
    返回相同 ID、metadata、价格和请求契约。
 10. **B-010** live smoke 默认关闭，只能由文档声明的单一显式 opt-in 环境变量开启；
-    未提供 opt-in 或凭证时不得联网，普通单元测试、全量测试和应用启动不得隐式触发。
+    opt-in 与 Developer credential 任一缺失时均不得联网。offline fixture 必须覆盖完整
+    2×2 矩阵：双缺失；仅 sentinel `GEMINI_API_KEY`；仅
+    `LITELLM_RS_LIVE_GEMINI=1` 且 `GEMINI_API_KEY`/其他 Developer credential aliases
+    全部 unset，三者均 network counter=0；双满足才可进入 fake/显式真实 transport。
+    普通单元测试、全量测试和应用启动不得隐式触发。
 11. **B-011** opt-in live smoke 必须分别记录静态目录、官方 list-models/get-model
     exact 结果与最小调用结果，并把失败分类为闭集
-    `{auth, quota, not_found, protocol, network}`；任一必需步骤未执行不得报告整体通过。
+    `{auth, quota, not_found, protocol, network}`。已发出的 transport 请求达到 deadline
+    timeout 必须是 `status=failed`、`error_class=network`，并记录 timeout termination；
+    任一必需步骤未执行必须是 `status=failed`、`error_class=protocol`，并记录
+    missing-step termination，不得报告整体通过。
 12. **B-012** live smoke、错误、Debug/Display、命令回显和持久化 artifact 均不得包含
-    API key 或其他 credential；redaction 负例必须使用 sentinel 凭证证明泄漏为零。
+    API key 或其他 credential；redaction 负例必须安装 captured tracing subscriber，
+    并用 sentinel 凭证证明 tracing、stdout、stderr、error、Debug 与 artifact 所有
+    sink 明文命中均为零。
 13. **B-013** Developer API 证据不得扩大 Vertex AI availability、endpoint、region、
     auth 或 pricing 声明；任何 Vertex 结果只能作为独立信息记录，不能满足本 spec 的
     Developer API 正证据，也不能由本 spec 改变 Vertex 行为。
 14. **B-014** live smoke 被取消、中断或部分完成时必须保留已完成步骤与终止原因，
-    整体状态为 incomplete/failed；重试不得复用旧凭证输出或把先前部分成功冒充当前
-    完整通过。
+    typed artifact 每条记录必须包含同一 invocation 的 non-empty `run_id` 和可审计的
+    `termination_reason`。只有外部 cancel/interruption 为
+    `status=incomplete` 且 `error_class` 缺失；transport deadline 按 B-011 归
+    `failed/network`。每次重试必须生成不同 run_id，不得复用旧凭证输出或把先前部分
+    成功冒充当前完整通过。
 15. **B-015** 除明确列出的新模型、evidence disposition 和新请求契约外，已有仍受支持
     模型的 exact ID、能力、合法参数、认证、endpoint 与响应转换保持兼容；不因刷新
     意外删除或改变无关模型。
@@ -142,15 +161,25 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 - [ ] 新契约模型的 supported params 与最终请求体均不含三项废弃采样参数；typed
       `temperature/top_p` JSON `null` 与 flattened `top_k: null` 均由 shared normalizer
       消费为 absent，任何 non-null 输入在网络前得到稳定错误。
-- [ ] trailing semantically-empty turns 只 strip 一次；normalized sequence 同时供 gate
-      与 serializer 使用。meaningful user/tool + empty assistant 不产生尾部 model，
-      non-empty model + trailing empties 和全空序列均在网络前拒绝；完整 tool-loop
-      callability 明确不作为 GH1108 acceptance。
+- [ ] one-shot role/content normalization 直接产生 serializer-ready `contents` 与
+      `systemInstruction`；assistant+system、assistant+developer、all-system/developer、
+      non-empty model+trailing-empty 和 all-empty 均 pre-network 拒绝，user+system
+      保留 user contents 可通过；完整 tool-loop callability 不作为 GH1108 acceptance。
+- [ ] 两个新模型的 positive parameter allowlist 精确等于
+      `{max_tokens, stop, stream}`；tools/tool_choice/response_format/max_completion_tokens
+      与三项 deprecated sampling params 均不在集合，provider/preflight/map/serializer
+      fixture 对集合和值去向完全一致。
 - [ ] catalog 重复/并发读取稳定排序且 metadata/price/contract 一致。
-- [ ] opt-in live smoke 对 list/get/minimal-call 三层结果产生 typed artifact，失败分类
-      闭合，取消/中断不产生伪成功。
-- [ ] sentinel 凭证在 stdout、stderr、错误、Debug/Display、日志和 artifact 中均无
-      明文命中。
+- [ ] live opt-in/credential 2×2 fixture 精确覆盖双缺失、仅 sentinel
+      `GEMINI_API_KEY`、仅 `LITELLM_RS_LIVE_GEMINI=1` 且所有 Developer credential
+      aliases unset，三个组合均 network counter=0；双满足才可进入 fake/显式真实
+      transport。
+- [ ] opt-in live smoke 对 list/get/minimal-call 三层结果产生含 `run_id`、
+      `termination_reason` 的 closed typed artifact；transport timeout 为
+      failed/network，外部 cancel/interruption 为无 error_class 的 incomplete，重试
+      使用新 run_id。
+- [ ] captured tracing subscriber 下，sentinel 凭证在 tracing、stdout、stderr、错误、
+      Debug/Display 和 artifact 中均无明文命中。
 - [ ] Vertex AI、Interactions API、GH1111 tool loop 与 GH1113 pricing authority
       acceptance 均未被本实现顺带修改或宣称完成。
 - [ ] 新增关键 catalog/request-validation 分支覆盖 100%，新增代码总体 line coverage
@@ -162,16 +191,16 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 
 | 边界类别 | 判定 |
 | --- | --- |
-| Empty / missing input | covered: B-005、B-006、B-010、B-011。typed/flattened null、空尾 turn、全空序列、缺 opt-in/credential、缺 smoke step 都有确定结果。 |
-| Error and failure paths | covered: B-003、B-005、B-006、B-011、B-016。未知证据、非法参数、prefill 和 live failures 均 fail closed。 |
+| Empty / missing input | covered: B-005、B-006、B-010、B-011。typed/flattened null、空 contents、all-system/developer、缺 opt-in/credential、缺 smoke step 都有确定结果。 |
+| Error and failure paths | covered: B-003、B-005、B-006、B-011、B-014、B-016。未知证据、非法参数、serialized prefill、timeout/cancel 和 live failures 均 fail closed。 |
 | Authorization / permission | covered: B-010、B-012、B-013。Developer credential 只用于 opt-in Developer 请求，不扩大 Vertex 权限。 |
 | Concurrency / race / ordering | covered: B-009。目录与契约为稳定不可变快照。 |
-| Retry / repetition / idempotency | covered: B-009、B-014。重复目录读取幂等，smoke retry 不复用部分成功。 |
+| Retry / repetition / idempotency | covered: B-009、B-014。重复目录读取幂等，每次 smoke retry 使用新 run_id 且不复用部分成功。 |
 | Illegal state transitions | covered: B-003、B-004、B-011。无证据/部分 smoke 不能变为 advertised/passed。 |
 | Compatibility / migration | covered: B-005、B-007、B-015、B-017。明确行为收紧与新模型能力闭合集，其余模型与入口保持兼容。 |
 | Degradation / fallback | covered: B-003、B-005、B-016、B-017。旧目录、silent drop、二手资料、近似 ID 和未兑现能力均不能冒充成功。 |
 | Evidence and audit integrity | covered: B-004、B-011、B-012、B-016、B-017。每个公开 ID、能力与 smoke 结论都绑定可审计证据。 |
-| Cancellation / interruption / partial completion | covered: B-014。中断 smoke 保留部分事实但整体不通过。 |
+| Cancellation / interruption / partial completion | covered: B-011、B-014。transport timeout 为 failed/network；只有外部 cancel/interruption 为无 error_class incomplete。 |
 
 ## 边界情况
 
@@ -183,6 +212,15 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 - meaningful user/tool turn + trailing empty assistant turns 在 strip 后保留 user/tool
   结尾且 serializer 不产生尾部 model；non-empty model + trailing empties 在 strip 后
   仍拒绝；全部 turns 均 semantically empty 时按空 normalized sequence 拒绝。
+- assistant+system 与 assistant+developer 的 raw last role 虽非 assistant，最终
+  `contents` 仍以 model 结尾，必须拒绝；all-system/developer 产生空 contents 并拒绝；
+  user+system 产生 user contents + systemInstruction，可通过 prefill gate。
+- `max_tokens`/`stop` 的 body mapping 与 `stream` transport selection 是新模型仅有的三项
+  positive params；tools/tool_choice 的 passthrough、response_format/max_completion_tokens
+  的字段存在都不能冒充 serializer support。
+- opt-in=1 但 key unset 与 key set 但 opt-in unset 均必须零网络；transport deadline
+  timeout 记录 failed/network，新 retry 使用新 run_id；外部 cancel/interruption 才是
+  无 error_class incomplete。
 - list-models 出现但 lifecycle 页面未提供通用 chat 正证据时保持不公开，并记录冲突。
 - live minimal call 成功但静态价格/limits 不匹配时 smoke 整体失败，不能用连通性覆盖
   metadata 漂移。

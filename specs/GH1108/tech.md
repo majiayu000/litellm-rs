@@ -36,9 +36,11 @@ GH-1108 / #1108
 | Current Gemini registry | `src/core/providers/gemini/models/mod.rs:144-179` | 以 `HashMap` 存 17 个模型，duplicate insert 会覆盖，`list_models()` 直接返回 values。 | GH1112 将迁移为 neutral exact catalog；GH1108 只能在其 merged API 上刷新。 |
 | Current 3.5 catalog | `src/core/providers/gemini/models/catalog/gemini35.rs:7-68` | 只登记 `gemini-3.5-flash`，无 3.6 Flash 或 3.5 Flash-Lite。 | 两个新 GA model records 的现状锚点。 |
 | Provider list/preflight | `src/core/providers/gemini/provider.rs:51-56,74-112` | 模型列表来自 registry；validation 只有通用温度/top-p 数值范围。 | 需要按 exact model contract 拒绝 deprecated params 与 prefill。 |
-| Supported params/mapping | `src/core/providers/gemini/provider.rs:169-212` | 所有 Gemini model 共用参数表；`temperature`/`top_p` 被映射，部分 unsupported 参数被 silent skip。 | B-005/B-007 要改为 model-specific fail-closed contract。 |
+| Supported params/mapping | `src/core/providers/gemini/provider.rs:169-212` | 当前表列出 temperature/max_tokens/top_p/stop/stream/tools/tool_choice；map 对 tools/tool_choice 仅 passthrough，unknown 也 passthrough。 | B-005/B-007 要按最终 consumer 证据收敛为 model-specific closed contract。 |
 | Canonical extra params | `src/core/types/chat.rs:177-179` | `ChatRequest.extra_params` 使用 `#[serde(flatten)] HashMap<String, Value>`，因此 `top_k: null` 保留为 `Value::Null`，不同于 typed `Option` 字段。 | B-005 必须在 shared normalizer 明确消费 flattened null，并拒绝 non-null。 |
-| Final Developer body | `src/core/providers/gemini/client.rs:252-320` | `transform_chat_request` 独立构造 contents 与 `generationConfig`，仍写入 temperature/topP。 | 必须证明 final upstream body 与 preflight 一致，direct-client 也不能绕过。 |
+| Final Developer body | `src/core/providers/gemini/client.rs:252-336` | System 移到 systemInstruction、Developer 被跳过；body 只消费 max_tokens/temperature/top_p/stop，未消费 tools/tool_choice/response_format。 | prefill 必须基于最终 contents，positive params 必须按真实 sink 收敛。 |
+| Streaming transport | `src/core/providers/gemini/client.rs:93-118` | unary/stream 分别选择 generateContent/streamGenerateContent；stream 不属于 body 字段。 | B-007 可保留 stream，但必须声明为 transport-only disposition。 |
+| Captured tracing pattern | `src/core/observability/tests.rs:81-101,310-315` | `MakeWriter` + `tracing::subscriber::set_default` 可把 tracing bytes 捕获到测试 buffer。 | B-012 live redaction fixture 必须覆盖 tracing sink。 |
 | Pricing storage | `src/core/providers/gemini/models/mod.rs:83-105,127-140` | pricing helper 接收 per-million 值并换算到 per-1k fields，metadata 与 limits 同记录。 | 新价格的单位换算、cost parity 与 GH1113 边界。 |
 | Credential config | `src/core/providers/gemini/config.rs:14-15,82-105,134-141` | Developer config 从 env 读 key；当前 type derive `Debug`。 | live smoke 不得格式化/落盘 key；production credential redaction 由 GH1112 T4 所有。 |
 | Existing live-test pattern | `tests/live_bedrock.rs:1-27,63-68` | `#[ignore]` + 单一 opt-in env，未开启时不联网。 | 复用成熟手动验证形态，不创建后台自动化。 |
@@ -120,15 +122,19 @@ illegal-state policy：
   non-null value 即 typed invalid-request；normalizer 返回的 map 不再含 `top_k`；
 - final serializer 只消费 normalized request，且生成的 upstream body 不含
   `temperature`、`topP`、`top_k` 或 `topK`；
-- shared contract 对 messages 只执行一次 `strip_trailing_semantically_empty_turns`，
-  返回的 retained sequence 保持原顺序/内容，并同时传给
-  `validate_no_model_prefill` 与 final serializer；二者禁止重新读取原 messages；
+- shared contract 只执行一次 `normalize_gemini_contents`：它按最终 transport 规则同时
+  完成 semantic-empty stripping、role mapping 和 content conversion，直接返回
+  serializer-ready `{contents, system_instruction}`；validator 与 serializer 都只消费该
+  结果，禁止重新读取 raw messages 或再次映射 roles；
 - semantically-empty turn 定义为：`content` 缺失、blank text 或仅含 blank text parts，
   且无 thinking、audio、tool calls、function call、tool result/call ID 等 meaningful
   payload；任一 non-text content part 或 tool payload 均使 turn meaningful；
-- normalized sequence 为空时 typed invalid-request；最后一个 retained turn 为
-  `model`/assistant 时 prefill rejection；meaningful user/tool + trailing empty
-  assistants 在 strip 后不得被该 gate 拒绝，且 final body 不得以 `model` role 结尾；
+- System 的 meaningful text 只进入 `system_instruction`，Developer 不进入 `contents`；
+  User→`user`、Assistant→`model`；Tool/Function 的现有 mapping 不在 GH1108 扩展；
+- `validate_no_model_prefill` 必须在最终 `contents` 上运行：contents 为空或最后一项 role
+  为 `model` 即 typed invalid-request。fixture 必须锁定 assistant+system、
+  assistant+developer、all-system/developer、non-empty model+trailing-empty、all-empty
+  拒绝，以及 user+system 保留 user contents 并通过；
 - 既有 Gemini `ToolUse`/`ToolResult` wire 序列化与完整 callability 由 GH1111 所有，
   不是 GH1108 acceptance，也不构成 GH1108 implementation dependency；
 - 只有官方明确声明相同契约的未来 model record 才能复用，禁止 family substring 推断。
@@ -137,6 +143,23 @@ Gemini provider 的 supported params、`validate_request`、`map_openai_params` 
 `GeminiClient::transform_chat_request` 都查询同一 contract。最终 body serializer 只消费
 已经校验的 provider-neutral fields；direct client entry point 也先执行同一 preflight。
 网络计数 fixture 证明所有负例在 auth/HTTP 之前终止。
+
+两个新模型的 positive OpenAI-compatible allowlist 恰为：
+
+| Parameter | Disposition | Evidence at spec time |
+| --- | --- | --- |
+| `max_tokens` | allowed；映射到 `generationConfig.maxOutputTokens` | `provider.rs:172,194-196`；`client.rs:295-297` |
+| `stop` | allowed；非空时映射到 `generationConfig.stopSequences` | `provider.rs:174,191-193`；`client.rs:307-312` |
+| `stream` | allowed；只选择 stream transport/endpoint，不写 body | `provider.rs:175,191-193`；`client.rs:93-118` |
+| `temperature` / `top_p` / `top_k` | excluded；按 B-005 null/absent 与 non-null rejection 处理 | B-005 shared contract |
+| `tools` / `tool_choice` | excluded；当前 provider 只广告/passthrough，`transform_chat_request` 未消费 | `provider.rs:176-177,198-200`；`client.rs:252-336` |
+| `response_format` / `max_completion_tokens` | excluded；canonical fields 存在但 Gemini transformer 未消费 | `src/core/types/chat.rs:98-101,129-131`；`client.rs:252-336` |
+
+`get_supported_openai_params`、preflight allowlist、map disposition 与
+serializer/transport disposition 必须以集合相等断言锁定 `{max_tokens, stop, stream}`；
+对每个 allowed param 断言精确 sink，对每个 excluded param 断言 pre-network typed error
+或 B-005 absent 规则。不得以 B-017 catalog capability 自动添加 tools/tool_choice；
+完整 tool serialization 仍归 GH1111。
 
 ### 3. Pricing 与能力边界
 
@@ -184,16 +207,36 @@ Interactions 即使官方产品页面存在，也因当前公开 API 无对应�
   error 或 artifact；
 - 依次执行 static snapshot、official models get/list、两个 exact ID 的最小
   generate-content call；
-- 结果写为 typed in-memory/temporary artifact，字段只含 model、step、status、
-  error_class、HTTP status（若可安全公开）与时间，不含 request URL query/header/body
-  credential；
+- offline gate fixture 以 scoped env guard 覆盖 opt-in/key 完整 2×2 matrix：
+  `LITELLM_RS_LIVE_GEMINI`/`GEMINI_API_KEY` 双 unset；仅 sentinel
+  `GEMINI_API_KEY`；仅 `LITELLM_RS_LIVE_GEMINI=1` 且 `GEMINI_API_KEY`、
+  `GOOGLE_API_KEY` 及其他 Developer credential aliases 全 unset，三者均 network
+  counter=0；双满足只允许命中 fake transport，真实 endpoint 仍只由手工 ignored test
+  使用；fixture 结束恢复原 env；
+- 每次 invocation 生成新的 non-empty opaque `run_id`；同一 run 的所有 step 共用该值；
+- 每条结果使用 closed typed schema：
+  `{run_id, model, step, status, error_class, http_status, observed_at,
+  termination_reason}`。`model`/`http_status` 按 step 可为 none；`step` 闭集为
+  `{static_snapshot, list_models, get_model, minimal_call, aggregate}`；`status` 闭集为
+  `{passed, failed, incomplete}`；`termination_reason` 闭集为
+  `{step_failed, transport_timeout, externally_cancelled, externally_interrupted,
+  missing_required_step}` 或 none，不含 request URL query/header/body credential；
 - 错误分类闭集 `{auth, quota, not_found, protocol, network}`；
-- 五个且仅五个 error classes 为 `{auth, quota, not_found, protocol, network}`；
-  cancellation/timeout 记录 termination reason 并标记 `incomplete`，不是第六个
-  error class，也不把部分步骤聚合为 pass。
+- 五个且仅五个 error classes 为 `{auth, quota, not_found, protocol, network}`。已发出
+  请求达到 transport deadline 必须记录 `status=failed`、`error_class=network`、
+  `termination_reason=transport_timeout`；只有外部 cancellation/interruption 记录
+  `status=incomplete`、`error_class=None` 与对应 termination reason；
+- passed record 的 error_class/termination_reason 均为 none；普通 step failure 为
+  failed + closed error_class + `step_failed`；missing required step 为 failed +
+  `error_class=protocol` + `missing_required_step`，aggregate 不得 false-pass；
+- retry 必须生成不同 run_id；旧 run steps 保持只读，不能聚合到新 run。
 
-offline unit test 使用 sentinel key 和 loopback/fake response 覆盖分类与 redaction；
-普通 `cargo test` 只运行 offline tests，live cases 保持 ignored 且 opt-in 双门禁。
+offline unit test 使用 sentinel key 和 loopback/fake response 覆盖分类与 redaction。
+redaction fixture 必须复用已核验的 captured tracing pattern，安装局部
+`tracing_subscriber`/captured `MakeWriter`，触发含 sentinel 的 upstream URL/error
+负例，并断言 tracing bytes、stdout、stderr、Error Display/Debug、config/result Debug
+与 serialized artifact 均零命中。普通 `cargo test` 只运行 offline tests，live cases
+保持 ignored 且 opt-in 双门禁。
 
 ### 5. 文档与发布 snapshot
 
@@ -216,15 +259,15 @@ offline unit test 使用 sentinel key 和 loopback/fake response 覆盖分类与
 | B-003 | Developer evidence filter | `cargo test --locked google_model_catalog_2026_07_dispositions`；retired/shutdown/unverified/other-product 不公开。 |
 | B-004 | deterministic disposition fixture | 同一 test 输出 pre/post set、status/source/reason 并断言每个旧 ID 恰好一个 disposition。 |
 | B-005 | shared request allowlist + canonical extra-map normalizer | `cargo test --locked gemini_2026_07_deprecated_sampling_rejected`；typed temperature/top_p omitted/JSON-null 均为 absent，flattened extra_body/extra_params 的 `top_k: Value::Null` 被消费并删除，三者 non-null 均 pre-network error，final JSON 四种 key 均不存在。 |
-| B-006 | one-shot trailing-empty normalization + prefill gate/serializer parity | `cargo test --locked gemini_2026_07_prefill_rejected`；meaningful user/tool + empty assistant strip 后 body 不以 model 结尾；non-empty model + trailing empties 与 all-empty 拒绝；spy/source fixture 证明 strip 只执行一次且 gate/serializer 使用同一 retained sequence；不把 GH1111 tool-loop callability 计为通过条件。 |
-| B-007 | provider/client contract parity | `cargo test --locked gemini_2026_07_request_contract_parity`；supported params、preflight、final JSON table fixture 一致。 |
+| B-006 | one-shot final-contents normalization + prefill/serializer parity | `cargo test --locked gemini_2026_07_prefill_rejected`；assistant+system、assistant+developer、all-system/developer、model+trailing-empty、all-empty 拒绝，user+system 通过；spy/source fixture 证明 normalizer 只执行一次并直接产出 serializer-ready contents/systemInstruction；不把 GH1111 tool-loop callability 计为通过条件。 |
+| B-007 | exact positive param allowlist + sink parity | `cargo test --locked gemini_2026_07_request_contract_parity`；provider/preflight/map/serializer param-name 集合精确等于 `{max_tokens, stop, stream}`，逐项断言 maxOutputTokens/stopSequences/stream transport sink，并断言 temperature/top_p/top_k/tools/tool_choice/response_format/max_completion_tokens 不在集合。 |
 | B-008 | neutral paid Standard pricing facts only | `cargo test --locked gemini_2026_07_cost`；fixed-token cost 精确，Batch/Flex/Priority 未声明同值，unknown behavior snapshot 不变。 |
 | B-009 | immutable stable snapshot | `cargo test --locked google_model_catalog_2026_07_stability`；重复/并发查询结果完全相等、升序、无重复。 |
-| B-010 | double-gated live test | `cargo test --locked --test live_gemini -- --ignored` 在无 opt-in/key 时 network counter=0；真实调用只用显式命令。 |
-| B-011 | typed live result aggregation | offline fixture `cargo test --locked live_gemini_result_classification` 覆盖且只允许五类错误与 missing-step false-pass；手工 opt-in 跑 list/get/call。 |
-| B-012 | credential redaction | `cargo test --locked live_gemini_redaction`；sentinel 在 stdout/stderr/error/debug/artifact capture 中零命中。 |
+| B-010 | opt-in/key 2×2 gate | `cargo test --locked live_gemini_gate_matrix`；双 unset、仅 sentinel GEMINI_API_KEY、仅 opt-in=1 且 GEMINI_API_KEY/GOOGLE_API_KEY/其他 aliases unset 均 network counter=0，双满足只命中 fake transport，scoped guard 恢复 env；真实调用只用显式 ignored 命令。 |
+| B-011 | typed live result aggregation | `cargo test --locked live_gemini_result_classification` 覆盖且只允许五类错误；transport deadline 精确为 failed/network/transport_timeout，missing-step 精确为 failed/protocol/missing_required_step；手工 opt-in 跑 list/get/call。 |
+| B-012 | credential redaction including tracing | `cargo test --locked live_gemini_redaction` 安装 captured tracing subscriber；sentinel 在 tracing/stdout/stderr/error Display+Debug/config+result Debug/artifact 中零命中。 |
 | B-013 | Vertex overlay/read paths | `test "$(git rev-parse HEAD)" = "$IMPLEMENTATION_HEAD_SHA" && git diff --name-only "$IMPLEMENTATION_BASE_SHA...$IMPLEMENTATION_HEAD_SHA"` 不含 Vertex production path；catalog fixture 证明 Vertex set 未变。 |
-| B-014 | live cancellation/retry state | `cargo test --locked live_gemini_interruption`；timeout/cancel 为 incomplete termination（非 error class），重试生成新 run id。 |
+| B-014 | live run/termination/retry state | `cargo test --locked live_gemini_interruption`；closed schema 含 run_id/termination_reason；external cancel/interruption 为 no-error-class incomplete，transport timeout 为 failed/network；重试生成不同 run_id 且不聚合旧 steps。 |
 | B-015 | existing model compatibility | `cargo test --locked gemini_provider` 与 migration snapshot；只允许 fixture 声明的 advertised-ID delta。 |
 | B-016 | evidence manifest validation | `cargo test --locked google_model_catalog_2026_07_evidence`；missing/conflicting/stale/unofficial evidence 初始化失败。 |
 | B-017 | exact public capability + model-feature closed sets | `cargo test --locked google_model_catalog_2026_07_metadata`；分别对两个模型断言两个集合与 spec 闭合集相等，并断言 CodeExecution/BatchProcessing/Realtime、Computer Use、generation、Live/Interactions 均未广告。 |
@@ -330,7 +373,7 @@ JSON。checker 必须验证：
 | --- | --- | --- |
 | `catalog_evidence_validation` | `src/core/providers/google/models/registry.rs` | `validate_developer_catalog_evidence` / `catalog-evidence-validation` |
 | `deprecated_param_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_deprecated_sampling_params` / `deprecated-param-rejection` |
-| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `strip_trailing_semantically_empty_turns` / `trailing-empty-normalization` **and** `validate_no_model_prefill` / `prefill-rejection`；两个 selector 都必需 |
+| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_gemini_contents` / `final-contents-normalization` **and** `validate_no_model_prefill` / `prefill-rejection`；两个 selector 都必需 |
 | `live_classification` | `tests/live_gemini.rs` | `classify_live_failure` / `live-classification` |
 | `live_redaction` | `tests/live_gemini.rs` | `redact_live_artifact` / `live-redaction` |
 

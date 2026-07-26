@@ -66,10 +66,15 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       supported params；typed temperature/top_p omitted/JSON-null 按 `Option` absent；
       flattened extra_body/extra_params 的 `top_k: Value::Null` 由 shared normalizer
       消费并删除，任何 non-null 值（包括默认数值）在 auth/network 前拒绝，final body
-      无 temperature/topP/top_k/topK；messages 只执行一次 trailing semantically-empty
-      strip，retained sequence 同时供 prefill gate 与 serializer，且二者不读取原序列；
-      meaningful user/tool + empty assistant 最终 body 不以 model 结尾，non-empty model
-      + trailing empties 与 all-empty 均 pre-network error；既有 Gemini
+      无 temperature/topP/top_k/topK；`normalize_gemini_contents` 只执行一次 role/content
+      normalization，直接产出 serializer-ready contents/systemInstruction，prefill gate
+      与 serializer 都不读取 raw messages；assistant+system、assistant+developer、
+      all-system/developer、non-empty model+trailing-empty、all-empty 均 pre-network
+      error，user+system 保留 user contents 可通过；positive param allowlist 精确等于
+      `{max_tokens, stop, stream}`，分别落到 maxOutputTokens/stopSequences/stream
+      transport；temperature/top_p/top_k/tools/tool_choice/response_format/
+      max_completion_tokens 均排除，provider/preflight/map/serializer set-equality 与 sink
+      fixture 通过；既有 Gemini
       ToolResult/ToolUse 序列化与完整 callability 归 GH1111、非本任务 acceptance，且
       GH1108 implementation 不依赖 GH1111；no family-substring inheritance or silent
       drop remains for this contract. Verify:
@@ -82,11 +87,19 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       credential path unchanged. Files: `tests/live_gemini.rs`,
       `docs/providers/gemini.md`, `docs/providers/README.md`; production catalog/provider
       files read-only. Done when: ignored live tests require exactly
-      `LITELLM_RS_LIVE_GEMINI=1`; absent opt-in/key makes zero network calls; static/list/
-      get/minimal-call steps aggregate to a typed result; auth/quota/not_found/protocol/
-      network 是且仅是五个 closed error classes；cancellation/timeout 产生带 termination
-      reason 的 incomplete、不是第六错误类；sentinel key is absent from
-      all captured outputs/artifacts; docs give the exact opt-in command, migration,
+      `LITELLM_RS_LIVE_GEMINI=1`；scoped-env 2×2 fixture 的双 unset、仅 sentinel
+      `GEMINI_API_KEY`、仅 opt-in=1 且 GEMINI_API_KEY/GOOGLE_API_KEY/其他 Developer
+      aliases unset 均 network counter=0，双满足只命中 fake transport，fixture 恢复
+      原 env；static/list/get/
+      minimal-call steps 写入 closed schema
+      `{run_id, model, step, status, error_class, http_status, observed_at,
+      termination_reason}`；auth/quota/not_found/protocol/network 是且仅是五个 error
+      classes；transport deadline 为 failed/network/transport_timeout，只有 external
+      cancel/interruption 为 no-error-class incomplete；retry 使用不同 run_id，旧 steps
+      不聚合；missing required step 为 failed/protocol/missing_required_step；
+      redaction fixture 安装 captured tracing subscriber，sentinel key is absent from
+      tracing/stdout/stderr/error Display+Debug/config+result Debug/artifact；docs 给出
+      exact opt-in command、migration、
       disposition and Developer/Vertex boundary；分类与脱敏分别由 exact symbols
       `classify_live_failure`、`redact_live_artifact` 所有。Verify:
       `cargo test --locked live_gemini`、
@@ -101,7 +114,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       Done when: checker enforces full SHA/head/ancestor/tracked-clean/LCOV guards、non-empty
       changed-production denominator、all changed production sources in LCOV、changed-line
       ≥80%；五个 mandatory categories 均绑定 tech 表中 exact path + Rust symbol + marker
-      span，prefill 的两个 selectors 都满足，classification/redaction 独立满足；missing/
+      span，prefill 的 `normalize_gemini_contents`/`validate_no_model_prefill` 两个
+      selectors 都满足，classification/redaction 独立满足；missing/
       malformed selector、DA/BRDA、span 或 uncovered branch 全部 fail closed。negative
       fixtures 证明 same-path other-symbol 与 same-symbol outside-marker 的 covered branch
       不能满足 category，并分别证明 classification-only/redaction-only 失败。Verify:
@@ -166,8 +180,15 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - deprecated sampling fields 对 omitted/JSON-null 按 absent 处理；non-null 使用 typed
   pre-network rejection；其中 flattened top_k null 必须被 shared normalizer 消费并从
   extra_params 删除，禁止 silent drop/透传。
-- trailing semantically-empty turns 只 strip 一次；同一 retained sequence 供 gate 与
-  serializer，all-empty 与 retained model 结尾 fail closed。
+- one-shot `normalize_gemini_contents` 直接产出 contents/systemInstruction；gate 与
+  serializer 共用结果。System/Developer 不能遮蔽 terminal model，空 contents 与 final
+  model fail closed。
+- 新模型 positive params 精确为 `{max_tokens, stop, stream}`；tools/tool_choice 仅有现存
+  passthrough、无 serializer consumer，因此与 response_format/max_completion_tokens 一并
+  排除。
+- live artifact closed schema 含 run_id/termination_reason；transport timeout 是
+  failed/network，external cancel/interruption 才是 no-error-class incomplete；2×2 gate
+  matrix 与 captured tracing redaction fixture 必须通过。
 - `checks/gh1108_coverage_gate.py`/test 是 implementation manifest 的必交付物；必须在
   T5 read-only review 前由 coordinator 实现，不能以本 spec 里的临时 heredoc 替代。
 - live smoke 仍处于 manual validation 阶段；不得直接做 cron/CI automation。
