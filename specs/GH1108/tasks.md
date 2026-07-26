@@ -27,7 +27,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `B-001..B-017`; tech Product-to-Test Mapping and task `Covers:` union both cover the
       full set; planned-changes manifest is issue=1108/complete=true; official Developer
       sources are recorded；manifest 包含 versioned coverage checker/test，tech 已定义
-      七类 exact selector/span 和 fail-closed negative fixtures；GH1112 implementation
+      八类 exact selector/span 和 fail-closed negative fixtures；GH1112 implementation
       dependency and no-Vertex-inference boundary are explicit；最终 spec head 已获得
       maintainer 明确批准，且批准证据绑定该 exact head。Verify:
       `python3 checks/check_workflow.py --repo . --spec-dir specs/GH1108`、
@@ -55,8 +55,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `cargo test --locked google_model_catalog_2026_07`、
       `cargo test --locked gemini_2026_07_cost`、
       `test "$(git rev-parse HEAD)" = "$IMPLEMENTATION_HEAD_SHA" &&
-       git diff --name-only "$IMPLEMENTATION_BASE_SHA...$IMPLEMENTATION_HEAD_SHA"`
-      has no Vertex production path、
+       test -z "$(git diff --name-only
+       "$IMPLEMENTATION_BASE_SHA...$IMPLEMENTATION_HEAD_SHA" --
+       ':(glob)src/core/providers/vertex_ai/**')"`、
       `cargo fmt --all -- --check`、`cargo check --locked`.
 
 - [ ] `SP1108-T3` Covers: B-005, B-006, B-007, B-015. Owner: shared contract + Gemini consumer owner. Dependencies: SP1108-T2 stable committed head. Done when: detailed contract evidence below is satisfied. Verify: detailed commands below pass.
@@ -69,7 +70,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `src/core/models/openai/requests.rs`,
       `src/server/routes/ai/token_policy.rs`,
       `src/server/routes/ai/chat_tests.rs`,
-      `tests/gemini_router_fallback_routes.rs`; T2 catalog records read-only.
+      `tests/gemini_router_fallback_routes.rs`; T2 catalog records read-only；
+      `src/server/routes/ai/chat.rs`、`src/server/routes/ai/chat_streaming.rs`、
+      `src/core/types/chat.rs` 是 read-only context，不在 writable manifest。
       Done when: exact new-model contract removes `temperature`/`top_p`/`top_k` from
       supported params；typed temperature/top_p omitted/JSON-null 按 `Option` absent；
       flattened extra_body/extra_params 的 `top_k: Value::Null` 由 shared normalizer
@@ -83,8 +86,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       transport；temperature/top_p/top_k/tools/tool_choice/response_format/
       max_completion_tokens 均排除，provider/preflight/map/serializer set-equality 与 sink
       fixture 通过；`stream_options` 只接受 closed `include_usage: bool` wire metadata，
-      DTO boundary 拒绝 unknown/non-bool 但不消费合法 object；shared builder 必须保留
-      合法 metadata 直到 alias/fallback 后最终 deployment 选定；
+      DTO boundary 拒绝 unknown/non-bool 但不消费合法 object；shared builder 继续生成
+      既有 canonical core metadata 并保留到 alias/fallback 后最终 deployment 选定，
+      不承诺 client wire false 原值透传；
       `prepare_chat_request_for_provider` 只对 selected Gemini Developer + 两个新 exact ID
       调用 `normalize_selected_gemini_stream_metadata` 并消费为
       `{client_requested_usage, include_usage:true}`；direct/alias/fallback 到新模型的
@@ -99,6 +103,10 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       drop remains for this contract. Verify:
       `cargo test --locked gemini_2026_07`、
       `cargo test --locked gemini_router_fallback`、network-counter negatives、
+      `test -z "$(git diff --name-only
+       "$IMPLEMENTATION_BASE_SHA...$IMPLEMENTATION_HEAD_SHA" --
+       src/server/routes/ai/chat.rs src/server/routes/ai/chat_streaming.rs
+       src/core/types/chat.rs)"`、
       `cargo fmt --all -- --check`、`cargo check --locked`.
 
 - [ ] `SP1108-T4` Covers: B-010, B-011, B-012, B-014, B-016. Owner: live-smoke test/documentation owner. Dependencies: SP1108-T3 stable committed head. Done when: detailed smoke/redaction evidence below is satisfied. Verify: detailed commands below pass.
@@ -128,16 +136,30 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       token counts/fixed-decimal prices、aggregate keys step/model lexical sort、recursive
       lexical JSON keys canonicalize，再对 observation 求 SHA-256；observation/digest
       同生同灭且必须重算匹配，任一事实变化必须改变 canonical observation/digest；
-      auth/quota/not_found/protocol/network 是且仅是五个 error
-      classes；transport deadline 为 failed/network/transport_timeout，只有 external
-      cancel/interruption 为 no-error-class incomplete；retry 使用不同 run_id，旧 keys
-      不聚合；missing required step 为 failed/protocol/missing_required_step；
+      `classify_live_failure` 按 tech closed table 穷举 exact terminal event、structured
+      Google reason、typed ProviderError、numeric HTTP fallback 与 local validation：
+      auth/quota/not_found/protocol/network 是且仅是五类，禁止 message substring；
+      precedence 固定为 first terminal event → structured reason → ProviderError → HTTP →
+      local protocol，deadline/cancel race 使用 atomic first-terminal-event-wins；403 +
+      RESOURCE_EXHAUSTED=quota，runner deadline=failed/network/transport_timeout，remote
+      DEADLINE_EXCEEDED=failed/network/step_failed，只有 verified external cancel/
+      interruption 为 no-error-class incomplete；`run_live_gemini_smoke` 注入 cancellation
+      token、transport barrier 与 reloadable artifact sink，每个 step 必须
+      redaction/canonicalization 后 await temp-write + atomic-replace snapshot，再开始下一
+      network call；真实 cancel 停止后续网络、把 in-flight/remaining keys 记为 incomplete
+      并 await flush，persistence failure 不得 passed；runner-level fixture reload 后证明
+      completed facts/digests 保留、later network=0、aggregate 非 passed；retry 使用不同
+      run_id，旧 keys 不聚合；只有无 external terminal event 的 natural missing required
+      step 为 failed/protocol/missing_required_step；
       redaction fixture 安装 captured tracing subscriber，sentinel key is absent from
       tracing/stdout/stderr/error Display+Debug/config+result Debug/artifact；docs 给出
       exact opt-in command、migration、
-      disposition and Developer/Vertex boundary；分类、脱敏、observation canonicalization
+      disposition and Developer/Vertex boundary；分类、脱敏、observation canonicalization、
+      runner cancellation/persistence
       分别由 exact symbols `classify_live_failure`、`redact_live_artifact`、
-      `canonicalize_live_observation` 所有。Verify:
+      `canonicalize_live_observation`、`run_live_gemini_smoke` 所有。Verify:
+      `cargo test --locked live_gemini_failure_mapping_precedence`、
+      `cargo test --locked live_gemini_runner_cancellation_persists_incrementally`、
       `cargo test --locked live_gemini`、
       `cargo test --locked --test live_gemini -- --ignored` with no opt-in proves skip/
       zero-network、manual
@@ -149,7 +171,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `checks/test_gh1108_coverage_gate.py`; production/test Rust files read-only.
       Done when: checker enforces full SHA/head/ancestor/tracked-clean/LCOV guards、non-empty
       changed-production denominator、all changed production sources in LCOV、changed-line
-      ≥80%；七个 mandatory categories 均绑定 tech 表中 exact path + Rust symbol + marker
+      ≥80%、changed paths 是 complete manifest 子集；chat.rs/chat_streaming.rs/
+      core/types/chat.rs read-only contexts 与 `src/core/providers/vertex_ai/**` 任一变化均
+      fail closed；八个 mandatory categories 均绑定 tech 表中 exact path + Rust symbol + marker
       span，prefill 的 `normalize_gemini_contents`/`validate_no_model_prefill` 两个
       selectors 都满足，stream metadata 的 `src/server/routes/ai/token_policy.rs` /
       `prepare_chat_request_for_provider` / `selected-deployment-stream-metadata` selector
@@ -159,10 +183,17 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       unknown/non-bool wire rejection。live observation 的
       `canonicalize_live_observation` selector 覆盖 redaction-first/hash-only/
       optional-pair/partial/no-response/per-model-missing-key/one-fact-different branches，
-      classification/redaction/canonicalization 独立满足；missing/
+      `classify_live_failure` selector 覆盖完整 source→class table、precedence、
+      first-terminal-event-wins 与 no-substring branches；
+      `run_live_gemini_smoke` / `live-runner-cancellation-persistence` selector 必须由真实
+      runner 驱动 barrier/cancellation/sink reload，覆盖每-step awaited atomic replace、
+      cancel flush、remaining incomplete、no-later-network、persistence failure 与
+      new-run-id isolation；只构造 incomplete record 或只测 sink helper 不算覆盖；
+      classification/redaction/canonicalization/interruption-persistence 独立满足；missing/
       malformed selector、DA/BRDA、span 或 uncovered branch 全部 fail closed。negative
       fixtures 证明 same-path other-symbol 与 same-symbol outside-marker 的 covered branch
-      不能满足 category，并分别证明 classification/redaction/canonicalization 任一
+      不能满足 category，并分别证明 classification/redaction/canonicalization/
+      interruption-persistence 任一
       missing/uncovered 时失败。Verify:
       `python3 checks/test_gh1108_coverage_gate.py`；生成 LCOV 后执行
       `python3 checks/gh1108_coverage_gate.py --repo . --base "$IMPLEMENTATION_BASE_SHA"
@@ -177,7 +208,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       changed production Rust line coverage is at least 80%；versioned checker 证明
       catalog evidence validation、deprecated rejection、prefill rejection、
       stream-metadata validation、live classification、live redaction、
-      live-observation canonicalization 的 mandatory
+      live-observation canonicalization、live interruption persistence 的 mandatory
       symbol/marker spans 各自存在 changed
       branch records 且 100% covered；coverage gate 验证完整
       `IMPLEMENTATION_BASE_SHA`/`IMPLEMENTATION_HEAD_SHA`、exact HEAD、tracked clean、
@@ -209,7 +240,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - Planned manifest: issue=1108、complete=true、包含 neutral catalog、shared contract、
   Gemini consumers、post-selection token-policy stream-metadata adapter/tests、live smoke、
   versioned coverage
-  checker/tests 与 provider docs。
+  checker/tests 与 provider docs；chat.rs/chat_streaming.rs/core/types/chat.rs 仅为
+  read-only context，不扩 writable manifest。
 - Spec phase:
   `python3 checks/check_workflow.py --repo . --spec-dir specs/GH1108`、
   `python3 checks/check_workflow.py --repo .`、`git diff --check`.
@@ -235,8 +267,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - 新模型 positive params 精确为 `{max_tokens, stop, stream}`；tools/tool_choice 仅有现存
   passthrough、无 serializer consumer，因此与 response_format/max_completion_tokens 一并
   排除。stream_options 是 gateway settlement metadata，不是第四个 param；builder 保留到
-  final selection，只有 selected Gemini Developer + 两个新 exact ID 在 token-policy hook
-  消费。direct/alias/fallback 的 canonical include_usage=true 到达 stream transport 但不
+  final selection 的是既有 canonical core metadata，不承诺 wire false 原值透传；只有
+  selected Gemini Developer + 两个新 exact ID 在 token-policy hook 消费。
+  direct/alias/fallback 的 canonical include_usage=true 到达 stream transport 但不
   进 upstream body；OpenAI/OpenRouter hook input/output 相等，selection failure 不修改
   请求，selected
   new-Gemini 非法或 non-stream 组合 fail closed。
@@ -248,9 +281,15 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   observation/digest pair；passed 必须 complete，auth/timeout/cancel 无响应不得伪造
   observation，partial 只存真实 facts。静态/list 与两个 exact model 各自 get/minimal-call
   按 `(step, model)` keys 聚合，一个模型不能替代另一个；实际 facts 经 credential
-  redaction 后 canonicalize，pair/digest 必须一致且事实变化产生不同记录；transport timeout 是
-  failed/network，external cancel/interruption 才是 no-error-class incomplete；2×2 gate
-  matrix 与 captured tracing redaction fixture 必须通过。
+  redaction 后 canonicalize，pair/digest 必须一致且事实变化产生不同记录；error class
+  使用 closed source table 与 first-terminal-event-wins，禁止 substring；transport
+  timeout 是 failed/network，verified external cancel/interruption 才是 no-error-class
+  incomplete。真实 runner cancellation fixture 必须证明逐 step await atomic snapshot、
+  cancel flush、reload 保留、later network=0 与 new run_id isolation；2×2 gate matrix 与
+  captured tracing redaction fixture 必须通过。
+- Vertex production unchanged 由对 `src/core/providers/vertex_ai/**` 真正非零退出的
+  fail-closed path gate 证明；neutral catalog 内 Vertex overlay 仍由 snapshot fixture
+  独立证明。
 - `checks/gh1108_coverage_gate.py`/test 是 implementation manifest 的必交付物；必须在
   T5 read-only review 前由 coordinator 实现，不能以本 spec 里的临时 heredoc 替代。
 - live smoke 仍处于 manual validation 阶段；不得直接做 cron/CI automation。

@@ -107,9 +107,11 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    gateway streaming settlement metadata；它不得加入上述 positive allowlist，也不得
    进入 Gemini upstream body。API boundary 可按闭合 wire shape 对所有请求拒绝 unknown
    字段或非 boolean `include_usage`，但不得借此消费合法 metadata。共享 gateway builder
-   必须先保留合法 `stream_options`；等 alias/fallback 已解析且最终 deployment 已选定后，
-   只有最终选中的 provider 是 Gemini Developer、exact model 是上述两个新 ID 时才执行
-   模型特定校验并消费，生成 `include_usage=true` 的 canonical settlement metadata。direct、
+   继续按既有行为把 client preference 转成 canonical core `stream_options`（包括为内部
+   settlement 请求 `include_usage=true`）；“保留”只表示该 canonical metadata 在最终
+   selection 前不被 take/drop，不承诺 wire `include_usage=false` 到 upstream 的值保持
+   不变。等 alias/fallback 已解析且最终 deployment 已选定后，只有最终选中的 provider 是
+   Gemini Developer、exact model 是上述两个新 ID 时才执行模型特定校验并消费。direct、
    alias 与 fallback 到该契约都必须使用最终身份得到相同行为；最终选中 OpenAI、
    OpenRouter 或其他 provider 时，post-selection hook 的 `stream_options` 输入/输出必须
    相等，selection failure 也不得修改原请求。unknown/non-bool wire shape 在 API
@@ -130,10 +132,22 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     普通单元测试、全量测试和应用启动不得隐式触发。
 11. **B-011** opt-in live smoke 必须分别记录静态目录、官方 list-models/get-model
     exact 结果与最小调用结果，并把失败分类为闭集
-    `{auth, quota, not_found, protocol, network}`。已发出的 transport 请求达到 deadline
-    timeout 必须是 `status=failed`、`error_class=network`，并记录 timeout termination；
-    任一必需步骤未执行必须是 `status=failed`、`error_class=protocol`，并记录
-    missing-step termination，不得报告整体通过。每个 record 必须保存 credential-free
+    `{auth, quota, not_found, protocol, network}`，且 source→class 映射必须闭合、确定：
+    exact structured Google reason 优先于 typed provider error，typed provider error 优先于
+    HTTP status fallback；禁止按 error message substring 分类。Authentication/401/403/
+    `UNAUTHENTICATED`/`PERMISSION_DENIED` → auth；RateLimit/QuotaExceeded/402/429/
+    `RESOURCE_EXHAUSTED` → quota；ModelNotFound/404/`NOT_FOUND` → not_found；
+    InvalidRequest、serialization/parsing/schema/exact mismatch、其他 4xx 和自然结束后的
+    missing step → protocol；Network/Timeout/ProviderUnavailable/streaming transport、
+    408/504/5xx/`UNAVAILABLE`/`DEADLINE_EXCEEDED` → network。显式 runner terminal event
+    优先于以上 response/error facts；deadline 与 external cancellation/interruption
+    竞争时，原子记录的首个 terminal event 胜出，后到事件不得重分类。已发出的 transport
+    请求达到 deadline timeout 必须是 `status=failed`、`error_class=network`，并记录
+    timeout termination；
+    无 external terminal event 时，任一必需步骤在自然结束后仍未执行必须是
+    `status=failed`、`error_class=protocol`，并记录 missing-step termination，不得报告
+    整体通过；external cancellation/interruption 后未执行的步骤按 B-014 记为
+    incomplete。每个 record 必须保存 credential-free
     的 closed typed attempt/termination facts；只有真实取得并解析的响应事实才可保存为
     `observation`，不得为 auth、timeout、cancel 或未收到/未解析响应的失败填充空字符串、
     零值或成功形状。`passed` 必须保存完整、step-specific 的 closed typed
@@ -158,8 +172,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     有完整或 partial typed observation 时必须先脱敏、canonicalize，并保存匹配 digest；
     digest 不能替代 observation。只有外部 cancel/interruption 为
     `status=incomplete` 且 `error_class` 缺失；transport deadline 按 B-011 归
-    `failed/network`。每次重试必须生成不同 run_id，不得复用旧凭证输出或把先前部分
-    成功冒充当前完整通过。aggregate 必须以闭合 `(step, model)` key 逐项结算：
+    `failed/network`。runner 必须在开始下一 required step 前等待当前 step 的
+    credential-free snapshot 原子持久化完成；真实 external cancellation/interruption
+    发生时必须停止后续网络调用、flush 当前 termination/incomplete state，并允许重新读取
+    已完成步骤。取消后的当前与尚未开始 keys 归 `incomplete_keys`，不得被后续
+    missing-step aggregation 改写为 protocol failure；只有无 external terminal event 的
+    自然结束缺项才是 missing-required-step。每次重试必须生成不同 run_id，不得复用旧凭证
+    输出或把先前部分成功冒充当前完整通过。aggregate 必须以闭合 `(step, model)` key 逐项结算：
     global static/list 的 model 为 none；两个新 exact ID 各自都必须有一个 get-model 和
     一个 minimal-call key，一个模型的成功不能替代另一个。任一 observation fact 不同都
     必须产生不同 canonical observation/digest，不能落成相同的成功记录。
@@ -202,7 +221,8 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
       `{max_tokens, stop, stream}`；tools/tool_choice/response_format/max_completion_tokens
       与三项 deprecated sampling params 均不在集合，provider/preflight/map/serializer
       fixture 对集合和值去向完全一致；gateway builder 保留 `stream_options` 直到最终
-      deployment 选定，direct/alias/fallback 到两个新 Gemini 模型后才校验并消费
+      deployment 选定；这里保留的是既有 builder 生成的 canonical core metadata，不承诺
+      wire false 原值透传。direct/alias/fallback 到两个新 Gemini 模型后才校验并消费
       `include_usage=true` 并到达 streaming transport、从不进入 upstream body；
       OpenAI/OpenRouter 在 post-selection hook 前后值相等、selection failure 不修改请求，
       所选 GH1108 Gemini 模型的非法/不一致 metadata 与 non-stream 组合均 pre-network
@@ -218,7 +238,9 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
       observation，failed/incomplete 不得伪造 response facts，partial 只保存实际取得的
       typed fields；aggregate 以闭合 `(step, model)` keys 结算且缺任一模型即失败。不同
       observation 不产生相同成功记录；transport timeout 为 failed/network，外部
-      cancel/interruption 为无 error_class 的 incomplete，重试使用新 run_id。
+      cancel/interruption 为无 error_class 的 incomplete；runner-level fixture 必须在真实
+      step 阻塞点触发 cancellation，重新读取逐 step 原子 snapshot，证明已完成步骤保留、
+      后续网络调用为零且 retry 使用新 run_id。
 - [ ] captured tracing subscriber 下，sentinel 凭证在 tracing、stdout、stderr、错误、
       Debug/Display 和 artifact 中均无明文命中。
 - [ ] Vertex AI、Interactions API、GH1111 tool loop 与 GH1113 pricing authority
@@ -259,10 +281,11 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 - `max_tokens`/`stop` 的 body mapping 与 `stream` transport selection 是新模型仅有的三项
   positive params；tools/tool_choice 的 passthrough、response_format/max_completion_tokens
   的字段存在都不能冒充 serializer support。`stream_options` 是 gateway metadata 而非
-  第四个 provider param；共享 builder 先保留它，最终选中两个新 Gemini 模型后才消费。
-  direct/alias/fallback 的 canonical include_usage=true 可到达 stream transport 但不得进入
-  upstream body；OpenAI/OpenRouter 在 post-selection hook 前后值相等，selection failure
-  不修改请求，所选新模型的
+  第四个 provider param；共享 builder 生成 canonical core metadata 并在 pre-selection
+  阶段保持该 object 不被 take/drop，不承诺 client wire `include_usage=false` 原值透传；
+  最终选中两个新 Gemini 模型后才消费。direct/alias/fallback 的 canonical
+  include_usage=true 可到达 stream transport 但不得进入 upstream body；OpenAI/OpenRouter
+  在 post-selection hook 前后值相等，selection failure 不修改请求，所选新模型的
   non-stream + stream_options 必须拒绝。
 - opt-in=1 但 key unset 与 key set 但 opt-in unset 均必须零网络；transport deadline
   timeout 记录 failed/network，新 retry 使用新 run_id；外部 cancel/interruption 才是
@@ -272,6 +295,10 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   partial response 只能保存真实 typed partial facts。只保存 digest、伪造成功 observation、
   让一个模型替代另一个模型的 required key，或把两个不同 response observations
   canonicalize 成同一成功记录均失败。
+- 403 + structured `RESOURCE_EXHAUSTED` 必须按 quota 而非 auth；deadline 与 external
+  cancellation 同时就绪时只采用原子记录的首个 terminal event，后到 signal 不得覆写。
+- runner 在 fake transport barrier 上收到 external cancellation 后必须停止后续请求；
+  reload artifact 仍能看到此前已 await-persist 的 steps 和当前 incomplete termination。
 - list-models 出现但 lifecycle 页面未提供通用 chat 正证据时保持不公开，并记录冲突。
 - live minimal call 成功但静态价格/limits 不匹配时 smoke 整体失败，不能用连通性覆盖
   metadata 漂移。
