@@ -189,8 +189,18 @@ monitoring:
     backends: []
 
 cache:
-  # NOT YET IMPLEMENTED: the response cache is not wired into the request
-  # path; all cache settings below currently have no effect.
+  # The deterministic response cache is wired into the request path. With
+  # enabled: true (and ttl > 0) non-streaming /v1/chat/completions and
+  # /v1/embeddings responses are stored and replayed. Cache entries are scoped
+  # to the authenticated api key or user, so responses are never shared across
+  # callers. ttl: 0 with enabled: true logs an error and leaves the cache off.
+  #
+  # Chat has bypass conditions that embeddings do not. The chat cache is
+  # skipped, for both lookup and store and without any log line, when the
+  # request carries a per-key budget, when the request sets store: true, or
+  # when an upstream handler marked the context as bypassed. In a deployment
+  # where every key has a budget attached, chat therefore stays at a 0% hit
+  # rate while embeddings still cache normally.
   enabled: false
   ttl: 3600
   max_size: 1000
