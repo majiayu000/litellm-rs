@@ -517,6 +517,8 @@ typo_field: true
 
     #[test]
     fn test_gateway_yaml_example_matches_config_schema() {
+        use crate::config::models::gateway::UnpricedModelPolicy;
+
         let example_path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config/gateway.yaml.example");
         let content = std::fs::read_to_string(example_path).unwrap();
@@ -529,7 +531,58 @@ typo_field: true
             );
 
         let gateway: GatewayConfig = serde_yml::from_str(&content).unwrap();
-        Config { gateway }.validate().unwrap();
+        Config {
+            gateway: gateway.clone(),
+        }
+        .validate()
+        .unwrap();
+        assert_eq!(
+            gateway.pricing.unpriced_model_policy,
+            UnpricedModelPolicy::Reject
+        );
+        assert_eq!(gateway.pricing.unpriced_fallback_cost_per_1k_tokens, None);
+    }
+
+    #[test]
+    fn test_gateway_dev_yaml_example_matches_config_schema_and_prices_all_models() {
+        use crate::config::models::gateway::UnpricedModelPolicy;
+        use crate::core::pricing::embedded_default_pricing_models;
+        use crate::core::pricing_service::DEFAULT_PRICING_SOURCE;
+
+        let example_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("config/gateway.dev.yaml.example");
+        let content = std::fs::read_to_string(example_path).unwrap();
+        let gateway: GatewayConfig = serde_yml::from_str(&content).unwrap();
+
+        Config {
+            gateway: gateway.clone(),
+        }
+        .validate()
+        .unwrap();
+        assert_eq!(
+            gateway.pricing.source.as_deref(),
+            Some(DEFAULT_PRICING_SOURCE)
+        );
+
+        let priced_models = embedded_default_pricing_models().unwrap();
+        let unpriced_models: Vec<&str> = gateway
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled)
+            .flat_map(|provider| provider.models.iter())
+            .filter(|model| !priced_models.contains_key(*model))
+            .map(String::as_str)
+            .collect();
+
+        assert!(
+            unpriced_models.is_empty()
+                || (gateway.pricing.unpriced_model_policy == UnpricedModelPolicy::AllowUnpriced
+                    && gateway
+                        .pricing
+                        .unpriced_fallback_cost_per_1k_tokens
+                        .is_some()),
+            "enabled dev models {unpriced_models:?} need embedded prices or an explicit fallback"
+        );
     }
 
     #[test]

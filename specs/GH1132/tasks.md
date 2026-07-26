@@ -11,7 +11,7 @@ GH-1132 / #1132
 
 ## 决策门
 
-- [ ] `SP1132-T0` Covers: B-001 ～ B-008. Owner: maintainer/spec owner. Dependencies: none. Done when: dev-only embedded source + explicit zero fallback 行为绑定最终 spec SHA 获批，Issue 添加 `ready_to_implement`. Verify: SpecRail workflow/spec checks与 implement route gate。
+- [x] `SP1132-T0` Covers: B-001 ～ B-008. Owner: maintainer/spec owner. Dependencies: none. Done when: 维护者在 `user-2026-07-27-approve-all-specs` 批准 dev-only embedded source + explicit zero fallback 行为，Issue 已添加 `ready_to_implement`. Verify: SpecRail workflow/spec checks与 implement route gate。
 
 ## 实现任务
 
