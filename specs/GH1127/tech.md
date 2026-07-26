@@ -57,8 +57,11 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
 - Chat 从转换后的 `ChatCompletionDelta` 提取 `content`、`thinking.content` 或其
   `reasoning_content` alias（同一语义值只累计一次）、`refusal`、`audio.transcript`、
   legacy `function_call.name/arguments` 与
-  `tool_calls[].function.name/arguments`。audio base64 data、role、IDs、usage、
-  finish reason 与 transport markers 只缓冲、不扫描。
+  `tool_calls[].function.name/arguments`；同时从 choice logprobs 提取
+  `content[].token` 与 `top_logprobs[].token`。每个 event/choice 使用稳定去重集，
+  与 `delta.content` 完全相同或已出现的 token 只累计一次，其他客户端可见候选
+  token 均进入带 surface 边界的累计文本。audio base64 data、role、IDs、usage、
+  finish reason、logprob bytes/数值与 transport markers 只缓冲、不扫描。
 - Completion 扫描最终 client-visible `text`，包含一次 `echo`。
 - Responses 直接从每个上游 `choice.delta` 提取 output text、thinking、
   tool/function name 与 arguments，并在派生 `.delta` event 前只累计一次；派生的
@@ -136,7 +139,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、refusal、audio transcript、tool/function name+args、Responses done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、refusal、audio transcript、logprobs chosen/top token 去重、tool/function name+args、Responses done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |
@@ -184,7 +187,7 @@ block/error/overflow 丢弃当前 pending、取消上游并发送安全 terminal
 
 ## 测试计划
 
-- [ ] Unit tests: `stream_output_check_chars` validation、pending/cumulative accounting、所有文本 surface、语义 alias 去重、UTF-8、error envelope。
+- [ ] Unit tests: `stream_output_check_chars` validation、pending/cumulative accounting、所有文本 surface、reasoning/logprobs 语义去重、UTF-8、error envelope。
 - [ ] Integration tests: Chat/Completion/Responses 单窗口/多窗口 safe、后续窗口 block、跨阈值完整 event、error、overflow、disabled。
 - [ ] Lifecycle tests: usage、预算、provider lease、callback、pending 后 provider error/idle timeout 不泄露、三阶段断连。
 - [ ] Deterministic checks: `cargo fmt --check`; `cargo check`; `cargo clippy --all-targets -- -D warnings`; focused guardrail/stream tests; `cargo test`。

@@ -15,9 +15,9 @@ GH-1127 / #1127
 
 ## 实现任务
 
-- [ ] `SP1127-T1` Covers: B-001, B-002, B-003, B-005, B-008, B-012, B-013, B-014, B-015. Owner: stream guardrail implementation owner. Dependencies: SP1127-T0. Done when: config 与 `check_output_text`、共享 `StreamOutputGuard` 完成 fixed windowed cumulative、256/1..=4096、8 MiB 双上限、全部客户端可见文本 surface、Responses/alias 去重、UTF-8 安全和 disabled fast path. Verify: focused config/guardrail/state-machine tests.
+- [ ] `SP1127-T1` Covers: B-001, B-002, B-003, B-005, B-008, B-012, B-013, B-014, B-015. Owner: stream guardrail implementation owner. Dependencies: SP1127-T0. Done when: config 与 `check_output_text`、共享 `StreamOutputGuard` 完成 fixed windowed cumulative、256/1..=4096、8 MiB 双上限、全部客户端可见文本 surface、Responses/reasoning/logprobs 去重、UTF-8 安全和 disabled fast path. Verify: focused config/guardrail/state-machine tests.
 - [ ] `SP1127-T2` Covers: B-001, B-004, B-006, B-007, B-009, B-010, B-011, B-012, B-013, B-016. Owner: same implementation owner. Dependencies: SP1127-T1. Done when: chat/completions/Responses 三条 stream loop 在每个窗口发送前接入累计检查；blocked/error 不泄露当前 pending，发送稳定 error + 一个 `[DONE]`，事件顺序、usage、lease/callback/settlement/persistence 保持. Verify: 三 handler focused stream/lifecycle tests.
-- [ ] `SP1127-T3` Covers: B-002 ～ B-016. Owner: test owner. Dependencies: SP1127-T2. Done when: 单/多窗口、后续窗口违规、跨 chunk、UTF-8、content/thinking/reasoning/refusal/audio transcript/tool/function surface、Responses done/snapshot 去重、guardrail timeout/error/fail_open、overflow、pending 后 provider error/idle 不泄露、disconnect 和 lifecycle exactly-once fixture 完整. Verify: focused route/lifecycle test filters.
+- [ ] `SP1127-T3` Covers: B-002 ～ B-016. Owner: test owner. Dependencies: SP1127-T2. Done when: 单/多窗口、后续窗口违规、跨 chunk、UTF-8、content/thinking/reasoning/refusal/audio transcript/logprobs/tool/function surface、Responses done/snapshot 与 Chat alias/token 去重、guardrail timeout/error/fail_open、overflow、pending 后 provider error/idle 不泄露、disconnect 和 lifecycle exactly-once fixture 完整. Verify: focused route/lifecycle test filters.
 - [ ] `SP1127-T4` Covers: B-001 ～ B-016. Owner: verification owner. Dependencies: SP1127-T3. Done when: diff 只覆盖已批准设计，完整 Rust/SpecRail gate 通过且有安全人工 review. Verify: `cargo fmt --check`; `cargo check`; `cargo clippy --all-targets -- -D warnings`; `cargo test`; workflow/spec checks; `git diff --check`.
 
 ## 并行拆分

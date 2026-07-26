@@ -31,7 +31,7 @@ complexity: high
 
 ## Behavior Invariants
 
-1. B-001 当输出 guardrail 生效时，`/v1/chat/completions`、`/v1/completions` 和 `/v1/responses` 的全部客户端可见模型文本必须在发送给客户端前通过输出检查；包括 content、thinking/reasoning、refusal、audio transcript、tool/function name 与 arguments。
+1. B-001 当输出 guardrail 生效时，`/v1/chat/completions`、`/v1/completions` 和 `/v1/responses` 的全部客户端可见模型文本必须在发送给客户端前通过输出检查；包括 content、thinking/reasoning、refusal、audio transcript、logprobs token、tool/function name 与 arguments。
 2. B-002 审核粒度固定为 `windowed_cumulative`：三条路径使用 `guardrails.stream_output_check_chars` 作为 event-aligned 检查触发阈值，默认 `256` 个新增 Unicode 字符，合法范围 `1..=4096`；包含使新增字符数达到或超过阈值的完整 provider event，并对截至该 event 的累计模型文本执行检查，禁止只检查独立 provider chunk。
 3. B-003 跨 chunk 敏感词、跨 chunk PII 与多字节 UTF-8 必须通过累计文本检测；provider chunk 切分不得造成独立 chunk 扫描绕过。由于原 SSE event 不拆分，单个 event 可使实际 pending 窗口超过配置字符阈值。
 4. B-004 当前 pending 窗口通过审核前不得发送其中的模型文本、reasoning summary 或 tool/function arguments；允许立即发送的内容仅限不包含模型数据且不破坏事件顺序的连接级元数据或 SSE 注释。
@@ -51,7 +51,7 @@ complexity: high
 ## 验收标准
 
 - [ ] 三条端点均有测试证明每个安全窗口在累计审核后按原 SSE 顺序回放。
-- [ ] 三条端点均有测试证明被拒窗口中的 content、thinking/reasoning、refusal、audio transcript 与 tool/function name/arguments 不出现在任何已发送 event 中。
+- [ ] 三条端点均有测试证明被拒窗口中的 content、thinking/reasoning、refusal、audio transcript、logprobs token 与 tool/function name/arguments 不出现在任何已发送 event 中。
 - [ ] 跨 chunk 敏感模式与多字节 UTF-8 使用累计文本检测；测试证明阈值按 Unicode 字符计数、触发 event 不拆分且其完整模型文本先审核后释放。
 - [ ] Responses 测试证明 delta/done/snapshot 的重复表达只累计一次，不会重复触发字符阈值或 8 MiB 上限。
 - [ ] pending/cumulative buffer overflow、guardrail 拒绝、默认 fail-closed 错误与显式 `fail_open` 均有确定测试。
@@ -66,6 +66,7 @@ complexity: high
 - 敏感模式可能从一个 chunk 的末尾延伸到下一个 chunk 的开头。
 - provider 可能先发送 role、usage 或空 delta，再发送文本。
 - Chat 可能同时序列化 `thinking.content` 与相同的 `reasoning_content` alias；相同语义增量只累计一次。
+- Chat logprobs 可能重复 `delta.content` 或同一候选 token；同 event 内完全相同的语义值只累计一次，未出现在 content 的 top candidate 仍须扫描。
 - upstream EOF 可能没有 usage；仍须使用既有 reserved-spend fallback。
 - guardrail 可能在上游已经产生完整 usage 后拒绝内容；拒绝不免除已发生费用。
 - provider error 或 idle timeout 可能发生在已有安全窗口释放之后；已释放前缀不可撤回，但当前未审核 pending 必须丢弃。
