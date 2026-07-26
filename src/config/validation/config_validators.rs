@@ -28,6 +28,11 @@ impl GatewayConfig {
             if alias.trim().is_empty() {
                 return Err("Model alias name cannot be empty".to_string());
             }
+            if *alias != alias.trim() {
+                return Err(format!(
+                    "Model alias name '{alias}' cannot contain leading or trailing whitespace"
+                ));
+            }
             if target.trim().is_empty() {
                 return Err(format!("Model alias '{alias}' target cannot be empty"));
             }
@@ -486,7 +491,7 @@ mod model_alias_validation_tests {
             (vec![("", "model")], "name cannot be empty"),
             (vec![("alias", " ")], "target cannot be empty"),
             (vec![("alias", "alias")], "cannot target itself"),
-            (vec![(" alias ", "alias")], "cannot target itself"),
+            (vec![("alias", " alias ")], "cannot target itself"),
             (vec![("a", "b"), ("b", "a")], "cycle detected"),
             (vec![("a", "b"), ("b", "c"), ("c", "a")], "cycle detected"),
         ] {
@@ -494,6 +499,20 @@ mod model_alias_validation_tests {
                 .expect_err("invalid alias graph must fail");
             assert!(error.contains(expected), "{error}");
         }
+    }
+
+    #[test]
+    fn phase_a_rejects_alias_names_with_surrounding_whitespace() {
+        for alias in [" public", "public ", " public "] {
+            let error = GatewayConfig::validate_model_alias_map(&aliases(&[(alias, "gpt-4o")]))
+                .expect_err("alias names must not contain surrounding whitespace");
+            assert!(
+                error.contains("cannot contain leading or trailing whitespace"),
+                "{error}"
+            );
+        }
+
+        assert!(GatewayConfig::validate_model_alias_map(&aliases(&[("public", "gpt-4o")])).is_ok());
     }
 
     #[test]

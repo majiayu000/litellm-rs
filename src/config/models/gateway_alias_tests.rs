@@ -83,6 +83,29 @@ fn model_alias_merge_is_key_wise_with_overlay_wins() {
 }
 
 #[test]
+fn layered_yaml_alias_with_surrounding_whitespace_fails_validation() {
+    let base = GatewayConfig {
+        model_aliases: alias_map(&[("stable", "model-v1")]),
+        ..Default::default()
+    };
+    let yaml_aliases: HashMap<String, String> =
+        serde_yml::from_str("' public ': gpt-4o").expect("alias YAML should deserialize");
+    let overlay = GatewayConfig {
+        model_aliases: yaml_aliases,
+        ..Default::default()
+    };
+
+    let merged = base.merge(overlay);
+    assert!(merged.model_aliases.contains_key(" public "));
+    let error = GatewayConfig::validate_model_alias_map(&merged.model_aliases)
+        .expect_err("layered YAML aliases must fail closed on surrounding whitespace");
+    assert!(
+        error.contains("cannot contain leading or trailing whitespace"),
+        "{error}"
+    );
+}
+
+#[test]
 fn gateway_unknown_fields_remain_rejected() {
     let mut gateway =
         serde_json::to_value(GatewayConfig::default()).expect("default gateway should serialize");
