@@ -41,8 +41,11 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `src/core/providers/google/models/catalog/{mod.rs,gemini35.rs,gemini36.rs}`,
       `src/core/providers/google/models/tests.rs`; all Gemini/Vertex consumers read-only.
       Done when: both GA exact IDs、limits、provider-callable exact closed capability/feature
-      sets（capability 仅 ChatCompletion/ChatCompletionStream、supports_tools=false，feature
-      不含 ToolCalling/FunctionCalling/JsonMode）、Gemini
+      sets（capability 仅 ChatCompletion/ChatCompletionStream、supports_tools=false；
+      feature 精确为 MultimodalSupport/StreamingSupport/SystemInstructions，并分别绑定
+      inlineData image/stream endpoint/systemInstruction serializer；显式排除
+      ContextCaching/SearchGrounding/VideoUnderstanding/AudioUnderstanding 以及
+      ToolCalling/FunctionCalling/JsonMode）、Gemini
       Developer API paid Standard per-million pricing and official evidence are present
       in the Developer overlay；Batch/Flex/Priority 不复用或宣称该定价；every
       pre-refresh Developer chat ID
@@ -64,8 +67,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `src/core/providers/gemini/provider_tests.rs`,
       `src/core/providers/gemini/client.rs`,
       `src/core/models/openai/requests.rs`,
-      `src/server/routes/ai/chat.rs`,
-      `src/server/routes/ai/chat_streaming.rs`,
+      `src/server/routes/ai/token_policy.rs`,
       `src/server/routes/ai/chat_tests.rs`,
       `tests/gemini_router_fallback_routes.rs`; T2 catalog records read-only.
       Done when: exact new-model contract removes `temperature`/`top_p`/`top_k` from
@@ -81,12 +83,17 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       transport；temperature/top_p/top_k/tools/tool_choice/response_format/
       max_completion_tokens 均排除，provider/preflight/map/serializer set-equality 与 sink
       fixture 通过；`stream_options` 只接受 closed `include_usage: bool` wire metadata，
-      `normalize_gateway_stream_metadata` 在 provider allowlist 前把 stream=true 请求
-      规范化为 `{client_requested_usage, include_usage:true}` 并消费该 metadata；
-      canonical include_usage=true fixture 到达 ChatCompletionStream/
-      chat_completion_stream，而 Gemini upstream body 无 stream_options/include_usage；
-      unknown/non-bool/inconsistent metadata 与 non-stream + stream_options 均
-      pre-network fail closed，且 positive allowlist 仍只有三项；既有 Gemini
+      DTO boundary 拒绝 unknown/non-bool 但不消费合法 object；shared builder 必须保留
+      合法 metadata 直到 alias/fallback 后最终 deployment 选定；
+      `prepare_chat_request_for_provider` 只对 selected Gemini Developer + 两个新 exact ID
+      调用 `normalize_selected_gemini_stream_metadata` 并消费为
+      `{client_requested_usage, include_usage:true}`；direct/alias/fallback 到新模型的
+      canonical fixture 都到达 ChatCompletionStream/chat_completion_stream，Gemini
+      upstream body 无 stream_options/include_usage；OpenAI/OpenRouter 在
+      post-selection hook 前后值相等，
+      selection failure 不修改原请求；wire unknown/non-bool、所选新 Gemini 的 internal
+      inconsistent metadata 与 non-stream + stream_options 均 pre-network fail closed，且
+      positive allowlist 仍只有三项；既有 Gemini
       ToolResult/ToolUse 序列化与完整 callability 归 GH1111、非本任务 acceptance，且
       GH1108 implementation 不依赖 GH1111；no family-substring inheritance or silent
       drop remains for this contract. Verify:
@@ -105,18 +112,25 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       原 env；static/list/get/
       minimal-call steps 写入 closed schema
       `{run_id, model, step, status, error_class, http_status, observed_at,
-      termination_reason, observation, observation_sha256}`；observation 是 deny-unknown
-      tagged union，精确覆盖 static metadata 的 ID/catalog/lifecycle/limits/pricing/
+      termination_reason, attempt, observation?, observation_sha256?}`；attempt 记录
+      started/network_attempted/response_received/response_parsed 实际阶段；observation 是
+      deny-unknown complete-or-partial tagged union，精确覆盖 static metadata 的
+      ID/catalog/lifecycle/limits/pricing/
       supports flags/capability/feature/evidence facts、list 的 returned count + exact matches、get 的
       returned exact resource/methods/limits、minimal-call 的 model version/candidates/
-      finish/text/usage facts，以及 aggregate step sets；passed record 缺 step-specific
-      facts、kind 错配或 hash-only 均 failed/protocol；redaction 后按 exact ID 不
+      finish/text/usage facts，以及 aggregate `(step, model)` key sets；passed record 必须
+      complete、pair digest 一致，缺 step/model-specific facts、kind 错配、partial/none 或
+      hash-only 均 failed/protocol；auth/timeout/cancel 无 response observation 时 optional
+      pair 都缺失，不得伪造 success facts，partial 只保存真实 typed facts；aggregate
+      required keys 精确包含 global static/list 与两个 exact model 各自一次 get/minimal-call，
+      sets disjoint/union 完整，缺任一模型均 failed/protocol；redaction 后按 exact ID 不
       case-fold、set-valued fields lexical sort/dedupe、candidate/text 保序、integer
-      token counts/fixed-decimal prices、recursive lexical JSON keys canonicalize，再对
-      observation 求 SHA-256；任一事实变化必须改变 canonical observation/digest；
+      token counts/fixed-decimal prices、aggregate keys step/model lexical sort、recursive
+      lexical JSON keys canonicalize，再对 observation 求 SHA-256；observation/digest
+      同生同灭且必须重算匹配，任一事实变化必须改变 canonical observation/digest；
       auth/quota/not_found/protocol/network 是且仅是五个 error
       classes；transport deadline 为 failed/network/transport_timeout，只有 external
-      cancel/interruption 为 no-error-class incomplete；retry 使用不同 run_id，旧 steps
+      cancel/interruption 为 no-error-class incomplete；retry 使用不同 run_id，旧 keys
       不聚合；missing required step 为 failed/protocol/missing_required_step；
       redaction fixture 安装 captured tracing subscriber，sentinel key is absent from
       tracing/stdout/stderr/error Display+Debug/config+result Debug/artifact；docs 给出
@@ -137,10 +151,15 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       changed-production denominator、all changed production sources in LCOV、changed-line
       ≥80%；七个 mandatory categories 均绑定 tech 表中 exact path + Rust symbol + marker
       span，prefill 的 `normalize_gemini_contents`/`validate_no_model_prefill` 两个
-      selectors 都满足，stream metadata 的 `normalize_gateway_stream_metadata` selector
-      覆盖 canonical/invalid/non-stream branches，live observation 的
+      selectors 都满足，stream metadata 的 `src/server/routes/ai/token_policy.rs` /
+      `prepare_chat_request_for_provider` / `selected-deployment-stream-metadata` selector
+      覆盖 selected Gemini
+      direct/alias/fallback consume、OpenAI/OpenRouter preserve、selection-failure no
+      mutation 与 internal-inconsistent/non-stream branches；DTO unit fixtures 另行覆盖
+      unknown/non-bool wire rejection。live observation 的
       `canonicalize_live_observation` selector 覆盖 redaction-first/hash-only/
-      one-fact-different branches，classification/redaction/canonicalization 独立满足；missing/
+      optional-pair/partial/no-response/per-model-missing-key/one-fact-different branches，
+      classification/redaction/canonicalization 独立满足；missing/
       malformed selector、DA/BRDA、span 或 uncovered branch 全部 fail closed。negative
       fixtures 证明 same-path other-symbol 与 same-symbol outside-marker 的 covered branch
       不能满足 category，并分别证明 classification/redaction/canonicalization 任一
@@ -188,7 +207,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   B-011, B-012, B-013, B-014, B-015, B-016, B-017`.
 - Task `Covers:` union: 同一完整集合；无 orphan invariant。
 - Planned manifest: issue=1108、complete=true、包含 neutral catalog、shared contract、
-  Gemini consumers、gateway stream-metadata adapter/tests、live smoke、versioned coverage
+  Gemini consumers、post-selection token-policy stream-metadata adapter/tests、live smoke、
+  versioned coverage
   checker/tests 与 provider docs。
 - Spec phase:
   `python3 checks/check_workflow.py --repo . --spec-dir specs/GH1108`、
@@ -214,15 +234,21 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   model fail closed。
 - 新模型 positive params 精确为 `{max_tokens, stop, stream}`；tools/tool_choice 仅有现存
   passthrough、无 serializer consumer，因此与 response_format/max_completion_tokens 一并
-  排除。stream_options 是 gateway settlement metadata，不是第四个 param；只在
-  stream=true 下按 closed include_usage bool shape 接受，在 provider allowlist 前消费，
-  canonical include_usage=true 到达 stream transport 但不进 upstream body，非法或
-  non-stream 组合 fail closed。
-- 两个新模型不广告 ToolCalling/FunctionCalling/JsonMode，supports_tools=false；Google
-  产品支持不等于当前 provider callability，相关能力留给 GH1111/后续契约。
-- live artifact closed schema 含 run_id/termination_reason/step-specific observation/
-  observation_sha256；不能 hash-only，静态/list/get/minimal-call 实际 facts 经 credential
-  redaction 后 canonicalize，事实变化必须产生不同记录；transport timeout 是
+  排除。stream_options 是 gateway settlement metadata，不是第四个 param；builder 保留到
+  final selection，只有 selected Gemini Developer + 两个新 exact ID 在 token-policy hook
+  消费。direct/alias/fallback 的 canonical include_usage=true 到达 stream transport 但不
+  进 upstream body；OpenAI/OpenRouter hook input/output 相等，selection failure 不修改
+  请求，selected
+  new-Gemini 非法或 non-stream 组合 fail closed。
+- 两个新模型 features 仅 MultimodalSupport/StreamingSupport/SystemInstructions，不广告
+  ContextCaching/SearchGrounding/VideoUnderstanding/AudioUnderstanding 或
+  ToolCalling/FunctionCalling/JsonMode，supports_tools=false；Google 产品支持不等于当前
+  provider callability，相关能力留给 GH1111/后续契约。
+- live artifact closed schema 含 run_id/attempt/termination 与 status-dependent optional
+  observation/digest pair；passed 必须 complete，auth/timeout/cancel 无响应不得伪造
+  observation，partial 只存真实 facts。静态/list 与两个 exact model 各自 get/minimal-call
+  按 `(step, model)` keys 聚合，一个模型不能替代另一个；实际 facts 经 credential
+  redaction 后 canonicalize，pair/digest 必须一致且事实变化产生不同记录；transport timeout 是
   failed/network，external cancel/interruption 才是 no-error-class incomplete；2×2 gate
   matrix 与 captured tracing redaction fixture 必须通过。
 - `checks/gh1108_coverage_gate.py`/test 是 implementation manifest 的必交付物；必须在
