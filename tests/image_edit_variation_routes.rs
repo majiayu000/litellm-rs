@@ -238,6 +238,16 @@ mod tests {
         body
     }
 
+    fn image_edit_multipart_body_with_transport_padding(boundary: &str) -> Vec<u8> {
+        let body = String::from_utf8(image_edit_multipart_body(boundary))
+            .expect("multipart fixture should be utf-8");
+        body.replace(
+            &format!("--{boundary}\r\n"),
+            &format!("--{boundary} \t\r\n"),
+        )
+        .into_bytes()
+    }
+
     fn image_variation_multipart_body(boundary: &str) -> Vec<u8> {
         image_variation_multipart_body_for_model(boundary, "gpt-image-1-mini")
     }
@@ -562,6 +572,45 @@ mod tests {
             (model_spend - expected_cost).abs() < f64::EPSILON,
             "image proxy model spend must charge image tokens once"
         );
+
+        mock.stop_image_mock().await;
+    }
+
+    #[tokio::test]
+    async fn canonical_image_multipart_with_transport_padding_is_forwarded_byte_for_byte() {
+        let mock = MockImageServer::start_image_mock().await;
+        let state = build_test_state(vec![image_route_provider_with_name_and_models(
+            "mock-openai-compatible",
+            &mock.base_url,
+            vec!["gpt-image-1-mini".to_string()],
+        )])
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let boundary = "litellm-rs-padded-boundary";
+        let payload = image_edit_multipart_body_with_transport_padding(boundary);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/edits")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(payload.clone())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let captured = mock.requests();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].body, payload);
 
         mock.stop_image_mock().await;
     }

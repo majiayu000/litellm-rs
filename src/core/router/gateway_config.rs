@@ -237,7 +237,11 @@ impl Router {
                 models.push(provider_name.clone());
             }
 
+            let mut seen_provider_models = HashSet::new();
             for model in models {
+                if !seen_provider_models.insert(model.clone()) {
+                    continue;
+                }
                 let deployment_id = if uses_provider_name_fallback {
                     provider_name.clone()
                 } else {

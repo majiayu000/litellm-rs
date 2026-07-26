@@ -123,7 +123,6 @@ async fn proxy_gemini_route_inner(
         apply_gemini_api_key_output_token_limit(context.api_key_max_tokens_per_request(), request)?;
     validate_api_version(api_version)?;
     validate_method(method)?;
-    validate_model_segment(&requested_model)?;
     validate_gemini_request_size(&request)?;
     super::context::enforce_api_key_model_and_token_limits(
         req,
@@ -131,6 +130,7 @@ async fn proxy_gemini_route_inner(
         gemini_requested_max_output_tokens(&request),
     )?;
     let requested_model = state.unified_router.resolve_model_name(&requested_model);
+    validate_model_segment(&requested_model)?;
 
     if stream {
         return proxy_gemini_stream_route_inner(

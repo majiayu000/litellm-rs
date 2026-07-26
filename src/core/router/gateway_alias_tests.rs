@@ -188,6 +188,22 @@ async fn construction_rejects_duplicate_generated_deployment_ids_before_publicat
 }
 
 #[tokio::test]
+async fn construction_deduplicates_repeated_models_within_one_provider() {
+    let configured = provider("primary", &["gpt-4o", "gpt-4o"], 0);
+    let model_alias = aliases(&[("public", "gpt-4o")]);
+
+    let (result, probe) = build_with_probe(&[configured], &model_alias).await;
+    let router = result.expect("same-provider duplicate models should remain compatible");
+    assert_eq!(
+        router.get_deployments_for_model("gpt-4o"),
+        vec!["primary-gpt-4o"]
+    );
+    assert_eq!(router.list_deployments(), vec!["primary-gpt-4o"]);
+    assert_eq!(probe.routing_snapshot_publications.load(Relaxed), 1);
+    assert_eq!(probe.health_check_phase_entries.load(Relaxed), 1);
+}
+
+#[tokio::test]
 async fn aliases_accept_dynamic_and_provider_name_fallback_models() {
     let dynamic_alias = aliases(&[("dynamic", "gpt-4o")]);
     let dynamic = Router::from_gateway_config_with_aliases(

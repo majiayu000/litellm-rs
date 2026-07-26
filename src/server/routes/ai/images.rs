@@ -136,10 +136,14 @@ async fn proxy_image_multipart_endpoint(
     let content_type = image_multipart_content_type(req)?;
     let body = read_image_multipart_payload(payload).await?;
     let form_fields = extract_image_proxy_form_fields(&body, &content_type);
-    let requested_model = required_image_proxy_model(&form_fields)?;
-    super::context::enforce_api_key_model_and_token_limits(req, requested_model, None)?;
-    let requested_model = state.unified_router.resolve_model_name(requested_model);
-    let body = replace_text_field(&body, &content_type, "model", &requested_model)?;
+    let public_model = required_image_proxy_model(&form_fields)?;
+    super::context::enforce_api_key_model_and_token_limits(req, public_model, None)?;
+    let requested_model = state.unified_router.resolve_model_name(public_model);
+    let body = if requested_model == public_model {
+        body
+    } else {
+        replace_text_field(&body, &content_type, "model", &requested_model)?
+    };
     let requested_model = requested_model.as_str();
     ensure_image_proxy_candidate_configured(
         state.config().gateway.providers.as_slice(),
