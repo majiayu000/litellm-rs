@@ -37,6 +37,7 @@ GH-1108 / #1108
 | Current 3.5 catalog | `src/core/providers/gemini/models/catalog/gemini35.rs:7-68` | 只登记 `gemini-3.5-flash`，无 3.6 Flash 或 3.5 Flash-Lite。 | 两个新 GA model records 的现状锚点。 |
 | Provider list/preflight | `src/core/providers/gemini/provider.rs:51-56,74-112` | 模型列表来自 registry；validation 只有通用温度/top-p 数值范围。 | 需要按 exact model contract 拒绝 deprecated params 与 prefill。 |
 | Supported params/mapping | `src/core/providers/gemini/provider.rs:169-212` | 所有 Gemini model 共用参数表；`temperature`/`top_p` 被映射，部分 unsupported 参数被 silent skip。 | B-005/B-007 要改为 model-specific fail-closed contract。 |
+| Canonical extra params | `src/core/types/chat.rs:177-179` | `ChatRequest.extra_params` 使用 `#[serde(flatten)] HashMap<String, Value>`，因此 `top_k: null` 保留为 `Value::Null`，不同于 typed `Option` 字段。 | B-005 必须在 shared normalizer 明确消费 flattened null，并拒绝 non-null。 |
 | Final Developer body | `src/core/providers/gemini/client.rs:252-320` | `transform_chat_request` 独立构造 contents 与 `generationConfig`，仍写入 temperature/topP。 | 必须证明 final upstream body 与 preflight 一致，direct-client 也不能绕过。 |
 | Pricing storage | `src/core/providers/gemini/models/mod.rs:83-105,127-140` | pricing helper 接收 per-million 值并换算到 per-1k fields，metadata 与 limits 同记录。 | 新价格的单位换算、cost parity 与 GH1113 边界。 |
 | Credential config | `src/core/providers/gemini/config.rs:14-15,82-105,134-141` | Developer config 从 env 读 key；当前 type derive `Debug`。 | live smoke 不得格式化/落盘 key；production credential redaction 由 GH1112 T4 所有。 |
@@ -61,6 +62,8 @@ GH-1108 / #1108
     "src/core/providers/gemini/client.rs",
     "tests/gemini_router_fallback_routes.rs",
     "tests/live_gemini.rs",
+    "checks/gh1108_coverage_gate.py",
+    "checks/test_gh1108_coverage_gate.py",
     "docs/providers/README.md",
     "docs/providers/gemini.md"
   ],
@@ -109,13 +112,25 @@ fixture 必须列出 pre/post advertised IDs 与 reason/source。registry 初始
 illegal-state policy：
 
 - `temperature`、`top_p`、`top_k` 不在 allowlist；
-- 现有 wire/canonical DTO 的 `Option` 语义保持不变：字段省略和显式 JSON `null` 均反序列化
-  为 `None`、视为 absent 并允许继续；final upstream body 必须省略这些字段；
-- 任一字段为 `Some(non-null value)`（包括看似默认的数值）即 typed invalid-request；
-- contents 规范化后，最后一个非空 role 为 `model` 即 prefill rejection；
-- user/tool 结尾不触发本 issue 新增的 prefill rejection；既有 Gemini
-  `ToolUse`/`ToolResult` wire 序列化与完整 callability 由 GH1111 所有，不是 GH1108
-  acceptance，也不构成 GH1108 implementation dependency；
+- typed `temperature`/`top_p` 的字段省略和显式 JSON `null` 均反序列化为 `None`、视为
+  absent；任何 `Some(non-null value)`（包括看似默认的数值）即 typed
+  invalid-request；
+- OpenAI wire `extra_body` 转为 canonical `ChatRequest.extra_params` 后，shared
+  normalizer 必须移除 `top_k` 且检查其 `Value`：`Value::Null` 消费为 absent，任何
+  non-null value 即 typed invalid-request；normalizer 返回的 map 不再含 `top_k`；
+- final serializer 只消费 normalized request，且生成的 upstream body 不含
+  `temperature`、`topP`、`top_k` 或 `topK`；
+- shared contract 对 messages 只执行一次 `strip_trailing_semantically_empty_turns`，
+  返回的 retained sequence 保持原顺序/内容，并同时传给
+  `validate_no_model_prefill` 与 final serializer；二者禁止重新读取原 messages；
+- semantically-empty turn 定义为：`content` 缺失、blank text 或仅含 blank text parts，
+  且无 thinking、audio、tool calls、function call、tool result/call ID 等 meaningful
+  payload；任一 non-text content part 或 tool payload 均使 turn meaningful；
+- normalized sequence 为空时 typed invalid-request；最后一个 retained turn 为
+  `model`/assistant 时 prefill rejection；meaningful user/tool + trailing empty
+  assistants 在 strip 后不得被该 gate 拒绝，且 final body 不得以 `model` role 结尾；
+- 既有 Gemini `ToolUse`/`ToolResult` wire 序列化与完整 callability 由 GH1111 所有，
+  不是 GH1108 acceptance，也不构成 GH1108 implementation dependency；
 - 只有官方明确声明相同契约的未来 model record 才能复用，禁止 family substring 推断。
 
 Gemini provider 的 supported params、`validate_request`、`map_openai_params` 和
@@ -200,8 +215,8 @@ offline unit test 使用 sentinel key 和 loopback/fake response 覆盖分类与
 | B-002 | `gemini35.rs`/`gemini36.rs` limits、capability closed sets 与 paid Standard pricing | `cargo test --locked google_model_catalog_2026_07_metadata`；断言 exact capability/feature 集合相等、Developer paid Standard per-million 与 stored per-1k/cost，并断言 Batch/Flex/Priority 无同值声明。 |
 | B-003 | Developer evidence filter | `cargo test --locked google_model_catalog_2026_07_dispositions`；retired/shutdown/unverified/other-product 不公开。 |
 | B-004 | deterministic disposition fixture | 同一 test 输出 pre/post set、status/source/reason 并断言每个旧 ID 恰好一个 disposition。 |
-| B-005 | shared request allowlist + provider mapping | `cargo test --locked gemini_2026_07_deprecated_sampling_rejected`；三字段 omitted/JSON-null 均为 absent 且 final body 省略，default/non-default 的 non-null 值均 pre-network error。 |
-| B-006 | normalized contents prefill gate | `cargo test --locked gemini_2026_07_prefill_rejected`；model+trailing-empty 拒绝，user/tool 结尾只断言不被新增 prefill gate 拒绝；不把 GH1111 tool-loop wire callability 计为通过条件。 |
+| B-005 | shared request allowlist + canonical extra-map normalizer | `cargo test --locked gemini_2026_07_deprecated_sampling_rejected`；typed temperature/top_p omitted/JSON-null 均为 absent，flattened extra_body/extra_params 的 `top_k: Value::Null` 被消费并删除，三者 non-null 均 pre-network error，final JSON 四种 key 均不存在。 |
+| B-006 | one-shot trailing-empty normalization + prefill gate/serializer parity | `cargo test --locked gemini_2026_07_prefill_rejected`；meaningful user/tool + empty assistant strip 后 body 不以 model 结尾；non-empty model + trailing empties 与 all-empty 拒绝；spy/source fixture 证明 strip 只执行一次且 gate/serializer 使用同一 retained sequence；不把 GH1111 tool-loop callability 计为通过条件。 |
 | B-007 | provider/client contract parity | `cargo test --locked gemini_2026_07_request_contract_parity`；supported params、preflight、final JSON table fixture 一致。 |
 | B-008 | neutral paid Standard pricing facts only | `cargo test --locked gemini_2026_07_cost`；fixed-token cost 精确，Batch/Flex/Priority 未声明同值，unknown behavior snapshot 不变。 |
 | B-009 | immutable stable snapshot | `cargo test --locked google_model_catalog_2026_07_stability`；重复/并发查询结果完全相等、升序、无重复。 |
@@ -279,188 +294,64 @@ explicit live opt-in + Developer credential
       `python3 checks/check_workflow.py --repo . --spec-dir specs/GH1108 &&
        python3 checks/check_workflow.py --repo .`
 - [ ] Diff integrity: `git diff --check`
-- [ ] Coverage: 先执行 `mkdir -p artifacts/coverage/GH1108`，再执行
-      `cargo llvm-cov --locked --all-features --workspace --branch --lcov
-       --output-path artifacts/coverage/GH1108/lcov.info`，随后原样执行下方
-      exact-head gate。gate 以 `IMPLEMENTATION_BASE_SHA...IMPLEMENTATION_HEAD_SHA` 的
-      changed production Rust 可执行行为为分母，要求 line coverage ≥80%，并要求
-      catalog evidence validation、deprecated-param rejection、prefill rejection、
-      live classification/redaction 四类 changed branch records 100% 命中。
+- [ ] Coverage checker unit tests:
+      `python3 checks/test_gh1108_coverage_gate.py`
+- [ ] Coverage artifact:
+      `mkdir -p artifacts/coverage/GH1108 &&
+       cargo llvm-cov --locked --all-features --workspace --branch --lcov
+       --output-path artifacts/coverage/GH1108/lcov.info`
+- [ ] Exact-head coverage gate:
+      `python3 checks/gh1108_coverage_gate.py --repo . --base "$IMPLEMENTATION_BASE_SHA" --head "$IMPLEMENTATION_HEAD_SHA" --lcov artifacts/coverage/GH1108/lcov.info --output artifacts/coverage/GH1108/gate.json`
 
 full suite、strict Clippy、coverage 与 SpecRail gates 在 exact implementation head 各执行
 一次；reviewer 默认 inspection/focused，避免重复 full run。
 
-### Exact-head coverage gate
+### Versioned exact-head coverage checker contract
 
-`IMPLEMENTATION_BASE_SHA` 与 `IMPLEMENTATION_HEAD_SHA` 必须是 implementation lane 记录的
-完整 40 位小写 commit；禁止使用 branch name、短 SHA 或移动的 ref。LCOV 生成与 gate
-必须绑定同一个 tracked-clean exact head。checker 内联在本 spec，因此 planned-changes
-manifest 不需要新增 checker/policy path；若实现时把 checker 提取为文件，必须先 amend
-manifest。
+implementation PR 必须新增并提交 `checks/gh1108_coverage_gate.py` 与
+`checks/test_gh1108_coverage_gate.py`；本 spec PR 不实现 checker，也不需要独立 policy
+JSON。checker 必须验证：
 
-```bash
-set -euo pipefail
-mkdir -p artifacts/coverage/GH1108
-test "${IMPLEMENTATION_BASE_SHA:-}" != "" &&
-test "${IMPLEMENTATION_HEAD_SHA:-}" != "" &&
-test "$(git rev-parse "$IMPLEMENTATION_BASE_SHA^{commit}")" = "$IMPLEMENTATION_BASE_SHA" &&
-test "$(git rev-parse "$IMPLEMENTATION_HEAD_SHA^{commit}")" = "$IMPLEMENTATION_HEAD_SHA" &&
-test "$(git rev-parse HEAD)" = "$IMPLEMENTATION_HEAD_SHA" &&
-git merge-base --is-ancestor "$IMPLEMENTATION_BASE_SHA" "$IMPLEMENTATION_HEAD_SHA" &&
-test -z "$(git status --porcelain --untracked-files=no)" &&
-test -f artifacts/coverage/GH1108/lcov.info &&
-python3 - "$IMPLEMENTATION_BASE_SHA" "$IMPLEMENTATION_HEAD_SHA" \
-  artifacts/coverage/GH1108/lcov.info <<'PY' \
-  | tee artifacts/coverage/GH1108/gate.json
-from fnmatch import fnmatch
-import hashlib
-import json
-from pathlib import Path
-import re
-import subprocess
-import sys
+- `IMPLEMENTATION_BASE_SHA`/`IMPLEMENTATION_HEAD_SHA` 是不同的完整 40 位小写 commits，
+  base 是 head ancestor，当前 `HEAD` 等于 head，tracked worktree clean，LCOV 存在；
+- `base...head` changed production Rust executable lines 是非空分母，所有 changed
+  production sources 均存在于 LCOV，changed-line coverage 至少 80%；
+- LCOV malformed/missing `DA`/`BRDA`、selector source/symbol/span 缺失、selector span
+  没有 changed executable line 或没有 branch record、任一 selected branch hit 为零均
+  非零退出；
+- 成功 artifact 保存 immutable base/head、changed-line manifest、LCOV SHA256，以及每个
+  selector 的 path、symbol、marker span、branch 数与 hit 结果。
 
-base, head, lcov_path = sys.argv[1:4]
-if any(re.fullmatch(r"[0-9a-f]{40}", value) is None for value in (base, head)):
-    raise SystemExit("implementation base/head must be full lowercase commit SHAs")
-if base == head:
-    raise SystemExit("implementation base/head must differ")
+关键行为不能只按 path 归类。checker 内置以下 mandatory selectors；每个 selector 都必须
+定位唯一 exact Rust function symbol，并要求唯一、配对的
+`// gh1108-coverage:<marker>:start|end` marker 完全位于该 symbol body 内：
 
-diff = subprocess.run(
-    ["git", "diff", "--unified=0", "--no-color", f"{base}...{head}", "--", "*.rs"],
-    check=True,
-    text=True,
-    capture_output=True,
-).stdout
-changed: dict[str, set[int]] = {}
-current_path: str | None = None
-for raw in diff.splitlines():
-    if raw.startswith("+++ b/"):
-        current_path = raw[6:]
-        changed.setdefault(current_path, set())
-        continue
-    if raw.startswith("@@ ") and current_path is not None:
-        match = re.search(r"\+(\d+)(?:,(\d+))?", raw)
-        if match is None:
-            raise SystemExit(f"malformed diff hunk: {raw}")
-        start = int(match.group(1))
-        count = int(match.group(2) or "1")
-        changed[current_path].update(range(start, start + count))
+| Required category | Path | Exact symbol(s) and required marker |
+| --- | --- | --- |
+| `catalog_evidence_validation` | `src/core/providers/google/models/registry.rs` | `validate_developer_catalog_evidence` / `catalog-evidence-validation` |
+| `deprecated_param_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_deprecated_sampling_params` / `deprecated-param-rejection` |
+| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `strip_trailing_semantically_empty_turns` / `trailing-empty-normalization` **and** `validate_no_model_prefill` / `prefill-rejection`；两个 selector 都必需 |
+| `live_classification` | `tests/live_gemini.rs` | `classify_live_failure` / `live-classification` |
+| `live_redaction` | `tests/live_gemini.rs` | `redact_live_artifact` / `live-redaction` |
 
-root = Path.cwd().resolve()
-line_hits: dict[tuple[str, int], int] = {}
-branches: list[tuple[str, int, int]] = []
-lcov_sources: set[str] = set()
-source: str | None = None
-for raw in Path(lcov_path).read_text(encoding="utf-8").splitlines():
-    if raw.startswith("SF:"):
-        candidate = Path(raw[3:])
-        if candidate.is_absolute():
-            try:
-                source = candidate.resolve().relative_to(root).as_posix()
-            except ValueError:
-                source = None
-        else:
-            source = candidate.as_posix()
-        if source is not None:
-            lcov_sources.add(source)
-    elif raw.startswith("DA:") and source is not None:
-        fields = raw[3:].split(",")
-        if len(fields) < 2:
-            raise SystemExit(f"malformed DA record: {raw}")
-        line_hits[(source, int(fields[0]))] = int(fields[1])
-    elif raw.startswith("BRDA:") and source is not None:
-        fields = raw[5:].split(",")
-        if len(fields) != 4:
-            raise SystemExit(f"malformed BRDA record: {raw}")
-        branches.append(
-            (source, int(fields[0]), 0 if fields[3] == "-" else int(fields[3]))
-        )
+GH1112 merged API 若不能采用这些 exact symbols/paths，必须先 amend spec、manifest 与 checker，
+不得让 checker 猜 alias。marker 缺失、重复、反序、跨 symbol、空 span，或仅在同 path/
+同 symbol 的 marker 外存在 covered branch，都不得满足 selector。每个 category 的所有
+selector 都必须有自身 span 内的 changed `BRDA`，并达到 100%；`live_classification` 与
+`live_redaction` 分开判定，不能互相替代。
 
-def is_test_source(path: str) -> bool:
-    return (
-        path.startswith("tests/")
-        or "/tests/" in path
-        or path.endswith("/tests.rs")
-        or path.endswith("_test.rs")
-        or path.endswith("_tests.rs")
-    )
+`checks/test_gh1108_coverage_gate.py` 使用 synthetic source/diff/LCOV fixtures，至少覆盖：
 
-changed_production_sources = {
-    path
-    for path, lines in changed.items()
-    if lines
-    and path.startswith("src/")
-    and path.endswith(".rs")
-    and not is_test_source(path)
-}
-missing_sources = sorted(changed_production_sources - lcov_sources)
-if missing_sources:
-    raise SystemExit(f"changed production sources missing from LCOV: {missing_sources}")
-
-changed_lines = {
-    key: hits
-    for key, hits in line_hits.items()
-    if key[0] in changed_production_sources
-    and key[1] in changed.get(key[0], set())
-}
-if not changed_lines:
-    raise SystemExit("no changed executable production Rust lines found in LCOV")
-covered_lines = sum(hits > 0 for hits in changed_lines.values())
-line_percent = covered_lines * 100.0 / len(changed_lines)
-if line_percent < 80.0:
-    raise SystemExit(f"changed-line coverage {line_percent:.2f}% is below 80%")
-
-critical_categories = {
-    "catalog_evidence_validation": (
-        "src/core/providers/google/models/registry.rs",
-        "src/core/providers/google/models/catalog/gemini35.rs",
-        "src/core/providers/google/models/catalog/gemini36.rs",
-    ),
-    "deprecated_param_rejection": (
-        "src/core/providers/google/models/request_contract.rs",
-        "src/core/providers/gemini/provider.rs",
-    ),
-    "prefill_rejection": (
-        "src/core/providers/google/models/request_contract.rs",
-        "src/core/providers/gemini/client.rs",
-    ),
-    "live_classification_redaction": ("tests/live_gemini.rs",),
-}
-category_results: dict[str, dict[str, object]] = {}
-for category, patterns in critical_categories.items():
-    records = [
-        record
-        for record in branches
-        if record[1] in changed.get(record[0], set())
-        and any(fnmatch(record[0], pattern) for pattern in patterns)
-    ]
-    if not records:
-        raise SystemExit(f"no changed branch records for critical category: {category}")
-    uncovered = sorted({(path, line) for path, line, hits in records if hits <= 0})
-    if uncovered:
-        raise SystemExit(f"uncovered {category} branches: {uncovered}")
-    category_results[category] = {
-        "branches": len(records),
-        "covered_percent": 100,
-    }
-
-manifest = {
-    path: sorted(lines)
-    for path, lines in sorted(changed.items())
-    if lines and path.endswith(".rs")
-}
-result = {
-    "base_sha": base,
-    "head_sha": head,
-    "changed_manifest": manifest,
-    "changed_line_coverage": round(line_percent, 2),
-    "critical_categories": category_results,
-    "lcov_sha256": hashlib.sha256(Path(lcov_path).read_bytes()).hexdigest(),
-}
-print(json.dumps(result, sort_keys=True))
-PY
-```
+- happy path 与 full-SHA/head/ancestor/tracked-clean/LCOV guards；
+- missing changed source、empty denominator、line coverage <80%、malformed/missing
+  `DA`/`BRDA`；
+- 每个 required symbol/marker 的 missing/duplicate/out-of-order/outside-symbol/empty
+  span；
+- unrelated covered branch（同 path 但其他 symbol，以及同 symbol 但 marker span 外）
+  不能满足任何 category；
+- catalog、deprecated、prefill 的任一 selector 缺失或 uncovered 均失败；
+- classification covered 但 redaction missing/uncovered，以及 redaction covered 但
+  classification missing/uncovered，均失败。
 
 ## 回滚方案
 

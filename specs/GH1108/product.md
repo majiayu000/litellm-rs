@@ -82,15 +82,19 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    缺失、冲突或过期到已越过 shutdown date 的证据不得降级为“继续沿用旧目录”。
 5. **B-005** 对 `gemini-3.6-flash`、`gemini-3.5-flash-lite` 以及显式声明采用同一后续
    契约的模型，supported params 不得包含 `temperature`、`top_p`、`top_k`；
-   请求省略字段或显式 JSON `null` 经现有 `Option` DTO 反序列化后均视为 absent，允许
-   继续且最终 upstream body 必须省略字段；任何 non-null 值（包括看似默认的数值）
-   必须在网络前返回稳定的 OpenAI-compatible invalid-request 错误，不得静默删除、
-   忽略或透传。
-6. **B-006** 对 B-005 模型，最后一个非空 conversation turn 为 `model`/assistant
-   turn 时必须在网络前拒绝；尾部空内容不得改变“最后一个非空 turn”的判定，
-   user/tool turn 结尾不得被本 issue 新增的 prefill gate 拒绝。既有 Gemini
-   `ToolUse`/`ToolResult` 序列化与完整 tool-loop callability 仍归 GH1111，不是本
-   invariant 的通过条件，也不是 GH1108 implementation dependency。
+   typed `temperature`/`top_p` 省略或显式 JSON `null` 均按现有 `Option` 语义视为
+   absent；flattened `extra_body`/canonical `extra_params` 中的
+   `top_k: Value::Null` 必须被 shared normalizer 消费并删除为 absent。三者的任何 non-null
+   值（包括看似默认的数值）必须在网络前返回稳定的 OpenAI-compatible
+   invalid-request 错误；最终 upstream body 不得包含 `temperature`、`topP`、`top_k`
+   或 `topK`，不得静默透传。
+6. **B-006** 对 B-005 模型，系统必须一次性移除尾部所有 semantically-empty turns，
+   保持其余 turn 的原顺序与内容，并让 prefill gate 和最终 serializer 使用同一份
+   normalized sequence。若该序列为空，或最后一个 retained turn 为非空
+   `model`/assistant，必须在网络前拒绝；若 meaningful user/tool turn 后只有 empty
+   assistant turns，则这些 empty turns 不得序列化，最终 body 不得以 `model` role
+   结尾。既有 Gemini `ToolUse`/`ToolResult` 序列化与完整 tool-loop callability 仍归
+   GH1111，不是本 invariant 的通过条件，也不是 GH1108 implementation dependency。
 7. **B-007** provider 公布的 supported params、preflight validation 和最终 upstream
    request body 必须一致；任何一层不能重新加入已拒绝字段，也不能绕过 prefill gate。
 8. **B-008** 新模型的 pricing/cost lookup 必须返回 B-002 的确定值并保持单位一致；
@@ -135,11 +139,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
       Priority 不在该价格断言范围内。
 - [ ] 当前 Developer chat catalog 的每个公开 ID 都有 B-004 disposition；shutdown、
       unverified 与 other-product fixture 不被公开。
-- [ ] 新契约模型的 supported params 与最终请求体均不含三项废弃采样参数；省略或显式
-      JSON `null` 视为 absent，任何 non-null 输入在网络前得到稳定错误。
-- [ ] model-turn prefill 的空/非空、user/tool 结尾不被新增 gate 拒绝，以及
-      direct-client/provider 入口均由无网络 fixture 覆盖；完整 tool-loop callability
-      明确不作为 GH1108 acceptance。
+- [ ] 新契约模型的 supported params 与最终请求体均不含三项废弃采样参数；typed
+      `temperature/top_p` JSON `null` 与 flattened `top_k: null` 均由 shared normalizer
+      消费为 absent，任何 non-null 输入在网络前得到稳定错误。
+- [ ] trailing semantically-empty turns 只 strip 一次；normalized sequence 同时供 gate
+      与 serializer 使用。meaningful user/tool + empty assistant 不产生尾部 model，
+      non-empty model + trailing empties 和全空序列均在网络前拒绝；完整 tool-loop
+      callability 明确不作为 GH1108 acceptance。
 - [ ] catalog 重复/并发读取稳定排序且 metadata/price/contract 一致。
 - [ ] opt-in live smoke 对 list/get/minimal-call 三层结果产生 typed artifact，失败分类
       闭合，取消/中断不产生伪成功。
@@ -156,7 +162,7 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 
 | 边界类别 | 判定 |
 | --- | --- |
-| Empty / missing input | covered: B-006、B-010、B-011。空尾 turn、缺 opt-in/credential、缺 smoke step 都有确定结果。 |
+| Empty / missing input | covered: B-005、B-006、B-010、B-011。typed/flattened null、空尾 turn、全空序列、缺 opt-in/credential、缺 smoke step 都有确定结果。 |
 | Error and failure paths | covered: B-003、B-005、B-006、B-011、B-016。未知证据、非法参数、prefill 和 live failures 均 fail closed。 |
 | Authorization / permission | covered: B-010、B-012、B-013。Developer credential 只用于 opt-in Developer 请求，不扩大 Vertex 权限。 |
 | Concurrency / race / ordering | covered: B-009。目录与契约为稳定不可变快照。 |
@@ -171,10 +177,12 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 
 - `gemini-3.6-flash-preview`、`Gemini-3.6-Flash` 与
   `foo-gemini-3.6-flash` 均不能命中 stable exact ID。
-- 省略废弃采样字段或显式提供 JSON `null` 在现有 `Option` DTO 中均视为 absent，最终
-  upstream body 省略该字段；默认或非默认的任何 non-null 数值均按 B-005 拒绝，
-  “值看起来无害”不能恢复支持。
-- 多个尾部空 turn 之后仍以最近的非空 `model` turn 判定 prefill。
+- typed `temperature/top_p` 省略或 JSON `null` 视为 absent；flattened
+  `extra_body`/`extra_params` 的 `top_k: null` 被消费并从 map 删除；默认或非默认的任何
+  non-null 数值均按 B-005 拒绝，最终 serializer 对四种 upstream key 均零输出。
+- meaningful user/tool turn + trailing empty assistant turns 在 strip 后保留 user/tool
+  结尾且 serializer 不产生尾部 model；non-empty model + trailing empties 在 strip 后
+  仍拒绝；全部 turns 均 semantically empty 时按空 normalized sequence 拒绝。
 - list-models 出现但 lifecycle 页面未提供通用 chat 正证据时保持不公开，并记录冲突。
 - live minimal call 成功但静态价格/limits 不匹配时 smoke 整体失败，不能用连通性覆盖
   metadata 漂移。
