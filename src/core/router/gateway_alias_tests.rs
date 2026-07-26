@@ -132,13 +132,14 @@ async fn phase_b_rejects_collisions_missing_and_disabled_only_targets() {
     assert_eq!(probe.routing_snapshot_publications.load(Relaxed), 1);
     assert_eq!(probe.health_check_phase_entries.load(Relaxed), 1);
 
-    let whitespace_self_target = aliases(&[(" public ", "public")]);
-    let (whitespace_self_result, probe) =
-        build_with_probe(std::slice::from_ref(&configured), &whitespace_self_target).await;
-    let error = whitespace_self_result
-        .expect_err("whitespace-equivalent self-target must fail before publication");
+    let padded_alias = aliases(&[(" public ", "public")]);
+    let (padded_alias_result, probe) =
+        build_with_probe(std::slice::from_ref(&configured), &padded_alias).await;
+    let error = padded_alias_result.expect_err("padded alias name must fail before publication");
     assert!(
-        error.to_string().contains("cannot target itself"),
+        error
+            .to_string()
+            .contains("cannot contain leading or trailing whitespace"),
         "{error}"
     );
     assert_no_publication_or_health_side_effects(&probe);
