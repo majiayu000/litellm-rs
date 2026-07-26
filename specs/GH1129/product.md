@@ -43,18 +43,28 @@ complexity: high
 5. **B-005** 所有适用分量均合法但 prompt 与 completion 都为零时，整条 usage
    必须表现为 `None`，不得进入零费用成功记账路径。
 6. **B-006** provider 报告的 `total_tokens` 不得替代缺失的 prompt 或 completion
-   分量；输出 `total_tokens` 必须由归一化后的分量重新计算。
-7. **B-007** 对声明包含 total 的 provider 格式，total 缺失、类型错误或与重算值
-   不一致时，整条 usage 必须 fail closed 为 `None`；对声明不包含 total 的格式，
-   系统只使用重算值。
-8. **B-008** 合法的 `u64` token 数超过 `u32::MAX` 时必须饱和为
+   分量；输出 `total_tokens` 必须由可信原始分量重新计算。Vertex
+   `usageMetadata` 的有效 input 为 `promptTokenCount + toolUsePromptTokenCount`，
+   output 为 `candidatesTokenCount + thoughtsTokenCount`，后两个扩展字段缺失时按该
+   API 的可选零语义处理。`thoughtsTokenCount` 已包含在公开 `completion_tokens`
+   与 output token 费用中，本 Issue 不再把它写入会另行计价的
+   `completion_tokens_details.reasoning_tokens` 或其他 thinking details，禁止重复计费。
+7. **B-007** 对声明包含 total 的 provider 格式（包括 Bedrock Converse），total
+   缺失、类型错误或与原始分量之和不一致时，整条 usage 必须 fail closed 为
+   `None`；对声明不包含 total 的格式，系统只使用重算值。
+8. **B-008** 合法的 `u64` token 数超过 `u32::MAX` 时必须在 raw-domain total
+   校验完成后饱和为
    `u32::MAX`，不得回绕、截断为更小值或 panic。
 9. **B-009** `total_tokens` 必须使用饱和加法；即使两个分量各自可表示，相加也
    不得溢出为更小值。
-10. **B-010** `usage: None` 必须继续触发现有缺失 usage 结算行为：有预算预留时
-    按既有规则结算预留并记录显式错误；无预留时不得伪造零费用 spend。
-11. **B-011** 合法、范围内且 total 一致的 provider usage，其公开 token 值和
-    既有计费结果必须保持兼容。
+10. **B-010** `usage: None` 必须触发完整缺失 usage 结算：provider/model reservation
+    存在时按其 reserved amount 结算；只有 API-key reservation 时按 key reserved
+    amount 结算并记录 key usage；两者都不存在时记录显式错误且不得伪造零费用
+    spend。任一 reservation 不得因另一种 reservation 缺失而提前返回或泄漏。
+11. **B-011** 合法、范围内且 total 一致的既有 provider usage，在 Vertex 扩展字段
+    缺失或为零时，其公开 token 值和既有计费结果必须保持兼容。Vertex 扩展字段
+    非零时，公开 input/output 必须包含这些真实 token，费用按归一化后的 input/output
+    各计一次；这是从漏计到正确计费的有意修正。
 12. **B-012** 解析失败不得仅记录低级别日志后继续生成成功的零 token、零费用
     账单副作用。
 
@@ -66,12 +76,16 @@ complexity: high
       B-004。
 - [ ] `u32::MAX`、`u32::MAX + 1`、`u64::MAX` 和分量相加溢出场景均证明饱和且
       不回绕。
-- [ ] 对带 total 的格式覆盖一致、缺失、错误类型和不一致 total；对不带 total
+- [ ] 对带 total 的格式覆盖一致、缺失、错误类型和 raw-domain 不一致 total；对不带 total
       的格式证明输出 total 来自重算。
-- [ ] 下游验证证明不可信 usage 进入既有缺失 usage 结算路径，而不是记录
-      `$0` 成功计费。
+- [ ] Vertex 两条非流式 parser 都覆盖 thoughts/tool-use prompt 扩展计数；
+      cost 断言证明 input/output 各计一次且 thoughts 不产生额外 reasoning 费用；
+      Bedrock Converse 覆盖必需 `totalTokens`。
+- [ ] 下游验证证明不可信 usage 的 provider+key、provider-only、key-only 与无
+      reservation 四种路径都终止正确，不记录 `$0` 成功计费或遗留 reservation。
 - [ ] 未声明字段名和嵌套形状不会被猜测为 usage。
-- [ ] 合法非零 usage 的兼容性回归测试通过。
+- [ ] 不含 Vertex 扩展计数的合法非零 usage 兼容性回归测试通过；扩展计数非零的
+      token/cost 修正有精确断言。
 
 ## 边界情况
 
@@ -88,4 +102,5 @@ complexity: high
 
 这是计费正确性收紧。过去被默认为零 token、零费用的 malformed、partial 或
 all-zero usage 将进入既有缺失 usage 保护。合法非零 usage 无需迁移；若上游
-provider 已发生字段漂移，运营日志将显式暴露该问题。
+provider 已发生字段漂移，运营日志将显式暴露该问题。Vertex tool-use prompt 与
+thoughts token 现在分别计入 input/output 费用一次。
