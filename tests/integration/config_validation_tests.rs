@@ -47,6 +47,7 @@ mod tests {
             config.gateway.pricing.source.as_deref(),
             Some("embedded://model_prices_extended")
         );
+        assert!(!config.gateway.pricing.allow_degraded);
         assert_eq!(
             config.gateway.pricing.unpriced_model_policy,
             UnpricedModelPolicy::AllowUnpriced

@@ -563,6 +563,7 @@ typo_field: true
             gateway.pricing.source.as_deref(),
             Some(DEFAULT_PRICING_SOURCE)
         );
+        assert!(!gateway.pricing.allow_degraded);
 
         let priced_models = embedded_default_pricing_models().unwrap();
         let unpriced_models: Vec<&str> = gateway
