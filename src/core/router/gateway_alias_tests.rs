@@ -170,6 +170,24 @@ async fn phase_b_rejects_collisions_missing_and_disabled_only_targets() {
 }
 
 #[tokio::test]
+async fn construction_rejects_duplicate_generated_deployment_ids_before_publication() {
+    let providers = [provider("a-b", &["c"], 0), provider("a", &["b-c"], 1)];
+    let overwritten_model_alias = aliases(&[("public", "c")]);
+
+    let (result, probe) = build_with_probe(&providers, &overwritten_model_alias).await;
+    let error = result.expect_err(
+        "ambiguous generated deployment IDs must fail instead of hiding the alias target",
+    );
+    match error {
+        RouterError::InvalidConfiguration(message) => {
+            assert_eq!(message, "duplicate generated deployment ID 'a-b-c'");
+        }
+        other => panic!("expected stable invalid configuration error, got {other}"),
+    }
+    assert_no_publication_or_health_side_effects(&probe);
+}
+
+#[tokio::test]
 async fn aliases_accept_dynamic_and_provider_name_fallback_models() {
     let dynamic_alias = aliases(&[("dynamic", "gpt-4o")]);
     let dynamic = Router::from_gateway_config_with_aliases(

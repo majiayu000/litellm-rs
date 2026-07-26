@@ -191,6 +191,7 @@ impl Router {
         let router = Self::new(config);
         let mut staged = Vec::new();
         let mut canonical_models = HashSet::new();
+        let mut generated_deployment_ids = HashSet::new();
 
         for provider_config in providers {
             provider_config
@@ -237,12 +238,17 @@ impl Router {
             }
 
             for model in models {
-                canonical_models.insert(model.clone());
                 let deployment_id = if uses_provider_name_fallback {
                     provider_name.clone()
                 } else {
                     format!("{}-{}", provider_name, model)
                 };
+                if !generated_deployment_ids.insert(deployment_id.clone()) {
+                    return Err(RouterError::InvalidConfiguration(format!(
+                        "duplicate generated deployment ID '{deployment_id}'"
+                    )));
+                }
+                canonical_models.insert(model.clone());
                 staged.push((
                     create_deployment_from_config(
                         &deployment_id,
