@@ -43,7 +43,8 @@ GH-1108 / #1108
 | Gateway stream routing | `src/server/routes/ai/chat.rs:271-405`、`src/server/routes/ai/chat_streaming.rs:36-50,69-95,138-139`、`src/server/routes/ai/token_policy.rs:80-88`、`src/server/routes/ai/execution.rs:201-311`、`src/core/router/selection.rs:225-243` | shared builder 以既有 `include_usage_override=Some(true)` 生成只含 `include_usage=true` 的 canonical core request；router 解析 alias 并在 fallback/retry 中选择最终 deployment，operation callback 才拿到最终 provider/model，随后 `prepare_chat_request_for_provider` 处理该次 selected request。 | B-007 只要求 canonical metadata 在 pre-selection 阶段不被 take/drop，并在这个 post-selection hook 按最终 Gemini exact identity 校验/消费；不创建额外 usage preference state，其他 provider 与 selection failure 不得被提前修改。 |
 | Gemini streaming transport | `src/core/providers/gemini/client.rs:93-118` | unary/stream 分别选择 generateContent/streamGenerateContent；stream 与 stream_options 都不是 generation body 字段，transformer 也未读取 stream_options。 | B-007 可保留 `stream`，但 `stream_options` 只能作为 gateway metadata，不能成为第四个 provider param。 |
 | Captured tracing pattern | `src/core/observability/tests.rs:81-101,310-315` | `MakeWriter` + `tracing::subscriber::set_default` 可把 tracing bytes 捕获到测试 buffer。 | B-012 live redaction fixture 必须覆盖 tracing sink。 |
-| Pricing storage | `src/core/providers/gemini/models/mod.rs:83-105,127-140` | pricing helper 接收 per-million 值并换算到 per-1k fields，metadata 与 limits 同记录。 | 新价格的单位换算、cost parity 与 GH1113 边界。 |
+| Pricing authorities | `src/core/providers/gemini/models/mod.rs:83-105,127-140`、`src/core/pricing_service/{mod.rs,loader.rs,authority.rs}`、`config/model_prices_extended.json` | neutral catalog pricing helper 供 provider-local cost 使用；gateway 默认运行时 authority 独立加载 embedded `model_prices_extended.json`。provider-aware resolver 只有 Azure/Bedrock/xAI catalog fallback，没有 Gemini neutral-catalog fallback。 | 只加 neutral metadata 会使默认 unpriced reject 在预算预留前拒绝新 ID；必须添加 exact Developer runtime rows 与双路径 parity tests。 |
+| Public Gemini-capable entrypoints | `src/server/routes/ai/{mod.rs,chat.rs,chat_streaming.rs,completions.rs,completions_streaming.rs,responses.rs,responses_stream.rs,gemini.rs}` | chat、legacy completions 与 Responses 的 unary/stream 都转换到 shared chat execution；native `/v1`、`/v1beta`、`/gemini/v1`、`/gemini/v1beta` 的 generateContent/streamGenerateContent 直接转发 JSON `Value`，不经过 chat preflight。 | 必须封闭入口矩阵并给 native 路径增加 exact-model preflight；只测 `/v1/chat/completions` 不能证明协议约束。 |
 | Credential config | `src/core/providers/gemini/config.rs:14-15,82-105,134-141` | Developer config 从 env 读 key；当前 type derive `Debug`。 | live smoke 不得格式化/落盘 key；production credential redaction 由 GH1112 T4 所有。 |
 | Existing live-test pattern | `tests/live_bedrock.rs:1-27,63-68` | `#[ignore]` + 单一 opt-in env，未开启时不联网。 | 复用成熟手动验证形态，不创建后台自动化。 |
 | Dependency contract | `specs/GH1112/tech.md`、`specs/GH1112/tasks.md` | 已声明 neutral `google/models` owner、Developer overlay、shared request contract，T1→T2 串行。 | GH1108 implementation 的唯一合法 owner/base gate。 |
@@ -64,10 +65,15 @@ GH-1108 / #1108
     "src/core/providers/gemini/provider.rs",
     "src/core/providers/gemini/provider_tests.rs",
     "src/core/providers/gemini/client.rs",
+    "src/server/routes/ai/gemini.rs",
+    "src/server/routes/ai/gemini/spend.rs",
     "src/core/models/openai/requests.rs",
     "src/server/routes/ai/token_policy.rs",
     "src/server/routes/ai/chat_tests.rs",
     "tests/gemini_router_fallback_routes.rs",
+    "config/model_prices_extended.json",
+    "src/core/pricing_service/authority_tests.rs",
+    "src/server/routes/ai/spend_runtime_pricing_tests.rs",
     "tests/live_gemini.rs",
     "checks/gh1108_coverage_gate.py",
     "checks/test_gh1108_coverage_gate.py",
@@ -89,7 +95,10 @@ GH-1108 / #1108
 开始前必须以 merged GH1112 head 重新验证以上清单；任何必要路径差异通过 spec amendment
 处理，不能把旧 `src/core/providers/gemini/models/**` 加回 manifest。
 
-`src/server/routes/ai/chat.rs`、`src/server/routes/ai/chat_streaming.rs` 与
+`src/server/routes/ai/chat.rs`、`src/server/routes/ai/chat_streaming.rs`、
+`src/server/routes/ai/completions.rs`、`src/server/routes/ai/completions_streaming.rs`、
+`src/server/routes/ai/responses.rs`、`src/server/routes/ai/responses_stream.rs`、
+`src/server/routes/ai/mod.rs`、`src/server/routes/ai/batches.rs` 与
 `src/core/types/chat.rs` 是本设计已核验的 read-only context，不是 planned writable
 paths：现有 builder 已生成 canonical core `StreamOptions`，GH1108 只在最终 selected
 deployment 的 `token_policy` hook 条件消费它。“preserve”指 canonical object 在
@@ -102,6 +111,12 @@ test -z "$(git diff --name-only \
   "$IMPLEMENTATION_BASE_SHA...$IMPLEMENTATION_HEAD_SHA" -- \
   src/server/routes/ai/chat.rs \
   src/server/routes/ai/chat_streaming.rs \
+  src/server/routes/ai/completions.rs \
+  src/server/routes/ai/completions_streaming.rs \
+  src/server/routes/ai/responses.rs \
+  src/server/routes/ai/responses_stream.rs \
+  src/server/routes/ai/mod.rs \
+  src/server/routes/ai/batches.rs \
   src/core/types/chat.rs)"
 ```
 
@@ -244,20 +259,74 @@ fallback 与 capability selection 完成后，selected operation 才调用
   证明 preserved equality，selection-failure fixture 证明 no mutation。user-visible
   positive allowlist 仍精确为 `{max_tokens, stop, stream}`。
 
+#### Closed public-entrypoint matrix
+
+所有可以最终选择 Gemini Developer chat deployment 的公开请求入口必须归入下表。表外
+route 若使用其他 `ProviderCapability`，按 capability selector 不能路由到这两个 chat
+models；Batch route 只选择 OpenAI/OpenAI-compatible lifecycle proxy config，不执行
+Gemini chat model request，二者都必须以 source/static invariant 保持 non-routable。
+
+| Public entry shape | Unary/stream adapter | Required GH1108 preflight | Exact fixture |
+| --- | --- | --- | --- |
+| `POST /v1/chat/completions` | `chat.rs` / `chat_streaming.rs` | alias/fallback 后 selected Gemini exact identity 调用 shared chat contract；provider direct entry 再防御性校验 | unary + stream；deprecated params、terminal model、direct/alias/fallback network=0 |
+| `POST /completions`、`/v1/completions`、`/engines/{id}/completions`、`/v1/engines/{id}/completions`、`/openai/deployments/{id}/completions` | `completions.rs` / `completions_streaming.rs` 先构造 `ChatCompletionRequest` | 与 chat 相同的 selected-provider hook；adapter 不得绕过或静默删除 deprecated typed fields | 每个 handler family 至少一个 unary/stream route fixture，另用 route-table/source invariant 锁定所有 aliases 仍指向同 handler |
+| `POST /v1/responses` | `responses.rs` / `responses_stream.rs` 转为 `ChatCompletionRequest` | 与 chat 相同的 selected-provider hook；Responses `temperature`/`top_p` 与 terminal output-role input 服从相同 contract | unary + stream network-counter negative |
+| `POST /v1/models/{model}:generateContent`、`/v1beta/models/{model}:generateContent`、`/gemini/v1/models/{model}:generateContent`、`/gemini/v1beta/models/{model}:generateContent` | `gemini.rs` unary handler | path exact ID 上调用 shared native preflight，发生在 router/budget reservation/network 前；`GeminiProvider::gemini_generate_content` 再防御性调用 | 4 prefixes × unary，sampling null/non-null、terminal model/malformed shape、network=0 |
+| 上述四个 prefix 的 `:streamGenerateContent` | `gemini.rs` stream handler | 与 native unary 相同，且 validation 必须发生在产生 streaming HTTP response 前 | 4 prefixes × stream，同一负例集合、network=0 |
+
+OpenAI-compatible 三个 adapter family 共享的生产 preflight 仍位于
+`request_contract.rs` + selected-provider `token_policy` + Gemini provider，不为每个 route
+复制逻辑。`tests/gemini_router_fallback_routes.rs` 驱动公开 handler/fake provider 证明
+每个 family 可达 shared gate；route alias 绑定由 `src/server/routes/ai/mod.rs` 的精确
+source invariant 锁定。native lane 在 `request_contract.rs` 增加
+`normalize_native_gemini_request(model, body)`：
+
+- 只对两个 exact IDs 生效，其他已支持模型 body byte-for-byte/Value-equal 保持现状；
+- body 必须是 object；`generationConfig` 缺失或 JSON null 视为 absent（null key 被
+  删除），若 non-null 则必须是 object。删除 object 中 value 为 JSON null 的
+  `temperature`/`topP`/`topK`，任一 non-null 值返回 typed invalid request；
+- `contents` 必须是 array。由尾向前跳过 semantic-empty content：`parts` 必须存在且为
+  array，空 array 或只含 null/blank `{text}` 才为空；任何其他合法 part 为
+  meaningful。missing/malformed
+  content/parts、未知或缺失 role、无法闭合判定的 part shape fail closed；
+- 至少一个 meaningful content，terminal exact role 只能是 `user`；`model` 必须以稳定
+  prefill error 拒绝。`systemInstruction` 独立存在，不参与 terminal content 判定；
+- normalizer 返回 cleaned body，native route 的预算 estimate 与 provider transport 消费
+  同一个结果；`GeminiProvider::gemini_generate_content` 对内部直接 caller 重复调用须
+  幂等，不能重新解释或改变已 normalized body。
+
 ### 3. Pricing 与能力边界
 
-价格仍作为 neutral model metadata 的现有字段写入，保持 GH1112 已定义的 access API。
-本 spec 的数值只表示 Gemini Developer API paid Standard tier；测试从“官方
-per-million 数值 → stored per-1k 数值 → cost for fixed tokens”逐层断言单位，避免
-1000 倍换算错误。Batch、Flex、Priority 或其他 tier 不得写入相同 fixture、复用这些
-数值或由测试宣称通过。
+neutral metadata 保持 GH1112 access API；同时当前 gateway 的真实预算/结算 authority
+是 embedded `config/model_prices_extended.json`，且 provider catalog fallback 不包含
+Gemini。为避免新 ID 在默认 `unpriced_model_policy=reject` 下 pre-network 被拒，本 issue
+必须更新既有 runtime table，不新增 accessor、fallback 或第二个 authority。
 
-本 issue 只为两个新模型提供确定 pricing facts：
+闭合 runtime pricing rows 只有：
 
-- 不更改 pricing authority、fallback、unknown-cost 或 spend/budget/callback 路径；
-- 不新增零成本 fallback；
-- pricing consumer 若需要新 accessor，必须先走 GH1113 spec amendment，而不是在本 PR
-  建第二套价格表。
+| Runtime JSON key | `litellm_provider` | input/output per token | limits | Source |
+| --- | --- | --- | --- | --- |
+| `gemini/gemini-3.6-flash` | `gemini` | `0.0000015` / `0.0000075` | input 1,048,576；output 65,536 | Google Developer paid Standard pricing URL |
+| `gemini/gemini-3.5-flash-lite` | `gemini` | `0.0000003` / `0.0000025` | input 1,048,576；output 65,536 | Google Developer paid Standard pricing URL |
+
+不得添加 unprefixed key，也不得写 `vertex_ai`/`google` row。provider-aware resolution 对
+`provider=gemini, model=<exact ID>` 必须解析到上表对应 prefixed key；对
+`provider=vertex_ai` 必须返回 missing/unpriced。价格路径矩阵为：
+
+| Consumer | Actual authority call | Required result |
+| --- | --- | --- |
+| OpenAI chat、Responses、legacy completions unary/stream reservation | `estimate_loaded_completion_cost_for_provider` | 默认 embedded service 对两个 ID 产生精确正数 reservation，不进入 unpriced policy |
+| 同上 response settlement | `calculate_loaded_usage_cost_for_provider` | fixed usage 按 exact per-token 值 settle |
+| native generateContent/streamGenerateContent reservation | `gemini::spend::reserve_gemini_budget` → loaded estimate | 两个 ID 均成功；请求 maxOutputTokens 参与 estimate |
+| native unary/stream settlement | `gemini::spend::{record_gemini_spend,settle_gemini_stream_spend}` → loaded usage cost | usageMetadata 的 prompt/candidate tokens 产生相同精确成本 |
+| `POST /v1/pricing/calculate` with `provider=gemini` | `calculate_loaded_completion_cost_for_provider` | fixed token response 与 neutral catalog cost exact-equal |
+| any row with `provider=vertex_ai` | provider-aware lookup | fail closed；Developer evidence 不满足 Vertex |
+
+测试从“官方 per-million → neutral stored unit/cost → runtime per-token row → reservation/
+settlement fixed usage”逐层断言，避免 1000/1,000,000 倍误差。Batch、Flex、Priority 或
+其他 tier 不得写入相同 fixture、复用这些数值或由测试宣称通过。不得更改
+pricing resolver alias、fallback、unpriced policy、budget/callback 语义；发现需要这些
+更改时必须先 amend spec 并与 GH1113 串行。
 
 两个新模型必须使用相同的 exact、闭合能力 disposition：
 
@@ -320,6 +389,8 @@ Interactions 即使官方产品页面存在，也因当前公开 API 无对应�
   `{passed, failed, incomplete}`；`termination_reason` 闭集为
   `{step_failed, transport_timeout, externally_cancelled, externally_interrupted,
   missing_required_step}` 或 none，不含 request URL query/header/body credential。
+  `artifact_persistence_failed` 只属于下述 uncommitted runner outcome，不得写进并未成功
+  commit 的 artifact record。
   只有 aggregate 的 `model=None`；static/list/get/minimal-call 的 `model` 必须是两个新
   exact ID 之一，且必须与 observation/request key 一致；
 - `observation` 是 optional
@@ -425,22 +496,38 @@ Interactions 即使官方产品页面存在，也因当前公开 API 无对应�
 | `ProviderError::ApiError` | 依其 numeric status 使用下方 HTTP fallback | `step_failed` |
 | 其余 typed provider variants（含 InvalidRequest、Configuration、Serialization、ResponseParsing、TransformationError、ContextLengthExceeded、ContentFiltered、TokenLimitExceeded、NotSupported、NotImplemented、FeatureDisabled、无 verified external event 的 Cancelled、Other） | `failed` / `protocol` | `step_failed` |
 | HTTP fallback 401/403；402/429；404；408/504/5xx | 分别 `auth`；`quota`；`not_found`；`network` | `step_failed` |
-| 其他 HTTP status、local schema/exact/observation validation、artifact persistence failure | `failed` / `protocol` | `step_failed` |
+| 其他 HTTP status、local schema/exact/observation validation | `failed` / `protocol` | `step_failed` |
 | 无 external terminal event 的自然聚合缺 required key | `failed` / `protocol` | `missing_required_step` |
 
 classification precedence 固定为：
 
-1. runner 以 compare-and-set 原子记录的首个 terminal event；
+1. runner 以 compare-and-set 原子记录的首个 execution-terminal event；
 2. response 中已成功解析的 exact structured Google reason；
 3. typed `ProviderError` variant；
 4. numeric HTTP status fallback；
 5. local protocol validation。
 
 同一层冲突或未知值 fail closed 为 protocol。deadline/cancellation 同时就绪时
-first-terminal-event-wins，后到 signal 不得覆写 status/class/termination。403 +
+first-execution-terminal-event-wins，后到 execution signal 不得覆写该 execution
+fact。403 +
 `RESOURCE_EXHAUSTED` 因 structured reason 优先而归 quota；remote
 `DEADLINE_EXCEEDED` 是 network/step_failed，只有 runner 自身 deadline 才使用
 `transport_timeout`。passed record 的 error_class/termination_reason 均为 none。
+
+artifact commit 是 classification 之后的独立 finalization dimension。闭合优先级矩阵为：
+
+| First execution terminal CAS | Finalization | Returned outcome | Durable claim |
+| --- | --- | --- | --- |
+| none 或已分类 step/deadline failure | persisted | `Committed(LiveArtifact)`，artifact 保持对应 passed/failed facts | final snapshot 可重读 |
+| external cancellation/interruption | persisted | `Committed(LiveArtifact)`，in-flight/remaining 为 incomplete、no error class、external reason | final cancellation snapshot 可重读 |
+| none、deadline、cancel 或 interruption 中任一 | persistence_failed | `UncommittedFinalizationFailure {run_id, status=failed, error_class=protocol, termination_reason=artifact_persistence_failed, execution_terminal, last_committed_snapshot}` | 不声称失败 snapshot 已写入；只允许指向此前真实 committed snapshot |
+
+`execution_terminal` 是独立 deny-unknown typed enum
+`Option<{transport_timeout, externally_cancelled, externally_interrupted}>`，保留 CAS winner；
+持久化失败不能把 cancel 改写为“从未取消”，也不能让 cancel 掩盖 required commit failure。
+`last_committed_snapshot` 只含 credential-free exact path/run_id/digest（若尚无成功 commit
+则为 none），不嵌入 raw error 或伪造 artifact。调用方/CLI 对
+`UncommittedFinalizationFailure` 必须以非成功返回处理。
 
 `run_live_gemini_smoke` 必须接收可注入 cancellation token、可在指定 step barrier 阻塞的
 transport，以及 `LiveArtifactSink`。runner 对每个 step 执行：
@@ -452,9 +539,11 @@ transport，以及 `LiveArtifactSink`。runner 对每个 step 执行：
 收到 external cancellation/interruption 后，runner 停止调度新网络调用，为 in-flight 与
 尚未开始的 required keys 写入 `incomplete_keys`，保存真实 attempt/termination 与可选
 partial observation，await 最终 atomic flush 后返回；不得把这些 keys 再合成为
-missing-required protocol failure。若 flush 自身失败，runner 返回 protocol failure，不能
-报告 passed；此前已成功原子写入的 snapshot 仍须可 reload。retry 必须生成不同 run_id，
-旧 run steps 保持只读，不能聚合到新 run。
+missing-required protocol failure。若逐 step persist 或 cancel final flush 失败，runner
+立即停止后续 network，返回上述 typed `UncommittedFinalizationFailure`，保留原
+execution-terminal CAS winner，不构造/返回 `Committed` final artifact；此前已成功原子
+写入的 last snapshot 仍须可 reload 且 bytes/digest 不变。retry 必须生成不同 run_id，旧
+run steps 保持只读，不能聚合到新 run。
 
 manual invocation 的 production `LiveArtifactSink` 默认目录是
 `artifacts/live/GH1108`，final path 精确为
@@ -507,16 +596,16 @@ counter=0、final aggregate 非 passed，并以新 invocation 证明新 run_id �
 | B-002 | `gemini35.rs`/`gemini36.rs` limits 与 paid Standard pricing | `cargo test --locked google_model_catalog_2026_07_metadata`；断言 Developer paid Standard per-million 与 stored per-1k/cost，并断言 Batch/Flex/Priority 无同值声明。 |
 | B-003 | Developer evidence filter | `cargo test --locked google_model_catalog_2026_07_dispositions`；retired/shutdown/unverified/other-product 不公开。 |
 | B-004 | frozen 17-ID disposition ledger | `cargo test --locked google_model_catalog_2026_07_dispositions` 对 17 行 exact ID/disposition/full URL set/reviewed_at/reason 逐字段 exact-equal；七个 available 继续公开，六个 shutdown、一个 retired、三个 unverified 不公开，unverified 不得由实现自行升级。 |
-| B-005 | shared request allowlist + canonical extra-map normalizer | `cargo test --locked gemini_2026_07_deprecated_sampling_rejected`；typed temperature/top_p omitted/JSON-null 均为 absent，flattened extra_body/extra_params 的 `top_k: Value::Null` 被消费并删除，三者 non-null 均 pre-network error，final JSON 四种 key 均不存在。 |
-| B-006 | one-shot final-contents normalization + prefill/serializer parity | `cargo test --locked gemini_2026_07_prefill_rejected`；interleaved meaningful System+Developer text 按原消息顺序组成 systemInstruction.parts 且不进 contents，developer+user 不丢 instruction/user，System/Developer non-text 或不可表示 payload 均 pre-network 拒绝；assistant+system/assistant+developer 仍因 final model 拒绝，all-system/developer/model+trailing-empty/all-empty 拒绝，user+system 通过；spy/source fixture 证明 normalizer 只执行一次并直接产出 serializer-ready contents/systemInstruction；不把 GH1111 tool-loop callability 计为通过条件。 |
+| B-005 | shared chat/native sampling normalizers | `cargo test --locked gemini_2026_07_deprecated_sampling_rejected` 与 `cargo test --locked gemini_native_2026_07_preflight`；chat typed temperature/top_p omitted/JSON-null 均为 absent，flattened top_k null 被消费；native generationConfig temperature/topP/topK null 被消费；两 lane 的任一 non-null 均 budget/network 前 error，final JSON 四种 key 均不存在。 |
+| B-006 | one-shot chat normalization + native terminal-content preflight | `cargo test --locked gemini_2026_07_prefill_rejected`、`cargo test --locked gemini_native_2026_07_preflight` 与 `cargo test --locked gemini_public_entrypoint_contract`；chat fixture 覆盖 interleaved System/Developer、non-text rejection 与 final-model cases；native 4 prefix × unary/stream 覆盖 missing/empty/malformed contents、trailing blank、terminal user/model、systemInstruction 不遮蔽 model、network=0；chat/completions/Responses unary+stream 都命中 shared selected-provider gate；Batch/其他 capability source invariant 证明 non-routable。 |
 | B-007 | exact positive param allowlist + post-selection stream-metadata separation + sink parity | `cargo test --locked gemini_2026_07_request_contract_parity` 与 `cargo test --locked gemini_2026_07_stream_metadata`；provider/preflight/map/serializer param-name 集合精确等于 `{max_tokens, stop, stream}`，逐项断言 maxOutputTokens/stopSequences/stream transport sink，并断言 temperature/top_p/top_k/tools/tool_choice/response_format/max_completion_tokens 不在集合；wire unknown/non-bool 在 DTO boundary 拒绝但不消费合法 object；existing builder 生成、只含 include_usage=true 的 canonical metadata 在 pre-selection 不被 take/drop，且无额外 usage preference state；final selected Gemini exact identity 的 direct/alias/fallback 才消费 canonical `include_usage=true` 并到达 `ChatCompletionStream`，upstream body 无 stream_options/include_usage；OpenAI/OpenRouter canonical hook input/output 逐字段相等，selection failure 不修改原请求，所选新 Gemini 的 inconsistent metadata 与 non-stream 组合均 pre-network fail closed。 |
-| B-008 | neutral paid Standard pricing facts only | `cargo test --locked gemini_2026_07_cost`；fixed-token cost 精确，Batch/Flex/Priority 未声明同值，unknown behavior snapshot 不变。 |
+| B-008 | neutral + embedded runtime paid Standard pricing parity | `cargo test --locked gemini_2026_07_cost`、`cargo test --locked gemini_2026_07_runtime_pricing` 与 `cargo test --locked gemini_2026_07_runtime_spend`；两个 prefixed Developer rows/values/limits/source exact，provider=gemini unprefixed exact lookup 可解析且 chat/native reserve+settle fixed usage 与 neutral cost 相等；provider=vertex_ai、unprefixed row、Batch/Flex/Priority 均 fail closed/未声明，unknown policy snapshot 不变。 |
 | B-009 | immutable stable snapshot | `cargo test --locked google_model_catalog_2026_07_stability`；重复/并发查询结果完全相等、升序、无重复。 |
 | B-010 | opt-in/key 2×2 actual-env gate | `cargo test --locked live_gemini_gate_matrix`；四个 `env_clear` + exact-env 子进程经过 production env reader，三种缺门组合 network counter=0、双满足只命中 fake transport；普通 parallel tests 零 `set_var`/`remove_var`，并行 child counter/env/artifact 无交叉泄漏。 |
-| B-011 | deterministic failure classification + complete paginated list evidence + typed live observations/keyed aggregation | `cargo test --locked live_gemini_failure_mapping_precedence`、`cargo test --locked live_gemini_list_pagination`、`cargo test --locked live_gemini_result_classification` 与 `cargo test --locked live_gemini_observations`；table-driven fixture 穷举 terminal event、Google reason、ProviderError variant、HTTP fallback 与 local protocol sources，证明 precedence/first-terminal-event-wins 且无 substring branch；list fixture 从 empty token 遍历至无 next token，覆盖 later-page match、repeated/malformed token、page failure、100-page bound 与 cross-page duplicate；两个 exact IDs 各有 static/list/get/minimal-call 共 8 个 per-model required records，完整 traversal 派生的两条 list observations 分别保持 requested_exact_id/model/page-count/exact-match 一致并独立 hash/persist；auth/timeout/cancel 无响应不构造 observation，partial 只含真实 facts；hash-only/缺字段 passed record 被拒；transport deadline 精确为 failed/network/transport_timeout，natural missing `(step, model)` 精确为 failed/protocol/missing_required_step。 |
+| B-011 | deterministic failure classification + complete paginated list evidence + typed live observations/keyed aggregation | `cargo test --locked live_gemini_failure_mapping_precedence`、`cargo test --locked live_gemini_list_pagination`、`cargo test --locked live_gemini_result_classification` 与 `cargo test --locked live_gemini_observations`；table-driven fixture 穷举 execution-terminal event、Google reason、ProviderError variant、HTTP fallback 与 local protocol sources，证明 classification precedence/first-execution-terminal-event-wins 且无 substring branch；list fixture 从 empty token 遍历至无 next token，覆盖 later-page match、repeated/malformed token、page failure、100-page bound 与 cross-page duplicate；两个 exact IDs 各有 static/list/get/minimal-call 共 8 个 per-model required records，完整 traversal 派生的两条 list observations 分别保持 requested_exact_id/model/page-count/exact-match 一致并独立 hash/persist；auth/timeout/cancel 无响应不构造 observation，partial 只含真实 facts；hash-only/缺字段 passed record 被拒；transport deadline 精确为 failed/network/transport_timeout，natural missing `(step, model)` 精确为 failed/protocol/missing_required_step。 |
 | B-012 | credential redaction including tracing | `cargo test --locked live_gemini_redaction` 安装 captured tracing subscriber；sentinel 在 tracing/stdout/stderr/error Display+Debug/config+result Debug/artifact 中零命中。 |
 | B-013 | Vertex overlay/read paths | `test "$(git rev-parse HEAD)" = "$IMPLEMENTATION_HEAD_SHA" && test -z "$(git diff --name-only "$IMPLEMENTATION_BASE_SHA...$IMPLEMENTATION_HEAD_SHA" -- ':(glob)src/core/providers/vertex_ai/**')"` 必须零输出/零退出；synthetic prohibited-path fixture 证明任一 Vertex production path 使 gate 非零退出，catalog snapshot fixture 独立证明 neutral record 的 Vertex overlay 未变。 |
-| B-014 | live runner cancellation、durable incremental persistence、termination/retry/canonical observation state | `cargo test --locked live_gemini_runner_cancellation_persists_incrementally`、`cargo test --locked live_gemini_artifact_sink` 与 `cargo test --locked live_gemini_observation_canonicalization`；真实 runner + barrier + cancellation token + reloadable sink 证明每 step await atomic snapshot、cancel flush、后续 network=0、completed facts 保留、remaining keys incomplete、aggregate 非 passed；default/override sink 证明 `<run_id>.json`、same-dir atomic replace、Unix 0600/其他平台 contract、success/interruption retention、offline temp isolation，且 `grep -Fx '/artifacts/live/GH1108/' .gitignore` 与 `git check-ignore -q artifacts/live/GH1108/probe.json` 通过；deadline/cancel race first-terminal-event-wins，重试生成不同 run_id 且不聚合旧 keys；pair presence/recomputed digest 一致，8-key fixture 逐项移除均不得 aggregate false-pass，任一事实变化导致 canonical observation/digest 都变化。 |
+| B-014 | two-axis execution/finalization outcome + durable incremental persistence | `cargo test --locked live_gemini_runner_cancellation_persists_incrementally`、`cargo test --locked live_gemini_cancel_then_final_persist_failure`、`cargo test --locked live_gemini_artifact_sink` 与 `cargo test --locked live_gemini_observation_canonicalization`；正常 cancel flush 返回 committed incomplete；cancel 后 final persist failure 返回 typed uncommitted failed/protocol/artifact_persistence_failed 且 execution_terminal 保留 externally_cancelled、last snapshot reloadable/bytes 不变、无 false final artifact/no later network；none/deadline/interruption × persisted/failure table 全覆盖；其余 atomic path/permission/retention/new-run-id/digest invariants 保持。 |
 | B-015 | existing model compatibility | `cargo test --locked gemini_provider` 与 migration snapshot；只允许 fixture 声明的 advertised-ID delta。 |
 | B-016 | evidence manifest validation | `cargo test --locked google_model_catalog_2026_07_evidence`；missing/conflicting/stale/unofficial evidence 初始化失败。 |
 | B-017 | provider-callable public capability + model-feature closed sets | `cargo test --locked google_model_catalog_2026_07_metadata`；分别对两个模型断言 capability=`{ChatCompletion, ChatCompletionStream}`、supports_tools=false、feature=`{MultimodalSupport, StreamingSupport, SystemInstructions}` 集合相等，并以 image inlineData/stream endpoint/systemInstruction source fixtures 证明三项正向 sink；显式断言 ContextCaching/SearchGrounding/VideoUnderstanding/AudioUnderstanding、ToolCalling/FunctionCalling/JsonMode 及 CodeExecution/BatchProcessing/Realtime、Computer Use、generation、Live/Interactions 均未广告。 |
@@ -528,8 +617,16 @@ official Developer evidence fixture (offline, immutable)
   -> GH1112 neutral Google catalog validation
   -> Developer availability filter
   -> stable Gemini models()
+  -> neutral paid Standard cost facts
 
-OpenAI-compatible chat request
+embedded model_prices_extended exact Developer rows
+  -> provider-aware PricingService(provider=gemini, exact ID)
+  -> OpenAI chat / legacy completions / Responses reservation + settlement
+  -> native generateContent / streamGenerateContent reservation + settlement
+  -> provider-aware pricing endpoint
+  -> Vertex lookup remains missing
+
+OpenAI-compatible chat / legacy completions / Responses request
   -> provider-neutral gateway builder (preserve stream_options)
   -> alias/fallback resolution + final deployment selection
   -> post-selection token policy
@@ -542,6 +639,14 @@ OpenAI-compatible chat request
        -> final Developer request body
   -> ChatCompletionStream transport (no stream_options in upstream body)
   -> existing Developer endpoint + query API key
+
+Gemini-native request (4 prefixes x unary/stream)
+  -> shared native exact-model preflight
+       -> consume null deprecated generationConfig fields / reject non-null
+       -> validate closed contents shape + terminal meaningful user role
+  -> runtime pricing reservation
+  -> GeminiProvider defense-in-depth idempotent native preflight
+  -> generateContent / streamGenerateContent transport
 
 explicit live opt-in + Developer credential
   -> per-model static snapshot (2 records)
@@ -588,6 +693,12 @@ explicit live opt-in + Developer credential
 
 - [ ] Catalog: `cargo test --locked google_model_catalog_2026_07`
 - [ ] Provider contract: `cargo test --locked gemini_2026_07`
+- [ ] Public entrypoint/native preflight:
+      `cargo test --locked gemini_native_2026_07_preflight &&
+       cargo test --locked gemini_public_entrypoint_contract`
+- [ ] Embedded runtime pricing:
+      `cargo test --locked gemini_2026_07_runtime_pricing &&
+       cargo test --locked gemini_2026_07_runtime_spend`
 - [ ] Router/network negatives: `cargo test --locked gemini_router_fallback`
 - [ ] Offline live-smoke fixtures: `cargo test --locked live_gemini`
 - [ ] Manual opt-in:
@@ -606,6 +717,9 @@ explicit live opt-in + Developer credential
       `test -z "$(git diff --name-only
        "$IMPLEMENTATION_BASE_SHA...$IMPLEMENTATION_HEAD_SHA" --
        src/server/routes/ai/chat.rs src/server/routes/ai/chat_streaming.rs
+       src/server/routes/ai/completions.rs src/server/routes/ai/completions_streaming.rs
+       src/server/routes/ai/responses.rs src/server/routes/ai/responses_stream.rs
+       src/server/routes/ai/mod.rs src/server/routes/ai/batches.rs
        src/core/types/chat.rs)"`
 - [ ] Vertex production paths unchanged:
       `test "$(git rev-parse HEAD)" = "$IMPLEMENTATION_HEAD_SHA" &&
@@ -633,7 +747,7 @@ JSON。checker 必须验证：
 - `IMPLEMENTATION_BASE_SHA`/`IMPLEMENTATION_HEAD_SHA` 是不同的完整 40 位小写 commits，
   base 是 head ancestor，当前 `HEAD` 等于 head，tracked worktree clean，LCOV 存在；
 - `base...head` changed paths 必须是本 complete planned-changes manifest 的子集；
-  `src/server/routes/ai/{chat.rs,chat_streaming.rs}`、`src/core/types/chat.rs` 或
+  上述九个 read-only routing/context files 或
   `src/core/providers/vertex_ai/**` 任一路径变化均 fail closed。Vertex neutral overlay
   是否未变仍由 catalog snapshot fixture 独立证明，不能用 path gate 替代；
 - `base...head` changed production Rust executable lines 是非空分母，所有 changed
@@ -653,6 +767,8 @@ JSON。checker 必须验证：
 | `catalog_evidence_validation` | `src/core/providers/google/models/registry.rs` | `validate_developer_catalog_evidence` / `catalog-evidence-validation` |
 | `deprecated_param_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_deprecated_sampling_params` / `deprecated-param-rejection` |
 | `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_gemini_contents` / `final-contents-normalization` **and** `validate_no_model_prefill` / `prefill-rejection`；两个 selector 都必需 |
+| `native_request_preflight` | `src/core/providers/google/models/request_contract.rs` | `normalize_native_gemini_request` / `native-request-preflight` |
+| `runtime_pricing_authority` | `src/core/pricing_service/authority_tests.rs` | `gemini_2026_07_runtime_pricing_authority` / `runtime-pricing-authority` |
 | `stream_metadata_validation` | `src/server/routes/ai/token_policy.rs` | `prepare_chat_request_for_provider` / `selected-deployment-stream-metadata` |
 | `live_classification` | `tests/live_gemini.rs` | `classify_live_failure` / `live-classification` |
 | `live_redaction` | `tests/live_gemini.rs` | `redact_live_artifact` / `live-redaction` |
@@ -669,7 +785,7 @@ selector 都必须有自身 span 内的 changed `BRDA`，并达到 100%；`live_
 `checks/test_gh1108_coverage_gate.py` 使用 synthetic source/diff/LCOV fixtures，至少覆盖：
 
 - happy path 与 full-SHA/head/ancestor/tracked-clean/LCOV guards；
-- changed path 不在 complete manifest、三个 read-only routing context 任一变化、任一
+- changed path 不在 complete manifest、九个 read-only routing/context files 任一变化、任一
   `src/core/providers/vertex_ai/**` 变化均非零退出；synthetic allowed path 仍通过；
 - missing changed source、empty denominator、line coverage <80%、malformed/missing
   `DA`/`BRDA`；
@@ -677,7 +793,8 @@ selector 都必须有自身 span 内的 changed `BRDA`，并达到 100%；`live_
   span；
 - unrelated covered branch（同 path 但其他 symbol，以及同 symbol 但 marker span 外）
   不能满足任何 category；
-- catalog、deprecated、prefill、stream metadata 的任一 selector 缺失或 uncovered 均失败；
+- catalog、deprecated、prefill、native preflight、runtime pricing authority、stream
+  metadata 的任一 selector 缺失或 uncovered 均失败；
 - prefill fixtures 覆盖 interleaved System/Developer 原序 parts、developer+user
   instruction/content 均保留、System/Developer non-text/不可表示 payload pre-network rejection、
   assistant+developer final-model rejection，且证明 normalizer/serializer 不二次读 raw roles；
@@ -687,6 +804,14 @@ selector 都必须有自身 span 内的 changed `BRDA`，并达到 100%；`live_
   + stream_options、OpenAI/OpenRouter post-selection input/output equality、selection
   failure no mutation、同 path 其他 function 与 marker 外 covered branch；任何
   conditional consume/preserve/fail-closed branch 未命中均失败；
+- native selector fixtures 覆盖 exact-model-only、三个 generationConfig fields 的
+  absent/null/non-null、contents missing/empty/malformed、trailing blank、terminal
+  user/model、systemInstruction 不遮蔽 terminal model 与 idempotent defense-in-depth；
+  route fixture 另覆盖 4 prefixes × unary/stream，并证明 budget/network counter=0；
+- runtime-pricing selector fixtures 覆盖两个 exact Developer prefixed rows 的 provider-aware
+  lookup、fixed usage cost、chat/native reservation + settlement 与 provider=vertex_ai
+  missing；unprefixed/Vertex row、wrong unit/source/value 或任一路径落入 unpriced policy
+  都 fail closed；
 - observation selector fixtures 覆盖 redaction-before-canonicalization、optional pair
   consistency/recomputed digest、auth/timeout/cancel no-response、typed partial facts、
   hash-only/complete-required-for-passed rejection、8 个 per-model required keys 逐项缺失、
@@ -697,11 +822,15 @@ selector 都必须有自身 span 内的 changed `BRDA`，并达到 100%；`live_
 - env-gate fixtures 用四个 `env_clear` + exact-env child 经过 production reader，证明
   parallel parent 零 `set_var`/`remove_var`、network counters 与 artifact paths 无泄漏；
 - classification selector fixtures 穷举完整 source→class table、precedence、
-  first-terminal-event-wins 与 no-message-substring branches；
+  first-execution-terminal-event-wins 与 no-message-substring branches；
 - interruption/persistence selector fixtures 必须由真实 runner 驱动 barrier +
   cancellation token + reloadable artifact sink，覆盖每-step awaited atomic replace、
-  cancel flush、remaining incomplete、no-later-network、persistence failure 与 new-run-id
-  isolation；sink fixtures 另覆盖 default/override `<run_id>.json`、same-dir temp replace、
+  cancel flush、remaining incomplete、no-later-network、new-run-id isolation，以及
+  none/deadline/cancel/interruption × persisted/persistence_failed closed matrix；特别覆盖
+  cancel 后 final flush failure 返回 typed uncommitted
+  failed/protocol/artifact_persistence_failed、保留 execution terminal、last committed
+  snapshot reloadable/unchanged 且不存在 false final artifact；sink fixtures 另覆盖
+  default/override `<run_id>.json`、same-dir temp replace、
   Unix 0600/其他平台 contract、success/interruption retention、path traversal rejection 与
   offline temp sink/default-dir-zero-write；只构造 incomplete record 或只覆盖 sink helper
   不能满足该 category；

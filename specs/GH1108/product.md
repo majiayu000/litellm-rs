@@ -58,7 +58,10 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 - 不把 Gemini Developer API 的模型、价格或 availability 推断到 Vertex AI。
 - 不实现 GH1112 的共享 Google catalog ownership、Vertex overlay 或认证收敛。
 - 不实现 GH1111 的完整 `ToolUse` / `ToolResult` 回路。
-- 不实现 GH1113 的 pricing authority、unknown-cost 或 spend/budget 语义收敛。
+- 不实现 GH1113 的 pricing authority、unknown-cost 或 spend/budget 语义收敛；但当前
+  gateway 的预算预留、结算与 provider-aware pricing endpoint 都以嵌入式
+  `model_prices_extended.json` 为运行时 authority，因此为两个 exact Developer IDs 增加
+  与 B-002 相等的 runtime rows 和回归测试属于本 issue 的必要正确性，不是新 authority。
 - 不把 Gemini Developer API paid Standard 的价格推断为 Batch、Flex 或 Priority tier
   价格，也不在本 issue 增加这些 tier 的计费契约。
 - 不自动联网刷新目录，不在正常构建、测试或运行时隐式执行 live smoke。
@@ -91,7 +94,10 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    `top_k: Value::Null` 必须被 shared normalizer 消费并删除为 absent。三者的任何 non-null
    值（包括看似默认的数值）必须在网络前返回稳定的 OpenAI-compatible
    invalid-request 错误；最终 upstream body 不得包含 `temperature`、`topP`、`top_k`
-   或 `topK`，不得静默透传。
+   或 `topK`，不得静默透传。Gemini-native `generateContent`/
+   `streamGenerateContent` 的等价字段是
+   `generationConfig.{temperature,topP,topK}`：缺失或 JSON `null` 必须作为 absent
+   消费，任一 non-null 值必须在预算预留和网络前以同一稳定错误拒绝。
 6. **B-006** 对 B-005 模型，系统必须一次性把原 messages 规范化为实际提交给 Gemini
    的 `contents` 与独立 `systemInstruction`；prefill gate 和 serializer 必须消费这同一
    结果，不能再依据 raw role 列表二次推导。meaningful System 与 Developer 的文本按原
@@ -104,6 +110,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    以 model 结尾而拒绝；all-system/developer 和 all-empty 也拒绝，user+system 可通过。
    既有 Gemini `ToolUse`/`ToolResult` 序列化与完整 tool-loop callability 仍归 GH1111，
    不是本 invariant 的通过条件，也不是 GH1108 implementation dependency。
+   Gemini-native body 不重新做 OpenAI role conversion；其 shared native preflight 必须
+   fail closed 解析 `contents`，跳过 trailing semantic-empty content 后要求至少一个
+   meaningful content，且最后一个 meaningful content 的 exact role 必须为 `user`；
+   role 为 `model` 是 prefill，缺失/未知 role、malformed `contents`/`parts` 或无法确定
+   semantic emptiness 的 shape 都必须在预算预留和网络前拒绝。`systemInstruction` 不得
+   遮蔽 terminal `model` content。JSON-null/blank-text-only parts 可判定为空；任何其他
+   part 均为 meaningful，保持原 body 顺序且不由本 issue 重写 native contents。
 7. **B-007** 两个新模型的 OpenAI-compatible positive parameter allowlist 必须恰为闭集
    `{max_tokens, stop, stream}`：`max_tokens`/`stop` 进入既有 Gemini generation body，
    `stream` 只选择 streaming transport、不进入 body。`temperature`、`top_p`、`top_k`
@@ -125,7 +138,14 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    boundary fail closed；对所选 GH1108
    Gemini 模型，合法 metadata 与非 streaming 请求并存或内部 canonical metadata
    不一致时也必须在网络前 fail closed。
-8. **B-008** 新模型的 pricing/cost lookup 必须返回 B-002 的确定值并保持单位一致；
+8. **B-008** 新模型的 neutral catalog cost lookup 与当前 gateway runtime
+   `PricingService` 必须都返回 B-002 的确定值并保持单位一致。默认嵌入式 pricing source
+   必须以 exact Developer keys `gemini/gemini-3.6-flash` 与
+   `gemini/gemini-3.5-flash-lite`、`litellm_provider=gemini` 保存 per-token 值，使
+   OpenAI-compatible chat、Responses、legacy completions、Gemini-native
+   generateContent/streamGenerateContent 的预算预留和结算，以及 provider-aware
+   `/v1/pricing/calculate` 都不会按默认 unpriced reject 策略拒绝这两个 ID。不得新增
+   unprefixed 或 Vertex rows；`provider=vertex_ai` 对两个 ID 必须继续 fail closed。
    这些值只代表 Gemini Developer API paid Standard tier；Batch、Flex、Priority 与
    其他 unknown model/tier 的全局 pricing 行为不得由本 issue 改写、复用或伪装为
    已知零成本。
@@ -148,9 +168,12 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     `RESOURCE_EXHAUSTED` → quota；ModelNotFound/404/`NOT_FOUND` → not_found；
     InvalidRequest、serialization/parsing/schema/exact mismatch、其他 4xx 和自然结束后的
     missing step → protocol；Network/Timeout/ProviderUnavailable/streaming transport、
-    408/504/5xx/`UNAVAILABLE`/`DEADLINE_EXCEEDED` → network。显式 runner terminal event
+    408/504/5xx/`UNAVAILABLE`/`DEADLINE_EXCEEDED` → network。显式 runner
+    execution-terminal event
     优先于以上 response/error facts；deadline 与 external cancellation/interruption
-    竞争时，原子记录的首个 terminal event 胜出，后到事件不得重分类。已发出的 transport
+    竞争时，原子记录的首个 execution-terminal event 胜出，后到 execution event 不得
+    重分类。artifact finalization 是其后的独立 required commit gate，不参与这次 CAS；
+    它不得抹掉已记录的 execution terminal fact。已发出的 transport
     请求达到 deadline timeout 必须是 `status=failed`、`error_class=network`，并记录
     timeout termination；
     无 external terminal event 时，任一必需步骤在自然结束后仍未执行必须是
@@ -205,7 +228,20 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     pattern 代替此验收。offline tests 仍注入临时 sink，不写默认目录。aggregate 必须对
     B-011 的 8 个
     per-model keys 逐项结算，一个模型的成功不能替代另一个。任一 observation fact 不同都
-    必须产生不同 canonical observation/digest，不能落成相同的成功记录。
+    必须产生不同 canonical observation/digest，不能落成相同的成功记录。runner 的闭合
+    返回类型必须区分 `Committed(LiveArtifact)` 与
+    `UncommittedFinalizationFailure`。execution terminal 使用 first-event CAS 的闭集
+    `{transport_timeout, externally_cancelled, externally_interrupted}` 或 none；
+    finalization 使用闭集 `{persisted, persistence_failed}`。若 external cancel/
+    interruption 后最终 flush 成功，返回 committed artifact，仍为
+    incomplete/no-error-class/external reason；若任一逐步 snapshot 或最终 flush 失败，
+    不得声称失败 snapshot 已持久化，必须返回 typed
+    `UncommittedFinalizationFailure`，其整体事实固定为
+    `status=failed`、`error_class=protocol`、
+    `termination_reason=artifact_persistence_failed`，同时以独立 typed
+    `execution_terminal` 保留已由 CAS 赢得的 cancel/interruption/deadline（若有），并
+    指向可重读的 last committed snapshot。last committed snapshot 保持原样，不得伪造
+    新的 failed record；发生持久化失败后不得发起后续网络调用。
 15. **B-015** 除明确列出的新模型、evidence disposition 和新请求契约外，已有仍受支持
     模型的 exact ID、能力、合法参数、认证、endpoint 与响应转换保持兼容；不因刷新
     意外删除或改变无关模型。
@@ -231,13 +267,17 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 
 - [ ] 两个新 exact model ID 的 Developer API metadata、limits、能力闭合集与 paid
       Standard 价格符合 B-001/B-002/B-017，并有 registry 与 cost 行为测试；Batch/Flex/
-      Priority 不在该价格断言范围内。
+      Priority 不在该价格断言范围内；默认 embedded PricingService 的 provider-aware
+      lookup、chat/Responses/completions 与 native reservation/settlement 使用相同 exact
+      per-token 值，Vertex lookup 保持 fail closed。
 - [ ] migration 前 17 个 Developer chat exact IDs 的 disposition/source URLs/
       `reviewed_at=2026-07-26`/reason 与 tech frozen ledger 逐行完全相等；shutdown、
       retired 与 unverified fixture 不被公开，implementation 不自行升级 unverified。
 - [ ] 新契约模型的 supported params 与最终请求体均不含三项废弃采样参数；typed
       `temperature/top_p` JSON `null` 与 flattened `top_k: null` 均由 shared normalizer
-      消费为 absent，任何 non-null 输入在网络前得到稳定错误。
+      消费为 absent，任何 non-null 输入在网络前得到稳定错误；native
+      generationConfig 三个等价字段及 native final-model prefill 在预算/网络前得到同一
+      fail-closed 结果。
 - [ ] one-shot role/content normalization 直接产生 serializer-ready `contents` 与
       `systemInstruction.parts`；meaningful System+Developer text 按原消息顺序组成 parts
       且都不进 contents，System/Developer non-text 或不可表示 payload 均 pre-network 拒绝；
@@ -255,6 +295,12 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
       OpenAI/OpenRouter 在 post-selection hook 前后值相等、selection failure 不修改请求，
       所选 GH1108 Gemini 模型的非法/不一致 metadata 与 non-stream 组合均 pre-network
       拒绝。
+- [ ] 公开请求入口矩阵闭合覆盖：OpenAI chat unary/stream、legacy completions
+      unary/stream、Responses unary/stream 都在最终 selected Gemini identity 上进入
+      shared chat preflight；`/v1`、`/v1beta`、`/gemini/v1`、
+      `/gemini/v1beta` 的 native unary/stream 共 8 个 endpoint shape 都进入 shared native
+      preflight；Batch 只代理 OpenAI/OpenAI-compatible batch provider lifecycle，不能路由
+      到 Gemini provider，其他 capability route 也不可选择 Gemini chat capability。
 - [ ] catalog 重复/并发读取稳定排序且 metadata/price/contract 一致。
 - [ ] live opt-in/credential 2×2 fixture 精确覆盖双缺失、仅 sentinel
       `GEMINI_API_KEY`、仅 `LITELLM_RS_LIVE_GEMINI=1` 且所有 Developer credential
@@ -273,7 +319,10 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
       observation 不产生相同成功记录；transport timeout 为 failed/network，外部
       cancel/interruption 为无 error_class 的 incomplete；runner-level fixture 必须在真实
       step 阻塞点触发 cancellation，重新读取逐 step 原子 snapshot，证明已完成步骤保留、
-      后续网络调用为零且 retry 使用新 run_id。manual artifact 默认持久保留在
+      后续网络调用为零且 retry 使用新 run_id；cancel 后 final flush failure 必须返回
+      typed uncommitted failed/protocol/artifact_persistence_failed，保留
+      execution_terminal=externally_cancelled、last committed snapshot 可重读且不伪造
+      final artifact。manual artifact 默认持久保留在
       `artifacts/live/GH1108/<run_id>.json`，显式 output-dir override、atomic replace、
       POSIX `0600`/其他平台 best-effort、检索与清理命令均有测试/文档；repository ignore
       policy 含精确 `/artifacts/live/GH1108/`，offline sink 只写临时目录。
@@ -338,9 +387,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   后续页仍必须命中。repeated/malformed token、任一页失败、超过 100 页或跨页 exact
   duplicate 均不得用 partial results false-pass。
 - 403 + structured `RESOURCE_EXHAUSTED` 必须按 quota 而非 auth；deadline 与 external
-  cancellation 同时就绪时只采用原子记录的首个 terminal event，后到 signal 不得覆写。
+  cancellation 同时就绪时只采用原子记录的首个 execution-terminal event，后到
+  execution signal 不得覆写。
 - runner 在 fake transport barrier 上收到 external cancellation 后必须停止后续请求；
-  reload artifact 仍能看到此前已 await-persist 的 steps 和当前 incomplete termination。
+  final flush 成功时 reload artifact 仍能看到此前已 await-persist 的 steps 和当前
+  incomplete termination；final flush 失败时返回 typed uncommitted
+  failed/protocol/artifact_persistence_failed，并保留 external cancellation 与 last
+  committed snapshot，不得声称 final artifact 已落盘。
 - manual success/interruption artifact 不自动删除；默认目录、显式 output-dir override、
   atomic replace 与权限契约可验证，repository ignore policy 精确忽略
   `/artifacts/live/GH1108/`，offline test sink 不污染默认目录。
