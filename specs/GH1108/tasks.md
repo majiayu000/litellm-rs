@@ -47,9 +47,11 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `src/server/routes/ai/spend_runtime_pricing_tests.rs`,
       `src/server/routes/ai/gemini/spend.rs`; all other Gemini/Vertex consumers read-only.
       Done when: both GA exact IDs、limits、provider-callable exact closed capability/feature
-      sets（capability 仅 ChatCompletion/ChatCompletionStream、supports_tools=false；
+      sets（capability 精确为
+      ChatCompletion/ChatCompletionStream/GeminiGenerateContent、supports_tools=false；
       feature 精确为 MultimodalSupport/StreamingSupport/SystemInstructions，并分别绑定
-      inlineData image/stream endpoint/systemInstruction serializer；显式排除
+      chat 与 native capability selector、inlineData image/stream endpoint/
+      systemInstruction serializer；显式排除
       ContextCaching/SearchGrounding/VideoUnderstanding/AudioUnderstanding 以及
       ToolCalling/FunctionCalling/JsonMode）、Gemini
       Developer API paid Standard per-million pricing and official evidence are present
@@ -124,8 +126,10 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       inconsistent metadata 与 non-stream + stream_options 均 pre-network fail closed，且
       positive allowlist 仍只有三项；native shared normalizer 只对两个 exact IDs
       生效：generationConfig 的 temperature/topP/topK absent/null 被消费、non-null 在
-      budget/network 前拒绝；contents missing/empty/malformed、未知 role 或 terminal
-      meaningful model 拒绝，trailing blank 被跳过、terminal user 可通过、
+      budget/network 前拒绝；contents missing/empty/malformed 拒绝，trailing blank 被
+      跳过；role exact user/model 保留，omitted 按 official Content default normalize
+      为 user，terminal explicit-user/omitted 可通过，terminal model 拒绝，explicit
+      null/unknown string/其他 non-string/ambiguous sequence fail closed，
       systemInstruction 不遮蔽 model；cleaned body 同时供 native budget 与 transport，
       provider direct defensive call 幂等。公开入口矩阵 fixture 覆盖 chat、legacy
       completions、Responses 的 unary/stream 均命中 selected-provider shared chat gate，
@@ -154,11 +158,15 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       credential path unchanged. Files: `tests/live_gemini.rs`,
       `docs/providers/gemini.md`, `docs/providers/README.md`, `.gitignore`; production catalog/provider
       files read-only. Done when: ignored live tests require exactly
-      `LITELLM_RS_LIVE_GEMINI=1`；2×2 fixture 不在普通 parallel process 调用
-      `set_var`/`remove_var`，每 case 以 `env_clear` + exact env 的隔离子进程经过
-      production actual env boundary；双 unset、仅 sentinel
-      `GEMINI_API_KEY`、仅 opt-in=1 且 GEMINI_API_KEY/GOOGLE_API_KEY/其他 Developer
-      aliases unset 均 network counter=0，双满足只命中 fake transport，parallel child
+      `LITELLM_RS_LIVE_GEMINI=1`；supported Developer aliases 精确为
+      `GOOGLE_API_KEY`、`GEMINI_API_KEY`，production precedence 是 GOOGLE 后 GEMINI。
+      closed 13-case fixture 不在普通 parallel process 调用 `set_var`/`remove_var`，每
+      case 以 `env_clear` + exact env 隔离子进程经过 production reader：disabled
+      empty/GOOGLE/GEMINI；enabled empty/GOOGLE/GEMINI/both；enabled Vertex
+      project+location、Vertex pair+service account、project-only、location-only；
+      enabled GOOGLE+Vertex 与 GEMINI+Vertex。disabled、missing Developer key 与所有
+      Vertex-only/partial cases network=0；Developer-positive cases 只命中预期 fake
+      source，both 时 GOOGLE 胜出、Developer key 始终先于 Vertex；parallel child
       env/counter/artifact 无泄漏；static/list/get/
       minimal-call steps 写入 closed schema
       `{run_id, model, step, status, error_class, http_status, observed_at,
@@ -243,8 +251,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       selectors 都满足并覆盖 interleaved System/Developer 原序、developer+user 保留、
       System/Developer non-text rejection、assistant+developer final-model rejection，
       native request preflight selector 覆盖 exact-only、sampling absent/null/non-null、
-      malformed/empty/trailing-empty contents、terminal user/model、4 prefixes ×
-      unary/stream network=0 与 provider defensive idempotence；runtime pricing authority
+      malformed/empty/trailing-empty contents、terminal explicit-user/omitted success、
+      explicit-model/null/unknown-string/其他 non-string/ambiguous rejection、4 prefixes ×
+      unary/stream negative network=0 与 provider defensive idempotence；runtime pricing authority
       selector 覆盖两个 prefixed Developer rows、Gemini provider-aware lookup、neutral/
       runtime fixed cost parity、chat/native reserve+settle 与 Vertex missing；
       stream metadata 的 `src/server/routes/ai/token_policy.rs` /
@@ -354,8 +363,10 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - public entrypoint matrix 除 chat 外还包含 legacy completions、Responses 的 unary/stream，
   它们都必须到 shared selected-provider chat gate；native `/v1`、`/v1beta`、
   `/gemini/v1`、`/gemini/v1beta` × unary/stream 八个 shape 走独立 shared native
-  normalizer，在 budget/network 前消费 null sampling fields、拒绝 non-null/malformed/
-  terminal model。Batch 与其他 capability routes 已证明不能路由到 Gemini chat。
+  normalizer，在 budget/network 前消费 null sampling fields；terminal omitted role
+  按 official default=user 通过，explicit model/null/unknown/nonrepresentable/ambiguous
+  拒绝。
+  Batch 与其他 capability routes 已证明不能路由到 Gemini chat。
 - 新模型 positive params 精确为 `{max_tokens, stop, stream}`；tools/tool_choice 仅有现存
   passthrough、无 serializer consumer，因此与 response_format/max_completion_tokens 一并
   排除。stream_options 是 gateway settlement metadata，不是第四个 param；builder 保留到
@@ -366,7 +377,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   进 upstream body；OpenAI/OpenRouter hook input/output 相等，selection failure 不修改
   请求，selected
   new-Gemini 非法或 non-stream 组合 fail closed。
-- 两个新模型 features 仅 MultimodalSupport/StreamingSupport/SystemInstructions，不广告
+- 两个新模型 capability 精确为 ChatCompletion/ChatCompletionStream/
+  GeminiGenerateContent，features 仅
+  MultimodalSupport/StreamingSupport/SystemInstructions，不广告
   ContextCaching/SearchGrounding/VideoUnderstanding/AudioUnderstanding 或
   ToolCalling/FunctionCalling/JsonMode，supports_tools=false；Google 产品支持不等于当前
   provider callability，相关能力留给 GH1111/后续契约。
@@ -388,9 +401,10 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   snapshot，不声称 final artifact 已持久化。manual sink 默认
   durable `artifacts/live/GH1108/<run_id>.json`，支持 explicit output-dir override、
   atomic replace、权限/retention 契约与 docs 检索/清理；implementation 必须提交 exact
-  `.gitignore` pattern `/artifacts/live/GH1108/`，offline sink 使用 temp。2×2 gate
-  matrix 必须以 env-isolated child actual boundary 测试、普通 parallel process 零
-  set_var/remove_var；captured tracing redaction fixture 必须通过。
+  `.gitignore` pattern `/artifacts/live/GH1108/`，offline sink 使用 temp。closed
+  13-case actual-env matrix 必须分别锁定 GOOGLE/GEMINI aliases、GOOGLE precedence、
+  Developer-over-Vertex precedence 和 Vertex-only/partial zero-network，普通 parallel
+  process 零 set_var/remove_var；captured tracing redaction fixture 必须通过。
 - 17-ID frozen disposition ledger 是批准输入（7 available/6 shutdown/1 retired/
   3 unverified，reviewed_at 2026-07-26）；implementation fixture 必须逐字段 exact-equal，
   不得自行升级 unverified。

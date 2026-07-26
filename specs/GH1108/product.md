@@ -39,8 +39,12 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   <https://ai.google.dev/gemini-api/docs/deprecations>
 - Gemini Developer API 定价（paid Standard tier）：
   <https://ai.google.dev/gemini-api/docs/pricing>
+- Google `Content` wire schema：`role` 是 optional，省略时服务默认 `user`，显式值只能是
+  `user` 或 `model`：
+  <https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1>
 
-证据只证明 Gemini Developer API，不证明 Vertex AI availability。
+最后一项仅用于共享 `Content` message 的 wire-shape/default 证据，不证明 Vertex AI
+availability；其他证据只证明 Gemini Developer API。
 
 ## 目标
 
@@ -112,9 +116,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    不是本 invariant 的通过条件，也不是 GH1108 implementation dependency。
    Gemini-native body 不重新做 OpenAI role conversion；其 shared native preflight 必须
    fail closed 解析 `contents`，跳过 trailing semantic-empty content 后要求至少一个
-   meaningful content，且最后一个 meaningful content 的 exact role 必须为 `user`；
-   role 为 `model` 是 prefill，缺失/未知 role、malformed `contents`/`parts` 或无法确定
-   semantic emptiness 的 shape 都必须在预算预留和网络前拒绝。`systemInstruction` 不得
+   meaningful content。对每个 meaningful content，显式 exact `user`/`model` 保留；
+   role field 缺失按 Google `Content` schema deterministic normalize 为 `user`，
+   因此 terminal omitted-role 与 terminal explicit-user 都是非 prefill，可通过；
+   terminal explicit `model` 是 prefill。role 为其他 string、非 string、或 content/
+   parts shape 无法确定时必须 fail closed，不能把 unknown/nonrepresentable role 猜成
+   user。只有所有 meaningful content 的 role 都能按此闭集唯一归一化时，sequence 才算
+   unambiguous。`systemInstruction` 不得
    遮蔽 terminal `model` content。JSON-null/blank-text-only parts 可判定为空；任何其他
    part 均为 meaningful，保持原 body 顺序且不由本 issue 重写 native contents。
 7. **B-007** 两个新模型的 OpenAI-compatible positive parameter allowlist 必须恰为闭集
@@ -152,10 +160,18 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 9. **B-009** catalog 列表必须稳定排序、无重复；同一不可变证据输入在重复或并发读取时
    返回相同 ID、metadata、价格和请求契约。
 10. **B-010** live smoke 默认关闭，只能由文档声明的单一显式 opt-in 环境变量开启；
-    opt-in 与 Developer credential 任一缺失时均不得联网。offline fixture 必须覆盖完整
-    2×2 矩阵：双缺失；仅 sentinel `GEMINI_API_KEY`；仅
-    `LITELLM_RS_LIVE_GEMINI=1` 且 `GEMINI_API_KEY`/其他 Developer credential aliases
-    全部 unset，三者均 network counter=0；双满足才可进入 fake/显式真实 transport。
+    opt-in 与 Developer credential 任一缺失时均不得联网。supported Developer aliases
+    的闭集与 production `GeminiConfig::from_env` 一致，仅为 `GOOGLE_API_KEY` 与
+    `GEMINI_API_KEY`，且两者同时存在时 `GOOGLE_API_KEY` 优先。closed 13-case offline
+    actual-env fixture 必须分别覆盖：全 unset；仅 GOOGLE key；仅 GEMINI key；仅 opt-in；
+    opt-in+GOOGLE；opt-in+GEMINI；opt-in+两 key 并证明 GOOGLE precedence；opt-in+
+    Vertex-only `GOOGLE_CLOUD_PROJECT`+`GOOGLE_CLOUD_LOCATION` 且无 Developer key；
+    opt-in+Vertex pair+`GOOGLE_APPLICATION_CREDENTIALS` 且无 Developer key；以及
+    opt-in+单独 project、opt-in+单独 location、opt-in+GOOGLE key+Vertex pair、
+    opt-in+GEMINI key+Vertex pair。无 opt-in 的两个 key cases、无 Developer
+    key 的 opt-in/partial-Vertex/full-Vertex cases均 network counter=0；只有
+    opt-in+任一 Developer key 才可进入 fake/显式真实 Developer transport，Vertex env
+    不得满足此 gate，Developer key 必须按 production 顺序先于 Vertex。
     每个 case 必须通过 `env_clear` + 精确 env set 的隔离子进程（或所有 env reader 共用的
     完全注入配置）测试真实 env boundary；普通并行测试不得调用 `set_var`/`remove_var`，
     case 间不得泄漏 opt-in 或 credential。普通单元测试、全量测试和应用启动不得隐式触发。
@@ -249,11 +265,14 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     页面互相冲突、来源不可访问或模型只存在于非官方二手资料时按 B-003 fail closed，
     不能以 live smoke 单次成功替代 lifecycle/source 记录。
 17. **B-017** 两个新模型公开的 `ModelInfo.capabilities` 必须恰为闭合集
-    `{ChatCompletion, ChatCompletionStream}`，`supports_tools=false`；model feature
+    `{ChatCompletion, ChatCompletionStream, GeminiGenerateContent}`，
+    `supports_tools=false`；model feature
     flags 必须恰为闭合集
     `{MultimodalSupport, StreamingSupport, SystemInstructions}`。这里
     `MultimodalSupport` 只表示当前 serializer 可提交 inline base64 image，
-    `StreamingSupport` 表示 `streamGenerateContent` transport，
+    `StreamingSupport` 表示 streaming transport；`GeminiGenerateContent` 表示
+    gateway 已公开且 provider capability selector 可达的 native unary/stream
+    `generateContent`/`streamGenerateContent` transport，
     `SystemInstructions` 表示 `systemInstruction` 序列化；公开 metadata 只能反映
     本 provider 当前可调用面，Google 产品页面声明能力不能替代本 provider serializer/
     transport 证据。由于当前 transformer 不消费 `tools`、`tool_choice` 或
@@ -300,13 +319,18 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
       shared chat preflight；`/v1`、`/v1beta`、`/gemini/v1`、
       `/gemini/v1beta` 的 native unary/stream 共 8 个 endpoint shape 都进入 shared native
       preflight；Batch 只代理 OpenAI/OpenAI-compatible batch provider lifecycle，不能路由
-      到 Gemini provider，其他 capability route 也不可选择 Gemini chat capability。
+      到 Gemini provider，其他 capability route 也不可选择 Gemini chat capability；
+      native terminal omitted-role 按 official default=user 与 explicit user 同样通过，
+      explicit model 拒绝，explicit null/unknown/non-string role 与不可判定 sequence
+      fail closed。
 - [ ] catalog 重复/并发读取稳定排序且 metadata/price/contract 一致。
-- [ ] live opt-in/credential 2×2 fixture 精确覆盖双缺失、仅 sentinel
-      `GEMINI_API_KEY`、仅 `LITELLM_RS_LIVE_GEMINI=1` 且所有 Developer credential
-      aliases unset，三个组合均 network counter=0；双满足才可进入 fake/显式真实
-      transport；每 case 使用 `env_clear` + exact env 的隔离子进程（或全注入配置）命中
-      actual env boundary，普通并行测试不调用 `set_var`/`remove_var` 且无 case 泄漏。
+- [ ] live actual-env matrix 对 `GOOGLE_API_KEY` 与 `GEMINI_API_KEY` 分别覆盖 opt-in
+      缺失/存在，并覆盖双 key 的 GOOGLE precedence；opt-in-only、Vertex project/location
+      pair、pair+service-account、project-only、location-only 且无 Developer key 均零
+      network；每个 Developer alias 与 Vertex pair 并存时都锁定 Developer-first。只有
+      opt-in+Developer key 可命中 fake/显式真实 Developer transport；每
+      case 使用 `env_clear` + exact env 隔离子进程命中 production reader，普通并行测试不
+      调用 `set_var`/`remove_var` 且无 case 泄漏。
 - [ ] opt-in live smoke 对两个新 exact ID 各自产生 static/list/get/minimal-call 共 8 个
       per-model required records
       含 `run_id`、attempt/termination facts、status-dependent optional typed
@@ -365,6 +389,10 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   instruction 都 pre-network 拒绝。assistant+system 与 assistant+developer 的 raw last role 虽非
   assistant，最终 `contents` 仍以 model 结尾，必须拒绝；all-system/developer 产生空
   contents 并拒绝；user+system 产生 user contents + systemInstruction，可通过 prefill gate。
+- native terminal explicit `user` 与 omitted role 都 normalize 为 user 并通过；
+  terminal explicit `model` 拒绝。explicit null、unknown string、其他 non-string role、
+  malformed/无法判定 sequence fail closed；4 prefixes 的 unary/stream fixtures必须逐项
+  相同。
 - `max_tokens`/`stop` 的 body mapping 与 `stream` transport selection 是新模型仅有的三项
   positive params；tools/tool_choice 的 passthrough、response_format/max_completion_tokens
   的字段存在都不能冒充 serializer support。`stream_options` 是 gateway metadata 而非
@@ -374,7 +402,8 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   include_usage=true 可到达 stream transport 但不得进入 upstream body；OpenAI/OpenRouter
   在 post-selection hook 前后值相等，selection failure 不修改请求，所选新模型的
   non-stream + stream_options 必须拒绝。
-- opt-in=1 但 key unset 与 key set 但 opt-in unset 均必须零网络；transport deadline
+- opt-in=1 但两个 Developer keys 均 unset（包括 Vertex-only env）与任一 key set 但
+  opt-in unset 均必须零网络；双 key 时 GOOGLE_API_KEY 胜出。transport deadline
   timeout 记录 failed/network，新 retry 使用新 run_id；外部 cancel/interruption 才是
   无 error_class incomplete。
 - live passed artifact 必须保存 static/list/get/minimal-call 的完整 typed facts；
