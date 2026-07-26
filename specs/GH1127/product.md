@@ -66,7 +66,7 @@ complexity: high
 - 敏感模式可能从一个 chunk 的末尾延伸到下一个 chunk 的开头。
 - provider 可能先发送 role、usage 或空 delta，再发送文本。
 - Chat 可能同时序列化 `thinking.content` 与相同的 `reasoning_content` alias；相同语义增量只累计一次。
-- Chat logprobs 可能重复 `delta.content` 或同一候选 token；同 event 内完全相同的语义值只累计一次，未出现在 content 的 top candidate 仍须扫描。
+- Chat logprobs 的 ordered chosen-token 序列可能只是 `delta.content` 的另一种表示；两者整体相等时只累计 content。不同位置的同值 token 必须保留；top candidate 仅在同一 token 位置且等于 chosen token 时去重。
 - upstream EOF 可能没有 usage；仍须使用既有 reserved-spend fallback。
 - guardrail 可能在上游已经产生完整 usage 后拒绝内容；拒绝不免除已发生费用。
 - provider error 或 idle timeout 可能发生在已有安全窗口释放之后；已释放前缀不可撤回，但当前未审核 pending 必须丢弃。

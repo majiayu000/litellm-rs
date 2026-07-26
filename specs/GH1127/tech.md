@@ -58,10 +58,13 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   `reasoning_content` alias（同一语义值只累计一次）、`refusal`、`audio.transcript`、
   legacy `function_call.name/arguments` 与
   `tool_calls[].function.name/arguments`；同时从 choice logprobs 提取
-  `content[].token` 与 `top_logprobs[].token`。每个 event/choice 使用稳定去重集，
-  与 `delta.content` 完全相同或已出现的 token 只累计一次，其他客户端可见候选
-  token 均进入带 surface 边界的累计文本。audio base64 data、role、IDs、usage、
-  finish reason、logprob bytes/数值与 transport markers 只缓冲、不扫描。
+  `content[].token` 与 `top_logprobs[].token`。按 content position 重建 ordered
+  chosen-token sequence：若其拼接结果与 `delta.content` 完全相等，则 chosen
+  sequence 不再重复累计；否则每个 chosen token 按位置、按顺序进入 length-delimited
+  surface，不能用全局 string set 删除不同位置的同值 token。top candidate 按
+  `(content_position, candidate_index)` 加边界；仅当候选 token 在同一位置等于
+  chosen token 时视为同一 representation 而跳过。audio base64 data、role、IDs、
+  usage、finish reason、logprob bytes/数值与 transport markers 只缓冲、不扫描。
 - Completion 扫描最终 client-visible `text`，包含一次 `echo`。
 - Responses 直接从每个上游 `choice.delta` 提取 output text、thinking、
   tool/function name 与 arguments，并在派生 `.delta` event 前只累计一次；派生的
@@ -139,7 +142,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、refusal、audio transcript、logprobs chosen/top token 去重、tool/function name+args、Responses done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、refusal、audio transcript、chosen sequence 等于 content、不同位置同值 token、top candidate position 去重、tool/function name+args、Responses done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |
