@@ -83,8 +83,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       无 temperature/topP/top_k/topK；`normalize_gemini_contents` 只执行一次 role/content
       normalization，直接产出 serializer-ready contents/systemInstruction，prefill gate
       与 serializer 都不读取 raw messages；meaningful System+Developer text 按原 messages
-      顺序组成 `systemInstruction.parts` 且都不进 contents，Developer non-text/不可表示
-      payload pre-network error；developer+user 同时保留 instruction/user；
+      顺序组成 `systemInstruction.parts` 且都不进 contents，System/Developer non-text
+      或不可表示 payload 均 pre-network error；developer+user 同时保留 instruction/user；
       assistant+system、assistant+developer 因 final contents=model 拒绝，
       all-system/developer、non-empty model+trailing-empty、all-empty 也拒绝，user+system
       可通过；positive param allowlist 精确等于
@@ -118,7 +118,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - [ ] `SP1108-T4` Covers: B-010, B-011, B-012, B-014, B-016. Owner: live-smoke test/documentation owner. Dependencies: SP1108-T3 stable committed head. Done when: detailed smoke/redaction evidence below is satisfied. Verify: detailed commands below pass.
       Developer
       credential path unchanged. Files: `tests/live_gemini.rs`,
-      `docs/providers/gemini.md`, `docs/providers/README.md`; production catalog/provider
+      `docs/providers/gemini.md`, `docs/providers/README.md`, `.gitignore`; production catalog/provider
       files read-only. Done when: ignored live tests require exactly
       `LITELLM_RS_LIVE_GEMINI=1`；2×2 fixture 不在普通 parallel process 调用
       `set_var`/`remove_var`，每 case 以 `env_clear` + exact env 的隔离子进程经过
@@ -140,8 +140,11 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       pair 都缺失，不得伪造 success facts，partial 只保存真实 typed facts；aggregate
       required keys 精确包含两个 exact model 各自一次 static/list/get/minimal-call 共
       8 个 per-model keys，sets disjoint/union 完整，缺任一项均 failed/protocol；一次
-      list response 可派生两条 list observation，但各自 key/model/requested_exact_id/
-      case-sensitive exact match 必须一致并独立 hash/persist；redaction 后按 exact ID 不
+      official list 从 empty token 遍历所有 pages 直到无 non-empty next token，完整
+      traversal 才可派生两条 list observation；各自 key/model/requested_exact_id/
+      pages_fetched/case-sensitive exact match 必须一致并独立 hash/persist。later-page
+      match 必须命中，repeated/malformed token、任一 page failure、100-page bound 与
+      cross-page duplicate 必须 failed/protocol、不得 partial false-pass；redaction 后按 exact ID 不
       case-fold、set-valued fields lexical sort/dedupe、candidate/text 保序、integer
       token counts/fixed-decimal prices、aggregate keys step/model lexical sort、recursive
       lexical JSON keys canonicalize，再对 observation 求 SHA-256；observation/digest
@@ -165,7 +168,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `artifacts/live/GH1108/<run_id>.json`，非空
       `LITELLM_RS_LIVE_GEMINI_OUTPUT_DIR` 可覆盖目录；same-directory temp + atomic
       replace、Unix 0600 best-effort/非 POSIX 平台契约、success/interruption retention、
-      path/reload 均有 fixture，offline tests 注入 temp sink 且默认目录零写入；
+      path/reload 均有 fixture；repository `.gitignore` 新增精确 anchored
+      `/artifacts/live/GH1108/`，`grep -Fx` 与 `git check-ignore` 验证通过；offline tests
+      注入 temp sink 且默认目录零写入；
       redaction fixture 安装 captured tracing subscriber，sentinel key is absent from
       tracing/stdout/stderr/error Display+Debug/config+result Debug/artifact；docs 给出
       exact opt-in command、artifact 检索/显式清理命令、migration、
@@ -174,6 +179,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       分别由 exact symbols `classify_live_failure`、`redact_live_artifact`、
       `canonicalize_live_observation`、`run_live_gemini_smoke` 所有。Verify:
       `cargo test --locked live_gemini_failure_mapping_precedence`、
+      `cargo test --locked live_gemini_list_pagination`、
       `cargo test --locked live_gemini_runner_cancellation_persists_incrementally`、
       `cargo test --locked live_gemini_artifact_sink`、
       `cargo test --locked live_gemini`、
@@ -192,7 +198,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       fail closed；八个 mandatory categories 均绑定 tech 表中 exact path + Rust symbol + marker
       span，prefill 的 `normalize_gemini_contents`/`validate_no_model_prefill` 两个
       selectors 都满足并覆盖 interleaved System/Developer 原序、developer+user 保留、
-      Developer non-text rejection、assistant+developer final-model rejection，
+      System/Developer non-text rejection、assistant+developer final-model rejection，
       stream metadata 的 `src/server/routes/ai/token_policy.rs` /
       `prepare_chat_request_for_provider` / `selected-deployment-stream-metadata` selector
       覆盖 selected Gemini
@@ -201,7 +207,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       unknown/non-bool wire rejection。live observation 的
       `canonicalize_live_observation` selector 覆盖 redaction-first/hash-only/
       optional-pair/partial/no-response/8-key per-model missing/global-static-list rejection/
-      one-list-response-two-independent-observations/one-fact-different branches，
+      complete-pagination-two-independent-observations/later-page-match/repeated-or-malformed-
+      token/page-failure/100-page-bound/cross-page-duplicate/one-fact-different branches，
       `classify_live_failure` selector 覆盖完整 source→class table、precedence、
       first-terminal-event-wins 与 no-substring branches；
       `live_interruption_persistence` category 的 `run_live_gemini_smoke` /
@@ -261,7 +268,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - Planned manifest: issue=1108、complete=true、包含 neutral catalog、shared contract、
   Gemini consumers、post-selection token-policy stream-metadata adapter/tests、live smoke、
   versioned coverage
-  checker/tests 与 provider docs；chat.rs/chat_streaming.rs/core/types/chat.rs 仅为
+  checker/tests、provider docs 与精确 artifact ignore policy owner `.gitignore`；
+  chat.rs/chat_streaming.rs/core/types/chat.rs 仅为
   read-only context，不扩 writable manifest。
 - Spec phase:
   `python3 checks/check_workflow.py --repo . --spec-dir specs/GH1108`、
@@ -284,8 +292,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   extra_params 删除，禁止 silent drop/透传。
 - one-shot `normalize_gemini_contents` 直接产出 contents/systemInstruction；gate 与
   serializer 共用结果。meaningful System+Developer text 按 raw message 顺序组成
-  systemInstruction.parts 且不进 contents；Developer non-text/不可表示 payload fail
-  closed，developer+user 不丢内容。System/Developer extraction 不能遮蔽 terminal model，
+  systemInstruction.parts 且不进 contents；System/Developer non-text 或不可表示 payload
+  均 fail closed，developer+user 不丢内容。System/Developer extraction 不能遮蔽 terminal model，
   assistant+developer、空 contents 与 final model fail closed。
 - 新模型 positive params 精确为 `{max_tokens, stop, stream}`；tools/tool_choice 仅有现存
   passthrough、无 serializer consumer，因此与 response_format/max_completion_tokens 一并
@@ -304,15 +312,18 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - live artifact closed schema 含 run_id/attempt/termination 与 status-dependent optional
   observation/digest pair；passed 必须 complete，auth/timeout/cancel 无响应不得伪造
   observation，partial 只存真实 facts。两个 exact model 各自 static/list/get/minimal-call
-  形成 8 个 `(step, model)` required keys；一次 list response 的两条 observations 仍独立
-  绑定 exact ID，一个模型/global record 不能替代另一个；实际 facts 经 credential
+  形成 8 个 `(step, model)` required keys；list 必须完成全部 pagination，later-page model
+  可见且 repeated/malformed token、page failure、100-page bound/cross-page duplicate
+  fail closed；完整 traversal 的两条 observations 仍独立绑定 exact ID，一个模型/global
+  record 不能替代另一个；实际 facts 经 credential
   redaction 后 canonicalize，pair/digest 必须一致且事实变化产生不同记录；error class
   使用 closed source table 与 first-terminal-event-wins，禁止 substring；transport
   timeout 是 failed/network，verified external cancel/interruption 才是 no-error-class
   incomplete。真实 runner cancellation fixture 必须证明逐 step await atomic snapshot、
   cancel flush、reload 保留、later network=0 与 new run_id isolation。manual sink 默认
   durable `artifacts/live/GH1108/<run_id>.json`，支持 explicit output-dir override、
-  atomic replace、权限/retention 契约与 docs 检索/清理；offline sink 使用 temp。2×2 gate
+  atomic replace、权限/retention 契约与 docs 检索/清理；implementation 必须提交 exact
+  `.gitignore` pattern `/artifacts/live/GH1108/`，offline sink 使用 temp。2×2 gate
   matrix 必须以 env-isolated child actual boundary 测试、普通 parallel process 零
   set_var/remove_var；captured tracing redaction fixture 必须通过。
 - 17-ID frozen disposition ledger 是批准输入（7 available/6 shutdown/1 retired/
@@ -324,6 +335,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - `checks/gh1108_coverage_gate.py`/test 是 implementation manifest 的必交付物；必须在
   T5 read-only review 前由 coordinator 实现，不能以本 spec 里的临时 heredoc 替代。
 - live smoke 仍处于 manual validation 阶段；不得直接做 cron/CI automation。
+- manual artifacts 是 retained persistent files；rollback 不自动删除，必须检索 default
+  与所有 override directories 后显式归档/清理，保留文件时继续维持 ignore protection。
 - 若 merged GH1112 API/path 与本 tech manifest 不同，先修订 spec，不猜 alias/wrapper。
 - 不修改 GH1111 tool loop、GH1113 pricing authority 或 unknown-cost semantics；GH1108
   不依赖 GH1111，也不声称 tool-loop 完整 callability。

@@ -96,8 +96,8 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
    的 `contents` 与独立 `systemInstruction`；prefill gate 和 serializer 必须消费这同一
    结果，不能再依据 raw role 列表二次推导。meaningful System 与 Developer 的文本按原
    messages 顺序组成同一个 `systemInstruction.parts`，二者都不进入 `contents`；
-   Developer turn 含 non-text 或其他无法表示为 instruction text 的 meaningful payload
-   时必须在网络前拒绝，不能静默丢弃。trailing semantically-empty turn 不进入
+   System 或 Developer turn 含 non-text 或其他无法表示为 instruction text 的 meaningful
+   payload 时必须在网络前拒绝，不能静默丢弃。trailing semantically-empty turn 不进入
    `contents`，但 instruction extraction 不能遮蔽此前 terminal model：最终 `contents`
    为空或末项 role 为 `model` 时必须在网络前拒绝。因此 developer+user 必须保留
    Developer instruction 且保留 user contents；assistant+developer 仍因最终 contents
@@ -168,9 +168,13 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     response model version、candidate/finish/text 与 usage token facts。passed record 缺少
     对应 step 的必需 observation 字段时必须按 protocol failure 处理。required keys 恰为
     两个 exact ID 各自的 `static_snapshot`、`list_models`、`get_model`、`minimal_call`
-    共 8 个 per-model keys，aggregate 另算；一次 list response 可派生两条独立 per-model
-    observations，但每条的 key/model/`requested_exact_id`/case-sensitive exact match
-    必须与对应 exact ID 一致，不能以一条 global list record 或另一模型记录替代。
+    共 8 个 per-model keys，aggregate 另算。official list-models 必须从无 page token 开始，
+    遍历每一页直到响应不再含 non-empty next-page token 后才算 complete；重复 token、
+    malformed token、任一中间页失败，或 100 页后仍有 next token 都必须 deterministic
+    fail closed，不能用已收集的 partial pages 报 passed。一次完整 paginated traversal
+    可派生两条独立 per-model observations，但每条的 key/model/`requested_exact_id`/
+    case-sensitive exact match 必须与对应 exact ID 一致；后续页命中的模型必须被发现，
+    跨页重复 exact match 必须失败，不能以一条 global list record 或另一模型记录替代。
 12. **B-012** live smoke、错误、Debug/Display、命令回显和持久化 artifact 均不得包含
     API key 或其他 credential；redaction 负例必须安装 captured tracing subscriber，
     并用 sentinel 凭证证明 tracing、stdout、stderr、error、Debug 与 artifact 所有
@@ -196,7 +200,10 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
     `LITELLM_RS_LIVE_GEMINI_OUTPUT_DIR` 才覆盖目录；temp + atomic replace，支持 POSIX
     permissions 的平台必须把临时/最终文件限制为 `0600`，其他平台按文档 best-effort
     contract。成功与中断 artifact 均不得自动删除，provider docs 必须给出检索与显式清理
-    命令；offline tests 仍注入临时 sink，不写默认目录。aggregate 必须对 B-011 的 8 个
+    命令；implementation 必须在 repository ignore policy 加入精确 anchored pattern
+    `/artifacts/live/GH1108/`，避免 retained manual artifacts 被纳入版本控制，且不得用更宽
+    pattern 代替此验收。offline tests 仍注入临时 sink，不写默认目录。aggregate 必须对
+    B-011 的 8 个
     per-model keys 逐项结算，一个模型的成功不能替代另一个。任一 observation fact 不同都
     必须产生不同 canonical observation/digest，不能落成相同的成功记录。
 15. **B-015** 除明确列出的新模型、evidence disposition 和新请求契约外，已有仍受支持
@@ -233,7 +240,7 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
       消费为 absent，任何 non-null 输入在网络前得到稳定错误。
 - [ ] one-shot role/content normalization 直接产生 serializer-ready `contents` 与
       `systemInstruction.parts`；meaningful System+Developer text 按原消息顺序组成 parts
-      且都不进 contents，Developer non-text/不可表示 payload pre-network 拒绝；
+      且都不进 contents，System/Developer non-text 或不可表示 payload 均 pre-network 拒绝；
       developer+user 不丢 instruction/user contents，assistant+developer 仍因 final model
       prefill 拒绝；all-system/developer、non-empty model+trailing-empty 和 all-empty 也
       拒绝，user+system 可通过；完整 tool-loop callability 不作为 GH1108 acceptance。
@@ -259,14 +266,17 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
       含 `run_id`、attempt/termination facts、status-dependent optional typed
       observation/digest pair 的 closed artifact；passed 必须是完整 step-specific
       observation，failed/incomplete 不得伪造 response facts，partial 只保存实际取得的
-      typed fields；一次 list response 派生的两条 list observations 仍分别精确绑定
-      requested model；aggregate 以闭合 8-key `(step, model)` set 结算且缺任一项即失败。不同
+      typed fields；list-models 必须完整遍历 pagination，覆盖 later-page match，并对
+      repeated/malformed token、中间页失败、100-page bound 与 cross-page duplicate
+      fail closed；完整 traversal 派生的两条 list observations 仍分别精确绑定 requested
+      model。aggregate 以闭合 8-key `(step, model)` set 结算且缺任一项即失败。不同
       observation 不产生相同成功记录；transport timeout 为 failed/network，外部
       cancel/interruption 为无 error_class 的 incomplete；runner-level fixture 必须在真实
       step 阻塞点触发 cancellation，重新读取逐 step 原子 snapshot，证明已完成步骤保留、
       后续网络调用为零且 retry 使用新 run_id。manual artifact 默认持久保留在
       `artifacts/live/GH1108/<run_id>.json`，显式 output-dir override、atomic replace、
-      POSIX `0600`/其他平台 best-effort、检索与清理命令均有测试/文档；offline sink 只写临时目录。
+      POSIX `0600`/其他平台 best-effort、检索与清理命令均有测试/文档；repository ignore
+      policy 含精确 `/artifacts/live/GH1108/`，offline sink 只写临时目录。
 - [ ] captured tracing subscriber 下，sentinel 凭证在 tracing、stdout、stderr、错误、
       Debug/Display 和 artifact 中均无明文命中。
 - [ ] Vertex AI、Interactions API、GH1111 tool loop 与 GH1113 pricing authority
@@ -302,8 +312,8 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   结尾且 serializer 不产生尾部 model；non-empty model + trailing empties 在 strip 后
   仍拒绝；全部 turns 均 semantically empty 时按空 normalized sequence 拒绝。
 - meaningful System+Developer text 按原消息顺序组成 `systemInstruction.parts` 且都不进
-  `contents`；developer+user 保留两边内容，Developer non-text/不可表示 instruction
-  pre-network 拒绝。assistant+system 与 assistant+developer 的 raw last role 虽非
+  `contents`；developer+user 保留两边内容，System 或 Developer non-text/不可表示
+  instruction 都 pre-network 拒绝。assistant+system 与 assistant+developer 的 raw last role 虽非
   assistant，最终 `contents` 仍以 model 结尾，必须拒绝；all-system/developer 产生空
   contents 并拒绝；user+system 产生 user contents + systemInstruction，可通过 prefill gate。
 - `max_tokens`/`stop` 的 body mapping 与 `stream` transport selection 是新模型仅有的三项
@@ -324,12 +334,16 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
   用 global static/list 替代 8 个 per-model required keys、让一个模型替代另一个模型，
   或把两个不同 response observations
   canonicalize 成同一成功记录均失败。
+- list-models 的 exact match 仅在从空 token 开始、完整走到无 next token 后结算；目标只在
+  后续页仍必须命中。repeated/malformed token、任一页失败、超过 100 页或跨页 exact
+  duplicate 均不得用 partial results false-pass。
 - 403 + structured `RESOURCE_EXHAUSTED` 必须按 quota 而非 auth；deadline 与 external
   cancellation 同时就绪时只采用原子记录的首个 terminal event，后到 signal 不得覆写。
 - runner 在 fake transport barrier 上收到 external cancellation 后必须停止后续请求；
   reload artifact 仍能看到此前已 await-persist 的 steps 和当前 incomplete termination。
 - manual success/interruption artifact 不自动删除；默认目录、显式 output-dir override、
-  atomic replace 与权限契约可验证，offline test sink 不污染默认目录。
+  atomic replace 与权限契约可验证，repository ignore policy 精确忽略
+  `/artifacts/live/GH1108/`，offline test sink 不污染默认目录。
 - list-models 出现但 lifecycle 页面未提供通用 chat 正证据时保持不公开，并记录冲突。
 - live minimal call 成功但静态价格/limits 不匹配时 smoke 整体失败，不能用连通性覆盖
   metadata 漂移。
@@ -339,4 +353,6 @@ Developer API 行为面，同时保持 Vertex AI、Interactions API 和其他产
 这是 Developer API catalog refresh 与请求行为收紧。发布说明必须列出新增的两个 GA
 exact IDs、价格/limits、三项采样参数拒绝和 model-turn prefill 拒绝，并列出停止公开的
 旧 ID 及 disposition。必须明确 Vertex AI 未随本变更更新，live smoke 仍为显式 opt-in，
-且回滚 binary 前应先移除只被新版本识别的模型配置。
+且回滚 binary 前应先移除只被新版本识别的模型配置。manual artifacts 是 retained
+persistent files；回滚实现或 binary 不会自动删除它们，operator 必须先检索并显式清理
+默认目录以及曾配置的 override directories。
