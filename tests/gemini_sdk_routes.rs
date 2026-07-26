@@ -132,6 +132,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gemini_sdk_route_resolves_alias_before_selection_and_upstream_path() {
+        let mock = MockGeminiServer::launch().await;
+        let state = build_test_state(vec![gemini_provider(
+            "gemini",
+            &mock.base_url,
+            vec!["gemini-3.1-flash-lite".to_string()],
+        )])
+        .await;
+        state
+            .unified_router
+            .add_model_alias("public-gemini", "gemini-3.1-flash-lite")
+            .expect("runtime alias should install");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1beta/models/public-gemini:generateContent")
+                .set_json(gemini_body())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].path_and_query,
+            "/v1beta/models/gemini-3.1-flash-lite:generateContent?key=test-api-key-12345678901234567890"
+        );
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn gemini_sdk_stream_route_uses_sse_alt_query() {
         let mock = MockGeminiServer::launch().await;
         let state = build_test_state(vec![gemini_provider(

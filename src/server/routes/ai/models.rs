@@ -66,7 +66,7 @@ pub async fn get_models_from_router(router: &UnifiedRouter) -> Result<Vec<Model>
         .collect::<BTreeSet<_>>();
 
     for model_name in model_names {
-        let owned_by = router
+        let Some(owned_by) = router
             .get_deployments_for_model(&model_name)
             .into_iter()
             .find_map(|deployment_id| {
@@ -74,7 +74,9 @@ pub async fn get_models_from_router(router: &UnifiedRouter) -> Result<Vec<Model>
                     .get_deployment(&deployment_id)
                     .map(|deployment| deployment.provider.name().to_string())
             })
-            .unwrap_or_else(|| "unknown".to_string());
+        else {
+            continue;
+        };
 
         models.push(Model {
             id: model_name,
@@ -150,5 +152,59 @@ mod tests {
             .expect("configured alias should be discoverable");
         assert_eq!(alias.id, "chat");
         assert_eq!(alias.owned_by, "primary");
+    }
+
+    #[tokio::test]
+    async fn model_inventory_excludes_runtime_aliases_without_live_deployments() {
+        let provider = ProviderConfig {
+            name: "primary".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["gpt-4o".to_string()],
+            ..ProviderConfig::default()
+        };
+        let router = UnifiedRouter::from_gateway_config(&[provider], None)
+            .await
+            .expect("inventory fixture router should build");
+
+        router
+            .add_model_alias("missing", "not-deployed")
+            .expect("runtime alias shape should be valid");
+        router
+            .add_model_alias("live", "gpt-4o")
+            .expect("live runtime alias should install");
+
+        let models = get_models_from_router(&router)
+            .await
+            .expect("model inventory should build");
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| (model.id.as_str(), model.owned_by.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("gpt-4o", "primary"), ("live", "primary")]
+        );
+        assert!(
+            get_model_from_router(&router, "missing")
+                .await
+                .expect("missing alias lookup should complete")
+                .is_none()
+        );
+
+        router
+            .remove_deployment("primary-gpt-4o")
+            .expect("live deployment should be removable");
+        assert!(
+            get_models_from_router(&router)
+                .await
+                .expect("post-removal inventory should build")
+                .is_empty()
+        );
+        assert!(
+            get_model_from_router(&router, "live")
+                .await
+                .expect("removed alias lookup should complete")
+                .is_none()
+        );
     }
 }

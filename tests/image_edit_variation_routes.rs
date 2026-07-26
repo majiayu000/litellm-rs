@@ -218,8 +218,12 @@ mod tests {
     }
 
     fn image_edit_multipart_body(boundary: &str) -> Vec<u8> {
+        image_edit_multipart_body_for_model(boundary, "gpt-image-1-mini")
+    }
+
+    fn image_edit_multipart_body_for_model(boundary: &str, model: &str) -> Vec<u8> {
         let mut body = Vec::new();
-        add_text_field(&mut body, boundary, "model", "gpt-image-1-mini");
+        add_text_field(&mut body, boundary, "model", model);
         add_text_field(&mut body, boundary, "prompt", "make it lighter");
         add_text_field(&mut body, boundary, "size", "1024x1024");
         add_file_field(
@@ -235,8 +239,12 @@ mod tests {
     }
 
     fn image_variation_multipart_body(boundary: &str) -> Vec<u8> {
+        image_variation_multipart_body_for_model(boundary, "gpt-image-1-mini")
+    }
+
+    fn image_variation_multipart_body_for_model(boundary: &str, model: &str) -> Vec<u8> {
         let mut body = Vec::new();
-        add_text_field(&mut body, boundary, "model", "gpt-image-1-mini");
+        add_text_field(&mut body, boundary, "model", model);
         add_text_field(&mut body, boundary, "n", "1");
         add_file_field(
             &mut body,
@@ -426,6 +434,10 @@ mod tests {
             ),
         ])
         .await;
+        state
+            .unified_router
+            .add_model_alias("public-image", "gpt-image-1-mini")
+            .expect("runtime image alias should install");
         state.budget_limits.providers.set_provider_limit(
             "mock-openai-compatible",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -469,7 +481,10 @@ mod tests {
                     "content-type",
                     format!("multipart/form-data; boundary={boundary}"),
                 ))
-                .set_payload(image_edit_multipart_body(boundary))
+                .set_payload(image_edit_multipart_body_for_model(
+                    boundary,
+                    "public-image",
+                ))
                 .to_request(),
         )
         .await;
@@ -488,7 +503,10 @@ mod tests {
                     "content-type",
                     format!("multipart/form-data; boundary={boundary}"),
                 ))
-                .set_payload(image_variation_multipart_body(boundary))
+                .set_payload(image_variation_multipart_body_for_model(
+                    boundary,
+                    "public-image",
+                ))
                 .to_request(),
         )
         .await;
@@ -517,6 +535,7 @@ mod tests {
             let multipart_body = String::from_utf8_lossy(&request.body);
             assert!(multipart_body.contains("name=\"model\""));
             assert!(multipart_body.contains("gpt-image-1-mini"));
+            assert!(!multipart_body.contains("public-image"));
             assert!(multipart_body.contains("name=\"image\""));
         }
         let edit_multipart = String::from_utf8_lossy(&captured[0].body);

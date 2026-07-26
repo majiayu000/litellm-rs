@@ -47,9 +47,10 @@ pub async fn rerank(
 
 async fn handle_rerank_with_state(
     state: &AppState,
-    request: RerankRequest,
+    mut request: RerankRequest,
 ) -> Result<RerankResponse, GatewayError> {
-    let requested_model = request.model.clone();
+    let requested_model = state.unified_router.resolve_model_name(&request.model);
+    request.model = requested_model.clone();
     ensure_rerank_provider_candidate_configured(
         state.config().gateway.providers.as_slice(),
         &requested_model,

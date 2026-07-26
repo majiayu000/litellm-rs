@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn image_generation_allows_api_key_permitted_model() {
+    async fn image_generation_resolves_runtime_alias_before_authz_and_upstream() {
         let mock = MockImageServer::start().await;
         let state = build_test_state(vec![openai_image_provider_with_mapping(
             "openai-primary",
@@ -308,7 +308,11 @@ mod tests {
             "gpt-image-1-mini",
         )])
         .await;
-        let api_key = api_key_with_allowed_models(&["image-alias"]);
+        state
+            .unified_router
+            .add_model_alias("public-image", "image-alias")
+            .expect("runtime image alias should install");
+        let api_key = api_key_with_allowed_models(&["public-image"]);
         let app = test::init_service(
             App::new()
                 .wrap_fn(move |req, srv| {
@@ -325,7 +329,7 @@ mod tests {
             test::TestRequest::post()
                 .uri("/v1/images/generations")
                 .set_json(json!({
-                    "model": "image-alias",
+                    "model": "public-image",
                     "prompt": "make an icon",
                     "size": "1024x1024"
                 }))

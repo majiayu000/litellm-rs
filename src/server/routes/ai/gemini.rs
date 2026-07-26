@@ -130,6 +130,7 @@ async fn proxy_gemini_route_inner(
         &requested_model,
         gemini_requested_max_output_tokens(&request),
     )?;
+    let requested_model = state.unified_router.resolve_model_name(&requested_model);
 
     if stream {
         return proxy_gemini_stream_route_inner(
