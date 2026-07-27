@@ -11,7 +11,7 @@ GH-1127 / #1127
 
 ## 决策门
 
-- [x] `SP1127-T0` Covers: B-001 ～ B-016, HD-1127-1. Owner: maintainer/spec owner. Dependencies: none. Done when: 维护者在 `user-2026-07-27-approve-all-specs` 批准全部规格并选择 `windowed_cumulative`；YAML 字段为 `guardrails.stream_output_check_chars`，默认 `256`，合法范围 `1..=4096`；Issue 已获得 `ready_to_implement`. Verify: `python3 checks/check_workflow.py --repo . --spec-dir=specs/GH1127`; `python3 checks/route_gate.py --repo . --route implement --issue 1127 --state ready_to_implement --duplicate-evidence <evidence> --json`.
+- [ ] `SP1127-T0` Covers: B-001 ～ B-016, HD-1127-1. Owner: maintainer/spec owner. Dependencies: none. Done when: amendment 审查期间 Issue 移出 `ready_to_implement`；维护者对本 amendment exact head 批准 `windowed_cumulative`、YAML 字段 `guardrails.stream_output_check_chars`、默认 `256` 与合法范围 `1..=4096`，且 amendment 合并后才恢复 `ready_to_implement`. Verify: `python3 checks/check_workflow.py --repo . --spec-dir=specs/GH1127`; `python3 checks/route_gate.py --repo . --route implement --issue 1127 --state ready_to_implement --duplicate-evidence <evidence> --json`.
 
 ## 实现任务
 
