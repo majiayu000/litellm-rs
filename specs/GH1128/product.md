@@ -29,7 +29,7 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 
 ## Behavior Invariants
 
-1. B-001 普通文本、`Document.source`、`ToolResult.content`、`ToolUse.name/input`、message-level legacy `function_call`、`tool_calls[].function`、request-level `ChatCompletionRequest.function_call` 和 `ChatMessage.name` 都必须进入输入 guardrail。
+1. B-001 普通文本、`Document.source`、`ToolResult.content`、`ToolUse.name/input`、message-level legacy `function_call`、`tool_calls[].function`、request-level `ChatCompletionRequest.function_call` 和 `ChatMessage.name` 都必须进入输入 guardrail。本仓库当前 request-level compatibility DTO 复用 `FunctionCall { name, arguments }` 并把两者序列化转发给 provider；即使标准 OpenAI selection 语义通常只指定 name，该已接受并转发的 `arguments` 仍属于必须扫描的现有公开输入面。
 2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。语义上连续的 message content parts 必须保留原邻接关系以检测跨 part 拆词；message/function/tool 等独立字段必须作为独立审核记录通过一次 engine batch 调用处理，由各 guardrail 在 batch 内逐 record 隔离检查，不能用可被规则误命中的标签或分隔符拼成一个扫描字符串，也不能允许正则跨独立记录匹配。
 3. B-003 字符串字段保留原文本；结构化 JSON 字段同时扫描确定性完整 JSON 表示和递归解码后的 string keys/values，不得只扫描转义后的 `\n`/`\uXXXX` 或部分节点。合法 JSON function arguments 使用同一语义遍历，非 JSON arguments 仍扫描原字符串。文本型 document 必须扫描 base64 解码后的 UTF-8 正文，而不是编码字符串；JSON MIME document 还必须同时扫描原始正文和递归解码后的 string keys/values，声明为 JSON 但语法错误时稳定 fail-closed。
 4. B-004 任一列入范围的字段包含被拒内容时，整个请求在调用 provider 前被拒绝。
@@ -45,7 +45,7 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 ## 验收标准
 
 - [ ] 每个列入范围的 content variant 都有接受与拒绝测试。
-- [ ] modern/message-level legacy/request-level function call 的 name/arguments、`ChatMessage.name` 各有独立覆盖。
+- [ ] modern/message-level legacy function call、以及本仓库 request-level compatibility `FunctionCall` 的 name/arguments、`ChatMessage.name` 各有独立覆盖；测试证明 request-level arguments 确实从当前 DTO 解析并在 provider boundary 前被审核。
 - [ ] 文本 document fixture 证明扫描解码后正文；malformed base64、非 UTF-8 和不支持媒体类型 fail-closed。
 - [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part 拆词有测试。
 - [ ] 嵌套 JSON、数组、空值、Unicode escape、解码后的 string key/value、合法/非法 JSON arguments，以及 JSON MIME document 的 raw/semantic/invalid 三类行为有测试。

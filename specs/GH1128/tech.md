@@ -31,7 +31,12 @@ GH-1128 / #1128
      `ToolUse.name` 生成独立 typed records。每个 record 的值单独交给 engine，
      禁止把 kind、长度、换行或其他人工标签拼入扫描值，禁止 regex 跨 record 匹配。
    - request-level `ChatCompletionRequest.function_call.name/arguments` 在 messages
-     之后按固定 typed kind 加入；顺序与 request DTO 一致。
+     之后按固定 typed kind 加入；顺序与 request DTO 一致。这里描述的是本仓库现有
+     compatibility DTO，而不是宣称标准 OpenAI request-level selection 新增了
+     arguments：`src/core/models/openai/requests.rs` 当前复用
+     `tools::FunctionCall { name, arguments }`，`chat.rs` 会把整个值序列化到内部
+     provider request。只要该输入仍被接受并转发，两个字符串都必须在 provider 前
+     受 guardrail 审核。
 3. `ToolResult.content` 与 `ToolUse.input` 先使用 `serde_json::to_string` 加入完整、
    确定性表示，再深度遍历 `serde_json::Value`，按稳定对象 key 顺序分别加入解码
    后的 string keys/values。合法 JSON function arguments 使用同一遍历并同时保留
