@@ -30,7 +30,7 @@ complexity: high
 
 ## Behavior Invariants
 
-1. **B-001** Azure chat/embed、Azure AI chat/embed、Vertex AI、Bedrock 和
+1. **B-001** Azure chat/embed、Azure AI chat/embed、Vertex AI、direct Gemini、Bedrock 和
    Mistral embedding 的受影响非流式 usage 必须遵循同一可信度规则。
 2. **B-002** usage 容器不存在时，响应必须表现为 `usage: None`；不得构造默认
    零 usage。
@@ -43,16 +43,21 @@ complexity: high
 5. **B-005** 所有适用分量均合法但 prompt 与 completion 都为零时，整条 usage
    必须表现为 `None`，不得进入零费用成功记账路径。
 6. **B-006** provider 报告的 `total_tokens` 不得替代缺失的 prompt 或 completion
-   分量；输出 `total_tokens` 必须由可信原始分量重新计算。Vertex
+   分量；输出 `total_tokens` 必须由可信原始分量重新计算。Vertex/direct Gemini
    `usageMetadata` 的有效 input 为 `promptTokenCount + toolUsePromptTokenCount`，
    output 为 `candidatesTokenCount + thoughtsTokenCount`，后两个扩展字段缺失时按该
    API 的可选零语义处理。`thoughtsTokenCount` 已包含在公开 `completion_tokens`
    与 output token 费用中，本 Issue 不再把它写入会另行计价的
    `completion_tokens_details.reasoning_tokens` 或其他 thinking details，禁止重复计费。
-   该四项关系以
+   Vertex reported-total 的四项关系以
    [Google Vertex AI v1 `UsageMetadata`](https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerateContentResponse#usagemetadata)
    的公开契约为准：`totalTokenCount` 是 prompt、candidates、tool-use prompt 与
-   thoughts 四项之和；不得把扩展字段误认为已包含在前两项中。
+   thoughts 四项之和。Direct Gemini 当前
+   [Gemini API `UsageMetadata`](https://ai.google.dev/api/generate-content#v1beta.GenerateContentResponse.UsageMetadata)
+   则把 reported `totalTokenCount` 定义为 prompt、thoughts 与 candidates 三项之和，
+   不含单列的 tool-use prompt；因此两条 endpoint 必须共享严格字段解析，但使用
+   各自明确的 raw-domain reported-total policy。不得把扩展字段误认为已包含在
+   前两项中，也不得把 Vertex 的四项公式套到 direct Gemini。
 7. **B-007** 对声明包含 total 的 provider 格式（包括 Bedrock Converse），total
    缺失、类型错误或与原始分量之和不一致时，整条 usage 必须 fail closed 为
    `None`；对声明不包含 total 的格式，系统只使用重算值。
@@ -62,9 +67,11 @@ complexity: high
 9. **B-009** `total_tokens` 必须使用饱和加法；即使两个分量各自可表示，相加也
    不得溢出为更小值。
 10. **B-010** `usage: None` 必须触发完整缺失 usage 结算：provider/model reservation
-    存在时按其 reserved amount 结算；只有 API-key reservation 时按 key reserved
-    amount 结算并记录 key usage；两者都不存在时记录显式错误且不得伪造零费用
-    spend。任一 reservation 不得因另一种 reservation 缺失而提前返回或泄漏。
+    与 API-key reservation 各自按自身 `reserved_amount()` 结算；两者同时存在但
+    预留额不同时不得复用另一方金额。API-key usage 使用 key reservation 金额，
+    key reservation 缺失时才使用 provider reservation 金额；两者都不存在时记录
+    显式错误且不得伪造零费用 spend。任一 reservation 不得因另一种 reservation
+    缺失而提前返回或泄漏。
 11. **B-011** 合法、范围内且 total 一致的既有 provider usage，在 Vertex 扩展字段
     缺失或为零时，其公开 token 值和既有计费结果必须保持兼容。Vertex 扩展字段
     非零时，公开 input/output 必须包含这些真实 token，费用按归一化后的 input/output
@@ -82,14 +89,16 @@ complexity: high
       不回绕。
 - [ ] 对带 total 的格式覆盖一致、缺失、错误类型和 raw-domain 不一致 total；对不带 total
       的格式证明输出 total 来自重算。
-- [ ] Vertex 两条非流式 parser 都覆盖 thoughts/tool-use prompt 扩展计数；
+- [ ] Vertex 两条及 direct Gemini 非流式 parser 都覆盖 thoughts/tool-use prompt 扩展计数；
       cost 断言证明 input/output 各计一次且 thoughts 不产生额外 reasoning 费用；
       Bedrock Converse 覆盖必需 `totalTokens`。
 - [ ] 下游验证证明不可信 usage 的 provider+key、provider-only、key-only 与无
-      reservation 四种路径都终止正确，不记录 `$0` 成功计费或遗留 reservation。
+      reservation 四种路径都终止正确；provider+key 使用不同预留额时各自按自身
+      金额结算，不记录 `$0` 成功计费或遗留 reservation。
 - [ ] 未声明字段名和嵌套形状不会被猜测为 usage。
-- [ ] 不含 Vertex 扩展计数的合法非零 usage 兼容性回归测试通过；扩展计数非零的
-      token/cost 修正有精确断言。
+- [ ] 不含 Vertex/direct Gemini 扩展计数的合法非零 usage 兼容性回归测试通过；
+      扩展计数非零的 token/cost 修正，以及两条 endpoint 各自的 reported-total
+      公式都有精确断言。
 
 ## 边界情况
 
@@ -106,5 +115,6 @@ complexity: high
 
 这是计费正确性收紧。过去被默认为零 token、零费用的 malformed、partial 或
 all-zero usage 将进入既有缺失 usage 保护。合法非零 usage 无需迁移；若上游
-provider 已发生字段漂移，运营日志将显式暴露该问题。Vertex tool-use prompt 与
-thoughts token 现在分别计入 input/output 费用一次。
+provider 已发生字段漂移，运营日志将显式暴露该问题。Vertex 与 direct Gemini 的
+tool-use prompt/thoughts token 现在分别计入 input/output 费用一次，并各自使用
+官方 endpoint-specific reported-total 公式校验。

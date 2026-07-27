@@ -34,7 +34,9 @@ GH-1129 / #1129
 - 由可信 raw prompt/completion 构造 `Usage` 时：
   - 两者均为零则返回 `None`；
   - provider total 若该格式声明存在，则必须是合法 unsigned integer，并在
-    `u128` 域与 raw prompt/completion parts 之和一致；先饱和再比较被禁止；
+    `u128` 域与该 endpoint 显式声明的 reported-total raw parts 之和一致；通常
+    与 billable prompt/completion parts 相同，但 direct Gemini 是明确例外；
+    先饱和再比较被禁止；
   - raw-domain 校验通过后，各分量以 `min(value, u32::MAX)` 缩窄，
     `total_tokens` 以 raw 总和饱和到 `u32::MAX`。
 - helper 不猜测字段名；各 provider 适配器负责传入其格式声明的精确字段。
@@ -48,6 +50,7 @@ GH-1129 / #1129
 | Azure / Azure AI chat | `usage.prompt_tokens` | `usage.completion_tokens` | `usage.total_tokens` 必需且必须一致 |
 | Azure / Azure AI embedding | `usage.prompt_tokens` | 不适用，显式 `0`；若响应带 completion，则必须是合法 `0` | `usage.total_tokens` 必需且必须一致 |
 | Vertex `usageMetadata` | `promptTokenCount` + optional-zero `toolUsePromptTokenCount` | `candidatesTokenCount` + optional-zero `thoughtsTokenCount`；thoughts 只包含在 completion 总量，不写 `reasoning_tokens`/`thinking_usage` | `totalTokenCount` 必需，必须在 raw `u128` 域等于四项之和 |
+| Direct Gemini `usageMetadata` | `promptTokenCount` + optional-zero `toolUsePromptTokenCount` | `candidatesTokenCount` + optional-zero `thoughtsTokenCount`；同样不写 separately-priced reasoning details | `totalTokenCount` 必需，但按 Gemini API 契约在 raw `u128` 域等于 prompt + candidates + thoughts，不含 tool-use prompt；公开 `Usage.total_tokens` 仍由四个 billable parts 重算 |
 | Vertex legacy `metadata.tokenMetadata` | `inputTokens.totalTokens` | `outputTokens.totalTokens` | 格式不声明 total，统一重算 |
 | Bedrock OpenAI-compatible | `prompt_tokens` | `completion_tokens` | `total_tokens` 必需且必须一致 |
 | Bedrock runtime aliases | 已识别的 input 字段之一 | 对应格式的 output 字段 | 格式无 total 时统一重算；不得跨不完整 alias 组合拼接 |
@@ -59,8 +62,11 @@ Vertex 四项相加不是推断：Google 官方 Vertex AI v1
 [`UsageMetadata`](https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerateContentResponse#usagemetadata)
 明确把 `totalTokenCount` 定义为 `promptTokenCount + candidatesTokenCount +
 toolUsePromptTokenCount + thoughtsTokenCount`。因此 helper 必须按四项 raw-domain
-总和校验；把 tool-use prompt 或 thoughts 当成前两项已含 breakdown 会与官方
-`totalTokenCount` 契约冲突。
+总和校验。Direct Gemini 的官方
+[`UsageMetadata`](https://ai.google.dev/api/generate-content#v1beta.GenerateContentResponse.UsageMetadata)
+则明确把 reported total 写成 prompt + thoughts + candidates；适配器必须向共享
+helper 传入 endpoint-specific total parts，不能把 Vertex 四项公式套用过去。
+两者的 billable input/output 都分别纳入 tool-use prompt/thoughts。
 
 usage 容器缺失直接返回 `None`。容器存在时，任一必需字段缺失或类型错误都使用 `?`
 传播为 `None`；不得保留另一半字段形成 partial usage。
@@ -83,10 +89,13 @@ tokens 再计一笔，填充这些 details 会重复收费。若未来需要公�
 转换器返回 `None` 后进入 `record_reserved_spend_without_usage`。该函数需做最小
 修正以覆盖所有 reservation 组合：
 
-1. 有 `UnifiedBudgetReservation` 时以 reserved amount 结算，避免免费调用；
-2. 同时有 key budget reservation 时以同一 cost 结算；
-3. 只有 key budget reservation 时使用其 `reserved_amount()` 结算并记录 API-key
-   零 token/reserved cost；不得因 unified reservation 为 `None` 提前返回；
+1. 有 `UnifiedBudgetReservation` 时以其自身 `reserved_amount()` 结算 provider/model，
+   避免免费调用；
+2. 有 key budget reservation 时独立读取并以其自身 `reserved_amount()` 结算；
+   两者同时存在且金额不同时不得复用 unified cost；
+3. API-key usage 的零 token cost 优先使用 key reservation 自身金额；key reservation
+   缺失时才使用 unified reserved amount。只有 key reservation 时也必须结算并记录，
+   不得因 unified reservation 为 `None` 提前返回；
 4. 只有 provider reservation 时保持现有 provider/model 与 API-key usage 行为；
 5. 两种预留都没有时记录 error，且不伪造成功 spend。
 
@@ -108,11 +117,12 @@ tokens 再计一笔，填充这些 details 会重复收费。若未来需要公�
 | `src/core/providers/vertex_ai/transformers/split_tests.rs` | 覆盖 transformer 的 usageMetadata/legacy 合法、malformed、total、扩展字段与范围 fixture，避免继续膨胀已接近上限的实现文件 | B-001–B-009, B-011 |
 | `src/core/providers/vertex_ai/client.rs` | trait response parser 的 `usageMetadata` 委托同一共享 helper，移除 `unwrap_or(0) as u32`/普通加法；覆盖扩展计数、malformed/total 与 exact token 输出 | B-001–B-009, B-011 |
 | `src/core/providers/vertex_ai/client_tests.rs` | 覆盖 trait response parser 的扩展计数、malformed、all-zero、total mismatch 与范围 fixture | B-001–B-009, B-011 |
+| `src/core/providers/gemini/client.rs` | direct Gemini 非流式 `usageMetadata` 委托共享严格 helper，但使用 Gemini-specific prompt+candidates+thoughts reported-total policy；移除默认零/直接缩窄与 separately-priced reasoning details，并在 inline tests 覆盖扩展计数、malformed/total、范围与 exact token 输出 | B-001–B-009, B-011 |
 | `src/core/providers/bedrock/transformation.rs` | 收敛所有模型族 usage parser，禁止 partial alias 拼接，移除默认零和普通加法，并扩充本文件测试 | B-001–B-009, B-011 |
 | `src/core/providers/mistral/embedding.rs` | 严格读取 prompt/total、显式 completion=0，并扩充本文件测试 | B-001–B-009, B-011 |
 | `src/core/pricing_service/tests.rs` | 用归一化 Vertex effective usage 做 exact cost 断言，证明 thoughts 只进入 output cost 且 reasoning cost 为零 | B-006, B-011 |
-| `src/server/routes/ai/spend.rs` | 修正 no-usage key-only reservation 的提前返回，按可用 reservation 推导 reserved cost 并恰好结算一次 | B-010, B-012 |
-| `src/server/routes/ai/spend_no_usage_tests.rs` | 扩充无 usage 的 reservation、key budget、无 reservation 账单副作用测试 | B-010, B-012 |
+| `src/server/routes/ai/spend.rs` | 修正 no-usage key-only reservation 的提前返回，各 reservation 按自身金额恰好结算一次，并为 API-key usage 选择 key-first fallback cost | B-010, B-012 |
+| `src/server/routes/ai/spend_no_usage_tests.rs` | 扩充无 usage 的 reservation、不同 provider/key 预留额、key budget、无 reservation 账单副作用测试 | B-010, B-012 |
 
 不计划修改公开 `Usage` schema、流式 SSE 解析或价格/预算配置；若实现发现必须修改
 manifest 外文件，应停止并回到 spec review。
@@ -121,16 +131,16 @@ manifest 外文件，应停止并回到 spec review。
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| B-001 | 所有 manifest 中 provider parser（含两条 Vertex response parser） | 每个 provider 的定向 parser test；审查不再存在受影响路径的 `unwrap_or(0) as u32` |
+| B-001 | 所有 manifest 中 provider parser（含两条 Vertex 与 direct Gemini response parser） | 每个 provider 的定向 parser test；审查不再存在受影响路径的 `unwrap_or(0) as u32` |
 | B-002 | provider 容器入口 | 缺失 usage / usageMetadata / tokenMetadata fixture 返回 `None` |
 | B-003 | shared helper 与每种字段映射 | missing、`null`、string、float、negative、object/array fixture；partial 字段返回 `None` |
 | B-004 | chat 与 embedding 格式策略 | prompt=0/completion>0、prompt>0/completion=0、embedding completion=0 fixture |
 | B-005 | shared builder | prompt=0/completion=0 返回 `None`，所有 provider 至少一条集成 fixture |
 | B-006 | total 重算 | total 不能补齐缺失分量；无 total 格式得到分量饱和和 |
-| B-007 | reported-total validator | raw `u128` 域 total 缺失、错误类型、不一致均返回 `None`；一致 total 保留；Vertex/Converse 专项 fixture |
+| B-007 | endpoint-specific reported-total validator | raw `u128` 域 total 缺失、错误类型、不一致均返回 `None`；一致 total 保留；Vertex 四项、direct Gemini 三项与 Converse 专项 fixture |
 | B-008 | token conversion helper | `u32::MAX`、`u32::MAX + 1`、`u64::MAX` |
 | B-009 | total builder | `u32::MAX + 1` 与 `u32::MAX + u32::MAX` 均得到 `u32::MAX` |
-| B-010 | `spend.rs` + no-usage tests | 验证 provider+key、provider-only、key-only、neither 的 spend、API-key usage 与 exactly-once settlement |
+| B-010 | `spend.rs` + no-usage tests | 验证 provider+key（含不同金额）、provider-only、key-only、neither 的 spend、API-key usage 与各 reservation exactly-once/self-amount settlement |
 | B-011 | provider happy-path + Vertex pricing fixture | 扩展字段零/缺失保持既有值和费用；非零时 effective input/output 各计一次，reasoning cost 为零 |
 | B-012 | provider → spend handoff | malformed provider fixture 返回 `None`，下游 no-usage 测试证明不产生 `$0` 成功 spend |
 
@@ -172,9 +182,11 @@ manifest 外文件，应停止并回到 spec review。
       每个 provider 格式的 happy path 与 drift fixture。
 - [ ] Integration tests: provider parser 输出 `None` 后复用
       `spend_no_usage_tests.rs` 验证四种 reservation 组合和 key usage 副作用。
-- [ ] Regression tests: 现有 Azure、Azure AI、Vertex AI、Bedrock、Mistral 相关测试。
-- [ ] Pricing tests: Vertex tool-use prompt/thoughts 非零时，input/output cost 由四项
-      effective totals 精确计算，`reasoning_cost == 0` 且 total 不重复。
+- [ ] Regression tests: 现有 Azure、Azure AI、Vertex AI、direct Gemini、Bedrock、
+      Mistral 相关测试。
+- [ ] Pricing tests: Vertex/direct Gemini tool-use prompt/thoughts 非零时，
+      input/output cost 由四个 billable parts 精确计算，`reasoning_cost == 0`
+      且 total 不重复；reported total 分别覆盖 Vertex 四项和 direct Gemini 三项。
 - [ ] Static checks: `cargo fmt --check`、`cargo check`、
       `cargo clippy --all-targets -- -D warnings`。
 - [ ] Full verification: `cargo test`；关键 usage helper 与结算分支要求 100% 覆盖，
