@@ -25,13 +25,15 @@ complexity: high
 
 - 改变模型价格、预算上限、预留算法或 provider 请求协议。
 - 猜测未声明的新字段名、字符串数字、浮点数、负数或任意嵌套数字的含义。
-- 重写已经具有显式错误处理的流式 usage 解析。
+- 重写已经具有显式错误处理的 OpenAI SSE usage 解析；native Gemini SDK 的 unary
+  与 SSE 当前复用同一不严格 parser，因此该共享入口在本 Issue 范围内。
 - 扩大公开 `Usage` 字段的整数类型或改变公开响应 schema。
 
 ## Behavior Invariants
 
-1. **B-001** Azure chat/embed、Azure AI chat/embed、Vertex AI、direct Gemini、Bedrock 和
-   Mistral embedding 的受影响非流式 usage 必须遵循同一可信度规则。
+1. **B-001** Azure chat/embed、Azure AI chat/embed、Vertex AI、direct Gemini
+   provider client、native Gemini SDK unary/SSE shared parser、Bedrock 和
+   Mistral embedding 的受影响 usage 必须遵循同一可信度规则。
 2. **B-002** usage 容器不存在时，响应必须表现为 `usage: None`；不得构造默认
    零 usage。
 3. **B-003** 每种已声明 provider 格式的必需 token 分量必须存在且为 JSON
@@ -48,7 +50,8 @@ complexity: high
    output 为 `candidatesTokenCount + thoughtsTokenCount`，后两个扩展字段缺失时按该
    API 的可选零语义处理。`thoughtsTokenCount` 已包含在公开 `completion_tokens`
    与 output token 费用中，本 Issue 不再把它写入会另行计价的
-   `completion_tokens_details.reasoning_tokens` 或其他 thinking details，禁止重复计费。
+   `completion_tokens_details.reasoning_tokens`，禁止重复计费；现有 user-visible
+   `thinking_usage` breakdown 不参与 pricing，必须保留。
    Vertex reported-total 的四项关系以
    [Google Vertex AI v1 `UsageMetadata`](https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerateContentResponse#usagemetadata)
    的公开契约为准：`totalTokenCount` 是 prompt、candidates、tool-use prompt 与
@@ -71,11 +74,15 @@ complexity: high
     预留额不同时不得复用另一方金额。API-key usage 使用 key reservation 金额，
     key reservation 缺失时才使用 provider reservation 金额；两者都不存在时记录
     显式错误且不得伪造零费用 spend。任一 reservation 不得因另一种 reservation
-    缺失而提前返回或泄漏。
-11. **B-011** 合法、范围内且 total 一致的既有 provider usage，在 Vertex 扩展字段
-    缺失或为零时，其公开 token 值和既有计费结果必须保持兼容。Vertex 扩展字段
-    非零时，公开 input/output 必须包含这些真实 token，费用按归一化后的 input/output
-    各计一次；这是从漏计到正确计费的有意修正。
+    缺失而提前返回或泄漏。native Gemini SDK 独立 settlement 路径必须委托同一
+    结算 helper，不得恢复 key-only `0.0` 或把 unified amount 复用于 key。
+11. **B-011** 合法、范围内且 total 一致的既有 provider usage，在 Google 扩展字段
+    缺失或为零时，其公开 token 值和既有计费结果必须保持兼容。非零扩展字段时，
+    公开 input/output 必须包含真实 tool-use/thoughts token；可选
+    `cachedContentTokenCount` 必须严格解析、不得超过 raw prompt、饱和后保留到
+    cache-read pricing details；direct Gemini user-visible `thinking_usage` 保留，
+    但 separately-priced reasoning details 为空。费用按归一化 input/output 各计
+    一次，这是从漏计到正确计费的有意修正。
 12. **B-012** 解析失败不得仅记录低级别日志后继续生成成功的零 token、零费用
     账单副作用。
 
@@ -89,16 +96,19 @@ complexity: high
       不回绕。
 - [ ] 对带 total 的格式覆盖一致、缺失、错误类型和 raw-domain 不一致 total；对不带 total
       的格式证明输出 total 来自重算。
-- [ ] Vertex 两条及 direct Gemini 非流式 parser 都覆盖 thoughts/tool-use prompt 扩展计数；
+- [ ] Vertex 两条、direct Gemini provider client 与 native Gemini SDK unary/SSE
+      shared parser 都覆盖 thoughts/tool-use prompt 扩展计数；
       cost 断言证明 input/output 各计一次且 thoughts 不产生额外 reasoning 费用；
       Bedrock Converse 覆盖必需 `totalTokens`。
 - [ ] 下游验证证明不可信 usage 的 provider+key、provider-only、key-only 与无
       reservation 四种路径都终止正确；provider+key 使用不同预留额时各自按自身
-      金额结算，不记录 `$0` 成功计费或遗留 reservation。
+      金额结算；common 与 native Gemini SDK settlement 都不记录 `$0` 成功计费或
+      遗留 reservation。
 - [ ] 未声明字段名和嵌套形状不会被猜测为 usage。
 - [ ] 不含 Vertex/direct Gemini 扩展计数的合法非零 usage 兼容性回归测试通过；
       扩展计数非零的 token/cost 修正，以及两条 endpoint 各自的 reported-total
-      公式都有精确断言。
+      公式都有精确断言；cached count 保持 cache-read price，`thinking_usage`
+      保留而 reasoning cost 为零。
 
 ## 边界情况
 
