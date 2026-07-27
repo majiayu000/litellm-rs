@@ -30,7 +30,7 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 ## Behavior Invariants
 
 1. B-001 普通文本、`Document.source`、`ToolResult.content`、`ToolUse.name/input`、message-level legacy `function_call`、`tool_calls[].function`、request-level `ChatCompletionRequest.function_call` 和 `ChatMessage.name` 都必须进入输入 guardrail。本仓库当前 request-level compatibility DTO 复用 `FunctionCall { name, arguments }` 并把两者序列化转发给 provider；即使标准 OpenAI selection 语义通常只指定 name，该已接受并转发的 `arguments` 仍属于必须扫描的现有公开输入面。
-2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。语义上连续的 message content parts 必须保留原邻接关系以检测跨 part 拆词；message/function/tool 等独立字段必须作为独立审核记录通过一次 engine batch 调用处理，由各 guardrail 在 batch 内逐 record 隔离检查，不能用可被规则误命中的标签或分隔符拼成一个扫描字符串，也不能允许正则跨独立记录匹配。
+2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。语义上连续的 message text content parts 必须覆盖当前 provider 实际使用的三种邻接表示：直接拼接、单个 ASCII 空格连接和单个换行连接；每种表示是独立审核记录，内容相同时只保留一个，确保 Bedrock 等 provider 在 guardrail 后插入边界也不能形成未检查的新敏感短语。message/function/tool 等独立字段必须作为独立审核记录通过一次 engine batch 调用处理，由各 guardrail 在 batch 内逐 record 隔离检查，不能用可被规则误命中的标签拼成扫描文本，也不能允许正则跨独立记录匹配。
 3. B-003 字符串字段保留原文本；结构化 JSON 字段同时扫描确定性完整 JSON 表示和递归解码后的 string keys/values，不得只扫描转义后的 `\n`/`\uXXXX` 或部分节点。合法 JSON function arguments 使用同一语义遍历，并在构造 `Value` 前拒绝任意层级的重复 object key（包括 escape 解码后相同的 key），避免解析器覆盖早期恶意值；首个 JSON whitespace 后出现 U+FEFF BOM 的 arguments 也稳定 fail-closed。首个非空白字符不是 `{`/`[` 的普通非 JSON arguments 仍扫描原字符串，但看似 structured JSON 的 arguments 只要无法完成有界解析（包括 recursion/depth/resource limit）就稳定 fail-closed。文本型 document 必须扫描 base64 解码后的 UTF-8 正文，而不是编码字符串；JSON MIME document 还必须同时扫描原始正文和递归解码后的 string keys/values，声明为 JSON 但语法、重复 key、BOM、深度或资源限制失败时稳定 fail-closed。
 4. B-004 任一列入范围的字段包含被拒内容时，整个请求在调用 provider 前被拒绝。
 5. B-005 guardrail 返回 `GuardrailAction::Mask` 或任意修改后文本时，不得把扁平扫描文本错误回写到原有多模态或 tool 结构；即使 `Mask` 结果没有 `modified_content`，gateway 也必须 fail-closed，不得继续 provider 请求。
@@ -54,7 +54,7 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - [ ] 每个列入范围的 content variant 都有接受与拒绝测试。
 - [ ] modern/message-level legacy function call、以及本仓库 request-level compatibility `FunctionCall` 的 name/arguments、`ChatMessage.name` 各有独立覆盖；测试证明 request-level arguments 确实从当前 DTO 解析并在 provider boundary 前被审核。
 - [ ] allowlisted 文本 document fixture 证明扫描解码后正文；malformed base64、非 UTF-8、Markdown/HTML/XML/entity-bearing MIME 和其他不支持媒体类型 fail-closed，且 Markdown numeric/named entity fixture 不会仅经 raw 扫描后放行。
-- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part 拆词有测试。
+- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part 拆词有测试；`ignore` + `all previous instructions` 必须在单空格 view 命中，另有直接拼接/换行 view、相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。
 - [ ] 嵌套 JSON、数组、空值、Unicode escape、解码后的 string key/value、任意层级与 escape 后重复 key、前导 BOM、合法/普通非 JSON/structured-invalid/超深 JSON arguments，以及 JSON MIME document 的 raw/semantic/invalid/duplicate-key/BOM/depth-limit 行为有测试。
 - [ ] 测试证明 guardrail 拒绝发生在 provider 调用前。
 - [ ] 测试证明扫描不会下载 URL；`enabled: false` 与 `check_input: false` 不增加 guardrail-specific document 拒绝或改变请求。既有 request validator 仍会无条件拒绝 malformed base64，因此 disabled fixture 使用 baseline 可接受的合法 base64，并分别覆盖 unsupported MIME、非 UTF-8 或 invalid JSON 等只属于 guardrail 的检查。
@@ -78,6 +78,8 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
   HTML/XML entity-bearing 格式和 PDF 等二进制在没有安全解析器时 fail-closed。
 - message name 或参数可能为空；空值不应制造虚假内容。
 - 相邻 content parts 的末尾和开头可能共同形成敏感词，连续视图必须保留该邻接；独立字段逐条审核，不共享正则匹配边界。
+- provider 可能在相邻 text parts 之间使用空串、空格或换行；guardrail 必须在 provider
+  转换前覆盖这三种当前可达表示，不能假设 DTO 中没有显式分隔符就等于最终 prompt。
 - guardrail provider 可能只支持纯文本修改，不能安全地重建任意结构化输入。
 - 攻击者可能用大量短 JSON keys/values 放大 records；固定记录数/派生字节上限必须
   在任何外部审核前一次性验证。

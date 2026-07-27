@@ -24,8 +24,13 @@ GH-1128 / #1128
    后的正文；record 只在进程内携带 typed provenance 与原始扫描值，provenance 不编码
    进扫描文本，错误不能被 iterator/filter 静默丢弃。
 2. builder 按稳定顺序生成互补记录：
-   - 对每条 message 中语义连续的 content parts 生成 adjacency view，不插入标签，
-     使跨 part 拆词保持可检测；document/tool 等不连续 surface 不加入该连续串。
+   - 对每条 message 中语义连续的 text content parts 依次生成三种 adjacency view：
+     `parts.join("")`、`parts.join(" ")`、`parts.join("\n")`。这是仓库当前 provider
+     转换的完整边界集合：Gemini/Vertex 等直接拼接，Bedrock prompt transforms 使用
+     单空格，Ollama 使用换行。三种 view 各自是独立 typed record；按上述固定顺序
+     对完整字符串做局部去重，避免单 part 或已含边界时重复计入 records/bytes。
+     不向扫描值写入标签，也不允许 guardrail 跨三种 alternative records 匹配。
+     document/tool 等不连续 surface 不加入这些 adjacency views。
    - 对 message name、普通 content、message-level legacy `function_call`
      name/arguments、modern `tool_calls[].function` name/arguments 和
      `ToolUse.name` 生成独立 typed records。每个 record 的值单独交给 engine，
@@ -113,7 +118,7 @@ GH-1128 / #1128
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | request/message/function/content 规范化 | 每种载体独立 allow/block fixture |
-| B-002/B-003 | adjacency + typed independent records | 跨 content part、顺序、record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
+| B-002/B-003 | adjacency + typed independent records | 跨 content part 的空串/单空格/换行 views、view 局部去重、Bedrock/Ollama/Gemini-Vertex provider-transform 对照、顺序、record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
 | B-004 | `check_input` 调用顺序 | mock provider 未被调用 |
 | B-005 | `enforce` modified 分支 | mask 仍 fail-closed 且请求 DTO 未改变 |
 | B-006 | fallible builder | malformed document/serialization 返回安全稳定 400，且不调用 engine/provider 后续 |
@@ -123,8 +128,8 @@ GH-1128 / #1128
 
 ## 数据流
 
-`ChatCompletionRequest.messages` 按顺序进入 bounded fallible fragment builder；连续 content
-形成 adjacency record，独立字段形成 typed independent records。JSON 同时保留完整
+`ChatCompletionRequest.messages` 按顺序进入 bounded fallible fragment builder；连续 text
+content 形成空串/单空格/换行三种去重后的 adjacency records，独立字段形成 typed independent records。JSON 同时保留完整
 表示和解码 string nodes；允许的 document base64 解码为 UTF-8，JSON MIME 进一步
 生成 raw + semantic records；request-level `function_call` 最后加入。builder 完整
 成功且通过 256/2 MiB 上限后，把 typed batch 一次交给 engine；engine 让每个
@@ -143,7 +148,8 @@ guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation
 
 - Security: 支持媒体类型列表必须 fail-closed，不能被 MIME 大小写/参数绕过。
 - Compatibility: 启用 input guardrail 的二进制 document 将被拒绝；发布说明需明确。
-- Performance: 文档解码和 owned 载荷增加内存；沿用请求大小限制并避免重复复制。
+- Performance: 文档解码和三种 adjacency views 增加 owned 载荷；局部去重避免相同
+  view 重复计数，所有派生值仍受 256 records/2 MiB checked 上限约束。
 - Availability/Cost: records 有 256/2 MiB 硬上限；内置 OpenAI moderation 的
   eligible batch 另有保守 32,768-byte context 上限，必须 batch 为单次远程调用，
   并验证 response count，避免 JSON fan-out 或确定性的上游 context 拒绝。
@@ -151,10 +157,13 @@ guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation
 
 ## 测试计划
 
-- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、跨 part、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
+- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、跨 part 空串/单空格/换行 views 与局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
 - [ ] Document tests: plain/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、MIME 参数、bad base64、bad UTF-8，以及 Markdown numeric/named entity、HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
 - [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、legacy custom guardrail 默认 adapter、OpenAI array single-call、32,768/32,769 eligible-byte 边界、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、response count/input-limit 在 `fail_open` true/false 下 fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled 与 `check_input: false` 不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
+- [ ] Provider-boundary tests: Bedrock 的 space-join、Ollama 的 newline-join 与
+      Gemini/Vertex 的 empty-join 转换结果分别与 builder 对应 adjacency view 相等；
+      `ignore` + `all previous instructions` 在 provider 调用前被拒绝。
 - [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`。
 
 ## 回滚方案
