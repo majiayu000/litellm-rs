@@ -55,7 +55,7 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
 扫描文本采用稳定的 choice/surface 边界，不能按 provider chunk 独立判断：
 
 - Chat 从转换后的 `ChatCompletionDelta` 提取 `content`、`thinking.content` 或其
-  `reasoning_content` alias（同一语义值只累计一次）、`refusal`、`audio.transcript`、
+  `reasoning_content` alias（同一语义值只累计一次）、`audio.transcript`、
   legacy `function_call.name/arguments` 与
   `tool_calls[].function.name/arguments`；同时从 choice logprobs 提取
   `content[].token` 与 `top_logprobs[].token`。按 content position 重建 ordered
@@ -65,10 +65,21 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   `(content_position, candidate_index)` 加边界；仅当候选 token 在同一位置等于
   chosen token 时视为同一 representation 而跳过。audio base64 data、role、IDs、
   usage、finish reason、logprob bytes/数值与 transport markers 只缓冲、不扫描。
-- Completion 扫描最终 client-visible `text`，包含一次 `echo`。
-- Responses 直接从每个上游 `choice.delta` 提取 output text、thinking、
-  tool/function name 与 arguments，并在派生 `.delta` event 前只累计一次；派生的
-  `.done` events、output items、`response.completed` snapshot 只缓冲，不再扫描。
+- 当前 canonical `ChatDelta` 没有 refusal，`convert_core_chunk_to_streaming` 也不会
+  从 provider pipeline 填充 wire `ChatCompletionDelta.refusal`；本 tranche 不新增
+  该 surface，不得用 synthetic post-conversion fixture 代替端到端可达性。未来若
+  provider/canonical/conversion 三层接入 refusal，必须先更新 manifest 与测试矩阵。
+- Completion 扫描最终 client-visible `text`，包含一次 `echo`；还必须从 route
+  实际转发的 `choice.logprobs` 提取 ordered chosen `content[].token`、
+  `top_logprobs[].token` 与 `refusal`。chosen/top 的 positional 去重沿用 Chat
+  契约，不能因 compatibility request 层拒绝 `logprobs` 参数而忽略 provider/custom
+  adapter 主动返回的 logprobs。
+- Responses 从每个上游 `choice.delta` 提取 output text、thinking 与 function
+  arguments；function name 必须绑定现有 `tool_states` 的接受分支：携带 call ID
+  创建 vacant state 时累计初始 name，或 state.name 为空时累计一次 late name。
+  重复 raw name delta 不累计，因为 route 不再发布它。所有已接受文本在派生
+  `.delta` event 前只累计一次；派生的 `.done` events、output items、
+  `response.completed` snapshot 只缓冲，不再扫描。
 
 ### 3. 三条 route 的状态机
 
@@ -142,7 +153,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、refusal、audio transcript、chosen sequence 等于 content、不同位置同值 token、top candidate position 去重、tool/function name+args、Responses done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、tool/function name+args、Responses initial/late/repeated name state-acceptance 与 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |
