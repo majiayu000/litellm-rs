@@ -15,7 +15,8 @@ complexity: high
 
 ## 目标
 
-- 对受影响的非流式 provider 使用一致、可测试的 usage 有效性规则。
+- 对受影响的 provider 非流式与明确列出的 Gemini 流式入口使用一致、可测试的
+  usage 有效性规则。
 - 明确区分合法的单字段零值、字段缺失、字段类型错误和整体零 usage。
 - 对部分字段漂移采取 fail closed 行为，不猜测或拼接不可信 usage。
 - 以饱和语义处理合法的大整数，并保证 `total_tokens` 与分量一致。
@@ -25,15 +26,17 @@ complexity: high
 
 - 改变模型价格、预算上限、预留算法或 provider 请求协议。
 - 猜测未声明的新字段名、字符串数字、浮点数、负数或任意嵌套数字的含义。
-- 重写已经具有显式错误处理的 OpenAI SSE usage 解析；native Gemini SDK 的 unary
-  与 SSE 当前复用同一不严格 parser，因此该共享入口在本 Issue 范围内。
+- 重写已经具有显式错误处理的 OpenAI SSE usage 解析；标准 chat-completions Gemini
+  stream 与 native Gemini SDK SSE 仍经过不严格 Google usage parser，因此这两条
+  流式入口在本 Issue 范围内。
 - 扩大公开 `Usage` 字段的整数类型或改变公开响应 schema。
 
 ## Behavior Invariants
 
 1. **B-001** Azure chat/embed、Azure AI chat/embed、Vertex AI、direct Gemini
-   provider client、native Gemini SDK unary/SSE shared parser、Bedrock 和
-   Mistral embedding 的受影响 usage 必须遵循同一可信度规则。
+   provider client、标准 chat-completions Gemini stream、native Gemini SDK
+   unary/SSE shared parser、Bedrock 和 Mistral embedding 的受影响 usage 必须遵循
+   同一可信度规则。
 2. **B-002** usage 容器不存在时，响应必须表现为 `usage: None`；不得构造默认
    零 usage。
 3. **B-003** 每种已声明 provider 格式的必需 token 分量必须存在且为 JSON
@@ -75,7 +78,10 @@ complexity: high
     key reservation 缺失时才使用 provider reservation 金额；两者都不存在时记录
     显式错误且不得伪造零费用 spend。任一 reservation 不得因另一种 reservation
     缺失而提前返回或泄漏。native Gemini SDK 独立 settlement 路径必须委托同一
-    结算 helper，不得恢复 key-only `0.0` 或把 unified amount 复用于 key。
+    结算 helper，不得恢复 key-only `0.0` 或把 unified amount 复用于 key。native
+    Gemini SSE 一旦已收到任意 upstream output，随后即使在 usage 到达前发生 read
+    error，也必须把真实 `saw_upstream_output=true` 传入 settlement 并按无 usage
+    保护结算；无 upstream output 的 read error 不得伪报为已产生输出。
 11. **B-011** 合法、范围内且 total 一致的既有 provider usage，在 Google 扩展字段
     缺失或为零时，其公开 token 值和既有计费结果必须保持兼容。非零扩展字段时，
     公开 input/output 必须包含真实 tool-use/thoughts token；可选
@@ -96,14 +102,18 @@ complexity: high
       不回绕。
 - [ ] 对带 total 的格式覆盖一致、缺失、错误类型和 raw-domain 不一致 total；对不带 total
       的格式证明输出 total 来自重算。
-- [ ] Vertex 两条、direct Gemini provider client 与 native Gemini SDK unary/SSE
-      shared parser 都覆盖 thoughts/tool-use prompt 扩展计数；
+- [ ] Vertex 两条、direct Gemini provider client、标准 chat-completions Gemini
+      stream 与 native Gemini SDK unary/SSE shared parser 都覆盖
+      malformed/overflow/thoughts/tool-use prompt/cache；
       cost 断言证明 input/output 各计一次且 thoughts 不产生额外 reasoning 费用；
       Bedrock Converse 覆盖必需 `totalTokens`。
 - [ ] 下游验证证明不可信 usage 的 provider+key、provider-only、key-only 与无
       reservation 四种路径都终止正确；provider+key 使用不同预留额时各自按自身
       金额结算；common 与 native Gemini SDK settlement 都不记录 `$0` 成功计费或
       遗留 reservation。
+- [ ] native Gemini route-level SSE 测试证明：先收到 output、再发生 upstream read
+      error 且没有 usage 时，caller 传递真实 output 状态并按各 reservation 自有金额
+      结算；error 发生在任何 output 前时不伪造已输出结算。
 - [ ] 未声明字段名和嵌套形状不会被猜测为 usage。
 - [ ] 不含 Vertex/direct Gemini 扩展计数的合法非零 usage 兼容性回归测试通过；
       扩展计数非零的 token/cost 修正，以及两条 endpoint 各自的 reported-total
@@ -120,11 +130,15 @@ complexity: high
   情况都不能被当作可信 usage。
 - 极少数真实响应可能明确报告全零 usage；在计费边界上仍按无可信 usage 处理，
   以避免静默免费调用。
+- 流式响应可能在已发送 candidate/output 后、最终 usage chunk 前断开；是否进入
+  no-usage settlement 必须取决于真实 upstream output 状态，而不是终止分支常量。
 
 ## 发布说明
 
 这是计费正确性收紧。过去被默认为零 token、零费用的 malformed、partial 或
 all-zero usage 将进入既有缺失 usage 保护。合法非零 usage 无需迁移；若上游
-provider 已发生字段漂移，运营日志将显式暴露该问题。Vertex 与 direct Gemini 的
-tool-use prompt/thoughts token 现在分别计入 input/output 费用一次，并各自使用
-官方 endpoint-specific reported-total 公式校验。
+provider 已发生字段漂移，运营日志将显式暴露该问题。Vertex 与 direct Gemini
+非流式、标准 chat stream、native SDK unary/SSE 的 tool-use prompt/thoughts token
+现在分别计入 input/output 费用一次，并各自使用官方 endpoint-specific
+reported-total 公式校验。native Gemini SSE 在已输出后遇到 read error 时不再释放
+未记账的 reservation。

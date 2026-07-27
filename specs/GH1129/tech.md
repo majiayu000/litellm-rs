@@ -17,7 +17,8 @@ GH-1129 / #1129
 | Azure | `src/core/providers/azure/chat.rs`, `src/core/providers/azure/embed.rs`, `src/core/providers/azure/chat_tests.rs` | 缺失或错误类型通过 `unwrap_or(0)` 退化为零，`as u32` 可截断 | chat 与 embedding 都在账单入口前产生 `Option<Usage>` |
 | Azure AI | `src/core/providers/azure_ai/chat.rs`, `src/core/providers/azure_ai/embed.rs`, `src/core/providers/azure_ai/chat_tests.rs` | 与 Azure 相同；embedding completion 固定为不适用的零 | 需要保留格式差异，同时移除静默 fallback |
 | Vertex AI | `src/core/providers/vertex_ai/transformers.rs`, `src/core/providers/vertex_ai/client.rs` | 两条非流式 response parser 都解析 `usageMetadata`/legacy metadata，存在默认零、截断或手写加法；legacy 路径还会把缺失 usage 展开为全零 `Usage` | 两条入口必须委托同一 helper，不能只修 transformer |
-| Direct Gemini | `src/core/providers/gemini/client.rs`, `src/server/routes/ai/gemini/spend.rs` | provider client 与 native SDK unary/SSE 使用不同 parser；两者都默认零/直接缩窄，SDK parser 还独立执行有缺口的 no-usage settlement | 两条 parser 都必须使用 endpoint policy；SDK settlement 委托 common helper，不能留下旁路 |
+| Direct Gemini provider | `src/core/providers/gemini/client.rs`, `src/core/providers/gemini/streaming.rs`, `src/core/providers/base/sse/gemini.rs` | 非流式 client 与标准 chat-completions stream 使用不同 parser；SSE transformer 的 usage-only/candidate 两个分支都默认零、截断并忽略 tool/thoughts/cache | 三个入口必须复用同一 strict direct-Gemini endpoint policy，不能只修非流式 client |
+| Native Gemini SDK route | `src/server/routes/ai/gemini.rs`, `src/server/routes/ai/gemini/spend.rs`, `tests/gemini_sdk_routes/runtime_provider_tests.rs` | unary/SSE 复用独立不严格 parser 和 no-usage settlement；stream error arm 即使已观察 output 也硬编码传 `false` | parser 与 settlement 委托 common helper；所有终止分支传递真实 output 状态并由 route-level reservation test 固定 |
 | Bedrock | `src/core/providers/bedrock/transformation.rs` | 多种模型族各自解析，部分路径已有 all-zero → `None`，其他路径仍默认零并直接相加 | 需要统一 OpenAI-compatible、runtime alias、Claude、Converse、Titan 的边界语义 |
 | Mistral embedding | `src/core/providers/mistral/embedding.rs` | 缺失或错误字段默认为零并截断 | completion 为不适用零，prompt/total 仍需严格验证 |
 | 结算保护 | `src/server/routes/ai/spend.rs`, `src/server/routes/ai/spend_no_usage_tests.rs` | `usage: None` 会进入 `record_reserved_spend_without_usage`；有预留时按预留结算，无预留时显式报错且不记录 spend | provider 层必须把不可信 usage 路由到此既有保护，并补充账单副作用回归证明 |
@@ -55,7 +56,7 @@ GH-1129 / #1129
 | Azure / Azure AI chat | `usage.prompt_tokens` | `usage.completion_tokens` | `usage.total_tokens` 必需且必须一致 |
 | Azure / Azure AI embedding | `usage.prompt_tokens` | 不适用，显式 `0`；若响应带 completion，则必须是合法 `0` | `usage.total_tokens` 必需且必须一致 |
 | Vertex `usageMetadata` | `promptTokenCount` + optional-zero `toolUsePromptTokenCount` | `candidatesTokenCount` + optional-zero `thoughtsTokenCount`；thoughts 只包含在 completion 总量，不写 `reasoning_tokens`/`thinking_usage` | `totalTokenCount` 必需，必须在 raw `u128` 域等于四项之和 |
-| Direct Gemini `usageMetadata`（provider client + native SDK unary/SSE） | `promptTokenCount` + optional-zero `toolUsePromptTokenCount` | `candidatesTokenCount` + optional-zero `thoughtsTokenCount`；不写 separately-priced reasoning details，provider client 保留 user-visible `thinking_usage` | `totalTokenCount` 必需，但按 Gemini API 契约在 raw `u128` 域等于 prompt + candidates + thoughts，不含 tool-use prompt；公开/计费 total 仍由四个 billable parts 重算；optional cached count 严格保留 |
+| Direct Gemini `usageMetadata`（provider client + standard chat SSE + native SDK unary/SSE） | `promptTokenCount` + optional-zero `toolUsePromptTokenCount` | `candidatesTokenCount` + optional-zero `thoughtsTokenCount`；不写 separately-priced reasoning details，`Usage` 路径保留 user-visible `thinking_usage` | `totalTokenCount` 必需，但按 Gemini API 契约在 raw `u128` 域等于 prompt + candidates + thoughts，不含 tool-use prompt；公开/计费 total 仍由四个 billable parts 重算；optional cached count 严格保留 |
 | Vertex legacy `metadata.tokenMetadata` | `inputTokens.totalTokens` | `outputTokens.totalTokens` | 格式不声明 total，统一重算 |
 | Bedrock OpenAI-compatible | `prompt_tokens` | `completion_tokens` | `total_tokens` 必需且必须一致 |
 | Bedrock runtime aliases | 已识别的 input 字段之一 | 对应格式的 output 字段 | 格式无 total 时统一重算；不得跨不完整 alias 组合拼接 |
@@ -109,6 +110,11 @@ Direct Gemini 现有 `thinking_usage` 只是 user-visible breakdown，当前
 native Gemini SDK 的 `settle_gemini_reserved_spend_without_usage` 不再维护平行算法：
 把 common helper 调整为 crate-visible 内部入口并委托它，确保 unary/SSE 的
 provider+key、provider-only、key-only、neither 与不同金额矩阵完全相同。
+`src/server/routes/ai/gemini.rs` 的每个 stream 终止分支必须传递
+`should_record_spend && saw_upstream_output`，尤其 upstream read error arm 不得硬编码
+`false`。route-level fixture 先写出一个不含 usage 的 candidate/output chunk，再制造
+upstream read error，断言 provider 与 key reservation 各以自身金额结算且没有泄漏；
+另测 output 前 read error，证明 caller 不会伪造已输出状态。
 
 在 `spend_no_usage_tests.rs` 扩充下游测试，固定这些副作用，避免未来 provider 修复
 再次被结算层弱化。
@@ -129,7 +135,11 @@ provider+key、provider-only、key-only、neither 与不同金额矩阵完全相
 | `src/core/providers/vertex_ai/client.rs` | trait response parser 的 `usageMetadata` 委托同一共享 helper，移除 `unwrap_or(0) as u32`/普通加法；覆盖扩展计数、malformed/total 与 exact token 输出 | B-001–B-009, B-011 |
 | `src/core/providers/vertex_ai/client_tests.rs` | 覆盖 trait response parser 的扩展计数、malformed、all-zero、total mismatch 与范围 fixture | B-001–B-009, B-011 |
 | `src/core/providers/gemini/client.rs` | direct Gemini 非流式 `usageMetadata` 委托共享严格 helper，但使用 Gemini-specific prompt+candidates+thoughts reported-total policy；移除默认零/直接缩窄与 separately-priced reasoning details，并在 inline tests 覆盖扩展计数、malformed/total、范围与 exact token 输出 | B-001–B-009, B-011 |
+| `src/core/providers/base/sse/gemini.rs` | 标准 chat-completions Gemini stream 的 usage-only 与 candidate 两个 `usageMetadata` 分支都委托 strict direct-Gemini normalizer，移除默认零/截断并保留 tool/thoughts/cache details；增加 malformed、overflow、endpoint-total 与扩展计数测试 | B-001–B-009, B-011–B-012 |
+| `src/core/providers/gemini/streaming.rs` | 通过真实 `UnifiedSSEParser<GeminiTransformer>` fixture 覆盖标准 Gemini stream 的合法扩展 usage、malformed/partial/all-zero、overflow、cache 与 exact token/cost handoff | B-001–B-009, B-011–B-012 |
 | `src/server/routes/ai/gemini/spend.rs` | native Gemini SDK unary/SSE `gemini_usage_metadata` 委托同一 strict direct-Gemini policy，保留 cached pricing、清空 reasoning cost；no-usage settlement 委托 common helper，并扩充 inline parser/四组合/不同金额测试 | B-001–B-012 |
+| `src/server/routes/ai/gemini.rs` | native SSE 所有终止分支向 settlement 传真实 `should_record_spend && saw_upstream_output`，修正 output 后 upstream read error 硬编码 `false` 的 reservation 释放旁路 | B-010, B-012 |
+| `tests/gemini_sdk_routes/runtime_provider_tests.rs` | 增加 native SSE output-then-read-error 与 error-before-output route fixture，断言前者 self-amount settlement/exactly-once、后者不伪造已输出状态且均无 reservation 泄漏 | B-010, B-012 |
 | `src/core/providers/bedrock/transformation.rs` | 收敛所有模型族 usage parser，禁止 partial alias 拼接，移除默认零和普通加法，并扩充本文件测试 | B-001–B-009, B-011 |
 | `src/core/providers/mistral/embedding.rs` | 严格读取 prompt/total、显式 completion=0，并扩充本文件测试 | B-001–B-009, B-011 |
 | `src/core/pricing_service/tests.rs` | 用归一化 Vertex effective usage 做 exact cost 断言，证明 thoughts 只进入 output cost 且 reasoning cost 为零 | B-006, B-011 |
@@ -137,14 +147,15 @@ provider+key、provider-only、key-only、neither 与不同金额矩阵完全相
 | `src/server/routes/ai/spend_no_usage_tests.rs` | 扩充无 usage 的 reservation、不同 provider/key 预留额、key budget、无 reservation 账单副作用测试 | B-010, B-012 |
 
 不计划修改公开 `Usage` schema、已经 fail-closed 的 OpenAI SSE usage 解析或
-价格/预算配置；native Gemini unary/SSE shared parser 按 manifest 在范围内。
+价格/预算配置；标准 chat-completions Gemini SSE 与 native Gemini unary/SSE
+shared parser 按 manifest 在范围内。
 若实现发现必须修改 manifest 外文件，应停止并回到 spec review。
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| B-001 | 所有 manifest 中 provider parser（含两条 Vertex、direct Gemini provider client 与 native SDK unary/SSE shared parser） | 每个 provider 的定向 parser test；审查不再存在受影响路径的 `unwrap_or(0) as u32` |
+| B-001 | 所有 manifest 中 provider parser（含两条 Vertex、direct Gemini provider client、standard chat SSE 与 native SDK unary/SSE shared parser） | 每个 provider 的定向 parser test；审查不再存在受影响路径的 `unwrap_or(0) as u32` |
 | B-002 | provider 容器入口 | 缺失 usage / usageMetadata / tokenMetadata fixture 返回 `None` |
 | B-003 | shared helper 与每种字段映射 | missing、`null`、string、float、negative、object/array fixture；partial 字段返回 `None` |
 | B-004 | chat 与 embedding 格式策略 | prompt=0/completion>0、prompt>0/completion=0、embedding completion=0 fixture |
@@ -153,19 +164,22 @@ provider+key、provider-only、key-only、neither 与不同金额矩阵完全相
 | B-007 | endpoint-specific reported-total validator | raw `u128` 域 total 缺失、错误类型、不一致均返回 `None`；一致 total 保留；Vertex 四项、direct Gemini 三项与 Converse 专项 fixture |
 | B-008 | token conversion helper | `u32::MAX`、`u32::MAX + 1`、`u64::MAX` |
 | B-009 | total builder | `u32::MAX + 1` 与 `u32::MAX + u32::MAX` 均得到 `u32::MAX` |
-| B-010 | common + native Gemini SDK no-usage tests | 两条入口都验证 provider+key（含不同金额）、provider-only、key-only、neither 的 spend、API-key usage 与各 reservation exactly-once/self-amount settlement |
-| B-011 | provider happy-path + Google pricing fixtures | 扩展字段零/缺失保持既有值和费用；非零时 effective input/output 各计一次，cached 保持 cache-read price，thinking breakdown 保留且 reasoning cost 为零 |
-| B-012 | provider → spend handoff | malformed provider fixture 返回 `None`，下游 no-usage 测试证明不产生 `$0` 成功 spend |
+| B-010 | common + native Gemini SDK no-usage tests | 两条入口都验证 provider+key（含不同金额）、provider-only、key-only、neither 的 spend、API-key usage 与各 reservation exactly-once/self-amount settlement；route fixture 覆盖 output 后 read error |
+| B-011 | provider happy-path + Google pricing fixtures | 非流式、standard chat SSE、native SDK 的扩展字段零/缺失保持既有值和费用；非零时 effective input/output 各计一次，cached 保持 cache-read price，thinking breakdown 保留且 reasoning cost 为零 |
+| B-012 | provider → spend handoff | malformed provider/stream fixture 返回 `None`，下游 no-usage 与 native route output-then-error 测试证明不产生 `$0` 成功 spend或 reservation 泄漏 |
 
 ## 数据流
 
-1. provider 非流式响应被解析为 JSON。
-2. 对应适配器按格式选择精确 usage 容器和必需字段。
+1. provider 非流式响应或明确列出的 Gemini SSE event 被解析为 JSON。
+2. 对应适配器按格式选择精确 usage 容器和必需字段；标准 Gemini chat stream 的
+   usage-only/candidate 两个分支与 native SDK unary/SSE 都调用同一 direct-Gemini
+   policy。
 3. 共享 helper 验证 JSON unsigned integer，在 raw `u128` 域重算并校验 reported
    total、拒绝 partial/all-zero usage，然后执行饱和转换。
 4. 可信数据生成 `Some(Usage)`；不可信或缺失数据生成 `None`。
 5. `Some(Usage)` 进入现有定价与实际 usage 结算；`None` 进入现有 reserved
-   no-usage 结算与 error 日志。
+   no-usage 结算与 error 日志。native stream 在 output 后 read error 时以真实
+   `saw_upstream_output` 触发同一保护。
 6. 不新增持久化字段或外部调用。
 
 ## 备选方案
@@ -180,14 +194,15 @@ provider+key、provider-only、key-only、neither 与不同金额矩阵完全相
 ## 风险
 
 - Security: 计费与预算属于高风险边界；任一 fallback-to-zero 都可能恢复免费调用。
-  必须人工审查 provider 字段映射和所有账单副作用测试。
+  必须人工审查 provider/SSE 字段映射、stream 终止分支和所有账单副作用测试。
 - Compatibility: malformed、partial、all-zero 或 total 不一致的响应将从
   `Some(Usage)` 变为 `None`；这是有意收紧。Vertex 扩展字段缺失/零的合法非零响应
   与公开 schema 不变；扩展字段非零时修正过去漏计的 token/cost。
 - Performance: 每个响应增加常数级字段检查、`try_from` 和一次饱和加法，无额外 I/O
   或分配，影响可忽略。
 - Maintenance: provider 字段策略必须保留在显式表驱动/局部映射中；不得让共享
-  helper 猜测任意 alias。
+  helper 猜测任意 alias。新增 Gemini stream 入口必须复用同一 normalizer，禁止再
+  复制手写 usage 构造。
 
 ## 测试计划
 
@@ -196,18 +211,22 @@ provider+key、provider-only、key-only、neither 与不同金额矩阵完全相
 - [ ] Integration tests: provider parser 输出 `None` 后复用
       `spend_no_usage_tests.rs` 验证四种 reservation 组合和 key usage 副作用。
 - [ ] Regression tests: 现有 Azure、Azure AI、Vertex AI、direct Gemini provider
-      client/native SDK unary+SSE、Bedrock、Mistral 相关测试。
+      client/standard chat SSE/native SDK unary+SSE、Bedrock、Mistral 相关测试。
 - [ ] Pricing tests: Vertex/direct Gemini tool-use prompt/thoughts 非零时，
       input/output cost 由四个 billable parts 精确计算，`reasoning_cost == 0`
       且 total 不重复；reported total 分别覆盖 Vertex 四项和 direct Gemini 三项；
-      cached token 保持 cache-read price，provider client `thinking_usage` 保留。
+      cached token 保持 cache-read price，`Usage` 路径 `thinking_usage` 保留。
+- [ ] Route tests: native Gemini SSE 在 output 后 read error 时传递真实
+      `saw_upstream_output`，provider/key reservation 按各自金额 exactly-once 结算；
+      output 前 read error 不伪造已输出状态。
 - [ ] Static checks: `cargo fmt --check`、`cargo check`、
       `cargo clippy --all-targets -- -D warnings`。
 - [ ] Full verification: `cargo test`；关键 usage helper 与结算分支要求 100% 覆盖，
       新增代码整体至少 80% line coverage。
 - [ ] Manual verification: 使用一份合法 usage 与一份 partial/malformed usage 的
-      provider fixture，确认前者正常计费，后者产生显式 no-usage error 且不记录
-      `$0` 成功 spend。
+      provider 与 standard Gemini SSE fixture，确认前者正常计费，后者产生显式
+      no-usage error 且不记录 `$0` 成功 spend；再用 output-then-read-error native
+      SSE fixture 确认 reservations 不被静默释放。
 
 ## Security / Compatibility / Performance / Rollback
 
