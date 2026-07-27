@@ -65,10 +65,15 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   chosen 历史（包括此前 alias 的前缀）物化为一个连续 scan surface，并在后续 event
   始终向该 surface 追加，不能重新折叠。alias bookkeeping 和物化后的 surface 都纳入
   同一个 cumulative 8 MiB checked accounting。chosen token 之间不能插入边界，也
-  不能用全局 string set 删除不同位置的同值 token。top candidate 按
-  `(content_position, candidate_index)` 加边界；仅当候选 token 在同一位置等于
-  chosen token 时视为同一 representation 而跳过。audio base64 data、role、IDs、
-  usage、finish reason、logprob bytes/数值与 transport markers 只缓冲、不扫描。
+  不能用全局 string set 删除不同位置的同值 token。top candidates 不得按
+  `(content_position, candidate_index)` 拆成独立 surface，也不得因某一位置的 token
+  等于 chosen token 而跳过；每个 candidate rank 按
+  `(choice.index, candidate_index)` 跨 content positions 与 provider events
+  连续追加，只有不同 choice/rank 之间加入稳定边界。这样相邻位置同一 rank 的
+  `sec`、`ret` 必须形成 `secret`，且“首位置 top == chosen、次位置分叉”的情况也
+  保留完整 top 前缀。top candidate bookkeeping/文本同样纳入 cumulative 8 MiB
+  checked accounting。audio base64 data、role、IDs、usage、finish reason、
+  logprob bytes/数值与 transport markers 只缓冲、不扫描。
   legacy `function_call` 的 name/arguments 分别按 `(choice.index, legacy, field)`
   维护连续 surface；modern tool calls 分别按
   `(choice.index, tool_call.index, field)` 维护连续 surface。不同 choice、tool index
@@ -173,7 +178,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的跨 event alias 物化、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、Chat parallel tool index 连续/隔离、tool/function name+args、Responses initial/late/repeated name、late-name state update 后 provider error 不扫描、late name 在 output-item done 首次发布前检查、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的跨 event alias 物化、不同位置同值 token、top candidate rank 跨 position/event 的连续 `sec`/`ret`、top 首位置等于 chosen 后分叉仍保留前缀、Completion logprobs refusal、Chat parallel tool index 连续/隔离、tool/function name+args、Responses initial/late/repeated name、late-name state update 后 provider error 不扫描、late name 在 output-item done 首次发布前检查、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |

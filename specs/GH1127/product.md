@@ -67,7 +67,7 @@ complexity: high
 - 敏感模式可能从一个 chunk 的末尾延伸到下一个 chunk 的开头。
 - provider 可能先发送 role、usage 或空 delta，再发送文本。
 - Chat 可能同时序列化 `thinking.content` 与相同的 `reasoning_content` alias；相同语义增量只累计一次。
-- Chat logprobs 的 ordered chosen-token 序列可能只是 `delta.content` 的另一种表示；去重必须按 choice 比较截至当前 event 的累计表示，而不能逐 event 丢弃相等 token。chosen 累计值仍与 content 累计值相等时可作为 content 的 alias；一旦任一 event 使两者不再相等，必须把此前 alias 前缀连同新 token 一起物化为一个连续 chosen surface，且之后不得重新折叠。这样即使前一 event 的 content/chosen 都是 `sec`、后一 event 只有 chosen `ret`，扫描面仍包含连续的 `secret`。不同位置的同值 token 必须保留。top candidate 仅在同一 token 位置且等于 chosen token 时去重。
+- Chat logprobs 的 ordered chosen-token 序列可能只是 `delta.content` 的另一种表示；去重必须按 choice 比较截至当前 event 的累计表示，而不能逐 event 丢弃相等 token。chosen 累计值仍与 content 累计值相等时可作为 content 的 alias；一旦任一 event 使两者不再相等，必须把此前 alias 前缀连同新 token 一起物化为一个连续 chosen surface，且之后不得重新折叠。这样即使前一 event 的 content/chosen 都是 `sec`、后一 event 只有 chosen `ret`，扫描面仍包含连续的 `secret`。不同位置的同值 token 必须保留。top candidates 不做逐位置 chosen 去重；每个 candidate rank 按 `(choice.index, candidate_index)` 跨 content positions/events 维护连续 surface，使相邻位置 rank 相同的 `sec`、`ret` 也形成 `secret`。不同 choice/rank 之间保持稳定边界。
 - Chat provider 可能交错发送多个 parallel tool call；legacy function 与每个 modern tool call 的 name/arguments 必须各自保持连续 surface。不得按 event 到达顺序把不同 tool index 的碎片拼进同一字符串，也不得跨独立 call 匹配。
 - Completion 虽然拒绝客户端请求 `logprobs`，但 provider/custom adapter 仍可能返回并被 compatibility route 原样序列化；这些 unsolicited chosen/top token 与 refusal 文本仍是客户端可见面，不能只扫描 `text`。
 - Responses provider 可能在 call ID/state 建立前发送 arguments、重复发送 function name，或在 call ID 之后才补 name；累计序列必须与 state 的实际发布时点一致。pre-ID 丢弃的 arguments 和未发布的重复 name 都不能按原始 delta 追加；只写入 state 的 late name 若随后遇到 provider error/idle timeout 也不得被扫描，只有进入最终 `ResponseOutputItemDone` 时才首次累计。
