@@ -60,8 +60,9 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   `tool_calls[].function.name/arguments`；同时从 choice logprobs 提取
   `content[].token` 与 `top_logprobs[].token`。按 content position 重建 ordered
   chosen-token sequence：若其拼接结果与 `delta.content` 完全相等，则 chosen
-  sequence 不再重复累计；否则每个 chosen token 按位置、按顺序进入 length-delimited
-  surface，不能用全局 string set 删除不同位置的同值 token。top candidate 按
+  sequence 不再重复累计；否则保留 position 用于去重，但把全部 chosen tokens
+  按顺序拼接进同一个 scan surface，不能在 token 之间插入边界，也不能用全局
+  string set 删除不同位置的同值 token。top candidate 按
   `(content_position, candidate_index)` 加边界；仅当候选 token 在同一位置等于
   chosen token 时视为同一 representation 而跳过。audio base64 data、role、IDs、
   usage、finish reason、logprob bytes/数值与 transport markers 只缓冲、不扫描。
@@ -153,7 +154,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、tool/function name+args、Responses initial/late/repeated name state-acceptance 与 done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、tool/function name+args、Responses initial/late/repeated name state-acceptance 与 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |
