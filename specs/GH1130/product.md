@@ -34,7 +34,7 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
 3. B-003 metadata、content 和 delete 对非 owner 的结果必须与不存在文件不可区分，不得泄露目标文件是否存在、owner 或其他元数据。
 4. B-004 管理员可以列出和操作所有文件，包括历史无 owner 文件。API key 请求只有 key 自身的直接或运行时权限明确包含 admin 能力时才是管理员；admin user 持有的受限或无 admin 能力 key 不得继承用户管理员权限。无 API key 的 JWT/session 才可按用户 admin role/RBAC 判定。
 5. B-005 auth 开启但无法解析任何有效 owner 范围时，上传和对象访问必须 fail-closed。
-6. B-006 Local 与 S3 后端必须持久化、读取和列举一致的 owner 信息；进程重启后授权结果不变。S3 HeadObject 的 `NoSuchKey`/`NotFound`/HTTP 404 必须进入 canonical storage NotFound，其他 S3 错误保持 5xx。
+6. B-006 Local 与 S3 后端必须持久化、读取和列举一致的 owner 信息；进程重启后授权结果不变。S3 HeadObject 只有 HTTP 404 进入 canonical storage NotFound；HEAD 错误没有可依赖的响应正文或精确 exception，403、transport、timeout 与 5xx 等其他 S3 错误保持显式失败。
 7. B-007 旧元数据缺少 owner 时仍可反序列化，但只对管理员可见；不得自动归属给第一个访问者。
 8. B-008 owner 信息是内部授权元数据，不得出现在 OpenAI-compatible File 响应或错误正文中。
 9. B-009 auth 明确关闭并允许匿名访问时，Files API 保持现有单租户行为，不伪造 owner。
@@ -47,7 +47,7 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
 - [ ] 非 owner 与随机不存在 ID 的状态码和公开错误形状一致。
 - [ ] 管理员可以访问所有 owner 与 legacy 文件，普通调用者看不到 legacy 文件；直接 `*`/`system.admin`、runtime `is_admin`、受限 key + admin owner、无 key admin JWT 各有测试。
 - [ ] 无身份的已启用 auth 请求在上传和对象操作上 fail-closed。
-- [ ] Local 与 S3 元数据 round-trip、旧元数据兼容和重启后读取有测试；S3 `NoSuchKey`/404 与 foreign 的公开 404 等价，非 404 S3 故障仍为 5xx。
+- [ ] Local 与 S3 元数据 round-trip、旧元数据兼容和重启后读取有测试；S3 HeadObject HTTP 404 与 foreign 的公开 404 等价，非 404 S3 故障仍显式失败。
 - [ ] S3 超过 1000 个对象时遍历 continuation token 到结束，先按 owner 过滤再应用公开 limit/count。
 - [ ] OpenAI File JSON 与错误日志不泄露 owner。
 - [ ] `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试及完整测试通过；S3 路径至少用 `--all-features`（或等价 `--features s3`）完成 check、Clippy 与相关测试。
@@ -64,6 +64,8 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
   其他后端错误仍需遵循现有显式失败语义。
 - list 期间单个 metadata 损坏不得导致未过滤内容泄露。
 - S3 一页最多返回有限对象，授权代码不能把第一页或 backend max_keys 当公开 limit。
+- 大 bucket 的完整分页与逐对象 metadata 读取可能触发 S3 throttling/`503 Slow Down`；
+  当前请求必须显式失败而不是返回未过滤或不完整列表，后续索引/缓存优化不能弱化授权。
 
 ## 发布说明
 

@@ -54,9 +54,10 @@ GH-1130 / #1130
    metadata 读取和 owner 过滤后，才应用 API 的 limit/count；不得把 `max_keys=limit`
    下推到未授权候选集。公开对象不序列化 owner。
 6. get/content/delete 对非 owner 使用与 missing file 相同的 canonical `NotFound`
-   状态、错误 type/code 和不含 file/owner 细节的正文。S3 `HeadObject` mapper 仅将
-   service code `NoSuchKey`/`NotFound` 或 HTTP 404 归入 canonical storage NotFound；
-   transport、credential、timeout、5xx 与其他 service errors 保持显式 5xx，禁止
+   状态、错误 type/code 和不含 file/owner 细节的正文。S3 `HeadObject` mapper 使用
+   Rust SDK `HeadObjectError::is_not_found()` 判定服务 HTTP 404；HEAD 错误响应没有
+   可依赖的 body/精确 exception，不得解析 `NoSuchKey` 字符串。transport、
+   credential、timeout、403、5xx 与其他 service errors 保持显式 5xx，禁止
    blanket 映射。route 对 foreign 与 storage NotFound 使用同一公开 404 mapper。
    日志只记录 request ID 与拒绝类别，不记录 owner 值。delete 必须先取 metadata
    并授权，再调用 backend delete。
@@ -101,14 +102,18 @@ Local/S3 都从持久化 metadata 恢复相同 enum；legacy `None` 只能通过
 - Security: API key 是 permission attenuation boundary；不得让 admin user 身份抬高
   受限 key 权限，也不得把任意 team membership 当 active team。
 - Compatibility: 历史文件普通用户将不可见；这是明确的 fail-closed 迁移。
-- Performance: 正确的跨租户 limit 要先遍历/过滤 S3 candidates，可能增加分页与
-  metadata 读取；先保证正确性，索引优化需另开 Issue。
+- Performance/Availability: 正确的跨租户 limit 要先遍历/过滤 S3 candidates，
+  可能增加大量分页与逐对象 `HeadObject`，在大 bucket/高并发下可能触发
+  throttling 或 `503 Slow Down` 并使整个 list 显式失败。实现应保持 bounded
+  concurrency/retry 与 fail-closed，不得为可用性跳过 metadata 或返回部分未过滤
+  结果；可扩展性需另开 Issue，以按 owner 建立可信索引或缓存（例如数据库/Redis），
+  且索引失效时仍回到安全失败而非全局放行。
 - Maintenance: 所有新 Files handler 必须复用 caller/ownership helper。
 
 ## 测试计划
 
 - [ ] Unit tests: enum serde、trusted active-team scope priority、key attenuation、ownership、uniform not-found。
-- [ ] Storage tests: Local/S3 owner round-trip、legacy、损坏 metadata、HeadObject 404/非 404、>1000 object pagination。
+- [ ] Storage tests: Local/S3 owner round-trip、legacy、损坏 metadata、HeadObject SDK `is_not_found()`/非 404、>1000 object pagination，以及 throttling/503 保持显式失败。
 - [ ] Route tests: tenant/admin/auth-disabled list/get/content/delete 矩阵、filter-before-limit 与 backend call count。
 - [ ] Security tests: multi-team login token 解码为 no-team 且 Files 回退 User scope、validated active-team claim、cross-team same-user、restricted key + admin owner、日志/JSON owner 泄露、unauthorized delete no-op。
 - [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`；S3 feature 用 `cargo check --all-features`、`cargo clippy --all-targets --all-features -- -D warnings` 与相关 S3 tests。
