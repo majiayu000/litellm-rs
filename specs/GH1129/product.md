@@ -49,6 +49,10 @@ complexity: high
    API 的可选零语义处理。`thoughtsTokenCount` 已包含在公开 `completion_tokens`
    与 output token 费用中，本 Issue 不再把它写入会另行计价的
    `completion_tokens_details.reasoning_tokens` 或其他 thinking details，禁止重复计费。
+   该四项关系以
+   [Google Vertex AI v1 `UsageMetadata`](https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerateContentResponse#usagemetadata)
+   的公开契约为准：`totalTokenCount` 是 prompt、candidates、tool-use prompt 与
+   thoughts 四项之和；不得把扩展字段误认为已包含在前两项中。
 7. **B-007** 对声明包含 total 的 provider 格式（包括 Bedrock Converse），total
    缺失、类型错误或与原始分量之和不一致时，整条 usage 必须 fail closed 为
    `None`；对声明不包含 total 的格式，系统只使用重算值。

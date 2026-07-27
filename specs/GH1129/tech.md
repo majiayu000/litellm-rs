@@ -55,6 +55,13 @@ GH-1129 / #1129
 | Bedrock Converse | `usage.inputTokens` | `usage.outputTokens` | `usage.totalTokens` 必需且 raw-domain 一致 |
 | Mistral embedding | `usage.prompt_tokens` | 不适用，显式 `0` | `usage.total_tokens` 必需且必须一致 |
 
+Vertex 四项相加不是推断：Google 官方 Vertex AI v1
+[`UsageMetadata`](https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerateContentResponse#usagemetadata)
+明确把 `totalTokenCount` 定义为 `promptTokenCount + candidatesTokenCount +
+toolUsePromptTokenCount + thoughtsTokenCount`。因此 helper 必须按四项 raw-domain
+总和校验；把 tool-use prompt 或 thoughts 当成前两项已含 breakdown 会与官方
+`totalTokenCount` 契约冲突。
+
 usage 容器缺失直接返回 `None`。容器存在时，任一必需字段缺失或类型错误都使用 `?`
 传播为 `None`；不得保留另一半字段形成 partial usage。
 
