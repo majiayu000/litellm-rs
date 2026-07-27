@@ -54,26 +54,26 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
 
 扫描文本采用稳定的 choice/surface 边界，不能按 provider chunk 独立判断：
 
+- Chat 与 Completion 的 `choice.logprobs` 必须委托同一个 route-private
+  `LogprobSurfaceAccumulator`，不得在两个 endpoint 各复制一套去重规则。该组件按
+  choice 维护 client-visible content 累计值、ordered chosen-token 累计值和不可逆
+  alias/materialized 状态：两个累计值仍完全相等时 chosen 可作为 content alias；
+  首次分歧时把包含 alias 前缀的完整 chosen 历史物化为连续 surface，之后永不重新
+  折叠。chosen token 之间不能插边界，也不能用全局 string set 删除不同位置的同值
+  token。top candidates 不做逐位置 chosen 去重；每个 candidate rank 按
+  `(choice.index, candidate_index)` 跨 content positions/provider events 连续追加，
+  只在不同 choice/rank 之间加入稳定边界。该组件的 alias bookkeeping、chosen 与
+  top 文本统一纳入 cumulative 8 MiB checked accounting，并同时服务 Chat 与
+  Completion。共享 contract tests 必须覆盖 chosen/content 的 `sec`→`ret` alias
+  物化、top-rank 的 `sec`→`ret`，以及首位置 top 等于 chosen 后分叉；两个 endpoint
+  各自还要有 integration fixture 证明实际 wire logprobs 经过该组件。
 - Chat 从转换后的 `ChatCompletionDelta` 提取 `content`、`thinking.content` 或其
   `reasoning_content` alias（同一语义值只累计一次）、`audio.transcript`、
   legacy `function_call.name/arguments` 与
   `tool_calls[].function.name/arguments`；同时从 choice logprobs 提取
-  `content[].token` 与 `top_logprobs[].token`。每个 choice 必须维护跨 event 的
-  content 累计值、ordered chosen-token 累计值和不可逆的 alias/materialized 状态，
-  不能按单个 event 的相等性跳过 chosen token。只要两个累计值仍完全相等，chosen
-  可作为 content 的 alias 而不重复写入 scan payload；一旦两者不再相等，就把完整
-  chosen 历史（包括此前 alias 的前缀）物化为一个连续 scan surface，并在后续 event
-  始终向该 surface 追加，不能重新折叠。alias bookkeeping 和物化后的 surface 都纳入
-  同一个 cumulative 8 MiB checked accounting。chosen token 之间不能插入边界，也
-  不能用全局 string set 删除不同位置的同值 token。top candidates 不得按
-  `(content_position, candidate_index)` 拆成独立 surface，也不得因某一位置的 token
-  等于 chosen token 而跳过；每个 candidate rank 按
-  `(choice.index, candidate_index)` 跨 content positions 与 provider events
-  连续追加，只有不同 choice/rank 之间加入稳定边界。这样相邻位置同一 rank 的
-  `sec`、`ret` 必须形成 `secret`，且“首位置 top == chosen、次位置分叉”的情况也
-  保留完整 top 前缀。top candidate bookkeeping/文本同样纳入 cumulative 8 MiB
-  checked accounting。audio base64 data、role、IDs、usage、finish reason、
-  logprob bytes/数值与 transport markers 只缓冲、不扫描。
+  `content[].token` 与 `top_logprobs[].token` 并交给上述共享 accumulator。
+  audio base64 data、role、IDs、usage、finish reason、logprob bytes/数值与
+  transport markers 只缓冲、不扫描。
   legacy `function_call` 的 name/arguments 分别按 `(choice.index, legacy, field)`
   维护连续 surface；modern tool calls 分别按
   `(choice.index, tool_call.index, field)` 维护连续 surface。不同 choice、tool index
@@ -87,10 +87,11 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   provider/canonical/conversion 三层接入 refusal，必须先更新 manifest 与测试矩阵。
 - Completion 扫描最终 client-visible `text`，包含一次 `echo`；还必须从 route
   实际转发的 `choice.logprobs` 提取 ordered chosen `content[].token`、
-  `top_logprobs[].token` 与 `refusal`。chosen/content 的跨 event
-  alias/materialized 状态和 chosen/top 的 positional 去重沿用 Chat 契约，不能因
-  compatibility request 层拒绝 `logprobs` 参数而忽略 provider/custom adapter
-  主动返回的 logprobs。
+  `top_logprobs[].token` 与 `refusal`。chosen/top token 必须交给同一个
+  `LogprobSurfaceAccumulator`，因此 Completion 与 Chat 具有完全相同的
+  chosen/content 不可逆 alias 物化、top-rank 跨 position/event 连续追加和禁止
+  逐位置 chosen skip 语义；不能因 compatibility request 层拒绝 `logprobs` 参数而
+  忽略 provider/custom adapter 主动返回的 logprobs。
 - Responses 从每个上游 `choice.delta` 提取 output text 与 thinking；function
   name/arguments 必须绑定现有 `tool_states` 的接受/发布分支：携带 call ID 创建
   vacant state 时，在 `ResponseOutputItemAdded` 入 pending 前累计其中发布的 initial
