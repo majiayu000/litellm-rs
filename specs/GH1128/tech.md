@@ -40,11 +40,15 @@ GH-1128 / #1128
 3. `ToolResult.content` 与 `ToolUse.input` 先使用 `serde_json::to_string` 加入完整、
    确定性表示，再深度遍历 `serde_json::Value`，按稳定对象 key 顺序分别加入解码
    后的 string keys/values。合法 JSON function arguments 使用同一遍历并同时保留
-   原 argument string；解析失败不跳过原字符串，也不把原本允许的非 JSON argument
-   改成请求错误。序列化错误 fail-closed。
+   原 argument string。首个非空白字符不是 `{`/`[` 且解析失败的普通非 JSON
+   argument 仍只扫描原字符串；若首个非空白字符为 `{`/`[`，任何解析失败（包括
+   serde recursion/depth/resource limit）都返回稳定 400，禁止把超深但有效 JSON
+   降级成 raw-only 扫描。序列化错误同样 fail-closed。
 4. `Document.source.data` 先按 base64 解码。仅接受明确文本媒体类型：
-   `text/*`、`application/json`、`application/*+json`、`application/xml` 和
-   `application/*+xml`；解码结果必须是 UTF-8。malformed base64、非 UTF-8 或
+   `text/plain`、`text/markdown`、`text/csv`、`application/json` 和
+   `application/*+json`；解码结果必须是 UTF-8。`text/html`、XML/`+xml` 与其他
+   `text/*` 不在 allowlist，因为本 tranche 不引入 HTML/XML entity parser，必须
+   fail-closed 而不是扫描 encoded entities。malformed base64、非 UTF-8 或
    其他媒体类型在 input guardrail 开启且 `check_input` 为 true 时 fail-closed。
    MIME 比较忽略 ASCII 大小写并剥离参数。malformed base64、非 UTF-8 和 unsupported
    MIME 均返回 `GatewayError::validation`，外部固定为 HTTP 400、
@@ -52,11 +56,13 @@ GH-1128 / #1128
    base64/UTF-8/media-type 类别，不回显输入。
    `application/json` 与 `application/*+json` 的解码正文必须作为 raw record
    扫描，并解析成 `serde_json::Value` 后按第 3 条生成 semantic records；声明为
-   JSON 但语法无效时返回同一稳定 400（消息类别为 invalid JSON，不回显正文），
+   JSON 但语法、recursion/depth 或资源限制失败时返回同一稳定 400（消息类别为 invalid JSON，不回显正文），
    不得仅扫描带 `\uXXXX` 转义的 raw 表示后放行。
    不读取 URL、不解析 PDF/Office、不扫描 image/audio base64。
-5. 新规范化只改变传给 guardrail 的扫描字符串，绝不重写原 DTO。现有
-   `GuardrailAction::Mask`/modified 结果继续由 `enforce` 显式失败，避免把扁平文本
+5. 新规范化只改变传给 guardrail 的扫描字符串，绝不重写原 DTO。gateway
+   `enforce` 必须在 `result.action == GuardrailAction::Mask` 或
+   `modified_content.is_some()` 任一成立时显式失败；这覆盖 OpenAI moderation
+   action-only `Mask`，避免缺少 modified content 时继续请求，也避免把扁平文本
    错误回写到结构。
 6. 在 `check_input` 中先构造全部 records，成功后通过一次 batch 调用交给 engine。
    gateway 不循环调用现有单字符串入口，而是调用一次新增的
@@ -69,7 +75,8 @@ GH-1128 / #1128
    response-integrity variant；结果数量
    不匹配返回该 variant，engine 在检查 `fail_open` 之前无条件传播它，只有 network/
    provider availability 等既有可降级错误仍受 `fail_open` 控制。任一 guardrail
-   的聚合结果为 block/error/modified 时沿用现有 `enforce` 语义结束；
+   的聚合结果为 block/error/modified 或 action-only `Mask` 时沿用上述 fail-closed
+   `enforce` 语义结束；
    `GuardrailAction::Log` 命中继续 merge 并执行后续 guardrails，最终保持非阻断，
    与现有 engine 契约一致。
    单字符串 `check_input` 通过一元素 batch 保持兼容。engine disabled 或
@@ -125,8 +132,8 @@ guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation
 ## 测试计划
 
 - [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、跨 part、Unicode。
-- [ ] Document tests: textual MIME、JSON raw+semantic/invalid、`+json/+xml`、MIME 参数、bad base64、bad UTF-8、PDF。
-- [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、OpenAI array single-call、mixed/all whitespace eligibility、`Log` 非阻断、response count mismatch fail-closed。
+- [ ] Document tests: plain/markdown/csv、JSON raw+semantic/invalid/depth-limit、`+json`、MIME 参数、bad base64、bad UTF-8，以及 HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
+- [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、OpenAI array single-call、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、response count mismatch fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled 与 `check_input: false` 不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`。
 
