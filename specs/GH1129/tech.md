@@ -136,8 +136,9 @@ provider+key、provider-only、key-only、neither 与不同金额矩阵完全相
 | `src/server/routes/ai/spend.rs` | 修正 no-usage key-only reservation 的提前返回，各 reservation 按自身金额恰好结算一次，为 API-key usage 选择 key-first fallback cost，并把 helper 暴露为 native Gemini SDK 可复用的 crate-internal 入口 | B-010, B-012 |
 | `src/server/routes/ai/spend_no_usage_tests.rs` | 扩充无 usage 的 reservation、不同 provider/key 预留额、key budget、无 reservation 账单副作用测试 | B-010, B-012 |
 
-不计划修改公开 `Usage` schema、流式 SSE 解析或价格/预算配置；若实现发现必须修改
-manifest 外文件，应停止并回到 spec review。
+不计划修改公开 `Usage` schema、已经 fail-closed 的 OpenAI SSE usage 解析或
+价格/预算配置；native Gemini unary/SSE shared parser 按 manifest 在范围内。
+若实现发现必须修改 manifest 外文件，应停止并回到 spec review。
 
 ## Product-to-Test Mapping
 
