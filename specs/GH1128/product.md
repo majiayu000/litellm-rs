@@ -30,11 +30,11 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 ## Behavior Invariants
 
 1. B-001 普通文本、`Document.source`、`ToolResult.content`、`ToolUse.name/input`、message-level legacy `function_call`、`tool_calls[].function`、request-level `ChatCompletionRequest.function_call` 和 `ChatMessage.name` 都必须进入输入 guardrail。本仓库当前 request-level compatibility DTO 复用 `FunctionCall { name, arguments }` 并把两者序列化转发给 provider；即使标准 OpenAI selection 语义通常只指定 name，该已接受并转发的 `arguments` 仍属于必须扫描的现有公开输入面。
-2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。语义上连续的 message text content parts 必须覆盖当前 provider 实际使用的三种邻接表示：直接拼接、单个 ASCII 空格连接和单个换行连接；每种表示是独立审核记录，内容相同时只保留一个，确保 Bedrock 等 provider 在 guardrail 后插入边界也不能形成未检查的新敏感短语。message/function/tool 等独立字段必须作为独立审核记录通过一次 engine batch 调用处理，由各 guardrail 在 batch 内逐 record 隔离检查，不能用可被规则误命中的标签拼成扫描文本，也不能允许正则跨独立记录匹配。
+2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。每条 message 的普通 text parts 必须按原顺序收集，过滤其间 image/document/tool 等非 text part 后，覆盖当前 provider 实际使用的三种投影：直接拼接、单个 ASCII 空格连接和单个换行连接；每种投影是独立审核记录，内容相同时只保留一个。为保持当前 gateway 已有的跨 message 检测，还必须把全请求所有普通 text leaves 按原顺序用单个换行连接成一个 request-level legacy view；它只跨普通 message text，不混入 function/tool/document 等独立字段。这样 provider 在 guardrail 后过滤 part、插入边界，或敏感短语跨 message 拆分时，都不能形成未检查的新文本。message/function/tool/document 等独立字段仍作为独立记录，由各 guardrail 在 batch 内逐 record 隔离检查；不能用可被规则误命中的人工标签拼成扫描文本。
 3. B-003 字符串字段保留原文本；结构化 JSON 字段同时扫描确定性完整 JSON 表示和递归解码后的 string keys/values，不得只扫描转义后的 `\n`/`\uXXXX` 或部分节点。合法 JSON function arguments 使用同一语义遍历，并在构造 `Value` 前拒绝任意层级的重复 object key（包括 escape 解码后相同的 key），避免解析器覆盖早期恶意值；首个 JSON whitespace 后出现 U+FEFF BOM 的 arguments 也稳定 fail-closed。首个非空白字符不是 `{`/`[` 的普通非 JSON arguments 仍扫描原字符串，但看似 structured JSON 的 arguments 只要无法完成有界解析（包括 recursion/depth/resource limit）就稳定 fail-closed。文本型 document 必须扫描 base64 解码后的 UTF-8 正文，而不是编码字符串；JSON MIME document 还必须同时扫描原始正文和递归解码后的 string keys/values，声明为 JSON 但语法、重复 key、BOM、深度或资源限制失败时稳定 fail-closed。
 4. B-004 任一列入范围的字段包含被拒内容时，整个请求在调用 provider 前被拒绝。
 5. B-005 guardrail 返回 `GuardrailAction::Mask` 或任意修改后文本时，不得把扁平扫描文本错误回写到原有多模态或 tool 结构；即使 `Mask` 结果没有 `modified_content`，gateway 也必须 fail-closed，不得继续 provider 请求。
-6. B-006 无法构造完整扫描载荷时必须返回安全、稳定的 HTTP 400 `invalid_request_error` / `invalid_request`；错误消息不得包含 document 正文、arguments、命中规则或 provider secret，禁止跳过失败字段后继续请求。
+6. B-006 无法构造完整扫描载荷时必须返回安全、稳定的 HTTP 400 `invalid_request_error` / `invalid_request`；错误消息不得包含 document 正文、arguments、命中规则或 provider secret，禁止跳过失败字段后继续请求。`/v1/responses` 的 `background: true` 也必须在持久化 queued response、创建后台任务或返回 200 前同步完成同一 input guardrail；失败时不得留下 queued/in-progress response。通过后后台执行不得再次检查同一输入，也不得存在可被其他调用方误用的未审核 handler 旁路。
 7. B-007 未列入范围的图片、音频和远端资源只保留现有行为，扫描过程不得发起网络访问；document 文本 allowlist 仅含 `text/plain`、`text/csv`、`application/json` 与 `application/*+json`。Markdown、HTML、XML、`text/*` 其他类型及二进制格式因缺少安全 entity/语义解码器而 fail-closed，不能把 entity-encoded 内容当作已扫描放行。
 8. B-008 没有配置输入 guardrail 时，请求结构和 provider 可见内容保持不变。
 9. B-009 规范化产生的审核记录最多 256 条，所有派生扫描值的 UTF-8 字节总和最多
@@ -54,9 +54,10 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - [ ] 每个列入范围的 content variant 都有接受与拒绝测试。
 - [ ] modern/message-level legacy function call、以及本仓库 request-level compatibility `FunctionCall` 的 name/arguments、`ChatMessage.name` 各有独立覆盖；测试证明 request-level arguments 确实从当前 DTO 解析并在 provider boundary 前被审核。
 - [ ] allowlisted 文本 document fixture 证明扫描解码后正文；malformed base64、非 UTF-8、Markdown/HTML/XML/entity-bearing MIME 和其他不支持媒体类型 fail-closed，且 Markdown numeric/named entity fixture 不会仅经 raw 扫描后放行。
-- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part 拆词有测试；`ignore` + `all previous instructions` 必须在单空格 view 命中，另有直接拼接/换行 view、相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。
+- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part/message 拆词有测试；同一 message 的 `Text("ignore")` + image + `Text("all previous instructions")` 必须在过滤后的单空格 view 命中，两个 message 分别携带这两段时必须在 request-level newline view 命中；另有直接拼接/换行 view、相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。
 - [ ] 嵌套 JSON、数组、空值、Unicode escape、解码后的 string key/value、任意层级与 escape 后重复 key、前导 BOM、合法/普通非 JSON/structured-invalid/超深 JSON arguments，以及 JSON MIME document 的 raw/semantic/invalid/duplicate-key/BOM/depth-limit 行为有测试。
 - [ ] 测试证明 guardrail 拒绝发生在 provider 调用前。
+- [ ] Responses background 测试证明 normalization 400、guardrail block/error 在 queued response 持久化和 200 前完成；失败时 response store/task/provider 调用计数均为 0，通过时 input guardrail 恰好执行一次后才进入后台执行。
 - [ ] 测试证明扫描不会下载 URL；`enabled: false` 与 `check_input: false` 不增加 guardrail-specific document 拒绝或改变请求。既有 request validator 仍会无条件拒绝 malformed base64，因此 disabled fixture 使用 baseline 可接受的合法 base64，并分别覆盖 unsupported MIME、非 UTF-8 或 invalid JSON 等只属于 guardrail 的检查。
 - [ ] 256/2 MiB 边界内允许，越界稳定 400 且外部调用计数为 0；多 record 的
   OpenAI moderation mock 只收到一次 batch 请求并逐索引合并结果；结果数量不足/
@@ -77,7 +78,10 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - `Document.source.data` 是 base64；仅闭集 allowlist 文本/JSON 可扫描，Markdown、
   HTML/XML entity-bearing 格式和 PDF 等二进制在没有安全解析器时 fail-closed。
 - message name 或参数可能为空；空值不应制造虚假内容。
-- 相邻 content parts 的末尾和开头可能共同形成敏感词，连续视图必须保留该邻接；独立字段逐条审核，不共享正则匹配边界。
+- 普通 text parts 即使被 image 等非 text part 分隔，也可能被 provider 过滤后重新相邻；
+  多条 message 也可能共同形成当前 gateway 已能检测的敏感词。message 内 provider
+  projections 与 request-level legacy newline view 必须同时保留；独立结构化字段仍
+  逐条审核，不共享正则匹配边界。
 - provider 可能在相邻 text parts 之间使用空串、空格或换行；guardrail 必须在 provider
   转换前覆盖这三种当前可达表示，不能假设 DTO 中没有显式分隔符就等于最终 prompt。
 - guardrail provider 可能只支持纯文本修改，不能安全地重建任意结构化输入。
@@ -90,4 +94,5 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 guardrail 拒绝。启用输入 guardrail 时，超过 256 个扫描 records 或 2 MiB 派生扫描
 文本的请求也会被拒绝。使用 OpenAI moderation 时，eligible batch 还受保守的
 32,768 UTF-8 bytes 上游 context 上限约束。无需新增配置；未启用输入 guardrail
-的部署保持兼容。
+的部署保持兼容。启用输入 guardrail 的 background Responses 会在返回 queued
+response 前增加一次输入检查延迟，以保证确定性 400 与 block 不被异步成功掩盖。

@@ -16,6 +16,8 @@ GH-1128 / #1128
 | Chat DTO | `src/core/models/openai/messages.rs` | `ContentPart` 包含 document/tool result/tool use | 列出必须规范化的载体 |
 | Function DTO | `src/core/models/openai/tools.rs` | legacy/modern function arguments 都会发给 provider | 等价结构化输入不能继续遗漏 |
 | Guardrail engine | `src/core/guardrails/{traits,types,engine,openai_moderation,pii,prompt_injection}.rs` | 接收单个 `&str`；OpenAI moderation 每次调用发一个远程请求；一般执行错误可被 `fail_open` 忽略；mask 在 gateway boundary fail-closed | 需要 record-aware batch、不可吞掉的 response-integrity error，避免字段拼接、缺结果绕过和外部调用放大 |
+| Chat execution boundary | `src/server/routes/ai/chat.rs` | 公开 route helper 总是在内部执行 input guardrail；直接暴露 unchecked internal handler 会形成旁路 | Background Responses 需在 queue 前检查一次、后台执行不重复，必须用窄作用域 audited entrypoint 和 caller-coverage test 固定 |
+| Background Responses | `src/server/routes/ai/responses.rs`, `src/server/routes/ai/responses/lifecycle.rs`, `src/server/routes/ai/responses/lifecycle_tests.rs` | 先存储并返回 queued 200，再由后台 task 进入 chat input guardrail；deterministic normalization 400 只能晚到并变成 failed status | 必须把完整 input guardrail 移到 queue/persist/task 之前，并保证后台只消费已审核的原请求 |
 
 ## 设计方案
 
@@ -24,13 +26,20 @@ GH-1128 / #1128
    后的正文；record 只在进程内携带 typed provenance 与原始扫描值，provenance 不编码
    进扫描文本，错误不能被 iterator/filter 静默丢弃。
 2. builder 按稳定顺序生成互补记录：
-   - 对每条 message 中语义连续的 text content parts 依次生成三种 adjacency view：
-     `parts.join("")`、`parts.join(" ")`、`parts.join("\n")`。这是仓库当前 provider
-     转换的完整边界集合：Gemini/Vertex 等直接拼接，Bedrock prompt transforms 使用
-     单空格，Ollama 使用换行。三种 view 各自是独立 typed record；按上述固定顺序
-     对完整字符串做局部去重，避免单 part 或已含边界时重复计入 records/bytes。
-     不向扫描值写入标签，也不允许 guardrail 跨三种 alternative records 匹配。
-     document/tool 等不连续 surface 不加入这些 adjacency views。
+   - 对每条 message，按原 part 顺序先收集全部普通 text leaves，过滤夹在其中的
+     image/document/tool 等非 text parts；再依次生成三种 provider projection：
+     `text_leaves.join("")`、`text_leaves.join(" ")`、`text_leaves.join("\n")`。
+     这是仓库当前 provider 转换的完整边界集合：Gemini/Vertex 等直接拼接，Bedrock
+     prompt transforms 先过滤非 text 再用单空格，Ollama 使用换行。三种 view 各自是
+     独立 typed record；按上述固定顺序对完整字符串做局部去重，避免单 part 或已含
+     边界时重复计入 records/bytes。不向扫描值写入标签，也不允许 guardrail 跨三种
+     alternative records 匹配。
+   - 另外按 message/part 原顺序收集全请求所有普通 text leaves，生成唯一的
+     `request_text_leaves.join("\n")` legacy record。这精确保留当前
+     `src/server/guardrails.rs` 的跨 message/newline 检测能力；只包含普通 message
+     text，不把 message name、function/tool、document 或其他 typed records 混入，
+     因此结构化字段仍保持 record isolation。该 record 与 message projections 一样
+     参加局部值去重、256 records 与 2 MiB accounting。
    - 对 message name、普通 content、message-level legacy `function_call`
      name/arguments、modern `tool_calls[].function` name/arguments 和
      `ToolUse.name` 生成独立 typed records。每个 record 的值单独交给 engine，
@@ -112,29 +121,43 @@ GH-1128 / #1128
    guardrail 的外部请求次数必须按 guardrail 数量有界，而不是按 record 数量增长。
    2 MiB 是通用本地扫描载荷上限；32,768 bytes 是仅在 OpenAI moderation active
    时对 eligible batch 额外执行的、更严格的上游兼容上限，二者不得互相替代。
+8. Background Responses 不得先 queue 再检查。`handle_background_response` 改为
+   async，并在创建 response ID、写入 response store 或 spawn task 前调用完整
+   `check_chat_input`。失败直接返回现有安全 error response；成功后只把同一个未修改
+   `ChatCompletionRequest` 移交后台。`chat.rs` 提供一个 crate-private、仅允许此
+   lifecycle 使用的 `handle_chat_completion_after_input_guardrail`，它跳过的只有已
+   完成的 input check，仍执行 provider、output guardrail、budget/callback 等全部
+   后续逻辑。source-boundary test 必须证明该 entrypoint 只有
+   `responses/lifecycle.rs` 调用；lifecycle test 证明 check 在 queue/persist/spawn
+   前恰好一次，失败时 response store、task registry 与 provider dispatch 都为零。
+   这条路径不通过 clone 后修改请求，也不允许对其他 handler 公开 unchecked API。
 
 ## Product-to-Test Mapping
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | request/message/function/content 规范化 | 每种载体独立 allow/block fixture |
-| B-002/B-003 | adjacency + typed independent records | 跨 content part 的空串/单空格/换行 views、view 局部去重、Bedrock/Ollama/Gemini-Vertex provider-transform 对照、顺序、record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
+| B-002/B-003 | message/request text projections + typed independent records | 过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、view 局部去重、Bedrock/Ollama/Gemini-Vertex provider-transform 对照、顺序、结构化 record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
 | B-004 | `check_input` 调用顺序 | mock provider 未被调用 |
 | B-005 | `enforce` modified 分支 | mask 仍 fail-closed 且请求 DTO 未改变 |
-| B-006 | fallible builder | malformed document/serialization 返回安全稳定 400，且不调用 engine/provider 后续 |
+| B-006 | fallible builder + background pre-queue gate | malformed document/serialization 返回安全稳定 400；background 失败时 queue/store/task/provider zero-call，通过时 input check exactly-once |
 | B-007 | document media gate | 文本正文解码；PDF/image/audio/URL 无网络且 fail-closed/保持范围 |
 | B-008 | disabled fast path | 同一多模态请求在未启用 guardrail 时保持兼容 |
 | B-009 | batch engine + builder limits | 256/2 MiB 边界、越界 zero-call、custom guardrail 默认 batch adapter、moderation 32,768/32,769-byte 边界与 single-batch，以及 count mismatch/input-limit 在 `fail_open` true/false 下均不可吞掉 |
 
 ## 数据流
 
-`ChatCompletionRequest.messages` 按顺序进入 bounded fallible fragment builder；连续 text
-content 形成空串/单空格/换行三种去重后的 adjacency records，独立字段形成 typed independent records。JSON 同时保留完整
+`ChatCompletionRequest.messages` 按顺序进入 bounded fallible fragment builder；每条
+message 过滤非 text parts 后形成空串/单空格/换行三种去重后的 provider projection，
+全请求普通 text leaves 另形成 legacy newline record，独立结构化字段形成 typed
+independent records。JSON 同时保留完整
 表示和解码 string nodes；允许的 document base64 解码为 UTF-8，JSON MIME 进一步
 生成 raw + semantic records；request-level `function_call` 最后加入。builder 完整
 成功且通过 256/2 MiB 上限后，把 typed batch 一次交给 engine；engine 让每个
 guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation 使用一次 array
 请求。再由 `enforce` 统一映射 allow/block/modified/error。原请求对象始终不变。
+Background Responses 在 queued response 产生前完成相同检查，并把已通过的同一请求
+交给窄作用域 post-input-guardrail chat entrypoint；同步/stream 路径仍使用常规入口。
 
 ## 备选方案
 
@@ -148,7 +171,7 @@ guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation
 
 - Security: 支持媒体类型列表必须 fail-closed，不能被 MIME 大小写/参数绕过。
 - Compatibility: 启用 input guardrail 的二进制 document 将被拒绝；发布说明需明确。
-- Performance: 文档解码和三种 adjacency views 增加 owned 载荷；局部去重避免相同
+- Performance: 文档解码、message projections 与 request legacy view 增加 owned 载荷；局部去重避免相同
   view 重复计数，所有派生值仍受 256 records/2 MiB checked 上限约束。
 - Availability/Cost: records 有 256/2 MiB 硬上限；内置 OpenAI moderation 的
   eligible batch 另有保守 32,768-byte context 上限，必须 batch 为单次远程调用，
@@ -157,13 +180,17 @@ guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation
 
 ## 测试计划
 
-- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、跨 part 空串/单空格/换行 views 与局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
+- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view 与局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
 - [ ] Document tests: plain/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、MIME 参数、bad base64、bad UTF-8，以及 Markdown numeric/named entity、HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
 - [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、legacy custom guardrail 默认 adapter、OpenAI array single-call、32,768/32,769 eligible-byte 边界、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、response count/input-limit 在 `fail_open` true/false 下 fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled 与 `check_input: false` 不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Provider-boundary tests: Bedrock 的 space-join、Ollama 的 newline-join 与
       Gemini/Vertex 的 empty-join 转换结果分别与 builder 对应 adjacency view 相等；
-      `ignore` + `all previous instructions` 在 provider 调用前被拒绝。
+      image-separated 及 split-message `ignore` + `all previous instructions` 都在
+      provider 调用前被拒绝。
+- [ ] Background Responses tests: normalization limit/invalid document/guardrail block 在
+      queued persist/task spawn/200 前返回；失败时 store/task/provider zero-call，
+      通过时 input guardrail exactly-once，post-input entrypoint caller 仅 lifecycle。
 - [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`。
 
 ## 回滚方案
