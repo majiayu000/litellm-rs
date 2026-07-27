@@ -11,7 +11,7 @@ GH-1129 / #1129
 
 ## 决策门
 
-- [ ] `SP1129-T0` Covers: B-001 ～ B-012. Owner: maintainer/spec owner. Dependencies: none. Done when: 原规格已在 `user-2026-07-27-approve-all-specs` 获批；本 amendment 的 raw-domain total、Vertex 双 parser 与 thoughts 单次 output 计费、Converse total、key-only settlement 再次获得内容绑定批准，Issue 保持 `ready_to_implement`. Verify: SpecRail workflow/spec checks与 implement route gate。
+- [ ] `SP1129-T0` Covers: B-001 ～ B-012. Owner: maintainer/spec owner. Dependencies: none. Done when: amendment 审查期间 Issue 移出 `ready_to_implement`；本 amendment exact head 的 raw-domain total、Vertex 双 parser 与 thoughts 单次 output 计费、Converse total、key-only settlement 获得内容绑定批准并合并后，才恢复 `ready_to_implement`. Verify: SpecRail workflow/spec checks 与 implement route gate。
 
 ## 实现任务
 
