@@ -15,7 +15,7 @@ GH-1128 / #1128
 | Guardrail adapter | `src/server/guardrails.rs` | `content_text` 只借用普通 text part | 根因与唯一 enforcement boundary |
 | Chat DTO | `src/core/models/openai/messages.rs` | `ContentPart` 包含 document/tool result/tool use | 列出必须规范化的载体 |
 | Function DTO | `src/core/models/openai/tools.rs` | legacy/modern function arguments 都会发给 provider | 等价结构化输入不能继续遗漏 |
-| Guardrail engine | `src/core/guardrails/{traits,engine,openai_moderation,pii,prompt_injection}.rs` | 接收单个 `&str`；OpenAI moderation 每次调用发一个远程请求；mask 在 gateway boundary fail-closed | 需要 record-aware batch，避免字段拼接和外部调用放大 |
+| Guardrail engine | `src/core/guardrails/{traits,types,engine,openai_moderation,pii,prompt_injection}.rs` | 接收单个 `&str`；OpenAI moderation 每次调用发一个远程请求；一般执行错误可被 `fail_open` 忽略；mask 在 gateway boundary fail-closed | 需要 record-aware batch、不可吞掉的 response-integrity error，避免字段拼接、缺结果绕过和外部调用放大 |
 
 ## 设计方案
 
@@ -64,7 +64,10 @@ GH-1128 / #1128
    对每个 guardrail 调用一次 batch 方法；PII/prompt-injection 在该方法内逐 record
    做本地匹配并聚合，不能跨 record；OpenAI moderation 将全部非空 record values
    作为 API 支持的 string array 放进一次 `/moderations` 请求，按 response index
-   聚合，结果数量不匹配时 fail-closed。任一 guardrail 的聚合结果为
+   聚合。`GuardrailError` 增加明确的 batch response-integrity variant；结果数量
+   不匹配返回该 variant，engine 在检查 `fail_open` 之前无条件传播它，只有 network/
+   provider availability 等既有可降级错误仍受 `fail_open` 控制。任一 guardrail
+   的聚合结果为
    block/error/modified 时沿用现有 `enforce` 语义结束；只有全部 allow 才继续。
    单字符串 `check_input` 通过一元素 batch 保持兼容。engine disabled 或
    `check_input: false` 时保持现有无检查行为。
@@ -87,7 +90,7 @@ GH-1128 / #1128
 | B-006 | fallible builder | malformed document/serialization 返回安全稳定 400，且不调用 engine/provider 后续 |
 | B-007 | document media gate | 文本正文解码；PDF/image/audio/URL 无网络且 fail-closed/保持范围 |
 | B-008 | disabled fast path | 同一多模态请求在未启用 guardrail 时保持兼容 |
-| B-009 | batch engine + builder limits | 256/2 MiB 边界、越界 zero-call、moderation single-batch/count mismatch |
+| B-009 | batch engine + builder limits | 256/2 MiB 边界、越界 zero-call、moderation single-batch，以及 count mismatch 在 `fail_open` true/false 下均不可吞掉 |
 
 ## 数据流
 
@@ -121,7 +124,7 @@ guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation
 - [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、跨 part、Unicode。
 - [ ] Document tests: textual MIME、JSON raw+semantic/invalid、`+json/+xml`、MIME 参数、bad base64、bad UTF-8、PDF。
 - [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、OpenAI array single-call、response count mismatch fail-closed。
-- [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定，engine disabled 与 `check_input: false` 都保持 DTO。
+- [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled 与 `check_input: false` 不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`。
 
 ## 回滚方案

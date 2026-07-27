@@ -41,6 +41,8 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
    2 MiB；超过任一上限必须在外部 guardrail/provider 调用前返回稳定安全的 HTTP 400。
    engine 必须以一个 batch 契约处理全部 records；内置 OpenAI moderation 对一批
    非空文本最多发起一次远程请求，不能让 JSON 节点数线性放大外部请求次数。
+   moderation 响应条目数必须与提交的非空 records 数完全一致；不一致是不可被
+   `fail_open` 覆盖的完整性失败，必须阻止 provider 调用。
 
 ## 验收标准
 
@@ -50,9 +52,10 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part 拆词有测试。
 - [ ] 嵌套 JSON、数组、空值、Unicode escape、解码后的 string key/value、合法/非法 JSON arguments，以及 JSON MIME document 的 raw/semantic/invalid 三类行为有测试。
 - [ ] 测试证明 guardrail 拒绝发生在 provider 调用前。
-- [ ] 测试证明扫描不会下载 URL；`enabled: false` 与 `check_input: false` 都不会解码/reject document 或改变请求。
+- [ ] 测试证明扫描不会下载 URL；`enabled: false` 与 `check_input: false` 不增加 guardrail-specific document 拒绝或改变请求。既有 request validator 仍会无条件拒绝 malformed base64，因此 disabled fixture 使用 baseline 可接受的合法 base64，并分别覆盖 unsupported MIME、非 UTF-8 或 invalid JSON 等只属于 guardrail 的检查。
 - [ ] 256/2 MiB 边界内允许，越界稳定 400 且外部调用计数为 0；多 record 的
-  OpenAI moderation mock 只收到一次 batch 请求并逐索引合并结果。
+  OpenAI moderation mock 只收到一次 batch 请求并逐索引合并结果；结果数量不足/
+  过多在 `fail_open: false/true` 下都固定失败且 provider 调用为 0。
 - [ ] `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试及完整测试通过。
 
 ## 边界情况
