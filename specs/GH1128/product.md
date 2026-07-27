@@ -39,10 +39,12 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 8. B-008 没有配置输入 guardrail 时，请求结构和 provider 可见内容保持不变。
 9. B-009 规范化产生的审核记录最多 256 条，所有派生扫描值的 UTF-8 字节总和最多
    2 MiB；超过任一上限必须在外部 guardrail/provider 调用前返回稳定安全的 HTTP 400。
-   engine 必须以一个 batch 契约处理全部 records；内置 OpenAI moderation 对一批
-   非空文本最多发起一次远程请求，不能让 JSON 节点数线性放大外部请求次数。
-   moderation 响应条目数必须与提交的非空 records 数完全一致；不一致是不可被
+   engine 必须以一个 batch 契约处理全部 records；内置 OpenAI moderation 沿用
+   现有 `trim().is_empty()` eligibility，一批 trim 后非空文本最多发起一次远程
+   请求，全空白 batch 不发起远程请求，不能让 JSON 节点数线性放大外部请求次数。
+   moderation 响应条目数必须与实际提交的 eligible records 数完全一致；不一致是不可被
    `fail_open` 覆盖的完整性失败，必须阻止 provider 调用。
+   `GuardrailAction::Log` 命中仍按现有契约记录并继续，不能因 batch 聚合被升级为阻断。
 
 ## 验收标准
 
@@ -55,7 +57,8 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - [ ] 测试证明扫描不会下载 URL；`enabled: false` 与 `check_input: false` 不增加 guardrail-specific document 拒绝或改变请求。既有 request validator 仍会无条件拒绝 malformed base64，因此 disabled fixture 使用 baseline 可接受的合法 base64，并分别覆盖 unsupported MIME、非 UTF-8 或 invalid JSON 等只属于 guardrail 的检查。
 - [ ] 256/2 MiB 边界内允许，越界稳定 400 且外部调用计数为 0；多 record 的
   OpenAI moderation mock 只收到一次 batch 请求并逐索引合并结果；结果数量不足/
-  过多在 `fail_open: false/true` 下都固定失败且 provider 调用为 0。
+  过多在 `fail_open: false/true` 下都固定失败且 provider 调用为 0；mixed whitespace
+  只提交 trim 后非空值、全 whitespace zero-call，`Log` action 保持非阻断。
 - [ ] `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试及完整测试通过。
 
 ## 边界情况

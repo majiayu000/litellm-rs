@@ -62,13 +62,16 @@ GH-1128 / #1128
    gateway 不循环调用现有单字符串入口，而是调用一次新增的
    `GuardrailEngine::check_input_records(&[GuardrailInputRecord])`。engine 按优先级
    对每个 guardrail 调用一次 batch 方法；PII/prompt-injection 在该方法内逐 record
-   做本地匹配并聚合，不能跨 record；OpenAI moderation 将全部非空 record values
-   作为 API 支持的 string array 放进一次 `/moderations` 请求，按 response index
-   聚合。`GuardrailError` 增加明确的 batch response-integrity variant；结果数量
+   做本地匹配并聚合，不能跨 record；OpenAI moderation 按既有
+   `!value.trim().is_empty()` 选择 eligible records，将其 values 作为 API 支持的
+   string array 放进至多一次 `/moderations` 请求；全空白 batch 直接返回 pass，
+   mixed batch 按原 record index 合并。`GuardrailError` 增加明确的 batch
+   response-integrity variant；结果数量
    不匹配返回该 variant，engine 在检查 `fail_open` 之前无条件传播它，只有 network/
    provider availability 等既有可降级错误仍受 `fail_open` 控制。任一 guardrail
-   的聚合结果为
-   block/error/modified 时沿用现有 `enforce` 语义结束；只有全部 allow 才继续。
+   的聚合结果为 block/error/modified 时沿用现有 `enforce` 语义结束；
+   `GuardrailAction::Log` 命中继续 merge 并执行后续 guardrails，最终保持非阻断，
+   与现有 engine 契约一致。
    单字符串 `check_input` 通过一元素 batch 保持兼容。engine disabled 或
    `check_input: false` 时保持现有无检查行为。
 7. builder 使用固定常量 `MAX_INPUT_GUARDRAIL_RECORDS = 256` 与
@@ -123,7 +126,7 @@ guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation
 
 - [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、跨 part、Unicode。
 - [ ] Document tests: textual MIME、JSON raw+semantic/invalid、`+json/+xml`、MIME 参数、bad base64、bad UTF-8、PDF。
-- [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、OpenAI array single-call、response count mismatch fail-closed。
+- [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、OpenAI array single-call、mixed/all whitespace eligibility、`Log` 非阻断、response count mismatch fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled 与 `check_input: false` 不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`。
 
