@@ -50,9 +50,9 @@ GH-1128 / #1128
    recursion/depth/resource limit）都返回稳定 400，禁止把超深但有效 JSON 降级成
    raw-only 扫描。序列化错误同样 fail-closed。
 4. `Document.source.data` 先按 base64 解码。仅接受明确文本媒体类型：
-   `text/plain`、`text/markdown`、`text/csv`、`application/json` 和
-   `application/*+json`；解码结果必须是 UTF-8。`text/html`、XML/`+xml` 与其他
-   `text/*` 不在 allowlist，因为本 tranche 不引入 HTML/XML entity parser，必须
+   `text/plain`、`text/csv`、`application/json` 和 `application/*+json`；解码结果
+   必须是 UTF-8。`text/markdown`、`text/html`、XML/`+xml` 与其他 `text/*` 不在
+   allowlist，因为本 tranche 不引入 Markdown/HTML/XML entity parser，必须
    fail-closed 而不是扫描 encoded entities。malformed base64、非 UTF-8 或
    其他媒体类型在 input guardrail 开启且 `check_input` 为 true 时 fail-closed。
    MIME 比较忽略 ASCII 大小写并剥离参数。malformed base64、非 UTF-8 和 unsupported
@@ -152,7 +152,7 @@ guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation
 ## 测试计划
 
 - [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、跨 part、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
-- [ ] Document tests: plain/markdown/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、MIME 参数、bad base64、bad UTF-8，以及 HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
+- [ ] Document tests: plain/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、MIME 参数、bad base64、bad UTF-8，以及 Markdown numeric/named entity、HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
 - [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、legacy custom guardrail 默认 adapter、OpenAI array single-call、32,768/32,769 eligible-byte 边界、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、response count/input-limit 在 `fail_open` true/false 下 fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled 与 `check_input: false` 不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`。
