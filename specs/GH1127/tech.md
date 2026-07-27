@@ -69,6 +69,13 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   `(content_position, candidate_index)` 加边界；仅当候选 token 在同一位置等于
   chosen token 时视为同一 representation 而跳过。audio base64 data、role、IDs、
   usage、finish reason、logprob bytes/数值与 transport markers 只缓冲、不扫描。
+  legacy `function_call` 的 name/arguments 分别按 `(choice.index, legacy, field)`
+  维护连续 surface；modern tool calls 分别按
+  `(choice.index, tool_call.index, field)` 维护连续 surface。不同 choice、tool index
+  或 field 之间使用稳定边界，不能把交错 event 按到达顺序拼成一个 surface。
+  parallel fixture 必须证明 call 0 arguments 的 `sec`、call 1 的 `x`、call 0 的
+  `ret` 会在 call 0 的连续 surface 形成 `secret`，同时不会让两个 call 发生跨边界
+  误匹配。
 - 当前 canonical `ChatDelta` 没有 refusal，`convert_core_chunk_to_streaming` 也不会
   从 provider pipeline 填充 wire `ChatCompletionDelta.refusal`；本 tranche 不新增
   该 surface，不得用 synthetic post-conversion fixture 代替端到端可达性。未来若
@@ -81,12 +88,18 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   主动返回的 logprobs。
 - Responses 从每个上游 `choice.delta` 提取 output text 与 thinking；function
   name/arguments 必须绑定现有 `tool_states` 的接受/发布分支：携带 call ID 创建
-  vacant state 时累计初始 name，state.name 为空时累计一次 late name；arguments
+  vacant state 时，在 `ResponseOutputItemAdded` 入 pending 前累计其中发布的 initial
+  name；state.name 为空时到达的 late name 只更新 state，不立即累计，因为该分支没有
+  对客户端发 event。late name 必须在 clean EOF 构造
+  `ResponseOutputItemDone`、且该首次携带 name 的 event 入 pending 前累计并检查。
+  因此 late-name state update 后发生 provider error/idle timeout 时，未发布 name
+  不影响 guardrail、阈值或 buffer limit，仍按 B-009 保留 provider error。arguments
   仅在 `tool_states.get_mut(idx)` 成功且 route 实际 `push_str` 并发布
   `ResponseFunctionCallArgumentsDelta` 时累计。call ID/state 创建前到达而被 route
   丢弃的 arguments 与重复 raw name 都不累计。所有已接受文本在派生
   `.delta` event 前只累计一次；派生的 `.done` events、output items、
-  `response.completed` snapshot 只缓冲，不再扫描。
+  `response.completed` snapshot 只缓冲，不再扫描，唯一例外是上述此前从未发布的
+  late name 在 `ResponseOutputItemDone` 前首次累计。
 
 ### 3. 三条 route 的状态机
 
@@ -160,7 +173,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的跨 event alias 物化、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、tool/function name+args、Responses initial/late/repeated name、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的跨 event alias 物化、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、Chat parallel tool index 连续/隔离、tool/function name+args、Responses initial/late/repeated name、late-name state update 后 provider error 不扫描、late name 在 output-item done 首次发布前检查、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |

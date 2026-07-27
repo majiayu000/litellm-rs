@@ -43,7 +43,7 @@ complexity: high
 10. B-010 guardrail 拒绝或执行错误时，已发生的 provider 用量仍按现有 partial/final usage 与 reservation fallback 结算；callback 以 `guardrail_output` 失败，provider lease 不得被错误惩罚为 provider failure。
 11. B-011 客户端在上游读取、guardrail 等待或审核通过后的回放阶段断连时，等待检查与上游读取必须可取消，且 lease、callback、预算 reservation 恰好结束一次。
 12. B-012 纯 usage、role、空 delta、heartbeat、finish reason 与 `[DONE]` 不作为模型文本扫描，但必须保留；completion 的 `echo` 文本属于客户端可见文本，必须包含在累计审核载荷中。
-13. B-013 `/v1/responses` 的 output text、reasoning summary、function-call name 与 arguments 都属于客户端可见模型文本，必须从上游语义 delta 恰好一次进入累计扫描序列；function name 只在首次被接受并对客户端发布时累计，arguments 只在对应 `tool_states` 已存在且 route 实际追加并发布 argument delta 时累计。call ID/state 创建前到达而被 route 丢弃的 arguments，以及之后未形成新客户端输出的重复 name delta，都不得影响检查阈值或 8 MiB 上限；`.done` events、output items 与最终 response snapshot 不得重复累计同一文本。
+13. B-013 `/v1/responses` 的 output text、reasoning summary、function-call name 与 arguments 都属于客户端可见模型文本，必须从上游语义 delta 恰好一次进入累计扫描序列；function name 只在首次被接受并对客户端发布时累计：创建 state 时随 `ResponseOutputItemAdded` 发布的 initial name 在该 event 前累计，只更新 `state.name` 而未立即发布的 late name 必须延后到 EOF 的 `ResponseOutputItemDone` 首次发布前累计。arguments 只在对应 `tool_states` 已存在且 route 实际追加并发布 argument delta 时累计。call ID/state 创建前到达而被 route 丢弃的 arguments，以及之后未形成新客户端输出的重复 name delta，都不得影响检查阈值或 8 MiB 上限；`.done` events、output items 与最终 response snapshot 中已发布过的文本不得重复累计。
 14. B-014 输出 guardrail 未启用或 `check_output: false` 时，三条路径继续逐事件转发，不增加窗口缓冲或额外 guardrail 延迟。
 15. B-015 `windowed_cumulative` 的首内容延迟至少为首个窗口生成时间加一次输出 guardrail 检查时间；已审核并释放的前缀无法因后续窗口形成的新违规上下文而撤回，该风险必须在配置文档和发布说明中明确。
 16. B-016 只有通过输出 guardrail 的 `/v1/responses` 结果才能进入 response persistence；拒绝、错误、超限或取消的结果不得保存为成功响应。
@@ -53,7 +53,8 @@ complexity: high
 - [ ] 三条端点均有测试证明每个安全窗口在累计审核后按原 SSE 顺序回放。
 - [ ] 三条端点均有测试证明被拒窗口中的各自客户端可见 surface 不出现在任何已发送 event 中；Chat 覆盖 content、thinking/reasoning、audio transcript、logprobs token 与 tool/function name/arguments，Completion 覆盖 text/echo 与 forwarded logprobs token/refusal，Responses 覆盖 output/reasoning 与状态机实际接受的 function name/arguments。
 - [ ] 跨 chunk 敏感模式与多字节 UTF-8 使用累计文本检测；测试证明阈值按 Unicode 字符计数、触发 event 不拆分且其完整模型文本先审核后释放。
-- [ ] Responses 测试证明 delta/done/snapshot 的重复表达只累计一次，pre-ID arguments 被 route 丢弃且不进入扫描，不会错误触发字符阈值或 8 MiB 上限。
+- [ ] Chat parallel tool calls 测试证明 name/arguments 按 `(choice.index, tool_call.index, field)` 独立连续累计；call 0 的 `sec`、call 1 的 `x`、call 0 的 `ret` 仍让 call 0 surface 命中 `secret`，且独立 call 之间不发生跨 surface 匹配。
+- [ ] Responses 测试证明 delta/done/snapshot 的重复表达只累计一次，pre-ID arguments 被 route 丢弃且不进入扫描；late name 在仅更新 state 时不影响字符阈值、8 MiB 上限或 provider error，只有在 `ResponseOutputItemDone` 首次发布前才进入检查。
 - [ ] pending/cumulative buffer overflow、guardrail 拒绝、默认 fail-closed 错误与显式 `fail_open` 均有确定测试。
 - [ ] violation/error 只发送稳定错误 envelope 与一个 `[DONE]`，且不发送成功完成事件。
 - [ ] usage-only、空 delta、provider error、idle timeout 与三个阶段的客户端断连均保持正确结算和单一 terminal callback。
@@ -67,8 +68,9 @@ complexity: high
 - provider 可能先发送 role、usage 或空 delta，再发送文本。
 - Chat 可能同时序列化 `thinking.content` 与相同的 `reasoning_content` alias；相同语义增量只累计一次。
 - Chat logprobs 的 ordered chosen-token 序列可能只是 `delta.content` 的另一种表示；去重必须按 choice 比较截至当前 event 的累计表示，而不能逐 event 丢弃相等 token。chosen 累计值仍与 content 累计值相等时可作为 content 的 alias；一旦任一 event 使两者不再相等，必须把此前 alias 前缀连同新 token 一起物化为一个连续 chosen surface，且之后不得重新折叠。这样即使前一 event 的 content/chosen 都是 `sec`、后一 event 只有 chosen `ret`，扫描面仍包含连续的 `secret`。不同位置的同值 token 必须保留。top candidate 仅在同一 token 位置且等于 chosen token 时去重。
+- Chat provider 可能交错发送多个 parallel tool call；legacy function 与每个 modern tool call 的 name/arguments 必须各自保持连续 surface。不得按 event 到达顺序把不同 tool index 的碎片拼进同一字符串，也不得跨独立 call 匹配。
 - Completion 虽然拒绝客户端请求 `logprobs`，但 provider/custom adapter 仍可能返回并被 compatibility route 原样序列化；这些 unsolicited chosen/top token 与 refusal 文本仍是客户端可见面，不能只扫描 `text`。
-- Responses provider 可能在 call ID/state 建立前发送 arguments、重复发送 function name，或在 call ID 之后才补 name；累计序列必须与 state 接受/发布分支一致。pre-ID 丢弃的 arguments 和未发布的重复 name 都不能按原始 delta 追加。
+- Responses provider 可能在 call ID/state 建立前发送 arguments、重复发送 function name，或在 call ID 之后才补 name；累计序列必须与 state 的实际发布时点一致。pre-ID 丢弃的 arguments 和未发布的重复 name 都不能按原始 delta 追加；只写入 state 的 late name 若随后遇到 provider error/idle timeout 也不得被扫描，只有进入最终 `ResponseOutputItemDone` 时才首次累计。
 - upstream EOF 可能没有 usage；仍须使用既有 reserved-spend fallback。
 - guardrail 可能在上游已经产生完整 usage 后拒绝内容；拒绝不免除已发生费用。
 - provider error 或 idle timeout 可能发生在已有安全窗口释放之后；已释放前缀不可撤回，但当前未审核 pending 必须丢弃。
