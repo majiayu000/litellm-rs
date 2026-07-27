@@ -75,10 +75,12 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   `top_logprobs[].token` 与 `refusal`。chosen/top 的 positional 去重沿用 Chat
   契约，不能因 compatibility request 层拒绝 `logprobs` 参数而忽略 provider/custom
   adapter 主动返回的 logprobs。
-- Responses 从每个上游 `choice.delta` 提取 output text、thinking 与 function
-  arguments；function name 必须绑定现有 `tool_states` 的接受分支：携带 call ID
-  创建 vacant state 时累计初始 name，或 state.name 为空时累计一次 late name。
-  重复 raw name delta 不累计，因为 route 不再发布它。所有已接受文本在派生
+- Responses 从每个上游 `choice.delta` 提取 output text 与 thinking；function
+  name/arguments 必须绑定现有 `tool_states` 的接受/发布分支：携带 call ID 创建
+  vacant state 时累计初始 name，state.name 为空时累计一次 late name；arguments
+  仅在 `tool_states.get_mut(idx)` 成功且 route 实际 `push_str` 并发布
+  `ResponseFunctionCallArgumentsDelta` 时累计。call ID/state 创建前到达而被 route
+  丢弃的 arguments 与重复 raw name 都不累计。所有已接受文本在派生
   `.delta` event 前只累计一次；派生的 `.done` events、output items、
   `response.completed` snapshot 只缓冲，不再扫描。
 
@@ -154,7 +156,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、tool/function name+args、Responses initial/late/repeated name state-acceptance 与 done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、tool/function name+args、Responses initial/late/repeated name、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |
