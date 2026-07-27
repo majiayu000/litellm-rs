@@ -58,11 +58,14 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   `reasoning_content` alias（同一语义值只累计一次）、`audio.transcript`、
   legacy `function_call.name/arguments` 与
   `tool_calls[].function.name/arguments`；同时从 choice logprobs 提取
-  `content[].token` 与 `top_logprobs[].token`。按 content position 重建 ordered
-  chosen-token sequence：若其拼接结果与 `delta.content` 完全相等，则 chosen
-  sequence 不再重复累计；否则保留 position 用于去重，但把全部 chosen tokens
-  按顺序拼接进同一个 scan surface，不能在 token 之间插入边界，也不能用全局
-  string set 删除不同位置的同值 token。top candidate 按
+  `content[].token` 与 `top_logprobs[].token`。每个 choice 必须维护跨 event 的
+  content 累计值、ordered chosen-token 累计值和不可逆的 alias/materialized 状态，
+  不能按单个 event 的相等性跳过 chosen token。只要两个累计值仍完全相等，chosen
+  可作为 content 的 alias 而不重复写入 scan payload；一旦两者不再相等，就把完整
+  chosen 历史（包括此前 alias 的前缀）物化为一个连续 scan surface，并在后续 event
+  始终向该 surface 追加，不能重新折叠。alias bookkeeping 和物化后的 surface 都纳入
+  同一个 cumulative 8 MiB checked accounting。chosen token 之间不能插入边界，也
+  不能用全局 string set 删除不同位置的同值 token。top candidate 按
   `(content_position, candidate_index)` 加边界；仅当候选 token 在同一位置等于
   chosen token 时视为同一 representation 而跳过。audio base64 data、role、IDs、
   usage、finish reason、logprob bytes/数值与 transport markers 只缓冲、不扫描。
@@ -72,9 +75,10 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   provider/canonical/conversion 三层接入 refusal，必须先更新 manifest 与测试矩阵。
 - Completion 扫描最终 client-visible `text`，包含一次 `echo`；还必须从 route
   实际转发的 `choice.logprobs` 提取 ordered chosen `content[].token`、
-  `top_logprobs[].token` 与 `refusal`。chosen/top 的 positional 去重沿用 Chat
-  契约，不能因 compatibility request 层拒绝 `logprobs` 参数而忽略 provider/custom
-  adapter 主动返回的 logprobs。
+  `top_logprobs[].token` 与 `refusal`。chosen/content 的跨 event
+  alias/materialized 状态和 chosen/top 的 positional 去重沿用 Chat 契约，不能因
+  compatibility request 层拒绝 `logprobs` 参数而忽略 provider/custom adapter
+  主动返回的 logprobs。
 - Responses 从每个上游 `choice.delta` 提取 output text 与 thinking；function
   name/arguments 必须绑定现有 `tool_states` 的接受/发布分支：携带 call ID 创建
   vacant state 时累计初始 name，state.name 为空时累计一次 late name；arguments
@@ -156,7 +160,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、tool/function name+args、Responses initial/late/repeated name、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的跨 event alias 物化、不同位置同值 token、top candidate position 去重、Completion logprobs refusal、tool/function name+args、Responses initial/late/repeated name、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |

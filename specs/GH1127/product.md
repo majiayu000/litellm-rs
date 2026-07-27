@@ -66,7 +66,7 @@ complexity: high
 - 敏感模式可能从一个 chunk 的末尾延伸到下一个 chunk 的开头。
 - provider 可能先发送 role、usage 或空 delta，再发送文本。
 - Chat 可能同时序列化 `thinking.content` 与相同的 `reasoning_content` alias；相同语义增量只累计一次。
-- Chat logprobs 的 ordered chosen-token 序列可能只是 `delta.content` 的另一种表示；两者整体相等时只累计 content。否则 chosen tokens 必须按顺序拼成一个连续扫描 surface，使跨 token 的敏感词仍可命中；不同位置的同值 token 必须保留。top candidate 仅在同一 token 位置且等于 chosen token 时去重。
+- Chat logprobs 的 ordered chosen-token 序列可能只是 `delta.content` 的另一种表示；去重必须按 choice 比较截至当前 event 的累计表示，而不能逐 event 丢弃相等 token。chosen 累计值仍与 content 累计值相等时可作为 content 的 alias；一旦任一 event 使两者不再相等，必须把此前 alias 前缀连同新 token 一起物化为一个连续 chosen surface，且之后不得重新折叠。这样即使前一 event 的 content/chosen 都是 `sec`、后一 event 只有 chosen `ret`，扫描面仍包含连续的 `secret`。不同位置的同值 token 必须保留。top candidate 仅在同一 token 位置且等于 chosen token 时去重。
 - Completion 虽然拒绝客户端请求 `logprobs`，但 provider/custom adapter 仍可能返回并被 compatibility route 原样序列化；这些 unsolicited chosen/top token 与 refusal 文本仍是客户端可见面，不能只扫描 `text`。
 - Responses provider 可能在 call ID/state 建立前发送 arguments、重复发送 function name，或在 call ID 之后才补 name；累计序列必须与 state 接受/发布分支一致。pre-ID 丢弃的 arguments 和未发布的重复 name 都不能按原始 delta 追加。
 - upstream EOF 可能没有 usage；仍须使用既有 reserved-spend fallback。
