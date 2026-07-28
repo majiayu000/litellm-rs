@@ -36,25 +36,35 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
 3. B-003 metadata、content 和 delete 对非 owner 的结果必须与不存在文件不可区分，不得泄露目标文件是否存在、owner 或其他元数据。
 4. B-004 管理员可以列出和操作所有文件，包括历史无 owner 文件。API key 请求只有 key 自身的直接或运行时权限明确包含 admin 能力时才是管理员；admin user 持有的受限、空权限或无 admin 能力 key 都不得继承用户管理员权限。无 API key 的 JWT/session 才可按用户 admin role/RBAC 判定。
 5. B-005 auth 开启但无法解析任何有效 owner 范围时，上传和对象访问必须 fail-closed。
-6. B-006 Local 与 S3 后端必须持久化、读取和列举一致的 owner 信息；进程重启后授权结果不变。S3 HeadObject 只有 HTTP 404 进入 canonical storage NotFound；HEAD 错误没有可依赖的响应正文或精确 exception，403、transport、timeout 与 5xx 等其他 S3 错误保持显式失败。
-7. B-007 旧元数据缺少 owner 时仍可反序列化，但只对管理员可见；不得自动归属给第一个访问者。
+6. B-006 Local 与 S3 后端必须持久化、读取和列举一致的 owner 信息；进程重启后授权结果不变。Local owned write 只有在 content 与完整 owner metadata 都可用后才可被 list 或对象读取看见；写入失败或发布中断不得留下可枚举但缺少完整 metadata 的 content，也不得让遗留 staging 或仅有 metadata 的记录毒化重启后的 list。S3 HeadObject 只有 HTTP 404 进入 canonical storage NotFound；HEAD 错误没有可依赖的响应正文或精确 exception，403、transport、timeout 与 5xx 等其他 S3 错误保持显式失败。
+7. B-007 只有旧元数据中 owner 字段物理缺失时才按 legacy `owner: None` 反序列化，并且只对管理员可见；owner 字段存在但为 `null`、malformed 或非 canonical scope 时是损坏 metadata，必须返回 generic 5xx，不得自动归属或降级为 legacy。
 8. B-008 owner 信息是内部授权元数据，不得出现在 OpenAI-compatible File 响应或错误正文中。
 9. B-009 auth 明确关闭并允许匿名访问时，Files API 保持现有单租户行为，不伪造 owner。
 10. B-010 所有权检查必须发生在返回内容或执行删除之前；失败不得静默降级为无过滤访问。
-11. B-011 access token 的 team provenance 是闭集状态：marker 缺失时是 legacy
-    token，必须忽略其中任何 `team_id` 并使用 User scope；marker 为 version 1 且
-    `team_id` 缺失时使用 User scope；marker 为 version 1 且 `team_id` 存在时，只有
-    当前 active membership 复验成功才使用 Team scope；任何其他 marker 值都使整个
-    bearer token 无效。未知 version、stale team 或无效 membership 均不得回退到
+11. B-011 access token 的 team provenance 是闭集状态：只有 marker 字段物理缺失时
+    才是 legacy token，必须忽略其中任何 `team_id` 并使用 User scope；marker 为
+    version 1 且 `team_id` 缺失时使用 User scope；marker 为 version 1 且 `team_id`
+    存在时，只有当前 active membership 复验成功才使用 Team scope。marker 字段存在
+    但为 `null`、non-integer、malformed 或任何非 1 数值时，整个 bearer token 都以
+    401 拒绝。上述 invalid marker、stale team 或无效 membership 均不得回退到
     User、API-key 或其他 team。
 12. B-012 `/auth/login` 与 `/auth/refresh` 的 optional `team_id` 只接受 UUID
-    格式且必须对应该 user 的当前 active membership。字段缺失时签发 version 1
-    User-scope token；malformed、foreign、missing、inactive 或 suspended selection
-    均返回稳定 400，且不得签发 access 或 refresh token。
+    格式且必须对应该 user 的当前 active membership。JSON/UUID syntactic parse
+    完成后，password 或 refresh-token primary verification 以及适用的 active-user
+    gate 必须先于任何 team/member repository 读取；错误 password、无效 refresh
+    token 或 user gate failure 的既有 generic auth 结果优先于 valid/foreign team
+    selection，且不得触发 team lookup 或 token encode。有效 refresh token 重载到
+    missing/inactive user 时统一返回稳定 generic 401，并在 team/RBAC/encode 前结束。
+    primary verification 与 user gate 成功后，字段缺失签发 version 1 User-scope
+    token；well-formed foreign、missing、inactive 或 suspended selection 统一返回稳定
+    generic 400。JSON/UUID malformed 仍由 syntactic request boundary 返回 400；所有
+    selection failure 都不得签发 access 或 refresh token。
 13. B-013 已签发 version 1 team token 的 membership 缺失或不再 active 时返回稳定
     401；user/team/membership repository、RBAC、API-key policy 或 file metadata 的
     读取、解析、转换错误返回 generic 5xx。上述错误不得被转成“无 membership”、空权限、
-    User scope、legacy store、跳过坏 metadata 或部分成功 list。
+    User scope、legacy store、跳过坏 metadata 或部分成功 list；primary credential
+    failure 也不得被后续 selection 400/5xx 覆盖，显式 null owner/marker 不得被缺失字段
+    兼容逻辑吞掉。
 14. B-014 下列既有 public Rust method call、handler signature 与 struct literal
     保持 source-compatible：Files storage 的
     `store`、`store_with_purpose`、`StorageLayer::store_file`，JWT 的
@@ -71,9 +81,9 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
 16. B-016 internal persisted envelope 中的 owner 是且仅是一个 canonical UUID scope
     `{Team(Uuid), User(Uuid), ApiKey(Uuid)}`。auth-enabled Files upload 必须走 owner
     非 optional 的 additive owned-store；无效/缺失 UUID 不得变成字符串 owner 或
-    退回 legacy `owner: None`。既有非 HTTP storage 调用继续产生 legacy
-    `owner: None`；public `FileMetadata` 只呈现既有非授权字段，auth-disabled anonymous
-    route 也保持 B-009 行为。
+    退回 legacy `owner: None`，present `null` 也不是 owner 缺失。既有非 HTTP storage
+    调用继续产生字段物理缺失的 legacy `owner: None`；public `FileMetadata` 只呈现
+    既有非授权字段，auth-disabled anonymous route 也保持 B-009 行为。
 17. B-017 caller scope 的认证来源必须互斥。存在 API key 时只能按该 key 的
     `team_id -> user_id -> key UUID` 选择一个 scope，并忽略任何残留 JWT/context team；
     不存在 API key 时才按复验通过的 JWT Team -> authenticated User UUID 选择。typed
@@ -91,11 +101,17 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
 ## 验收标准
 
 - [ ] 两个 API key、两个 user、两个 team 的矩阵测试覆盖 list/get/content/delete；login/refresh 的可选 `team_id` 必须验证 membership，新 token 带 provenance marker；multi-team 且无选择时签发 `team_id: None`，旧 token 缺 marker 时忽略其 guessed team，Files 均使用 User scope。
-- [ ] JWT 矩阵分别覆盖 legacy marker 缺失、version 1 team/no-team、unknown version
-  team/no-team；unknown version 与 stale membership 均为 401 且没有身份 fallback。
+- [ ] JWT 矩阵分别覆盖 marker 字段物理缺失、signed explicit `null`、non-integer/
+  malformed、version 1 team/no-team、unknown numeric version team/no-team；除字段物理
+  缺失可作为 legacy 外，其余 invalid marker 与 stale membership 均为 401 且没有
+  身份 fallback。
 - [ ] login/refresh 的 malformed、foreign、missing、inactive、suspended team
   selection 均为同一公开 400 且没有任何新 token；membership/team repository
   故障为 generic 5xx。
+- [ ] wrong password 与 invalid refresh token 分别搭配 valid/foreign `team_id` 时，
+  返回各自既有 generic auth failure，team/member repository call count 为 0、token
+  encode count 为 0；valid refresh token 对 missing/inactive user 在有/无 `team_id`
+  时均为同一 generic 401，并且 team/RBAC/encode call count 为 0。
 - [ ] team-scoped 文件不能仅因相同 `user_id` 从另一个 team 访问；有效范围优先级有测试。
 - [ ] 非 owner 与随机不存在 ID 的状态码和公开错误形状一致。
 - [ ] 管理员可以访问所有 owner 与 legacy 文件，普通调用者看不到 legacy 文件；直接 `*`/`system.admin`、runtime `is_admin`、受限 key + admin owner、空权限 key + admin owner、无 key admin JWT 各有测试。
@@ -108,7 +124,12 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
   `team_id: Some` JWT 调用不生成 token，typed verified 路径可生成 team token；
   auth-enabled HTTP upload 只调用 owner 非 optional 的 owned-store，并只用 internal
   metadata-with-owner 结果授权。
-- [ ] Local 与 S3 元数据 round-trip、旧元数据兼容和重启后读取有测试；S3 HeadObject HTTP 404 与 foreign 的公开 404 等价，非 404 S3 故障仍显式失败。
+- [ ] Local 与 S3 元数据 round-trip、旧元数据兼容和重启后读取有测试；Local owned
+  write 的 metadata publish failure，以及 metadata 已完成但 content 尚未可见时的中断，
+  在 reopen 后都不产生可枚举或可按 ID 读取的不完整 content、不毒化 list；owner
+  字段 missing、explicit `null`、malformed 与 valid scope 四态分别得到 legacy、
+  5xx、5xx 与正常 round-trip。S3 HeadObject HTTP 404 与 foreign 的公开 404 等价，
+  非 404 S3 故障仍显式失败。
 - [ ] S3 超过 1000 个对象时以稳定 prefix 遍历 continuation token 到结束，返回全部已授权文件且不泄露其他 owner；`Some(0)` 零请求且为空，单页大小为 `min(1000, remaining)`；truncated page 的 token 缺失、为空或重复，以及任意 later-page error 都使整个请求失败；既有 internal `Some(limit)` 是跨页总上限；不存在公共 limit/count 断言。
 - [ ] OpenAI File JSON 与错误日志不泄露 owner。
 - [ ] API-key 与 JWT 同时留下 context 字段时 scope 来源互斥；API key 的 team/user/key
@@ -131,8 +152,14 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
   必须被忽略，token 可继续作为 user-scope 身份使用。
 - access token 可能包含未来或损坏的非 1 marker；即使 `team_id` 缺失也必须整体
   拒绝，不能把 unknown version 当 legacy。
+- access token 的 marker key 可能存在但值为 JSON `null`、字符串、浮点数或其他
+  malformed value；这些状态不是字段缺失，必须整体 401。
 - version 1 token 的 membership 可能在签发后被删除、暂停或对应 team 被停用；
   下一次认证必须 401，读取基础设施失败则必须 5xx。
+- login password 或 refresh token 可能无效，同时携带 valid/foreign team selection；
+  syntactic parse 后必须先返回 primary auth failure，不得查询 membership 或暴露其状态。
+- refresh token 可能签名有效但 user 已被删除或停用；必须在 team/RBAC/token encode
+  前统一 401，不能延长 refresh-token 生命周期。
 - admin owner 可能使用受限或空权限 API key；key 是权限衰减边界，不能因 owner
   的用户角色提权。
 - API-key runtime policy 可能是 malformed JSON；不能把解析失败当作空 policy。
@@ -140,6 +167,10 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
   association，不读取或继承 key owner 的 active-team selection；team/key lifecycle
   同步与撤销策略不在本 Issue 扩展。
 - 文件可能在升级前创建且没有 owner。
+- Local owned write 可能在 metadata failure 或发布中断时只留下 staging/metadata；
+  reopen 后这些非完整记录不得变成可枚举 content 或使 list 永久失败。
+- Local metadata 的 owner key 可能显式为 `null` 或 malformed；这不是历史字段缺失，
+  必须显式 5xx，不能变成管理员可见的 legacy 文件。
 - metadata 存在但内容丢失，或删除时后端失败；S3 missing 使用 canonical NotFound，
   其他后端错误仍需遵循现有显式失败语义。
 - list 期间单个 metadata 损坏不得导致未过滤内容泄露。
@@ -154,13 +185,13 @@ Files API 的存储元数据没有所有者，所有已认证调用者都可以�
 | Empty / missing input | covered: B-005, B-007, B-009, B-011, B-012, B-016, B-018 |
 | Error and failure paths | covered: B-003, B-006, B-010, B-013, B-017, B-018 |
 | Authorization / permission | covered: B-001, B-003, B-004, B-005, B-011, B-012, B-015, B-016, B-017, B-019 |
-| Concurrency / race / ordering | covered: B-010；授权必须先于内容返回或删除，owner 不可由 caller 更新 |
+| Concurrency / race / ordering | covered: B-006, B-010, B-012, B-013；primary auth 先于 membership lookup，Local 完整 metadata 先于 content 可见，授权先于内容返回或删除 |
 | Retry / repetition / idempotency | covered: B-002, B-006, B-013；S3 continuation 重复或缺失必须失败，不得返回部分结果 |
 | Illegal state transitions | covered: B-011, B-012, B-013, B-015 |
 | Compatibility / migration | covered: B-007, B-009, B-014, B-016, B-018, B-019；listed public structs/handlers 不改变 shape/signature |
 | Degradation / fallback | covered: B-005, B-010, B-011, B-013, B-016, B-017, B-018, B-019 |
 | Evidence and audit integrity | N/A：本 Issue 不产生审批或审计 ledger；B-008 仍约束公开响应与日志不得泄露 owner |
-| Cancellation / interruption / partial completion | covered: B-002, B-010, B-013；失败请求不得返回部分未过滤 list 或执行未授权 delete |
+| Cancellation / interruption / partial completion | covered: B-002, B-006, B-010, B-013；Local 中断不得发布 ownerless content，失败请求不得返回部分未过滤 list 或执行未授权 delete |
 
 ## 发布说明
 
