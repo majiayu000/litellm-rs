@@ -52,16 +52,22 @@ GH-1128 / #1128
      `tools::FunctionCall { name, arguments }`，`chat.rs` 会把整个值序列化到内部
      provider request。只要该输入仍被接受并转发，两个字符串都必须在 provider 前
      受 guardrail 审核。
-   - 每个 `ToolResult.content` 还要生成独立、field-scoped 的 provider-boundary
-     sequence。当前 Bedrock `tool_result_contents_from_value` 对数组直接按原顺序转换：
+   - 先定义 `ToolResult.content` 到 Bedrock textual leaves 的确定性 primitive。当前
+     `tool_result_contents_from_value` 对数组直接按原顺序转换：
      `{"type":"text","text":<string>}` 贡献解码后的 `text`，未知 type 或无 type 的
      entry 贡献该 entry 的确定性 JSON string，image/image_url/document 等 provider
-     会拒绝的 entry 不伪造 text；root string/non-array 只形成单 leaf。builder 必须镜像这条
-     可达转换得到 ordered textual leaves，并按固定顺序生成 `join("")`、
-     `join(" ")`、`join("\n")` 三个 alternative records。相同完整值在该字段内局部
-     去重；不得与 sibling ToolResult、普通 message text、ToolUse/function 或其他
-     message 合并。raw JSON 与逐 string key/value semantic records 仍保留，provider
-     views 是补充而非替代，且每个去重后的 view 都计入 256 records/2 MiB 上限。
+     会拒绝的 entry 不伪造 text；root string/non-array 只形成单 leaf。builder 镜像
+     该 primitive 后，按每个实际 outgoing Bedrock `ToolResultBlock.content` 分组：
+     普通 user/assistant message 中每个 `ContentPart::ToolResult` 独立形成一个组；
+     tool/function-role `MessageContent::Parts` 则镜像
+     `message_content_to_tool_result_contents`，按 part 顺序把普通 `Text` leaf 与每个
+     ToolResult primitive 的 leaves 依次 extend 到同一组，因为 route 会把整条 message
+     包成一个 ToolResult block。每组按固定顺序生成 `join("")`、`join(" ")`、
+     `join("\n")` 三个 alternative records 并按完整值局部去重。不得跨不同 outgoing
+     block 或 message 合并；尤其普通 user/assistant 的 Text 与 sibling ToolResult、
+     或两个 sibling ToolResult blocks 仍隔离。raw JSON 与逐 string key/value
+     semantic records 保持原字段粒度，provider views 是补充而非替代；每个去重后的
+     view 都计入 256 records/2 MiB 上限。
 3. `ToolResult.content` 与 `ToolUse.input` 先使用 `serde_json::to_string` 加入完整、
    确定性表示，再深度遍历 `serde_json::Value`，按稳定对象 key 顺序分别加入解码
    后的 string keys/values。对原始 JSON string 不能直接反序列化成会覆盖重复 key
@@ -75,8 +81,13 @@ GH-1128 / #1128
    recursion/depth/resource limit）都返回稳定 400，禁止把超深但有效 JSON 降级成
    raw-only 扫描。序列化错误同样 fail-closed。
 4. 先用 `mime = "0.3"` 的直接依赖把 `Document.source.media_type` 完整解析为
-   `mime::Mime`；语法失败立即返回稳定 invalid media type 400，禁止按第一个分号截断
-   或对 malformed 参数降级。按 parser 的 essence 做 ASCII 大小写不敏感 allowlist
+   `mime::Mime`。因为锁定的 `mime 0.3.17` 会接受尾随空参数，在调用 parser 前必须用
+   quote-aware 字节状态机检查原字符串的参数段：只把引号外分号视为 delimiter，拒绝
+   任意 trim 后为空的参数段、连续分号和尾随分号（含尾随空白），不得把 quoted value
+   内的分号误判为 delimiter。精确地说，`text/plain;` 与
+   `text/plain; charset=utf-8;` 都必须稳定 400。随后 parser 语法失败同样返回稳定
+   invalid media type 400，禁止按第一个分号截断或对 malformed 参数降级。按 parser
+   的 essence 做 ASCII 大小写不敏感 allowlist
    比较，并遍历全部参数执行闭集策略：参数列表为空可继续；否则必须恰好只有一个
    `charset`，且其解引用后的值大小写不敏感地等于 `utf-8`。两个及以上 charset
    即使值相同也因歧义稳定 400；`utf8` 等别名、UTF-16/UTF-16LE/ISO-8859-1 等其他
@@ -187,11 +198,11 @@ GH-1128 / #1128
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | request/message/function/content 规范化 | 每种载体独立 allow/block fixture |
-| B-002/B-003 | message/request text projections + typed independent records | 过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、view 局部去重、Bedrock/Ollama/Gemini-Vertex provider-transform 对照、ToolResult field-scoped provider sequence 的 split-pattern 与跨字段隔离、顺序、结构化 record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
+| B-002/B-003 | message/request text projections + typed independent records | 过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、view 局部去重、Bedrock/Ollama/Gemini-Vertex provider-transform 对照、单 ToolResult array 与 tool/function-role Text+ToolResult/多 ToolResult 的 outgoing-block-scoped split-pattern、普通 user/assistant sibling-block/message 隔离、顺序、结构化 record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
 | B-004 | `check_input` 调用顺序 | mock provider 未被调用 |
 | B-005 | `enforce` modified 分支 | mask 仍 fail-closed 且请求 DTO 未改变 |
 | B-006 | fallible builder + background pre-queue gate | malformed document/serialization 返回安全稳定 400；background 失败时 queue/store/task/provider zero-call，通过时 input check exactly-once |
-| B-007 | document media gate | 完整 MIME syntax/essence/charset table；无 charset/唯一 UTF-8 正文解码，重复/非 UTF-8 charset 与 PDF/image/audio/URL 无网络且 fail-closed/保持范围 |
+| B-007 | document media gate | quote-aware 空参数/尾随分号检查 + MIME syntax/essence/charset table；无参数/唯一 UTF-8 正文解码，重复/非 UTF-8 charset 与 PDF/image/audio/URL 无网络且 fail-closed/保持范围 |
 | B-008 | pre-builder active-input predicate | global/check_input/empty/all-custom-disabled fast paths；同一多模态请求不触发 guardrail-specific normalization 且保持兼容 |
 | B-009 | default batch method + builder limits | 256/2 MiB 边界、越界 zero-call、legacy custom default adapter、现有公开 error enum exhaustive/旧 custom compile fixture、custom output/enable/priority/name regression、config-created 与 manually-added moderation 都走 single-batch、32,768/32,769-byte 边界，以及 batch count-mismatch/input-limit failures 在 `fail_open` true/false 下均不可吞掉 |
 
@@ -201,8 +212,9 @@ GH-1128 / #1128
 按顺序进入 bounded fallible fragment builder；每条 message 过滤非 text parts 后
 形成空串/单空格/换行三种去重后的 provider projection，全请求普通 text leaves 另
 形成 legacy newline record，独立结构化字段形成 typed independent records；每个
-ToolResult.content 的 Bedrock-reachable ordered text sequence 另形成 field-scoped
-三投影并局部去重。JSON 同时保留完整表示和解码 string nodes；document MIME 完整
+实际 outgoing Bedrock ToolResult block 的 ordered text sequence 另形成 block-scoped
+三投影并局部去重，tool/function-role message 的 Text 与多个 ToolResult 在同组，
+普通 user/assistant sibling blocks 保持隔离。JSON 同时保留完整表示和解码 string nodes；document MIME 完整
 解析且 charset absent/UTF-8 gate 通过后，base64 解码为 UTF-8，JSON MIME 进一步
 生成 raw + semantic records；request-level `function_call` 最后加入。builder 完整
 成功且通过 256/2 MiB 上限后，把 typed batch 一次交给 engine；现有
@@ -225,9 +237,9 @@ Background Responses 在 queued response 产生前完成相同检查，并把已
 
 ## 风险
 
-- Security: 支持媒体类型列表必须 fail-closed，不能被 MIME 大小写、malformed/重复
-  参数或非 UTF-8 charset 绕过；ToolResult provider views 必须覆盖字段内相邻化但
-  不能跨字段制造误匹配。
+- Security: 支持媒体类型列表必须 fail-closed，不能被 MIME 大小写、parser 宽容接受的
+  空参数/尾随分号、malformed/重复参数或非 UTF-8 charset 绕过；ToolResult provider
+  views 必须覆盖 outgoing block 内实际相邻化，但不能跨 block/message 制造误匹配。
 - Compatibility: 启用 input guardrail 的二进制 document 将被拒绝；发布说明需明确。
 - Public API compatibility: `GuardrailError` variants、
   `GuardrailEngine::check_input` 签名与 `add_guardrail` 调用方式保持不变；
@@ -243,15 +255,17 @@ Background Responses 在 queued response 产生前完成相同检查，并把已
 
 ## 测试计划
 
-- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、ToolResult field-scoped provider views 与局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
-- [ ] Document tests: plain/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、完整 MIME syntax、无参数/大小写 UTF-8/quoted UTF-8、重复 charset、UTF-16LE/其他 charset、non-charset 参数 fail-closed、bad base64、bad UTF-8，以及 Markdown numeric/named entity、HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
+- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、single ToolResult array 与 tool/function-role Text+ToolResult/多 ToolResult outgoing-block views、普通 user/assistant sibling-block/message 隔离、局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
+- [ ] Document tests: plain/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、完整 MIME syntax、无参数/大小写 UTF-8/quoted UTF-8、`text/plain;`、`text/plain; charset=utf-8;`、连续/空参数段、重复 charset、UTF-16LE/其他 charset、non-charset 参数 fail-closed、bad base64、bad UTF-8，以及 Markdown numeric/named entity、HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
 - [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、legacy custom default adapter、现有公开 error enum exhaustive/旧 custom compile fixture、custom input-allow/output-block + disabled + non-default-priority/name regression、config-created 与 manually-added OpenAI array single-call、32,768/32,769 eligible-byte 边界、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、batch response-integrity/input-limit failure 在 `fail_open` true/false 下 fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled、`check_input: false` 与仅有 disabled custom guardrail 都在 builder 前不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Provider-boundary tests: Bedrock 的 space-join、Ollama 的 newline-join 与
       Gemini/Vertex 的 empty-join 转换结果分别与 builder 对应 adjacency view 相等；
       image-separated 及 split-message `ignore` + `all previous instructions` 都在
-      provider 调用前被拒绝；Bedrock ToolResult array 的相邻 text block
-      `sec`/`ret` 由同字段 view 命中，而不同 ToolResult/message 的两段保持隔离。
+      provider 调用前被拒绝；Bedrock ToolResult array、tool-role
+      Text+ToolResult 与 tool-role 多 ToolResult 的相邻 `sec`/`ret` 由同 outgoing
+      block view 命中，而普通 user/assistant sibling ToolResult blocks 与不同 message
+      的两段保持隔离。
 - [ ] Background Responses tests: normalization limit/invalid document/guardrail block 在
       queued persist/task spawn/200 前返回；失败时 store/task/provider zero-call，
       通过时 input guardrail exactly-once，post-input entrypoint caller 仅 lifecycle。

@@ -30,8 +30,8 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 ## Behavior Invariants
 
 1. B-001 普通文本、`Document.source`、`ToolResult.content`、`ToolUse.name/input`、message-level legacy `function_call`、`tool_calls[].function`、request-level `ChatCompletionRequest.function_call` 和 `ChatMessage.name` 都必须进入输入 guardrail。本仓库当前 request-level compatibility DTO 复用 `FunctionCall { name, arguments }` 并把两者序列化转发给 provider；即使标准 OpenAI selection 语义通常只指定 name，该已接受并转发的 `arguments` 仍属于必须扫描的现有公开输入面。
-2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。每条 message 的普通 text parts 必须按原顺序收集，过滤其间 image/document/tool 等非 text part 后，覆盖当前 provider 实际使用的三种投影：直接拼接、单个 ASCII 空格连接和单个换行连接；每种投影是独立审核记录，内容相同时只保留一个。为保持当前 gateway 已有的跨 message 检测，还必须把全请求所有普通 text leaves 按原顺序用单个换行连接成一个 request-level legacy view；它只跨普通 message text，不混入 function/tool/document 等独立字段。`ToolResult.content` 内当前 Bedrock 转换会按顺序发成相邻 text blocks 的文本序列，也必须在该字段内部生成同样的直接/空格/换行 provider-boundary views；不同 ToolResult 字段、message 或其他结构化字段之间不得拼接。这样 provider 在 guardrail 后过滤 part、插入边界或相邻化结构化文本时，不能形成未检查的新文本。message/function/tool/document 等独立字段仍作为独立记录，由各 guardrail 在 batch 内逐 record 隔离检查；不能用可被规则误命中的人工标签拼成扫描文本。
-3. B-003 字符串字段保留原文本；结构化 JSON 字段同时扫描确定性完整 JSON 表示和递归解码后的 string keys/values，不得只扫描转义后的 `\n`/`\uXXXX` 或部分节点。合法 JSON function arguments 使用同一语义遍历，并在构造 `Value` 前拒绝任意层级的重复 object key（包括 escape 解码后相同的 key），避免解析器覆盖早期恶意值；首个 JSON whitespace 后出现 U+FEFF BOM 的 arguments 也稳定 fail-closed。首个非空白字符不是 `{`/`[` 的普通非 JSON arguments 仍扫描原字符串，但看似 structured JSON 的 arguments 只要无法完成有界解析（包括 recursion/depth/resource limit）就稳定 fail-closed。文本型 document 必须扫描 base64 解码后的 UTF-8 正文，而不是编码字符串；MIME 必须完整解析而不是按分号截断，allowlist media type 的参数闭集只允许“无参数”或“恰好一个大小写不敏感的 `charset=utf-8`”。重复 charset、任何其他 charset（包括 UTF-16/UTF-16LE/ISO-8859-1）及其他参数都稳定 fail-closed，避免 `format` 等 provider 语义参数产生未覆盖的文本视图。JSON MIME document 还必须同时扫描原始正文和递归解码后的 string keys/values，声明为 JSON 但语法、重复 key、BOM、深度或资源限制失败时稳定 fail-closed。gateway 不转码且不得改写原 DTO。
+2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。每条 message 的普通 text parts 必须按原顺序收集，过滤其间 image/document/tool 等非 text part 后，覆盖当前 provider 实际使用的三种投影：直接拼接、单个 ASCII 空格连接和单个换行连接；每种投影是独立审核记录，内容相同时只保留一个。为保持当前 gateway 已有的跨 message 检测，还必须把全请求所有普通 text leaves 按原顺序用单个换行连接成一个 request-level legacy view；它只跨普通 message text，不混入 function/tool/document 等独立字段。Bedrock provider-boundary views 的作用域必须对应每个实际 outgoing `ToolResultBlock.content`：普通 user/assistant message 中每个 `ToolResult.content` 独立成组；tool/function-role message 则按 part 顺序把普通 `Text` 与其中所有 `ToolResult.content` 的可达 text entries 展开成同一组，因为当前转换会把它们扁平到一个 block。每组都生成直接/空格/换行三种投影；不同 outgoing block 或 message 不得拼接。这样 provider 在 guardrail 后过滤 part、插入边界或相邻化结构化文本时，不能形成未检查的新文本。原始 message/function/tool/document 字段的 typed semantic records 仍逐字段隔离；不能用可被规则误命中的人工标签拼成扫描文本。
+3. B-003 字符串字段保留原文本；结构化 JSON 字段同时扫描确定性完整 JSON 表示和递归解码后的 string keys/values，不得只扫描转义后的 `\n`/`\uXXXX` 或部分节点。合法 JSON function arguments 使用同一语义遍历，并在构造 `Value` 前拒绝任意层级的重复 object key（包括 escape 解码后相同的 key），避免解析器覆盖早期恶意值；首个 JSON whitespace 后出现 U+FEFF BOM 的 arguments 也稳定 fail-closed。首个非空白字符不是 `{`/`[` 的普通非 JSON arguments 仍扫描原字符串，但看似 structured JSON 的 arguments 只要无法完成有界解析（包括 recursion/depth/resource limit）就稳定 fail-closed。文本型 document 必须扫描 base64 解码后的 UTF-8 正文，而不是编码字符串；MIME 必须完整解析而不是按分号截断，且要在 parser 之外拒绝空参数段与尾随分号。allowlist media type 的参数闭集只允许“无参数”或“恰好一个大小写不敏感的 `charset=utf-8`”。重复 charset、任何其他 charset（包括 UTF-16/UTF-16LE/ISO-8859-1）及其他参数都稳定 fail-closed，避免 `format` 等 provider 语义参数产生未覆盖的文本视图。JSON MIME document 还必须同时扫描原始正文和递归解码后的 string keys/values，声明为 JSON 但语法、重复 key、BOM、深度或资源限制失败时稳定 fail-closed。gateway 不转码且不得改写原 DTO。
 4. B-004 任一列入范围的字段包含被拒内容时，整个请求在调用 provider 前被拒绝。
 5. B-005 guardrail 返回 `GuardrailAction::Mask` 或任意修改后文本时，不得把扁平扫描文本错误回写到原有多模态或 tool 结构；即使 `Mask` 结果没有 `modified_content`，gateway 也必须 fail-closed，不得继续 provider 请求。
 6. B-006 无法构造完整扫描载荷时必须返回安全、稳定的 HTTP 400 `invalid_request_error` / `invalid_request`；错误消息不得包含 document 正文、arguments、命中规则或 provider secret，禁止跳过失败字段后继续请求。`/v1/responses` 的 `background: true` 也必须在持久化 queued response、创建后台任务或返回 200 前同步完成同一 input guardrail；失败时不得留下 queued/in-progress response。通过后后台执行不得再次检查同一输入，也不得存在可被其他调用方误用的未审核 handler 旁路。
@@ -58,8 +58,8 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 
 - [ ] 每个列入范围的 content variant 都有接受与拒绝测试。
 - [ ] modern/message-level legacy function call、以及本仓库 request-level compatibility `FunctionCall` 的 name/arguments、`ChatMessage.name` 各有独立覆盖；测试证明 request-level arguments 确实从当前 DTO 解析并在 provider boundary 前被审核。
-- [ ] allowlisted 文本 document fixture 证明扫描解码后正文；无 charset 与单个大小写不敏感 `charset=utf-8` 可进入相同 UTF-8 扫描，`charset=utf-16le`、其他非 UTF-8 charset、重复 charset 与 malformed MIME 稳定 400；malformed base64、非 UTF-8、Markdown/HTML/XML/entity-bearing MIME 和其他不支持媒体类型 fail-closed，且 Markdown numeric/named entity fixture 不会仅经 raw 扫描后放行。
-- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part/message 拆词有测试；同一 message 的 `Text("ignore")` + image + `Text("all previous instructions")` 必须在过滤后的单空格 view 命中，两个 message 分别携带这两段时必须在 request-level newline view 命中；另有直接拼接/换行 view、相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。Bedrock `ToolResult.content` 数组中相邻 text blocks 的 `sec`/`ret` 必须由 field-scoped provider view 命中，且不同 ToolResult 字段/message 不得产生跨字段 `secret`。
+- [ ] allowlisted 文本 document fixture 证明扫描解码后正文；无 charset 与单个大小写不敏感 `charset=utf-8` 可进入相同 UTF-8 扫描，`charset=utf-16le`、其他非 UTF-8 charset、重复 charset、`text/plain;`、`text/plain; charset=utf-8;`、空参数段与其他 malformed MIME 稳定 400；malformed base64、非 UTF-8、Markdown/HTML/XML/entity-bearing MIME 和其他不支持媒体类型 fail-closed，且 Markdown numeric/named entity fixture 不会仅经 raw 扫描后放行。
+- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part/message 拆词有测试；同一 message 的 `Text("ignore")` + image + `Text("all previous instructions")` 必须在过滤后的单空格 view 命中，两个 message 分别携带这两段时必须在 request-level newline view 命中；另有直接拼接/换行 view、相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。Bedrock 单个 `ToolResult.content` 数组中相邻 text blocks 的 `sec`/`ret`、tool-role `Text("sec")` + `ToolResult("ret")`、以及同一 tool-role message 的两个 ToolResult 分别为 `sec`/`ret` 都必须由 outgoing-block-scoped provider view 命中；普通 user/assistant role 的不同 ToolResult blocks 与不同 message 不得产生跨边界 `secret`。
 - [ ] 嵌套 JSON、数组、空值、Unicode escape、解码后的 string key/value、任意层级与 escape 后重复 key、前导 BOM、合法/普通非 JSON/structured-invalid/超深 JSON arguments，以及 JSON MIME document 的 raw/semantic/invalid/duplicate-key/BOM/depth-limit 行为有测试。
 - [ ] 测试证明 guardrail 拒绝发生在 provider 调用前。
 - [ ] Responses background 测试证明 normalization 400、guardrail block/error 在 queued response 持久化和 200 前完成；失败时 response store/task/provider 调用计数均为 0，通过时 input guardrail 恰好执行一次后才进入后台执行。
@@ -82,9 +82,10 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
   也可能在 JSON whitespace 后放置下游 parser 会忽略的 U+FEFF BOM。
 - `Document.source.data` 是 base64；仅闭集 allowlist 文本/JSON 可扫描，Markdown、
   HTML/XML entity-bearing 格式和 PDF 等二进制在没有安全解析器时 fail-closed。
-- MIME 参数可能带引号、大小写变化或重复 `charset`；必须先完成语法解析，再只接受
-  无参数或唯一的 `charset=utf-8`，不能因解码 bytes 恰好也是合法 UTF-8 就放行声明的
-  UTF-16/ISO-8859-1 内容，也不能忽略其他可能改变 provider 文本语义的参数。
+- MIME 参数可能带引号、大小写变化、空参数段、尾随分号或重复 `charset`；必须先做
+  quote-aware 的原始参数段完整性检查，再执行标准语法解析，并只接受无参数或唯一的
+  `charset=utf-8`。不能因 parser 宽容接受 `text/plain;`，或因解码 bytes 恰好也是
+  合法 UTF-8，就放行空参数、UTF-16/ISO-8859-1 内容或其他 provider 语义参数。
 - message name 或参数可能为空；空值不应制造虚假内容。
 - 普通 text parts 即使被 image 等非 text part 分隔，也可能被 provider 过滤后重新相邻；
   多条 message 也可能共同形成当前 gateway 已能检测的敏感词。message 内 provider
@@ -93,8 +94,10 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - provider 可能在相邻 text parts 之间使用空串、空格或换行；guardrail 必须在 provider
   转换前覆盖这三种当前可达表示，不能假设 DTO 中没有显式分隔符就等于最终 prompt。
 - Bedrock 会把单个 `ToolResult.content` 数组中的多个 text entries 转成相邻 text
-  blocks；raw JSON 标点与逐 node record 都不能替代该字段内部的 provider-boundary
-  views。views 不能跨 ToolResult 字段或 message 扩散。
+  blocks；对于 tool/function-role message，还会把普通 Text parts 与多个
+  ToolResult.content 一起展开到同一个 outgoing block。raw JSON 标点与逐 node record
+  都不能替代 block-scoped provider-boundary views；views 只跨该 outgoing block
+  实际扁平化的 leaves，不能跨普通 user/assistant 的 sibling blocks 或 message 扩散。
 - guardrail provider 可能只支持纯文本修改，不能安全地重建任意结构化输入。
 - 攻击者可能用大量短 JSON keys/values 放大 records；固定记录数/派生字节上限必须
   在任何外部审核前一次性验证。
