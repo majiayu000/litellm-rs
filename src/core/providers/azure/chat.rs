@@ -15,9 +15,7 @@ use crate::core::types::{
     context::RequestContext,
     message::MessageContent,
     message::MessageRole,
-    responses::{
-        ChatChoice, ChatChunk, ChatDelta, ChatResponse, ChatStreamChoice, FinishReason, Usage,
-    },
+    responses::{ChatChoice, ChatChunk, ChatDelta, ChatResponse, ChatStreamChoice, FinishReason},
 };
 
 use super::client::AzureClient;
@@ -387,14 +385,9 @@ impl AzureChatHandler {
             })
             .collect();
 
-        let usage = response.get("usage").map(|u| Usage {
-            prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-            completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-            total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
-            thinking_usage: None,
-        });
+        let usage = response
+            .get("usage")
+            .and_then(crate::core::providers::shared::strict_openai_chat_usage);
 
         let timestamp = response["created"].as_i64().unwrap_or_else(|| {
             SystemTime::now()

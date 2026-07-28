@@ -1,8 +1,27 @@
 use super::*;
 use actix_web::body::MessageBody;
+use litellm_rs::core::budget::{BudgetConfig, BudgetScope};
+use litellm_rs::core::types::context::RequestContext;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use uuid::Uuid;
+
+async fn route_key_budget_context(
+    state: &litellm_rs::server::state::AppState,
+) -> (BudgetScope, RequestContext) {
+    let scope = BudgetScope::ApiKey(format!("gemini-route-{}", Uuid::new_v4()));
+    let budget = state
+        .budget_manager
+        .create_budget(
+            scope.clone(),
+            BudgetConfig::new("Gemini route key budget", 100.0),
+        )
+        .await
+        .expect("API key budget");
+    let budget_id = Uuid::parse_str(&budget.id).expect("budget id should be a UUID");
+    (scope, RequestContext::new().with_api_key_budget(budget_id))
+}
 
 #[tokio::test]
 async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
@@ -557,7 +576,7 @@ async fn gemini_sdk_stream_route_does_not_charge_upstream_error_body() {
 }
 
 #[tokio::test]
-async fn gemini_sdk_stream_route_releases_budget_on_midstream_read_error() {
+async fn gemini_sdk_stream_route_settles_reserved_spend_after_output_then_read_error() {
     let broken = BrokenGeminiStreamServer::launch().await;
     let state = build_test_state(vec![gemini_provider(
         "gemini",
@@ -573,6 +592,13 @@ async fn gemini_sdk_stream_route_releases_budget_on_midstream_read_error() {
         "gemini-3.1-flash-lite",
         ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
+    let expected_reservation = state
+        .pricing
+        .estimate_loaded_completion_cost_for_provider("gemini", "gemini-3.1-flash-lite", 7, Some(8))
+        .expect("Gemini pricing")
+        .max_cost;
+    let (key_scope, key_context) = route_key_budget_context(&state).await;
+    let budget_manager = state.budget_manager.clone();
     let budget_limits = state.budget_limits.clone();
     let deployment = state
         .unified_router
@@ -587,14 +613,12 @@ async fn gemini_sdk_stream_route_releases_budget_on_midstream_read_error() {
     )
     .await;
 
-    let response = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent")
-            .set_json(gemini_body())
-            .to_request(),
-    )
-    .await;
+    let request = test::TestRequest::post()
+        .uri("/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent")
+        .set_json(gemini_body())
+        .to_request();
+    request.extensions_mut().insert(key_context);
+    let response = test::call_service(&app, request).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let stream_body = test::read_body(response).await;
@@ -605,12 +629,17 @@ async fn gemini_sdk_stream_route_releases_budget_on_midstream_read_error() {
         .providers
         .get_provider_usage("gemini")
         .expect("provider budget should exist");
-    assert_eq!(provider_usage.current_spend, 0.0);
+    assert!((provider_usage.current_spend - expected_reservation).abs() < f64::EPSILON);
+    assert_eq!(provider_usage.request_count, 1);
     let model_usage = budget_limits
         .models
         .get_model_usage("gemini-3.1-flash-lite")
         .expect("model budget should exist");
-    assert_eq!(model_usage.current_spend, 0.0);
+    assert_eq!(model_usage.current_spend, provider_usage.current_spend);
+    assert_eq!(model_usage.request_count, 1);
+    assert!(
+        (budget_manager.get_current_spend(&key_scope) - expected_reservation).abs() < f64::EPSILON
+    );
     assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
     assert_eq!(
         deployment.state.success_requests.load(Ordering::Relaxed),
@@ -622,6 +651,77 @@ async fn gemini_sdk_stream_route_releases_budget_on_midstream_read_error() {
     );
 
     broken.shutdown().await;
+}
+
+#[tokio::test]
+async fn gemini_sdk_stream_read_error_before_output_does_not_charge_reservation() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("empty broken stream should bind");
+    let address = listener.local_addr().expect("broken stream address");
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("request should connect");
+        let mut request = [0_u8; 4096];
+        socket
+            .read_exact(&mut request[..1])
+            .await
+            .expect("request should read");
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 4096\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .expect("headers should write");
+        socket.shutdown().await.expect("stream should close");
+    });
+    let state = build_test_state(vec![gemini_provider(
+        "gemini",
+        &format!("http://{address}"),
+        vec!["gemini-3.1-flash-lite".to_string()],
+    )])
+    .await;
+    state.budget_limits.providers.set_provider_limit(
+        "gemini",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    state.budget_limits.models.set_model_limit(
+        "gemini-3.1-flash-lite",
+        ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let (key_scope, key_context) = route_key_budget_context(&state).await;
+    let budget_manager = state.budget_manager.clone();
+    let budget_limits = state.budget_limits.clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let request = test::TestRequest::post()
+        .uri("/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent")
+        .set_json(gemini_body())
+        .to_request();
+    request.extensions_mut().insert(key_context);
+    let response = test::call_service(&app, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = String::from_utf8(test::read_body(response).await.to_vec())
+        .expect("stream body should be utf8");
+    assert!(!body.contains("partial"));
+    assert!(body.contains("Gemini upstream stream error"));
+    let provider_usage = budget_limits
+        .providers
+        .get_provider_usage("gemini")
+        .expect("provider budget");
+    assert_eq!(provider_usage.current_spend, 0.0);
+    assert_eq!(provider_usage.request_count, 0);
+    let model_usage = budget_limits
+        .models
+        .get_model_usage("gemini-3.1-flash-lite")
+        .expect("model budget");
+    assert_eq!(model_usage.current_spend, 0.0);
+    assert_eq!(model_usage.request_count, 0);
+    assert_eq!(budget_manager.get_current_spend(&key_scope), 0.0);
+    upstream.await.expect("broken upstream should finish");
 }
 
 #[tokio::test]

@@ -266,7 +266,7 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
     }
 }
 
-async fn record_reserved_spend_without_usage(
+pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
     key_manager: &KeyManager,
     api_key_id: Option<Uuid>,
     provider: &str,
@@ -275,22 +275,37 @@ async fn record_reserved_spend_without_usage(
     key_budget_reservation: Option<BudgetReservation>,
     context: &str,
 ) {
-    let Some(reservation) = budget_reservation else {
-        tracing::error!("{context} for provider '{provider}' model '{model}'; spend not recorded");
-        return;
-    };
-    let reserved = reservation.reserved_amount();
-    if let Err(error) = reservation.settle(reserved) {
+    let provider_reserved = budget_reservation
+        .as_ref()
+        .map(UnifiedBudgetReservation::reserved_amount);
+    let key_reserved = key_budget_reservation
+        .as_ref()
+        .map(BudgetReservation::reserved_amount);
+    let recorded_cost = key_reserved
+        .filter(|amount| *amount > 0.0)
+        .or_else(|| provider_reserved.filter(|amount| *amount > 0.0));
+    if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)
+        && let Err(error) = reservation.settle(reserved)
+    {
         tracing::error!(
             "failed to settle reserved budget without usage for '{provider}'/'{model}': {error:?}"
         );
     }
+    if let Some(reservation) = key_budget_reservation {
+        settle_api_key_budget_reservation(Some(reservation), recorded_cost.unwrap_or(0.0), context);
+    }
+    let Some(recorded_cost) = recorded_cost else {
+        tracing::error!(
+            "{context} for provider '{provider}' model '{model}'; \
+             no positive reserved spend was available, so key usage was not recorded"
+        );
+        return;
+    };
     if let Some(key_id) = api_key_id
-        && let Err(error) = key_manager.record_usage(key_id, 0, reserved).await
+        && let Err(error) = key_manager.record_usage(key_id, 0, recorded_cost).await
     {
         tracing::error!("failed to record reserved usage for key {key_id}: {error}");
     }
-    settle_api_key_budget_reservation(key_budget_reservation, reserved, context);
 }
 
 #[cfg(test)]

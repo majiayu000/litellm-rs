@@ -334,3 +334,39 @@ fn test_transform_response_message_roles() {
         assert!(result.is_ok());
     }
 }
+
+fn response_with_usage(usage: Value) -> ChatResponse {
+    AzureAIChatUtils::transform_response(
+        json!({
+            "id": "usage-test",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": usage
+        }),
+        "gpt-4",
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_usage_fails_closed_without_losing_legal_zero_or_range() {
+    for bad in [
+        json!({"prompt_tokens": 2, "total_tokens": 3}),
+        json!({"prompt_tokens": 2, "completion_tokens": null, "total_tokens": 3}),
+        json!({"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 4}),
+        json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+    ] {
+        assert!(response_with_usage(bad).usage.is_none());
+    }
+    let usage = response_with_usage(json!({
+        "prompt_tokens": 0,
+        "completion_tokens": u64::from(u32::MAX) + 1,
+        "total_tokens": u64::from(u32::MAX) + 1
+    }))
+    .usage
+    .unwrap();
+    assert_eq!(
+        (usage.prompt_tokens, usage.completion_tokens),
+        (0, u32::MAX)
+    );
+    assert_eq!(usage.total_tokens, u32::MAX);
+}

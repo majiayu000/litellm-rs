@@ -1,9 +1,19 @@
 use serde_json::Value;
 
 use super::SSETransformer;
+use crate::core::providers::shared::strict_direct_gemini_usage_metadata;
+#[cfg(any(feature = "providers-extended", test))]
+use crate::core::providers::shared::strict_vertex_usage_metadata;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
 use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason, Usage};
+
+#[derive(Debug, Clone, Copy)]
+enum GeminiUsagePolicy {
+    Direct,
+    #[cfg(any(feature = "providers-extended", test))]
+    Vertex,
+}
 
 /// Gemini SSE Transformer
 ///
@@ -12,10 +22,28 @@ use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, Fini
 pub struct GeminiTransformer {
     model: String,
     chunk_id: String,
+    usage_policy: Option<GeminiUsagePolicy>,
 }
 
 impl GeminiTransformer {
     pub fn new(model: impl Into<String>) -> Self {
+        Self::with_usage_policy(model, Some(GeminiUsagePolicy::Direct))
+    }
+
+    #[cfg(any(feature = "providers-extended", test))]
+    pub(crate) fn new_vertex(model: impl Into<String>) -> Self {
+        Self::with_usage_policy(model, Some(GeminiUsagePolicy::Vertex))
+    }
+
+    #[cfg(feature = "providers-extended")]
+    pub(crate) fn new_without_usage_policy(model: impl Into<String>) -> Self {
+        Self::with_usage_policy(model, None)
+    }
+
+    fn with_usage_policy(
+        model: impl Into<String>,
+        usage_policy: Option<GeminiUsagePolicy>,
+    ) -> Self {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -23,6 +51,16 @@ impl GeminiTransformer {
         Self {
             model: model.into(),
             chunk_id: format!("gemini-stream-{}", nanos),
+            usage_policy,
+        }
+    }
+
+    fn transform_usage_metadata(&self, metadata: &Value) -> Option<Usage> {
+        match self.usage_policy {
+            Some(GeminiUsagePolicy::Direct) => strict_direct_gemini_usage_metadata(metadata),
+            #[cfg(any(feature = "providers-extended", test))]
+            Some(GeminiUsagePolicy::Vertex) => strict_vertex_usage_metadata(metadata),
+            None => None,
         }
     }
 }
@@ -58,28 +96,9 @@ impl SSETransformer for GeminiTransformer {
 
         if candidates.is_empty() {
             // Usage-only chunk
-            let usage = json.get("usageMetadata").map(|u| {
-                let prompt = u
-                    .get("promptTokenCount")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let completion = u
-                    .get("candidatesTokenCount")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let total = u
-                    .get("totalTokenCount")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                Usage {
-                    prompt_tokens: prompt,
-                    completion_tokens: completion,
-                    total_tokens: total,
-                    prompt_tokens_details: None,
-                    completion_tokens_details: None,
-                    thinking_usage: None,
-                }
-            });
+            let usage = json
+                .get("usageMetadata")
+                .and_then(|metadata| self.transform_usage_metadata(metadata));
             if usage.is_some() {
                 return Ok(Some(ChatChunk {
                     id: self.chunk_id.clone(),
@@ -152,28 +171,9 @@ impl SSETransformer for GeminiTransformer {
             });
         }
 
-        let usage = json.get("usageMetadata").map(|u| {
-            let prompt = u
-                .get("promptTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            let completion = u
-                .get("candidatesTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            let total = u
-                .get("totalTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            Usage {
-                prompt_tokens: prompt,
-                completion_tokens: completion,
-                total_tokens: total,
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-                thinking_usage: None,
-            }
-        });
+        let usage = json
+            .get("usageMetadata")
+            .and_then(|metadata| self.transform_usage_metadata(metadata));
 
         if choices.is_empty() && usage.is_none() {
             return Ok(None);
@@ -188,5 +188,107 @@ impl SSETransformer for GeminiTransformer {
             usage,
             system_fingerprint: None,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_usage_metadata_applies_to_candidate_and_usage_only_chunks() {
+        let transformer = GeminiTransformer::new("gemini-test");
+        let usage = r#""usageMetadata":{
+            "promptTokenCount":10,"toolUsePromptTokenCount":2,
+            "candidatesTokenCount":3,"thoughtsTokenCount":4,
+            "cachedContentTokenCount":5,"totalTokenCount":17
+        }"#;
+        for data in [
+            format!(r#"{{"candidates":[],{usage}}}"#),
+            format!(r#"{{"candidates":[{{"content":{{"parts":[{{"text":"ok"}}]}}}}],{usage}}}"#),
+        ] {
+            let chunk = transformer.transform_chunk(&data).unwrap().unwrap();
+            let usage = chunk.usage.unwrap();
+            assert_eq!(
+                (
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens
+                ),
+                (12, 7, 19)
+            );
+            assert!(usage.completion_tokens_details.is_none());
+            assert_eq!(usage.thinking_tokens(), Some(4));
+        }
+    }
+
+    #[test]
+    fn vertex_usage_policy_applies_to_candidate_and_usage_only_chunks() {
+        let transformer = GeminiTransformer::new_vertex("gemini-test");
+        for candidates in ["[]", r#"[{"content":{"parts":[{"text":"ok"}]}}]"#] {
+            let data = format!(
+                r#"{{"candidates":{candidates},"usageMetadata":{{
+                    "promptTokenCount":10,"toolUsePromptTokenCount":2,
+                    "candidatesTokenCount":3,"thoughtsTokenCount":4,
+                    "cachedContentTokenCount":5,"totalTokenCount":19
+                }}}}"#
+            );
+            let usage = transformer
+                .transform_chunk(&data)
+                .unwrap()
+                .unwrap()
+                .usage
+                .unwrap();
+            assert_eq!(
+                (
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens
+                ),
+                (12, 7, 19)
+            );
+        }
+        let direct_total = r#"{
+            "promptTokenCount":10,"toolUsePromptTokenCount":2,
+            "candidatesTokenCount":3,"thoughtsTokenCount":4,"totalTokenCount":17
+        }"#;
+        let usage_only = format!(r#"{{"candidates":[],"usageMetadata":{direct_total}}}"#);
+        assert!(transformer.transform_chunk(&usage_only).unwrap().is_none());
+        let candidate = format!(
+            r#"{{"candidates":[{{"content":{{"parts":[{{"text":"ok"}}]}}}}],"usageMetadata":{direct_total}}}"#
+        );
+        assert!(
+            transformer
+                .transform_chunk(&candidate)
+                .unwrap()
+                .unwrap()
+                .usage
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn malformed_usage_never_becomes_zero_usage() {
+        let transformer = GeminiTransformer::new("gemini-test");
+        for metadata in [
+            r#"{"promptTokenCount":2,"candidatesTokenCount":1,"totalTokenCount":4}"#,
+            r#"{"promptTokenCount":2,"candidatesTokenCount":null,"totalTokenCount":2}"#,
+            r#"{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}"#,
+        ] {
+            let usage_only = format!(r#"{{"candidates":[],"usageMetadata":{metadata}}}"#);
+            assert!(transformer.transform_chunk(&usage_only).unwrap().is_none());
+            let with_output = format!(
+                r#"{{"candidates":[{{"content":{{"parts":[{{"text":"ok"}}]}}}}],"usageMetadata":{metadata}}}"#
+            );
+            let chunk = transformer.transform_chunk(&with_output).unwrap().unwrap();
+            assert!(chunk.usage.is_none());
+        }
+        let huge = transformer
+            .transform_chunk(
+                r#"{"candidates":[],"usageMetadata":{"promptTokenCount":18446744073709551615,"candidatesTokenCount":0,"totalTokenCount":18446744073709551615}}"#,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(huge.usage.unwrap().total_tokens, u32::MAX);
     }
 }

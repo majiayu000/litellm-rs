@@ -331,3 +331,43 @@ fn test_transform_streaming_chunk_empty_choices() {
     let chat_chunk = result.unwrap();
     assert!(chat_chunk.choices.is_empty());
 }
+
+fn response_with_usage(usage: Value) -> ChatResponse {
+    let config =
+        AzureConfig::new().with_azure_endpoint("https://test.openai.azure.com".to_string());
+    let handler = AzureChatHandler::new(config).unwrap();
+    handler
+        .transform_response(
+            json!({
+                "id": "usage-test", "created": 1,
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": usage
+            }),
+            "gpt-4",
+        )
+        .unwrap()
+}
+
+#[test]
+fn test_usage_fails_closed_without_losing_legal_zero_or_range() {
+    for bad in [
+        json!({"prompt_tokens": 2, "total_tokens": 3}),
+        json!({"prompt_tokens": "2", "completion_tokens": 1, "total_tokens": 3}),
+        json!({"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 4}),
+        json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+    ] {
+        assert!(response_with_usage(bad).usage.is_none());
+    }
+    let usage = response_with_usage(json!({
+        "prompt_tokens": u64::from(u32::MAX) + 1,
+        "completion_tokens": 0,
+        "total_tokens": u64::from(u32::MAX) + 1
+    }))
+    .usage
+    .unwrap();
+    assert_eq!(
+        (usage.prompt_tokens, usage.completion_tokens),
+        (u32::MAX, 0)
+    );
+    assert_eq!(usage.total_tokens, u32::MAX);
+}

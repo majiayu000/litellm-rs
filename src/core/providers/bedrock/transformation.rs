@@ -1,8 +1,3 @@
-//! Request and Response Transformation for Bedrock Provider
-//!
-//! Contains the logic for transforming requests and responses between
-//! OpenAI-compatible format and Bedrock model-specific formats.
-
 mod openai_invoke_response;
 
 use serde_json::Value;
@@ -10,12 +5,12 @@ use serde_json::Value;
 use super::get_model_config_for_model_id;
 use super::model_config::{BedrockApiType, BedrockModelFamily};
 use super::model_id::is_runtime_resolved_invoke_model_id;
+use crate::core::providers::shared::{strict_openai_chat_usage, strict_token_count, strict_usage};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::responses::{ChatChoice, ChatResponse, FinishReason, Usage};
 use crate::core::types::tools::{FunctionCall, ToolCall};
 use crate::core::types::{chat::ChatMessage, message::MessageContent, message::MessageRole};
 
-/// Safely convert an f32 to a serde_json::Number, defaulting to 0 for NaN/Inf values
 fn safe_f64_to_number(value: f32) -> serde_json::Number {
     let f64_val: f64 = value.into();
     if f64_val.is_finite() {
@@ -25,7 +20,6 @@ fn safe_f64_to_number(value: f32) -> serde_json::Number {
     }
 }
 
-/// Transform a chat request to Bedrock format based on model family
 pub fn transform_chat_request(
     model: &str,
     messages: &[ChatMessage],
@@ -34,23 +28,17 @@ pub fn transform_chat_request(
     top_p: Option<f32>,
     messages_to_prompt: impl Fn(&[ChatMessage]) -> Result<String, ProviderError>,
 ) -> Result<Value, ProviderError> {
-    // Get model configuration
     let model_config = get_model_config_for_model_id(model)?;
-
-    // Route based on model family
     match model_config.family {
         BedrockModelFamily::Claude => {
-            // Claude models on Bedrock use anthropic messages format
             let mut body = serde_json::json!({
                 "messages": messages,
                 "max_tokens": max_tokens.unwrap_or(4096),
                 "anthropic_version": "bedrock-2023-05-20"
             });
-
             if let Some(temp) = temperature {
                 body["temperature"] = Value::Number(safe_f64_to_number(temp));
             }
-
             if let Some(top_p_val) = top_p {
                 body["top_p"] = Value::Number(safe_f64_to_number(top_p_val));
             }
@@ -58,7 +46,6 @@ pub fn transform_chat_request(
             Ok(body)
         }
         BedrockModelFamily::TitanText => {
-            // Titan models use different format
             let prompt = messages_to_prompt(messages)?;
             let mut body = serde_json::json!({
                 "inputText": prompt,
@@ -79,7 +66,6 @@ pub fn transform_chat_request(
             Ok(body)
         }
         BedrockModelFamily::Nova => {
-            // Nova models use converse API format similar to Claude
             let mut body = serde_json::json!({
                 "messages": messages,
                 "max_tokens": max_tokens.unwrap_or(4096),
@@ -92,7 +78,6 @@ pub fn transform_chat_request(
             Ok(body)
         }
         BedrockModelFamily::Llama => {
-            // Meta Llama models use similar format to Claude
             let mut body = serde_json::json!({
                 "messages": messages,
                 "max_tokens": max_tokens.unwrap_or(4096),
@@ -105,7 +90,6 @@ pub fn transform_chat_request(
             Ok(body)
         }
         BedrockModelFamily::Mistral => {
-            // Mistral models use their own format
             let prompt = messages_to_prompt(messages)?;
             let mut body = serde_json::json!({
                 "prompt": prompt,
@@ -119,7 +103,6 @@ pub fn transform_chat_request(
             Ok(body)
         }
         BedrockModelFamily::AI21 => {
-            // AI21 models use their own format
             let prompt = messages_to_prompt(messages)?;
             let mut body = serde_json::json!({
                 "prompt": prompt,
@@ -133,7 +116,6 @@ pub fn transform_chat_request(
             Ok(body)
         }
         BedrockModelFamily::Cohere => {
-            // Cohere models use their own format
             let prompt = messages_to_prompt(messages)?;
             let mut body = serde_json::json!({
                 "prompt": prompt,
@@ -147,7 +129,6 @@ pub fn transform_chat_request(
             Ok(body)
         }
         BedrockModelFamily::DeepSeek => {
-            // DeepSeek models use their own format
             let prompt = messages_to_prompt(messages)?;
             let mut body = serde_json::json!({
                 "prompt": prompt,
@@ -162,20 +143,16 @@ pub fn transform_chat_request(
         }
         BedrockModelFamily::TitanEmbedding
         | BedrockModelFamily::TitanImage
-        | BedrockModelFamily::StabilityAI => {
-            // These are not chat models
-            Err(ProviderError::invalid_request(
-                "bedrock",
-                format!(
-                    "Model family {:?} is not supported for chat completion",
-                    model_config.family
-                ),
-            ))
-        }
+        | BedrockModelFamily::StabilityAI => Err(ProviderError::invalid_request(
+            "bedrock",
+            format!(
+                "Model family {:?} is not supported for chat completion",
+                model_config.family
+            ),
+        )),
     }
 }
 
-/// Transform a Bedrock response to ChatResponse format based on model family
 pub fn transform_chat_response(
     raw_response: &[u8],
     model: &str,
@@ -184,25 +161,17 @@ pub fn transform_chat_response(
         .map_err(|e| ProviderError::response_parsing("bedrock", e.to_string()))?;
 
     if is_runtime_resolved_invoke_model_id(model) {
-        let mut usage = parse_runtime_invoke_usage(&response);
-        if let Some(ref mut usage) = usage
-            && usage.total_tokens == 0
-        {
-            usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-        }
-
         return Ok(ChatResponse {
             id: format!("bedrock-{}", uuid::Uuid::new_v4()),
             object: "chat.completion".to_string(),
             created: chrono::Utc::now().timestamp(),
             model: model.to_string(),
             choices: parse_runtime_invoke_response(&response),
-            usage,
+            usage: parse_runtime_invoke_usage(&response),
             system_fingerprint: None,
         });
     }
 
-    // Get model configuration
     let model_config = get_model_config_for_model_id(model)?;
 
     let (choices, usage) = match model_config.api_type {
@@ -244,23 +213,16 @@ pub fn transform_chat_response(
         }
     };
 
-    let mut final_usage = usage;
-    if let Some(ref mut usage) = final_usage {
-        usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-    }
-
     Ok(ChatResponse {
         id: format!("bedrock-{}", uuid::Uuid::new_v4()),
         object: "chat.completion".to_string(),
         created: chrono::Utc::now().timestamp(),
         model: model.to_string(),
         choices,
-        usage: final_usage,
+        usage,
         system_fingerprint: None,
     })
 }
-
-// ==================== Response Parsing Helpers ====================
 
 fn create_chat_choice(content: String) -> ChatChoice {
     ChatChoice {
@@ -491,105 +453,68 @@ fn parse_converse_finish_reason(reason: &str) -> FinishReason {
     }
 }
 
-// ==================== Usage Parsing Helpers ====================
-
 fn parse_openai_compatible_usage(response: &Value) -> Option<Usage> {
-    response.get("usage").map(|u| Usage {
-        prompt_tokens: u.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-        completion_tokens: u
-            .get("completion_tokens")
-            .and_then(|t| t.as_u64())
-            .unwrap_or(0) as u32,
-        total_tokens: u.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-        prompt_tokens_details: None,
-        completion_tokens_details: None,
-        thinking_usage: None,
-    })
+    strict_openai_chat_usage(response.get("usage")?)
 }
 
 fn parse_runtime_invoke_usage(response: &Value) -> Option<Usage> {
-    if let Some(usage) = parse_openai_compatible_usage(response) {
-        return Some(usage);
+    if response.get("usage").is_some() {
+        return parse_openai_compatible_usage(response);
     }
-
-    let prompt_tokens = response
-        .get("inputTextTokenCount")
-        .or_else(|| response.get("prompt_token_count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as u32;
-    let completion_tokens = response
-        .get("results")
-        .and_then(Value::as_array)
-        .and_then(|results| results.first())
-        .and_then(|result| result.get("tokenCount"))
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            response
-                .get("generation_token_count")
-                .and_then(Value::as_u64)
-        })
-        .unwrap_or(0) as u32;
-
-    if prompt_tokens == 0 && completion_tokens == 0 {
-        return None;
+    if response.get("inputTextTokenCount").is_some() || response.get("results").is_some() {
+        return parse_titan_usage(response);
     }
+    parse_llama_invoke_usage(response)
+}
 
-    Some(Usage {
-        prompt_tokens,
-        completion_tokens,
-        total_tokens: prompt_tokens + completion_tokens,
-        prompt_tokens_details: None,
-        completion_tokens_details: None,
-        thinking_usage: None,
-    })
+fn parse_llama_invoke_usage(response: &Value) -> Option<Usage> {
+    let prompt = strict_token_count(response.get("prompt_token_count"))?;
+    let completion = strict_token_count(response.get("generation_token_count"))?;
+    strict_usage(&[prompt], &[completion], None, None)
 }
 
 fn parse_claude_usage(response: &Value) -> Option<Usage> {
-    response.get("usage").map(|u| Usage {
-        prompt_tokens: u.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-        completion_tokens: u.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-        total_tokens: 0, // Will be calculated by caller
-        prompt_tokens_details: None,
-        completion_tokens_details: None,
-        thinking_usage: None,
-    })
+    let usage = response.get("usage")?;
+    let prompt = strict_token_count(usage.get("input_tokens"))?;
+    let completion = strict_token_count(usage.get("output_tokens"))?;
+    strict_usage(&[prompt], &[completion], None, None)
 }
 
 fn parse_converse_usage(response: &Value) -> Option<Usage> {
-    response.get("usage").map(|u| Usage {
-        prompt_tokens: u.get("inputTokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-        completion_tokens: u.get("outputTokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-        total_tokens: 0,
-        prompt_tokens_details: None,
-        completion_tokens_details: None,
-        thinking_usage: None,
-    })
+    let usage = response.get("usage")?;
+    let prompt = strict_token_count(usage.get("inputTokens"))?;
+    let completion = strict_token_count(usage.get("outputTokens"))?;
+    let total = strict_token_count(usage.get("totalTokens"))?;
+    strict_usage(
+        &[prompt],
+        &[completion],
+        Some((total, &[prompt, completion])),
+        None,
+    )
 }
 
 fn parse_titan_usage(response: &Value) -> Option<Usage> {
-    response.get("inputTextTokenCount").and_then(|input| {
-        response.get("results").and_then(|results| {
-            results.as_array().and_then(|arr| {
-                arr.first().and_then(|r| {
-                    r.get("tokenCount").map(|output| Usage {
-                        prompt_tokens: input.as_u64().unwrap_or(0) as u32,
-                        completion_tokens: output.as_u64().unwrap_or(0) as u32,
-                        total_tokens: 0, // Will be calculated by caller
-                        prompt_tokens_details: None,
-                        completion_tokens_details: None,
-                        thinking_usage: None,
-                    })
-                })
-            })
-        })
-    })
+    let prompt = strict_token_count(response.get("inputTextTokenCount"))?;
+    let completion = strict_token_count(
+        response
+            .get("results")
+            .and_then(Value::as_array)?
+            .first()?
+            .get("tokenCount"),
+    )?;
+    strict_usage(&[prompt], &[completion], None, None)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::transform_chat_response;
+    use super::{
+        parse_claude_usage, parse_converse_usage, parse_llama_invoke_usage,
+        parse_openai_compatible_usage, parse_runtime_invoke_usage, parse_titan_usage,
+        transform_chat_response,
+    };
     use crate::core::types::message::MessageContent;
-    use crate::core::types::responses::FinishReason;
+    use crate::core::types::responses::{FinishReason, Usage};
+    use serde_json::json;
 
     #[test]
     fn parses_converse_response_for_runtime_resolved_profile_arn() {
@@ -645,7 +570,8 @@ mod tests {
             },
             "usage": {
                 "inputTokens": 11,
-                "outputTokens": 4
+                "outputTokens": 4,
+                "totalTokens": 15
             },
             "stopReason": "tool_use"
         });
@@ -785,5 +711,89 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 13);
         assert_eq!(usage.completion_tokens, 8);
         assert_eq!(usage.total_tokens, 21);
+    }
+
+    #[test]
+    fn usage_parsers_fail_closed_without_alias_splicing() {
+        let rejected = [
+            parse_openai_compatible_usage(
+                &json!({"usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 4}}),
+            ),
+            parse_openai_compatible_usage(
+                &json!({"usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}),
+            ),
+            parse_openai_compatible_usage(
+                &json!({"usage": {"prompt_tokens": "2", "completion_tokens": 1, "total_tokens": 3}}),
+            ),
+            parse_llama_invoke_usage(
+                &json!({"prompt_token_count": 0, "generation_token_count": 0}),
+            ),
+            parse_llama_invoke_usage(
+                &json!({"prompt_token_count": 2, "generation_token_count": []}),
+            ),
+            parse_claude_usage(&json!({"usage": {"input_tokens": 2}})),
+            parse_claude_usage(&json!({"usage": {"input_tokens": 0, "output_tokens": 0}})),
+            parse_claude_usage(&json!({"usage": {"input_tokens": {}, "output_tokens": 1}})),
+            parse_converse_usage(&json!({"usage": {"inputTokens": 2, "outputTokens": 1}})),
+            parse_converse_usage(
+                &json!({"usage": {"inputTokens": 2, "outputTokens": 1, "totalTokens": 4}}),
+            ),
+            parse_converse_usage(
+                &json!({"usage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}}),
+            ),
+            parse_converse_usage(
+                &json!({"usage": {"inputTokens": 2, "outputTokens": 1.0, "totalTokens": 3}}),
+            ),
+            parse_titan_usage(&json!({"inputTextTokenCount": 2, "results": []})),
+            parse_titan_usage(&json!({"inputTextTokenCount": 0, "results": [{"tokenCount": 0}]})),
+            parse_titan_usage(
+                &json!({"inputTextTokenCount": null, "results": [{"tokenCount": 1}]}),
+            ),
+            parse_runtime_invoke_usage(
+                &json!({"inputTextTokenCount": 2, "generation_token_count": 1}),
+            ),
+            parse_runtime_invoke_usage(
+                &json!({"inputTextTokenCount": 2, "prompt_token_count": 2, "generation_token_count": 1}),
+            ),
+            parse_runtime_invoke_usage(&json!({
+                "usage": {"prompt_tokens": "2", "completion_tokens": 1, "total_tokens": 3},
+                "prompt_token_count": 2, "generation_token_count": 1
+            })),
+        ];
+        assert!(rejected.into_iter().all(|usage| usage.is_none()));
+    }
+
+    #[test]
+    fn usage_parsers_saturate_after_raw_total_validation() {
+        let titan = parse_runtime_invoke_usage(
+            &json!({"inputTextTokenCount": 2, "results": [{"tokenCount": 1}]}),
+        )
+        .unwrap();
+        assert_eq!(titan.prompt_tokens, 2);
+        assert_eq!(titan.completion_tokens, 1);
+        assert_eq!(titan.total_tokens, 3);
+        let usages: [Usage; 5] = [
+            parse_openai_compatible_usage(&json!({"usage": {
+                "prompt_tokens": u64::MAX, "completion_tokens": 0, "total_tokens": u64::MAX
+            }}))
+            .unwrap(),
+            parse_llama_invoke_usage(
+                &json!({"prompt_token_count": u64::MAX, "generation_token_count": 0}),
+            )
+            .unwrap(),
+            parse_claude_usage(&json!({"usage": {"input_tokens": u64::MAX, "output_tokens": 0}}))
+                .unwrap(),
+            parse_converse_usage(&json!({"usage": {
+                "inputTokens": u64::MAX, "outputTokens": 0, "totalTokens": u64::MAX
+            }}))
+            .unwrap(),
+            parse_titan_usage(
+                &json!({"inputTextTokenCount": u64::MAX, "results": [{"tokenCount": 1}]}),
+            )
+            .unwrap(),
+        ];
+        for usage in usages {
+            assert_eq!(usage.total_tokens, u32::MAX);
+        }
     }
 }

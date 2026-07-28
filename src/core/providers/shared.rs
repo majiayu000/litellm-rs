@@ -1,17 +1,13 @@
-//! Shared utilities for all providers
-//!
-//! This module contains common functionality that can be reused across all providers,
-//! following the DRY principle and Rust's composition over inheritance pattern.
+//! Shared utilities for all providers.
 
 use serde_json::Value;
 
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::responses::FinishReason;
+use crate::core::types::responses::{FinishReason, PromptTokensDetails, Usage};
+use crate::core::types::thinking::ThinkingUsage;
 use crate::core::types::{message::MessageContent, message::MessageRole};
 
-// ============================================================================
 // Shared Model Limits
-// ============================================================================
 
 pub const GEMINI_10_PRO_CONTEXT_WINDOW: u32 = 32_000;
 pub const GEMINI_15_FLASH_CONTEXT_WINDOW: u32 = 1_000_000;
@@ -66,14 +62,11 @@ pub fn gemini_context_window(model_name: &str) -> Option<u32> {
     }
 }
 
-// ============================================================================
 // Message Transformation Utilities
-// ============================================================================
 
 pub struct MessageTransformer;
 
 impl MessageTransformer {
-    /// Convert role to OpenAI-compatible string
     pub fn role_to_string(role: &MessageRole) -> &'static str {
         match role {
             MessageRole::System => "system",
@@ -85,7 +78,6 @@ impl MessageTransformer {
         }
     }
 
-    /// Parse string to MessageRole
     pub fn string_to_role(role: &str) -> MessageRole {
         match role {
             "system" => MessageRole::System,
@@ -97,7 +89,6 @@ impl MessageTransformer {
         }
     }
 
-    /// Convert MessageContent to JSON Value
     pub fn content_to_value(content: &Option<MessageContent>) -> Value {
         match content {
             Some(MessageContent::Text(text)) => Value::String(text.clone()),
@@ -108,7 +99,6 @@ impl MessageTransformer {
         }
     }
 
-    /// Parse finish reason string
     pub fn parse_finish_reason(reason: &str) -> Option<FinishReason> {
         match reason {
             "stop" => Some(FinishReason::Stop),
@@ -120,9 +110,7 @@ impl MessageTransformer {
     }
 }
 
-// ============================================================================
 // Rate Limiting
-// ============================================================================
 
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -154,9 +142,7 @@ impl RateLimiter {
     }
 }
 
-// ============================================================================
 // Response Validation
-// ============================================================================
 
 pub struct ResponseValidator;
 
@@ -198,9 +184,7 @@ impl ResponseValidator {
     }
 }
 
-// ============================================================================
 // Retry-After Parsing
-// ============================================================================
 
 /// Parse retry-after duration from a JSON response body.
 ///
@@ -231,9 +215,7 @@ pub fn parse_retry_after_from_body(response_body: &str) -> Option<u64> {
     }
 }
 
-// ============================================================================
 // Vector Math Utilities
-// ============================================================================
 
 /// Calculate cosine similarity between two vectors.
 pub fn cosine_similarity(vec1: &[f32], vec2: &[f32]) -> f32 {
@@ -275,9 +257,138 @@ pub fn normalize_vector(vector: &mut [f32]) {
     }
 }
 
-// ============================================================================
+/// Read a declared token field without narrowing it before consistency checks.
+pub(crate) fn strict_token_count(value: Option<&Value>) -> Option<u64> {
+    value?.as_u64()
+}
+
+fn raw_token_sum(parts: &[u64]) -> Option<u128> {
+    parts
+        .iter()
+        .try_fold(0_u128, |sum, part| sum.checked_add(u128::from(*part)))
+}
+
+fn saturating_token_count(tokens: u128) -> u32 {
+    u32::try_from(tokens).unwrap_or(u32::MAX)
+}
+
+/// Normalize trusted raw components, optionally validating an endpoint-specific total.
+///
+/// `reported_total_parts` are deliberately independent from the billable parts:
+/// direct Gemini excludes tool-use prompt tokens from its reported total, while
+/// Vertex includes them. Cached tokens are validated against the raw base prompt.
+pub(crate) fn strict_usage(
+    prompt_parts: &[u64],
+    completion_parts: &[u64],
+    reported_total: Option<(u64, &[u64])>,
+    cached_tokens: Option<(u64, u64)>,
+) -> Option<Usage> {
+    let raw_prompt = raw_token_sum(prompt_parts)?;
+    let raw_completion = raw_token_sum(completion_parts)?;
+    if raw_prompt == 0 && raw_completion == 0 {
+        return None;
+    }
+    if let Some((reported, reported_parts)) = reported_total
+        && u128::from(reported) != raw_token_sum(reported_parts)?
+    {
+        return None;
+    }
+    if let Some((cached, base_prompt)) = cached_tokens
+        && cached > base_prompt
+    {
+        return None;
+    }
+
+    let cached = cached_tokens.map(|(cached, _)| saturating_token_count(u128::from(cached)));
+    Some(Usage {
+        prompt_tokens: saturating_token_count(raw_prompt),
+        completion_tokens: saturating_token_count(raw_completion),
+        total_tokens: saturating_token_count(raw_prompt.checked_add(raw_completion)?),
+        prompt_tokens_details: cached.map(|cached| PromptTokensDetails {
+            cached_tokens: Some(cached),
+            cache_creation_tokens: None,
+            cache_read_tokens: Some(cached),
+            audio_tokens: None,
+        }),
+        completion_tokens_details: None,
+        thinking_usage: None,
+    })
+}
+
+pub(crate) fn strict_openai_chat_usage(usage: &Value) -> Option<Usage> {
+    let prompt = strict_token_count(usage.get("prompt_tokens"))?;
+    let completion = strict_token_count(usage.get("completion_tokens"))?;
+    let total = strict_token_count(usage.get("total_tokens"))?;
+    strict_usage(
+        &[prompt],
+        &[completion],
+        Some((total, &[prompt, completion])),
+        None,
+    )
+}
+
+pub(crate) fn strict_openai_embedding_usage(usage: &Value) -> Option<Usage> {
+    let prompt = strict_token_count(usage.get("prompt_tokens"))?;
+    let completion = match usage.get("completion_tokens") {
+        Some(value) => strict_token_count(Some(value))?,
+        None => 0,
+    };
+    if completion != 0 {
+        return None;
+    }
+    let total = strict_token_count(usage.get("total_tokens"))?;
+    strict_usage(&[prompt], &[0], Some((total, &[prompt])), None)
+}
+
+fn strict_google_usage_metadata(metadata: &Value, vertex_total: bool) -> Option<Usage> {
+    let prompt = strict_token_count(metadata.get("promptTokenCount"))?;
+    let candidates = strict_token_count(metadata.get("candidatesTokenCount"))?;
+    let tool_prompt = match metadata.get("toolUsePromptTokenCount") {
+        Some(value) => strict_token_count(Some(value))?,
+        None => 0,
+    };
+    let thoughts = match metadata.get("thoughtsTokenCount") {
+        Some(value) => strict_token_count(Some(value))?,
+        None => 0,
+    };
+    let cached = match metadata.get("cachedContentTokenCount") {
+        Some(value) => Some((strict_token_count(Some(value))?, prompt)),
+        None => None,
+    };
+    let total = strict_token_count(metadata.get("totalTokenCount"))?;
+    let vertex_parts = [prompt, candidates, tool_prompt, thoughts];
+    let direct_parts = [prompt, candidates, thoughts];
+    let total_parts = if vertex_total {
+        vertex_parts.as_slice()
+    } else {
+        direct_parts.as_slice()
+    };
+    strict_usage(
+        &[prompt, tool_prompt],
+        &[candidates, thoughts],
+        Some((total, total_parts)),
+        cached,
+    )
+}
+
+#[cfg(any(feature = "providers-extra", feature = "providers-extended", test))]
+pub(crate) fn strict_vertex_usage_metadata(metadata: &Value) -> Option<Usage> {
+    strict_google_usage_metadata(metadata, true)
+}
+
+pub(crate) fn strict_direct_gemini_usage_metadata(metadata: &Value) -> Option<Usage> {
+    let thoughts = match metadata.get("thoughtsTokenCount") {
+        Some(value) => Some(strict_token_count(Some(value))?),
+        None => None,
+    };
+    let mut usage = strict_google_usage_metadata(metadata, false)?;
+    usage.thinking_usage = thoughts.map(|tokens| {
+        ThinkingUsage::new(saturating_token_count(u128::from(tokens))).with_provider("gemini")
+    });
+    Some(usage)
+}
+
 // Testing Utilities
-// ============================================================================
 
 #[cfg(test)]
 pub mod test_utils {
@@ -307,16 +418,12 @@ pub mod test_utils {
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::types::content::ContentPart;
-
-    // ==================== MessageTransformer Tests ====================
 
     #[test]
     fn test_message_transformer_role_to_string_system() {
@@ -481,8 +588,6 @@ mod tests {
         assert_eq!(MessageTransformer::parse_finish_reason(""), None);
     }
 
-    // ==================== RateLimiter Tests ====================
-
     #[test]
     fn test_rate_limiter_new() {
         let limiter = RateLimiter::new(10);
@@ -520,8 +625,6 @@ mod tests {
         // Permit is dropped, should be released
         assert_eq!(limiter.available_permits(), 10);
     }
-
-    // ==================== ResponseValidator Tests ====================
 
     #[test]
     fn test_response_validator_valid_response() {
@@ -581,8 +684,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ==================== Test Utilities Tests ====================
-
     #[test]
     fn test_mock_message() {
         let message = test_utils::mock_message(MessageRole::User, "Hello");
@@ -601,5 +702,93 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 100);
         assert_eq!(usage.completion_tokens, 50);
         assert_eq!(usage.total_tokens, 150);
+    }
+
+    #[test]
+    fn strict_usage_preserves_raw_domain_until_validation() {
+        let values = serde_json::json!({"ok": 1, "bad": [null, "1", 1.5, -1, {}, []]});
+        assert_eq!(strict_token_count(values.get("ok")), Some(1));
+        for value in values["bad"].as_array().unwrap() {
+            assert!(strict_token_count(Some(value)).is_none());
+        }
+        assert!(strict_usage(&[0], &[0], Some((0, &[0, 0])), None).is_none());
+        let max_u32 = u64::from(u32::MAX);
+        for (prompt, completion) in [(max_u32, 0), (max_u32 + 1, 0), (max_u32, 1)] {
+            let usage = strict_usage(&[prompt], &[completion], None, None).unwrap();
+            assert_eq!(usage.prompt_tokens, u32::MAX);
+            assert_eq!(usage.total_tokens, u32::MAX);
+        }
+        assert!(strict_usage(&[u64::MAX], &[1], Some((u64::MAX, &[u64::MAX, 1])), None).is_none());
+        let usage = strict_usage(&[u64::MAX], &[1], None, None).unwrap();
+        assert_eq!(
+            (usage.prompt_tokens, usage.total_tokens),
+            (u32::MAX, u32::MAX)
+        );
+    }
+
+    #[test]
+    fn strict_google_usage_applies_endpoint_total_and_cache_policies() {
+        let mut metadata = serde_json::json!({
+            "promptTokenCount": 10, "toolUsePromptTokenCount": 2,
+            "candidatesTokenCount": 3, "thoughtsTokenCount": 4,
+            "cachedContentTokenCount": 5, "totalTokenCount": 19
+        });
+        let vertex = strict_vertex_usage_metadata(&metadata).unwrap();
+        assert_eq!(vertex.prompt_tokens, 12);
+        assert_eq!(vertex.completion_tokens, 7);
+        assert_eq!(vertex.total_tokens, 19);
+        assert!(strict_direct_gemini_usage_metadata(&metadata).is_none());
+        metadata["totalTokenCount"] = serde_json::json!(17);
+        let direct = strict_direct_gemini_usage_metadata(&metadata).unwrap();
+        assert_eq!(direct.prompt_tokens, 12);
+        assert_eq!(direct.completion_tokens, 7);
+        assert_eq!(direct.total_tokens, 19);
+        assert!(direct.completion_tokens_details.is_none());
+        assert_eq!(direct.thinking_tokens(), Some(4));
+        metadata["cachedContentTokenCount"] = serde_json::json!(10);
+        assert!(strict_direct_gemini_usage_metadata(&metadata).is_some());
+        metadata["cachedContentTokenCount"] = serde_json::json!(11);
+        assert!(strict_direct_gemini_usage_metadata(&metadata).is_none());
+
+        let tool_only = serde_json::json!({
+            "promptTokenCount": 0, "toolUsePromptTokenCount": 2,
+            "candidatesTokenCount": 0, "totalTokenCount": 0
+        });
+        let usage = strict_direct_gemini_usage_metadata(&tool_only).unwrap();
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!((usage.prompt_tokens, usage.total_tokens), (2, 2));
+        let thought_only = serde_json::json!({
+            "promptTokenCount": 0, "candidatesTokenCount": 0,
+            "thoughtsTokenCount": 3, "totalTokenCount": 3
+        });
+        let usage = strict_direct_gemini_usage_metadata(&thought_only).unwrap();
+        assert_eq!((usage.completion_tokens, usage.total_tokens), (3, 3));
+        assert_eq!(usage.thinking_tokens(), Some(3));
+
+        for (field, malformed) in [
+            ("toolUsePromptTokenCount", serde_json::json!("2")),
+            ("thoughtsTokenCount", Value::Null),
+            ("cachedContentTokenCount", serde_json::json!([])),
+        ] {
+            let mut bad = serde_json::json!({
+                "promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2
+            });
+            bad[field] = malformed;
+            assert!(strict_direct_gemini_usage_metadata(&bad).is_none());
+        }
+    }
+
+    #[test]
+    fn strict_embedding_zero_is_semantic() {
+        let valid =
+            serde_json::json!({"prompt_tokens": 8, "completion_tokens": 0, "total_tokens": 8});
+        assert!(strict_openai_embedding_usage(&valid).is_some());
+        for bad in [
+            serde_json::json!({"prompt_tokens": 8, "total_tokens": 9}),
+            serde_json::json!({"prompt_tokens": "8", "total_tokens": 8}),
+            serde_json::json!({"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 8}),
+        ] {
+            assert!(strict_openai_embedding_usage(&bad).is_none());
+        }
     }
 }

@@ -453,7 +453,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                         should_record_spend.then(|| final_usage.take()).flatten(),
                         budget_reservation.take(),
                         key_budget_reservation.take(),
-                        false,
+                        should_record_spend && saw_upstream_output,
                     )
                     .await;
                     if tx

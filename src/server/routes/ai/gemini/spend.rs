@@ -9,6 +9,7 @@ use crate::core::budget::{
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::ProviderError;
+use crate::core::providers::shared::strict_direct_gemini_usage_metadata;
 use crate::utils::error::gateway_error::GatewayError;
 
 use super::provider::GeminiRouteProvider;
@@ -224,42 +225,16 @@ async fn settle_gemini_reserved_spend_without_usage(
     key_budget_reservation: Option<BudgetReservation>,
     context: &str,
 ) {
-    let Some(reservation) = budget_reservation else {
-        super::super::spend::settle_api_key_budget_reservation(
-            key_budget_reservation,
-            0.0,
-            context,
-        );
-        error!(
-            "{context} for provider '{}' model '{}'; spend not recorded",
-            provider.provider_name, provider.model
-        );
-        return;
-    };
-    let reserved = reservation.reserved_amount();
-    if let Err(error) = reservation.settle(reserved) {
-        error!(
-            "failed to settle reserved Gemini SDK budget for provider '{}' model '{}': {error:?}",
-            provider.provider_name, provider.model
-        );
-    }
-    super::super::spend::settle_api_key_budget_reservation(
+    super::super::spend::record_reserved_spend_without_usage(
+        spend_state.key_manager,
+        spend_state.api_key_id,
+        &provider.provider_name,
+        &provider.model,
+        budget_reservation,
         key_budget_reservation,
-        reserved,
         context,
-    );
-    if let Some(key_id) = spend_state.api_key_id
-        && let Err(error) = spend_state
-            .key_manager
-            .record_usage(key_id, 0, reserved)
-            .await
-    {
-        error!("failed to record reserved Gemini SDK usage for key {key_id}: {error}");
-    }
-    error!(
-        "{context} for provider '{}' model '{}'; charged reserved amount",
-        provider.provider_name, provider.model
-    );
+    )
+    .await;
 }
 
 fn reservation_error_to_gateway_error(
@@ -321,21 +296,8 @@ fn estimated_gemini_request_usage(request: &Value) -> PricingUsage {
 
 fn gemini_usage_metadata(value: &Value) -> Option<PricingUsage> {
     let metadata = value.get("usageMetadata")?;
-    let prompt_tokens = u32_field(metadata, "promptTokenCount").unwrap_or(0);
-    let completion_tokens = u32_field(metadata, "candidatesTokenCount").unwrap_or(0);
-    let mut usage = PricingUsage::new(prompt_tokens, completion_tokens);
-    usage.total_tokens = u32_field(metadata, "totalTokenCount")
-        .unwrap_or_else(|| prompt_tokens.saturating_add(completion_tokens));
-    usage.cached_tokens = u32_field(metadata, "cachedContentTokenCount");
-    usage.reasoning_tokens = u32_field(metadata, "thoughtsTokenCount");
-    Some(usage)
-}
-
-fn u32_field(value: &Value, key: &str) -> Option<u32> {
-    value
-        .get(key)
-        .and_then(Value::as_u64)
-        .and_then(|tokens| u32::try_from(tokens).ok())
+    let usage = strict_direct_gemini_usage_metadata(metadata)?;
+    Some(PricingUsage::from(&usage))
 }
 
 fn estimate_gemini_prompt_tokens(request: &Value) -> u32 {
@@ -376,8 +338,11 @@ fn collect_text_chars(value: &Value, chars: &mut usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::budget::{BudgetConfig, BudgetManager, BudgetScope};
-    use crate::core::keys::{InMemoryKeyRepository, KeyManager};
+    use crate::core::budget::{
+        BudgetConfig, BudgetManager, BudgetScope, ModelLimitConfig, ProviderLimitConfig,
+        ResetPeriod,
+    };
+    use crate::core::keys::{CreateKeyConfig, InMemoryKeyRepository, KeyManager};
     use crate::core::pricing_service::PricingService;
     use crate::server::routes::ai::gemini::provider::test_gemini_route_provider;
 
@@ -398,6 +363,39 @@ mod tests {
         assert_eq!(usage.completion_tokens, 2);
         assert_eq!(usage.total_tokens, 3);
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn native_usage_parser_preserves_effective_cache_without_reasoning_charge() {
+        let value = serde_json::json!({"usageMetadata": {
+            "promptTokenCount": 10, "toolUsePromptTokenCount": 2,
+            "candidatesTokenCount": 3, "thoughtsTokenCount": 4,
+            "cachedContentTokenCount": 5, "totalTokenCount": 17
+        }});
+        let usage = gemini_usage_metadata(&value).unwrap();
+        assert_eq!(
+            (
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens
+            ),
+            (12, 7, 19)
+        );
+        assert_eq!(usage.cached_tokens, Some(5));
+        assert_eq!(usage.cache_read_tokens, Some(5));
+        assert_eq!(usage.reasoning_tokens, None);
+        for bad in [
+            serde_json::json!({"usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 4}}),
+            serde_json::json!({"usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": "1", "totalTokenCount": 3}}),
+            serde_json::json!({"usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}}),
+        ] {
+            assert!(gemini_usage_metadata(&bad).is_none());
+        }
+        let huge = serde_json::json!({"usageMetadata": {
+            "promptTokenCount": u64::MAX, "candidatesTokenCount": 0,
+            "totalTokenCount": u64::MAX
+        }});
+        assert_eq!(gemini_usage_metadata(&huge).unwrap().total_tokens, u32::MAX);
     }
 
     #[tokio::test]
@@ -439,5 +437,111 @@ mod tests {
         let spend = budget_manager.get_current_spend(&scope);
         assert!(spend > 0.0, "API key budget spend should be recorded");
         assert!(spend < 0.5, "reservation should settle to actual spend");
+    }
+
+    async fn assert_native_no_usage_case(
+        provider_amount: Option<f64>,
+        key_amount: Option<f64>,
+        key_budget_enabled: bool,
+    ) {
+        let pricing = PricingService::with_embedded_default().expect("pricing");
+        let pricing_config = GatewayPricingConfig::default();
+        let budget_limits = UnifiedBudgetLimits::new();
+        let provider = test_gemini_route_provider("gemini", "vertex_ai", "gemini-test");
+        budget_limits.providers.set_provider_limit(
+            &provider.provider_name,
+            ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+        );
+        budget_limits.models.set_model_limit(
+            &provider.model,
+            ModelLimitConfig::new(10.0, ResetPeriod::Monthly),
+        );
+        let provider_reservation = provider_amount.map(|amount| {
+            budget_limits
+                .reserve_spend(&provider.provider_name, &provider.model, amount)
+                .expect("provider reservation")
+        });
+        let budget_manager = BudgetManager::new();
+        let scope = BudgetScope::ApiKey("native-no-usage".to_string());
+        let mut key_budget_config = BudgetConfig::new("native no usage", 10.0);
+        key_budget_config.enabled = Some(key_budget_enabled);
+        budget_manager
+            .create_budget(scope.clone(), key_budget_config)
+            .await
+            .expect("key budget");
+        let key_reservation = key_amount.map(|amount| {
+            budget_manager
+                .tracker()
+                .reserve_spend(&scope, amount)
+                .expect("key reservation")
+        });
+        let key_reserved = key_reservation
+            .as_ref()
+            .map(BudgetReservation::reserved_amount);
+        let has_key_reservation = key_reservation.is_some();
+        let key_manager = KeyManager::new(InMemoryKeyRepository::new());
+        let (key_id, _) = key_manager
+            .generate_key(CreateKeyConfig {
+                name: "native matrix key".to_string(),
+                ..Default::default()
+            })
+            .await
+            .expect("API key");
+        let state = GeminiSpendState {
+            pricing: &pricing,
+            pricing_config: &pricing_config,
+            budget_limits: &budget_limits,
+            key_manager: &key_manager,
+            api_key_id: Some(key_id),
+        };
+        settle_gemini_reserved_spend_without_usage(
+            &state,
+            &provider,
+            provider_reservation,
+            key_reservation,
+            "native no usage matrix",
+        )
+        .await;
+
+        let provider_spend = budget_limits
+            .providers
+            .get_provider_usage(&provider.provider_name)
+            .expect("provider usage")
+            .current_spend;
+        let model_spend = budget_limits
+            .models
+            .get_model_usage(&provider.model)
+            .expect("model usage")
+            .current_spend;
+        let expected_provider = provider_amount.unwrap_or(0.0);
+        assert!((provider_spend - expected_provider).abs() < f64::EPSILON);
+        assert!((model_spend - expected_provider).abs() < f64::EPSILON);
+        let expected_cost = key_reserved
+            .filter(|amount| *amount > 0.0)
+            .or_else(|| provider_amount.filter(|amount| *amount > 0.0));
+        let expected_key_spend = if has_key_reservation {
+            expected_cost.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        assert!(
+            (budget_manager.get_current_spend(&scope) - expected_key_spend).abs() < f64::EPSILON
+        );
+        let stats = key_manager
+            .get_usage_stats(key_id)
+            .await
+            .expect("usage stats");
+        assert_eq!(stats.total_requests, u64::from(expected_cost.is_some()));
+        assert!((stats.total_cost - expected_cost.unwrap_or(0.0)).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn native_no_usage_settlement_uses_each_reservation_own_amount() {
+        assert_native_no_usage_case(Some(0.4), Some(0.2), true).await;
+        assert_native_no_usage_case(Some(0.4), None, true).await;
+        assert_native_no_usage_case(None, Some(0.2), true).await;
+        assert_native_no_usage_case(None, None, true).await;
+        assert_native_no_usage_case(Some(0.4), Some(0.2), false).await;
+        assert_native_no_usage_case(None, Some(0.2), false).await;
     }
 }

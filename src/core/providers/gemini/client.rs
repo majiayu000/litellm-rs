@@ -1,7 +1,4 @@
-//! Gemini Client
-//!
-//! Error handling
-//! Supports both Google AI Studio and Vertex AI endpoints
+//! Gemini client for Google AI Studio and Vertex AI endpoints.
 
 use std::time::Duration;
 
@@ -14,6 +11,9 @@ use crate::core::providers::base::{
     BaseConfig, BaseHttpClient, HeaderPair, apply_provider_headers, header, header_owned,
     header_static, read_streaming_error_body,
 };
+use crate::core::providers::shared::{
+    strict_direct_gemini_usage_metadata, strict_vertex_usage_metadata,
+};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::{
     chat::ChatMessage,
@@ -21,8 +21,7 @@ use crate::core::types::{
     content::ContentPart,
     message::MessageContent,
     message::MessageRole,
-    responses::{ChatChoice, ChatResponse, CompletionTokensDetails, PromptTokensDetails, Usage},
-    thinking::ThinkingUsage,
+    responses::{ChatChoice, ChatResponse},
     tools::{FunctionCall, ToolCall},
 };
 
@@ -30,6 +29,7 @@ use super::config::GeminiConfig;
 use super::error::{
     GeminiErrorMapper, gemini_multimodal_error, gemini_network_error, gemini_parse_error,
 };
+use super::streaming::GeminiUsagePolicy;
 
 /// Gemini API client
 #[derive(Debug, Clone)]
@@ -109,13 +109,15 @@ impl GeminiClient {
         &self,
         request: ChatRequest,
     ) -> Result<reqwest::Response, ProviderError> {
-        // Request
         let gemini_request = self.transform_chat_request(&request)?;
-
-        // Request
         let endpoint = "streamGenerateContent";
-        self.send_stream_request(&request.model, endpoint, gemini_request)
-            .await
+        let mut response = self
+            .send_stream_request(&request.model, endpoint, gemini_request)
+            .await?;
+        response
+            .extensions_mut()
+            .insert(GeminiUsagePolicy::from_vertex_ai(self.config.use_vertex_ai));
+        Ok(response)
     }
 
     /// Request
@@ -548,43 +550,11 @@ impl GeminiClient {
         }
 
         // Extract usage_stats
-        let usage = response.get("usageMetadata").map(|usage_metadata| {
-            let cached_tokens = usage_metadata
-                .get("cachedContentTokenCount")
-                .and_then(|v| v.as_u64())
-                .map(|tokens| tokens as u32);
-            let thoughts_tokens = usage_metadata
-                .get("thoughtsTokenCount")
-                .and_then(|v| v.as_u64())
-                .map(|tokens| tokens as u32);
-
-            Usage {
-                prompt_tokens: usage_metadata
-                    .get("promptTokenCount")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32,
-                completion_tokens: usage_metadata
-                    .get("candidatesTokenCount")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32,
-                total_tokens: usage_metadata
-                    .get("totalTokenCount")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32,
-                prompt_tokens_details: cached_tokens.map(|cached_tokens| PromptTokensDetails {
-                    cached_tokens: Some(cached_tokens),
-                    cache_creation_tokens: None,
-                    cache_read_tokens: Some(cached_tokens),
-                    audio_tokens: None,
-                }),
-                completion_tokens_details: thoughts_tokens.map(|reasoning_tokens| {
-                    CompletionTokensDetails {
-                        reasoning_tokens: Some(reasoning_tokens),
-                        audio_tokens: None,
-                    }
-                }),
-                thinking_usage: thoughts_tokens
-                    .map(|tokens| ThinkingUsage::new(tokens).with_provider("gemini")),
+        let usage = response.get("usageMetadata").and_then(|metadata| {
+            if self.config.use_vertex_ai {
+                strict_vertex_usage_metadata(metadata)
+            } else {
+                strict_direct_gemini_usage_metadata(metadata)
             }
         });
 
@@ -747,6 +717,7 @@ mod tests {
             }],
             "usageMetadata": {
                 "promptTokenCount": 100,
+                "toolUsePromptTokenCount": 10,
                 "candidatesTokenCount": 25,
                 "totalTokenCount": 140,
                 "cachedContentTokenCount": 12,
@@ -757,10 +728,12 @@ mod tests {
         let result = client.transform_chat_response(response, &request).unwrap();
         let usage = result.usage.unwrap();
         let prompt_details = usage.prompt_tokens_details.unwrap();
-        let completion_details = usage.completion_tokens_details.unwrap();
+        assert_eq!(usage.prompt_tokens, 110);
+        assert_eq!(usage.completion_tokens, 40);
+        assert_eq!(usage.total_tokens, 150);
         assert_eq!(prompt_details.cached_tokens, Some(12));
         assert_eq!(prompt_details.cache_read_tokens, Some(12));
-        assert_eq!(completion_details.reasoning_tokens, Some(15));
+        assert!(usage.completion_tokens_details.is_none());
         assert_eq!(
             usage
                 .thinking_usage
@@ -768,5 +741,56 @@ mod tests {
                 .and_then(|thinking| thinking.thinking_tokens),
             Some(15)
         );
+    }
+
+    #[test]
+    fn test_gemini_usage_fails_closed_and_saturates_after_raw_total() {
+        let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
+        let request = ChatRequest {
+            model: "gemini-2.0-flash".to_string(),
+            ..Default::default()
+        };
+        let transform = |client: &GeminiClient, usage| {
+            client
+                .transform_chat_response(
+                    json!({
+                        "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+                        "usageMetadata": usage
+                    }),
+                    &request,
+                )
+                .unwrap()
+                .usage
+        };
+        for bad in [
+            json!({"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 4}),
+            json!({"promptTokenCount": 2, "candidatesTokenCount": "1", "totalTokenCount": 3}),
+            json!({"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}),
+            json!({"promptTokenCount": 2, "candidatesTokenCount": 1, "cachedContentTokenCount": 3, "totalTokenCount": 3}),
+        ] {
+            assert!(transform(&client, bad).is_none());
+        }
+        let usage = transform(
+            &client,
+            json!({
+                "promptTokenCount": u64::MAX, "candidatesTokenCount": 0,
+                "totalTokenCount": u64::MAX
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            (usage.prompt_tokens, usage.total_tokens),
+            (u32::MAX, u32::MAX)
+        );
+        let vertex = GeminiClient::new(GeminiConfig::new_vertex_ai("project", "location")).unwrap();
+        let mut vertex_usage = json!({
+            "promptTokenCount": 2, "toolUsePromptTokenCount": 1,
+            "candidatesTokenCount": 1, "thoughtsTokenCount": 1, "totalTokenCount": 5
+        });
+        let usage = transform(&vertex, vertex_usage.clone()).unwrap();
+        assert_eq!((usage.prompt_tokens, usage.completion_tokens), (3, 2));
+        assert!(usage.thinking_usage.is_none());
+        vertex_usage["totalTokenCount"] = json!(4);
+        assert!(transform(&vertex, vertex_usage).is_none());
     }
 }

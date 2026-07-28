@@ -222,16 +222,9 @@ impl AzureEmbeddingUtils {
             .collect::<Result<Vec<_>, ProviderError>>()?;
 
         // Calculate usage
-        let usage = response["usage"]
-            .as_object()
-            .map(|u| crate::core::types::responses::Usage {
-                prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-                completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-                total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
-                completion_tokens_details: None,
-                prompt_tokens_details: None,
-                thinking_usage: None,
-            });
+        let usage = response
+            .get("usage")
+            .and_then(crate::core::providers::shared::strict_openai_embedding_usage);
 
         Ok(EmbeddingResponse {
             object: "list".to_string(),
@@ -603,6 +596,38 @@ mod tests {
 
         let embedding_response = result.unwrap();
         assert!(embedding_response.usage.is_none());
+    }
+
+    #[test]
+    fn test_transform_response_embedding_usage_is_strict_and_saturating() {
+        let transform = |usage| {
+            AzureEmbeddingUtils::transform_response(
+                json!({
+                    "data": [{"index": 0, "embedding": [0.1]}],
+                    "usage": usage
+                }),
+                "text-embedding-ada-002",
+            )
+            .unwrap()
+        };
+        for bad in [
+            json!({"total_tokens": 8}),
+            json!({"prompt_tokens": "8", "total_tokens": 8}),
+            json!({"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 8}),
+            json!({"prompt_tokens": 8, "total_tokens": 9}),
+            json!({"prompt_tokens": 0, "total_tokens": 0}),
+        ] {
+            assert!(transform(bad).usage.is_none());
+        }
+        let usage = transform(json!({
+            "prompt_tokens": u64::MAX, "total_tokens": u64::MAX
+        }))
+        .usage
+        .unwrap();
+        assert_eq!(
+            (usage.prompt_tokens, usage.total_tokens),
+            (u32::MAX, u32::MAX)
+        );
     }
 
     #[test]

@@ -188,14 +188,7 @@ impl AzureAIEmbeddingUtils {
         // Parse usage information
         let usage = response
             .get("usage")
-            .map(|usage_data| crate::core::types::responses::Usage {
-                prompt_tokens: usage_data["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-                completion_tokens: 0, // Embeddings don't have completion tokens
-                total_tokens: usage_data["total_tokens"].as_u64().unwrap_or(0) as u32,
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-                thinking_usage: None,
-            });
+            .and_then(crate::core::providers::shared::strict_openai_embedding_usage);
 
         Ok(EmbeddingResponse {
             object: "list".to_string(),
@@ -383,5 +376,38 @@ mod tests {
             assert!(handler.is_multimodal_embedding_model("cohere-embed-v3-multilingual"));
             assert!(!handler.is_multimodal_embedding_model("text-embedding-3-large"));
         }
+    }
+
+    #[test]
+    fn test_transform_response_embedding_usage_is_strict_and_saturating() {
+        let transform = |usage| {
+            AzureAIEmbeddingUtils::transform_response(
+                json!({
+                    "data": [{"index": 0, "embedding": [0.1]}],
+                    "usage": usage
+                }),
+                "text-embedding-3-large",
+            )
+            .unwrap()
+        };
+        for bad in [
+            json!({"prompt_tokens": null, "total_tokens": 8}),
+            json!({"prompt_tokens": 8}),
+            json!({"prompt_tokens": 8, "completion_tokens": "0", "total_tokens": 8}),
+            json!({"prompt_tokens": 8, "total_tokens": 9}),
+            json!({"prompt_tokens": 0, "total_tokens": 0}),
+        ] {
+            assert!(transform(bad).usage.is_none());
+        }
+        let usage = transform(json!({
+            "prompt_tokens": u64::from(u32::MAX) + 1,
+            "total_tokens": u64::from(u32::MAX) + 1
+        }))
+        .usage
+        .unwrap();
+        assert_eq!(
+            (usage.prompt_tokens, usage.total_tokens),
+            (u32::MAX, u32::MAX)
+        );
     }
 }
