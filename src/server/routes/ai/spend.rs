@@ -284,6 +284,19 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
     let recorded_cost = key_reserved
         .filter(|amount| *amount > 0.0)
         .or_else(|| provider_reserved.filter(|amount| *amount > 0.0));
+    if let Some(api_key_usage_fallback_cost) = recorded_cost {
+        tracing::error!(
+            event = "billing_no_usage_reserved_fallback",
+            provider = %provider,
+            model = %model,
+            reason = %context,
+            provider_reserved_amount = ?provider_reserved,
+            key_reserved_amount = ?key_reserved,
+            api_key_usage_fallback_cost,
+            api_key_usage_target_present = api_key_id.is_some(),
+            "trusted provider usage unavailable; settling reserved spend fallback"
+        );
+    }
     if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)
         && let Err(error) = reservation.settle(reserved)
     {

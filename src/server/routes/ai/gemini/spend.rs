@@ -22,46 +22,91 @@ pub(super) struct GeminiSpendState<'a> {
     pub(super) api_key_id: Option<uuid::Uuid>,
 }
 
+#[derive(Debug, Default)]
+pub(super) enum GeminiStreamUsage {
+    #[default]
+    Missing,
+    Valid(PricingUsage),
+    Invalid,
+}
+
+impl GeminiStreamUsage {
+    pub(super) fn observe(&mut self, observation: Self) {
+        match observation {
+            Self::Missing => {}
+            observation => *self = observation,
+        }
+    }
+
+    pub(super) fn as_valid(&self) -> Option<&PricingUsage> {
+        match self {
+            Self::Valid(usage) => Some(usage),
+            Self::Missing | Self::Invalid => None,
+        }
+    }
+}
+
 pub(super) async fn settle_gemini_stream_spend(
     spend_state: &GeminiSpendState<'_>,
     provider: &GeminiRouteProvider,
-    usage: Option<PricingUsage>,
+    usage: GeminiStreamUsage,
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
     saw_upstream_output: bool,
 ) {
-    if let Some(usage) = usage {
-        record_gemini_usage(
-            spend_state,
-            provider,
-            usage,
-            budget_reservation,
-            key_budget_reservation,
-        )
-        .await;
-    } else if saw_upstream_output {
-        settle_gemini_reserved_spend_without_usage(
-            spend_state,
-            provider,
-            budget_reservation,
-            key_budget_reservation,
-            "Gemini SDK stream ended without usageMetadata",
-        )
-        .await;
+    match usage {
+        GeminiStreamUsage::Valid(usage) => {
+            record_gemini_usage(
+                spend_state,
+                provider,
+                usage,
+                budget_reservation,
+                key_budget_reservation,
+            )
+            .await;
+        }
+        GeminiStreamUsage::Missing if saw_upstream_output => {
+            settle_gemini_reserved_spend_without_usage(
+                spend_state,
+                provider,
+                budget_reservation,
+                key_budget_reservation,
+                "Gemini SDK stream ended without usageMetadata",
+            )
+            .await;
+        }
+        GeminiStreamUsage::Invalid if saw_upstream_output => {
+            settle_gemini_reserved_spend_without_usage(
+                spend_state,
+                provider,
+                budget_reservation,
+                key_budget_reservation,
+                "Gemini SDK stream ended with invalid usageMetadata",
+            )
+            .await;
+        }
+        GeminiStreamUsage::Missing | GeminiStreamUsage::Invalid => {}
     }
 }
 
-pub(super) fn extract_gemini_sse_usage(bytes: &Bytes, buffer: &mut String) -> Option<PricingUsage> {
+pub(super) fn extract_gemini_sse_usage(bytes: &Bytes, buffer: &mut String) -> GeminiStreamUsage {
     buffer.push_str(&String::from_utf8_lossy(bytes));
-    let mut usage = None;
+    let mut usage = GeminiStreamUsage::Missing;
     while let Some((event_end, separator_len)) = next_sse_event_boundary(buffer) {
         let event = buffer[..event_end].to_string();
         buffer.drain(..event_end + separator_len);
-        if let Some(next_usage) = parse_gemini_sse_event_usage(&event) {
-            usage = Some(next_usage);
-        }
+        usage.observe(parse_gemini_sse_event_usage(&event));
     }
     usage
+}
+
+pub(super) fn finish_gemini_sse_usage(buffer: &mut String) -> GeminiStreamUsage {
+    let event = std::mem::take(buffer);
+    if event.trim().is_empty() {
+        GeminiStreamUsage::Missing
+    } else {
+        parse_gemini_sse_event_usage(&event)
+    }
 }
 
 fn next_sse_event_boundary(buffer: &str) -> Option<(usize, usize)> {
@@ -268,7 +313,8 @@ fn reservation_error_to_gateway_error(
     }
 }
 
-fn parse_gemini_sse_event_usage(event: &str) -> Option<PricingUsage> {
+fn parse_gemini_sse_event_usage(event: &str) -> GeminiStreamUsage {
+    let mut usage = GeminiStreamUsage::Missing;
     for line in event.lines() {
         let Some(data) = line.trim_start().strip_prefix("data:").map(str::trim) else {
             continue;
@@ -276,12 +322,18 @@ fn parse_gemini_sse_event_usage(event: &str) -> Option<PricingUsage> {
         if data == "[DONE]" || data.is_empty() {
             continue;
         }
-        let value = serde_json::from_str::<Value>(data).ok()?;
-        if let Some(usage) = gemini_usage_metadata(&value) {
-            return Some(usage);
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            return GeminiStreamUsage::Invalid;
+        };
+        if value.get("usageMetadata").is_none() {
+            continue;
         }
+        let Some(next_usage) = gemini_usage_metadata(&value) else {
+            return GeminiStreamUsage::Invalid;
+        };
+        usage = GeminiStreamUsage::Valid(next_usage);
     }
-    None
+    usage
 }
 
 fn estimated_gemini_request_usage(request: &Value) -> PricingUsage {
@@ -356,12 +408,82 @@ mod tests {
             ),
             &mut buffer,
         );
-        assert!(usage.is_some(), "usage should be parsed");
-        let usage = usage.unwrap_or_default();
+        let GeminiStreamUsage::Valid(usage) = usage else {
+            panic!("usage should be parsed");
+        };
 
         assert_eq!(usage.prompt_tokens, 1);
         assert_eq!(usage.completion_tokens, 2);
         assert_eq!(usage.total_tokens, 3);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn native_sse_usage_distinguishes_missing_invalid_and_valid_updates() {
+        let mut buffer = String::new();
+        let mut usage = GeminiStreamUsage::Missing;
+        usage.observe(extract_gemini_sse_usage(
+            &Bytes::from_static(
+                b"data: {\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2,\"totalTokenCount\":3}}\n\n",
+            ),
+            &mut buffer,
+        ));
+        assert_eq!(usage.as_valid().map(|usage| usage.total_tokens), Some(3));
+
+        usage.observe(extract_gemini_sse_usage(
+            &Bytes::from_static(b"data: {\"candidates\":[]}\n\ndata: [DONE]\n\n"),
+            &mut buffer,
+        ));
+        assert_eq!(
+            usage.as_valid().map(|usage| usage.total_tokens),
+            Some(3),
+            "events without usageMetadata must preserve cumulative usage"
+        );
+
+        usage.observe(extract_gemini_sse_usage(
+            &Bytes::from_static(
+                b"data: {\"usageMetadata\":{\"promptTokenCount\":4,\"totalTokenCount\":6}}\n\n",
+            ),
+            &mut buffer,
+        ));
+        assert!(matches!(usage, GeminiStreamUsage::Invalid));
+
+        usage.observe(extract_gemini_sse_usage(
+            &Bytes::from_static(
+                b"data: {\"usageMetadata\":{\"promptTokenCount\":4,\"candidatesTokenCount\":2,\"totalTokenCount\":6}}\n\n",
+            ),
+            &mut buffer,
+        ));
+        assert_eq!(
+            usage.as_valid().map(|usage| usage.total_tokens),
+            Some(6),
+            "a later authoritative cumulative usage event may recover the stream"
+        );
+    }
+
+    #[test]
+    fn native_sse_usage_rejects_later_malformed_or_truncated_events() {
+        let mut buffer = String::new();
+        let usage = extract_gemini_sse_usage(
+            &Bytes::from_static(
+                b"data: {\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2,\"totalTokenCount\":3}}\n\ndata: {\"usageMetadata\":{\"promptTokenCount\":4,\"totalTokenCount\":6}}\n\n",
+            ),
+            &mut buffer,
+        );
+        assert!(matches!(usage, GeminiStreamUsage::Invalid));
+
+        let mut usage = GeminiStreamUsage::Valid(PricingUsage::new(1, 2));
+        usage.observe(extract_gemini_sse_usage(
+            &Bytes::from_static(b"data: {\"usageMetadata\":{\"promptTokenCount\":4"),
+            &mut buffer,
+        ));
+        assert_eq!(
+            usage.as_valid().map(|usage| usage.total_tokens),
+            Some(3),
+            "an incomplete buffered event is not invalid until the stream ends"
+        );
+        usage.observe(finish_gemini_sse_usage(&mut buffer));
+        assert!(matches!(usage, GeminiStreamUsage::Invalid));
         assert!(buffer.is_empty());
     }
 
@@ -494,12 +616,13 @@ mod tests {
             key_manager: &key_manager,
             api_key_id: Some(key_id),
         };
-        settle_gemini_reserved_spend_without_usage(
+        settle_gemini_stream_spend(
             &state,
             &provider,
+            GeminiStreamUsage::Invalid,
             provider_reservation,
             key_reservation,
-            "native no usage matrix",
+            true,
         )
         .await;
 
@@ -536,7 +659,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_no_usage_settlement_uses_each_reservation_own_amount() {
+    async fn invalid_stream_usage_settles_each_reservation_own_amount() {
         assert_native_no_usage_case(Some(0.4), Some(0.2), true).await;
         assert_native_no_usage_case(Some(0.4), None, true).await;
         assert_native_no_usage_case(None, Some(0.2), true).await;
