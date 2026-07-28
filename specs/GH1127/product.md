@@ -54,6 +54,7 @@ complexity: high
 - [ ] 三条端点均有测试证明被拒窗口中的各自客户端可见 surface 不出现在任何已发送 event 中；Chat 覆盖 content、thinking/reasoning、audio transcript、logprobs token 与 tool/function name/arguments，Completion 覆盖 text/echo 与 forwarded logprobs token/refusal，Responses 覆盖 output/reasoning 与状态机实际接受的 function name/arguments。
 - [ ] 跨 chunk 敏感模式与多字节 UTF-8 使用累计文本检测；测试证明阈值按 Unicode 字符计数、触发 event 不拆分且其完整模型文本先审核后释放。
 - [ ] Chat parallel tool calls 测试证明 name/arguments 按 `(choice.index, tool_call.index, field)` 独立连续累计；call 0 的 `sec`、call 1 的 `x`、call 0 的 `ret` 仍让 call 0 surface 命中 `secret`，且独立 call 之间不发生跨 surface 匹配。
+- [ ] Chat 与 Completion 的 top-candidate 测试覆盖每个逻辑 logprob position 的可变 `top_logprobs` 长度：同一 rank 在相邻 position/event 的 `sec`、`ret` 必须命中；rank 在中间 position 缺失后再次出现时必须开始新 segment，不能把缺口两侧误拼成 `secret`。Completion 还必须证明 wire `refusal` 保持原值，同时结构化 refusal token array 中相邻的 `sec`、`ret` 进入独立连续 surface 并被命中。
 - [ ] Responses 测试证明 delta/done/snapshot 的重复表达只累计一次，pre-ID arguments 被 route 丢弃且不进入扫描；late name 在仅更新 state 时不影响字符阈值、8 MiB 上限或 provider error，只有在 `ResponseOutputItemDone` 首次发布前才进入检查。
 - [ ] pending/cumulative buffer overflow、guardrail 拒绝、默认 fail-closed 错误与显式 `fail_open` 均有确定测试。
 - [ ] violation/error 只发送稳定错误 envelope 与一个 `[DONE]`，且不发送成功完成事件。
@@ -67,9 +68,9 @@ complexity: high
 - 敏感模式可能从一个 chunk 的末尾延伸到下一个 chunk 的开头。
 - provider 可能先发送 role、usage 或空 delta，再发送文本。
 - Chat 可能同时序列化 `thinking.content` 与相同的 `reasoning_content` alias；相同语义增量只累计一次。
-- Chat 与 Completion logprobs 共用同一累计契约：ordered chosen-token 序列可能只是 client-visible text 的另一种表示；去重必须按 choice 比较截至当前 event 的累计表示，而不能逐 event 丢弃相等 token。chosen 累计值仍与 text 累计值相等时可作为 alias；一旦任一 event 使两者不再相等，必须把此前 alias 前缀连同新 token 一起物化为一个连续 chosen surface，且之后不得重新折叠。这样即使前一 event 的 text/chosen 都是 `sec`、后一 event 只有 chosen `ret`，扫描面仍包含连续的 `secret`。不同位置的同值 token 必须保留。top candidates 不做逐位置 chosen 去重；每个 candidate rank 按 `(choice.index, candidate_index)` 跨 content positions/events 维护连续 surface，使相邻位置 rank 相同的 `sec`、`ret` 也形成 `secret`。不同 choice/rank 之间保持稳定边界。
+- Chat 与 Completion logprobs 共用同一累计契约：ordered chosen-token 序列可能只是 client-visible text 的另一种表示；去重必须按 choice 比较截至当前 event 的累计表示，而不能逐 event 丢弃相等 token。chosen 累计值仍与 text 累计值相等时可作为 alias；一旦任一 event 使两者不再相等，必须把此前 alias 前缀连同新 token 一起物化为一个连续 chosen surface，且之后不得重新折叠。这样即使前一 event 的 text/chosen 都是 `sec`、后一 event 只有 chosen `ret`，扫描面仍包含连续的 `secret`。不同位置的同值 token 必须保留。top candidates 不做逐位置 chosen 去重，但连续性只存在于同一 choice/rank 的相邻逻辑 logprob positions：rank 在中间 position 缺失时必须结束当前 run，再出现时用稳定边界开启新 segment；没有 logprob position 的模型文本推进同样结束现有 top-rank run，纯 metadata event 则不影响连续性。不同 choice/rank/run 之间保持稳定边界。
 - Chat provider 可能交错发送多个 parallel tool call；legacy function 与每个 modern tool call 的 name/arguments 必须各自保持连续 surface。不得按 event 到达顺序把不同 tool index 的碎片拼进同一字符串，也不得跨独立 call 匹配。
-- Completion 虽然拒绝客户端请求 `logprobs`，但 provider/custom adapter 仍可能返回并被 compatibility route 原样序列化；这些 unsolicited chosen/top token 与 refusal 文本仍是客户端可见面，不能只扫描 `text`。
+- Completion 虽然拒绝客户端请求 `logprobs`，但 provider/custom adapter 仍可能返回并被 compatibility route 原样序列化；这些 unsolicited chosen/top token 与 refusal 文本仍是客户端可见面，不能只扫描 `text`。OpenAI transformer 会把非字符串 refusal 序列化为 JSON string，因此扫描层除保留该 wire raw string 外，还必须对完整匹配 token-array schema 的值按数组顺序提取 `token` 字符串，形成独立的 per-choice refusal-token surface；数组中间出现非 token entry、非结构化 refusal 或解析失败时不得部分拼接，且必须结束既有 structured run。
 - Responses provider 可能在 call ID/state 建立前发送 arguments、重复发送 function name，或在 call ID 之后才补 name；累计序列必须与 state 的实际发布时点一致。pre-ID 丢弃的 arguments 和未发布的重复 name 都不能按原始 delta 追加；只写入 state 的 late name 若随后遇到 provider error/idle timeout 也不得被扫描，只有进入最终 `ResponseOutputItemDone` 时才首次累计。
 - upstream EOF 可能没有 usage；仍须使用既有 reserved-spend fallback。
 - guardrail 可能在上游已经产生完整 usage 后拒绝内容；拒绝不免除已发生费用。
