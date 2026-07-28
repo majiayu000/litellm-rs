@@ -6,134 +6,428 @@ GH-1130 / #1130
 
 ## Product Spec
 
-见 `product.md`（B-001 ～ B-010）。
+见 [`product.md`](./product.md)（B-001 ～ B-019）。
 
 ## Codebase Context
 
-| Area | Files | Current behavior | Why relevant |
+以下锚点均在本 amendment 基线
+`ae26d9d54254124b0942d3b7765ef67ea6fdc9e6` 上核对。
+
+| Area | Verified anchors | Current behavior | Why relevant |
 | --- | --- | --- | --- |
-| Request identity | `src/auth/{user_management,system}.rs`, `src/auth/jwt/{types,handler}.rs`, `src/server/routes/auth/{models,login,token}.rs`, `src/server/routes/ai/context.rs`, `src/core/types/context.rs` | 一个内部 login 路径签发 first-team，JWT 认证读取也重新选择 first-team；HTTP login/refresh 没有 active-team 输入；旧 token 无 provenance；空权限 key 会回退 admin owner | 增加服务端验证的 login/refresh team selection 与版本化 claim，旧 guessed claim 安全降级；Files admin 必须把任何 API key 当 attenuation boundary |
-| Files routes | `src/server/routes/ai/files.rs` | handler 只按裸 `file_id` 操作 | 所有对象级 bypass |
-| Metadata | `src/storage/files/types.rs` | `FileMetadata` 没有 owner | 持久化根因 |
-| Storage dispatch | `src/storage/files/storage.rs` | store API 不接收 owner | Local/S3 必须一致 |
-| Local backend | `src/storage/files/local.rs` | `.meta` JSON 持久化基础 metadata | 可向后兼容 `owner: None` |
-| S3 backend | `src/storage/files/s3.rs` | 使用 object metadata，list/head 获取 metadata | owner 需稳定编码并 round-trip |
-| Route tests | `tests/files_routes.rs`, `src/storage/files/tests.rs` | 只覆盖基础 CRUD | 需要租户矩阵与 legacy |
+| JWT claims / public issuer | `src/auth/jwt/types.rs:34-59`; `src/auth/jwt/handler.rs:25-58,92-133`; `src/auth/jwt/tokens.rs:10-155`; `src/auth/jwt/utils.rs:58-76` | public `Claims` 无 provenance version；public issuer 直接接受 raw `Option<Uuid>` team；specialized tokens 共用 `Claims` | 保持 public `Claims` shape，用 internal access envelope 承载 marker；specialized token 文件无需修改 |
+| AuthSystem login / JWT read | `src/auth/user_management.rs:29-69`; `src/auth/system.rs:85-153`; `src/auth/tests.rs:260-316` | internal login 与认证读取都使用 `user.team_ids.first()`；数据库 `Err` 已通过 `?` 保留 | 共享 current-active membership validator 与 `VerifiedActiveTeam` 的唯一创建点 |
+| HTTP login / refresh | `src/server/routes/auth/models.rs:16-21,49-53`; `src/server/routes/auth/login.rs:69-185`; `src/server/routes/auth/token.rs:10-82`; `src/server/routes/auth/mod.rs:16-45` | public request DTO 没有 `team_id`；routes 直接注册 public handlers；refresh 的 RBAC `Err` 被 `unwrap_or_default` 吞成空权限 | private wire DTO/route adapter 接收 selection，public DTO/handler signature 保持，固定 400/5xx |
+| Middleware status boundary | `src/server/middleware/auth.rs:211-295,333-369` | `AuthSystem::authenticate` 的 `Err` 已是 generic 500；但 API-key endpoint-policy parse `Err` 被公开成 403 与内部细节 | 保留认证 401/5xx 分流，收紧 policy/check error 为 generic 5xx |
+| Canonical team state | `src/core/teams/repository.rs:14-40`; `src/core/models/team/member.rs:45-76`; `src/server/state.rs:31-48,84-86` | repository 已提供 `get`/`get_member`，team/member 都有 active 状态；AppState 已持有同一数据库上的 manager | 复用既有 canonical repository；这些文件无需修改，不新增平行 membership 存储 |
+| API-key policy / identity | `src/server/routes/ai/context.rs:86-185,214-246`; `src/core/types/context.rs:61-80,140-159` | bool permission helpers用 `matches!` 吞 runtime-policy parse error；context 的 user 字段是 String，但 authenticated User/API key IDs 本身是 UUID | Files 使用 result-returning checked helper，只从 typed principal 构造 UUID scope；`RequestContext` 结构无需改 |
+| Files routes | `src/server/routes/ai/files.rs:60-171`; `src/server/routes/ai/mod.rs:43,155-166` | 五个 public handlers 无 request proof 且直接注册；upload 调用 legacy store；读删只按裸 `file_id` | 保留 public signatures 但 auth-enabled fail closed；HTTP routes 改注册 private proof-aware adapters |
+| Metadata / dispatch | `src/storage/files/types.rs:14-32`; `src/storage/files/storage.rs:41-101`; `src/storage/mod.rs:326-334` | public `FileMetadata` 无 owner；`metadata` 与三个 public store 入口不提供 owner | 保持 public struct literal 与方法签名，owner 只进入 internal persisted envelope/additive API |
+| Local backend | `src/storage/files/local.rs:34-80,137-225` | `.meta` JSON round-trip 基础 metadata；list 的 `Some(limit)` 是总结果上限 | 增加 internal flat owner envelope 并保留 public/legacy/list 语义 |
+| S3 backend | `src/storage/files/s3.rs:104-150,217-254,256-312,314-353` | owner 未写 metadata；metadata HEAD 把所有错误映射 Internal；list 只取第一页并把 `max_keys` 当完整 limit | 严格 owner metadata、精确 HEAD 404、完整 continuation 与跨页总 limit |
+| Existing test surfaces | `src/storage/files/tests.rs:1-78`; `tests/files_routes.rs:1-80`; `tests/integration/auth_middleware_tests_parts/mod.rs:1-202`; `tests/integration/auth_middleware_tests_parts/rejection_rate_limit.rs:1-225`; `tests/public_api_compat.rs:1-64` | 已有 storage CRUD、Files route、middleware 500 与 public API compile harness | 扩充 security/status/source-boundary/compatibility 矩阵，不访问真实 AWS |
+
+## Planned Changes
+
+以下是完整实现边界，恰好 24 个 repository-relative path。实现若必须修改表外文件，
+先停止并提交新的 spec amendment；不得把未申报文件塞入实现 PR。
+
+```specrail-planned-changes
+{
+  "issue": 1130,
+  "complete": true,
+  "paths": [
+    "src/auth/jwt/types.rs",
+    "src/auth/jwt/handler.rs",
+    "src/auth/jwt/tests.rs",
+    "src/auth/user_management.rs",
+    "src/auth/system.rs",
+    "src/auth/tests.rs",
+    "src/server/routes/auth/models.rs",
+    "src/server/routes/auth/login.rs",
+    "src/server/routes/auth/token.rs",
+    "src/server/routes/auth/mod.rs",
+    "src/server/routes/ai/context.rs",
+    "src/server/middleware/auth.rs",
+    "src/server/routes/ai/files.rs",
+    "src/server/routes/ai/mod.rs",
+    "src/storage/files/mod.rs",
+    "src/storage/files/types.rs",
+    "src/storage/files/storage.rs",
+    "src/storage/files/local.rs",
+    "src/storage/files/s3.rs",
+    "src/storage/files/tests.rs",
+    "tests/files_routes.rs",
+    "tests/integration/auth_middleware_tests_parts/mod.rs",
+    "tests/integration/auth_middleware_tests_parts/rejection_rate_limit.rs",
+    "tests/public_api_compat.rs"
+  ],
+  "spec_refs": [
+    "B-001",
+    "B-002",
+    "B-003",
+    "B-004",
+    "B-005",
+    "B-006",
+    "B-007",
+    "B-008",
+    "B-009",
+    "B-010",
+    "B-011",
+    "B-012",
+    "B-013",
+    "B-014",
+    "B-015",
+    "B-016",
+    "B-017",
+    "B-018",
+    "B-019"
+  ]
+}
+```
 
 ## 设计方案
 
-1. 定义单值 `FileOwnerScope`，推荐 serde tagged enum：
-   `Team(Uuid)`、`User(String)`、`ApiKey(Uuid)`。`FileMetadata.owner` 为
-   `Option<FileOwnerScope>` 并带 `#[serde(default)]`，从而旧 Local metadata
-   反序列化为 `None`。禁止保存三个 optional ID 并使用 OR 匹配。
-2. 在 files route 的 crate-private helper 中从可信 request extensions/context 解析
-   `FileCaller { auth_enforced, is_admin, effective_scope }`：
-   - API key 请求的 active team 只能是已验证 `ApiKey.team_id`。
-   - `LoginRequest` 与 `RefreshTokenRequest` 增加 optional snake_case `team_id`。
-     login/refresh handler 读取数据库中的 current user memberships；缺失时签发
-     user-scope token，存在时只在 exact membership match 后签发，否则稳定拒绝且
-     不生成 token。`AuthSystem::login` 同步接受 optional selection 并复用同一
-     validator，禁止 `user.team_ids.first()`。
-   - access-token `Claims` 增加 `#[serde(default)] team_scope_version: Option<u8>`；
-     本 tranche 唯一接受值为 `Some(1)`。只有通过上述 validator 的 typed
-     `VerifiedActiveTeam` 才能同时写入 `team_id` 与 version 1；无选择的新 token
-     写 `team_id: None`/version 1。旧 token 因字段缺失解码为 `None`：即使其中有
-     历史 guessed `team_id`，认证也忽略该 team，但 token 仍作为 user-scope 身份。
-     version 1 的 team 仍须在认证时再次验证 current membership；失败时拒绝 token，
-     不得静默切换其他 team。不得新增或信任客户端自报 header。
-   - API key 存在时，admin 只能由该 key 的直接 `*`/`system.admin` 或 runtime
-     `is_admin`/等价 admin permission 授予。把 `context.rs` 现有 direct/runtime
-     admin parser 暴露为唯一 crate-private helper 供 Files caller 复用；只要 API key
-     存在，受限、空 permissions、runtime payload absent 都不得回退到 key owner 的
-     用户角色。无 API key 的 JWT/session 才按 canonical user admin role/RBAC 判定。
-   有效 scope 严格按 trusted team -> non-empty user -> API key 优先；auth 开启且
-   普通调用者没有 scope 时返回显式 auth/permission error。
-3. 扩展 `FileStorage::{store,store_with_purpose}` 及 Local/S3 对应入口接收 owner。
-   Files route 在写 content 前完成 caller 解析。Local 把 enum 写入 `.meta`；S3 使用
-   一个版本化 JSON metadata key（避免三个 key 产生组合歧义），读取时严格解析。
-4. 建立唯一 `can_access_file(caller, metadata)`：auth disabled 允许现有单租户行为；
-   admin 允许全部；普通调用者仅当单一 effective scope 与 owner 完全相等时允许；
-   `owner: None` 仅 admin。该 helper 供 list/get/content/delete 共同使用。
-5. list 读取 metadata 后先过滤再构造公开 `FileObject`；任何 metadata 解析错误显式
-   返回 error，禁止跳过损坏项并给出不完整/未过滤结果。当前 route 没有 query
-   pagination/limit/count，公开响应只有 `object` 与 `data`，因此返回全部已授权文件，
-   不新增 public limit。Local/S3 storage listing 必须返回完整候选集：S3 循环
-   `ListObjectsV2` continuation token 直到 `is_truncated=false`，检测 token
-   缺失/重复并显式失败；Files route 保持调用 `list(None, None)`，不得把内部
-   `max_keys` 当公开截断。公开对象不序列化 owner。
-6. get/content/delete 对非 owner 使用与 missing file 相同的 canonical `NotFound`
-   状态、错误 type/code 和不含 file/owner 细节的正文。S3 `HeadObject` mapper 使用
-   Rust SDK `HeadObjectError::is_not_found()` 判定服务 HTTP 404；HEAD 错误响应没有
-   可依赖的 body/精确 exception，不得解析 `NoSuchKey` 字符串。transport、
-   credential、timeout、403、5xx 与其他 service errors 保持显式 5xx，禁止
-   blanket 映射。route 对 foreign 与 storage NotFound 使用同一公开 404 mapper。
-   日志只记录 request ID 与拒绝类别，不记录 owner 值。delete 必须先取 metadata
-   并授权，再调用 backend delete。
-7. S3 的 object key 继续不可由调用者指定，owner metadata 仅由服务端写入。测试使用
-   backend fixture/mock，不访问真实 AWS。
+### 1. 单值 UUID owner
+
+在 `src/storage/files/types.rs` 定义 crate-private adjacent-tag enum，wire 必须精确为：
+
+```text
+#[serde(tag = "scope", content = "id", rename_all = "snake_case")]
+FileOwnerScope = Team(Uuid) | User(Uuid) | ApiKey(Uuid)
+
+{"scope":"team","id":"<uuid>"}
+{"scope":"user","id":"<uuid>"}
+{"scope":"api_key","id":"<uuid>"}
+```
+
+public `FileMetadata` 的字段集合保持原样。新增 crate-private flat persisted envelope：
+
+```text
+StoredFileMetadata {
+  #[serde(flatten)] public: FileMetadata,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  owner: Option<FileOwnerScope>
+}
+```
+
+Local 新 `.meta` 仍把既有 public fields 放在顶层；旧 bare `FileMetadata` 因 owner
+default 解码为 `None`，旧 reader 也可忽略新 owner 字段。S3 internal metadata result
+同样返回 `{ public, owner }`，public `metadata()` 只投影 `public`。不保存三个 optional
+ID，不做 OR matching，不从任意 String 制造 User owner。Files caller 只使用已认证
+`User::id()`、`ApiKey.user_id`、`ApiKey.team_id` 与 `ApiKey.metadata.id` 的 UUID。
+
+### 2. Provenance 三态与唯一 typed issuer
+
+public `Claims` 字段集合保持不变。`src/auth/jwt/types.rs` 新增 crate-private access
+envelope：
+
+```text
+AccessTokenClaims {
+  #[serde(flatten)] public: Claims,
+  #[serde(default)] team_scope_version: Option<u8>
+}
+```
+
+只有 access-token encode/decode 使用该 envelope；refresh/password-reset/email/
+invitation 继续直接使用 public `Claims`，因此 `jwt/tokens.rs` 与 `jwt/utils.rs` 不在
+manifest。public `verify_access_token` 的签名不变并只返回其中的 `Claims`；新增
+crate-internal `verify_access_token_with_provenance` 供 `AuthSystem` 使用完整 envelope。
+access-token 状态机固定为：
+
+| Marker / team claim | Authentication result |
+| --- | --- |
+| `None` / any `team_id` | legacy；忽略 team，active user 成功后只建立 User scope |
+| `Some(1)` / `None` | active user 的 User scope |
+| `Some(1)` / `Some(team_id)` | current team 与 membership 都 active 时建立 Team scope；missing/inactive/stale 为 401 |
+| `Some(v != 1)` / any `team_id` | 401；在 scope fallback 前拒绝整个 bearer token |
+
+在 `src/auth/system.rs` 定义
+`VerifiedActiveTeam { user_id: Uuid, team_id: Uuid }`：类型可供 crate-internal typed
+issuer 接受，但两个字段与 constructor 都私有于 `auth::system` module。唯一 constructor
+由共享 validator 在 canonical `TeamRepository::get` 与 `get_member` 均成功、
+`Team::is_active()` 与 `TeamMember::is_active()` 都为真、member/user UUID exact match
+后调用。repository `Err` 原样传播；
+成功读取但 team/member 不存在或不 active 由调用边界分类：
+
+- login/refresh 的显式 selection：400，且在任何 token encode 前结束；
+- version 1 bearer token 的复验：认证失败 401；
+- repository/反序列化/连接错误：generic 5xx。
+
+`JwtHandler::{create_access_token,create_token_pair}` 的 public 参数和返回类型不改：
+raw `team_id: None` 签发 version 1 User token；raw `team_id: Some` 在 encode 前返回
+显式错误。新增 crate-internal typed issuer，只接受 `&VerifiedActiveTeam`，并在
+encode 前强制 `proof.user_id == token subject`；不相等时显式拒绝，不能把 user A 的
+proof 配给 user B。校验通过后才签发 version 1 Team token。生产 login/refresh
+只能走 typed path；没有第二个 raw-team encode helper。
+
+`AuthSystem::login(&str, &str)` 保留原签名并成为 no-selection User-scope 入口；
+新增 additive `login_with_active_team`，与 HTTP login/refresh 共用同一个 validator。
+所有 `team_ids.first()` 签发/读取路径删除。
+
+### 3. HTTP selection 与错误分类
+
+public `LoginRequest`、`RefreshTokenRequest` 字段集合和既有 public login/refresh
+handler signatures 保持不变。新增 private wire DTO：
+
+```text
+LoginWireRequest {
+  #[serde(flatten)] public: LoginRequest,
+  team_id: Option<Uuid>
+}
+RefreshWireRequest {
+  #[serde(flatten)] public: RefreshTokenRequest,
+  team_id: Option<Uuid>
+}
+```
+
+`src/server/routes/auth/mod.rs` 的 HTTP registration 只指向 private wire-aware
+adapters；existing public handlers 继续作为 no-selection wrappers，调用同一个
+internal implementation。wire behavior 为：
+
+- 字段缺失保持兼容，签发 version 1 User token；
+- JSON/UUID malformed 由 request boundary 返回 400；
+- well-formed foreign/missing/inactive/suspended selection 统一 generic 400；
+- user/team/membership/RBAC storage `Err` 返回 generic 5xx；
+- 失败时 access 与 refresh token 都不得生成。
+
+refresh 删除 `unwrap_or_default`；RBAC `Err` 不能变成空 permissions。
+
+认证 middleware 已将 `AuthSystem::authenticate` 的 `Err` 映射 generic 500，保留该
+边界。它对 `api_key_allows_endpoint` 的 parse/check `Err` 改为同样的 generic 500，
+不再返回含内部 policy 细节的 403。普通 deny 仍为 403，无效 credential/token 仍为
+401。
+
+### 4. API-key attenuation 与 caller resolver
+
+在 `src/server/routes/ai/context.rs` 增加 result-returning crate-private checked
+helper，复用现有 direct permissions 与 runtime-policy parser：
+
+- API key 存在时，只有该 key 的 direct `*`/`system.admin` 或成功解析的 runtime
+  `is_admin`/等价 custom permission 可授予 Files admin；
+- restricted、empty、runtime payload absent 都是 non-admin，且不得回退 key owner
+  的 Admin/SuperAdmin role；
+- malformed runtime policy 是 `Err`，由 middleware/Files route 变成 generic 5xx，
+  不能伪装 non-admin 后继续 fallback；
+- 无 API key 的 JWT/session 才按 canonical user role/RBAC 判定。
+
+`FileCaller { auth_enforced, is_admin, effective_scope }` 的 principal 分支互斥：
+
+1. request extensions 存在 `ApiKey` 时，不读取任何 JWT/context residual team。
+   先验证 context 的 API-key/user identity 与 typed key exact match；然后只在该 key
+   内按 `team_id -> user_id -> metadata.id` 取一个 UUID scope。
+2. 不存在 `ApiKey` 时，要求 typed authenticated `User` 与 context user UUID exact
+   match；只有 `AuthSystem` 复验后写入的 JWT team 才优先于 `User::id()`。
+3. typed principal/context mismatch、缺失的必需 identity 或 invalid UUID 都是
+   consistency/storage error，返回 generic 5xx；不得尝试下一种 principal/scope。
+
+本 Issue 把已认证且 active 的 API key 上持久化 `team_id` 视为 key 自身的 trusted
+team association，不把它当 key owner 的 active-team selection，也不查询 owner
+membership。team 删除与 key association 撤销/同步属于独立 lifecycle Issue；该风险
+不允许通过读取 residual JWT team 来“修复”。
+
+### 5. Additive storage API
+
+以下 public 方法和 public `FileMetadata` struct shape 保留，并继续代表显式
+non-HTTP legacy/admin/migration caller，写 `owner: None`：
+
+- `FileStorage::{store,store_with_purpose,metadata}`
+- `LocalStorage::{store,store_with_purpose,metadata}`
+- `S3Storage::{store,store_with_purpose,metadata}`
+- `StorageLayer::{store_file,get_file}`（该文件不改）
+
+新增 owner 非 optional 的 crate-internal
+`store_owned_with_purpose(..., owner: FileOwnerScope)`，以及对应 Local/S3 dispatch
+；另新增 crate-internal `metadata_with_owner` 返回 `StoredFileMetadata`。
+auth-enabled Files HTTP upload 在读取
+multipart content 后、backend write 前解析 caller，并且只能调用 owned 方法；scope
+失败不得调用 legacy store。auth-disabled + allow-anonymous route 才走兼容入口。
+
+Local 用 flat internal envelope 把 owner 写入 `.meta`，同时兼容 legacy bare
+`FileMetadata`。S3 metadata key 固定为 `litellm-owner`，value 固定为：
+
+```json
+{"version":1,"scope":"team|user|api_key","id":"<uuid>"}
+```
+
+S3 只有整个 key 缺失才表示 legacy `owner: None`；value malformed、unknown version、
+unknown scope、missing/extra required field 或 invalid UUID 都是 5xx。public metadata
+result 不含 owner，不得用三个独立 metadata key 拼接 owner。
+
+### 6. 完整 listing 与统一授权
+
+建立唯一 `can_access_file(caller, metadata)`：
+
+- auth disabled：保持现有单租户行为；
+- admin：允许所有 owner 与 legacy `None`；
+- 普通 caller：只有 effective scope 与 metadata 的单一 owner 完全相等才允许；
+- legacy `None`：auth-enabled 时仅 admin。
+
+list 必须先得到完整候选集、逐个读取并验证 metadata，再构造公开
+`OpenAiFileObject`。任一 metadata failure 使整个请求 5xx，不 skip、不返回部分 data。
+Files route 继续调用 `list(None, None)`，因为公开 API 没有 limit/count。
+
+S3 `ListObjectsV2` 对每一页保持同一个 prefix，并循环 continuation token 到
+`is_truncated=false`：
+
+- `Some(0)` 不发 S3 请求并返回空结果；
+- `None` 返回所有 candidates；每页 `max_keys=1000`；
+- `Some(limit > 0)` 是跨页总上限；每页
+  `max_keys=min(1000, remaining)`，达到后停止；
+- truncated page 必须提供 fresh、non-empty next token；缺失、空值或重复 token
+  显式失败；
+- 任意 later-page error 使整个 list 失败，不得返回已经收集的 prefix/部分结果。
+
+Local 的 existing `Some(limit)` 总上限语义保持不变，并修正为 `Some(0)` 直接返回空
+结果、零目录扫描。
+
+### 7. Concealment 与精确 S3 NotFound
+
+get/content/delete 都先取 metadata 并授权；delete 只有授权成功后才调用 backend
+delete。foreign owner 与真实 missing 使用同一 canonical OpenAI-compatible 404
+status、type、code 和不含 file/owner 细节的正文。
+
+S3 metadata/exists 共用一个 HeadObject error mapper。只有 SDK modeled
+`is_not_found()` 或 raw service response status 404 生成 canonical
+`GatewayError::NotFound`；不得读取或假设 HEAD body、`NoSuchKey` code 或 exception
+字符串。transport、credential、timeout、403、throttling 与 5xx 保持显式 error，
+最终为 generic 5xx。日志只记录 request ID 与拒绝类别，不记录 owner 或持久化 policy。
+
+legacy owner-less metadata 只有 `purpose` 仍是当前公开 File object 支持的值时才可被
+list/get 表示。missing/invalid purpose 保持现有显式 error，并使整个 list/get 失败；
+不得默认成 `assistants`、skip 或返回部分成功。
+
+### 8. Proof-aware Files route adapters
+
+`src/server/routes/ai/files.rs` 保留五个 public handler signatures，并新增 private
+`HttpRequest`-aware adapters 与共享 internal implementation：
+
+- `src/server/routes/ai/mod.rs` 的五个 HTTP routes 只注册 private adapters；
+- adapters 解析 request extensions/context 后调用 shared implementation；
+- proofless public wrappers 传入 `None` proof：auth enabled 时在任何 storage call 前
+  fail closed；只有 auth disabled + allow-anonymous 才进入 legacy behavior。
+
+source-boundary test 读取 route registration，断言不再存在 `.to(create_file)`、
+`.to(list_files)`、`.to(get_file)`、`.to(delete_file)` 或
+`.to(get_file_content)`，并断言五个 private adapter 都已注册。route test 同时用
+call-count 证明 auth-enabled direct wrapper 不触碰 storage。
+
+### 9. 文件级实现边界
+
+24 个 manifest path 的职责划分如下：
+
+- JWT/auth/selection：10 个 auth/JWT/route path；
+- API-key policy status：`src/server/routes/ai/context.rs` 与
+  `src/server/middleware/auth.rs`；
+- Files authorization/registration：`src/server/routes/ai/{files,mod}.rs`；
+- owner/storage：6 个 `src/storage/files/**` path；
+- integration/status/public-compat fixtures：4 个 `tests/**` path。
+
+`src/core/types/context.rs`、`src/core/teams/**`、`src/server/state.rs` 与 database
+repository 不修改：当前 typed UUID accessors、canonical TeamRepository 和 AppState
+manager 已足够。若实现证明此判断错误，必须先回到 spec review，而不是越界修改。
 
 ## Product-to-Test Mapping
 
-| Product invariant | Implementation area | Verification |
+| Product invariant | Implementation area | Deterministic verification |
 | --- | --- | --- |
-| B-001 | token selection/provenance + effective scope resolver + enum | login/refresh valid/foreign/no team、version 1、legacy no-marker、API-key team、multi-team no-claim、user/key fallback |
-| B-002 | paginated list + filter | 多 tenant + legacy + >1000 S3 objects；返回全部 authorized data，无 public limit/count |
-| B-003 | uniform concealment response | foreign 与 Local/S3 random missing 的 status/body 等价 |
-| B-004/B-005 | caller resolver/canonical RBAC | key direct/runtime admin、restricted key + admin owner、admin JWT、无 scope |
-| B-006/B-007 | Local/S3 serialization + error mapper | round-trip、legacy、restart、S3 404/非 404 |
-| B-008 | FileObject/error mapping | JSON/log capture 无 owner |
-| B-009 | auth-disabled branch | anonymous CRUD 兼容测试 |
-| B-010 | route call order | mock backend 证明 unauthorized 不调用 get/delete |
+| B-001 | FileCaller + owner enum + typed team context | `cargo test --all-features --test files_routes gh1130_scope_priority -- --nocapture` |
+| B-002 | S3 continuation + Files filter | `cargo test --features s3 --lib storage::files::s3::tests -- --nocapture`，包含 `Some(0)`、>1000、stable prefix、repeat/missing/empty token、later-page error 与 `Some(limit)` |
+| B-003 | canonical concealment mapper | `cargo test --all-features --test files_routes gh1130_foreign_matches_missing -- --nocapture` |
+| B-004 | checked API-key admin parser | `cargo test --lib server::routes::ai::context::tests -- --nocapture`，覆盖 direct/runtime/empty/restricted + admin owner |
+| B-005 | FileCaller / upload pre-write gate | `cargo test --all-features --test files_routes gh1130_missing_scope -- --nocapture` |
+| B-006 | Local/S3 internal envelope serde + HeadObject mapper | `cargo test --lib storage::files::tests -- --nocapture`; `cargo test --features s3 --lib storage::files::s3::tests -- --nocapture` |
+| B-007 | serde-defaulted legacy owner | `cargo test --lib storage::files::tests gh1130_legacy_owner -- --nocapture` |
+| B-008 | public object/error/log capture | `cargo test --all-features --test files_routes gh1130_owner_redaction -- --nocapture` |
+| B-009 | auth-disabled route + legacy store | `cargo test --all-features --test files_routes gh1130_auth_disabled -- --nocapture` |
+| B-010 | route call order / failure propagation | `cargo test --all-features --test files_routes gh1130_backend_call_order -- --nocapture` |
+| B-011 | Claims state table + authenticate_jwt | `cargo test --lib auth::jwt::tests -- --nocapture`; `cargo test --lib auth::tests -- --nocapture` |
+| B-012 | login/refresh selection boundary | inline login tests plus `cargo test --all-features --test lib integration::auth_middleware_tests -- --nocapture` |
+| B-013 | auth/policy/storage 401/5xx matrix | `cargo test --all-features --test lib integration::auth_middleware_tests -- --nocapture` |
+| B-014 | unchanged public method/handler signatures + unchanged public struct fields | `cargo test --all-features --test public_api_compat -- --nocapture`; `cargo check --all-features` |
+| B-015 | system-private constructor + subject-bound typed issuer | `cargo test --lib auth::jwt::tests gh1130_verified_team -- --nocapture`; negative proof-subject mismatch；source review confirms no raw-team encode path |
+| B-016 | UUID owner envelope + owned-store-only upload | `cargo test --lib storage::files::tests gh1130_owned_store -- --nocapture`; legacy bare/new envelope round-trip；Files mock asserts legacy store call count zero |
+| B-017 | mutually exclusive caller resolver | `cargo test --all-features --test files_routes gh1130_exclusive_principal_scope -- --nocapture`，覆盖 key team/user/id、JWT team/user 与 mismatch |
+| B-018 | legacy purpose compatibility | `cargo test --all-features --test files_routes gh1130_legacy_purpose -- --nocapture`，valid visible、missing/invalid whole-request failure |
+| B-019 | private route adapters + proofless wrapper gate | source-boundary/compile fixture in `tests/public_api_compat.rs`; route call-count tests in `tests/files_routes.rs` |
+
+所有计划新增的 GH1130 test 名使用 `gh1130_` 前缀；focused command 若没有匹配测试，
+不构成完成证据，最终还必须运行对应完整 module/target。
 
 ## 数据流
 
-login/refresh 接收 optional `team_id` 并验证 current membership；token issuer 只把
-typed verified selection 与 `team_scope_version=1` 写入 JWT，否则写
-`team_id: None`。旧 access token 缺 version 时忽略历史 team claim并保持 user-scope
-认证。auth middleware 将可信 user/API key 与 `RequestContext` 放入 request
-extensions；version 1 JWT active-team claim 只有在再次验证 membership 后才进入
-Files caller，签发/读取两端都不能复用 `team_ids.first()`。Files handler 解析一个
-有效 caller scope；upload 把该 scope随 metadata 交给 storage。
-后续 list 或 object 操作先读取 metadata，使用唯一授权 helper 判定，再返回公开对象、
-content 或执行 delete。S3 list 先遍历全部 continuation pages，再由 route 过滤并返回
-完整 authorized set；Local/S3 都从持久化 metadata 恢复相同 enum；legacy `None`
-只能通过 admin 路径。
+1. private login/refresh wire adapters 解析 optional UUID selection；共享 validator
+   查询 canonical team 与 membership；public request DTO/handlers 保持 no-selection。
+2. no-selection 签发 version 1 User token；valid selection 产生
+   `VerifiedActiveTeam` 并走 typed Team issuer；selection rejection 在 encode 前结束。
+3. middleware 验证 JWT：legacy 忽略 team；version 1 team 复验 membership；unknown
+   version/stale membership 为 401，repository `Err` 为 generic 5xx。
+4. middleware 插入 typed User/API key 与只含可信 team 的 RequestContext；policy parse
+   error 在 route 前 generic 5xx。
+5. private Files route adapter 提供 request proof；caller resolver 先选互斥 principal，
+   再解析一个 UUID scope。proofless public wrapper 在 auth-enabled 时 fail closed。
+6. Local/S3 通过 internal envelope 持久化 tagged owner；list 完整遍历 candidates
+   并逐个调用 internal metadata-with-owner，public `FileMetadata` 不变。
+7. 唯一授权 helper 在公开对象/content/delete 前判断；foreign 与 missing 统一 404，
+   storage/policy failure 统一 generic 5xx。
 
 ## 备选方案
 
-- 保存 user/team/key 三个字段并任一相等即允许：拒绝，会让同一 user 跨 team 绕过。
-- 只绑定 API key：隔离最强但会破坏同 team/user 合法共享，且忽略已有租户层次。
-- foreign 返回 `403`：拒绝，与 missing `404` 可区分并泄露对象存在性。
-- 自动把 legacy 文件归给首个访问者：拒绝，存在可抢占所有权风险。
-- 只在 route 内存映射 owner：拒绝，重启和多实例会丢失授权事实。
+- 保存 user/team/key 三个 optional 字段并任一相等即允许：拒绝，会产生 same-user
+  cross-team bypass。
+- 继续让 raw `Option<Uuid>` issuer 签 team token：拒绝，无法证明 provenance。
+- 修改既有 public storage/JWT/handler signature 或 public DTO/metadata/claims fields：
+  拒绝，会造成不必要 Rust source break；使用 internal envelope/wire adapter。
+- unknown version 当 legacy 或 stale membership 回退 User：拒绝，会把未来/损坏状态
+  当可信降级。
+- foreign 返回 403：拒绝，会成为文件存在性 oracle。
+- 只取 S3 第一页或 metadata 错误时 skip：拒绝，会返回不完整且可能泄露的成功结果。
+- 自动归属 legacy 文件：拒绝，存在 owner 抢占。
 
 ## 风险
 
-- Security: owner scope、admin 判定和 concealment 是 auth 敏感面，必须人工 review。
-- Security: API key 是 permission attenuation boundary；不得让 admin user 身份抬高
-  受限/空权限 key 权限，也不得把任意 team membership 当 active team。旧 token 的
-  guessed team 必须因缺 version marker 被忽略。
-- Compatibility: 历史文件普通用户将不可见；这是明确的 fail-closed 迁移。旧 access
-  token 继续作为 user-scope 身份有效，但不再保留 guessed team scope；需要 team
-  scope 的客户端通过 login/refresh 的 optional `team_id` 获取新 token。
-- Performance/Availability: 完整的跨租户授权列表要先遍历/过滤全部 S3 candidates，
-  可能增加大量分页与逐对象 `HeadObject`，在大 bucket/高并发下可能触发
-  throttling 或 `503 Slow Down` 并使整个 list 显式失败。实现应保持 bounded
-  concurrency/retry 与 fail-closed，不得为可用性跳过 metadata 或返回部分未过滤
-  结果；可扩展性需另开 Issue，以按 owner 建立可信索引或缓存（例如数据库/Redis），
-  且索引失效时仍回到安全失败而非全局放行。
-- Maintenance: 所有新 Files handler 必须复用 caller/ownership helper。
+- Security: auth、owner、API-key attenuation 与 concealment 都是高风险边界；实现 PR
+  必须有独立人工 security review，不能由 agent 自批。
+- Compatibility: legacy token 继续 User-scope；unknown version 必须重新登录。列出的
+  public methods/handlers 与 `FileMetadata`/`Claims`/auth request struct literals 保留；
+  marker/selection/owner 由 internal envelope/wire 承载。raw team signing 从可用变为
+  显式拒绝，这是有意的 runtime 安全收紧。
+- Compatibility: 历史 owner-less 文件在 auth-enabled 部署仅 admin 可见；不自动迁移。
+- Compatibility: 历史 missing/invalid purpose 不被本 Issue 猜测；对应 list/get
+  继续显式失败，可能需要单独迁移。
+- Security/Lifecycle: API-key `team_id` 被视为 key-owned trusted association；本
+  Issue 不新增 team deletion 与 key revocation 的联动。该 lifecycle gap 需单独跟踪，
+  但不得通过 key owner/JWT fallback 扩权。
+- Performance/Availability: 完整 S3 listing + per-object HeadObject 可能触发
+  throttling/503；本 tranche 必须整体失败。owner index/cache 另开 Issue，且 cache
+  失效不能降级为全局放行。
+- Maintenance: typed validator、checked policy helper 与 ownership helper 各保持单一
+  owner；不得新增平行 auth/storage module。
 
 ## 测试计划
 
-- [ ] Unit tests: enum serde、login/refresh team membership、versioned/legacy claims、trusted active-team scope priority、empty/restricted key attenuation、ownership、uniform not-found。
-- [ ] Storage tests: Local/S3 owner round-trip、legacy、损坏 metadata、HeadObject SDK `is_not_found()`/非 404、>1000 object pagination，以及 throttling/503 保持显式失败。
-- [ ] Route tests: tenant/admin/auth-disabled list/get/content/delete 矩阵、完整 authorized list 与 backend call count。
-- [ ] Security tests: login/refresh valid/foreign/no-team selection、legacy no-marker token 回退 User scope、version 1 active-team claim、cross-team same-user、restricted/empty key + admin owner、日志/JSON owner 泄露、unauthorized delete no-op。
-- [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`；S3 feature 用 `cargo check --all-features`、`cargo clippy --all-targets --all-features -- -D warnings` 与相关 S3 tests。
+- [ ] Unit: exact provenance state table、typed issuer、active/inactive membership、
+  UUID owner serde、legacy metadata、checked admin/policy error、call ordering。
+- [ ] Route: two users/teams/keys + admin/legacy/auth-disabled 的
+  list/get/content/delete/upload 矩阵；foreign/missing 公开错误完全等价。
+- [ ] S3 feature: owner round-trip、strict malformed metadata、HeadObject exact 404、
+  403/timeout/5xx、`Some(0)`、>1000 continuation、stable prefix、repeat/missing/empty
+  token、later-page failure、cross-page `Some(limit)`。
+- [ ] Middleware: unknown version/stale membership 401；repository/RBAC/policy error
+  generic 5xx 且不泄露内部 detail。
+- [ ] Compatibility/source boundary: existing public method/handler 与
+  `FileMetadata`/`Claims`/auth request struct-literal compile fixtures；legacy bare/new
+  envelope round-trip；raw team issuer 拒绝；private auth/Files adapters 是唯一 route
+  registration；proofless Files wrappers 在 auth-enabled 时不调用 storage。
+- [ ] Repository: `cargo fmt --check`; `cargo check`; `cargo check --all-features`;
+  `cargo clippy --all-targets --all-features -- -D warnings`; focused tests;
+  `cargo test`; SpecRail packet/workflow checks；`git diff --check`。
 
 ## 回滚方案
 
-代码可回滚，但新 metadata 的额外 owner 字段必须由旧反序列化器是否拒绝未知字段来决定；
-回滚演练先验证兼容。不得通过忽略 owner 恢复全局访问。若必须回滚服务版本，应先暂停
-Files API 或保持对象授权补丁，避免重新暴露跨租户读取。
+代码可整体 revert，但不得恢复未授权跨租户访问。回滚前验证旧 reader 是否接受新增
+metadata 字段；若不确定，暂停 auth-enabled Files API 或保留 authorization patch。
+已经写入 owner 的 metadata 不自动删除，legacy 文件不自动归属。若 JWT provenance
+逻辑需紧急回滚，先撤销 team-scoped login/refresh issuance 并只允许 User scope，
+不得重新启用 first-team guessing。Spec approval、implementation、security review、
+merge 与 release 仍是独立 human gates。
