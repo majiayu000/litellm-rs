@@ -17,7 +17,7 @@ GH-1128 / #1128
 
 - [ ] `SP1128-T1` Covers: B-001, B-002, B-003, B-006, B-009. Owner: guardrail implementation owner. Dependencies: SP1128-T0. Done when: `content_text` 被 bounded fallible owned record builder 替代，覆盖 request/message legacy function、modern function、message name、普通 content、tool result/use；每条 message 的普通 text leaves 过滤其间非 text parts 后按固定顺序生成空串/单空格/换行三种 provider projections 并局部去重，全请求普通 text leaves 另生成 legacy newline view，其他字段生成 typed independent records；JSON 做 raw+semantic 扫描；bounded duplicate-rejecting visitor 在构造 `Value` 前拒绝任意层级/escape-equivalent duplicate key，leading BOM 与 structured-looking argument 的 syntax/recursion/depth/resource 解析失败稳定 400，普通非 JSON 仍扫描 raw；全部 projections/records 纳入 256/2 MiB checked accounting. Verify: focused filtered-part/three-projection/cross-message/provider-transform/record-isolation/JSON/duplicate-key/BOM/depth-limit/limit tests.
 - [ ] `SP1128-T2` Covers: B-003, B-006, B-007. Owner: same implementation owner. Dependencies: SP1128-T1. Done when: plain/csv document base64 解码为 UTF-8 正文；JSON/`+json` document 生成 raw+semantic records 且 syntax/duplicate-key/BOM/depth/resource failure 稳定 400；Markdown（含 numeric/named entity）、HTML/XML/`+xml`/其他 `text/*`、bad base64/UTF-8 与其他 MIME 在 input guardrail 开启时 fail-closed；无网络、entity 或二进制解析. Verify: document MIME/base64/JSON/duplicate-key/BOM/depth/entity table tests.
-- [ ] `SP1128-T3` Covers: B-004, B-005, B-006, B-008, B-009. Owner: engine/test owner. Dependencies: SP1128-T2. Done when: engine/traits/types 与 PII、prompt-injection、OpenAI moderation 提供 record-aware batch；trait 默认 batch adapter 让只实现旧 `check_input(&str)` 的 custom guardrail 逐 record 保持兼容；本地 guardrails 保持边界；OpenAI moderation 沿用 trim-empty eligibility、使用至多一次 string-array 请求，在发送前执行 eligible 原始字符串 32,768 UTF-8 bytes 上限并验证 response count；input limit 与 count mismatch 使用 engine 在 `fail_open` 判定前传播的 typed error，前者映射稳定 400；`Log` action merge 后继续，任何 `Mask` action 即使无 `modified_content` 也由 gateway fail-closed；Responses background 在 queued persist/task/200 前执行完整 input check，失败 zero-state/zero-provider，通过后仅 lifecycle 可调用的 post-input entrypoint 保证 exactly-once；provider-before-block、安全稳定 400、disabled path 不增加 guardrail-specific 拒绝、前置 malformed-base64 validator 兼容与无网络证据完整. Verify: focused custom-adapter/batch/byte-boundary/whitespace/log/mask-action/background-prequeue/exactly-once/source-boundary/external-call-count/fail-open async tests.
+- [ ] `SP1128-T3` Covers: B-004, B-005, B-006, B-008, B-009. Owner: engine/test owner. Dependencies: SP1128-T2. Done when: `engine.rs` 以 crate-private `EngineGuardrailEntry` 和 `InputBatchFailure` 提供 record-aware batch；公开 `Guardrail` trait、公开且可穷举匹配的 `GuardrailError` enum、`GuardrailEngine::check_input` 签名与 `add_guardrail` 方式保持不变；内部 legacy adapter 让只实现旧 `check_input(&str)` 的 custom guardrail 逐 record 保持兼容；PII/prompt-injection 保持本地 record 边界；OpenAI moderation 沿用 trim-empty eligibility、使用至多一次 string-array 请求，在发送前执行 eligible 原始字符串 32,768 UTF-8 bytes 上限并验证 response count；internal input-limit 与 response-integrity failures 在 `fail_open` 判定前传播，前者映射稳定 400，公开单字符串入口只映射到现有 `GuardrailError::Internal` 安全消息；`Log` action merge 后继续，任何 `Mask` action 即使无 `modified_content` 也由 gateway fail-closed；Responses background 在 queued persist/task/200 前执行完整 input check，失败 zero-state/zero-provider，通过后仅 lifecycle 可调用的 post-input entrypoint 保证 exactly-once；provider-before-block、安全稳定 400、disabled path 不增加 guardrail-specific 拒绝、前置 malformed-base64 validator 兼容与无网络证据完整. Verify: focused internal-custom-adapter/public-API-compile/batch/byte-boundary/whitespace/log/mask-action/background-prequeue/exactly-once/source-boundary/external-call-count/fail-open async tests.
 - [ ] `SP1128-T4` Covers: B-001 ～ B-009. Owner: verification owner. Dependencies: SP1128-T3. Done when: 实现 diff 已按最终 amendment 审计/修正，完整 Rust/SpecRail gate 与安全人工 review 通过. Verify: `cargo fmt --check`; `cargo check`; `cargo clippy --all-targets -- -D warnings`; `cargo test`; workflow/spec checks; `git diff --check`.
 
 ## 并行拆分
@@ -25,7 +25,7 @@ GH-1128 / #1128
 不并行。实现由同一 owner 串行覆盖 `src/server/guardrails.rs`、`src/server/routes/ai/chat.rs`、
 `src/server/routes/ai/responses.rs`、`src/server/routes/ai/responses/lifecycle.rs`、
 `src/server/routes/ai/responses/lifecycle_tests.rs`、core guardrail 的
-`traits.rs`、`types.rs`、`engine.rs`、`openai_moderation.rs`、`pii.rs`、
+`engine.rs`、`openai_moderation.rs`、`pii.rs`、
 `prompt_injection.rs` 及对应测试。任何既有 Claude worktree 仅作为待审 diff，
 不视为已验证实现；验证只在本 session 最终实现 worktree 串行执行。
 
@@ -48,7 +48,9 @@ GH-1128 / #1128
   action-only `Mask` 则固定阻止该调用；32,768 eligible UTF-8 bytes 可提交，
   32,769 bytes 在 `fail_open` true/false 下 moderation/model provider 均 zero-call。
 - custom guardrail fixture 只实现既有必需方法 `check_input(&str)`，证明无需新增 trait
-  实现即可经默认 adapter 按顺序收到所有 records，且 block/Log/error 语义不变。
+  实现即可经 engine-internal legacy adapter 按顺序收到所有 records，且
+  block/Log/error 语义不变；另有下游式 compile fixture 对现有五个
+  `GuardrailError` variants 穷举匹配，证明公开 enum/trait 未扩大。
 - 测试必须扫描解码后的 document 文本，不能仅断言 base64/JSON 字符串被拼接。
 - PR 在最终 slice 使用 `Fixes #1128`，需要 security 人工 review。
 

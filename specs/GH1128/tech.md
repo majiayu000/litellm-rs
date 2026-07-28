@@ -15,7 +15,7 @@ GH-1128 / #1128
 | Guardrail adapter | `src/server/guardrails.rs` | `content_text` 只借用普通 text part | 根因与唯一 enforcement boundary |
 | Chat DTO | `src/core/models/openai/messages.rs` | `ContentPart` 包含 document/tool result/tool use | 列出必须规范化的载体 |
 | Function DTO | `src/core/models/openai/tools.rs` | legacy/modern function arguments 都会发给 provider | 等价结构化输入不能继续遗漏 |
-| Guardrail engine | `src/core/guardrails/{traits,types,engine,openai_moderation,pii,prompt_injection}.rs` | 接收单个 `&str`；OpenAI moderation 每次调用发一个远程请求；一般执行错误可被 `fail_open` 忽略；mask 在 gateway boundary fail-closed | 需要 record-aware batch、不可吞掉的 response-integrity error，避免字段拼接、缺结果绕过和外部调用放大 |
+| Guardrail engine | `src/core/guardrails/{traits,types,engine,openai_moderation,pii,prompt_injection}.rs` | 接收单个 `&str`；OpenAI moderation 每次调用发一个远程请求；一般执行错误可被 `fail_open` 忽略；`GuardrailError` 是公开 re-export、未标记 `non_exhaustive` 的 enum，custom guardrail 只需实现公开 `check_input(&str)` | record-aware batch 与不可吞掉的完整性分类必须位于 engine 内部；给公开 enum 增加 variant 或给 trait 增加必需方法会破坏下游源码兼容 |
 | Chat execution boundary | `src/server/routes/ai/chat.rs` | 公开 route helper 总是在内部执行 input guardrail；直接暴露 unchecked internal handler 会形成旁路 | Background Responses 需在 queue 前检查一次、后台执行不重复，必须用窄作用域 audited entrypoint 和 caller-coverage test 固定 |
 | Background Responses | `src/server/routes/ai/responses.rs`, `src/server/routes/ai/responses/lifecycle.rs`, `src/server/routes/ai/responses/lifecycle_tests.rs` | 先存储并返回 queued 200，再由后台 task 进入 chat input guardrail；deterministic normalization 400 只能晚到并变成 failed status | 必须把完整 input guardrail 移到 queue/persist/task 之前，并保证后台只消费已审核的原请求 |
 
@@ -85,33 +85,43 @@ GH-1128 / #1128
    action-only `Mask`，避免缺少 modified content 时继续请求，也避免把扁平文本
    错误回写到结构。
 6. 在 `check_input` 中先构造全部 records，成功后通过一次 batch 调用交给 engine。
-   gateway 不循环调用现有单字符串入口，而是调用一次新增的
-   `GuardrailEngine::check_input_records(&[GuardrailInputRecord])`。engine 按优先级
-   对每个 guardrail 调用一次 batch 方法。`Guardrail` trait 上新增的 batch 方法必须
-   有默认实现：按稳定 record 顺序调用既有必需方法 `check_input(&str)` 并使用现有
-   merge/early-block 语义聚合，因此通过公开 `add_guardrail` 注册、只实现旧单字符串
-   方法的 custom guardrail 不需要改源码，也不会被跳过。PII/prompt-injection
-   override 该方法并在方法内逐 record
-   做本地匹配并聚合，不能跨 record；OpenAI moderation 按既有
+   gateway 不循环调用现有单字符串入口，而是调用一次 crate-private
+   `GuardrailEngine::check_input_records(&[GuardrailInputRecord])`。公开
+   `Guardrail` trait 与公开 re-export 的、可穷举匹配的 `GuardrailError` enum 保持
+   原样：不得增加 batch method、`InputLimitExceeded` 或 response-integrity variant。
+
+   engine 内部把已注册项保存为 crate-private `EngineGuardrailEntry`：
+   OpenAI moderation、PII 与 prompt-injection 使用明确 built-in variants；
+   公开 `add_guardrail(BoxedGuardrail)` 注册的下游实现进入 `Custom` variant。
+   `EngineGuardrailEntry` 统一暴露内部 name/priority/input-batch dispatch，不对 crate
+   外公开。`Custom` 使用 `LegacyRecordAdapter`，按稳定 record 顺序调用原有必需方法
+   `Guardrail::check_input(&str)`，并复用现有 merge/early-block/`Log` 语义；因此只
+   实现旧 trait 的 custom guardrail 无需改源码，也不会被跳过。PII 与
+   prompt-injection 的 internal batch dispatch 同样逐 record 本地匹配并聚合，不能
+   跨 record；它们不需要改变公开 trait。
+
+   crate-private `InputBatchFailure` 明确区分
+   `Guardrail(GuardrailError)`、`InputLimitExceeded` 与 `ResponseIntegrity`。
+   前者维持现有 `fail_open` 行为；后两者由 engine 在 `fail_open` 分支之前无条件
+   传播。gateway 将 `InputLimitExceeded` 映射为安全稳定的 HTTP 400，并将
+   `ResponseIntegrity` 映射为不含响应正文的稳定 guardrail server error；二者都不得
+   调用 downstream model provider。公开 `GuardrailEngine::check_input(&str)` 保持
+   既有签名，通过一元素内部 batch 执行，并把两个内部 fatal classes 映射为现有
+   `GuardrailError::Internal` 的固定安全消息；不得把内部 enum 泄漏为公开 API。
+
+   OpenAI moderation 的 internal batch dispatch 按既有
    `!value.trim().is_empty()` 选择 eligible records，将其 values 作为 API 支持的
    string array 放进至多一次 `/moderations` 请求；全空白 batch 直接返回 pass，
    mixed batch 按原 record index 合并。发送前以 checked arithmetic 计算 eligible
    原始字符串（不是 trim 后副本）的 UTF-8 byte 总和，并要求
    `<= MAX_OPENAI_MODERATION_BATCH_BYTES = 32_768`。BPE token 数不会超过 UTF-8 byte
    数，因此该保守上限保证不超过仓库 catalog 中 moderation 模型的 32,768-token
-   context，且不引入不确定 tokenizer fallback。32,769 bytes 及以上使用 typed
-   `GuardrailError::InputLimitExceeded`，由 gateway 映射为安全稳定的 HTTP 400；
-   engine 必须在 `fail_open` 判断前传播，且不得调用 moderation 或 downstream
-   model provider。`GuardrailError` 另增加明确的 batch
-   response-integrity variant；结果数量
-   不匹配返回该 variant，engine 在检查 `fail_open` 之前无条件传播它，只有 network/
-   provider availability 等既有可降级错误仍受 `fail_open` 控制。任一 guardrail
-   的聚合结果为 block/error/modified 或 action-only `Mask` 时沿用上述 fail-closed
-   `enforce` 语义结束；
-   `GuardrailAction::Log` 命中继续 merge 并执行后续 guardrails，最终保持非阻断，
-   与现有 engine 契约一致。
-   单字符串 `check_input` 通过一元素 batch 保持兼容。engine disabled 或
-   `check_input: false` 时保持现有无检查行为。
+   context，且不引入不确定 tokenizer fallback。32,769 bytes 及以上返回内部
+   `InputBatchFailure::InputLimitExceeded`；结果数量不匹配返回内部
+   `InputBatchFailure::ResponseIntegrity`。任一 guardrail 的聚合结果为
+   block/error/modified 或 action-only `Mask` 时沿用上述 fail-closed `enforce`
+   语义结束；`GuardrailAction::Log` 命中继续 merge 并执行后续 guardrails，最终保持
+   非阻断。engine disabled 或 `check_input: false` 时保持现有无检查行为。
 7. builder 使用固定常量 `MAX_INPUT_GUARDRAIL_RECORDS = 256` 与
    `MAX_INPUT_GUARDRAIL_SCAN_BYTES = 2 * 1024 * 1024`。每次加入 record 前用 checked
    arithmetic 统计 records 数与所有 record values 的 UTF-8 byte 总和；任一超限
@@ -143,7 +153,7 @@ GH-1128 / #1128
 | B-006 | fallible builder + background pre-queue gate | malformed document/serialization 返回安全稳定 400；background 失败时 queue/store/task/provider zero-call，通过时 input check exactly-once |
 | B-007 | document media gate | 文本正文解码；PDF/image/audio/URL 无网络且 fail-closed/保持范围 |
 | B-008 | disabled fast path | 同一多模态请求在未启用 guardrail 时保持兼容 |
-| B-009 | batch engine + builder limits | 256/2 MiB 边界、越界 zero-call、custom guardrail 默认 batch adapter、moderation 32,768/32,769-byte 边界与 single-batch，以及 count mismatch/input-limit 在 `fail_open` true/false 下均不可吞掉 |
+| B-009 | internal batch engine + builder limits | 256/2 MiB 边界、越界 zero-call、custom guardrail internal legacy adapter、公开 trait/enum exhaustive compile fixture、moderation 32,768/32,769-byte 边界与 single-batch，以及 internal count-mismatch/input-limit failures 在 `fail_open` true/false 下均不可吞掉 |
 
 ## 数据流
 
@@ -153,9 +163,11 @@ message 过滤非 text parts 后形成空串/单空格/换行三种去重后的 
 independent records。JSON 同时保留完整
 表示和解码 string nodes；允许的 document base64 解码为 UTF-8，JSON MIME 进一步
 生成 raw + semantic records；request-level `function_call` 最后加入。builder 完整
-成功且通过 256/2 MiB 上限后，把 typed batch 一次交给 engine；engine 让每个
-guardrail 在保持 record 边界的前提下处理该 batch，OpenAI moderation 使用一次 array
-请求。再由 `enforce` 统一映射 allow/block/modified/error。原请求对象始终不变。
+成功且通过 256/2 MiB 上限后，把 typed batch 一次交给 engine；crate-private
+`EngineGuardrailEntry` 在保持 record 边界的前提下分派 built-in batch 或 custom
+legacy adapter，OpenAI moderation 使用一次 array 请求，fatal batch failures 由内部
+`InputBatchFailure` 在 `fail_open` 前分类。再由 `enforce` 统一映射
+allow/block/modified/error。公开 trait/error enum 与原请求对象始终不变。
 Background Responses 在 queued response 产生前完成相同检查，并把已通过的同一请求
 交给窄作用域 post-input-guardrail chat entrypoint；同步/stream 路径仍使用常规入口。
 
@@ -171,6 +183,9 @@ Background Responses 在 queued response 产生前完成相同检查，并把已
 
 - Security: 支持媒体类型列表必须 fail-closed，不能被 MIME 大小写/参数绕过。
 - Compatibility: 启用 input guardrail 的二进制 document 将被拒绝；发布说明需明确。
+- Public API compatibility: `Guardrail` trait、`GuardrailError` variants、
+  `GuardrailEngine::check_input` 签名与 `add_guardrail` 调用方式保持不变；内部 batch
+  类型不得 re-export。
 - Performance: 文档解码、message projections 与 request legacy view 增加 owned 载荷；局部去重避免相同
   view 重复计数，所有派生值仍受 256 records/2 MiB checked 上限约束。
 - Availability/Cost: records 有 256/2 MiB 硬上限；内置 OpenAI moderation 的
@@ -182,7 +197,7 @@ Background Responses 在 queued response 产生前完成相同检查，并把已
 
 - [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view 与局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
 - [ ] Document tests: plain/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、MIME 参数、bad base64、bad UTF-8，以及 Markdown numeric/named entity、HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
-- [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、legacy custom guardrail 默认 adapter、OpenAI array single-call、32,768/32,769 eligible-byte 边界、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、response count/input-limit 在 `fail_open` true/false 下 fail-closed。
+- [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、engine-internal legacy custom adapter、公开 trait/enum exhaustive compile fixture、OpenAI array single-call、32,768/32,769 eligible-byte 边界、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、internal response-integrity/input-limit failure 在 `fail_open` true/false 下 fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled 与 `check_input: false` 不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Provider-boundary tests: Bedrock 的 space-join、Ollama 的 newline-join 与
       Gemini/Vertex 的 empty-join 转换结果分别与 builder 对应 adjacency view 相等；

@@ -46,7 +46,11 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
    上游 context 上限约束；该上限保证 token 数不超过当前 moderation 模型的
    32,768-token context，超限在远程调用前稳定 400，且不得由 `fail_open` 覆盖。
    moderation 响应条目数必须与实际提交的 eligible records 数完全一致；不一致是不可被
-   `fail_open` 覆盖的完整性失败，必须阻止 provider 调用。
+   `fail_open` 覆盖的完整性失败，必须阻止 provider 调用。输入上限与响应完整性必须由
+   engine 内部 batch failure 类型分类；公开且可穷举匹配的 `GuardrailError` enum 与
+   公开 `Guardrail` trait 均不得为本功能增加 variant 或必需方法。仅实现现有
+   `check_input(&str)` 的 custom guardrail 由 engine 内部 legacy adapter 按 record
+   顺序调用。
    `GuardrailAction::Log` 命中仍按现有契约记录并继续，不能因 batch 聚合被升级为阻断。
 
 ## 验收标准
@@ -66,7 +70,7 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
   OpenAI moderation 的 action-only `Mask` 在无 `modified_content` 时仍 fail-closed；
   eligible 原始字符串总计 32,768 UTF-8 bytes 可提交、32,769 bytes 在
   `fail_open: false/true` 下都稳定 400 且 moderation/model provider zero-call。
-- [ ] 仅实现既有 `Guardrail::check_input(&str)` 的 custom guardrail 无需源码修改即可注册；默认 batch adapter 按 record 顺序逐条调用它，保持 record 隔离与现有 block/Log/error 聚合语义。
+- [ ] 仅实现既有 `Guardrail::check_input(&str)` 的 custom guardrail 无需源码修改即可注册；engine 内部 legacy batch adapter 按 record 顺序逐条调用它，保持 record 隔离与现有 block/Log/error 聚合语义。下游式 compile fixture 必须继续能够对现有五个 `GuardrailError` variants 做穷举匹配，证明本 amendment 没有扩大公开 enum 或要求实现新的 trait 方法。
 - [ ] `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试及完整测试通过。
 
 ## 边界情况
