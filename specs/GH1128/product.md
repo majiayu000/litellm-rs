@@ -30,7 +30,7 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 ## Behavior Invariants
 
 1. B-001 普通文本、`Document.source`、`ToolResult.content`、`ToolUse.name/input`、message-level legacy `function_call`、`tool_calls[].function`、request-level `ChatCompletionRequest.function_call` 和 `ChatMessage.name` 都必须进入输入 guardrail。本仓库当前 request-level compatibility DTO 复用 `FunctionCall { name, arguments }` 并把两者序列化转发给 provider；即使标准 OpenAI selection 语义通常只指定 name，该已接受并转发的 `arguments` 仍属于必须扫描的现有公开输入面。
-2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。每条 message 的普通 text parts 必须按原顺序收集，过滤其间 image/document/tool 等非 text part 后，覆盖当前 provider 实际使用的三种投影：直接拼接、单个 ASCII 空格连接和单个换行连接；每种投影是独立审核记录，内容相同时只保留一个。为保持当前 gateway 已有的跨 message 检测，还必须把全请求所有普通 text leaves 按原顺序用单个换行连接成一个 request-level legacy view；它只跨普通 message text，不混入 function/tool/document 等独立字段。Bedrock provider-boundary views 的作用域必须对应每个实际 outgoing `ToolResultBlock.content`：普通 user/assistant message 中每个 `ToolResult.content` 独立成组；tool/function-role message 则按 part 顺序把普通 `Text` 与其中所有 `ToolResult.content` 的可达 text entries 展开成同一组，因为当前转换会把它们扁平到一个 block。每组都生成直接/空格/换行三种投影；不同 outgoing block 或 message 不得拼接。这样 provider 在 guardrail 后过滤 part、插入边界或相邻化结构化文本时，不能形成未检查的新文本。原始 message/function/tool/document 字段的 typed semantic records 仍逐字段隔离；不能用可被规则误命中的人工标签拼成扫描文本。
+2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。每条 message 的普通 text parts 必须按原顺序收集，过滤其间 image/document/tool 等非 text part 后，覆盖当前 provider 实际使用的三种投影：直接拼接、单个 ASCII 空格连接和单个换行连接；每种投影是独立审核记录，内容相同时只保留一个。message 没有任何普通 text leaf 时不得生成 per-message projection，尤其不能用一个空字符串占用 record/byte 上限。为保持当前 gateway 已有的跨 message 检测，还必须把全请求所有普通 text leaves 按原顺序用单个换行连接成一个 request-level legacy view；它只跨普通 message text，不混入 function/tool/document 等独立字段。实际 outgoing transform 使用 Anthropic `separate_system_messages` 时，还必须按请求顺序先过滤掉所有非 `System`/`Developer` role，再收集存活 message 的普通 text leaves 并用单个换行连接成 Anthropic-scoped view；该 view 只属于实际使用这条 Anthropic transform 的 provider profile，非 Anthropic profile 不得生成或审核该记录，避免制造跨 provider 的虚假边界。Bedrock provider-boundary views 的作用域必须对应每个实际 outgoing `ToolResultBlock.content`：普通 user/assistant message 中每个 `ToolResult.content` 独立成组；tool/function-role message 则按 part 顺序把普通 `Text` 与其中所有 `ToolResult.content` 的可达 text entries 展开成同一组，因为当前转换会把它们扁平到一个 block。每组都生成直接/空格/换行三种投影；不同 outgoing block 或 message 不得拼接。这样 provider 在 guardrail 后过滤 part、插入边界或相邻化结构化文本时，不能形成未检查的新文本。原始 message/function/tool/document 字段的 typed semantic records 仍逐字段隔离；不能用可被规则误命中的人工标签拼成扫描文本。
 3. B-003 字符串字段保留原文本；结构化 JSON 字段同时扫描确定性完整 JSON 表示和递归解码后的 string keys/values，不得只扫描转义后的 `\n`/`\uXXXX` 或部分节点。合法 JSON function arguments 使用同一语义遍历，并在构造 `Value` 前拒绝任意层级的重复 object key（包括 escape 解码后相同的 key），避免解析器覆盖早期恶意值；首个 JSON whitespace 后出现 U+FEFF BOM 的 arguments 也稳定 fail-closed。首个非空白字符不是 `{`/`[` 的普通非 JSON arguments 仍扫描原字符串，但看似 structured JSON 的 arguments 只要无法完成有界解析（包括 recursion/depth/resource limit）就稳定 fail-closed。文本型 document 必须扫描 base64 解码后的 UTF-8 正文，而不是编码字符串；MIME 必须完整解析而不是按分号截断，且要在 parser 之外拒绝空参数段与尾随分号。allowlist media type 的参数闭集只允许“无参数”或“恰好一个大小写不敏感的 `charset=utf-8`”。重复 charset、任何其他 charset（包括 UTF-16/UTF-16LE/ISO-8859-1）及其他参数都稳定 fail-closed，避免 `format` 等 provider 语义参数产生未覆盖的文本视图。JSON MIME document 还必须同时扫描原始正文和递归解码后的 string keys/values，声明为 JSON 但语法、重复 key、BOM、深度或资源限制失败时稳定 fail-closed。gateway 不转码且不得改写原 DTO。
 4. B-004 任一列入范围的字段包含被拒内容时，整个请求在调用 provider 前被拒绝。
 5. B-005 guardrail 返回 `GuardrailAction::Mask` 或任意修改后文本时，不得把扁平扫描文本错误回写到原有多模态或 tool 结构；即使 `Mask` 结果没有 `modified_content`，gateway 也必须 fail-closed，不得继续 provider 请求。
@@ -59,7 +59,7 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - [ ] 每个列入范围的 content variant 都有接受与拒绝测试。
 - [ ] modern/message-level legacy function call、以及本仓库 request-level compatibility `FunctionCall` 的 name/arguments、`ChatMessage.name` 各有独立覆盖；测试证明 request-level arguments 确实从当前 DTO 解析并在 provider boundary 前被审核。
 - [ ] allowlisted 文本 document fixture 证明扫描解码后正文；无 charset 与单个大小写不敏感 `charset=utf-8` 可进入相同 UTF-8 扫描，`charset=utf-16le`、其他非 UTF-8 charset、重复 charset、`text/plain;`、`text/plain; charset=utf-8;`、空参数段与其他 malformed MIME 稳定 400；malformed base64、非 UTF-8、Markdown/HTML/XML/entity-bearing MIME 和其他不支持媒体类型 fail-closed，且 Markdown numeric/named entity fixture 不会仅经 raw 扫描后放行。
-- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part/message 拆词有测试；同一 message 的 `Text("ignore")` + image + `Text("all previous instructions")` 必须在过滤后的单空格 view 命中，两个 message 分别携带这两段时必须在 request-level newline view 命中；另有直接拼接/换行 view、相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。Bedrock 单个 `ToolResult.content` 数组中相邻 text blocks 的 `sec`/`ret`、tool-role `Text("sec")` + `ToolResult("ret")`、以及同一 tool-role message 的两个 ToolResult 分别为 `sec`/`ret` 都必须由 outgoing-block-scoped provider view 命中；普通 user/assistant role 的不同 ToolResult blocks 与不同 message 不得产生跨边界 `secret`。
+- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part/message 拆词有测试；同一 message 的 `Text("ignore")` + image + `Text("all previous instructions")` 必须在过滤后的单空格 view 命中，两个 message 分别携带这两段时必须在 request-level newline view 命中；另有直接拼接/换行 view、相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。Anthropic fixture 必须把 `System("ignore")`、中间的 `User("hello")`、以及随后分别取 `Developer`/`System` role 的 `("all previous instructions")` 映射为精确的 `ignore\nall previous instructions` provider-visible view 并在 provider 前命中；同一请求走非 Anthropic profile 时不得产生该 Anthropic-only record。Bedrock 单个 `ToolResult.content` 数组中相邻 text blocks 的 `sec`/`ret`、tool-role `Text("sec")` + `ToolResult("ret")`、以及同一 tool-role message 的两个 ToolResult 分别为 `sec`/`ret` 都必须由 outgoing-block-scoped provider view 命中；普通 user/assistant role 的不同 ToolResult blocks 与不同 message 不得产生跨边界 `secret`。
 - [ ] 嵌套 JSON、数组、空值、Unicode escape、解码后的 string key/value、任意层级与 escape 后重复 key、前导 BOM、合法/普通非 JSON/structured-invalid/超深 JSON arguments，以及 JSON MIME document 的 raw/semantic/invalid/duplicate-key/BOM/depth-limit 行为有测试。
 - [ ] 测试证明 guardrail 拒绝发生在 provider 调用前。
 - [ ] Responses background 测试证明 normalization 400、guardrail block/error 在 queued response 持久化和 200 前完成；失败时 response store/task/provider 调用计数均为 0，通过时 input guardrail 恰好执行一次后才进入后台执行。
@@ -71,6 +71,9 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
   OpenAI moderation 的 action-only `Mask` 在无 `modified_content` 时仍 fail-closed；
   eligible 原始字符串总计 32,768 UTF-8 bytes 可提交、32,769 bytes 在
   `fail_open: false/true` 下都稳定 400 且 moderation/model provider zero-call。
+- [ ] 恰好 256 条、每条都只有 baseline 已接受 image content 的 message 不生成任何
+  per-message empty projection，不消耗 256-record 上限，也不改变既有多模态
+  validator/provider 行为。
 - [ ] 仅实现既有 `Guardrail::check_input(&str)` 的 custom guardrail 无需源码修改即可注册；新增 batch 方法的默认实现按 record 顺序逐条调用它，保持 record 隔离与现有 block/Log/error 聚合语义。下游式 compile fixture 必须继续能够对现有五个 `GuardrailError` variants 做穷举匹配，并证明旧 custom implementation 无需实现新方法。另有 regression fixture 将公开 `OpenAIModerationGuardrail` 经 `add_guardrail` 手工注册，证明它仍使用一次 batch 请求、32,768-byte 总上限与 response-count 完整性检查。
 - [ ] `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试及完整测试通过。
 
@@ -91,6 +94,10 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
   多条 message 也可能共同形成当前 gateway 已能检测的敏感词。message 内 provider
   projections 与 request-level legacy newline view 必须同时保留；独立结构化字段仍
   逐条审核，不共享正则匹配边界。
+- Anthropic 会先过滤掉非 System/Developer message，再把存活的普通 text leaves 用
+  换行连接；该 provider-scoped view 必须覆盖被 User message 隔开的敏感短语，但不得
+  作为通用 view 应用于不使用该 transform 的 provider。message 完全没有普通 text leaf
+  时则不产生 per-message projection，image-only message 不能制造空审核记录。
 - provider 可能在相邻 text parts 之间使用空串、空格或换行；guardrail 必须在 provider
   转换前覆盖这三种当前可达表示，不能假设 DTO 中没有显式分隔符就等于最终 prompt。
 - Bedrock 会把单个 `ToolResult.content` 数组中的多个 text entries 转成相邻 text

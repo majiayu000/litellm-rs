@@ -15,6 +15,7 @@ GH-1128 / #1128
 | Guardrail adapter | `src/server/guardrails.rs` | `content_text` 只借用普通 text part | 根因与唯一 enforcement boundary |
 | Chat DTO | `src/core/models/openai/messages.rs` | `ContentPart` 包含 document/tool result/tool use | 列出必须规范化的载体 |
 | Function DTO | `src/core/models/openai/tools.rs` | legacy/modern function arguments 都会发给 provider | 等价结构化输入不能继续遗漏 |
+| Anthropic system projection | `src/core/providers/anthropic/client.rs:290` | `separate_system_messages` 先过滤为 `System`/`Developer`，再把存活的普通 text leaves 用换行连接；中间的 User message 不进入该 provider-visible string | input guardrail 必须镜像这条 provider-scoped 边界，但不能把它扩散到非 Anthropic profile |
 | Guardrail engine | `src/core/guardrails/{traits,types,engine,openai_moderation,pii,prompt_injection}.rs` | 接收单个 `&str`；OpenAI moderation 每次调用发一个远程请求；一般执行错误可被 `fail_open` 忽略；`GuardrailError` 是公开 re-export、未标记 `non_exhaustive` 的 enum，custom guardrail 只需实现公开 `check_input(&str)`；公开 `add_guardrail` 也可手工注册 built-in | 需要 source-compatible 的默认 batch method 与独立 batch error 类型；扩大现有 enum、增加必需 trait method 或依赖 trait-object downcast 都不可接受 |
 | Document MIME | `Cargo.toml`, `Cargo.lock`, `src/core/models/openai/messages.rs` | DTO 保留任意 `media_type` 字符串；`mime` 当前仅为 transitive dependency，不能直接依赖其 API | 需要直接声明标准 MIME parser 并审计全部 charset 参数，不能用字符串截断 |
 | Chat execution boundary | `src/server/routes/ai/chat.rs` | 公开 route helper 总是在内部执行 input guardrail；直接暴露 unchecked internal handler 会形成旁路 | Background Responses 需在 queue 前检查一次、后台执行不重复，必须用窄作用域 audited entrypoint 和 caller-coverage test 固定 |
@@ -30,6 +31,8 @@ GH-1128 / #1128
    - 对每条 message，按原 part 顺序先收集全部普通 text leaves，过滤夹在其中的
      image/document/tool 等非 text parts；再依次生成三种 provider projection：
      `text_leaves.join("")`、`text_leaves.join(" ")`、`text_leaves.join("\n")`。
+     `text_leaves.is_empty()` 时直接跳过这三种 projection，不创建空 record；只有至少
+     一个 leaf 时才执行 join 与局部去重。
      这是仓库当前 provider 转换的完整边界集合：Gemini/Vertex 等直接拼接，Bedrock
      prompt transforms 先过滤非 text 再用单空格，Ollama 使用换行。三种 view 各自是
      独立 typed record；按上述固定顺序对完整字符串做局部去重，避免单 part 或已含
@@ -41,6 +44,19 @@ GH-1128 / #1128
      text，不把 message name、function/tool、document 或其他 typed records 混入，
      因此结构化字段仍保持 record isolation。该 record 与 message projections 一样
      参加局部值去重、256 records 与 2 MiB accounting。
+   - Anthropic provider projection 独立于上述通用 legacy record。只有本请求绑定的
+     reachable provider-transform profile 包含原生 Anthropic
+     `separate_system_messages` 时，才按原 message 顺序过滤掉所有非
+     `System`/`Developer` role，从存活 message 中按 part 顺序收集普通 text leaves，
+     并生成唯一的 `anthropic_system_text_leaves.join("\n")` record；不存在存活 leaf
+     时不生成。profile 必须由实际路由/deployment metadata 提供，禁止按 model 名称
+     猜测，也禁止把该 record 无条件加入非 Anthropic-only route。包含 Anthropic
+     fallback 的 route 因该 transform 确实可达而必须包含此 view；profile 集合必须在
+     同一次 pre-provider input-check lifecycle 内固定，不能在 provider 调用后补检。
+     fixture 以 `System("ignore")`、`User("hello")`、随后分别为 `Developer` 与
+     `System` 的 `("all previous instructions")` 验证精确值均为
+     `ignore\nall previous instructions`；非 Anthropic-only profile 必须证明没有该
+     record，避免跨 provider 误匹配。
    - 对 message name、普通 content、message-level legacy `function_call`
      name/arguments、modern `tool_calls[].function` name/arguments 和
      `ToolUse.name` 生成独立 typed records。每个 record 的值单独交给 engine，
@@ -198,7 +214,7 @@ GH-1128 / #1128
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | request/message/function/content 规范化 | 每种载体独立 allow/block fixture |
-| B-002/B-003 | message/request text projections + typed independent records | 过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、view 局部去重、Bedrock/Ollama/Gemini-Vertex provider-transform 对照、单 ToolResult array 与 tool/function-role Text+ToolResult/多 ToolResult 的 outgoing-block-scoped split-pattern、普通 user/assistant sibling-block/message 隔离、顺序、结构化 record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
+| B-002/B-003 | message/request/provider-scoped text projections + typed independent records | 空 text-leaf message zero-projection、恰好 256 条 image-only message 不消耗 per-message records、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、Anthropic System/Developer role-filtered newline view 与 non-Anthropic-only zero-record、view 局部去重、Bedrock/Ollama/Gemini-Vertex provider-transform 对照、单 ToolResult array 与 tool/function-role Text+ToolResult/多 ToolResult 的 outgoing-block-scoped split-pattern、普通 user/assistant sibling-block/message 隔离、顺序、结构化 record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
 | B-004 | `check_input` 调用顺序 | mock provider 未被调用 |
 | B-005 | `enforce` modified 分支 | mask 仍 fail-closed 且请求 DTO 未改变 |
 | B-006 | fallible builder + background pre-queue gate | malformed document/serialization 返回安全稳定 400；background 失败时 queue/store/task/provider zero-call，通过时 input check exactly-once |
@@ -209,9 +225,11 @@ GH-1128 / #1128
 ## 数据流
 
 `ChatCompletionRequest.messages` 只有在 engine 的 active-input predicate 通过后才
-按顺序进入 bounded fallible fragment builder；每条 message 过滤非 text parts 后
-形成空串/单空格/换行三种去重后的 provider projection，全请求普通 text leaves 另
-形成 legacy newline record，独立结构化字段形成 typed independent records；每个
+按顺序进入 bounded fallible fragment builder；每条 message 过滤非 text parts 后，
+仅在至少一个 text leaf 存在时形成空串/单空格/换行三种去重后的 provider projection，
+全请求普通 text leaves 另形成 legacy newline record；route profile 可达 Anthropic
+transform 时另形成只跨 System/Developer text leaves 的 newline record，非 Anthropic-only
+profile 不生成该 record；独立结构化字段形成 typed independent records；每个
 实际 outgoing Bedrock ToolResult block 的 ordered text sequence 另形成 block-scoped
 三投影并局部去重，tool/function-role message 的 Text 与多个 ToolResult 在同组，
 普通 user/assistant sibling blocks 保持隔离。JSON 同时保留完整表示和解码 string nodes；document MIME 完整
@@ -246,8 +264,9 @@ Background Responses 在 queued response 产生前完成相同检查，并把已
   `Guardrail` 只增加有默认实现的 additive batch method；新增只读 record 与 batch
   error 从首次发布即 `#[non_exhaustive]`。旧 custom implementation、custom output
   override 与手工注册 built-in 必须有 compile/runtime regression fixture。
-- Performance: 文档解码、message/ToolResult projections 与 request legacy view 增加 owned 载荷；局部去重避免相同
-  view 重复计数，所有派生值仍受 256 records/2 MiB checked 上限约束。
+- Performance: 文档解码、message/ToolResult projections、request legacy view 与可达的
+  Anthropic role-filtered view 增加 owned 载荷；空 text-leaf message 不分配 projection，
+  局部去重避免相同 view 重复计数，所有派生值仍受 256 records/2 MiB checked 上限约束。
 - Availability/Cost: records 有 256/2 MiB 硬上限；内置 OpenAI moderation 的
   eligible batch 另有保守 32,768-byte context 上限，必须 batch 为单次远程调用，
   并验证 response count，避免 JSON fan-out 或确定性的上游 context 拒绝。
@@ -255,14 +274,16 @@ Background Responses 在 queued response 产生前完成相同检查，并把已
 
 ## 测试计划
 
-- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、single ToolResult array 与 tool/function-role Text+ToolResult/多 ToolResult outgoing-block views、普通 user/assistant sibling-block/message 隔离、局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
+- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、空 text-leaf zero-projection、恰好 256 条 image-only message 不消耗 per-message records、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、Anthropic System/User/Developer 与 System/User/System role-filtered newline views、non-Anthropic-only zero-record、single ToolResult array 与 tool/function-role Text+ToolResult/多 ToolResult outgoing-block views、普通 user/assistant sibling-block/message 隔离、局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
 - [ ] Document tests: plain/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、完整 MIME syntax、无参数/大小写 UTF-8/quoted UTF-8、`text/plain;`、`text/plain; charset=utf-8;`、连续/空参数段、重复 charset、UTF-16LE/其他 charset、non-charset 参数 fail-closed、bad base64、bad UTF-8，以及 Markdown numeric/named entity、HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
 - [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、legacy custom default adapter、现有公开 error enum exhaustive/旧 custom compile fixture、custom input-allow/output-block + disabled + non-default-priority/name regression、config-created 与 manually-added OpenAI array single-call、32,768/32,769 eligible-byte 边界、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、batch response-integrity/input-limit failure 在 `fail_open` true/false 下 fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled、`check_input: false` 与仅有 disabled custom guardrail 都在 builder 前不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Provider-boundary tests: Bedrock 的 space-join、Ollama 的 newline-join 与
       Gemini/Vertex 的 empty-join 转换结果分别与 builder 对应 adjacency view 相等；
       image-separated 及 split-message `ignore` + `all previous instructions` 都在
-      provider 调用前被拒绝；Bedrock ToolResult array、tool-role
+      provider 调用前被拒绝；Anthropic fixture 过滤中间 User 后的精确
+      `ignore\nall previous instructions` view 在 provider 前被拒绝，同一 fixture
+      的 non-Anthropic-only route 不产生该 view；Bedrock ToolResult array、tool-role
       Text+ToolResult 与 tool-role 多 ToolResult 的相邻 `sec`/`ret` 由同 outgoing
       block view 命中，而普通 user/assistant sibling ToolResult blocks 与不同 message
       的两段保持隔离。
