@@ -56,28 +56,39 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
 
 - Chat 与 Completion 的 `choice.logprobs` 必须委托同一个 route-private
   `LogprobSurfaceAccumulator`，不得在两个 endpoint 各复制一套去重规则。该组件按
-  choice 维护 client-visible content 累计值、ordered chosen-token 累计值和不可逆
-  alias/materialized 状态：两个累计值仍完全相等时 chosen 可作为 content alias；
-  首次分歧时把包含 alias 前缀的完整 chosen 历史物化为连续 surface，之后永不重新
-  折叠。chosen token 之间不能插边界，也不能用全局 string set 删除不同位置的同值
-  token。top candidates 不做逐位置 chosen 去重，但也不能把 rank 当成跨整次响应的
-  永久字符串。组件把每个 `content[]` entry 视为一个逻辑 logprob position，并按
+  choice 维护 client-visible content 累计值以及带 `position_epoch` 的 ordered
+  chosen-token 状态。每个 epoch 记录开始时的 content baseline、chosen 累计值与
+  alias/materialized 状态：epoch 内两个表示仍完全相等时 chosen 可作为 content alias；
+  首次分歧时只把该 epoch 内包含 alias 前缀的完整 chosen 历史物化为连续 surface，
+  此后在该 epoch 内不重新折叠。chosen token 之间不能插边界，也不能用全局 string set
+  删除不同位置的同值 token。若同一 choice 的非空 Chat
+  `ChatCompletionDelta.content` 或 Completion `choice.text` 前进、而该 event 没有
+  任何 `logprobs.content` entry，组件必须先让 route 把该文本加入正常 content
+  surface，再 close 当前 chosen segment、写入稳定边界、递增 `position_epoch`，并以
+  该文本之后的 content offset 作为新 epoch baseline。下一次 chosen token 从空的
+  epoch-local 历史开始，不能导入旧 alias 前缀。top candidates 不做逐位置 chosen
+  去重，但也不能把 rank 当成跨整次响应的永久字符串。组件把每个
+  `content[]` entry 视为一个逻辑 logprob position，并按
   `(choice.index, candidate_index, run_generation)` 维护相邻 run：处理每个 position
   时，当前 rank 有 token 才追加；此前 active、但在该 position 缺失的 rank 必须先
   close，之后再出现时递增 generation 并以稳定边界开启新 segment。一个推进
   关联的 client-visible content surface 前进却没有任何对应 logprob position 时也
-  必须 close 该 choice 的全部 active top-rank runs：Chat 仅指非空
-  `ChatCompletionDelta.content`，Completion 仅指非空 `choice.text`。thinking/
+  必须在同一 position-epoch transition 中 close 该 choice 的全部 active top-rank
+  runs：Chat 仅指非空 `ChatCompletionDelta.content`，Completion 仅指非空
+  `choice.text`。thinking/
   reasoning、audio transcript、tool/function、refusal 等独立 surface，以及 role、
-  usage、finish reason 等纯 metadata event 均不改变 top-rank 连续性。这样相邻
-  content logprob position/event 的同 rank `sec`、`ret`
-  仍形成 `secret`，而 `rank1=sec`、下一 position 只有 rank0、再下一 position
-  `rank1=ret` 不会误拼。该组件的 alias bookkeeping、chosen、全部 top run 文本与
-  stable boundaries 统一纳入 cumulative 8 MiB checked accounting，并同时服务 Chat
-  与 Completion。共享 contract tests 必须覆盖 chosen/content 的 `sec`→`ret` alias
-  物化、top-rank 相邻 position/event 的 `sec`→`ret`、可变 top 列表造成的 rank
-  缺口/reset，以及首位置 top 等于 chosen 后分叉；两个 endpoint 各自还要有
-  integration fixture 证明实际 wire logprobs 经过该组件。
+  usage、finish reason 等纯 metadata event 均不推进关联 content position，因此既不
+  切换 chosen epoch，也不改变 top-rank 连续性。这样相邻 content logprob
+  position/event 的 chosen 或同 rank `sec`、`ret` 仍形成 `secret`；但
+  `content/chosen=sec`、随后 content-only `x`、再随后 chosen `ret` 会在 `x` 后的新
+  epoch 只物化 `ret`，不得跨边界形成 `secret`；`rank1=sec`、下一 position 只有
+  rank0、再下一 position `rank1=ret` 也不会误拼。该组件的 epoch baseline/alias
+  bookkeeping、chosen、全部 top run 文本与 stable boundaries 统一纳入 cumulative
+  8 MiB checked accounting，并同时服务 Chat 与 Completion。共享 contract tests
+  必须覆盖 chosen/content 的连续 `sec`→`ret` alias 物化、上述 content-only gap
+  reset、独立 surface/no-op 不 reset、top-rank 相邻 position/event 的 `sec`→`ret`、
+  可变 top 列表造成的 rank 缺口/reset，以及首位置 top 等于 chosen 后分叉；两个
+  endpoint 各自还要有 integration fixture 证明实际 wire logprobs 经过该组件。
 - Chat 从转换后的 `ChatCompletionDelta` 提取 `content`、`thinking.content` 或其
   `reasoning_content` alias（同一语义值只累计一次）、`audio.transcript`、
   legacy `function_call.name/arguments` 与
@@ -100,8 +111,9 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   实际转发的 `choice.logprobs` 提取 ordered chosen `content[].token`、
   `top_logprobs[].token` 与 `refusal`。chosen/top token 必须交给同一个
   `LogprobSurfaceAccumulator`，因此 Completion 与 Chat 具有完全相同的
-  chosen/content 不可逆 alias 物化、top-rank 相邻 position run/reset 和禁止逐位置
-  chosen skip 语义；不能因 compatibility request 层拒绝 `logprobs` 参数而忽略
+  chosen/content 的 epoch-local alias 物化、关联 content-only event 的 position-epoch
+  reset、top-rank 相邻 position run/reset 和禁止逐位置 chosen skip 语义；不能因
+  compatibility request 层拒绝 `logprobs` 参数而忽略
   provider/custom adapter 主动返回的 logprobs。
   canonical `LogProbs.refusal` 当前为 `Option<String>`，OpenAI transformer 会把原生
   非字符串 refusal 用 `serde_json::Value::to_string()` 保存为该 wire string。为不
@@ -206,7 +218,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的跨 event alias 物化、不同位置同值 token、top candidate rank 在相邻 position/event 的连续 `sec`/`ret`、可变 top 列表中 rank 缺失后 reset 且不得误拼、关联 content/text 无 logprob 时 reset，而 interleaved thinking/audio/tool/refusal 与 metadata 不 reset、top 首位置等于 chosen 后分叉仍保留前缀、Completion logprobs raw refusal 与结构化 refusal token-array 的 `sec`/`ret` 连续扫描、metadata/`None` no-op、普通 refusal reset 及 wire 值不变、Chat parallel tool index 连续/隔离、tool/function name+args、Responses initial/late/repeated name、late-name state update 后 provider error 不扫描、late name 在 output-item done 首次发布前检查、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的 epoch-local alias 物化、`content/chosen=sec`→关联 content/text-only `x`→chosen `ret` 的 position-epoch reset 且不得误拼、thinking/audio/tool/refusal/metadata 插入时 epoch 不 reset、不同位置同值 token、top candidate rank 在相邻 position/event 的连续 `sec`/`ret`、可变 top 列表中 rank 缺失后 reset 且不得误拼、关联 content/text 无 logprob 时同时 reset chosen epoch 与 top runs，而 interleaved thinking/audio/tool/refusal 与 metadata 不 reset、top 首位置等于 chosen 后分叉仍保留前缀、Completion logprobs raw refusal 与结构化 refusal token-array 的 `sec`/`ret` 连续扫描、metadata/`None` no-op、普通 refusal reset 及 wire 值不变、Chat parallel tool index 连续/隔离、tool/function name+args、Responses initial/late/repeated name、late-name state update 后 provider error 不扫描、late name 在 output-item done 首次发布前检查、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |
@@ -240,8 +252,8 @@ block/error/overflow 丢弃当前 pending、取消上游并发送安全 terminal
 
 ## 风险
 
-- Security: buffer overflow、错误消息泄露、跨 surface 拼接、top rank 缺口误拼、
-  structured refusal 漏扫、已释放前缀不可撤回和
+- Security: buffer overflow、错误消息泄露、跨 surface 拼接、chosen position epoch 或
+  top rank 缺口误拼、structured refusal 漏扫、已释放前缀不可撤回和
   `fail_open` 配置可能形成风险；当前 pending 必须 bounded、稳定分隔、默认
   fail-closed 且不记录被拒正文。
 - Compatibility: guarded streaming 的首内容延迟变为首窗口生成+检查延迟；字面值
