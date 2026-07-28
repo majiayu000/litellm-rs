@@ -65,9 +65,12 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   `(choice.index, candidate_index, run_generation)` 维护相邻 run：处理每个 position
   时，当前 rank 有 token 才追加；此前 active、但在该 position 缺失的 rank 必须先
   close，之后再出现时递增 generation 并以稳定边界开启新 segment。一个推进
-  client-visible 模型文本却没有任何对应 logprob position 的 choice event 也必须
-  close 该 choice 的全部 active top-rank runs；role、usage、finish reason 等纯
-  metadata event 不改变连续性。这样相邻 position/event 的同 rank `sec`、`ret`
+  关联的 client-visible content surface 前进却没有任何对应 logprob position 时也
+  必须 close 该 choice 的全部 active top-rank runs：Chat 仅指非空
+  `ChatCompletionDelta.content`，Completion 仅指非空 `choice.text`。thinking/
+  reasoning、audio transcript、tool/function、refusal 等独立 surface，以及 role、
+  usage、finish reason 等纯 metadata event 均不改变 top-rank 连续性。这样相邻
+  content logprob position/event 的同 rank `sec`、`ret`
   仍形成 `secret`，而 `rank1=sec`、下一 position 只有 rank0、再下一 position
   `rank1=ret` 不会误拼。该组件的 alias bookkeeping、chosen、全部 top run 文本与
   stable boundaries 统一纳入 cumulative 8 MiB checked accounting，并同时服务 Chat
@@ -107,9 +110,12 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
   再对能够完整解析为 array、且每个 entry 都含 string `token` 的 payload，按数组
   顺序把 token 追加到独立 `(choice.index, structured_refusal)` 连续 surface。不得把
   JSON 标点插入 token surface；任一 entry 不匹配、解析失败或中间出现普通 refusal
-  时只保留 raw 扫描并 close structured run，禁止部分提取后跨缺口拼接。相邻 provider
-  events 的完整 token arrays 可继续同一 structured run；不同 choice 与 raw/structured
-  surface 保持稳定边界。raw string、解析出的 token、parser bookkeeping 与 boundary
+  时只保留 raw 扫描并 close structured run，禁止部分提取后跨缺口拼接。状态转换固定
+  为：完整匹配 token-array schema 的 `Some(refusal)` 追加当前 structured run；
+  普通、非匹配或解析失败的 `Some(refusal)` 扫描 raw 后 close；`refusal: None`、
+  unrelated surface 与 metadata event 是 no-op。相邻 provider events 的完整 token
+  arrays 即使被 no-op event 隔开也继续同一 structured run；不同 choice 与
+  raw/structured surface 保持稳定边界。raw string、解析出的 token、parser bookkeeping 与 boundary
   bytes 全部纳入 cumulative 8 MiB checked accounting。因为 transformer 已丢失原始
   JSON value 的类型来源，字面上恰好是该 token-array JSON 的 refusal string 会接受
   同样的保守 semantic 扫描；该兼容性收紧必须用 fixture 固定，不能改写 wire 值。
@@ -200,7 +206,7 @@ pending events，再发送既有 provider error；不得把 pending 模型文本
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的跨 event alias 物化、不同位置同值 token、top candidate rank 在相邻 position/event 的连续 `sec`/`ret`、可变 top 列表中 rank 缺失后 reset 且不得误拼、无 logprob 的模型文本推进会 reset 而 metadata 不会、top 首位置等于 chosen 后分叉仍保留前缀、Completion logprobs raw refusal 与结构化 refusal token-array 的 `sec`/`ret` 连续扫描及 wire 值不变、Chat parallel tool index 连续/隔离、tool/function name+args、Responses initial/late/repeated name、late-name state update 后 provider error 不扫描、late name 在 output-item done 首次发布前检查、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
+| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的跨 event alias 物化、不同位置同值 token、top candidate rank 在相邻 position/event 的连续 `sec`/`ret`、可变 top 列表中 rank 缺失后 reset 且不得误拼、关联 content/text 无 logprob 时 reset，而 interleaved thinking/audio/tool/refusal 与 metadata 不 reset、top 首位置等于 chosen 后分叉仍保留前缀、Completion logprobs raw refusal 与结构化 refusal token-array 的 `sec`/`ret` 连续扫描、metadata/`None` no-op、普通 refusal reset 及 wire 值不变、Chat parallel tool index 连续/隔离、tool/function name+args、Responses initial/late/repeated name、late-name state update 后 provider error 不扫描、late name 在 output-item done 首次发布前检查、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |
