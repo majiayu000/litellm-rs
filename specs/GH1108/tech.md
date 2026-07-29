@@ -81,6 +81,7 @@ GH-1108 / #1108
     "src/server/routes/ai/responses.rs",
     "src/server/routes/ai/responses_stream.rs",
     "src/server/routes/ai/responses/lifecycle.rs",
+    "src/server/routes/ai/responses/lifecycle_tests.rs",
     "src/server/routes/ai/responses_stream_tests.rs",
     "src/core/cache/key_generator.rs",
     "src/core/cache/key_policy.rs",
