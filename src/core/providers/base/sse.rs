@@ -1,7 +1,4 @@
-//! Unified SSE (Server-Sent Events) Parser
-//!
-//! A centralized SSE parsing system that eliminates code duplication across providers.
-//! All providers can use this parser and only need to implement the transformation logic.
+//! Shared parser and stream wrapper for provider Server-Sent Events.
 
 use bytes::Bytes;
 use futures::Stream;
@@ -22,9 +19,35 @@ pub use gemini::GeminiTransformer;
 pub use openai::OpenAICompatibleTransformer;
 
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::responses::{ChatChunk, FinishReason};
+use crate::core::types::responses::{ChatChunk, FinishReason, Usage};
 
-/// SSE Event Types
+const INVALID_STREAM_USAGE_MARKER: &str = "__litellm_invalid_stream_usage";
+
+/// Mark an internal provider chunk for route-level usage invalidation.
+pub(super) fn mark_stream_usage_invalid(mut chunk: ChatChunk) -> ChatChunk {
+    chunk.usage = Some(Usage::default());
+    chunk.system_fingerprint = Some(INVALID_STREAM_USAGE_MARKER.to_string());
+    chunk
+}
+
+pub(crate) fn observe_stream_usage(retained: &mut Option<Usage>, chunk: &mut ChatChunk) -> bool {
+    let invalid = chunk.system_fingerprint.as_deref() == Some(INVALID_STREAM_USAGE_MARKER)
+        && chunk.usage.as_ref().is_some_and(|usage| {
+            usage.prompt_tokens == 0 && usage.completion_tokens == 0 && usage.total_tokens == 0
+        });
+    if invalid {
+        chunk.system_fingerprint = None;
+        chunk.usage = None;
+        *retained = None;
+        true
+    } else if let Some(usage) = &chunk.usage {
+        *retained = Some(usage.clone());
+        false
+    } else {
+        false
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SSEEventType {
     Data,
@@ -34,7 +57,6 @@ pub enum SSEEventType {
     Comment,
 }
 
-/// Parsed SSE Event
 #[derive(Debug, Clone)]
 pub struct SSEEvent {
     pub event_type: Option<String>,
@@ -44,7 +66,6 @@ pub struct SSEEvent {
 }
 
 impl SSEEvent {
-    /// Parse SSE event from a line
     pub fn from_line(line: &str) -> Option<Self> {
         if line.is_empty() || line.starts_with(':') {
             return None;
@@ -93,24 +114,19 @@ impl SSEEvent {
     }
 }
 
-/// Trait for provider-specific SSE transformation
 pub trait SSETransformer: Send + Sync {
-    /// Provider name for error reporting
     fn provider_name(&self) -> &'static str;
 
-    /// Check if this is the end-of-stream marker
     fn is_end_marker(&self, data: &str) -> bool {
         data.trim() == "[DONE]"
     }
 
-    /// Transform raw SSE data into ChatChunk
     fn transform_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError>;
 
-    /// Parse finish reason from string (provider-specific)
-    ///
-    /// Default mapping covers the OpenAI shape plus the additional terminal
-    /// states used by Anthropic and Gemini. Providers that emit unique
-    /// reasons may still override this method.
+    fn transform_stream_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
+        self.transform_chunk(data)
+    }
+
     fn parse_finish_reason(&self, reason: &str) -> Option<FinishReason> {
         match reason.to_ascii_lowercase().as_str() {
             "stop" | "end_turn" => Some(FinishReason::Stop),
@@ -125,7 +141,6 @@ pub trait SSETransformer: Send + Sync {
     }
 }
 
-/// Unified SSE Parser
 pub struct UnifiedSSEParser<T: SSETransformer> {
     transformer: T,
     buffer: String,
@@ -133,7 +148,6 @@ pub struct UnifiedSSEParser<T: SSETransformer> {
 }
 
 impl<T: SSETransformer> UnifiedSSEParser<T> {
-    /// Create new SSE parser with a transformer
     pub fn new(transformer: T) -> Self {
         Self {
             transformer,
@@ -142,59 +156,53 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         }
     }
 
-    /// Process raw bytes into SSE events
-    ///
-    /// Optimized to minimize allocations:
-    /// - Uses `from_utf8_lossy` which returns `Cow<str>` (borrowed when valid UTF-8)
-    /// - Processes lines without collecting into intermediate `Vec<String>`
-    /// - Only allocates for incomplete lines that need to be buffered
     pub fn process_bytes(&mut self, bytes: &[u8]) -> Result<Vec<ChatChunk>, ProviderError> {
-        // Append new bytes to buffer - from_utf8_lossy avoids allocation for valid UTF-8
+        self.process_bytes_with_mode(bytes, false)
+    }
+
+    fn process_stream_bytes(&mut self, bytes: &[u8]) -> Result<Vec<ChatChunk>, ProviderError> {
+        self.process_bytes_with_mode(bytes, true)
+    }
+
+    fn process_bytes_with_mode(
+        &mut self,
+        bytes: &[u8],
+        stream_mode: bool,
+    ) -> Result<Vec<ChatChunk>, ProviderError> {
         let text = String::from_utf8_lossy(bytes);
         self.buffer.push_str(&text);
 
         let mut chunks = Vec::new();
-
-        // Find the last newline position
         let last_newline = self.buffer.rfind('\n');
 
         if let Some(pos) = last_newline {
-            // Extract complete part and remaining incomplete part
             let complete_part = self.buffer[..=pos].to_string();
             let incomplete_part = self.buffer[pos + 1..].to_string();
-
-            // Update buffer with incomplete part before processing
-            // (This avoids borrow issues)
             self.buffer = incomplete_part;
-
-            // Process complete lines
             for line in complete_part.lines() {
-                if let Some(chunk) = self.process_line(line)? {
+                if let Some(chunk) = self.process_line(line, stream_mode)? {
                     chunks.push(chunk);
                 }
             }
         }
-        // If no newline found, keep buffering (no action needed)
-
         Ok(chunks)
     }
 
-    /// Process a single SSE line
-    fn process_line(&mut self, line: &str) -> Result<Option<ChatChunk>, ProviderError> {
-        // Empty line signals end of event
+    fn process_line(
+        &mut self,
+        line: &str,
+        stream_mode: bool,
+    ) -> Result<Option<ChatChunk>, ProviderError> {
         if line.is_empty() {
             if let Some(event) = self.current_event.take() {
-                return self.process_event(event);
+                return self.process_event(event, stream_mode);
             }
             return Ok(None);
         }
 
-        // Parse SSE field
         if let Some(event) = SSEEvent::from_line(line) {
-            // For data fields, accumulate or merge
             if !event.data.is_empty() {
                 if let Some(ref mut current) = self.current_event {
-                    // Append to existing data
                     if !current.data.is_empty() {
                         current.data.push('\n');
                     }
@@ -203,7 +211,6 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
                     self.current_event = Some(event);
                 }
             } else if event.event_type.is_some() || event.id.is_some() || event.retry.is_some() {
-                // Merge other fields
                 if let Some(ref mut current) = self.current_event {
                     if event.event_type.is_some() {
                         current.event_type = event.event_type;
@@ -223,30 +230,41 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         Ok(None)
     }
 
-    /// Process a complete SSE event
-    fn process_event(&self, event: SSEEvent) -> Result<Option<ChatChunk>, ProviderError> {
-        // Skip empty events
+    fn process_event(
+        &self,
+        event: SSEEvent,
+        stream_mode: bool,
+    ) -> Result<Option<ChatChunk>, ProviderError> {
         if event.data.is_empty() {
             return Ok(None);
         }
 
-        // Check for end marker
         if self.transformer.is_end_marker(&event.data) {
             return Ok(None);
         }
 
-        // Transform to ChatChunk
-        self.transformer.transform_chunk(&event.data)
+        if stream_mode {
+            self.transformer.transform_stream_chunk(&event.data)
+        } else {
+            self.transformer.transform_chunk(&event.data)
+        }
+    }
+
+    fn finish_stream(&mut self) -> Result<Vec<ChatChunk>, ProviderError> {
+        let mut chunks = Vec::new();
+        if !self.buffer.is_empty() {
+            let line = std::mem::take(&mut self.buffer);
+            chunks.extend(self.process_line(&line, true)?);
+        }
+        if let Some(event) = self.current_event.take() {
+            chunks.extend(self.process_event(event, true)?);
+        }
+        Ok(chunks)
     }
 }
 
-/// Maximum number of chunks allowed in the buffer to prevent OOM from slow clients
-/// or malicious actors. At ~1KB per chunk, 10,000 chunks ≈ 10MB upper bound.
 const MAX_CHUNK_BUFFER_SIZE: usize = 10_000;
 
-/// Streaming wrapper that uses UnifiedSSEParser
-///
-/// Uses `VecDeque` for buffered chunks to enable O(1) pop_front instead of O(n) Vec::remove(0).
 pub struct UnifiedSSEStream<S, T>
 where
     S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + Unpin,
@@ -255,6 +273,8 @@ where
     inner: S,
     parser: UnifiedSSEParser<T>,
     chunk_buffer: VecDeque<ChatChunk>,
+    pending_error: Option<ProviderError>,
+    finished: bool,
 }
 
 impl<S, T> UnifiedSSEStream<S, T>
@@ -267,6 +287,8 @@ where
             inner: stream,
             parser: UnifiedSSEParser::new(transformer),
             chunk_buffer: VecDeque::new(),
+            pending_error: None,
+            finished: false,
         }
     }
 }
@@ -281,59 +303,74 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
 
-        // Return buffered chunks first - O(1) with VecDeque
         if let Some(chunk) = this.chunk_buffer.pop_front() {
             return Poll::Ready(Some(Ok(chunk)));
         }
+        if let Some(error) = this.pending_error.take() {
+            return Poll::Ready(Some(Err(error)));
+        }
+        if this.finished {
+            return Poll::Ready(None);
+        }
 
-        // Poll inner stream for more data
         match Pin::new(&mut this.inner).poll_next(cx) {
-            Poll::Ready(Some(Ok(bytes))) => {
-                match this.parser.process_bytes(&bytes) {
-                    Ok(chunks) => {
-                        if chunks.is_empty() {
-                            // No chunks yet, poll again
+            Poll::Ready(Some(Ok(bytes))) => match this.parser.process_stream_bytes(&bytes) {
+                Ok(chunks) => {
+                    if chunks.is_empty() {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    } else {
+                        if this.chunk_buffer.len() + chunks.len() > MAX_CHUNK_BUFFER_SIZE {
+                            return Poll::Ready(Some(Err(ProviderError::network(
+                                this.parser.transformer.provider_name(),
+                                format!(
+                                    "SSE chunk buffer exceeded limit of {} chunks",
+                                    MAX_CHUNK_BUFFER_SIZE
+                                ),
+                            ))));
+                        }
+                        this.chunk_buffer.extend(chunks);
+                        if let Some(chunk) = this.chunk_buffer.pop_front() {
+                            Poll::Ready(Some(Ok(chunk)))
+                        } else {
                             cx.waker().wake_by_ref();
                             Poll::Pending
-                        } else {
-                            // Guard against unbounded buffer growth (slow client / malicious actor)
-                            if this.chunk_buffer.len() + chunks.len() > MAX_CHUNK_BUFFER_SIZE {
-                                return Poll::Ready(Some(Err(ProviderError::network(
-                                    this.parser.transformer.provider_name(),
-                                    format!(
-                                        "SSE chunk buffer exceeded limit of {} chunks",
-                                        MAX_CHUNK_BUFFER_SIZE
-                                    ),
-                                ))));
-                            }
-                            // Buffer chunks and return first one
-                            this.chunk_buffer.extend(chunks);
-                            if let Some(chunk) = this.chunk_buffer.pop_front() {
-                                Poll::Ready(Some(Ok(chunk)))
-                            } else {
-                                cx.waker().wake_by_ref();
-                                Poll::Pending
-                            }
                         }
                     }
-                    Err(e) => Poll::Ready(Some(Err(e))),
+                }
+                Err(e) => Poll::Ready(Some(Err(e))),
+            },
+            Poll::Ready(Some(Err(error))) => {
+                let error = ProviderError::network(
+                    this.parser.transformer.provider_name(),
+                    format!("Stream error: {error}"),
+                );
+                this.finished = true;
+                match this.parser.finish_stream() {
+                    Ok(chunks) if !chunks.is_empty() => {
+                        this.chunk_buffer.extend(chunks);
+                        this.pending_error = Some(error);
+                        Poll::Ready(this.chunk_buffer.pop_front().map(Ok))
+                    }
+                    Ok(_) => Poll::Ready(Some(Err(error))),
+                    Err(error) => Poll::Ready(Some(Err(error))),
                 }
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProviderError::network(
-                this.parser.transformer.provider_name(),
-                format!("Stream error: {}", e),
-            )))),
-            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(None) => {
+                this.finished = true;
+                match this.parser.finish_stream() {
+                    Ok(chunks) => {
+                        this.chunk_buffer.extend(chunks);
+                        Poll::Ready(this.chunk_buffer.pop_front().map(Ok))
+                    }
+                    Err(error) => Poll::Ready(Some(Err(error))),
+                }
+            }
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
-/// Create an OpenAI-compatible SSE stream from an HTTP response.
-///
-/// Replaces the manual `.scan()` + `.flat_map()` pattern that was duplicated
-/// across many providers. Uses `UnifiedSSEStream` which handles buffering,
-/// parsing, and error mapping internally.
 pub fn create_provider_sse_stream(
     response: reqwest::Response,
     provider_name: &'static str,

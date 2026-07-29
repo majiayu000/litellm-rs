@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::core::providers::ProviderError;
+use crate::core::providers::base::sse::observe_stream_usage;
 use crate::core::streaming::types::Event;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
 use crate::server::state::AppState;
@@ -233,11 +234,15 @@ pub(super) async fn handle_streaming_completion(
                     };
 
                     let bytes = match chunk_result {
-                        Ok(chunk) => {
+                        Ok(mut chunk) => {
                             saw_upstream_output = true;
-                            if let Some(usage) = &chunk.usage {
-                                tokens_used = u64::from(usage.total_tokens);
-                                final_usage = Some(usage.clone());
+                            observe_stream_usage(&mut final_usage, &mut chunk);
+                            tokens_used = final_usage
+                                .as_ref()
+                                .map(|usage| u64::from(usage.total_tokens))
+                                .unwrap_or(0);
+                            if chunk.choices.is_empty() && chunk.usage.is_none() {
+                                continue;
                             }
                             let prefix_for_chunk = if chunk_has_text_delta(&chunk) {
                                 echo_prefix.take()

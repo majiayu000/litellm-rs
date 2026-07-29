@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::SSETransformer;
+use super::{SSETransformer, mark_stream_usage_invalid};
 use crate::core::providers::shared::strict_direct_gemini_usage_metadata;
 #[cfg(any(feature = "providers-extended", test))]
 use crate::core::providers::shared::strict_vertex_usage_metadata;
@@ -61,6 +61,40 @@ impl GeminiTransformer {
             #[cfg(any(feature = "providers-extended", test))]
             Some(GeminiUsagePolicy::Vertex) => strict_vertex_usage_metadata(metadata),
             None => None,
+        }
+    }
+
+    fn empty_chunk(&self) -> ChatChunk {
+        ChatChunk {
+            id: self.chunk_id.clone(),
+            object: "chat.completion.chunk".to_string(),
+            created: chrono::Utc::now().timestamp(),
+            model: self.model.clone(),
+            choices: vec![],
+            usage: None,
+            system_fingerprint: None,
+        }
+    }
+
+    fn transform_stream_data(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
+        let parsed: Value = match serde_json::from_str(data) {
+            Ok(parsed) => parsed,
+            Err(_) if data.contains("\"usageMetadata\"") => {
+                return Ok(Some(mark_stream_usage_invalid(self.empty_chunk())));
+            }
+            Err(_) => return self.transform_chunk(data),
+        };
+        let invalid_usage = self.usage_policy.is_some()
+            && parsed
+                .get("usageMetadata")
+                .is_some_and(|metadata| self.transform_usage_metadata(metadata).is_none());
+        let chunk = self.transform_chunk(data)?;
+        if invalid_usage {
+            Ok(Some(mark_stream_usage_invalid(
+                chunk.unwrap_or_else(|| self.empty_chunk()),
+            )))
+        } else {
+            Ok(chunk)
         }
     }
 }
@@ -189,11 +223,18 @@ impl SSETransformer for GeminiTransformer {
             system_fingerprint: None,
         }))
     }
+
+    fn transform_stream_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
+        self.transform_stream_data(data)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::providers::base::sse::{UnifiedSSEStream, observe_stream_usage};
+    use bytes::Bytes;
+    use futures::StreamExt;
 
     #[test]
     fn strict_usage_metadata_applies_to_candidate_and_usage_only_chunks() {
@@ -290,5 +331,148 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(huge.usage.unwrap().total_tokens, u32::MAX);
+    }
+
+    #[test]
+    fn later_invalid_usage_clears_retained_valid_usage() {
+        let transformer = GeminiTransformer::new("gemini-test");
+        let mut retained = None;
+        for data in [
+            r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}"#,
+            r#"{"candidates":[],"usageMetadata":{"promptTokenCount":4,"totalTokenCount":4}}"#,
+        ] {
+            let mut chunk = transformer.transform_stream_chunk(data).unwrap().unwrap();
+            observe_stream_usage(&mut retained, &mut chunk);
+        }
+        assert!(
+            retained.is_none(),
+            "malformed later usage must invalidate the retained lower total"
+        );
+    }
+
+    #[test]
+    fn stream_usage_state_preserves_missing_and_allows_authoritative_recovery() {
+        for transformer in [
+            GeminiTransformer::new("direct-test"),
+            GeminiTransformer::new_vertex("vertex-test"),
+        ] {
+            let mut retained = None;
+            for (data, expected) in [
+                (
+                    r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}"#
+                        .to_string(),
+                    Some(3),
+                ),
+                (
+                    r#"{"candidates":[{"content":{"parts":[{"text":"still streaming"}]}}]}"#
+                        .to_string(),
+                    Some(3),
+                ),
+                (
+                    r#"{"candidates":[],"usageMetadata":{"promptTokenCount":4,"totalTokenCount":4}}"#
+                        .to_string(),
+                    None,
+                ),
+                (
+                    format!(
+                        r#"{{"candidates":[],"usageMetadata":{{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":{}}}}}"#,
+                        6
+                    ),
+                    Some(6),
+                ),
+            ] {
+                let mut chunk = transformer.transform_stream_chunk(&data).unwrap().unwrap();
+                observe_stream_usage(&mut retained, &mut chunk);
+                assert_eq!(
+                    retained.as_ref().map(|usage| usage.total_tokens),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_flushes_truncated_usage_at_eof_as_invalid() {
+        let body = concat!(
+            "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":1,",
+            "\"candidatesTokenCount\":2,\"totalTokenCount\":3}}\n\n",
+            "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":4"
+        );
+        let source = futures::stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(body))]);
+        let mut stream = UnifiedSSEStream::new(source, GeminiTransformer::new("gemini-test"));
+        let mut retained = None;
+        while let Some(chunk) = stream.next().await {
+            let mut chunk = chunk.unwrap();
+            observe_stream_usage(&mut retained, &mut chunk);
+        }
+        assert!(
+            retained.is_none(),
+            "truncated final usageMetadata must clear retained usage"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_flushes_truncated_usage_before_read_error() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                      transfer-encoding: chunked\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            for body in [
+                concat!(
+                    "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":1,",
+                    "\"candidatesTokenCount\":2,\"totalTokenCount\":3}}\n\n"
+                ),
+                "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":4",
+            ] {
+                socket
+                    .write_all(format!("{:x}\r\n{body}\r\n", body.len()).as_bytes())
+                    .await
+                    .unwrap();
+                socket.flush().await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        let mut stream = UnifiedSSEStream::new(
+            Box::pin(response.bytes_stream()),
+            GeminiTransformer::new("gemini-test"),
+        );
+        let mut retained = None;
+        let mut saw_read_error = false;
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(mut chunk) => {
+                    observe_stream_usage(&mut retained, &mut chunk);
+                }
+                Err(_) => {
+                    saw_read_error = true;
+                    break;
+                }
+            }
+        }
+        server.await.unwrap();
+        assert!(saw_read_error);
+        assert!(
+            retained.is_none(),
+            "residual invalid usage must be observed before the read error"
+        );
     }
 }

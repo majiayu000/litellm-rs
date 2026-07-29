@@ -9,6 +9,7 @@ use crate::core::models::openai::responses_api::{
     ResponseStreamEvent, ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::core::providers::ProviderError;
+use crate::core::providers::base::sse::observe_stream_usage;
 use crate::core::streaming::types::Event;
 use crate::core::types::responses::Usage as ChatUsage;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
@@ -345,12 +346,19 @@ pub(crate) async fn handle_streaming_response(
                     let Some(result) = next else { break };
 
                     match result {
-                        Ok(chunk) => {
-                            if let Some(u) = &chunk.usage {
+                        Ok(mut chunk) => {
+                            let invalid_usage = observe_stream_usage(&mut final_usage, &mut chunk);
+                            saw_upstream_output |= invalid_usage;
+                            if let Some(u) = &final_usage {
                                 in_tokens = u.prompt_tokens;
                                 out_tokens = u.completion_tokens;
-                                final_usage = Some(u.clone());
                                 saw_upstream_output = true;
+                            } else {
+                                in_tokens = 0;
+                                out_tokens = 0;
+                            }
+                            if chunk.choices.is_empty() && chunk.usage.is_none() {
+                                continue;
                             }
                             for choice in &chunk.choices {
                                 if let Some(r) = &choice.finish_reason {
