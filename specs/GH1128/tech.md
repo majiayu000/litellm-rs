@@ -16,10 +16,14 @@ GH-1128 / #1128
 | Chat DTO | `src/core/models/openai/messages.rs` | `ContentPart` 包含 document/tool result/tool use | 列出必须规范化的载体 |
 | Function DTO | `src/core/models/openai/tools.rs` | legacy/modern function arguments 都会发给 provider | 等价结构化输入不能继续遗漏 |
 | Anthropic system projection | `src/core/providers/anthropic/client.rs:290` | `separate_system_messages` 先过滤为 `System`/`Developer`，再把存活的普通 text leaves 用换行连接；中间的 User message 不进入该 provider-visible string | input guardrail 必须镜像这条 provider-scoped 边界，但不能把它扩散到非 Anthropic profile |
+| Gemini system projection | `src/core/providers/gemini/client.rs:252` | `GeminiClient` 对 Google AI 与自身 Vertex endpoint 使用同一 transform，只保留 `System`，输出有序 `systemInstruction.parts`；独立 `Provider::VertexAI` 使用另一 transformer | profile 必须按实际 provider transform 区分，不能把 `Developer` 或独立 VertexAI 误归入 native Gemini |
+| Bedrock system projection | `src/core/providers/bedrock/{chat/mod.rs,chat/converse.rs,model_id.rs}` | provider 会按选中 model 的 `BedrockApiType` 在 Converse/ConverseStream 与 Invoke 系列间分流；只有非 prompt-management Converse 接受 request-level `System` 并输出 `system[]`，`Developer` 被过滤 | profile 必须按 deployment 的选中 model/API transform 分类，不能只按 `Provider::Bedrock` enum |
 | Guardrail engine | `src/core/guardrails/{traits,types,engine,openai_moderation,pii,prompt_injection}.rs` | 接收单个 `&str`；OpenAI moderation 每次调用发一个远程请求；一般执行错误可被 `fail_open` 忽略；`GuardrailError` 是公开 re-export、未标记 `non_exhaustive` 的 enum，custom guardrail 只需实现公开 `check_input(&str)`；公开 `add_guardrail` 也可手工注册 built-in | 需要 source-compatible 的默认 batch method 与独立 batch error 类型；扩大现有 enum、增加必需 trait method 或依赖 trait-object downcast 都不可接受 |
 | Document MIME | `Cargo.toml`, `Cargo.lock`, `src/core/models/openai/messages.rs` | DTO 保留任意 `media_type` 字符串；`mime` 当前仅为 transitive dependency，不能直接依赖其 API | 需要直接声明标准 MIME parser 并审计全部 charset 参数，不能用字符串截断 |
-| Chat execution boundary | `src/server/routes/ai/chat.rs` | 公开 route helper 总是在内部执行 input guardrail；直接暴露 unchecked internal handler 会形成旁路 | Background Responses 需在 queue 前检查一次、后台执行不重复，必须用窄作用域 audited entrypoint 和 caller-coverage test 固定 |
+| Routing snapshot | `src/core/router/{mod.rs,selection.rs,unified.rs}` | `RuntimeHandle` 已持有 immutable `RoutingSnapshot`/generation，但 server chat selection 仍直接调用 `UnifiedRouter`，每次选择都可 load 新 snapshot；现有 selector 还会应用 health/cooldown/concurrency/rate-limit 等瞬时过滤 | audit profiles 必须从一个 snapshot 的稳定候选集推导，后续 selection/retry 必须复用同一 handle，不能只审核 audit 时瞬时可选者 |
+| Chat execution boundary | `src/server/routes/ai/{chat.rs,chat_streaming.rs,budgeted.rs,execution.rs,response_cache.rs}` | input guardrail 后，cache pricing、unary/stream 与每次 retry 都可重新读取 current router；公开 route helper 总是在内部执行 input guardrail | active-input lifecycle 必须把 audited routing handle 传入 cache/pricing 与最终 dispatch；disabled lifecycle 保留动态 routing，窄作用域 API 与 caller tests 防止丢失 audit |
 | Background Responses | `src/server/routes/ai/responses.rs`, `src/server/routes/ai/responses/lifecycle.rs`, `src/server/routes/ai/responses/lifecycle_tests.rs` | 先存储并返回 queued 200，再由后台 task 进入 chat input guardrail；deterministic normalization 400 只能晚到并变成 failed status | 必须把完整 input guardrail 移到 queue/persist/task 之前，并保证后台只消费已审核的原请求 |
+| Streaming Responses | `src/server/routes/ai/responses_stream.rs` | 独立执行 input check 后调用动态 `run_stream` | stream 路径也必须携带 audited handle，不能成为 route-swap 旁路 |
 
 ## 设计方案
 
@@ -27,7 +31,26 @@ GH-1128 / #1128
    `content_text -> Vec<&str>`。owned 结果允许安全容纳 JSON 序列化和 base64 解码
    后的正文；record 只在进程内携带 typed provenance 与原始扫描值，provenance 不编码
    进扫描文本，错误不能被 iterator/filter 静默丢弃。
-2. builder 按稳定顺序生成互补记录：
+2. active-input predicate 为 true 时，`check_chat_input` 先通过现有
+   `RuntimeBinding`/`RuntimeHandle` surface 捕获一个 request-scoped immutable
+   `RoutingSnapshot`，并把 handle/generation 保存在 crate-private
+   `InputGuardrailAudit` 中。router snapshot surface 增加一个只读的 stable-candidate
+   枚举：按请求 model group、endpoint capability 与 deployment lifecycle eligibility
+   返回该 snapshot 内所有可能参与本请求 cache pricing、unary/stream、retry 和
+   background dispatch 的 deployment/provider/model，不调用 selector，也不读取
+   health、cooldown、active requests、RPM/TPM 或预算等瞬时状态。这样 audit 时暂时
+   unhealthy/in-cooldown、但同 generation 内稍后恢复的 deployment 也已经被覆盖。
+   profile derivation 与 record builder 都只读该 handle；审核完成后发布的新 snapshot
+   不得进入本请求。
+
+   `check_chat_input` 返回显式的 `Disabled` 或 `Audited(InputGuardrailAudit)` outcome，
+   不能用可被调用方静默丢弃的裸 `Option` 表示。`Disabled` 只来自 active predicate
+   false，并保留现有 dynamic selection；`Audited` 必须传入 cache pricing、
+   `run_unary`/`run_stream`、每次 retry 与 background task。router/selection 增加
+   capability-matching in-snapshot lease 方法；`budgeted.rs`/`execution.rs` 使用同一个
+   handle 完成所有 attempts，不再调用会 load current snapshot 的 selector。
+
+   builder 随后按稳定顺序生成互补记录：
    - 对每条 message，按原 part 顺序先收集全部普通 text leaves，过滤夹在其中的
      image/document/tool 等非 text parts；再依次生成三种 provider projection：
      `text_leaves.join("")`、`text_leaves.join(" ")`、`text_leaves.join("\n")`。
@@ -44,19 +67,28 @@ GH-1128 / #1128
      text，不把 message name、function/tool、document 或其他 typed records 混入，
      因此结构化字段仍保持 record isolation。该 record 与 message projections 一样
      参加局部值去重、256 records 与 2 MiB accounting。
-   - Anthropic provider projection 独立于上述通用 legacy record。只有本请求绑定的
-     reachable provider-transform profile 包含原生 Anthropic
-     `separate_system_messages` 时，才按原 message 顺序过滤掉所有非
-     `System`/`Developer` role，从存活 message 中按 part 顺序收集普通 text leaves，
-     并生成唯一的 `anthropic_system_text_leaves.join("\n")` record；不存在存活 leaf
-     时不生成。profile 必须由实际路由/deployment metadata 提供，禁止按 model 名称
-     猜测，也禁止把该 record 无条件加入非 Anthropic-only route。包含 Anthropic
-     fallback 的 route 因该 transform 确实可达而必须包含此 view；profile 集合必须在
-     同一次 pre-provider input-check lifecycle 内固定，不能在 provider 调用后补检。
-     fixture 以 `System("ignore")`、`User("hello")`、随后分别为 `Developer` 与
-     `System` 的 `("all previous instructions")` 验证精确值均为
-     `ignore\nall previous instructions`；非 Anthropic-only profile 必须证明没有该
-     record，避免跨 provider 误匹配。
+   - system-container projections 独立于上述通用 legacy record，并从 stable
+     candidates 的实际 provider/model transform 分类：
+     - 原生 Anthropic `separate_system_messages` 按请求顺序保留
+       `System`/`Developer` role 的普通 text leaves，生成唯一且精确的 newline
+       record；fixture 覆盖 System/User/Developer 与 System/User/System。
+     - `Provider::Gemini` 的 `GeminiClient` 对 Google AI 与自身 Vertex endpoint
+       使用同一 profile：只按请求顺序保留 `System` role，并对 outgoing
+       `systemInstruction.parts[].text` 有序值生成 `join("")`、`join(" ")`、
+       `join("\n")` 三种局部去重 records。`Developer` 不进入；feature-gated 的独立
+       `Provider::VertexAI` 不是 `GeminiClient`，不得生成该 profile。
+     - `Provider::Bedrock` 必须以 stable candidate 的 selected model 调用与 dispatch
+       共用的 Bedrock model-ID/API-transform classifier。只有实际分类为
+       `Converse`/`ConverseStream` 且不是 prompt-management ARN 时，按请求顺序保留
+       `System` role；每条 System message 的 Text 原样保留，Parts 则镜像现有
+       transform 过滤普通 Text 后以单 ASCII 空格连接，再对 outgoing `system[]`
+       有序 text values 生成 direct/space/newline 三种局部去重 records。
+       `Developer`、Invoke/InvokeStream 与会拒绝 request-level system 的
+       prompt-management ARN 不生成。禁止仅按 provider enum 把所有 Bedrock model
+       归为 Converse。
+     不存在存活 leaf 时不生成 record；nonmatching profile 必须证明 zero-record，
+     避免跨 provider 或跨 transform 误匹配。profile 集合在 input check 开始时固定，
+     provider 调用后不得补检。
    - 对 message name、普通 content、message-level legacy `function_call`
      name/arguments、modern `tool_calls[].function` name/arguments 和
      `ToolUse.name` 生成独立 typed records。每个 record 的值单独交给 engine，
@@ -136,13 +168,15 @@ GH-1128 / #1128
 6. `check_chat_input` 在调用 fallible builder 前先查询 crate-private
    `GuardrailEngine::has_active_input_guardrails()`；其真值严格等于
    `config.enabled && config.check_input && guardrails.iter().any(|g| g.is_enabled())`。
-   false 时立即沿用原请求 fast path，不执行任何 guardrail-specific JSON/MIME/base64/
-   size normalization。现有 `GuardrailEngine::is_enabled()` 的公开语义保持不变，避免
-   additive amendment 改变调用方；既有独立 request validator 也不因该 fast path
-   关闭。engine unit test 与 route fixture 必须覆盖 global disabled、check_input
-   disabled、空列表以及只有 disabled custom guardrail 四种 false case，并证明最后
-   一种不会因合法 base64 中的 unsupported MIME、非 UTF-8 charset 或 invalid JSON
-   触发 guardrail-specific 400。
+   false 时返回显式 `Disabled` outcome，立即沿用原请求 fast path，不创建
+   `RuntimeHandle`、不固定 routing generation，也不执行任何 guardrail-specific
+   JSON/MIME/base64/size normalization。现有 `GuardrailEngine::is_enabled()` 的公开
+   语义保持不变，避免 additive amendment 改变调用方；既有独立 request validator 也
+   不因该 fast path 关闭。engine unit test 与 route fixture 必须覆盖 global
+   disabled、check_input disabled、空列表以及只有 disabled custom guardrail 四种
+   false case，并证明最后一种不会因合法 base64 中的 unsupported MIME、非 UTF-8
+   charset 或 invalid JSON 触发 guardrail-specific 400，且 cache pricing/dispatch
+   仍可选择检查开始后发布的 current generation。
 
    只有 active predicate 为 true 时才构造全部 records，成功后通过一次 batch 调用
    交给 engine。gateway 不循环调用现有单字符串入口，而是调用一次 crate-private
@@ -198,15 +232,27 @@ GH-1128 / #1128
    guardrail 的外部请求次数必须按 guardrail 数量有界，而不是按 record 数量增长。
    2 MiB 是通用本地扫描载荷上限；32,768 bytes 是仅在 OpenAI moderation active
    时对 eligible batch 额外执行的、更严格的上游兼容上限，二者不得互相替代。
-8. Background Responses 不得先 queue 再检查。`handle_background_response` 改为
+8. chat cache-hit pricing gate、cache-miss unary、chat streaming 和 Responses
+   streaming 都必须接收第 2 条的完整 outcome。`Audited` 路径只能在 handle snapshot
+   内执行 capability selection；unary/stream 的 budget/unpriced exclusion 与 provider
+   retry 只改变同一 snapshot 内候选，所有 attempts 的 selected generation 都必须等于
+   audited generation。cache hit 也不是例外：`ensure_chat_cache_pricing_gate` 必须
+   接收 audited handle 并在同一 snapshot 内选择 priced deployment，不能重新读取
+   `AppState.unified_router`。`Disabled` 路径才可调用现有 dynamic selection。
+   source-boundary tests 必须枚举 outcome 的全部消费者，证明 active audit 不能被转换成
+   dynamic/disabled path。
+9. Background Responses 不得先 queue 再检查。`handle_background_response` 改为
    async，并在创建 response ID、写入 response store 或 spawn task 前调用完整
-   `check_chat_input`。失败直接返回现有安全 error response；成功后只把同一个未修改
-   `ChatCompletionRequest` 移交后台。`chat.rs` 提供一个 crate-private、仅允许此
-   lifecycle 使用的 `handle_chat_completion_after_input_guardrail`，它跳过的只有已
-   完成的 input check，仍执行 provider、output guardrail、budget/callback 等全部
-   后续逻辑。source-boundary test 必须证明该 entrypoint 只有
+   `check_chat_input`。失败直接返回现有安全 error response；成功后把同一个未修改
+   `ChatCompletionRequest` 与完整 `Audited(InputGuardrailAudit)` outcome 一起移交
+   后台。`chat.rs` 提供一个 crate-private、仅允许此 lifecycle 使用的
+   `handle_chat_completion_after_input_guardrail`；它跳过的只有已完成的 input
+   check，仍执行 pinned-snapshot provider/retry、output guardrail、budget/callback
+   等全部后续逻辑。source-boundary test 必须证明该 entrypoint 只有
    `responses/lifecycle.rs` 调用；lifecycle test 证明 check 在 queue/persist/spawn
    前恰好一次，失败时 response store、task registry 与 provider dispatch 都为零。
+   通过后即使 barrier 期间发布新 deployment，background task 仍不得读取 current
+   router，新 deployment zero-call，chosen generation 等于 audited generation。
    这条路径不通过 clone 后修改请求，也不允许对其他 handler 公开 unchecked API。
 
 ## Product-to-Test Mapping
@@ -214,34 +260,40 @@ GH-1128 / #1128
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | request/message/function/content 规范化 | 每种载体独立 allow/block fixture |
-| B-002/B-003 | message/request/provider-scoped text projections + typed independent records | 空 text-leaf message zero-projection、恰好 256 条 image-only message 不消耗 per-message records、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、Anthropic System/Developer role-filtered newline view 与 non-Anthropic-only zero-record、view 局部去重、Bedrock/Ollama/Gemini-Vertex provider-transform 对照、单 ToolResult array 与 tool/function-role Text+ToolResult/多 ToolResult 的 outgoing-block-scoped split-pattern、普通 user/assistant sibling-block/message 隔离、顺序、结构化 record 隔离、JSON/document raw+semantic、Unicode escape、嵌套/escape-equivalent duplicate key 与 leading-BOM fail-closed snapshot |
+| B-002/B-003 | message/request/provider-scoped projections + immutable audited routing context + typed records | 空 text-leaf/256 image-only、通用三投影、legacy newline、Anthropic exact-newline、GeminiClient/Bedrock Converse System-only 三投影、Developer/independent-VertexAI/Bedrock-Invoke/prompt-ARN zero-record、Bedrock 按 selected-model API transform 分类、ToolResult block views、record isolation、JSON/document raw+semantic，以及 route-swap/same-generation transient-state 下 chosen generation 等于 audited generation |
 | B-004 | `check_input` 调用顺序 | mock provider 未被调用 |
 | B-005 | `enforce` modified 分支 | mask 仍 fail-closed 且请求 DTO 未改变 |
-| B-006 | fallible builder + background pre-queue gate | malformed document/serialization 返回安全稳定 400；background 失败时 queue/store/task/provider zero-call，通过时 input check exactly-once |
+| B-006 | fallible builder + audited handle handoff + background pre-queue gate | malformed document/serialization 返回安全稳定 400；cache hit pricing/background 不重读 current snapshot；background 失败时 queue/store/task/provider zero-call，通过时 request 与同一 audited handle 入 task、input check exactly-once |
 | B-007 | document media gate | quote-aware 空参数/尾随分号检查 + MIME syntax/essence/charset table；无参数/唯一 UTF-8 正文解码，重复/非 UTF-8 charset 与 PDF/image/audio/URL 无网络且 fail-closed/保持范围 |
-| B-008 | pre-builder active-input predicate | global/check_input/empty/all-custom-disabled fast paths；同一多模态请求不触发 guardrail-specific normalization 且保持兼容 |
+| B-008 | pre-builder active-input predicate | global/check_input/empty/all-custom-disabled fast paths 不创建 audited binding；同一多模态请求不触发 guardrail-specific normalization，provider content 与动态 routing 保持兼容 |
 | B-009 | default batch method + builder limits | 256/2 MiB 边界、越界 zero-call、legacy custom default adapter、现有公开 error enum exhaustive/旧 custom compile fixture、custom output/enable/priority/name regression、config-created 与 manually-added moderation 都走 single-batch、32,768/32,769-byte 边界，以及 batch count-mismatch/input-limit failures 在 `fail_open` true/false 下均不可吞掉 |
 
 ## 数据流
 
-`ChatCompletionRequest.messages` 只有在 engine 的 active-input predicate 通过后才
-按顺序进入 bounded fallible fragment builder；每条 message 过滤非 text parts 后，
-仅在至少一个 text leaf 存在时形成空串/单空格/换行三种去重后的 provider projection，
-全请求普通 text leaves 另形成 legacy newline record；route profile 可达 Anthropic
-transform 时另形成只跨 System/Developer text leaves 的 newline record，非 Anthropic-only
-profile 不生成该 record；独立结构化字段形成 typed independent records；每个
-实际 outgoing Bedrock ToolResult block 的 ordered text sequence 另形成 block-scoped
-三投影并局部去重，tool/function-role message 的 Text 与多个 ToolResult 在同组，
-普通 user/assistant sibling blocks 保持隔离。JSON 同时保留完整表示和解码 string nodes；document MIME 完整
-解析且 charset absent/UTF-8 gate 通过后，base64 解码为 UTF-8，JSON MIME 进一步
-生成 raw + semantic records；request-level `function_call` 最后加入。builder 完整
-成功且通过 256/2 MiB 上限后，把 typed batch 一次交给 engine；现有
-`Box<dyn Guardrail>` 通过默认/override batch method 动态分派，OpenAI moderation
-使用一次 array 请求，fatal batch failures 由独立 `GuardrailBatchError` 在
-`fail_open` 前分类。再由 `enforce` 统一映射 allow/block/modified/error。现有
-`GuardrailError` variants、trait 必需方法、engine 单字符串签名与原请求对象不变。
-Background Responses 在 queued response 产生前完成相同检查，并把已通过的同一请求
-交给窄作用域 post-input-guardrail chat entrypoint；同步/stream 路径仍使用常规入口。
+`ChatCompletionRequest` 先进入 engine active-input predicate。false 时返回
+`Disabled`，不创建 routing handle，继续现有 dynamic selection。true 时捕获一个
+immutable `RuntimeHandle`，直接从其 snapshot 的 stable model/deployment metadata
+与 capability 枚举完整候选 profiles；该枚举不调用 selector、不读取后续 generation，
+也不按 health/cooldown/concurrency/RPM/TPM/budget 等瞬时状态过滤。
+
+随后 messages 按顺序进入 bounded fallible fragment builder。每条 message 过滤非
+text parts 后，仅在至少一个 text leaf 存在时形成 direct/space/newline 三种去重
+projection；全请求普通 text leaves 另形成 legacy newline record。根据 audited
+profiles，再分别形成 Anthropic 的 System|Developer exact-newline record、
+`GeminiClient` 的 System-only `systemInstruction.parts` 三投影和 Bedrock
+Converse/ConverseStream 的 System-only `system[]` 三投影；Developer、独立
+VertexAI、Bedrock Invoke/prompt ARN 等 nonmatching transforms 不生成相应 record。
+独立结构化字段形成 typed records；每个实际 outgoing Bedrock ToolResult block 的
+ordered text sequence 另形成 block-scoped 三投影并局部去重。JSON 同时保留完整表示和
+解码 string nodes；document MIME/charset gate 后，正文形成 raw + semantic records。
+
+builder 通过 256/2 MiB 上限后，把 typed batch 一次交给 engine；fatal batch failures
+在 `fail_open` 前分类，再由 `enforce` 映射。通过后把同一显式
+`Audited(InputGuardrailAudit)` 交给 chat cache、unary/stream/retry execution 与
+background task。cache hit pricing 和所有 provider attempts 都只在 audit snapshot
+内选择；Background Responses 在 queued response 前完成检查，并把未修改 request 与
+audit 一起交给窄作用域 post-input entrypoint。`Disabled` 才继续读取 current router。
+现有 `GuardrailError` variants、trait 必需方法、engine 单字符串签名与原请求对象不变。
 
 ## 备选方案
 
@@ -252,44 +304,67 @@ Background Responses 在 queued response 产生前完成相同检查，并把已
   charset 声明并放行 NUL-interleaved UTF-16 bytes。
 - 对不支持 document 类型放行：拒绝，因为输入 guardrail 会继续存在公开 bypass。
 - 自动提取 PDF/Office：超出范围且会新增复杂解析/资源消耗面。
+- audit 后仍让 execution 或 cache pricing 读取 current router：拒绝，因为 publish
+  会在审核与最终选择之间引入未审核 transform。
+- 用 selector 当前可选结果推导 profiles：拒绝，因为同 generation 的
+  health/cooldown 恢复会让审核时被过滤的 transform 重新成为候选。
+- selected provider 改变时再次执行完整 input guardrail：拒绝，因为破坏
+  exactly-once/single-batch 契约，background 返回 queued 后也无法同步返回相同错误。
 
 ## 风险
 
 - Security: 支持媒体类型列表必须 fail-closed，不能被 MIME 大小写、parser 宽容接受的
   空参数/尾随分号、malformed/重复参数或非 UTF-8 charset 绕过；ToolResult provider
-  views 必须覆盖 outgoing block 内实际相邻化，但不能跨 block/message 制造误匹配。
-- Compatibility: 启用 input guardrail 的二进制 document 将被拒绝；发布说明需明确。
+  views 必须覆盖 outgoing block 内实际相邻化，但不能跨 block/message 制造误匹配；
+  system profiles 必须覆盖 GeminiClient/Bedrock Converse 的 role filtering，并固定
+  audited generation 贯穿 cache pricing、retry 和 dispatch。
+- Compatibility: 启用 input guardrail 的二进制 document 将被拒绝；active-input
+  request 在 lifecycle 内固定 audited routing generation，并发 publish 只影响后续
+  请求；inactive path 保持现有动态 routing。发布说明需明确。
 - Public API compatibility: `GuardrailError` variants、
   `GuardrailEngine::check_input` 签名与 `add_guardrail` 调用方式保持不变；
   `Guardrail` 只增加有默认实现的 additive batch method；新增只读 record 与 batch
   error 从首次发布即 `#[non_exhaustive]`。旧 custom implementation、custom output
   override 与手工注册 built-in 必须有 compile/runtime regression fixture。
-- Performance: 文档解码、message/ToolResult projections、request legacy view 与可达的
-  Anthropic role-filtered view 增加 owned 载荷；空 text-leaf message 不分配 projection，
-  局部去重避免相同 view 重复计数，所有派生值仍受 256 records/2 MiB checked 上限约束。
+- Performance: 文档解码、message/ToolResult projections、request legacy view 与
+  system-container views 增加 owned 载荷；空 text-leaf message 不分配 projection，
+  局部去重避免重复计数，request-scoped handle 只持有一个 immutable snapshot `Arc`。
 - Availability/Cost: records 有 256/2 MiB 硬上限；内置 OpenAI moderation 的
   eligible batch 另有保守 32,768-byte context 上限，必须 batch 为单次远程调用，
-  并验证 response count，避免 JSON fan-out 或确定性的上游 context 拒绝。
+  并验证 response count。pinned snapshot 若在 lifecycle 内没有可用/priced candidate
+  则返回既有 routing/pricing error，不能切到未审核的新 generation。
 - Maintenance: DTO 新增文本载体时应在 exhaustiveness test 中显式分类。
 
 ## 测试计划
 
-- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、record isolation、空 text-leaf zero-projection、恰好 256 条 image-only message 不消耗 per-message records、过滤 image 后的空串/单空格/换行 views、跨 message legacy newline view、Anthropic System/User/Developer 与 System/User/System role-filtered newline views、non-Anthropic-only zero-record、single ToolResult array 与 tool/function-role Text+ToolResult/多 ToolResult outgoing-block views、普通 user/assistant sibling-block/message 隔离、局部去重、Unicode、嵌套与 escape-equivalent duplicate key、leading BOM。
+- [ ] Unit tests: 全 variant、request/message legacy/modern function、JSON raw+semantic、
+      record isolation、空 text-leaf/256 image-only、通用三投影、legacy newline、
+      Anthropic System/User/Developer 与 System/User/System exact-newline、
+      GeminiClient/Bedrock Converse System/User/System direct/space/newline、
+      Developer/independent-VertexAI/Bedrock-Invoke/prompt-ARN zero-record、Bedrock
+      selected-model transform classification、ToolResult block views、duplicate key/BOM。
 - [ ] Document tests: plain/csv、JSON raw+semantic/invalid/duplicate-key/BOM/depth-limit、`+json`、完整 MIME syntax、无参数/大小写 UTF-8/quoted UTF-8、`text/plain;`、`text/plain; charset=utf-8;`、连续/空参数段、重复 charset、UTF-16LE/其他 charset、non-charset 参数 fail-closed、bad base64、bad UTF-8，以及 Markdown numeric/named entity、HTML/XML/`+xml`/其他 `text/*`/PDF fail-closed。
 - [ ] Batch tests: 256/2 MiB 边界、checked overflow/越界 zero external calls、local record isolation、legacy custom default adapter、现有公开 error enum exhaustive/旧 custom compile fixture、custom input-allow/output-block + disabled + non-default-priority/name regression、config-created 与 manually-added OpenAI array single-call、32,768/32,769 eligible-byte 边界、mixed/all whitespace eligibility、`Log` 非阻断、action-only `Mask` fail-closed、batch response-integrity/input-limit failure 在 `fail_open` true/false 下 fail-closed。
 - [ ] Integration tests: blocked 发生在 provider 前，400 error envelope 稳定；engine disabled、`check_input: false` 与仅有 disabled custom guardrail 都在 builder 前不增加 guardrail-specific 拒绝并保持 DTO，malformed base64 仍由前置 request validator 按既有行为拒绝。
 - [ ] Provider-boundary tests: Bedrock 的 space-join、Ollama 的 newline-join 与
       Gemini/Vertex 的 empty-join 转换结果分别与 builder 对应 adjacency view 相等；
       image-separated 及 split-message `ignore` + `all previous instructions` 都在
-      provider 调用前被拒绝；Anthropic fixture 过滤中间 User 后的精确
-      `ignore\nall previous instructions` view 在 provider 前被拒绝，同一 fixture
-      的 non-Anthropic-only route 不产生该 view；Bedrock ToolResult array、tool-role
-      Text+ToolResult 与 tool-role 多 ToolResult 的相邻 `sec`/`ret` 由同 outgoing
-      block view 命中，而普通 user/assistant sibling ToolResult blocks 与不同 message
-      的两段保持隔离。
+      provider 调用前被拒绝；Anthropic fixture 过滤中间 User 后生成 exact-newline；
+      `GeminiClient`（Google AI/自身 Vertex endpoint）与 Bedrock
+      Converse/ConverseStream 过滤中间 User 后生成 System-only 三投影。各自
+      Developer、独立 VertexAI、Bedrock Invoke/prompt ARN 与其他 nonmatching route
+      不产生对应 system record；Bedrock ToolResult blocks 继续保持既定隔离。
+- [ ] Routing concurrency tests: 同步 barrier 在 audit 完成、最终 selection 前发布新
+      snapshot，分别覆盖 cache-miss unary、chat cache-hit pricing、stream、retry 与
+      background；新 deployment zero-call，所有 selected generation 等于 audited
+      generation，input guardrail exactly-once。inactive 对照继续选择 current dynamic
+      generation。另一个不发布 snapshot 的 fixture 令唯一 profile deployment 在 audit
+      时 unhealthy/in cooldown、barrier 后恢复并被 retry/final selector 选中，证明
+      stable profile enumeration 已预先覆盖它且不执行第二次 input check。
 - [ ] Background Responses tests: normalization limit/invalid document/guardrail block 在
       queued persist/task spawn/200 前返回；失败时 store/task/provider zero-call，
-      通过时 input guardrail exactly-once，post-input entrypoint caller 仅 lifecycle。
+      通过时未修改 request 与 audited handle 同时入 task、input guardrail
+      exactly-once、task 不读取 current router，post-input entrypoint caller 仅 lifecycle。
 - [ ] Repository gates: `cargo fmt --check`、`cargo check`、严格 Clippy、相关测试、`cargo test`。
 
 ## 回滚方案

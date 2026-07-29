@@ -30,13 +30,72 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 ## Behavior Invariants
 
 1. B-001 普通文本、`Document.source`、`ToolResult.content`、`ToolUse.name/input`、message-level legacy `function_call`、`tool_calls[].function`、request-level `ChatCompletionRequest.function_call` 和 `ChatMessage.name` 都必须进入输入 guardrail。本仓库当前 request-level compatibility DTO 复用 `FunctionCall { name, arguments }` 并把两者序列化转发给 provider；即使标准 OpenAI selection 语义通常只指定 name，该已接受并转发的 `arguments` 仍属于必须扫描的现有公开输入面。
-2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。每条 message 的普通 text parts 必须按原顺序收集，过滤其间 image/document/tool 等非 text part 后，覆盖当前 provider 实际使用的三种投影：直接拼接、单个 ASCII 空格连接和单个换行连接；每种投影是独立审核记录，内容相同时只保留一个。message 没有任何普通 text leaf 时不得生成 per-message projection，尤其不能用一个空字符串占用 record/byte 上限。为保持当前 gateway 已有的跨 message 检测，还必须把全请求所有普通 text leaves 按原顺序用单个换行连接成一个 request-level legacy view；它只跨普通 message text，不混入 function/tool/document 等独立字段。实际 outgoing transform 使用 Anthropic `separate_system_messages` 时，还必须按请求顺序先过滤掉所有非 `System`/`Developer` role，再收集存活 message 的普通 text leaves 并用单个换行连接成 Anthropic-scoped view；该 view 只属于实际使用这条 Anthropic transform 的 provider profile，非 Anthropic profile 不得生成或审核该记录，避免制造跨 provider 的虚假边界。Bedrock provider-boundary views 的作用域必须对应每个实际 outgoing `ToolResultBlock.content`：普通 user/assistant message 中每个 `ToolResult.content` 独立成组；tool/function-role message 则按 part 顺序把普通 `Text` 与其中所有 `ToolResult.content` 的可达 text entries 展开成同一组，因为当前转换会把它们扁平到一个 block。每组都生成直接/空格/换行三种投影；不同 outgoing block 或 message 不得拼接。这样 provider 在 guardrail 后过滤 part、插入边界或相邻化结构化文本时，不能形成未检查的新文本。原始 message/function/tool/document 字段的 typed semantic records 仍逐字段隔离；不能用可被规则误命中的人工标签拼成扫描文本。
+2. B-002 多条 message、多段 content 和多个 tool call 必须按稳定顺序处理。每条
+   message 的普通 text parts 必须按原顺序收集，过滤其间 image/document/tool 等
+   非 text part 后，覆盖当前 provider 实际使用的三种投影：直接拼接、单个 ASCII
+   空格连接和单个换行连接；每种投影是独立审核记录，内容相同时只保留一个。message
+   没有任何普通 text leaf 时不得生成 per-message projection，尤其不能用一个空字符串
+   占用 record/byte 上限。为保持当前 gateway 已有的跨 message 检测，还必须把全请求
+   所有普通 text leaves 按原顺序用单个换行连接成一个 request-level legacy view；
+   它只跨普通 message text，不混入 function/tool/document 等独立字段。
+
+   启用 input guardrail 时，input check 必须先捕获一个 request-scoped immutable
+   routing snapshot（可由 `RuntimeHandle` 持有）并记住其 generation。用于构造
+   provider-transform profiles 的候选集必须直接从该 snapshot 的稳定
+   model-group/deployment metadata、endpoint capability 和 lifecycle eligibility
+   枚举；不得调用会应用瞬时状态的 selector，也不能因审核瞬间的 health、cooldown、
+   并发、RPM/TPM 或预算状态而缩窄。该 snapshot 必须贯穿 chat cache-hit pricing、
+   cache-miss unary、stream、retry 与 background task 的最终 dispatch；任何阶段都
+   不得重新读取 current router。审核后发布的新 generation 不得处理该请求；同一
+   generation 内已经被 profile 枚举覆盖的 deployment 在瞬时状态恢复后可以被选择，
+   且不得执行第二次 input check。没有 active input guardrail 时不创建 audited
+   routing binding，保留现有动态 routing。
+
+   provider system-container views 只按该 snapshot 中实际可达的 transform 生成：
+
+   - 原生 Anthropic `separate_system_messages` 按请求顺序保留
+     `System`/`Developer` role 的普通 text leaves，生成唯一的精确 newline view。
+   - `Provider::Gemini` 使用的 `GeminiClient` 只保留 `System` role；无论 client
+     使用 Google AI endpoint 还是自身的 Vertex endpoint，都对 outgoing
+     `systemInstruction.parts` 的有序 text 值生成 direct/单 ASCII 空格/单换行三种
+     views。独立的 `Provider::VertexAI` transformer 不属于该 profile，
+     `Developer` 也不进入该 system-container view。
+   - `Provider::Bedrock` 只有在选中 model 经当前 model-ID 解析和 catalog lookup 后
+     实际采用 `Converse`/`ConverseStream` transform，且请求允许发送 request-level
+     system content 时，才对 outgoing `system[]` 的有序 `System` text 值生成
+     direct/单 ASCII 空格/单换行三种 views。分类必须使用 deployment 的选中 model
+     与实际 API transform，不能只看 provider enum；`Developer`、Invoke 系列及会拒绝
+     system content 的 prompt-management ARN 不生成该 view。
+
+   Bedrock provider-boundary views 的另一作用域必须对应每个实际 outgoing
+   `ToolResultBlock.content`：普通 user/assistant message 中每个
+   `ToolResult.content` 独立成组；tool/function-role message 则按 part 顺序把普通
+   `Text` 与其中所有 `ToolResult.content` 的可达 text entries 展开成同一组，因为
+   当前转换会把它们扁平到一个 block。每组都生成直接/空格/换行三种投影；不同
+   outgoing block 或 message 不得拼接。这样 provider 在 guardrail 后过滤 part、插入
+   边界或相邻化结构化文本时，不能形成未检查的新文本。原始
+   message/function/tool/document 字段的 typed semantic records 仍逐字段隔离；
+   不能用可被规则误命中的人工标签拼成扫描文本。
 3. B-003 字符串字段保留原文本；结构化 JSON 字段同时扫描确定性完整 JSON 表示和递归解码后的 string keys/values，不得只扫描转义后的 `\n`/`\uXXXX` 或部分节点。合法 JSON function arguments 使用同一语义遍历，并在构造 `Value` 前拒绝任意层级的重复 object key（包括 escape 解码后相同的 key），避免解析器覆盖早期恶意值；首个 JSON whitespace 后出现 U+FEFF BOM 的 arguments 也稳定 fail-closed。首个非空白字符不是 `{`/`[` 的普通非 JSON arguments 仍扫描原字符串，但看似 structured JSON 的 arguments 只要无法完成有界解析（包括 recursion/depth/resource limit）就稳定 fail-closed。文本型 document 必须扫描 base64 解码后的 UTF-8 正文，而不是编码字符串；MIME 必须完整解析而不是按分号截断，且要在 parser 之外拒绝空参数段与尾随分号。allowlist media type 的参数闭集只允许“无参数”或“恰好一个大小写不敏感的 `charset=utf-8`”。重复 charset、任何其他 charset（包括 UTF-16/UTF-16LE/ISO-8859-1）及其他参数都稳定 fail-closed，避免 `format` 等 provider 语义参数产生未覆盖的文本视图。JSON MIME document 还必须同时扫描原始正文和递归解码后的 string keys/values，声明为 JSON 但语法、重复 key、BOM、深度或资源限制失败时稳定 fail-closed。gateway 不转码且不得改写原 DTO。
 4. B-004 任一列入范围的字段包含被拒内容时，整个请求在调用 provider 前被拒绝。
 5. B-005 guardrail 返回 `GuardrailAction::Mask` 或任意修改后文本时，不得把扁平扫描文本错误回写到原有多模态或 tool 结构；即使 `Mask` 结果没有 `modified_content`，gateway 也必须 fail-closed，不得继续 provider 请求。
-6. B-006 无法构造完整扫描载荷时必须返回安全、稳定的 HTTP 400 `invalid_request_error` / `invalid_request`；错误消息不得包含 document 正文、arguments、命中规则或 provider secret，禁止跳过失败字段后继续请求。`/v1/responses` 的 `background: true` 也必须在持久化 queued response、创建后台任务或返回 200 前同步完成同一 input guardrail；失败时不得留下 queued/in-progress response。通过后后台执行不得再次检查同一输入，也不得存在可被其他调用方误用的未审核 handler 旁路。
+6. B-006 无法构造完整扫描载荷时必须返回安全、稳定的 HTTP 400
+   `invalid_request_error` / `invalid_request`；错误消息不得包含 document 正文、
+   arguments、命中规则或 provider secret，禁止跳过失败字段后继续请求。
+   `/v1/responses` 的 `background: true` 也必须在持久化 queued response、创建后台
+   任务或返回 200 前同步完成同一 input guardrail；失败时不得留下 queued/in-progress
+   response。通过后后台执行必须同时携带未修改请求和 B-002 中已审核的 routing
+   snapshot/generation，不得重新读取 current router、不得再次检查同一输入，也不得
+   存在可被其他调用方误用的未审核 handler 旁路。非流式 chat 的 cache hit 也是
+   post-audit early-return path：pricing gate 必须只在同一 audited snapshot 内选择，
+   cache hit/miss 分支均不得重新读取 current snapshot。
 7. B-007 未列入范围的图片、音频和远端资源只保留现有行为，扫描过程不得发起网络访问；document 文本 allowlist 仅含 `text/plain`、`text/csv`、`application/json` 与 `application/*+json`。Markdown、HTML、XML、`text/*` 其他类型及二进制格式因缺少安全 entity/语义解码器而 fail-closed，不能把 entity-encoded 内容当作已扫描放行。
-8. B-008 没有实际启用的输入 guardrail 时，请求结构和 provider 可见内容保持不变；这包括全局 `enabled: false`、`check_input: false`、没有注册 guardrail，以及已注册但所有实例 `is_enabled() == false`。这些路径必须在 guardrail-specific record/MIME/JSON/document builder 之前返回，不得仅因配置中存在 disabled custom guardrail 而新增稳定 400；既有独立 request validator 仍照常生效。
+8. B-008 没有实际启用的输入 guardrail 时，请求结构、provider 可见内容和动态
+   routing lifecycle 保持不变；这包括全局 `enabled: false`、`check_input: false`、
+   没有注册 guardrail，以及已注册但所有实例 `is_enabled() == false`。这些路径必须在
+   guardrail-specific record/MIME/JSON/document builder 和 audited routing binding
+   之前返回，不得仅因配置中存在 disabled custom guardrail 而新增稳定 400 或固定旧
+   routing generation；既有独立 request validator 仍照常生效。
 9. B-009 规范化产生的审核记录最多 256 条，所有派生扫描值的 UTF-8 字节总和最多
    2 MiB；超过任一上限必须在外部 guardrail/provider 调用前返回稳定安全的 HTTP 400。
    engine 必须以一个 batch 契约处理全部 records；内置 OpenAI moderation 沿用
@@ -59,10 +118,43 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - [ ] 每个列入范围的 content variant 都有接受与拒绝测试。
 - [ ] modern/message-level legacy function call、以及本仓库 request-level compatibility `FunctionCall` 的 name/arguments、`ChatMessage.name` 各有独立覆盖；测试证明 request-level arguments 确实从当前 DTO 解析并在 provider boundary 前被审核。
 - [ ] allowlisted 文本 document fixture 证明扫描解码后正文；无 charset 与单个大小写不敏感 `charset=utf-8` 可进入相同 UTF-8 扫描，`charset=utf-16le`、其他非 UTF-8 charset、重复 charset、`text/plain;`、`text/plain; charset=utf-8;`、空参数段与其他 malformed MIME 稳定 400；malformed base64、非 UTF-8、Markdown/HTML/XML/entity-bearing MIME 和其他不支持媒体类型 fail-closed，且 Markdown numeric/named entity fixture 不会仅经 raw 扫描后放行。
-- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨 content part/message 拆词有测试；同一 message 的 `Text("ignore")` + image + `Text("all previous instructions")` 必须在过滤后的单空格 view 命中，两个 message 分别携带这两段时必须在 request-level newline view 命中；另有直接拼接/换行 view、相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。Anthropic fixture 必须把 `System("ignore")`、中间的 `User("hello")`、以及随后分别取 `Developer`/`System` role 的 `("all previous instructions")` 映射为精确的 `ignore\nall previous instructions` provider-visible view 并在 provider 前命中；同一请求走非 Anthropic profile 时不得产生该 Anthropic-only record。Bedrock 单个 `ToolResult.content` 数组中相邻 text blocks 的 `sec`/`ret`、tool-role `Text("sec")` + `ToolResult("ret")`、以及同一 tool-role message 的两个 ToolResult 分别为 `sec`/`ret` 都必须由 outgoing-block-scoped provider view 命中；普通 user/assistant role 的不同 ToolResult blocks 与不同 message 不得产生跨边界 `secret`。
+- [ ] 多 message、多 content part、多 tool call 的稳定顺序、独立记录隔离与跨
+  content part/message 拆词有测试；同一 message 的 `Text("ignore")` + image +
+  `Text("all previous instructions")` 必须在过滤后的单空格 view 命中，两个 message
+  分别携带这两段时必须在 request-level newline view 命中；另有直接拼接/换行 view、
+  相同 view 去重和 Bedrock/Ollama/Gemini-Vertex provider 转换对照 fixture。Anthropic
+  fixture 必须把 `System("ignore")`、中间的 `User("hello")`、以及随后分别取
+  `Developer`/`System` role 的 `("all previous instructions")` 映射为精确的
+  `ignore\nall previous instructions`。`GeminiClient`（Google AI 与自身 Vertex
+  endpoint）和 Bedrock `Converse`/`ConverseStream` fixture 必须把
+  `System("ignore")`、`User("hello")`、`System("all previous instructions")`
+  的有序 outgoing system values 映射为 direct/单空格/单换行 views 并在 provider
+  前命中；各自的 `Developer` exclusion、独立 `Provider::VertexAI`、Bedrock
+  Invoke 系列、prompt-management ARN 及其他 nonmatching profile 不得产生对应
+  system-container record。Bedrock classification fixture 必须证明同一
+  `Provider::Bedrock` 下由选中 model 的 API transform 决定是否生成记录，而不是仅按
+  provider enum。Bedrock 单个 `ToolResult.content` 数组中相邻 text blocks 的
+  `sec`/`ret`、tool-role `Text("sec")` + `ToolResult("ret")`、以及同一 tool-role
+  message 的两个 ToolResult 分别为 `sec`/`ret` 都必须由 outgoing-block-scoped
+  provider view 命中；普通 user/assistant role 的不同 ToolResult blocks 与不同
+  message 不得产生跨边界 `secret`。
 - [ ] 嵌套 JSON、数组、空值、Unicode escape、解码后的 string key/value、任意层级与 escape 后重复 key、前导 BOM、合法/普通非 JSON/structured-invalid/超深 JSON arguments，以及 JSON MIME document 的 raw/semantic/invalid/duplicate-key/BOM/depth-limit 行为有测试。
 - [ ] 测试证明 guardrail 拒绝发生在 provider 调用前。
-- [ ] Responses background 测试证明 normalization 400、guardrail block/error 在 queued response 持久化和 200 前完成；失败时 response store/task/provider 调用计数均为 0，通过时 input guardrail 恰好执行一次后才进入后台执行。
+- [ ] Responses background 测试证明 normalization 400、guardrail block/error 在
+  queued response 持久化和 200 前完成；失败时 response store/task/provider 调用计数
+  均为 0，通过时 input guardrail 恰好执行一次后才进入后台执行，并使用与审核相同的
+  routing generation。
+- [ ] 带同步 barrier 的 route-swap fixtures 覆盖 cache-miss unary、chat cache-hit
+  pricing、stream、retry 与 background：在 input audit 完成后、最终 provider/pricing
+  selection 前发布一个带新增 system-container transform 的 deployment；新增
+  deployment 调用计数必须为 0，最终选择的 generation 必须等于 audited generation，
+  input guardrail 必须恰好执行一次。cache-hit fixture 必须证明 pricing gate 不读取
+  current snapshot；没有 active input guardrail 的对照请求继续使用当前动态 routing。
+- [ ] same-generation transient-state fixture 使用一个具有唯一 system-container
+  transform profile 的 deployment：audit 时令其 unhealthy/in cooldown（或处于等价
+  瞬时不可选状态），profile derivation 仍须从 snapshot 稳定 metadata/capability
+  纳入并审核；不发布新 generation，在 barrier 后恢复状态并令 retry/final selector
+  选中它时，不得执行第二次 input check，chosen generation 仍等于 audited generation。
 - [ ] 测试证明扫描不会下载 URL；`enabled: false`、`check_input: false` 与“已注册 custom guardrail 但全部 `is_enabled() == false`”均在 builder 前保持 fast path，不增加 guardrail-specific document 拒绝或改变请求。既有 request validator 仍会无条件拒绝 malformed base64，因此 disabled fixture 使用 baseline 可接受的合法 base64，并分别覆盖 unsupported MIME、非 UTF-8/非 UTF-8 charset 或 invalid JSON 等只属于 guardrail 的检查。
 - [ ] 256/2 MiB 边界内允许，越界稳定 400 且外部调用计数为 0；多 record 的
   OpenAI moderation mock 只收到一次 batch 请求并逐索引合并结果；结果数量不足/
@@ -94,10 +186,14 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
   多条 message 也可能共同形成当前 gateway 已能检测的敏感词。message 内 provider
   projections 与 request-level legacy newline view 必须同时保留；独立结构化字段仍
   逐条审核，不共享正则匹配边界。
-- Anthropic 会先过滤掉非 System/Developer message，再把存活的普通 text leaves 用
-  换行连接；该 provider-scoped view 必须覆盖被 User message 隔开的敏感短语，但不得
-  作为通用 view 应用于不使用该 transform 的 provider。message 完全没有普通 text leaf
-  时则不产生 per-message projection，image-only message 不能制造空审核记录。
+- provider system container 会采用不同 role/filter/boundary：Anthropic 保留
+  System/Developer 并精确 newline join；`GeminiClient` 只保留 System 并输出有序
+  `systemInstruction.parts`；Bedrock Converse/ConverseStream 只保留 System 并输出
+  `system[]`。后两者必须覆盖 direct/space/newline boundaries。每种 view 只能在对应
+  transform profile 可达时生成；尤其独立 `Provider::VertexAI`、Bedrock Invoke 与
+  prompt-management ARN 不得继承错误的 provider-scoped records。message 完全没有
+  普通 text leaf 时不产生 per-message projection，image-only message 不能制造空
+  审核记录。
 - provider 可能在相邻 text parts 之间使用空串、空格或换行；guardrail 必须在 provider
   转换前覆盖这三种当前可达表示，不能假设 DTO 中没有显式分隔符就等于最终 prompt。
 - Bedrock 会把单个 `ToolResult.content` 数组中的多个 text entries 转成相邻 text
@@ -108,6 +204,9 @@ tool use input、tool-call arguments 和 message name。攻击者可以把同一
 - guardrail provider 可能只支持纯文本修改，不能安全地重建任意结构化输入。
 - 攻击者可能用大量短 JSON keys/values 放大 records；固定记录数/派生字节上限必须
   在任何外部审核前一次性验证。
+- routing generation 可能在 audit 与 cache pricing/provider dispatch 之间切换；
+  active-input request 必须固定同一 snapshot。瞬时 health/cooldown 恢复不创建新
+  generation，因此 profile derivation 不能只审核当时 selector 可选的 deployments。
 
 ## 发布说明
 
@@ -117,5 +216,8 @@ guardrail 拒绝；声明非 UTF-8、重复 charset 或其他 MIME 参数的 all
 启用且至少一个 input guardrail 实例实际 active 时，超过 256 个扫描 records 或
 2 MiB 派生扫描文本的请求也会被拒绝。使用 OpenAI moderation 时，eligible batch 还受保守的
 32,768 UTF-8 bytes 上游 context 上限约束。无需新增配置；未启用输入 guardrail
-或只有 disabled guardrail 实例的部署保持兼容。启用输入 guardrail 的 background Responses 会在返回 queued
-response 前增加一次输入检查延迟，以保证确定性 400 与 block 不被异步成功掩盖。
+或只有 disabled guardrail 实例的部署保持兼容。启用输入 guardrail 的请求会在整个
+cache/pricing/unary/stream/retry/background lifecycle 固定 input audit 时的 routing
+generation；并发发布的新 routing generation 只影响后续请求。background Responses
+会在返回 queued response 前增加一次输入检查延迟，以保证确定性 400 与 block 不被
+异步成功掩盖。
