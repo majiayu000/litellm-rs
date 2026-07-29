@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::models::gateway::{GatewayPricingConfig, UnpricedModelPolicy};
+use crate::config::models::gateway::{GatewayConfig, GatewayPricingConfig, UnpricedModelPolicy};
 use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
 use crate::core::keys::InMemoryKeyRepository;
 use crate::core::pricing_service::LiteLLMModelInfo;
@@ -41,6 +41,72 @@ fn runtime_test_pricing_service(provider: &str) -> PricingService {
         },
     );
     service
+}
+
+fn dev_gateway_config() -> GatewayConfig {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config/gateway.dev.yaml.example");
+    let content = std::fs::read_to_string(path).expect("dev gateway example should be readable");
+    serde_yml::from_str(&content).expect("dev gateway example should match the schema")
+}
+
+#[test]
+fn dev_example_unpriced_vllm_model_uses_explicit_zero_fallback() {
+    let gateway = dev_gateway_config();
+    let provider = gateway
+        .providers
+        .iter()
+        .find(|provider| provider.enabled)
+        .expect("dev example should have an enabled provider");
+    let model = provider
+        .models
+        .first()
+        .expect("dev provider should declare a model");
+    let pricing =
+        PricingService::with_embedded_default().expect("embedded pricing should load offline");
+    assert!(
+        pricing.get_model_info(model).is_none(),
+        "fixture must exercise the unpriced path"
+    );
+
+    let reservation = reserve_completion_budget_with_policy(
+        &pricing,
+        &gateway.pricing,
+        &UnifiedBudgetLimits::new(),
+        &provider.provider_type,
+        model,
+        1000,
+        Some(500),
+    )
+    .expect("allow_unpriced should not return model_not_priced");
+
+    assert!(
+        reservation.is_none(),
+        "the explicit zero fallback must not reserve spend"
+    );
+}
+
+#[test]
+fn dev_example_known_model_uses_embedded_price_instead_of_zero_fallback() {
+    let gateway = dev_gateway_config();
+    let pricing =
+        PricingService::with_embedded_default().expect("embedded pricing should load offline");
+    let budget = UnifiedBudgetLimits::new();
+
+    let reservation = reserve_completion_budget_with_policy(
+        &pricing,
+        &gateway.pricing,
+        &budget,
+        "openai",
+        "gpt-4o",
+        1000,
+        Some(500),
+    )
+    .expect("known embedded model should be priced")
+    .expect("known embedded price must create a non-zero reservation");
+
+    assert!(reservation.reserved_amount() > 0.0);
+    reservation.cancel();
 }
 
 #[test]
