@@ -31,6 +31,9 @@ pub struct ProviderConfig {
     /// Provider weight for load balancing
     #[serde(default = "default_weight")]
     pub weight: f32,
+    /// Provider priority for priority-based routing (lower values win)
+    #[serde(default)]
+    pub priority: u32,
     /// Maximum requests per minute
     #[serde(default = "default_rpm")]
     pub rpm: u32,
@@ -78,6 +81,7 @@ impl std::fmt::Debug for ProviderConfig {
             .field("organization", &self.organization)
             .field("project", &self.project)
             .field("weight", &self.weight)
+            .field("priority", &self.priority)
             .field("rpm", &self.rpm)
             .field("tpm", &self.tpm)
             .field("max_concurrent_requests", &self.max_concurrent_requests)
@@ -105,6 +109,7 @@ impl Default for ProviderConfig {
             organization: None,
             project: None,
             weight: default_weight(),
+            priority: 0,
             rpm: default_rpm(),
             tpm: default_tpm(),
             max_concurrent_requests: default_max_connections(),
@@ -408,6 +413,7 @@ mod tests {
         assert!(config.base_url.is_none());
         assert_eq!(config.endpoint_access, ProviderEndpointAccess::PublicOnly);
         assert!((config.weight - 1.0).abs() < f32::EPSILON);
+        assert_eq!(config.priority, 0);
         assert_eq!(config.rpm, 1000);
         assert!(config.enabled);
     }
@@ -424,6 +430,7 @@ mod tests {
             organization: Some("org-123".to_string()),
             project: None,
             weight: 2.0,
+            priority: 7,
             rpm: 100,
             tpm: 100000,
             max_concurrent_requests: 20,
@@ -439,6 +446,7 @@ mod tests {
         assert_eq!(config.name, "openai-main");
         assert_eq!(config.provider_type, "openai");
         assert_eq!(config.models.len(), 1);
+        assert_eq!(config.priority, 7);
     }
 
     #[test]
@@ -482,6 +490,7 @@ mod tests {
             organization: None,
             project: None,
             weight: 1.0,
+            priority: 0,
             rpm: 60,
             tpm: 60000,
             max_concurrent_requests: 10,
@@ -509,6 +518,7 @@ mod tests {
             organization: None,
             project: None,
             weight: 1.5,
+            priority: 0,
             rpm: 50,
             tpm: 50000,
             max_concurrent_requests: 15,
@@ -525,6 +535,7 @@ mod tests {
         assert_eq!(json["name"], "test-provider");
         assert_eq!(json["provider_type"], "anthropic");
         assert_eq!(json["endpoint_access"], "public_only");
+        assert_eq!(json["priority"], 0);
         assert_eq!(json["rpm"], 50);
     }
 
@@ -546,7 +557,20 @@ mod tests {
         assert_eq!(config.name, "gemini");
         assert!(!config.enabled);
         assert!((config.weight - 0.5).abs() < f32::EPSILON);
+        assert_eq!(config.priority, 0);
         assert_eq!(config.endpoint_access, ProviderEndpointAccess::PublicOnly);
+    }
+
+    #[test]
+    fn test_provider_priority_yaml_and_unknown_fields() {
+        let configured: ProviderConfig = serde_yml::from_str(
+            "name: primary\nprovider_type: openai\napi_key: key\npriority: 4294967295\n",
+        )
+        .expect("priority should deserialize");
+        assert_eq!(configured.priority, u32::MAX);
+
+        let unknown = "name: primary\nprovider_type: openai\napi_key: key\npriority_rank: 42\n";
+        assert!(serde_yml::from_str::<ProviderConfig>(unknown).is_err());
     }
 
     #[test]

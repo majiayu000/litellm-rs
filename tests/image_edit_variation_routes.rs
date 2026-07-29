@@ -218,8 +218,12 @@ mod tests {
     }
 
     fn image_edit_multipart_body(boundary: &str) -> Vec<u8> {
+        image_edit_multipart_body_for_model(boundary, "gpt-image-1-mini")
+    }
+
+    fn image_edit_multipart_body_for_model(boundary: &str, model: &str) -> Vec<u8> {
         let mut body = Vec::new();
-        add_text_field(&mut body, boundary, "model", "gpt-image-1-mini");
+        add_text_field(&mut body, boundary, "model", model);
         add_text_field(&mut body, boundary, "prompt", "make it lighter");
         add_text_field(&mut body, boundary, "size", "1024x1024");
         add_file_field(
@@ -234,9 +238,23 @@ mod tests {
         body
     }
 
+    fn image_edit_multipart_body_with_transport_padding(boundary: &str) -> Vec<u8> {
+        let body = String::from_utf8(image_edit_multipart_body(boundary))
+            .expect("multipart fixture should be utf-8");
+        body.replace(
+            &format!("--{boundary}\r\n"),
+            &format!("--{boundary} \t\r\n"),
+        )
+        .into_bytes()
+    }
+
     fn image_variation_multipart_body(boundary: &str) -> Vec<u8> {
+        image_variation_multipart_body_for_model(boundary, "gpt-image-1-mini")
+    }
+
+    fn image_variation_multipart_body_for_model(boundary: &str, model: &str) -> Vec<u8> {
         let mut body = Vec::new();
-        add_text_field(&mut body, boundary, "model", "gpt-image-1-mini");
+        add_text_field(&mut body, boundary, "model", model);
         add_text_field(&mut body, boundary, "n", "1");
         add_file_field(
             &mut body,
@@ -426,6 +444,10 @@ mod tests {
             ),
         ])
         .await;
+        state
+            .unified_router
+            .add_model_alias("public-image", "gpt-image-1-mini")
+            .expect("runtime image alias should install");
         state.budget_limits.providers.set_provider_limit(
             "mock-openai-compatible",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -469,7 +491,10 @@ mod tests {
                     "content-type",
                     format!("multipart/form-data; boundary={boundary}"),
                 ))
-                .set_payload(image_edit_multipart_body(boundary))
+                .set_payload(image_edit_multipart_body_for_model(
+                    boundary,
+                    "public-image",
+                ))
                 .to_request(),
         )
         .await;
@@ -488,7 +513,10 @@ mod tests {
                     "content-type",
                     format!("multipart/form-data; boundary={boundary}"),
                 ))
-                .set_payload(image_variation_multipart_body(boundary))
+                .set_payload(image_variation_multipart_body_for_model(
+                    boundary,
+                    "public-image",
+                ))
                 .to_request(),
         )
         .await;
@@ -517,6 +545,7 @@ mod tests {
             let multipart_body = String::from_utf8_lossy(&request.body);
             assert!(multipart_body.contains("name=\"model\""));
             assert!(multipart_body.contains("gpt-image-1-mini"));
+            assert!(!multipart_body.contains("public-image"));
             assert!(multipart_body.contains("name=\"image\""));
         }
         let edit_multipart = String::from_utf8_lossy(&captured[0].body);
@@ -543,6 +572,45 @@ mod tests {
             (model_spend - expected_cost).abs() < f64::EPSILON,
             "image proxy model spend must charge image tokens once"
         );
+
+        mock.stop_image_mock().await;
+    }
+
+    #[tokio::test]
+    async fn canonical_image_multipart_with_transport_padding_is_forwarded_byte_for_byte() {
+        let mock = MockImageServer::start_image_mock().await;
+        let state = build_test_state(vec![image_route_provider_with_name_and_models(
+            "mock-openai-compatible",
+            &mock.base_url,
+            vec!["gpt-image-1-mini".to_string()],
+        )])
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let boundary = "litellm-rs-padded-boundary";
+        let payload = image_edit_multipart_body_with_transport_padding(boundary);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/edits")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(payload.clone())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let captured = mock.requests();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].body, payload);
 
         mock.stop_image_mock().await;
     }

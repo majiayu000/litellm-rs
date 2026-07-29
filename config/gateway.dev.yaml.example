@@ -100,10 +100,17 @@ cache:
   similarity_threshold: 0.95
 
 pricing:
-  source: null
+  # Bundled pricing data is cwd-independent and available offline, so known
+  # provider models still get accurate cost accounting in local runs.
+  source: "embedded://model_prices_extended"
   allow_degraded: false
-  unpriced_model_policy: reject
-  unpriced_fallback_cost_per_1k_tokens: null
+  # Development deliberately differs from config/gateway.yaml.example: the
+  # provider above is a self-hosted vLLM model with no upstream price, so the
+  # fail-closed `reject` policy would reject every local request before the
+  # provider call. Local inference has no vendor cost, hence the explicit zero
+  # fallback below. Keep `reject` for production configurations.
+  unpriced_model_policy: allow_unpriced
+  unpriced_fallback_cost_per_1k_tokens: 0.0
 
 rate_limit:
   enabled: false

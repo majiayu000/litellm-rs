@@ -7,6 +7,10 @@
 #[path = "gateway_config_tests.rs"]
 mod gateway_config_tests;
 
+#[cfg(test)]
+#[path = "gateway_alias_tests.rs"]
+mod gateway_alias_tests;
+
 use super::config::RouterConfig;
 use super::deployment::{
     Deployment, DeploymentConfig, HealthCheckPolicy, LegacySelectorMetadata, RetrySchedule,
@@ -14,11 +18,13 @@ use super::deployment::{
 use super::error::RouterError;
 use super::unified::Router;
 use crate::config::Validate;
+use crate::config::models::gateway::GatewayConfig;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::{self as provider_registry, ProviderDispatchKind};
 use crate::core::providers::{Provider, create_provider};
+use std::collections::{HashMap, HashSet};
 
 /// Construction-only handoff. Raw credentials never enter a deployment or snapshot.
 struct NormalizedProviderConstruction {
@@ -169,8 +175,23 @@ impl Router {
         providers: &[ProviderConfig],
         router_config: Option<RouterConfig>,
     ) -> Result<Self, RouterError> {
+        let model_aliases = HashMap::new();
+        Self::from_gateway_config_with_aliases(providers, router_config, &model_aliases).await
+    }
+
+    /// Create a Router from gateway configuration with validated public aliases.
+    pub async fn from_gateway_config_with_aliases(
+        providers: &[ProviderConfig],
+        router_config: Option<RouterConfig>,
+        model_aliases: &HashMap<String, String>,
+    ) -> Result<Self, RouterError> {
+        GatewayConfig::validate_model_alias_map(model_aliases)
+            .map_err(RouterError::InvalidConfiguration)?;
         let config = router_config.unwrap_or_default();
         let router = Self::new(config);
+        let mut staged = Vec::new();
+        let mut canonical_models = HashSet::new();
+        let mut generated_deployment_ids = HashSet::new();
 
         for provider_config in providers {
             provider_config
@@ -200,8 +221,8 @@ impl Router {
             })?;
             let legacy_metadata = construction.legacy_metadata;
 
-            // Determine which models this deployment serves
-            let models: Vec<String> = if !configured_models.is_empty() {
+            // Determine which models this deployment serves.
+            let mut models: Vec<String> = if !configured_models.is_empty() {
                 configured_models
             } else {
                 provider
@@ -211,42 +232,105 @@ impl Router {
                     .collect()
             };
 
-            // Create deployments
-            if models.is_empty() {
-                // Create a single deployment with provider name
-                let deployment = create_deployment_from_config(
-                    &provider_name,
-                    provider.clone(),
-                    &provider_name,
-                    deployment_config.clone(),
-                    tags.clone(),
-                );
-                match legacy_metadata {
-                    Some(metadata) => router.add_gateway_deployment(deployment, metadata),
-                    None => router.add_deployment(deployment),
+            let uses_provider_name_fallback = models.is_empty();
+            if uses_provider_name_fallback {
+                models.push(provider_name.clone());
+            }
+
+            let mut seen_provider_models = HashSet::new();
+            for model in models {
+                if !seen_provider_models.insert(model.clone()) {
+                    continue;
                 }
-            } else {
-                // Create one deployment per model
-                for model in models {
-                    let deployment_id = format!("{}-{}", provider_name, model);
-                    let deployment = create_deployment_from_config(
+                let deployment_id = if uses_provider_name_fallback {
+                    provider_name.clone()
+                } else {
+                    format!("{}-{}", provider_name, model)
+                };
+                if !generated_deployment_ids.insert(deployment_id.clone()) {
+                    return Err(RouterError::InvalidConfiguration(format!(
+                        "duplicate generated deployment ID '{deployment_id}'"
+                    )));
+                }
+                canonical_models.insert(model.clone());
+                staged.push((
+                    create_deployment_from_config(
                         &deployment_id,
                         provider.clone(),
                         &model,
                         deployment_config.clone(),
                         tags.clone(),
-                    );
-                    match legacy_metadata.clone() {
-                        Some(metadata) => router.add_gateway_deployment(deployment, metadata),
-                        None => router.add_deployment(deployment),
-                    }
-                }
+                    ),
+                    legacy_metadata.clone(),
+                ));
             }
         }
 
+        let normalized_aliases = normalize_model_aliases(model_aliases, &canonical_models)?;
+        let mut aliases = normalized_aliases.iter().collect::<Vec<_>>();
+        aliases.sort_unstable_by_key(|(alias, _)| *alias);
+        router.try_update_routing_snapshot(move |snapshot| {
+            for (deployment, legacy_metadata) in staged {
+                match legacy_metadata {
+                    Some(metadata) => {
+                        snapshot.insert_deployment_with_legacy_metadata(deployment, metadata);
+                    }
+                    None => snapshot.insert_deployment(deployment),
+                }
+            }
+            for (alias, target) in aliases {
+                snapshot.add_model_alias(alias, target)?;
+            }
+            Ok::<(), RouterError>(())
+        })?;
+        #[cfg(test)]
+        gateway_alias_tests::observe_construction(
+            gateway_alias_tests::ConstructionEvent::RoutingSnapshotPublication,
+        );
+
+        #[cfg(test)]
+        gateway_alias_tests::observe_construction(
+            gateway_alias_tests::ConstructionEvent::HealthCheckPhaseEntry,
+        );
         router.start_configured_health_checks()?;
         Ok(router)
     }
+
+    /// Return the normalized aliases installed in the current router snapshot.
+    pub fn model_aliases(&self) -> HashMap<String, String> {
+        self.load_routing_snapshot().model_aliases.clone()
+    }
+}
+
+fn normalize_model_aliases(
+    model_aliases: &HashMap<String, String>,
+    canonical_models: &HashSet<String>,
+) -> Result<HashMap<String, String>, RouterError> {
+    let mut alias_names = model_aliases.keys().map(String::as_str).collect::<Vec<_>>();
+    alias_names.sort_unstable();
+
+    for alias in &alias_names {
+        if canonical_models.contains(*alias) {
+            return Err(RouterError::InvalidConfiguration(format!(
+                "model alias '{alias}' collides with an enabled canonical model"
+            )));
+        }
+    }
+
+    let mut normalized = HashMap::with_capacity(model_aliases.len());
+    for alias in alias_names {
+        let mut target = &model_aliases[alias];
+        while let Some(next) = model_aliases.get(target) {
+            target = next;
+        }
+        if !canonical_models.contains(target) {
+            return Err(RouterError::InvalidConfiguration(format!(
+                "model alias '{alias}' resolves to unavailable model '{target}'"
+            )));
+        }
+        normalized.insert(alias.to_string(), target.clone());
+    }
+    Ok(normalized)
 }
 
 /// Helper function to create deployment from provider config
@@ -292,7 +376,7 @@ fn deployment_config_from_provider(
         },
         weight: (config.weight.max(1.0)).round() as u32,
         timeout_secs: config.timeout,
-        priority: 0,
+        priority: config.priority,
         retry_schedule: Some(RetrySchedule {
             base_delay_ms: config.retry.base_delay,
             max_delay_ms: config.retry.max_delay,

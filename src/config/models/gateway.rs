@@ -465,6 +465,9 @@ pub struct GatewayConfig {
     pub server: ServerConfig,
     /// Provider configurations
     pub providers: Vec<ProviderConfig>,
+    /// Public model aliases resolved by the runtime router
+    #[serde(default)]
+    pub model_aliases: HashMap<String, String>,
     /// Router configuration
     pub router: GatewayRouterConfig,
     /// Storage configuration
@@ -507,6 +510,7 @@ impl Default for GatewayConfig {
             schema_version: default_schema_version(),
             server: ServerConfig::default(),
             providers: Vec::new(),
+            model_aliases: HashMap::new(),
             router: GatewayRouterConfig::default(),
             storage: StorageConfig::default(),
             auth: AuthConfig::default(),
@@ -645,6 +649,7 @@ impl GatewayConfig {
         }
 
         self.providers = provider_map.into_values().collect();
+        self.model_aliases.extend(other.model_aliases);
         self.router = self.router.merge(other.router);
         self.storage = self.storage.merge(other.storage);
         self.auth = self.auth.merge(other.auth);
@@ -663,7 +668,10 @@ impl GatewayConfig {
     pub fn validate(&self) -> Result<(), String> {
         crate::config::validation::Validate::validate(self)?;
         // Surface dead cache configuration at error level without blocking
-        // startup: the response cache is not wired into the runtime yet.
+        // startup. `cache.enabled` itself is wired (the response cache is
+        // built in AppState and used by the chat and embedding routes), so
+        // only settings with no runtime effect, such as `semantic_cache`,
+        // produce a warning here.
         for warning in self.cache.not_yet_implemented_warnings() {
             tracing::error!("{}", warning);
         }
@@ -786,3 +794,7 @@ mod tests;
 #[cfg(test)]
 #[path = "gateway_pricing_tests.rs"]
 mod pricing_tests;
+
+#[cfg(test)]
+#[path = "gateway_alias_tests.rs"]
+mod alias_tests;

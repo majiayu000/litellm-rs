@@ -2,6 +2,7 @@
 
 use crate::config::models::provider::ProviderConfig;
 mod generation;
+mod multipart;
 mod pricing_keys;
 mod proxy_spend;
 
@@ -26,6 +27,7 @@ use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
 use super::context::handle_ai_request;
 use super::route_http::RouteHttpClient;
 use super::{openai_errors, provider_config};
+use multipart::{extract_text_field as extract_multipart_text_field, replace_text_field};
 use proxy_spend::{image_proxy_cost, record_image_proxy_spend};
 
 const OPENAI_IMAGE_BASE_URL: &str = "https://api.openai.com/v1";
@@ -61,14 +63,16 @@ pub async fn image_generations(
     let mut request = request.into_inner();
     info!("Image generation request for model: {:?}", request.model);
 
-    let model = match required_image_generation_model(&request) {
+    let requested_model = match required_image_generation_model(&request) {
         Ok(model) => model.to_string(),
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
-    request.model = Some(model.clone());
-    if let Err(error) = super::context::enforce_api_key_model_and_token_limits(&req, &model, None) {
+    if let Err(error) =
+        super::context::enforce_api_key_model_and_token_limits(&req, &requested_model, None)
+    {
         return Ok(openai_errors::gateway_error_response(&error));
     }
+    request.model = Some(state.unified_router.resolve_model_name(&requested_model));
 
     handle_ai_request(&req, request, "Image generation", |request, context| {
         generation::handle_image_generation_with_state(state.get_ref(), request, context)
@@ -132,8 +136,15 @@ async fn proxy_image_multipart_endpoint(
     let content_type = image_multipart_content_type(req)?;
     let body = read_image_multipart_payload(payload).await?;
     let form_fields = extract_image_proxy_form_fields(&body, &content_type);
-    let requested_model = required_image_proxy_model(&form_fields)?;
-    super::context::enforce_api_key_model_and_token_limits(req, requested_model, None)?;
+    let public_model = required_image_proxy_model(&form_fields)?;
+    super::context::enforce_api_key_model_and_token_limits(req, public_model, None)?;
+    let requested_model = state.unified_router.resolve_model_name(public_model);
+    let body = if requested_model == public_model {
+        body
+    } else {
+        replace_text_field(&body, &content_type, "model", &requested_model)?
+    };
+    let requested_model = requested_model.as_str();
     ensure_image_proxy_candidate_configured(
         state.config().gateway.providers.as_slice(),
         requested_model,
@@ -642,51 +653,6 @@ fn image_multipart_content_type(req: &HttpRequest) -> Result<String, GatewayErro
     Err(GatewayError::validation(
         "multipart/form-data content type is required",
     ))
-}
-
-fn extract_multipart_text_field(
-    body: &Bytes,
-    content_type: &str,
-    field_name: &str,
-) -> Option<String> {
-    let boundary = multipart_boundary(content_type)?;
-    let marker = format!("--{boundary}");
-    let body = String::from_utf8_lossy(body);
-
-    for raw_part in body.split(&marker).skip(1) {
-        if raw_part.starts_with("--") {
-            continue;
-        }
-        let part = raw_part.trim_start_matches("\r\n");
-        let Some((headers, value)) = part.split_once("\r\n\r\n") else {
-            continue;
-        };
-        if !multipart_part_has_field_name(headers, field_name) {
-            continue;
-        }
-        return Some(value.trim_end_matches("\r\n").trim().to_string());
-    }
-
-    None
-}
-
-fn multipart_boundary(content_type: &str) -> Option<String> {
-    content_type.split(';').find_map(|segment| {
-        let segment = segment.trim();
-        let raw_boundary = segment.strip_prefix("boundary=")?;
-        let boundary = raw_boundary.trim_matches('"').trim();
-        (!boundary.is_empty()).then(|| boundary.to_string())
-    })
-}
-
-fn multipart_part_has_field_name(headers: &str, field_name: &str) -> bool {
-    headers.lines().any(|line| {
-        let line = line.trim();
-        line.to_ascii_lowercase()
-            .starts_with("content-disposition:")
-            && (line.contains(&format!("name=\"{field_name}\""))
-                || line.contains(&format!("name={field_name}")))
-    })
 }
 
 fn missing_image_proxy_provider_error() -> GatewayError {

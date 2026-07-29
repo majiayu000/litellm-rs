@@ -1,0 +1,285 @@
+use super::*;
+use crate::core::router::config::{RouterConfig, RoutingStrategy};
+use crate::core::types::model::ProviderCapability;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+#[derive(Default)]
+struct ConstructionProbe {
+    routing_snapshot_publications: AtomicUsize,
+    health_check_phase_entries: AtomicUsize,
+}
+
+pub(super) enum ConstructionEvent {
+    RoutingSnapshotPublication,
+    HealthCheckPhaseEntry,
+}
+
+tokio::task_local! {
+    static CONSTRUCTION_PROBE: Arc<ConstructionProbe>;
+}
+
+pub(super) fn observe_construction(event: ConstructionEvent) {
+    let _ = CONSTRUCTION_PROBE.try_with(|probe| match event {
+        ConstructionEvent::RoutingSnapshotPublication => {
+            probe.routing_snapshot_publications.fetch_add(1, Relaxed);
+        }
+        ConstructionEvent::HealthCheckPhaseEntry => {
+            probe.health_check_phase_entries.fetch_add(1, Relaxed);
+        }
+    });
+}
+
+fn provider(name: &str, models: &[&str], priority: u32) -> ProviderConfig {
+    ProviderConfig {
+        name: name.to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-test".to_string(),
+        models: models.iter().map(|model| (*model).to_string()).collect(),
+        priority,
+        ..ProviderConfig::default()
+    }
+}
+
+fn aliases(entries: &[(&str, &str)]) -> HashMap<String, String> {
+    entries
+        .iter()
+        .map(|(alias, target)| ((*alias).to_string(), (*target).to_string()))
+        .collect()
+}
+
+async fn build_with_probe(
+    providers: &[ProviderConfig],
+    model_aliases: &HashMap<String, String>,
+) -> (Result<Router, RouterError>, Arc<ConstructionProbe>) {
+    let probe = Arc::new(ConstructionProbe::default());
+    let result = CONSTRUCTION_PROBE
+        .scope(
+            probe.clone(),
+            Router::from_gateway_config_with_aliases(providers, None, model_aliases),
+        )
+        .await;
+    (result, probe)
+}
+
+fn assert_no_publication_or_health_side_effects(probe: &ConstructionProbe) {
+    assert_eq!(probe.routing_snapshot_publications.load(Relaxed), 0);
+    assert_eq!(probe.health_check_phase_entries.load(Relaxed), 0);
+}
+
+#[tokio::test]
+async fn aliases_are_flattened_past_runtime_hop_limit_and_routable_for_chat_modes() {
+    let mut forward = HashMap::new();
+    for index in 0..20 {
+        forward.insert(
+            format!("alias-{index}"),
+            if index == 19 {
+                "gpt-4o".to_string()
+            } else {
+                format!("alias-{}", index + 1)
+            },
+        );
+    }
+    forward.insert("public-chat".to_string(), "alias-0".to_string());
+    let mut reverse_entries = forward
+        .iter()
+        .map(|(alias, target)| (alias.clone(), target.clone()))
+        .collect::<Vec<_>>();
+    reverse_entries.sort_unstable_by(|(left, _), (right, _)| right.cmp(left));
+    let reverse = reverse_entries.into_iter().collect::<HashMap<_, _>>();
+
+    let first = Router::from_gateway_config_with_aliases(
+        &[provider("primary", &["gpt-4o"], 0)],
+        None,
+        &forward,
+    )
+    .await
+    .expect("forward alias graph should build");
+    let second = Router::from_gateway_config_with_aliases(
+        &[provider("primary", &["gpt-4o"], 0)],
+        None,
+        &reverse,
+    )
+    .await
+    .expect("reverse alias graph should build");
+
+    assert_eq!(first.model_aliases(), second.model_aliases());
+    assert!(
+        first
+            .model_aliases()
+            .values()
+            .all(|target| target == "gpt-4o")
+    );
+    assert_eq!(first.resolve_model_name("public-chat"), "gpt-4o");
+
+    for capability in [
+        ProviderCapability::ChatCompletion,
+        ProviderCapability::ChatCompletionStream,
+    ] {
+        let lease = first
+            .select_deployment_lease_for_capability("public-chat", &capability)
+            .expect("configured alias should route for normal and streaming chat");
+        assert_eq!(lease.deployment_id(), "primary-gpt-4o");
+    }
+}
+
+#[tokio::test]
+async fn phase_b_rejects_collisions_missing_and_disabled_only_targets() {
+    let configured = provider("primary", &["gpt-4o", "gpt-4"], 0);
+    let valid_alias = aliases(&[("public", "gpt-4o")]);
+    let (valid, probe) = build_with_probe(std::slice::from_ref(&configured), &valid_alias).await;
+    valid.expect("probe control must complete construction");
+    assert_eq!(probe.routing_snapshot_publications.load(Relaxed), 1);
+    assert_eq!(probe.health_check_phase_entries.load(Relaxed), 1);
+
+    let padded_alias = aliases(&[(" public ", "public")]);
+    let (padded_alias_result, probe) =
+        build_with_probe(std::slice::from_ref(&configured), &padded_alias).await;
+    let error = padded_alias_result.expect_err("padded alias name must fail before publication");
+    assert!(
+        error
+            .to_string()
+            .contains("cannot contain leading or trailing whitespace"),
+        "{error}"
+    );
+    assert_no_publication_or_health_side_effects(&probe);
+
+    let collision = aliases(&[("gpt-4o", "gpt-4")]);
+    let (collision_result, probe) =
+        build_with_probe(std::slice::from_ref(&configured), &collision).await;
+    let error =
+        collision_result.expect_err("canonical alias key must not shadow a deployment model");
+    assert!(error.to_string().contains("collides"), "{error}");
+    assert_no_publication_or_health_side_effects(&probe);
+
+    let missing = aliases(&[("public", "missing-model")]);
+    let (missing_result, probe) =
+        build_with_probe(std::slice::from_ref(&configured), &missing).await;
+    let error = missing_result.expect_err("missing final target must fail before publication");
+    assert!(error.to_string().contains("unavailable"), "{error}");
+    assert_no_publication_or_health_side_effects(&probe);
+
+    let mut disabled = provider("disabled", &["disabled-model"], 1);
+    disabled.enabled = false;
+    let disabled_alias = aliases(&[("public", "disabled-model")]);
+    let (disabled_result, probe) =
+        build_with_probe(std::slice::from_ref(&disabled), &disabled_alias).await;
+    let error =
+        disabled_result.expect_err("disabled provider models must not satisfy alias targets");
+    assert!(error.to_string().contains("unavailable"), "{error}");
+    assert_no_publication_or_health_side_effects(&probe);
+}
+
+#[tokio::test]
+async fn construction_rejects_duplicate_generated_deployment_ids_before_publication() {
+    let providers = [provider("a-b", &["c"], 0), provider("a", &["b-c"], 1)];
+    let overwritten_model_alias = aliases(&[("public", "c")]);
+
+    let (result, probe) = build_with_probe(&providers, &overwritten_model_alias).await;
+    let error = result.expect_err(
+        "ambiguous generated deployment IDs must fail instead of hiding the alias target",
+    );
+    match error {
+        RouterError::InvalidConfiguration(message) => {
+            assert_eq!(message, "duplicate generated deployment ID 'a-b-c'");
+        }
+        other => panic!("expected stable invalid configuration error, got {other}"),
+    }
+    assert_no_publication_or_health_side_effects(&probe);
+}
+
+#[tokio::test]
+async fn construction_deduplicates_repeated_models_within_one_provider() {
+    let configured = provider("primary", &["gpt-4o", "gpt-4o"], 0);
+    let model_alias = aliases(&[("public", "gpt-4o")]);
+
+    let (result, probe) = build_with_probe(&[configured], &model_alias).await;
+    let router = result.expect("same-provider duplicate models should remain compatible");
+    assert_eq!(
+        router.get_deployments_for_model("gpt-4o"),
+        vec!["primary-gpt-4o"]
+    );
+    assert_eq!(router.list_deployments(), vec!["primary-gpt-4o"]);
+    assert_eq!(probe.routing_snapshot_publications.load(Relaxed), 1);
+    assert_eq!(probe.health_check_phase_entries.load(Relaxed), 1);
+}
+
+#[tokio::test]
+async fn aliases_accept_dynamic_and_provider_name_fallback_models() {
+    let dynamic_alias = aliases(&[("dynamic", "gpt-4o")]);
+    let dynamic = Router::from_gateway_config_with_aliases(
+        &[provider("dynamic-openai", &[], 0)],
+        None,
+        &dynamic_alias,
+    )
+    .await
+    .expect("provider catalog model should satisfy dynamic alias target");
+    assert_eq!(dynamic.resolve_model_name("dynamic"), "gpt-4o");
+
+    let fallback_provider = ProviderConfig {
+        name: "local-fallback".to_string(),
+        provider_type: "vllm".to_string(),
+        ..ProviderConfig::default()
+    };
+    let fallback_alias = aliases(&[("local-chat", "local-fallback")]);
+    let fallback =
+        Router::from_gateway_config_with_aliases(&[fallback_provider], None, &fallback_alias)
+            .await
+            .expect("empty provider catalog should fall back to the provider name");
+    assert_eq!(fallback.resolve_model_name("local-chat"), "local-fallback");
+}
+
+#[tokio::test]
+async fn provider_priority_propagates_and_lower_value_wins_through_alias() {
+    let router_config = RouterConfig {
+        routing_strategy: RoutingStrategy::PriorityBased,
+        ..RouterConfig::default()
+    };
+    let providers = [
+        provider("fallback", &["gpt-4o"], 10),
+        provider("primary", &["gpt-4o"], 1),
+    ];
+    let model_aliases = aliases(&[("production-chat", "gpt-4o")]);
+    let router =
+        Router::from_gateway_config_with_aliases(&providers, Some(router_config), &model_aliases)
+            .await
+            .expect("priority router should build");
+
+    assert_eq!(
+        router
+            .get_deployment("fallback-gpt-4o")
+            .expect("fallback deployment should exist")
+            .config
+            .priority,
+        10
+    );
+    assert_eq!(
+        router
+            .get_deployment("primary-gpt-4o")
+            .expect("primary deployment should exist")
+            .config
+            .priority,
+        1
+    );
+    let lease = router
+        .select_deployment_lease("production-chat")
+        .expect("alias should select a deployment");
+    assert_eq!(lease.deployment_id(), "primary-gpt-4o");
+}
+
+#[tokio::test]
+async fn legacy_constructor_keeps_empty_aliases_and_zero_priority() {
+    let router = Router::from_gateway_config(&[provider("legacy", &["gpt-4o"], 0)], None)
+        .await
+        .expect("legacy constructor should remain available");
+
+    assert!(router.model_aliases().is_empty());
+    assert_eq!(
+        router
+            .get_deployment("legacy-gpt-4o")
+            .expect("legacy deployment should exist")
+            .config
+            .priority,
+        0
+    );
+}

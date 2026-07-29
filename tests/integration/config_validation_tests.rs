@@ -7,7 +7,7 @@
 #[cfg(test)]
 mod tests {
     use litellm_rs::Config;
-    use litellm_rs::config::models::gateway::GatewayConfig;
+    use litellm_rs::config::models::gateway::{GatewayConfig, UnpricedModelPolicy};
     use litellm_rs::config::models::provider::{
         ProviderConfig, ProviderHealthCheckConfig, RetryConfig,
     };
@@ -43,7 +43,19 @@ mod tests {
         assert!(!config.auth().enable_jwt);
         assert!(!config.auth().enable_api_key);
         assert!(config.auth().allow_anonymous);
-        assert!(config.gateway.pricing.source.is_none());
+        assert_eq!(
+            config.gateway.pricing.source.as_deref(),
+            Some("embedded://model_prices_extended")
+        );
+        assert!(!config.gateway.pricing.allow_degraded);
+        assert_eq!(
+            config.gateway.pricing.unpriced_model_policy,
+            UnpricedModelPolicy::AllowUnpriced
+        );
+        assert_eq!(
+            config.gateway.pricing.unpriced_fallback_cost_per_1k_tokens,
+            Some(0.0)
+        );
         assert_eq!(config.server().port, 8080);
         assert_eq!(config.providers()[0].provider_type, "vllm");
         assert!(config.providers()[0].base_url.is_none());

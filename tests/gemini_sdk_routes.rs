@@ -10,9 +10,10 @@ mod support;
 mod tests {
     use super::support::{
         BrokenGeminiStreamServer, DelayedGeminiStreamServer, MockGeminiServer,
-        api_key_with_invalid_runtime_permissions, api_key_with_max_tokens_per_request,
-        build_auth_required_state, build_test_state, gemini_body,
-        gemini_body_without_generation_config, gemini_provider, gemini_upstream_error_body,
+        api_key_with_allowed_model_and_max_tokens, api_key_with_invalid_runtime_permissions,
+        api_key_with_max_tokens_per_request, build_auth_required_state, build_test_state,
+        gemini_body, gemini_body_without_generation_config, gemini_provider,
+        gemini_upstream_error_body,
     };
     use actix_web::{App, HttpMessage, dev::Service};
     use actix_web::{http::StatusCode, test, web};
@@ -127,6 +128,93 @@ mod tests {
             .get_model_usage("gemini-3.1-flash-lite")
             .expect("model spend should be recorded");
         assert!(model_usage.current_spend > 0.0);
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gemini_sdk_route_authorizes_public_alias_then_routes_canonical_model() {
+        let mock = MockGeminiServer::launch().await;
+        let state = build_auth_required_state(vec![gemini_provider(
+            "gemini",
+            &mock.base_url,
+            vec!["gemini-2.5-pro".to_string()],
+        )])
+        .await;
+        state
+            .unified_router
+            .add_model_alias("gemini@prod", "gemini-2.5-pro")
+            .expect("runtime alias should install");
+        let api_key = api_key_with_allowed_model_and_max_tokens("gemini@prod", 8);
+        let app = test::init_service(
+            App::new()
+                .wrap_fn(move |req, srv| {
+                    req.extensions_mut().insert::<ApiKey>(api_key.clone());
+                    srv.call(req)
+                })
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1beta/models/gemini@prod:generateContent")
+                .set_json(gemini_body())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].path_and_query,
+            "/v1beta/models/gemini-2.5-pro:generateContent?key=test-api-key-12345678901234567890"
+        );
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gemini_sdk_route_rejects_invalid_canonical_alias_target_before_upstream() {
+        let mock = MockGeminiServer::launch().await;
+        let state = build_test_state(vec![gemini_provider(
+            "gemini",
+            &mock.base_url,
+            vec!["gemini@prod".to_string()],
+        )])
+        .await;
+        state
+            .unified_router
+            .add_model_alias("public-gemini", "gemini@prod")
+            .expect("runtime alias should install");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1beta/models/public-gemini:generateContent")
+                .set_json(gemini_body())
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value = test::read_body_json(response).await;
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .expect("error message")
+                .contains("single safe path segment")
+        );
+        assert!(mock.requests().is_empty());
 
         mock.shutdown().await;
     }

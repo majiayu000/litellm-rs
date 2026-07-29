@@ -639,7 +639,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rerank_route_uses_router_budget_fallback_provider() {
+    async fn rerank_route_resolves_alias_and_uses_router_budget_fallback_provider() {
         let exhausted = MockRerankServer::start_rerank_mock().await;
         let fallback = MockRerankServer::start_rerank_mock().await;
         let state = build_test_app_state(vec![
@@ -655,6 +655,10 @@ mod tests {
             ),
         ])
         .await;
+        state
+            .unified_router
+            .add_model_alias("public-rerank", "rerank-english-v3.0")
+            .expect("runtime rerank alias should install");
         state.budget_limits.providers.set_provider_limit(
             "exhausted-cohere",
             ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
@@ -674,11 +678,13 @@ mod tests {
         )
         .await;
 
+        let mut request = rerank_body();
+        request["model"] = json!("public-rerank");
         let resp = test::call_service(
             &app,
             test::TestRequest::post()
                 .uri("/v1/rerank")
-                .set_json(rerank_body())
+                .set_json(request)
                 .to_request(),
         )
         .await;
