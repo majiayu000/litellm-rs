@@ -32,18 +32,21 @@ complexity: high
 `enabled && check_output && guardrail_count > 0` 时生效。
 
 审核模式不暴露运行时 enum；稳定行为固定为 `windowed_cumulative`。pending SSE
-bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避免引入第二个公开
-配置。`fail_open` 继续由 `GuardrailEngine::check_output` 决定，streaming 层不得
-增加第二套 fallback。
+bytes 与累计扫描 surface（含 key、parser 与 boundary state）分别受内部常量
+`8_388_608` bytes 限制，避免引入第二个公开配置。`fail_open` 继续由
+`GuardrailEngine::check_output` 决定，streaming 层不得增加第二套 fallback。
 
 ### 2. 共享缓冲器
 
 新增 route-private `StreamOutputGuardrail`：
 
 - 创建时记录是否需要输出检查和 `stream_output_check_chars`；
-- 按到达顺序保存当前 pending 窗口的完整 SSE `Bytes`，并单独累积带字段边界的
-  全部历史扫描文本；
-- 对 pending SSE bytes 与累计 scan text 使用 checked accounting，在追加前检查
+- 按到达顺序保存当前 pending 窗口的完整 SSE `Bytes`，并按稳定
+  `(endpoint, choice, call/index, field, representation)` key 单独累积全部历史扫描
+  surface；每次检查按稳定 key 顺序把每个非空 surface 分别传给
+  `check_output_text`，全部通过后才能回放，禁止先用分隔符拼成一个输入；
+- 对 pending SSE bytes 与全部累计 surface、key/parser/boundary bookkeeping 使用
+  checked accounting，在追加前检查
   8 MiB 内部上限，超限返回 typed `BufferLimitExceeded`；
 - active=false 时不保存历史 event，调用方继续原有 immediate-send 分支；
 - active=true 时自上次通过检查后新增的模型文本达到配置字符数或 upstream EOF 时，
@@ -52,10 +55,123 @@ bytes 与累计扫描文本分别受内部常量 `8_388_608` bytes 限制，避�
 - 检查通过后按原顺序 drain 当前 pending events 并清空 pending；拒绝或错误时丢弃
   当前 pending events，取消上游并进入 terminal。
 
-扫描文本采用稳定的 choice/surface 边界，不能按 provider chunk 独立判断。Chat 扫描
-`delta.content`；Completion 扫描最终 client-visible `text`（包含一次 `echo`）；
-Responses 扫描 output text、reasoning summary 和 function-call arguments。role、
-usage、finish reason、IDs 与 transport markers 只缓冲、不进入扫描文本。
+扫描文本采用稳定的 choice/surface identity，不能按 provider chunk 独立判断，也
+不能依赖分隔符阻止 regex 跨 surface 匹配。窗口阈值只按去重后的客户端可见 raw
+模型字符推进；派生的 JSON-semantic 表示不重复推进阈值，但必须在同一触发 event
+的检查中完成。一次窗口检查若任一独立 surface block/error，整个窗口都不得回放：
+
+- Chat 与 Completion 的 `choice.logprobs` 必须委托同一个 route-private
+  `LogprobSurfaceAccumulator`，不得在两个 endpoint 各复制一套去重规则。该组件按
+  choice 维护 client-visible content 累计值以及带 `position_epoch` 的 ordered
+  chosen-token 状态。每个 epoch 记录开始时的 content baseline、chosen 累计值与
+  alias/materialized 状态：epoch 内两个表示仍完全相等时 chosen 可作为 content alias；
+  首次分歧时只把该 epoch 内包含 alias 前缀的完整 chosen 历史物化为连续 surface，
+  此后在该 epoch 内不重新折叠。chosen token 之间不能插边界，也不能用全局 string set
+  删除不同位置的同值 token。若同一 choice 的非空 Chat
+  `ChatCompletionDelta.content` 或 Completion `choice.text` 前进、而该 event 没有
+  任何 `logprobs.content` entry，组件必须先让 route 把该文本加入正常 content
+  surface，再 close 当前 chosen segment、写入稳定边界、递增 `position_epoch`，并以
+  该文本之后的 content offset 作为新 epoch baseline。下一次 chosen token 从空的
+  epoch-local 历史开始，不能导入旧 alias 前缀。top candidates 不做逐位置 chosen
+  去重，但也不能把 rank 当成跨整次响应的永久字符串。组件把每个
+  `content[]` entry 视为一个逻辑 logprob position，并按
+  `(choice.index, candidate_index, run_generation)` 维护相邻 run：处理每个 position
+  时，当前 rank 有 token 才追加；此前 active、但在该 position 缺失的 rank 必须先
+  close，之后再出现时递增 generation 并以稳定边界开启新 segment。一个推进
+  关联的 client-visible content surface 前进却没有任何对应 logprob position 时也
+  必须在同一 position-epoch transition 中 close 该 choice 的全部 active top-rank
+  runs：Chat 仅指非空 `ChatCompletionDelta.content`，Completion 仅指非空
+  `choice.text`。thinking/
+  reasoning、audio transcript、tool/function、refusal 等独立 surface，以及 role、
+  usage、finish reason 等纯 metadata event 均不推进关联 content position，因此既不
+  切换 chosen epoch，也不改变 top-rank 连续性。这样相邻 content logprob
+  position/event 的 chosen 或同 rank `sec`、`ret` 仍形成 `secret`；但
+  `content/chosen=sec`、随后 content-only `x`、再随后 chosen `ret` 会在 `x` 后的新
+  epoch 只物化 `ret`，不得跨边界形成 `secret`；`rank1=sec`、下一 position 只有
+  rank0、再下一 position `rank1=ret` 也不会误拼。该组件的 epoch baseline/alias
+  bookkeeping、chosen、全部 top run 文本与 stable boundaries 统一纳入 cumulative
+  8 MiB checked accounting，并同时服务 Chat 与 Completion。共享 contract tests
+  必须覆盖 chosen/content 的连续 `sec`→`ret` alias 物化、上述 content-only gap
+  reset、独立 surface/no-op 不 reset、top-rank 相邻 position/event 的 `sec`→`ret`、
+  可变 top 列表造成的 rank 缺口/reset，以及首位置 top 等于 chosen 后分叉；两个
+  endpoint 各自还要有 integration fixture 证明实际 wire logprobs 经过该组件。
+- Chat legacy/modern 与 Responses 的 function arguments 必须委托同一个 route-private
+  `IncrementalJsonArgumentAccumulator`。每个已接受并将发布的 call arguments 使用
+  `(endpoint, choice, call/index, arguments, raw)` 连续 surface 原样追加 fragment；
+  同时为该 call 维护单一 JSON 文档的增量 lexer/parser，并为嵌套对象/数组中的每个
+  JSON string token（object key 与 string value）按稳定 path/occurrence identity
+  建立独立 decoded surface。parser 必须跨 provider event 保留 string、escape、
+  UTF-16 surrogate 和容器状态；支持 `\"`、`\\`、`\/`、控制字符 escape、
+  `\uXXXX`，并只在 high/low surrogate 配对完成后追加对应 Unicode scalar。event
+  结束时处于合法中间状态不算错误，后续 fragment 必须继续同一 token；可立即判定的
+  非法 JSON、非法 escape、lone/reversed surrogate 或完整文档后的额外 token 返回
+  typed `InvalidArgumentJson`，按 `guardrail_error` fail-closed。call 正常完成、
+  finish event 或 upstream clean EOF 时必须 finalize；未闭合 string/escape/surrogate/
+  container 或尚无完整顶层 JSON value 均按同一错误 fail-closed。raw surface 即使
+  parser 随后失败也始终保留并接受检查；不同 JSON string token、call、choice、
+  endpoint 或 raw/decoded representation 绝不合并为一次 guardrail 输入。raw 与
+  decoded 文本、path/occurrence key、parser buffer/state 和边界 bookkeeping 全部
+  计入累计 8 MiB checked accounting；semantic 派生文本不得让字符窗口阈值重复计数。
+  contract tests 必须覆盖嵌套 object/array、escape 或 surrogate pair 跨 event、
+  escaped quote/backslash、同一 token 内 `sec`→`ret` 命中、不同 token/call/field
+  的 `sec`/`ret` 不误命中、立即非法与 finalize 时未完成，以及临界 8 MiB accounting。
+- Chat 从转换后的 `ChatCompletionDelta` 提取 `content`、`thinking.content` 或其
+  `reasoning_content` alias（同一语义值只累计一次）、`audio.transcript`、
+  legacy `function_call.name/arguments` 与
+  `tool_calls[].function.name/arguments`；同时从 choice logprobs 提取
+  `content[].token` 与 `top_logprobs[].token` 并交给上述共享 accumulator。
+  audio base64 data、role、IDs、usage、finish reason、logprob bytes/数值与
+  transport markers 只缓冲、不扫描。
+  legacy `function_call` 的 name 与 arguments raw/decoded representations 分别按
+  `(choice.index, legacy, field, representation)` 维护连续 surface；modern tool calls 分别按
+  `(choice.index, tool_call.index, field)` 维护连续 surface。不同 choice、tool index
+  或 field 之间使用稳定边界，不能把交错 event 按到达顺序拼成一个 surface。
+  parallel fixture 必须证明 call 0 arguments 的 `sec`、call 1 的 `x`、call 0 的
+  `ret` 会在 call 0 的连续 surface 形成 `secret`，同时不会让两个 call 发生跨边界
+  误匹配。
+- 当前 canonical `ChatDelta` 没有 refusal，`convert_core_chunk_to_streaming` 也不会
+  从 provider pipeline 填充 wire `ChatCompletionDelta.refusal`；本 tranche 不新增
+  该 surface，不得用 synthetic post-conversion fixture 代替端到端可达性。未来若
+  provider/canonical/conversion 三层接入 refusal，必须先更新 manifest 与测试矩阵。
+- Completion 扫描最终 client-visible `text`，包含一次 `echo`；还必须从 route
+  实际转发的 `choice.logprobs` 提取 ordered chosen `content[].token`、
+  `top_logprobs[].token` 与 `refusal`。chosen/top token 必须交给同一个
+  `LogprobSurfaceAccumulator`，因此 Completion 与 Chat 具有完全相同的
+  chosen/content 的 epoch-local alias 物化、关联 content-only event 的 position-epoch
+  reset、top-rank 相邻 position run/reset 和禁止逐位置 chosen skip 语义；不能因
+  compatibility request 层拒绝 `logprobs` 参数而忽略
+  provider/custom adapter 主动返回的 logprobs。
+  canonical `LogProbs.refusal` 当前为 `Option<String>`，OpenAI transformer 会把原生
+  非字符串 refusal 用 `serde_json::Value::to_string()` 保存为该 wire string。为不
+  改变公开 `LogProbs` 类型或客户端 JSON，route-private
+  `RefusalTokenSurfaceParser` 必须始终先把原 refusal string 作为 raw surface 扫描，
+  再对能够完整解析为 array、且每个 entry 都含 string `token` 的 payload，按数组
+  顺序把 token 追加到独立 `(choice.index, structured_refusal)` 连续 surface。不得把
+  JSON 标点插入 token surface；任一 entry 不匹配、解析失败或中间出现普通 refusal
+  时只保留 raw 扫描并 close structured run，禁止部分提取后跨缺口拼接。状态转换固定
+  为：完整匹配 token-array schema 的 `Some(refusal)` 追加当前 structured run；
+  普通、非匹配或解析失败的 `Some(refusal)` 扫描 raw 后 close；`refusal: None`、
+  unrelated surface 与 metadata event 是 no-op。相邻 provider events 的完整 token
+  arrays 即使被 no-op event 隔开也继续同一 structured run；不同 choice 与
+  raw/structured surface 保持稳定边界。raw string、解析出的 token、parser bookkeeping 与 boundary
+  bytes 全部纳入 cumulative 8 MiB checked accounting。因为 transformer 已丢失原始
+  JSON value 的类型来源，字面上恰好是该 token-array JSON 的 refusal string 会接受
+  同样的保守 semantic 扫描；该兼容性收紧必须用 fixture 固定，不能改写 wire 值。
+- Responses 从每个上游 `choice.delta` 提取 output text 与 thinking；function
+  name/arguments 必须绑定现有 `tool_states` 的接受/发布分支：携带 call ID 创建
+  vacant state 时，在 `ResponseOutputItemAdded` 入 pending 前累计其中发布的 initial
+  name；state.name 为空时到达的 late name 只更新 state，不立即累计，因为该分支没有
+  对客户端发 event。late name 必须在 clean EOF 构造
+  `ResponseOutputItemDone`、且该首次携带 name 的 event 入 pending 前累计并检查。
+  因此 late-name state update 后发生 provider error/idle timeout 时，未发布 name
+  不影响 guardrail、阈值或 buffer limit，仍按 B-009 保留 provider error。arguments
+  仅在 `tool_states.get_mut(idx)` 成功且 route 实际 `push_str` 并发布
+  `ResponseFunctionCallArgumentsDelta` 时交给共享 arguments raw + incremental
+  JSON-semantic accumulator。call ID/state 创建前到达而被 route
+  丢弃的 arguments 不进入任一 representation，重复 raw name 也不累计。所有已接受文本在派生
+  `.delta` event 前只累计一次；派生的 `.done` events、output items、
+  `response.completed` snapshot 只缓冲，不再扫描，唯一例外是上述此前从未发布的
+  late name 在 `ResponseOutputItemDone` 前首次累计。
 
 ### 3. 三条 route 的状态机
 
@@ -74,6 +190,10 @@ usage、finish reason、IDs 与 transport markers 只缓冲、不进入扫描文
 - `terminal`：最后一个窗口通过后才发送原成功 event/`[DONE]` 并调用 success callback；guardrail
   失败发送 endpoint-compatible error + 一个 `[DONE]`，不发送
   `response.completed`。
+
+若 provider error 或 idle timeout 发生在 pending 窗口尚未审核时，先丢弃全部
+pending events，再发送既有 provider error；不得把 pending 模型文本写入错误、
+日志或 callback。此前已通过并释放的窗口不重发、不撤回。
 
 为避免 `responses_stream.rs` 超过 800 行硬上限，缓冲、扫描、错误分类和测试 helper
 必须放入新模块，route 文件只保留状态机接线。
@@ -100,10 +220,12 @@ usage、finish reason、IDs 与 transport markers 只缓冲、不进入扫描文
 | --- | --- |
 | `src/core/guardrails/config.rs` | 定义、默认化并验证 `stream_output_check_chars`。 |
 | `src/config/models/guardrails.rs` | 将新字段接入 deny-unknown gateway wire、merge/default 与配置测试。 |
+| `config/gateway.yaml.example` | 记录默认 256、合法范围、首窗口延迟和已释放前缀不可撤回风险。 |
+| `CHANGELOG.md` | 记录 guarded streaming 的 windowed cumulative 行为与错误终止契约。 |
 | `src/server/guardrails.rs` | 增加 crate-private `check_output_text`，复用既有 `enforce`，并测试 pass/block/error。 |
 | `src/server/routes/ai/mod.rs` | 声明共享 `stream_output_guardrail` 模块。 |
-| `src/server/routes/ai/stream_output_guardrail.rs` | 新增 bounded pending window、cumulative surface accumulator、typed errors 与 replay API。 |
-| `src/server/routes/ai/stream_output_guardrail_tests.rs` | 覆盖边界、UTF-8、上限、disabled fast path、drop/replay 顺序。 |
+| `src/server/routes/ai/stream_output_guardrail.rs` | 新增 bounded pending window、独立 keyed cumulative surface、incremental JSON arguments accumulator、typed errors 与 replay API。 |
+| `src/server/routes/ai/stream_output_guardrail_tests.rs` | 覆盖 surface 隔离、JSON escape/非法/未完成状态、UTF-8、上限、disabled fast path、drop/replay 顺序。 |
 | `src/server/routes/ai/chat_streaming.rs` | 接入 Chat 状态机、完整检查、取消与 terminal lifecycle。 |
 | `src/server/routes/ai/chat_sse.rs` | 提供 guardrail error envelope，保证错误后恰好一个 `[DONE]`。 |
 | `src/server/routes/ai/completions_streaming.rs` | 接入 Completion 状态机，并把 client-visible echo 纳入扫描。 |
@@ -123,7 +245,7 @@ usage、finish reason、IDs 与 transport markers 只缓冲、不进入扫描文
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001, B-002 | 三条 streaming route + shared buffer | 三端点多窗口 safe/block 集成测试；断言 guardrail 在阈值/EOF 调用且输入为累计文本。 |
-| B-003, B-013 | surface accumulator | split-pattern、UTF-8、触发 event 超过阈值、reasoning、function args fixtures。 |
+| B-003, B-013 | surface accumulator | 每个 keyed surface 独立调用 guardrail 的 same-surface hit/cross-surface no-hit、split-pattern、UTF-8、触发 event 超过阈值、thinking/reasoning alias 去重、audio transcript、Chat/Completion chosen sequence 等于 content、chosen tokens 跨 token 拼成敏感词、`content/chosen=sec` 后 chosen-only `ret` 的 epoch-local alias 物化、`content/chosen=sec`→关联 content/text-only `x`→chosen `ret` 的 position-epoch reset 且不得误拼、thinking/audio/tool/refusal/metadata 插入时 epoch 不 reset、不同位置同值 token、top candidate rank 在相邻 position/event 的连续 `sec`/`ret`、可变 top 列表中 rank 缺失后 reset 且不得误拼、关联 content/text 无 logprob 时同时 reset chosen epoch 与 top runs，而 interleaved thinking/audio/tool/refusal 与 metadata 不 reset、top 首位置等于 chosen 后分叉仍保留前缀、Completion logprobs raw refusal 与结构化 refusal token-array 的 `sec`/`ret` 连续扫描、metadata/`None` no-op、普通 refusal reset 及 wire 值不变、Chat parallel tool index 连续/隔离、Chat/Responses arguments raw + incremental JSON-semantic nested/escape/surrogate/invalid/incomplete/8 MiB cases、Responses initial/late/repeated name、late-name state update 后 provider error 不扫描、late name 在 output-item done 首次发布前检查、accepted arguments 与 pre-ID dropped arguments state-acceptance，以及 done/snapshot 不重复 fixtures。 |
 | B-004, B-007 | buffer + SSE helpers | 断言 blocked body 不含任一模型片段，只含 error 与一个 `[DONE]`。 |
 | B-005 | config + buffer | 0/4097 配置启动失败，1/4096 成功，pending/cumulative 超限 fail-closed。 |
 | B-006, B-012 | replay | safe fixture 逐 event byte/order 对比，usage/empty/done 不丢失。 |
@@ -157,23 +279,27 @@ block/error/overflow 丢弃当前 pending、取消上游并发送安全 terminal
 
 ## 风险
 
-- Security: buffer overflow、错误消息泄露、跨 surface 拼接、已释放前缀不可撤回和
+- Security: buffer overflow、错误消息泄露、跨 surface 拼接、JSON escape 语义绕过、
+  非法/未完成 arguments、chosen position epoch 或 top rank 缺口误拼、structured refusal 漏扫、已释放前缀不可撤回和
   `fail_open` 配置可能形成风险；当前 pending 必须 bounded、稳定分隔、默认
   fail-closed 且不记录被拒正文。
-- Compatibility: guarded streaming 的首内容延迟变为首窗口生成+检查延迟；错误仍
+- Compatibility: guarded streaming 的首内容延迟变为首窗口生成+检查延迟；字面值
+  恰好符合 token-array JSON schema 的 refusal string 会接受额外的保守 semantic 扫描；
+  wire 值不改变。错误仍
   保留 endpoint envelope 与 `[DONE]`，Responses 失败时不发送成功
   `response.completed`。
 - Performance: active 请求额外持有最多 8 MiB pending SSE bytes 和最多 8 MiB
-  cumulative scan text，并对随输出增长的累计文本执行多次检查；disabled fast path
-  不得复制整个流。
+  cumulative surface/parser state，并在每个窗口按稳定顺序逐 surface 执行累计检查；
+  surface 数量会增加 guardrail 调用次数，disabled fast path 不得复制整个流或建立
+  parser/key state。
 - Maintenance: 三条 route 的 lifecycle 容易漂移；共享 buffer/error 类型和映射测试
   必须作为单一契约。
 
 ## 测试计划
 
-- [ ] Unit tests: `stream_output_check_chars` validation、pending/cumulative accounting、surface ordering、UTF-8、error envelope。
+- [ ] Unit tests: `stream_output_check_chars` validation、pending/cumulative accounting、keyed surface 独立检查、incremental JSON arguments 的 nested/escape/surrogate/invalid/incomplete 状态、所有文本 surface、reasoning/logprobs 语义去重、UTF-8、error envelope。
 - [ ] Integration tests: Chat/Completion/Responses 单窗口/多窗口 safe、后续窗口 block、跨阈值完整 event、error、overflow、disabled。
-- [ ] Lifecycle tests: usage、预算、provider lease、callback、idle timeout、三阶段断连。
+- [ ] Lifecycle tests: usage、预算、provider lease、callback、pending 后 provider error/idle timeout 不泄露、三阶段断连。
 - [ ] Deterministic checks: `cargo fmt --check`; `cargo check`; `cargo clippy --all-targets -- -D warnings`; focused guardrail/stream tests; `cargo test`。
 - [ ] Manual verification: 使用慢速 SSE fixture 比较 guardrail on/off 的首内容时间与最终 event 顺序；不得依赖真实 provider 或密钥。
 
