@@ -28,12 +28,18 @@ enum GeminiStreamUsage {
 /// Gemini SSE Transformer
 ///
 /// Handles Gemini's streaming format with candidates/parts structure.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GeminiTransformer {
     model: String,
     chunk_id: String,
     usage_policy: Option<GeminiUsagePolicy>,
     stream_usage: Arc<Mutex<GeminiStreamUsage>>,
+}
+
+impl Clone for GeminiTransformer {
+    fn clone(&self) -> Self {
+        Self::with_usage_policy(self.model.clone(), self.usage_policy)
+    }
 }
 
 impl GeminiTransformer {
@@ -462,6 +468,49 @@ mod tests {
                 }));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn cloned_transformers_isolate_interleaved_stream_usage() {
+        let transformer = GeminiTransformer::new("gemini-test");
+        let valid = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"a\"}]}}],",
+            "\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2,",
+            "\"totalTokenCount\":3}}\n\n"
+        );
+        let invalid = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"b\"}]}}],",
+            "\"usageMetadata\":{\"promptTokenCount\":4,\"totalTokenCount\":4}}\n\n"
+        );
+        let mut valid_stream = UnifiedSSEStream::new(
+            futures::stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(valid))]),
+            transformer.clone(),
+        );
+        let mut invalid_stream = UnifiedSSEStream::new(
+            futures::stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(invalid))]),
+            transformer.clone(),
+        );
+
+        let valid_content = valid_stream.next().await.unwrap().unwrap();
+        let invalid_content = invalid_stream.next().await.unwrap().unwrap();
+        assert_eq!(valid_content.choices[0].delta.content.as_deref(), Some("a"));
+        assert_eq!(
+            invalid_content.choices[0].delta.content.as_deref(),
+            Some("b")
+        );
+
+        let invalid_final = invalid_stream.next().await.unwrap().unwrap();
+        assert!(invalid_final.choices.is_empty());
+        assert!(invalid_final.usage.is_none());
+        assert!(invalid_stream.next().await.is_none());
+
+        let valid_final = valid_stream.next().await.unwrap().unwrap();
+        assert!(valid_final.choices.is_empty());
+        assert_eq!(
+            valid_final.usage.as_ref().map(|usage| usage.total_tokens),
+            Some(3)
+        );
+        assert!(valid_stream.next().await.is_none());
     }
 
     #[tokio::test]

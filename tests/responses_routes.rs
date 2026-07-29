@@ -10,6 +10,7 @@ mod tests {
     use futures::stream;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
+    use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::integrations::{
         CallbackRuntime, Integration, IntegrationManager, IntegrationResult, LlmEndEvent,
         LlmErrorEvent, LlmStartEvent,
@@ -32,7 +33,7 @@ mod tests {
     #[derive(Clone)]
     enum RecordedCallback {
         Start,
-        End,
+        End(LlmEndEvent),
         Error(LlmErrorEvent),
     }
 
@@ -56,8 +57,11 @@ mod tests {
             Ok(())
         }
 
-        async fn on_llm_end(&self, _event: &LlmEndEvent) -> IntegrationResult<()> {
-            self.events.lock().unwrap().push(RecordedCallback::End);
+        async fn on_llm_end(&self, event: &LlmEndEvent) -> IntegrationResult<()> {
+            self.events
+                .lock()
+                .unwrap()
+                .push(RecordedCallback::End(event.clone()));
             Ok(())
         }
 
@@ -401,6 +405,133 @@ mod tests {
         assert_eq!(fetched["output"][0]["content"][0]["text"], "Hello");
 
         mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gemini_invalid_terminal_usage_is_not_serialized_or_settled_as_valid() {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("Gemini mock listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("Gemini mock should have local address");
+        let upstream = HttpServer::new(|| {
+            App::new().default_service(web::post().to(|| async {
+                let valid = concat!(
+                    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}],",
+                    "\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2,",
+                    "\"totalTokenCount\":3}}\n\n"
+                );
+                let invalid = concat!(
+                    "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":4,",
+                    "\"totalTokenCount\":4}}\n\n"
+                );
+                HttpResponse::Ok()
+                    .insert_header(("content-type", "text/event-stream"))
+                    .streaming(stream::iter([
+                        Ok::<Bytes, actix_web::Error>(Bytes::from_static(valid.as_bytes())),
+                        Ok::<Bytes, actix_web::Error>(Bytes::from_static(invalid.as_bytes())),
+                        Ok::<Bytes, actix_web::Error>(Bytes::from_static(b"data: [DONE]\n\n")),
+                    ]))
+            }))
+        })
+        .listen(listener)
+        .expect("Gemini mock should listen")
+        .run();
+        let upstream_handle = upstream.handle();
+        let upstream_task = tokio::spawn(upstream);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.providers = vec![mock_provider_config(
+            "gemini",
+            "gemini",
+            "test-key-12345678901234567890",
+            &format!("http://{address}"),
+            vec!["gemini-1.5-flash".to_string()],
+        )];
+        let gateway = GatewayHttpServer::new(&config)
+            .await
+            .expect("gateway should initialize with Gemini");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let error_notify = Arc::new(tokio::sync::Notify::new());
+        let runtime = callback_runtime(Arc::clone(&events), error_notify).await;
+        let state = gateway.state().clone().with_callbacks(runtime.dispatcher());
+        state.budget_limits.providers.set_provider_limit(
+            "gemini",
+            ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+        state.budget_limits.models.set_model_limit(
+            "gemini-1.5-flash",
+            ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+        let budget_limits = state.budget_limits.clone();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let request = with_user!(
+            test::TestRequest::post()
+                .uri("/v1/responses")
+                .set_json(json!({
+                    "model": "gemini-1.5-flash",
+                    "input": "hello",
+                    "stream": true
+                }))
+                .to_request(),
+            "gemini-owner"
+        );
+        let response = test::call_service(&app, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(test::read_body(response).await.to_vec())
+            .expect("responses stream should be utf8");
+        assert!(body.contains("\"type\":\"response.completed\""));
+        assert!(body.contains("\"text\":\"ok\""));
+        assert!(!body.contains("__litellm"));
+        assert!(!body.contains("\"input_tokens\":0"));
+
+        let completed = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|payload| serde_json::from_str::<Value>(payload).ok())
+            .find(|event| event["type"] == "response.completed")
+            .expect("responses stream should include a completed event");
+        assert!(completed["response"]["usage"].is_null());
+
+        runtime
+            .shutdown()
+            .await
+            .expect("callback runtime should drain");
+        {
+            let events = events
+                .lock()
+                .expect("callback events should not be poisoned");
+            let RecordedCallback::End(end) = events.last().expect("terminal callback should exist")
+            else {
+                panic!("responses stream should end successfully");
+            };
+            assert_eq!(end.input_tokens, None);
+            assert_eq!(end.output_tokens, None);
+            assert_eq!(end.cost_usd, None);
+        }
+        assert!(
+            budget_limits
+                .providers
+                .get_provider_usage("gemini")
+                .expect("no-usage reservation should settle")
+                .current_spend
+                > 0.0
+        );
+
+        upstream_handle.stop(true).await;
+        upstream_task
+            .await
+            .expect("Gemini mock task should join")
+            .expect("Gemini mock should stop cleanly");
     }
 
     #[tokio::test]

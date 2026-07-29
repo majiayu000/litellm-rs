@@ -97,6 +97,8 @@ Direct Gemini 现有 `thinking_usage` 只是 user-visible breakdown，当前
 
 标准 Gemini/Vertex transformer 在私有 accumulator 中维护
 Missing/Valid/Invalid，直接调用非 stream transformer/parser 的兼容行为不变。
+`Clone` 只复制 model 与 endpoint policy，并为新 stream 创建新的 chunk id 和
+accumulator；不得克隆或共享原 stream 的 `Arc<Mutex<GeminiStreamUsage>>`。
 stream 模式剥离所有内容 chunk 的 usage：Missing 保留累计 Valid，Invalid 清除，
 后续 Valid 恢复；仅在 `[DONE]`、EOF 或 read error 终态仍为 Valid 时生成一个合法
 usage-only `ChatChunk`。Invalid 终态可生成一个无 choices、无 usage、无 fingerprint
@@ -149,16 +151,15 @@ upstream read error，断言 provider 与 key reservation 各以自身金额结�
 | `src/core/providers/vertex_ai/client.rs` | trait response parser 的 `usageMetadata` 委托同一共享 helper，移除 `unwrap_or(0) as u32`/普通加法；覆盖扩展计数、malformed/total 与 exact token 输出 | B-001–B-009, B-011 |
 | `src/core/providers/vertex_ai/client_tests.rs` | 覆盖 trait response parser 的扩展计数、malformed、all-zero、total mismatch 与范围 fixture | B-001–B-009, B-011 |
 | `src/core/providers/gemini/client.rs` | direct Gemini 非流式 `usageMetadata` 委托共享严格 helper，但使用 Gemini-specific prompt+candidates+thoughts reported-total policy；移除默认零/直接缩窄与 separately-priced reasoning details，并在 inline tests 覆盖扩展计数、malformed/total、范围与 exact token 输出 | B-001–B-009, B-011 |
-| `src/core/providers/base/sse/gemini.rs` | 标准 Gemini/Vertex stream 的 usage-only 与 candidate 两个 `usageMetadata` 分支都委托 endpoint-specific strict normalizer；私有 accumulator 剥离中间 usage，仅终态 Valid 生成合法 usage-only chunk，并覆盖状态时序、marker/伪零不泄漏及 terminal flush | B-001–B-009, B-011–B-013 |
+| `src/core/providers/base/sse/gemini.rs` | 标准 Gemini/Vertex stream 的 usage-only 与 candidate 两个 `usageMetadata` 分支都委托 endpoint-specific strict normalizer；每个 clone 创建独立 accumulator，剥离中间 usage，仅终态 Valid 生成合法 usage-only chunk，并覆盖交错 clone 隔离、状态时序、marker/伪零不泄漏及 terminal flush | B-001–B-009, B-011–B-013 |
 | `src/core/providers/base/sse.rs` | 为 transformer 增加幂等 terminal hook，EOF/read-error 前 flush residual buffer，再生成公开安全的终态 chunk；保持直接 parser 兼容 | B-010, B-012–B-013 |
 | `src/core/providers/gemini/provider.rs` | direct 与 Vertex 配置的公开 provider stream 回归证明 Valid→Invalid 最终无 usage、无 marker/伪零 usage | B-012–B-013 |
 | `src/core/providers/gemini/streaming.rs` | 真实 response/provider stream fixture 覆盖 endpoint policy、公开 chunk 序列化和缺失 policy fail-closed | B-001–B-009, B-011–B-013 |
 | `src/server/routes/ai/chat_streaming.rs` | 只累计 provider 终态合法 usage；Invalid clean terminal 保持 `None` 并进入 common no-usage settlement | B-010, B-012–B-013 |
-| `src/server/routes/ai/chat_tests.rs` | chat 最终序列化证明 Invalid 后无 marker/伪零 usage 且 settlement usage 为 `None` | B-012–B-013 |
 | `src/server/routes/ai/completions_streaming.rs` | 只累计 provider 终态合法 usage，Invalid 后不复用旧 Valid | B-010, B-012–B-013 |
-| `tests/integration/completions_route_tests/tests/streaming_and_budget_tests.rs` | Gemini completions route 证明最终 SSE 无 marker/伪零 usage、callback usage 为 `None` 且 reservation 结算 | B-010, B-012–B-013 |
+| `tests/integration/completions_route_tests/tests/streaming_and_budget_tests.rs` | 真实 Gemini chat 与 completions routes 证明最终 SSE 无 marker/伪零 usage、callback usage 为 `None` 且 reservation 结算 | B-010, B-012–B-013 |
 | `src/server/routes/ai/responses_stream.rs` | 只用终态合法 usage 构造 Responses completion；Invalid clean terminal 触发 no-usage settlement | B-010, B-012–B-013 |
-| `src/server/routes/ai/responses_stream_tests.rs` | Responses completed event 的 Invalid 最终 usage 为 `null` 且无内部 marker | B-012–B-013 |
+| `tests/responses_routes.rs` | 真实 Gemini Responses route 证明 completed event 的 Invalid usage 为 `null`、无内部 marker/伪零 usage、callback usage 为 `None` 且 reservation 结算 | B-010, B-012–B-013 |
 | `src/server/routes/ai/gemini/spend.rs` | native Gemini SDK unary/SSE `gemini_usage_metadata` 委托同一 strict direct-Gemini policy，保留 cached pricing、清空 reasoning cost；no-usage settlement 委托 common helper，并扩充 inline parser/四组合/不同金额测试 | B-001–B-012 |
 | `src/server/routes/ai/gemini.rs` | native SSE 所有终止分支向 settlement 传真实 `should_record_spend && saw_upstream_output`，修正 output 后 upstream read error 硬编码 `false` 的 reservation 释放旁路 | B-010, B-012 |
 | `tests/gemini_sdk_routes/runtime_provider_tests.rs` | 增加 native SSE output-then-read-error 与 error-before-output route fixture，断言前者 self-amount settlement/exactly-once、后者不伪造已输出状态且均无 reservation 泄漏 | B-010, B-012 |
@@ -189,7 +190,7 @@ shared parser 按 manifest 在范围内。
 | B-010 | common + native Gemini SDK no-usage tests | 两条入口都验证 provider+key（含不同金额）、provider-only、key-only、neither 的 spend、API-key usage 与各 reservation exactly-once/self-amount settlement；route fixture 覆盖 output 后 read error |
 | B-011 | provider happy-path + Google pricing fixtures | 非流式、standard chat SSE、native SDK 的扩展字段零/缺失保持既有值和费用；非零时 effective input/output 各计一次，cached 保持 cache-read price，thinking breakdown 保留且 reasoning cost 为零 |
 | B-012 | provider → spend handoff | malformed provider/stream fixture 返回 `None`，下游 no-usage 与 native route output-then-error 测试证明不产生 `$0` 成功 spend或 reservation 泄漏 |
-| B-013 | standard Gemini transformer、shared SSE wrapper、公开 provider stream 与三个 routes | direct/Vertex Valid→Invalid、Valid→Missing、Valid→Invalid→Valid、EOF truncated、read-error residual fixture；所有公开序列化无 marker/伪零 usage，Invalid 最终 settlement usage 为 `None` |
+| B-013 | standard Gemini transformer、shared SSE wrapper、公开 provider stream 与三个 routes | direct/Vertex Valid→Invalid、Valid→Missing、Valid→Invalid→Valid、两个 clone 交错终止隔离、EOF truncated、read-error residual fixture；三个真实 route 测试证明所有公开序列化无 marker/伪零 usage，Invalid 最终 callback/settlement usage 为 `None` |
 
 ## 数据流
 

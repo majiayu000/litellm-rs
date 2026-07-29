@@ -98,7 +98,9 @@ complexity: high
     保存状态，剥离内容 chunk 上的 usage，仅在终态仍为 Valid 时发送一个合法
     usage-only chunk；终态 Invalid/Missing 不发送 usage。chat、completions 与
     responses 三条标准路由只能收到无内部标记、无伪零 usage 的公开 `ChatChunk`，
-    并把 Invalid 的 `None` 交给既有 no-usage reservation settlement。
+    并把 Invalid 的 `None` 交给既有 no-usage reservation settlement。transformer
+    的克隆必须为独立 stream 创建独立 accumulator，任一克隆终止不得读取、清除或
+    Finalize 另一克隆的 usage。
 
 ## 验收标准
 
@@ -125,7 +127,8 @@ complexity: high
 - [ ] standard Gemini/Vertex stream 覆盖 Valid→Invalid、Valid→Missing、
       Valid→Invalid→Valid、EOF truncated 与 read-error residual buffer；三个标准
       路由最终序列化、direct provider consumer 均永不出现内部 marker/伪零 usage，
-      Invalid 后继续使用 no-usage reservation settlement。
+      Invalid 后继续使用 no-usage reservation settlement；两个 transformer 克隆
+      交错消费和终止时 usage/finalization 状态彼此隔离。
 - [ ] 未声明字段名和嵌套形状不会被猜测为 usage。
 - [ ] 不含 Vertex/direct Gemini 扩展计数的合法非零 usage 兼容性回归测试通过；
       扩展计数非零的 token/cost 修正，以及两条 endpoint 各自的 reported-total
