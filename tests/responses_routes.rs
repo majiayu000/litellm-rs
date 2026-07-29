@@ -10,6 +10,7 @@ mod tests {
     use futures::stream;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
+    #[cfg(feature = "providers-extended")]
     use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::integrations::{
         CallbackRuntime, Integration, IntegrationManager, IntegrationResult, LlmEndEvent,
@@ -33,6 +34,7 @@ mod tests {
     #[derive(Clone)]
     enum RecordedCallback {
         Start,
+        #[allow(dead_code)]
         End(LlmEndEvent),
         Error(LlmErrorEvent),
     }
@@ -408,6 +410,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "providers-extended")]
     async fn gemini_invalid_terminal_usage_is_not_serialized_or_settled_as_valid() {
         let listener =
             std::net::TcpListener::bind("127.0.0.1:0").expect("Gemini mock listener should bind");

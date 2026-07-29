@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[cfg(feature = "providers-extended")]
 async fn gemini_invalid_terminal_usage_is_not_serialized_or_settled_as_valid() {
     let listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("Gemini mock listener should bind");
@@ -119,6 +120,7 @@ async fn gemini_invalid_terminal_usage_is_not_serialized_or_settled_as_valid() {
 }
 
 #[tokio::test]
+#[cfg(feature = "providers-extended")]
 async fn gemini_invalid_terminal_usage_is_not_serialized_by_chat_or_settled_as_valid() {
     let listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("Gemini mock listener should bind");
