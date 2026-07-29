@@ -8,6 +8,7 @@ GH-1108 / #1108
 - `spec_approval: pending_maintainer`
 - `draft_source: 2026-07-26 current conversation ("implxauto解决所有的issue和prs")`
 - `required_approval: maintainer approval bound to the final spec head`
+- Validation contract: [`validation.md`](validation.md)
 
 ## 用户问题
 
@@ -147,10 +148,19 @@ availability；其他证据只证明 Gemini Developer API。
    相等，selection failure 也不得修改原请求。unknown/non-bool wire shape 在 API
    boundary fail closed；对所选 GH1108
    Gemini 模型，合法 metadata 与非 streaming 请求并存或内部 canonical metadata
-   不一致时也必须在网络前 fail closed。Responses unary/stream 的 shared adapter 必须
-   无损捕获 `top_k`：omitted/null 为 absent，non-null 保留到 canonical contract 后拒绝；
-   `max_output_tokens` 只能 canonicalize 为 `max_tokens`，不得同时生成被本模型排除的
-   `max_completion_tokens`，并必须最终映射到 `generationConfig.maxOutputTokens`。
+   不一致时也必须在网络前 fail closed。Responses sync/stream/background 必须采用 two-stage
+   contract：API adapter 以 typed、trusted、non-serialized route-local provenance
+   区分 raw `top_k` 的 omitted/null/non-null，并记录 `max_output_tokens` 来源；该 sidecar
+   不得写入 `ChatCompletionRequest`、`CoreChatRequest`、`RequestContext.metadata`、
+   `extra_body` 或任何 upstream serialization。pre-selection canonical adapter 必须保持
+   当前兼容行为，包括 `max_output_tokens` 同时填入 `max_tokens` 与
+   `max_completion_tokens`。等 alias/fallback 最终选定 Gemini Developer 的两个 exact
+   GH1108 ID 后，才消费 provenance：non-null `top_k` 在预算/network 前拒绝，omitted/null
+   视为 absent，并把有 Responses 来源的 token limit 单次归一化为
+   `max_tokens=Some(value), max_completion_tokens=None`，最终映射到
+   `generationConfig.maxOutputTokens`。最终选中 OpenAI、OpenAI-like、其他 provider 或
+   其他 Gemini model 时丢弃 provenance，canonical request 的字段和值以及 provider-bound
+   serialization 必须与当前行为相同；任何路径都不得向 upstream 泄漏 `top_k`。
    unary response cache 不得成为绕过点：当前 cache canonical policy 会删除
    `stream_options`，因此任何 non-stream request 只要携带该 metadata，就必须在 key lookup/
    store 前安全 bypass cache，再由最终 selected-model hook 判定；cache 中已有合法同 key
@@ -269,7 +279,11 @@ availability；其他证据只证明 Gemini Developer API。
     新的 failed record；发生持久化失败后不得发起后续网络调用。
 15. **B-015** 除明确列出的新模型、evidence disposition 和新请求契约外，已有仍受支持
     模型的 exact ID、能力、合法参数、认证、endpoint 与响应转换保持兼容；不因刷新
-    意外删除或改变无关模型。
+    意外删除或改变无关模型。特别是 Responses adapter 的 provider-neutral canonical
+    request 不得全局改写：最终选中 OpenAI/OpenAI-like、其他 provider 或其他 Gemini
+    model 时，`max_output_tokens` 产生的既有 `max_tokens` /
+    `max_completion_tokens` 字段和值以及 serialization 均保持兼容，route-local
+    provenance 只允许两个 exact GH1108 Gemini consumer 使用。
 16. **B-016** catalog refresh 必须保留 evidence reviewed-at 与官方 source URL；官方
     页面互相冲突、来源不可访问或模型只存在于非官方二手资料时按 B-003 fail closed，
     不能以 live smoke 单次成功替代 lifecycle/source 记录。
@@ -326,13 +340,17 @@ availability；其他证据只证明 Gemini Developer API。
       `include_usage=true` 并到达 streaming transport、从不进入 upstream body；
       OpenAI/OpenRouter 在 post-selection hook 前后值相等、selection failure 不修改请求，
       所选 GH1108 Gemini 模型的非法/不一致 metadata 与 non-stream 组合均 pre-network
-      拒绝。Responses unary/stream 对 `top_k` non-null 无损拒绝、null/omitted absent；
-      `max_output_tokens` 只产生 `max_tokens` 且最终命中 maxOutputTokens，
-      `max_completion_tokens=None`。cache regression 必须先填充合法同 key response，再证明
+      拒绝。Responses sync/stream/background adapter 保持现有 canonical 字段/serialization，并以
+      non-serialized route-local provenance 捕获 `top_k` presence/value 与
+      `max_output_tokens` 来源；只有 alias/fallback 最终选中两个 exact GH1108 Gemini ID
+      后才拒绝 non-null `top_k`、把 null/omitted 视为 absent，并把 token limit 单次归一化
+      为 `max_tokens=Some(value), max_completion_tokens=None` 后命中 maxOutputTokens。
+      OpenAI/OpenAI-like、其他 provider 与其他 Gemini 的 canonical 字段和值保持不变，
+      provenance 不进入 extra_body 或 upstream。cache regression 必须先填充合法同 key response，再证明
       non-stream + stream_options 在 lookup/store 前 bypass、cache return=0、network=0 和
       stable invalid-request；合法无 metadata 请求仍可命中 cache。
 - [ ] 公开请求入口矩阵闭合覆盖：OpenAI chat unary/stream、legacy completions
-      unary/stream、Responses unary/stream 都在最终 selected Gemini identity 上进入
+      unary/stream、Responses sync/stream/background 都在最终 selected Gemini identity 上进入
       shared chat preflight；`/v1`、`/v1beta`、`/gemini/v1`、
       `/gemini/v1beta` 的 native unary/stream 共 8 个 endpoint shape 都进入 shared native
       preflight；Batch 只代理 OpenAI/OpenAI-compatible batch provider lifecycle，不能路由
@@ -425,10 +443,14 @@ availability；其他证据只证明 Gemini Developer API。
   non-stream + stream_options 必须拒绝。即使同 messages/model 的合法请求已经填充 cache，
   metadata-bearing non-stream request 也必须在生成/读取 key 前 safe bypass，不能返回旧
   response；key collision fixture 不得用改 prompt 或清 cache 伪造 miss。
-- Responses `top_k:null`/omitted 均按 absent，non-null 必须穿过 unary/stream shared
-  adapter 到 selected-model contract 后 network=0 拒绝；合法 `max_output_tokens` 的
-  canonical request 必须是 `max_tokens=Some(value), max_completion_tokens=None`，最终 body
-  只出现 `generationConfig.maxOutputTokens`。
+- Responses `top_k:null`/omitted/non-null 与 `max_output_tokens` 来源由 typed、
+  non-serialized route-local provenance 捕获；sidecar 不进入 canonical request、
+  `RequestContext.metadata`、extra_body 或 upstream。pre-selection adapter 保持当前
+  `max_tokens` 与 `max_completion_tokens` 双字段行为；只有最终 selected exact GH1108
+  Gemini consumer 才将 non-null `top_k` network=0 拒绝，并把 token limit 单次归一化为
+  `max_tokens=Some(value), max_completion_tokens=None`。OpenAI/OpenAI-like alias/fallback、
+  其他 provider 与其他 Gemini 的字段和值及 serialization 必须保持兼容，且任何 upstream
+  body 都不得出现 `top_k`。
 - capability router 以 deployment 的 case-sensitive final exact model 查询 neutral
   registry；两个新 ID 的 ToolCalling/FunctionCalling eligibility 为 false，但没有 exact
   record 的既有 Gemini model 仍使用原 provider-wide能力，不能通过全局删除 ToolCalling
