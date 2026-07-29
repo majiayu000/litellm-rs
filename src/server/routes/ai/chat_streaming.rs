@@ -10,7 +10,6 @@ use tracing::{error, info, warn};
 
 use crate::core::models::openai::ChatCompletionRequest;
 use crate::core::providers::ProviderError;
-use crate::core::providers::base::sse::observe_stream_usage;
 use crate::core::streaming::types::Event;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
 use crate::server::state::AppState;
@@ -241,9 +240,11 @@ pub(super) async fn handle_streaming_chat_completion(
                     };
 
                     let bytes = match chunk_result {
-                        Ok(mut chunk) => {
+                        Ok(chunk) => {
                             saw_upstream_output = true;
-                            observe_stream_usage(&mut final_usage, &mut chunk);
+                            if let Some(usage) = &chunk.usage {
+                                final_usage = Some(usage.clone());
+                            }
                             tokens_used = final_usage
                                 .as_ref()
                                 .map(|usage| u64::from(usage.total_tokens))

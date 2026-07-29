@@ -139,6 +139,62 @@ mod tests {
         )
     }
 
+    async fn response_stream_chunks(policy: GeminiUsagePolicy, events: &[&str]) -> Vec<ChatChunk> {
+        let body = events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>();
+        let mut response = response_at("/stream", &body).await;
+        response.extensions_mut().insert(policy);
+        GeminiStream::from_response(response, "gemini-test".to_string())
+            .map(|chunk| chunk.unwrap())
+            .collect()
+            .await
+    }
+
+    #[tokio::test]
+    async fn direct_and_vertex_public_streams_publish_only_final_valid_usage() {
+        let valid = r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}"#;
+        let invalid =
+            r#"{"candidates":[],"usageMetadata":{"promptTokenCount":4,"totalTokenCount":4}}"#;
+        let missing = r#"{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}"#;
+        let recovered = r#"{"candidates":[],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6}}"#;
+        for policy in [GeminiUsagePolicy::Direct, GeminiUsagePolicy::Vertex] {
+            let invalid_final = response_stream_chunks(policy, &[valid, invalid]).await;
+            assert_eq!(invalid_final.len(), 1);
+            assert!(invalid_final[0].usage.is_none());
+
+            let missing_final = response_stream_chunks(policy, &[valid, missing]).await;
+            assert_eq!(missing_final.len(), 2);
+            assert!(missing_final[0].usage.is_none());
+            assert_eq!(
+                missing_final[1]
+                    .usage
+                    .as_ref()
+                    .map(|usage| usage.total_tokens),
+                Some(3)
+            );
+
+            let recovered_final = response_stream_chunks(policy, &[invalid, recovered]).await;
+            assert_eq!(
+                recovered_final[0]
+                    .usage
+                    .as_ref()
+                    .map(|usage| usage.total_tokens),
+                Some(6)
+            );
+            for chunk in invalid_final
+                .iter()
+                .chain(missing_final.iter())
+                .chain(recovered_final.iter())
+            {
+                let json = serde_json::to_string(chunk).unwrap();
+                assert!(!json.contains("__litellm"));
+                assert!(!json.contains("\"prompt_tokens\":0"));
+            }
+        }
+    }
+
     #[tokio::test]
     async fn client_stream_response_carries_configured_usage_policy() {
         for use_vertex_ai in [false, true] {
@@ -213,6 +269,14 @@ mod tests {
         let chunk = stream.next().await.unwrap().unwrap();
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("ok"));
         assert!(chunk.usage.is_none());
+        let terminal = stream.next().await.unwrap().unwrap();
+        assert!(terminal.choices.is_empty());
+        assert!(terminal.usage.is_none());
+        assert!(
+            !serde_json::to_string(&terminal)
+                .unwrap()
+                .contains("__litellm")
+        );
         assert!(stream.next().await.is_none());
     }
 

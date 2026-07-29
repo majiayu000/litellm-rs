@@ -19,34 +19,7 @@ pub use gemini::GeminiTransformer;
 pub use openai::OpenAICompatibleTransformer;
 
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::responses::{ChatChunk, FinishReason, Usage};
-
-const INVALID_STREAM_USAGE_MARKER: &str = "__litellm_invalid_stream_usage";
-
-/// Mark an internal provider chunk for route-level usage invalidation.
-pub(super) fn mark_stream_usage_invalid(mut chunk: ChatChunk) -> ChatChunk {
-    chunk.usage = Some(Usage::default());
-    chunk.system_fingerprint = Some(INVALID_STREAM_USAGE_MARKER.to_string());
-    chunk
-}
-
-pub(crate) fn observe_stream_usage(retained: &mut Option<Usage>, chunk: &mut ChatChunk) -> bool {
-    let invalid = chunk.system_fingerprint.as_deref() == Some(INVALID_STREAM_USAGE_MARKER)
-        && chunk.usage.as_ref().is_some_and(|usage| {
-            usage.prompt_tokens == 0 && usage.completion_tokens == 0 && usage.total_tokens == 0
-        });
-    if invalid {
-        chunk.system_fingerprint = None;
-        chunk.usage = None;
-        *retained = None;
-        true
-    } else if let Some(usage) = &chunk.usage {
-        *retained = Some(usage.clone());
-        false
-    } else {
-        false
-    }
-}
+use crate::core::types::responses::{ChatChunk, FinishReason};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SSEEventType {
@@ -125,6 +98,10 @@ pub trait SSETransformer: Send + Sync {
 
     fn transform_stream_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
         self.transform_chunk(data)
+    }
+
+    fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
+        Ok(None)
     }
 
     fn parse_finish_reason(&self, reason: &str) -> Option<FinishReason> {
@@ -240,7 +217,11 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         }
 
         if self.transformer.is_end_marker(&event.data) {
-            return Ok(None);
+            return if stream_mode {
+                self.transformer.finish_stream()
+            } else {
+                Ok(None)
+            };
         }
 
         if stream_mode {
@@ -258,6 +239,9 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         }
         if let Some(event) = self.current_event.take() {
             chunks.extend(self.process_event(event, true)?);
+        }
+        if let Some(chunk) = self.transformer.finish_stream()? {
+            chunks.push(chunk);
         }
         Ok(chunks)
     }

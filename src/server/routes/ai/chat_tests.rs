@@ -7,6 +7,8 @@ use crate::core::types::responses::{
     ChatChunk, ChatDelta, ChatStreamChoice, LogProbs, TokenLogProb,
 };
 use crate::core::types::thinking::{ThinkingDelta, ThinkingUsage};
+use bytes::Bytes;
+use futures::StreamExt;
 
 #[test]
 fn test_convert_finish_reason() {
@@ -34,6 +36,42 @@ fn test_convert_finish_reason() {
         convert_finish_reason(types::responses::FinishReason::PauseTurn),
         "pause_turn"
     );
+}
+
+#[tokio::test]
+async fn gemini_invalid_terminal_usage_is_not_serialized_by_chat_route() {
+    let body = concat!(
+        "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}],",
+        "\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2,",
+        "\"totalTokenCount\":3}}\n\n",
+        "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":4,",
+        "\"totalTokenCount\":4}}\n\n"
+    );
+    let source = futures::stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(body))]);
+    let mut stream = crate::core::providers::base::sse::UnifiedSSEStream::new(
+        source,
+        crate::core::providers::base::sse::GeminiTransformer::new("gemini-test"),
+    );
+    let mut final_usage = None;
+    let mut serialized = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.unwrap();
+        if let Some(usage) = &chunk.usage {
+            final_usage = Some(usage.clone());
+        }
+        if !chunk.choices.is_empty() {
+            serialized.push(
+                serde_json::to_string(&convert_core_chunk_to_streaming(chunk).unwrap()).unwrap(),
+            );
+        }
+    }
+    assert!(final_usage.is_none());
+    assert_eq!(serialized.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&serialized[0]).unwrap()["usage"],
+        serde_json::Value::Null
+    );
+    assert!(!serialized.join("").contains("__litellm"));
 }
 
 #[test]

@@ -5,6 +5,8 @@ use crate::core::budget::{
 };
 use crate::core::keys::{InMemoryKeyRepository, KeyManager};
 use crate::core::pricing_service::PricingService;
+use bytes::Bytes;
+use futures::StreamExt;
 use std::sync::Arc;
 
 fn test_pricing_service() -> Arc<PricingService> {
@@ -21,6 +23,51 @@ fn test_sse_error_contains_done() {
     assert!(s.contains("data: {"));
     assert!(s.contains("[DONE]"));
     assert!(s.contains("oops"));
+}
+
+#[tokio::test]
+async fn gemini_invalid_terminal_usage_is_none_in_completed_response() {
+    let body = concat!(
+        "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}],",
+        "\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2,",
+        "\"totalTokenCount\":3}}\n\n",
+        "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":4,",
+        "\"totalTokenCount\":4}}\n\n"
+    );
+    let source = futures::stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(body))]);
+    let mut stream = crate::core::providers::base::sse::UnifiedSSEStream::new(
+        source,
+        crate::core::providers::base::sse::GeminiTransformer::new("gemini-test"),
+    );
+    let mut final_usage = None;
+    let mut saw_upstream_output = false;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.unwrap();
+        saw_upstream_output = true;
+        if let Some(usage) = chunk.usage {
+            final_usage = Some(usage);
+        }
+    }
+    let completed = ResponsesApiResponse {
+        id: "resp_test".to_string(),
+        object: "response".to_string(),
+        created_at: 1,
+        status: "completed".to_string(),
+        model: "gemini-test".to_string(),
+        output: vec![],
+        usage: final_usage.as_ref().map(response_usage_from_chat_usage),
+        error: None,
+        previous_response_id: None,
+        metadata: None,
+    };
+    let json = serde_json::to_string(&ResponseStreamEvent::ResponseCompleted {
+        response: Box::new(completed),
+    })
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(saw_upstream_output);
+    assert!(value["response"]["usage"].is_null());
+    assert!(!json.contains("__litellm"));
 }
 
 #[test]

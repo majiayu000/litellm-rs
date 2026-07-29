@@ -1,6 +1,7 @@
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
 
-use super::{SSETransformer, mark_stream_usage_invalid};
+use super::SSETransformer;
 use crate::core::providers::shared::strict_direct_gemini_usage_metadata;
 #[cfg(any(feature = "providers-extended", test))]
 use crate::core::providers::shared::strict_vertex_usage_metadata;
@@ -15,6 +16,15 @@ enum GeminiUsagePolicy {
     Vertex,
 }
 
+#[derive(Debug, Default)]
+enum GeminiStreamUsage {
+    #[default]
+    Missing,
+    Valid(Usage),
+    Invalid,
+    Finalized,
+}
+
 /// Gemini SSE Transformer
 ///
 /// Handles Gemini's streaming format with candidates/parts structure.
@@ -23,6 +33,7 @@ pub struct GeminiTransformer {
     model: String,
     chunk_id: String,
     usage_policy: Option<GeminiUsagePolicy>,
+    stream_usage: Arc<Mutex<GeminiStreamUsage>>,
 }
 
 impl GeminiTransformer {
@@ -52,6 +63,7 @@ impl GeminiTransformer {
             model: model.into(),
             chunk_id: format!("gemini-stream-{}", nanos),
             usage_policy,
+            stream_usage: Arc::new(Mutex::new(GeminiStreamUsage::Missing)),
         }
     }
 
@@ -76,25 +88,70 @@ impl GeminiTransformer {
         }
     }
 
+    fn lock_stream_usage(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, GeminiStreamUsage>, ProviderError> {
+        self.stream_usage.lock().map_err(|_| {
+            ProviderError::response_parsing("gemini", "Gemini stream usage state is poisoned")
+        })
+    }
+
+    fn observe_stream_usage(&self, parsed: &Value) -> Result<(), ProviderError> {
+        let Some(metadata) = parsed.get("usageMetadata") else {
+            return Ok(());
+        };
+        let next = self
+            .transform_usage_metadata(metadata)
+            .map_or(GeminiStreamUsage::Invalid, GeminiStreamUsage::Valid);
+        let mut usage = self.lock_stream_usage()?;
+        if !matches!(*usage, GeminiStreamUsage::Finalized) {
+            *usage = next;
+        }
+        Ok(())
+    }
+
+    fn invalidate_stream_usage(&self) -> Result<(), ProviderError> {
+        let mut usage = self.lock_stream_usage()?;
+        if !matches!(*usage, GeminiStreamUsage::Finalized) {
+            *usage = GeminiStreamUsage::Invalid;
+        }
+        Ok(())
+    }
+
     fn transform_stream_data(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
         let parsed: Value = match serde_json::from_str(data) {
             Ok(parsed) => parsed,
             Err(_) if data.contains("\"usageMetadata\"") => {
-                return Ok(Some(mark_stream_usage_invalid(self.empty_chunk())));
+                self.invalidate_stream_usage()?;
+                return Ok(None);
             }
             Err(_) => return self.transform_chunk(data),
         };
-        let invalid_usage = self.usage_policy.is_some()
-            && parsed
-                .get("usageMetadata")
-                .is_some_and(|metadata| self.transform_usage_metadata(metadata).is_none());
-        let chunk = self.transform_chunk(data)?;
-        if invalid_usage {
-            Ok(Some(mark_stream_usage_invalid(
-                chunk.unwrap_or_else(|| self.empty_chunk()),
-            )))
+        self.observe_stream_usage(&parsed)?;
+        let Some(mut chunk) = self.transform_chunk(data)? else {
+            return Ok(None);
+        };
+        chunk.usage = None;
+        if chunk.choices.is_empty() {
+            Ok(None)
         } else {
-            Ok(chunk)
+            Ok(Some(chunk))
+        }
+    }
+
+    fn finish_stream_usage(&self) -> Result<Option<ChatChunk>, ProviderError> {
+        let state = {
+            let mut usage = self.lock_stream_usage()?;
+            std::mem::replace(&mut *usage, GeminiStreamUsage::Finalized)
+        };
+        match state {
+            GeminiStreamUsage::Valid(usage) => {
+                let mut chunk = self.empty_chunk();
+                chunk.usage = Some(usage);
+                Ok(Some(chunk))
+            }
+            GeminiStreamUsage::Invalid => Ok(Some(self.empty_chunk())),
+            GeminiStreamUsage::Missing | GeminiStreamUsage::Finalized => Ok(None),
         }
     }
 }
@@ -227,12 +284,16 @@ impl SSETransformer for GeminiTransformer {
     fn transform_stream_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
         self.transform_stream_data(data)
     }
+
+    fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
+        self.finish_stream_usage()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::providers::base::sse::{UnifiedSSEStream, observe_stream_usage};
+    use crate::core::providers::base::sse::UnifiedSSEStream;
     use bytes::Bytes;
     use futures::StreamExt;
 
@@ -333,60 +394,72 @@ mod tests {
         assert_eq!(huge.usage.unwrap().total_tokens, u32::MAX);
     }
 
-    #[test]
-    fn later_invalid_usage_clears_retained_valid_usage() {
-        let transformer = GeminiTransformer::new("gemini-test");
-        let mut retained = None;
-        for data in [
-            r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}"#,
-            r#"{"candidates":[],"usageMetadata":{"promptTokenCount":4,"totalTokenCount":4}}"#,
-        ] {
-            let mut chunk = transformer.transform_stream_chunk(data).unwrap().unwrap();
-            observe_stream_usage(&mut retained, &mut chunk);
-        }
-        assert!(
-            retained.is_none(),
-            "malformed later usage must invalidate the retained lower total"
-        );
+    async fn collect_stream(transformer: GeminiTransformer, events: &[&str]) -> Vec<ChatChunk> {
+        let body = events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>();
+        let source = futures::stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(body))]);
+        UnifiedSSEStream::new(source, transformer)
+            .map(|result| result.unwrap())
+            .collect()
+            .await
     }
 
-    #[test]
-    fn stream_usage_state_preserves_missing_and_allows_authoritative_recovery() {
-        for transformer in [
-            GeminiTransformer::new("direct-test"),
-            GeminiTransformer::new_vertex("vertex-test"),
-        ] {
-            let mut retained = None;
-            for (data, expected) in [
-                (
-                    r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}"#
-                        .to_string(),
-                    Some(3),
-                ),
-                (
-                    r#"{"candidates":[{"content":{"parts":[{"text":"still streaming"}]}}]}"#
-                        .to_string(),
-                    Some(3),
-                ),
-                (
-                    r#"{"candidates":[],"usageMetadata":{"promptTokenCount":4,"totalTokenCount":4}}"#
-                        .to_string(),
-                    None,
-                ),
-                (
-                    format!(
-                        r#"{{"candidates":[],"usageMetadata":{{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":{}}}}}"#,
-                        6
-                    ),
-                    Some(6),
-                ),
-            ] {
-                let mut chunk = transformer.transform_stream_chunk(&data).unwrap().unwrap();
-                observe_stream_usage(&mut retained, &mut chunk);
-                assert_eq!(
-                    retained.as_ref().map(|usage| usage.total_tokens),
-                    expected
-                );
+    #[tokio::test]
+    async fn terminal_stream_usage_is_private_and_stateful() {
+        for vertex in [false, true] {
+            let transformer = || {
+                if vertex {
+                    GeminiTransformer::new_vertex("vertex-test")
+                } else {
+                    GeminiTransformer::new("direct-test")
+                }
+            };
+            let valid = r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}"#;
+            let invalid =
+                r#"{"candidates":[],"usageMetadata":{"promptTokenCount":4,"totalTokenCount":4}}"#;
+            let missing = r#"{"candidates":[{"content":{"parts":[{"text":"still streaming"}]}}]}"#;
+            let recovered = r#"{"candidates":[],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6}}"#;
+
+            let invalid_final = collect_stream(transformer(), &[valid, invalid]).await;
+            assert_eq!(invalid_final.len(), 1);
+            assert!(invalid_final[0].choices.is_empty());
+            assert!(invalid_final[0].usage.is_none());
+
+            let missing_final = collect_stream(transformer(), &[valid, missing]).await;
+            assert_eq!(missing_final.len(), 2);
+            assert!(missing_final[0].usage.is_none());
+            assert_eq!(
+                missing_final[1]
+                    .usage
+                    .as_ref()
+                    .map(|usage| usage.total_tokens),
+                Some(3)
+            );
+
+            let recovered_final = collect_stream(transformer(), &[valid, invalid, recovered]).await;
+            assert_eq!(recovered_final.len(), 1);
+            assert_eq!(
+                recovered_final[0]
+                    .usage
+                    .as_ref()
+                    .map(|usage| usage.total_tokens),
+                Some(6)
+            );
+
+            for chunk in invalid_final
+                .iter()
+                .chain(missing_final.iter())
+                .chain(recovered_final.iter())
+            {
+                let json = serde_json::to_string(chunk).unwrap();
+                assert!(!json.contains("__litellm"));
+                assert!(!chunk.usage.as_ref().is_some_and(|usage| {
+                    usage.prompt_tokens == 0
+                        && usage.completion_tokens == 0
+                        && usage.total_tokens == 0
+                }));
             }
         }
     }
@@ -399,15 +472,18 @@ mod tests {
             "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":4"
         );
         let source = futures::stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(body))]);
-        let mut stream = UnifiedSSEStream::new(source, GeminiTransformer::new("gemini-test"));
-        let mut retained = None;
-        while let Some(chunk) = stream.next().await {
-            let mut chunk = chunk.unwrap();
-            observe_stream_usage(&mut retained, &mut chunk);
-        }
+        let stream = UnifiedSSEStream::new(source, GeminiTransformer::new("gemini-test"));
+        let chunks = stream
+            .map(|chunk| chunk.unwrap())
+            .collect::<Vec<ChatChunk>>()
+            .await;
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].choices.is_empty());
+        assert!(chunks[0].usage.is_none());
         assert!(
-            retained.is_none(),
-            "truncated final usageMetadata must clear retained usage"
+            !serde_json::to_string(&chunks[0])
+                .unwrap()
+                .contains("__litellm")
         );
     }
 
@@ -455,13 +531,11 @@ mod tests {
             Box::pin(response.bytes_stream()),
             GeminiTransformer::new("gemini-test"),
         );
-        let mut retained = None;
+        let mut chunks = Vec::new();
         let mut saw_read_error = false;
         while let Some(result) = stream.next().await {
             match result {
-                Ok(mut chunk) => {
-                    observe_stream_usage(&mut retained, &mut chunk);
-                }
+                Ok(chunk) => chunks.push(chunk),
                 Err(_) => {
                     saw_read_error = true;
                     break;
@@ -470,9 +544,12 @@ mod tests {
         }
         server.await.unwrap();
         assert!(saw_read_error);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].usage.is_none());
         assert!(
-            retained.is_none(),
-            "residual invalid usage must be observed before the read error"
+            !serde_json::to_string(&chunks[0])
+                .unwrap()
+                .contains("__litellm")
         );
     }
 }

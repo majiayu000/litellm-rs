@@ -94,9 +94,11 @@ complexity: high
 13. **B-013** 标准 Gemini/Vertex SSE 必须区分 Missing、Valid 与 Invalid usage：
     Missing 不改变累计 Valid；后续 Invalid 必须清除旧 Valid，后续权威 Valid 可恢复。
     EOF 与 upstream read error 前必须先处理残留 SSE buffer；截断的
-    `usageMetadata` 必须成为 Invalid。chat、completions 与 responses 三条标准路由
-    必须在向客户端序列化前消费内部 invalidation 信号，并把 `None` 交给既有
-    no-usage reservation settlement，不得泄漏内部标记或旧 token。
+    `usageMetadata` 必须成为 Invalid。provider stream 必须在私有 accumulator 中
+    保存状态，剥离内容 chunk 上的 usage，仅在终态仍为 Valid 时发送一个合法
+    usage-only chunk；终态 Invalid/Missing 不发送 usage。chat、completions 与
+    responses 三条标准路由只能收到无内部标记、无伪零 usage 的公开 `ChatChunk`，
+    并把 Invalid 的 `None` 交给既有 no-usage reservation settlement。
 
 ## 验收标准
 
@@ -122,7 +124,8 @@ complexity: high
       结算；error 发生在任何 output 前时不伪造已输出结算。
 - [ ] standard Gemini/Vertex stream 覆盖 Valid→Invalid、Valid→Missing、
       Valid→Invalid→Valid、EOF truncated 与 read-error residual buffer；三个标准
-      路由均清除 Invalid 前的旧 usage，并继续使用 no-usage reservation settlement。
+      路由最终序列化、direct provider consumer 均永不出现内部 marker/伪零 usage，
+      Invalid 后继续使用 no-usage reservation settlement。
 - [ ] 未声明字段名和嵌套形状不会被猜测为 usage。
 - [ ] 不含 Vertex/direct Gemini 扩展计数的合法非零 usage 兼容性回归测试通过；
       扩展计数非零的 token/cost 修正，以及两条 endpoint 各自的 reported-total
