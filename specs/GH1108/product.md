@@ -88,6 +88,8 @@ availability；其他证据只证明 Gemini Developer API。
    `available_exact`、`retired`、`shutdown`、`unverified` 或 `other_product`。
    migration 前 17 个 exact ID 的 disposition、官方 URL、`reviewed_at=2026-07-26` 与
    reason 必须与 tech spec 的 “Frozen pre-refresh disposition ledger” 逐行完全相等；
+   其中 `gemini-2.0-flash-thinking-exp` 的官方 frozen shutdown date 是
+   `2025-12-02`，不得与 `gemini-2.0-flash-exp` 的其他 lifecycle date 混用；
    implementation 不得自行重新分类。缺失、冲突或过期到已越过 shutdown date 的证据不得
    降级为“继续沿用旧目录”；三个 `unverified` ID 即使 live/list 偶然返回，也不能在没有
    spec amendment 的情况下升级为 `available_exact`。
@@ -145,7 +147,14 @@ availability；其他证据只证明 Gemini Developer API。
    相等，selection failure 也不得修改原请求。unknown/non-bool wire shape 在 API
    boundary fail closed；对所选 GH1108
    Gemini 模型，合法 metadata 与非 streaming 请求并存或内部 canonical metadata
-   不一致时也必须在网络前 fail closed。
+   不一致时也必须在网络前 fail closed。Responses unary/stream 的 shared adapter 必须
+   无损捕获 `top_k`：omitted/null 为 absent，non-null 保留到 canonical contract 后拒绝；
+   `max_output_tokens` 只能 canonicalize 为 `max_tokens`，不得同时生成被本模型排除的
+   `max_completion_tokens`，并必须最终映射到 `generationConfig.maxOutputTokens`。
+   unary response cache 不得成为绕过点：当前 cache canonical policy 会删除
+   `stream_options`，因此任何 non-stream request 只要携带该 metadata，就必须在 key lookup/
+   store 前安全 bypass cache，再由最终 selected-model hook 判定；cache 中已有合法同 key
+   response 也不得返回。
 8. **B-008** 新模型的 neutral catalog cost lookup 与当前 gateway runtime
    `PricingService` 必须都返回 B-002 的确定值并保持单位一致。默认嵌入式 pricing source
    必须以 exact Developer keys `gemini/gemini-3.6-flash` 与
@@ -280,7 +289,11 @@ availability；其他证据只证明 Gemini Developer API。
     这些能力留给 GH1111 或后续契约完成后再独立启用。任何其他集合外能力也 fail closed
     为不广告，尤其包括 CodeExecution、BatchProcessing、Realtime API/streaming、
     ContextCaching、SearchGrounding、VideoUnderstanding、AudioUnderstanding、Computer
-    Use、audio/image generation、Live 与 Interactions。
+    Use、audio/image generation、Live 与 Interactions。实际 capability route selection
+    必须对 Gemini deployment 的最终 exact model 查询 neutral registry 并使用上述闭集；
+    不得只修公开 metadata。neutral registry 无 exact record 的既有 Gemini model 继续回落
+    provider-wide capability behavior，禁止为实现本 model-specific 收紧而全局移除 Gemini
+    ToolCalling。
 
 ## 验收标准
 
@@ -313,7 +326,11 @@ availability；其他证据只证明 Gemini Developer API。
       `include_usage=true` 并到达 streaming transport、从不进入 upstream body；
       OpenAI/OpenRouter 在 post-selection hook 前后值相等、selection failure 不修改请求，
       所选 GH1108 Gemini 模型的非法/不一致 metadata 与 non-stream 组合均 pre-network
-      拒绝。
+      拒绝。Responses unary/stream 对 `top_k` non-null 无损拒绝、null/omitted absent；
+      `max_output_tokens` 只产生 `max_tokens` 且最终命中 maxOutputTokens，
+      `max_completion_tokens=None`。cache regression 必须先填充合法同 key response，再证明
+      non-stream + stream_options 在 lookup/store 前 bypass、cache return=0、network=0 和
+      stable invalid-request；合法无 metadata 请求仍可命中 cache。
 - [ ] 公开请求入口矩阵闭合覆盖：OpenAI chat unary/stream、legacy completions
       unary/stream、Responses unary/stream 都在最终 selected Gemini identity 上进入
       shared chat preflight；`/v1`、`/v1beta`、`/gemini/v1`、
@@ -324,6 +341,10 @@ availability；其他证据只证明 Gemini Developer API。
       explicit model 拒绝，explicit null/unknown/non-string role 与不可判定 sequence
       fail closed。
 - [ ] catalog 重复/并发读取稳定排序且 metadata/price/contract 一致。
+- [ ] capability dispatch 对最终 Gemini exact model 查询 neutral registry：两个新 ID 只可
+      由 ChatCompletion/ChatCompletionStream/GeminiGenerateContent route 选择，
+      ToolCalling/FunctionCalling route 不可选择；未命中 exact record 的既有 Gemini model
+      保持 provider-wide compatibility，Gemini ToolCalling 未被全局移除。
 - [ ] live actual-env matrix 对 `GOOGLE_API_KEY` 与 `GEMINI_API_KEY` 分别覆盖 opt-in
       缺失/存在，并覆盖双 key 的 GOOGLE precedence；opt-in-only、Vertex project/location
       pair、pair+service-account、project-only、location-only 且无 Developer key 均零
@@ -401,7 +422,17 @@ availability；其他证据只证明 Gemini Developer API。
   最终选中两个新 Gemini 模型后才消费。direct/alias/fallback 的 canonical
   include_usage=true 可到达 stream transport 但不得进入 upstream body；OpenAI/OpenRouter
   在 post-selection hook 前后值相等，selection failure 不修改请求，所选新模型的
-  non-stream + stream_options 必须拒绝。
+  non-stream + stream_options 必须拒绝。即使同 messages/model 的合法请求已经填充 cache，
+  metadata-bearing non-stream request 也必须在生成/读取 key 前 safe bypass，不能返回旧
+  response；key collision fixture 不得用改 prompt 或清 cache 伪造 miss。
+- Responses `top_k:null`/omitted 均按 absent，non-null 必须穿过 unary/stream shared
+  adapter 到 selected-model contract 后 network=0 拒绝；合法 `max_output_tokens` 的
+  canonical request 必须是 `max_tokens=Some(value), max_completion_tokens=None`，最终 body
+  只出现 `generationConfig.maxOutputTokens`。
+- capability router 以 deployment 的 case-sensitive final exact model 查询 neutral
+  registry；两个新 ID 的 ToolCalling/FunctionCalling eligibility 为 false，但没有 exact
+  record 的既有 Gemini model 仍使用原 provider-wide能力，不能通过全局删除 ToolCalling
+  让负例“通过”。
 - opt-in=1 但两个 Developer keys 均 unset（包括 Vertex-only env）与任一 key set 但
   opt-in unset 均必须零网络；双 key 时 GOOGLE_API_KEY 胜出。transport deadline
   timeout 记录 failed/network，新 retry 使用新 run_id；外部 cancel/interruption 才是

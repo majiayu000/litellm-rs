@@ -28,10 +28,13 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       full set; planned-changes manifest is issue=1108/complete=true; official Developer
       sources are recorded，17-row frozen disposition ledger 的 exact
       ID/status/full URL set/reviewed_at/reason 已获批准；manifest 包含 versioned coverage checker/test，tech 已定义
-      十类 exact selector/span（含 native request preflight 与 runtime pricing
-      authority）和 fail-closed negative fixtures；GH1112 implementation
+      十三类 exact selector/span（含 native request preflight、runtime pricing
+      authority、Responses canonical mapping、model capability dispatch 与 cache-hit
+      preflight）和 fail-closed negative fixtures；GH1112 implementation
       dependency and no-Vertex-inference boundary are explicit；最终 spec head 已获得
-      maintainer 明确批准，且批准证据绑定该 exact head。Verify:
+      maintainer 明确批准，且批准证据绑定该 exact head；本 spec PR footer 保持
+      `Refs #1108`，只有后续完成实现与验收的 implementation PR 才使用 `Fixes #1108`。
+      Verify:
       `python3 checks/check_workflow.py --repo . --spec-dir specs/GH1108`、
       `python3 checks/check_workflow.py --repo .`、`git diff --check`.
 
@@ -58,7 +61,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       in the Developer overlay；Batch/Flex/Priority 不复用或宣称该定价；every
       pre-refresh Developer chat ID 的 fixture 与 tech frozen ledger 17 行逐字段
       exact-equal（7 available_exact、6 shutdown、1 retired、3 unverified；
-      `reviewed_at=2026-07-26`，仅使用表内 ai.google.dev URLs/reasons），implementation
+      `reviewed_at=2026-07-26`，其中 `gemini-2.0-flash-thinking-exp` shutdown
+      date/reason 精确为 2025-12-02，仅使用表内 ai.google.dev URLs/reasons），implementation
       不得自行分类或升级 unverified；retired/shutdown/unverified entries are not
       advertised; Developer pre/post snapshot is stable, sorted and duplicate-free;
       runtime JSON 只新增 `gemini/gemini-3.6-flash` 与
@@ -80,21 +84,31 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
        ':(glob)src/core/providers/vertex_ai/**')"`、
       `cargo fmt --all -- --check`、`cargo check --locked`.
 
-- [ ] `SP1108-T3` Covers: B-005, B-006, B-007, B-015. Owner: shared contract + Gemini consumer owner. Dependencies: SP1108-T2 stable committed head. Done when: detailed contract evidence below is satisfied. Verify: detailed commands below pass.
+- [ ] `SP1108-T3` Covers: B-005, B-006, B-007, B-015, B-017. Owner: shared contract + Gemini consumer owner. Dependencies: SP1108-T2 stable committed head. Done when: detailed contract evidence below is satisfied. Verify: detailed commands below pass.
       No other
       writable neutral-catalog owner. Files:
       `src/core/providers/google/models/request_contract.rs`,
       `src/core/providers/gemini/provider.rs`,
       `src/core/providers/gemini/provider_tests.rs`,
       `src/core/providers/gemini/client.rs`,
+      `src/core/providers/capability_dispatch.rs`,
       `src/server/routes/ai/gemini.rs`,
       `src/core/models/openai/requests.rs`,
+      `src/core/models/openai/responses_api.rs`,
       `src/server/routes/ai/token_policy.rs`,
+      `src/server/routes/ai/chat.rs`,
+      `src/server/routes/ai/chat_streaming.rs`,
       `src/server/routes/ai/chat_tests.rs`,
-      `tests/gemini_router_fallback_routes.rs`; T2 catalog records read-only；
-      `src/server/routes/ai/chat.rs`、`src/server/routes/ai/chat_streaming.rs`、
+      `src/server/routes/ai/response_cache.rs`,
+      `src/server/routes/ai/responses.rs`,
+      `src/server/routes/ai/responses_stream.rs`,
+      `src/server/routes/ai/responses_stream_tests.rs`,
+      `src/core/cache/key_generator.rs`,
+      `src/core/cache/key_policy.rs`,
+      `src/core/cache/llm_cache.rs`,
+      `tests/gemini_router_fallback_routes.rs`,
+      `tests/responses_routes.rs`; T2 catalog records read-only；
       `src/server/routes/ai/completions.rs`、`src/server/routes/ai/completions_streaming.rs`、
-      `src/server/routes/ai/responses.rs`、`src/server/routes/ai/responses_stream.rs`、
       `src/server/routes/ai/mod.rs`、`src/server/routes/ai/batches.rs`、
       `src/core/types/chat.rs` 是 read-only context，不在 writable manifest。
       Done when: exact new-model contract removes `temperature`/`top_p`/`top_k` from
@@ -124,7 +138,16 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       post-selection hook 前后值相等，
       selection failure 不修改原请求；wire unknown/non-bool、所选新 Gemini 的 internal
       inconsistent metadata 与 non-stream + stream_options 均 pre-network fail closed，且
-      positive allowlist 仍只有三项；native shared normalizer 只对两个 exact IDs
+      positive allowlist 仍只有三项；Responses DTO 无损捕获 top_k non-null 并在
+      unary/stream shared adapter 保留到 selected-model rejection，omitted/null absent；
+      `max_output_tokens` 只映射 `max_tokens`，`max_completion_tokens=None`，最终
+      maxOutputTokens sink 与 budget limit exact；`responses_stream.rs` 只增加 stream
+      metadata，不重新映射/删除字段；unary/stream positive/negative fixtures 均通过；
+      unary cache policy 对任何 non-stream + stream_options 在 key lookup/store 前
+      safe bypass，不能依赖当前 key canonicalizer 删除 metadata 后的碰撞；回归先填充同 key
+      合法 response，再证明 direct/alias/fallback 最终选中两个新模型时 cache return=0、
+      network=0、stable invalid-request，合法无 metadata request 仍可 cache hit；
+      native shared normalizer 只对两个 exact IDs
       生效：generationConfig 的 temperature/topP/topK absent/null 被消费、non-null 在
       budget/network 前拒绝；contents missing/empty/malformed 拒绝，trailing blank 被
       跳过；role exact user/model 保留，omitted 按 official Content default normalize
@@ -136,19 +159,24 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       以及 `/v1`、`/v1beta`、`/gemini/v1`、`/gemini/v1beta` × native unary/stream
       八个 endpoint shape 均命中 native gate 且 network=0；route-table/source invariant
       证明所有 completion aliases 仍绑定同 handler，Batch/其他 capability routes 对
-      Gemini chat non-routable。既有 Gemini
+      Gemini chat non-routable。`supports_capability_for_model` 对最终 Gemini exact model
+      查询 neutral registry；两个新 ID 只对 ChatCompletion/ChatCompletionStream/
+      GeminiGenerateContent eligible，ToolCalling/FunctionCalling route 不可选择；
+      无 exact record 的既有 Gemini model 保持 provider-wide fallback，禁止全局删除
+      Gemini ToolCalling。既有 Gemini
       ToolResult/ToolUse 序列化与完整 callability 归 GH1111、非本任务 acceptance，且
       GH1108 implementation 不依赖 GH1111；no family-substring inheritance or silent
       drop remains for this contract. Verify:
       `cargo test --locked gemini_2026_07`、
       `cargo test --locked gemini_router_fallback`、network-counter negatives、
+      `cargo test --locked gemini_2026_07_responses_contract`、
+      `cargo test --locked gemini_2026_07_capability_dispatch`、
+      `cargo test --locked gemini_2026_07_cache_hit_preflight`、
       `cargo test --locked gemini_native_2026_07_preflight`、
       `cargo test --locked gemini_public_entrypoint_contract`、
       `test -z "$(git diff --name-only
        "$IMPLEMENTATION_BASE_SHA...$IMPLEMENTATION_HEAD_SHA" --
-       src/server/routes/ai/chat.rs src/server/routes/ai/chat_streaming.rs
        src/server/routes/ai/completions.rs src/server/routes/ai/completions_streaming.rs
-       src/server/routes/ai/responses.rs src/server/routes/ai/responses_stream.rs
        src/server/routes/ai/mod.rs src/server/routes/ai/batches.rs
        src/core/types/chat.rs)"`、
       `cargo fmt --all -- --check`、`cargo check --locked`.
@@ -239,14 +267,14 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `LITELLM_RS_LIVE_GEMINI=1 cargo test --locked --test live_gemini -- --ignored`
       only when a human supplies credentials、documentation diff review.
 
-- [ ] `SP1108-T6` Covers: B-003, B-005, B-006, B-007, B-008, B-011, B-012, B-014, B-016. Owner: coverage-checker coordinator. Dependencies: SP1108-T2 through T4 stable committed head; tech exact selector contract. Done when: versioned checker and negative fixtures below are implemented before SP1108-T5 read-only review. Verify: checker unit tests and exact-head invocation below pass.
+- [ ] `SP1108-T6` Covers: B-003, B-005, B-006, B-007, B-008, B-011, B-012, B-014, B-016, B-017. Owner: coverage-checker coordinator. Dependencies: SP1108-T2 through T4 stable committed head; tech exact selector contract. Done when: versioned checker and negative fixtures below are implemented before SP1108-T5 read-only review. Verify: checker unit tests and exact-head invocation below pass.
       Files: `checks/gh1108_coverage_gate.py`,
       `checks/test_gh1108_coverage_gate.py`; production/test Rust files read-only.
       Done when: checker enforces full SHA/head/ancestor/tracked-clean/LCOV guards、non-empty
       changed-production denominator、all changed production sources in LCOV、changed-line
-      ≥80%、changed paths 是 complete manifest 子集；tech 列出的九个 read-only
+      ≥80%、changed paths 是 complete manifest 子集；tech 列出的五个 read-only
       routing/context files 与 `src/core/providers/vertex_ai/**` 任一变化均
-      fail closed；十个 mandatory categories 均绑定 tech 表中 exact path + Rust symbol + marker
+      fail closed；十三个 mandatory categories 均绑定 tech 表中 exact path + Rust symbol + marker
       span，prefill 的 `normalize_gemini_contents`/`validate_no_model_prefill` 两个
       selectors 都满足并覆盖 interleaved System/Developer 原序、developer+user 保留、
       System/Developer non-text rejection、assistant+developer final-model rejection，
@@ -261,7 +289,15 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       覆盖 selected Gemini
       direct/alias/fallback consume、OpenAI/OpenRouter preserve、selection-failure no
       mutation 与 internal-inconsistent/non-stream branches；DTO unit fixtures 另行覆盖
-      unknown/non-bool wire rejection。live observation 的
+      unknown/non-bool wire rejection。Responses canonical selector 覆盖 DTO top_k
+      omitted/null/non-null、unary/stream shared adapter、
+      max_output_tokens→max_tokens only、max_completion_tokens=None 与最终
+      maxOutputTokens sink；model capability dispatch selector 覆盖两个新 exact IDs 的
+      三项 closed positive capabilities、ToolCalling/FunctionCalling negatives、case/prefix
+      mismatch 与旧 Gemini no-record provider-wide fallback；cache-hit preflight 的
+      response-cache/chat 两个 selectors 覆盖真实合法 seed/hit、旧 key collision、
+      metadata-bearing lookup/store pre-key bypass、direct/alias/fallback selected-model
+      invalid-request/network=0，不能以改 key/prompt 或清 cache 制造 miss。live observation 的
       `canonicalize_live_observation` selector 覆盖 redaction-first/hash-only/
       optional-pair/partial/no-response/8-key per-model missing/global-static-list rejection/
       complete-pagination-two-independent-observations/later-page-match/repeated-or-malformed-
@@ -296,7 +332,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       changed production Rust line coverage is at least 80%；versioned checker 证明
       catalog evidence validation、deprecated rejection、prefill rejection、native request
       preflight、runtime pricing authority、
-      stream-metadata validation、live classification、live redaction、
+      Responses canonical mapping、model capability dispatch、stream-metadata validation、
+      cache-hit preflight、live classification、live redaction、
       live-observation canonicalization、live interruption persistence 的 mandatory
       symbol/marker spans 各自存在 changed
       branch records 且 100% covered；coverage gate 验证完整
@@ -328,10 +365,12 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - Task `Covers:` union: 同一完整集合；无 orphan invariant。
 - Planned manifest: issue=1108、complete=true、包含 neutral catalog、shared contract、
   embedded runtime pricing authority/tests、Gemini consumers、native request preflight/
-  public-entrypoint fixtures、post-selection token-policy stream-metadata adapter/tests、live smoke、
-  versioned coverage
+  public-entrypoint fixtures、Responses DTO/unary/stream canonical adapter/tests、
+  exact-model capability dispatch、post-selection token-policy stream-metadata adapter/tests、
+  chat/response-cache/key-policy cache-hit closure、live smoke、versioned coverage
   checker/tests、provider docs 与精确 artifact ignore policy owner `.gitignore`；
-  tech 列出的九个 routing/context files 仅为 read-only context，不扩 writable manifest。
+  tech 列出的五个 remaining routing/context files 仅为 read-only context，不扩 writable
+  manifest。
 - Spec phase:
   `python3 checks/check_workflow.py --repo . --spec-dir specs/GH1108`、
   `python3 checks/check_workflow.py --repo .`、`git diff --check`.
@@ -347,6 +386,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
     1.50 / 7.50 USD per million。
   - `gemini-3.5-flash-lite`: 1,048,576 / 65,536，Gemini Developer API paid Standard
     0.30 / 2.50 USD per million。
+  - `gemini-2.0-flash-thinking-exp`: exact changelog shutdown date 2025-12-02。
 - Google Developer release/lifecycle/pricing 证据不等于 Vertex availability。
 - gateway 运行时预算/结算不调用 neutral catalog cost，而加载 embedded
   `model_prices_extended.json`；两个新 ID 因此必须同时拥有 exact prefixed Developer
@@ -367,6 +407,10 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   按 official default=user 通过，explicit model/null/unknown/nonrepresentable/ambiguous
   拒绝。
   Batch 与其他 capability routes 已证明不能路由到 Gemini chat。
+- Responses unary/stream 共用 `build_chat_request` canonical adapter：top_k omitted/null
+  absent、non-null 无损保留到 selected-model rejection；max_output_tokens 只映射 max_tokens，
+  max_completion_tokens 保持 None 并最终进入 Gemini maxOutputTokens。DTO、unary 与 stream
+  adapters 均是 T3 writable owner，不能让合法 token limit 因制造 unsupported field 被拒。
 - 新模型 positive params 精确为 `{max_tokens, stop, stream}`；tools/tool_choice 仅有现存
   passthrough、无 serializer consumer，因此与 response_format/max_completion_tokens 一并
   排除。stream_options 是 gateway settlement metadata，不是第四个 param；builder 保留到
@@ -377,12 +421,19 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   进 upstream body；OpenAI/OpenRouter hook input/output 相等，selection failure 不修改
   请求，selected
   new-Gemini 非法或 non-stream 组合 fail closed。
+- unary response cache 的旧 key policy 会删除 stream_options；T3 固定在 key lookup/store
+  前 safe bypass metadata-bearing non-stream 请求，再由最终 selected-model hook 判定。
+  regression 必须真实 seed 同 key cache，证明 direct/alias/fallback cache return=0、
+  network=0/error 稳定，并保持无 metadata 合法 cache hit。
 - 两个新模型 capability 精确为 ChatCompletion/ChatCompletionStream/
   GeminiGenerateContent，features 仅
   MultimodalSupport/StreamingSupport/SystemInstructions，不广告
   ContextCaching/SearchGrounding/VideoUnderstanding/AudioUnderstanding 或
   ToolCalling/FunctionCalling/JsonMode，supports_tools=false；Google 产品支持不等于当前
-  provider callability，相关能力留给 GH1111/后续契约。
+  provider callability，相关能力留给 GH1111/后续契约。`capability_dispatch.rs` 必须按
+  final exact model 查询 neutral registry；两个新 ID 的 ToolCalling/FunctionCalling route
+  eligibility 为 false，但 no-record 既有 Gemini model 继续 provider-wide fallback，不能
+  全局删除 Gemini ToolCalling。
 - live artifact closed schema 含 run_id/attempt/termination 与 status-dependent optional
   observation/digest pair；passed 必须 complete，auth/timeout/cancel 无响应不得伪造
   observation，partial 只存真实 facts。两个 exact model 各自 static/list/get/minimal-call
@@ -417,5 +468,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
 - manual artifacts 是 retained persistent files；rollback 不自动删除，必须检索 default
   与所有 override directories 后显式归档/清理，保留文件时继续维持 ignore protection。
 - 若 merged GH1112 API/path 与本 tech manifest 不同，先修订 spec，不猜 alias/wrapper。
+- 当前 spec PR 始终使用 `Refs #1108`，不关闭仍待实现的 issue；只有满足 T2-T6 与 T5
+  exact-head acceptance 的 implementation PR 才使用 `Fixes #1108`。
 - 不修改 GH1111 tool loop、GH1113 pricing authority 或 unknown-cost semantics；GH1108
   不依赖 GH1111，也不声称 tool-loop 完整 callability。
