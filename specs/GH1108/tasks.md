@@ -104,6 +104,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `src/server/routes/ai/responses.rs`,
       `src/server/routes/ai/responses_stream.rs`,
       `src/server/routes/ai/responses/lifecycle.rs`,
+      `src/server/routes/ai/responses/lifecycle_tests.rs`,
       `src/server/routes/ai/responses_stream_tests.rs`,
       `src/core/cache/key_generator.rs`,
       `src/core/cache/key_policy.rs`,
@@ -142,6 +143,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       inconsistent metadata 与 non-stream + stream_options 均 pre-network fail closed，且
       positive allowlist 仍只有三项；Responses DTO 用 deserialize-only typed presence
       capture 区分 top_k Missing/Null/Value，并记录 max_output_tokens origin；provenance
+      字段加入后，`responses.rs` 与 `responses/lifecycle_tests.rs` 中两个完整
+      `ResponsesApiRequest` literals 都显式初始化 missing provenance 且保持编译；
       作为 non-serialized route-local sidecar，经 `responses.rs`、sync `chat.rs`、
       `responses_stream.rs` 或 background `responses/lifecycle.rs` 到 selected-model
       token policy，不得进入
