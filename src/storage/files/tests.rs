@@ -2,8 +2,10 @@
 
 use super::default_data_path;
 use super::local::LocalStorage;
+use super::types::FileOwnerScope;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 struct DataDirEnvRestore(Option<String>);
 
@@ -108,6 +110,45 @@ async fn test_local_storage_list_returns_stored_files() {
         assert_eq!(metadata.id, file_id);
         assert!(metadata.filename.ends_with(".jsonl"));
     }
+}
+
+#[tokio::test]
+async fn gh1130_owned_local_store_survives_reopen_and_legacy_stays_unowned() {
+    let temp_dir = TempDir::new().unwrap();
+    let owner = FileOwnerScope::ApiKey(Uuid::new_v4());
+    let owned_id;
+    let legacy_id;
+    {
+        let storage = LocalStorage::new(temp_dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+        owned_id = storage
+            .store_owned_with_purpose("owned.jsonl", b"{}\n", Some("batch"), owner.clone())
+            .await
+            .unwrap();
+        legacy_id = storage.store("legacy.jsonl", b"{}\n").await.unwrap();
+    }
+
+    let reopened = LocalStorage::new(temp_dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .metadata_with_owner(&owned_id)
+            .await
+            .unwrap()
+            .owner(),
+        Some(&owner)
+    );
+    assert_eq!(
+        reopened
+            .metadata_with_owner(&legacy_id)
+            .await
+            .unwrap()
+            .owner(),
+        None
+    );
+    assert!(reopened.list(None, Some(0)).await.unwrap().is_empty());
 }
 
 #[test]

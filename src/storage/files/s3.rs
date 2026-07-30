@@ -2,10 +2,10 @@
 
 use crate::config::models::file_storage::S3Config;
 use crate::utils::error::gateway_error::{GatewayError, Result};
+use std::collections::HashSet;
 #[cfg(feature = "s3")]
 use tracing::debug;
 use tracing::info;
-#[cfg(feature = "s3")]
 use uuid::Uuid;
 
 #[cfg(feature = "s3")]
@@ -13,7 +13,9 @@ use aws_config;
 #[cfg(feature = "s3")]
 use aws_sdk_s3 as aws_s3;
 
-use super::types::FileMetadata;
+use super::types::{FileMetadata, FileOwnerScope, StoredFileMetadata};
+
+const OWNER_METADATA_KEY: &str = "litellm-owner";
 
 /// S3 file storage
 #[derive(Debug, Clone)]
@@ -115,6 +117,30 @@ impl S3Storage {
         content: &[u8],
         purpose: Option<&str>,
     ) -> Result<String> {
+        self.store_envelope(filename, content, purpose, None).await
+    }
+
+    /// Store a file with a trusted, non-optional owner.
+    #[allow(unused_variables)]
+    pub(crate) async fn store_owned_with_purpose(
+        &self,
+        filename: &str,
+        content: &[u8],
+        purpose: Option<&str>,
+        owner: FileOwnerScope,
+    ) -> Result<String> {
+        self.store_envelope(filename, content, purpose, Some(owner))
+            .await
+    }
+
+    #[allow(unused_variables)]
+    async fn store_envelope(
+        &self,
+        filename: &str,
+        content: &[u8],
+        purpose: Option<&str>,
+        owner: Option<FileOwnerScope>,
+    ) -> Result<String> {
         #[cfg(feature = "s3")]
         {
             if let Some(client) = &self.client {
@@ -131,6 +157,9 @@ impl S3Storage {
 
                 if let Some(purpose) = Self::normalize_purpose(purpose) {
                     request = request.metadata("purpose", purpose);
+                }
+                if let Some(owner) = owner.as_ref() {
+                    request = request.metadata(OWNER_METADATA_KEY, Self::encode_owner(owner)?);
                 }
 
                 request
@@ -229,13 +258,12 @@ impl S3Storage {
                 {
                     Ok(_) => Ok(true),
                     Err(e) => {
-                        let service_err = e.into_service_error();
-                        if service_err.is_not_found() {
+                        if Self::head_error_is_not_found(&e) {
                             Ok(false)
                         } else {
                             Err(GatewayError::Internal(format!(
                                 "S3 exists check failed: {}",
-                                service_err
+                                e
                             )))
                         }
                     }
@@ -256,6 +284,12 @@ impl S3Storage {
     /// Get file metadata from S3
     #[allow(unused_variables)]
     pub async fn metadata(&self, file_id: &str) -> Result<FileMetadata> {
+        Ok(self.metadata_with_owner(file_id).await?.public)
+    }
+
+    /// Get public metadata and the strict internal owner envelope.
+    #[allow(unused_variables)]
+    pub(crate) async fn metadata_with_owner(&self, file_id: &str) -> Result<StoredFileMetadata> {
         #[cfg(feature = "s3")]
         {
             if let Some(client) = &self.client {
@@ -265,8 +299,12 @@ impl S3Storage {
                     .key(file_id)
                     .send()
                     .await
-                    .map_err(|e| {
-                        GatewayError::Internal(format!("S3 metadata fetch failed: {}", e))
+                    .map_err(|error| {
+                        if Self::head_error_is_not_found(&error) {
+                            GatewayError::not_found("File not found")
+                        } else {
+                            GatewayError::internal(format!("S3 metadata fetch failed: {error}"))
+                        }
                     })?;
 
                 let content_type = head
@@ -289,7 +327,7 @@ impl S3Storage {
                     .metadata()
                     .and_then(|metadata| metadata.get("purpose").cloned());
 
-                Ok(FileMetadata {
+                let public = FileMetadata {
                     id: file_id.to_string(),
                     filename,
                     content_type,
@@ -297,6 +335,15 @@ impl S3Storage {
                     created_at,
                     purpose,
                     checksum,
+                };
+                let owner = Self::decode_owner(
+                    head.metadata()
+                        .and_then(|metadata| metadata.get(OWNER_METADATA_KEY))
+                        .map(String::as_str),
+                )?;
+                Ok(match owner {
+                    Some(owner) => StoredFileMetadata::owned(public, owner),
+                    None => StoredFileMetadata::legacy(public),
                 })
             } else {
                 Err(GatewayError::Internal(
@@ -314,29 +361,54 @@ impl S3Storage {
     /// List files in S3 with optional prefix and limit
     #[allow(unused_variables)]
     pub async fn list(&self, prefix: Option<&str>, limit: Option<usize>) -> Result<Vec<String>> {
+        if limit == Some(0) {
+            return Ok(Vec::new());
+        }
         #[cfg(feature = "s3")]
         {
             if let Some(client) = &self.client {
-                let mut request = client.list_objects_v2().bucket(&self.bucket);
+                let mut keys = Vec::new();
+                let mut continuation: Option<String> = None;
+                let mut seen_tokens = HashSet::new();
 
-                if let Some(prefix) = prefix {
-                    request = request.prefix(prefix);
+                loop {
+                    let remaining = limit.map(|limit| limit.saturating_sub(keys.len()));
+                    if remaining == Some(0) {
+                        break;
+                    }
+                    let page_size = remaining.unwrap_or(1000).min(1000) as i32;
+                    let mut request = client
+                        .list_objects_v2()
+                        .bucket(&self.bucket)
+                        .max_keys(page_size);
+                    if let Some(prefix) = prefix {
+                        request = request.prefix(prefix);
+                    }
+                    if let Some(token) = continuation.as_deref() {
+                        request = request.continuation_token(token);
+                    }
+
+                    let page = request.send().await.map_err(|error| {
+                        GatewayError::internal(format!("S3 list failed: {error}"))
+                    })?;
+                    for object in page.contents() {
+                        if let Some(key) = object.key() {
+                            keys.push(key.to_string());
+                            if limit.is_some_and(|limit| keys.len() >= limit) {
+                                break;
+                            }
+                        }
+                    }
+
+                    if !page.is_truncated().unwrap_or(false) {
+                        break;
+                    }
+                    let next = Self::validate_next_token(
+                        page.next_continuation_token(),
+                        &mut seen_tokens,
+                    )?;
+                    continuation = Some(next);
                 }
-
-                if let Some(limit) = limit {
-                    request = request.max_keys(limit as i32);
-                }
-
-                let result = request
-                    .send()
-                    .await
-                    .map_err(|e| GatewayError::Internal(format!("S3 list failed: {}", e)))?;
-
-                let keys = result
-                    .contents()
-                    .iter()
-                    .filter_map(|obj| obj.key().map(|k| k.to_string()))
-                    .collect();
 
                 Ok(keys)
             } else {
@@ -407,11 +479,88 @@ impl S3Storage {
             .filter(|purpose| !purpose.is_empty())
             .map(ToOwned::to_owned)
     }
+
+    fn encode_owner(owner: &FileOwnerScope) -> Result<String> {
+        let (scope, id) = match owner {
+            FileOwnerScope::Team(id) => ("team", id),
+            FileOwnerScope::User(id) => ("user", id),
+            FileOwnerScope::ApiKey(id) => ("api_key", id),
+        };
+        serde_json::to_string(&serde_json::json!({
+            "version": 1,
+            "scope": scope,
+            "id": id,
+        }))
+        .map_err(|error| GatewayError::internal(format!("Failed to encode file owner: {error}")))
+    }
+
+    fn decode_owner(raw: Option<&str>) -> Result<Option<FileOwnerScope>> {
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let value: serde_json::Value = serde_json::from_str(raw)
+            .map_err(|_| GatewayError::internal("Invalid S3 file owner metadata"))?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| GatewayError::internal("Invalid S3 file owner metadata"))?;
+        if object.len() != 3 || object.get("version").and_then(serde_json::Value::as_u64) != Some(1)
+        {
+            return Err(GatewayError::internal("Invalid S3 file owner metadata"));
+        }
+        let scope = object
+            .get("scope")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| GatewayError::internal("Invalid S3 file owner metadata"))?;
+        let id = object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .ok_or_else(|| GatewayError::internal("Invalid S3 file owner metadata"))?;
+        match scope {
+            "team" => Ok(Some(FileOwnerScope::Team(id))),
+            "user" => Ok(Some(FileOwnerScope::User(id))),
+            "api_key" => Ok(Some(FileOwnerScope::ApiKey(id))),
+            _ => Err(GatewayError::internal("Invalid S3 file owner metadata")),
+        }
+    }
+
+    #[cfg(feature = "s3")]
+    fn head_error_is_not_found(
+        error: &aws_s3::error::SdkError<aws_s3::operation::head_object::HeadObjectError>,
+    ) -> bool {
+        let modeled = error
+            .as_service_error()
+            .is_some_and(|service| service.is_not_found());
+        let status = error
+            .raw_response()
+            .map(|response| response.status().as_u16());
+        Self::is_canonical_not_found(modeled, status)
+    }
+
+    fn is_canonical_not_found(modeled: bool, raw_status: Option<u16>) -> bool {
+        modeled || raw_status == Some(404)
+    }
+
+    fn validate_next_token(
+        token: Option<&str>,
+        seen_tokens: &mut HashSet<String>,
+    ) -> Result<String> {
+        let token = token.filter(|token| !token.is_empty()).ok_or_else(|| {
+            GatewayError::internal("S3 truncated page omitted continuation token")
+        })?;
+        if !seen_tokens.insert(token.to_string()) {
+            return Err(GatewayError::internal(
+                "S3 continuation token repeated before listing completed",
+            ));
+        }
+        Ok(token.to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::S3Storage;
+    use super::{FileOwnerScope, HashSet, S3Storage};
+    use uuid::Uuid;
 
     #[test]
     fn store_identifier_is_route_safe() {
@@ -427,5 +576,59 @@ mod tests {
         let file_id = "550e8400-e29b-41d4-a716-446655440000/nested/batch.jsonl";
 
         assert_eq!(S3Storage::filename_from_file_id(file_id), "batch.jsonl");
+    }
+
+    #[test]
+    fn gh1130_s3_owner_metadata_is_strict_and_versioned() {
+        for owner in [
+            FileOwnerScope::Team(Uuid::new_v4()),
+            FileOwnerScope::User(Uuid::new_v4()),
+            FileOwnerScope::ApiKey(Uuid::new_v4()),
+        ] {
+            let encoded = S3Storage::encode_owner(&owner).unwrap();
+            assert_eq!(
+                S3Storage::decode_owner(Some(&encoded)).unwrap(),
+                Some(owner)
+            );
+        }
+        assert_eq!(S3Storage::decode_owner(None).unwrap(), None);
+        for invalid in [
+            "null",
+            "{}",
+            r#"{"version":2,"scope":"team","id":"00000000-0000-0000-0000-000000000000"}"#,
+            r#"{"version":1,"scope":"team","id":null}"#,
+            r#"{"version":1,"scope":"team","id":"00000000-0000-0000-0000-000000000000","extra":true}"#,
+        ] {
+            assert!(S3Storage::decode_owner(Some(invalid)).is_err());
+        }
+    }
+
+    #[test]
+    fn gh1130_head_only_maps_modeled_or_raw_404_to_not_found() {
+        assert!(S3Storage::is_canonical_not_found(true, None));
+        assert!(S3Storage::is_canonical_not_found(false, Some(404)));
+        for status in [
+            None,
+            Some(400),
+            Some(401),
+            Some(403),
+            Some(408),
+            Some(429),
+            Some(500),
+        ] {
+            assert!(!S3Storage::is_canonical_not_found(false, status));
+        }
+    }
+
+    #[test]
+    fn gh1130_pagination_rejects_missing_empty_and_repeated_tokens() {
+        let mut seen = HashSet::new();
+        assert!(S3Storage::validate_next_token(None, &mut seen).is_err());
+        assert!(S3Storage::validate_next_token(Some(""), &mut seen).is_err());
+        assert_eq!(
+            S3Storage::validate_next_token(Some("next"), &mut seen).unwrap(),
+            "next"
+        );
+        assert!(S3Storage::validate_next_token(Some("next"), &mut seen).is_err());
     }
 }

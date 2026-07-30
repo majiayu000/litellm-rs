@@ -13,6 +13,7 @@ mod types;
 pub use local::LocalStorage;
 pub use s3::S3Storage;
 pub use types::{FileMetadata, FileStorage};
+pub(crate) use types::{FileOwnerScope, StoredFileMetadata};
 
 /// Returns the default absolute path for local file storage.
 ///

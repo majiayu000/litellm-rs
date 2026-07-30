@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::local::LocalStorage;
 use super::s3::S3Storage;
-use super::types::{FileMetadata, FileStorage};
+use super::types::{FileMetadata, FileOwnerScope, FileStorage, StoredFileMetadata};
 
 impl FileStorage {
     /// Create a new file storage instance
@@ -60,6 +60,28 @@ impl FileStorage {
         }
     }
 
+    /// Store a file with a non-optional, canonical owner scope.
+    pub(crate) async fn store_owned_with_purpose(
+        &self,
+        filename: &str,
+        content: &[u8],
+        purpose: Option<&str>,
+        owner: FileOwnerScope,
+    ) -> Result<String> {
+        match self {
+            FileStorage::Local(storage) => {
+                storage
+                    .store_owned_with_purpose(filename, content, purpose, owner)
+                    .await
+            }
+            FileStorage::S3(storage) => {
+                storage
+                    .store_owned_with_purpose(filename, content, purpose, owner)
+                    .await
+            }
+        }
+    }
+
     /// Retrieve file content by ID
     pub async fn get(&self, file_id: &str) -> Result<Vec<u8>> {
         match self {
@@ -89,6 +111,14 @@ impl FileStorage {
         match self {
             FileStorage::Local(storage) => storage.metadata(file_id).await,
             FileStorage::S3(storage) => storage.metadata(file_id).await,
+        }
+    }
+
+    /// Get public metadata plus its internal owner presence state.
+    pub(crate) async fn metadata_with_owner(&self, file_id: &str) -> Result<StoredFileMetadata> {
+        match self {
+            FileStorage::Local(storage) => storage.metadata_with_owner(file_id).await,
+            FileStorage::S3(storage) => storage.metadata_with_owner(file_id).await,
         }
     }
 
