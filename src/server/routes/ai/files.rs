@@ -736,7 +736,10 @@ mod tests {
                 .contains("secret file identifier")
         );
         let internal = storage_file_error(&GatewayError::Storage("secret backend detail".into()));
-        assert_eq!(internal.status(), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            internal.status(),
+            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
         let body = to_bytes(internal.into_body()).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["message"], "Internal server error");
