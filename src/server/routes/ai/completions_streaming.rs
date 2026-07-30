@@ -234,7 +234,8 @@ pub(super) async fn handle_streaming_completion(
 
                     let bytes = match chunk_result {
                         Ok(chunk) => {
-                            saw_upstream_output = true;
+                            let has_candidate_output =
+                                spend::stream_chunk_has_candidate_output(&chunk);
                             if let Some(usage) = &chunk.usage {
                                 final_usage = Some(usage.clone());
                             }
@@ -245,6 +246,7 @@ pub(super) async fn handle_streaming_completion(
                             if chunk.choices.is_empty() && chunk.usage.is_none() {
                                 continue;
                             }
+                            saw_upstream_output |= has_candidate_output;
                             let prefix_for_chunk = if chunk_has_text_delta(&chunk) {
                                 echo_prefix.take()
                             } else {

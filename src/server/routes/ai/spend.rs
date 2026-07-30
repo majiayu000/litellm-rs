@@ -18,7 +18,7 @@ use crate::core::budget::{
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::responses::Usage;
+use crate::core::types::responses::{ChatChunk, Usage};
 #[cfg(test)]
 use std::sync::LazyLock;
 
@@ -45,6 +45,10 @@ pub(super) use unpriced::{
     fallback_cost_for_usage, is_model_not_priced_error, model_not_priced_error,
     reserve_unpriced_usage_budget, settle_unpriced_usage,
 };
+
+pub(super) fn stream_chunk_has_candidate_output(chunk: &ChatChunk) -> bool {
+    !chunk.choices.is_empty()
+}
 
 /// Reject a request before it reaches the upstream provider when the served
 /// provider or model budget is already exhausted.
