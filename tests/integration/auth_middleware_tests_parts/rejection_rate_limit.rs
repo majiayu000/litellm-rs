@@ -237,7 +237,8 @@ async fn gh1130_malformed_api_key_policy_is_generic_500_not_detailed_403() {
             }
         }),
     );
-    let principal = seed_principal_with_api_key(&state, vec!["files".to_string()], metadata).await;
+    let principal =
+        seed_principal_with_api_key(&state, vec!["embeddings".to_string()], metadata).await;
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(state))

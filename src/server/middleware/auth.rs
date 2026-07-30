@@ -216,6 +216,20 @@ where
                     rate_limiter.record_success(&client_id);
                     debug!("Authentication succeeded");
 
+                    match api_key_allows_endpoint(result.api_key.as_ref(), req.path()) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            warn!("Authenticated API key is not permitted to access this endpoint");
+                            return Ok(forbidden_response(
+                                req,
+                                "API key is not permitted for this endpoint",
+                            ));
+                        }
+                        Err(error) => {
+                            warn!("Authenticated API key policy is invalid: {}", error);
+                            return Ok(authentication_unavailable_response(req));
+                        }
+                    }
                     if let Some(operation) = ai::operation_for_path(req.path())
                         && !check_permission(
                             result.user.as_ref(),
@@ -231,20 +245,6 @@ where
                             req,
                             "API key is not permitted for this operation",
                         ));
-                    }
-                    match api_key_allows_endpoint(result.api_key.as_ref(), req.path()) {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            warn!("Authenticated API key is not permitted to access this endpoint");
-                            return Ok(forbidden_response(
-                                req,
-                                "API key is not permitted for this endpoint",
-                            ));
-                        }
-                        Err(error) => {
-                            warn!("Authenticated API key policy is invalid: {}", error);
-                            return Ok(authentication_unavailable_response(req));
-                        }
                     }
 
                     insert_request_context(&mut req, result.context);
