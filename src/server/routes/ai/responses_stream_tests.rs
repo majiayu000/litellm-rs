@@ -143,6 +143,24 @@ fn test_response_usage_from_chat_usage_preserves_details() {
     );
 }
 
+#[test]
+fn response_stream_total_tokens_preserves_provider_saturation() {
+    let usage = ChatUsage {
+        prompt_tokens: u32::MAX,
+        completion_tokens: 1,
+        total_tokens: u32::MAX,
+        prompt_tokens_details: None,
+        completion_tokens_details: None,
+        thinking_usage: None,
+    };
+
+    assert_eq!(
+        response_stream_total_tokens(Some(&usage), usage.prompt_tokens, usage.completion_tokens),
+        u32::MAX
+    );
+    assert_eq!(response_stream_total_tokens(None, u32::MAX, 1), u32::MAX);
+}
+
 #[tokio::test]
 async fn disconnect_after_upstream_output_settles_reserved_budget() {
     let budget = Arc::new(UnifiedBudgetLimits::new());

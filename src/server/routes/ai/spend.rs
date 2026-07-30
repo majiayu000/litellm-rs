@@ -18,7 +18,7 @@ use crate::core::budget::{
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::responses::Usage;
+use crate::core::types::responses::{ChatChunk, Usage};
 #[cfg(test)]
 use std::sync::LazyLock;
 
@@ -45,6 +45,10 @@ pub(super) use unpriced::{
     fallback_cost_for_usage, is_model_not_priced_error, model_not_priced_error,
     reserve_unpriced_usage_budget, settle_unpriced_usage,
 };
+
+pub(super) fn stream_chunk_has_candidate_output(chunk: &ChatChunk) -> bool {
+    !chunk.choices.is_empty()
+}
 
 /// Reject a request before it reaches the upstream provider when the served
 /// provider or model budget is already exhausted.
@@ -266,7 +270,7 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
     }
 }
 
-async fn record_reserved_spend_without_usage(
+pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
     key_manager: &KeyManager,
     api_key_id: Option<Uuid>,
     provider: &str,
@@ -275,22 +279,50 @@ async fn record_reserved_spend_without_usage(
     key_budget_reservation: Option<BudgetReservation>,
     context: &str,
 ) {
-    let Some(reservation) = budget_reservation else {
-        tracing::error!("{context} for provider '{provider}' model '{model}'; spend not recorded");
-        return;
-    };
-    let reserved = reservation.reserved_amount();
-    if let Err(error) = reservation.settle(reserved) {
+    let provider_reserved = budget_reservation
+        .as_ref()
+        .map(UnifiedBudgetReservation::reserved_amount);
+    let key_reserved = key_budget_reservation
+        .as_ref()
+        .map(BudgetReservation::reserved_amount);
+    let recorded_cost = key_reserved
+        .filter(|amount| *amount > 0.0)
+        .or_else(|| provider_reserved.filter(|amount| *amount > 0.0));
+    if let Some(api_key_usage_fallback_cost) = recorded_cost {
+        tracing::error!(
+            event = "billing_no_usage_reserved_fallback",
+            provider = %provider,
+            model = %model,
+            reason = %context,
+            provider_reserved_amount = ?provider_reserved,
+            key_reserved_amount = ?key_reserved,
+            api_key_usage_fallback_cost,
+            api_key_usage_target_present = api_key_id.is_some(),
+            "trusted provider usage unavailable; settling reserved spend fallback"
+        );
+    }
+    if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)
+        && let Err(error) = reservation.settle(reserved)
+    {
         tracing::error!(
             "failed to settle reserved budget without usage for '{provider}'/'{model}': {error:?}"
         );
     }
+    if let Some(reservation) = key_budget_reservation {
+        settle_api_key_budget_reservation(Some(reservation), recorded_cost.unwrap_or(0.0), context);
+    }
+    let Some(recorded_cost) = recorded_cost else {
+        tracing::error!(
+            "{context} for provider '{provider}' model '{model}'; \
+             no positive reserved spend was available, so key usage was not recorded"
+        );
+        return;
+    };
     if let Some(key_id) = api_key_id
-        && let Err(error) = key_manager.record_usage(key_id, 0, reserved).await
+        && let Err(error) = key_manager.record_usage(key_id, 0, recorded_cost).await
     {
         tracing::error!("failed to record reserved usage for key {key_id}: {error}");
     }
-    settle_api_key_budget_reservation(key_budget_reservation, reserved, context);
 }
 
 #[cfg(test)]

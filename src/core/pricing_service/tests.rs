@@ -3,6 +3,10 @@
 #[cfg(test)]
 use crate::core::pricing_service::{LiteLLMModelInfo, PricingService, PricingUsage};
 #[cfg(test)]
+use crate::core::providers::shared::{
+    strict_direct_gemini_usage_metadata, strict_vertex_usage_metadata,
+};
+#[cfg(test)]
 use crate::core::types::responses::{PromptTokensDetails, Usage};
 use std::collections::HashMap;
 
@@ -215,6 +219,60 @@ fn provider_pricing_uses_input_price_when_cache_prices_are_missing() {
     assert!((cost.output_cost - 0.003).abs() < f64::EPSILON);
     assert!((cost.cache_cost - 0.007).abs() < f64::EPSILON);
     assert!((cost.total_cost - 0.013).abs() < f64::EPSILON);
+}
+
+#[test]
+fn google_effective_usage_prices_each_billable_part_once() {
+    let service = PricingService::new(None);
+    let mut model = LiteLLMModelInfo {
+        max_tokens: None,
+        max_input_tokens: None,
+        max_output_tokens: None,
+        input_cost_per_token: Some(0.01),
+        output_cost_per_token: Some(0.02),
+        input_cost_per_character: None,
+        output_cost_per_character: None,
+        cost_per_second: None,
+        litellm_provider: "vertex_ai".to_string(),
+        mode: "chat".to_string(),
+        supports_function_calling: None,
+        supports_vision: None,
+        supports_streaming: None,
+        supports_parallel_function_calling: None,
+        supports_system_message: None,
+        extra: HashMap::new(),
+    };
+    model.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::json!(0.005),
+    );
+    model.extra.insert(
+        "output_cost_per_reasoning_token".to_string(),
+        serde_json::json!(1.0),
+    );
+    service.add_custom_model("google-effective".to_string(), model);
+    let mut metadata = serde_json::json!({
+        "promptTokenCount": 10, "toolUsePromptTokenCount": 2,
+        "candidatesTokenCount": 3, "thoughtsTokenCount": 4,
+        "cachedContentTokenCount": 5, "totalTokenCount": 19
+    });
+    let vertex = strict_vertex_usage_metadata(&metadata).unwrap();
+    metadata["totalTokenCount"] = serde_json::json!(17);
+    let direct = strict_direct_gemini_usage_metadata(&metadata).unwrap();
+    for usage in [vertex, direct] {
+        let priced = service
+            .calculate_loaded_usage_cost_for_provider(
+                "vertex_ai",
+                "google-effective",
+                &PricingUsage::from(&usage),
+            )
+            .unwrap();
+        assert!((priced.input_cost - 0.07).abs() < f64::EPSILON);
+        assert!((priced.output_cost - 0.14).abs() < f64::EPSILON);
+        assert!((priced.cache_cost - 0.025).abs() < f64::EPSILON);
+        assert_eq!(priced.reasoning_cost, 0.0);
+        assert!((priced.total_cost - 0.235).abs() < f64::EPSILON);
+    }
 }
 
 fn flat_image_model_info(output_cost_per_image: Option<f64>) -> LiteLLMModelInfo {

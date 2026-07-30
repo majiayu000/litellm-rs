@@ -24,8 +24,11 @@ fn test_transform_chat_response_with_usage() {
         }],
         "usageMetadata": {
             "promptTokenCount": 100,
+            "toolUsePromptTokenCount": 10,
             "candidatesTokenCount": 50,
-            "totalTokenCount": 150
+            "thoughtsTokenCount": 5,
+            "cachedContentTokenCount": 20,
+            "totalTokenCount": 165
         }
     });
     let model = VertexAIModel::GeminiPro;
@@ -34,9 +37,52 @@ fn test_transform_chat_response_with_usage() {
         .transform_chat_response(response, &model)
         .unwrap();
     let usage = result.usage.unwrap();
-    assert_eq!(usage.prompt_tokens, 100);
-    assert_eq!(usage.completion_tokens, 50);
-    assert_eq!(usage.total_tokens, 150);
+    assert_eq!(usage.prompt_tokens, 110);
+    assert_eq!(usage.completion_tokens, 55);
+    assert_eq!(usage.total_tokens, 165);
+    assert_eq!(
+        usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cache_read_tokens),
+        Some(20)
+    );
+    assert!(usage.completion_tokens_details.is_none());
+}
+
+fn vertex_response_with_usage(usage: Value) -> ChatResponse {
+    GeminiTransformer::new()
+        .transform_chat_response(
+            json!({
+                "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+                "usageMetadata": usage
+            }),
+            &VertexAIModel::GeminiPro,
+        )
+        .unwrap()
+}
+
+#[test]
+fn test_vertex_usage_metadata_fails_closed_and_saturates() {
+    for bad in [
+        json!({"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 4}),
+        json!({"promptTokenCount": "2", "candidatesTokenCount": 1, "totalTokenCount": 3}),
+        json!({"promptTokenCount": 2, "totalTokenCount": 2}),
+        json!({"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}),
+        json!({"promptTokenCount": 2, "candidatesTokenCount": 1, "cachedContentTokenCount": 3, "totalTokenCount": 3}),
+    ] {
+        assert!(vertex_response_with_usage(bad).usage.is_none());
+    }
+    let usage = vertex_response_with_usage(json!({
+        "promptTokenCount": u64::MAX, "candidatesTokenCount": 0,
+        "totalTokenCount": u64::MAX
+    }))
+    .usage
+    .unwrap();
+    assert_eq!(
+        (usage.prompt_tokens, usage.total_tokens),
+        (u32::MAX, u32::MAX)
+    );
 }
 
 #[test]
@@ -295,4 +341,32 @@ fn test_transform_partner_response_with_metadata() {
     assert_eq!(usage.prompt_tokens, 50);
     assert_eq!(usage.completion_tokens, 100);
     assert_eq!(usage.total_tokens, 150);
+}
+
+#[test]
+fn test_partner_usage_metadata_is_strict_and_missing_stays_none() {
+    let transform = |metadata: Option<Value>| {
+        let mut response = json!({"predictions": [{"content": "ok"}]});
+        if let Some(metadata) = metadata {
+            response["metadata"] = metadata;
+        }
+        PartnerModelTransformer::new()
+            .transform_chat_response(response, &VertexAIModel::Claude35Sonnet)
+            .unwrap()
+    };
+    assert!(transform(None).usage.is_none());
+    for bad in [
+        json!({"tokenMetadata": {"inputTokens": {"totalTokens": 1}}}),
+        json!({"tokenMetadata": {"inputTokens": {"totalTokens": "1"}, "outputTokens": {"totalTokens": 2}}}),
+        json!({"tokenMetadata": {"inputTokens": {"totalTokens": 0}, "outputTokens": {"totalTokens": 0}}}),
+    ] {
+        assert!(transform(Some(bad)).usage.is_none());
+    }
+    let usage = transform(Some(json!({"tokenMetadata": {
+        "inputTokens": {"totalTokens": u64::MAX},
+        "outputTokens": {"totalTokens": 1}
+    }})))
+    .usage
+    .unwrap();
+    assert_eq!(usage.total_tokens, u32::MAX);
 }

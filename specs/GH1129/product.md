@@ -34,9 +34,9 @@ complexity: high
 ## Behavior Invariants
 
 1. **B-001** Azure chat/embed、Azure AI chat/embed、Vertex AI、direct Gemini
-   provider client、标准 chat-completions Gemini stream、native Gemini SDK
-   unary/SSE shared parser、Bedrock 和 Mistral embedding 的受影响 usage 必须遵循
-   同一可信度规则。
+   provider client、标准 chat/completions/responses Gemini stream、native Gemini
+   SDK unary/SSE shared parser、Bedrock 和 Mistral embedding 的受影响 usage 必须
+   遵循同一可信度规则。
 2. **B-002** usage 容器不存在时，响应必须表现为 `usage: None`；不得构造默认
    零 usage。
 3. **B-003** 每种已声明 provider 格式的必需 token 分量必须存在且为 JSON
@@ -91,6 +91,16 @@ complexity: high
     一次，这是从漏计到正确计费的有意修正。
 12. **B-012** 解析失败不得仅记录低级别日志后继续生成成功的零 token、零费用
     账单副作用。
+13. **B-013** 标准 Gemini/Vertex SSE 必须区分 Missing、Valid 与 Invalid usage：
+    Missing 不改变累计 Valid；后续 Invalid 必须清除旧 Valid，后续权威 Valid 可恢复。
+    EOF 与 upstream read error 前必须先处理残留 SSE buffer；截断的
+    `usageMetadata` 必须成为 Invalid。provider stream 必须在私有 accumulator 中
+    保存状态，剥离内容 chunk 上的 usage，仅在终态仍为 Valid 时发送一个合法
+    usage-only chunk；终态 Invalid/Missing 不发送 usage。chat、completions 与
+    responses 三条标准路由只能收到无内部标记、无伪零 usage 的公开 `ChatChunk`，
+    并把 Invalid 的 `None` 交给既有 no-usage reservation settlement。transformer
+    的克隆必须为独立 stream 创建独立 accumulator，任一克隆终止不得读取、清除或
+    Finalize 另一克隆的 usage。
 
 ## 验收标准
 
@@ -114,6 +124,11 @@ complexity: high
 - [ ] native Gemini route-level SSE 测试证明：先收到 output、再发生 upstream read
       error 且没有 usage 时，caller 传递真实 output 状态并按各 reservation 自有金额
       结算；error 发生在任何 output 前时不伪造已输出结算。
+- [ ] standard Gemini/Vertex stream 覆盖 Valid→Invalid、Valid→Missing、
+      Valid→Invalid→Valid、EOF truncated 与 read-error residual buffer；三个标准
+      路由最终序列化、direct provider consumer 均永不出现内部 marker/伪零 usage，
+      Invalid 后继续使用 no-usage reservation settlement；两个 transformer 克隆
+      交错消费和终止时 usage/finalization 状态彼此隔离。
 - [ ] 未声明字段名和嵌套形状不会被猜测为 usage。
 - [ ] 不含 Vertex/direct Gemini 扩展计数的合法非零 usage 兼容性回归测试通过；
       扩展计数非零的 token/cost 修正，以及两条 endpoint 各自的 reported-total
@@ -132,6 +147,8 @@ complexity: high
   以避免静默免费调用。
 - 流式响应可能在已发送 candidate/output 后、最终 usage chunk 前断开；是否进入
   no-usage settlement 必须取决于真实 upstream output 状态，而不是终止分支常量。
+- 标准 SSE 可能在同一网络读取中包含多个 usage event；Invalid 必须按事件顺序覆盖
+  旧 Valid，而不是把一批 chunks 聚合后再猜测最终状态。
 
 ## 发布说明
 
@@ -141,4 +158,5 @@ provider 已发生字段漂移，运营日志将显式暴露该问题。Vertex �
 非流式、标准 chat stream、native SDK unary/SSE 的 tool-use prompt/thoughts token
 现在分别计入 input/output 费用一次，并各自使用官方 endpoint-specific
 reported-total 公式校验。native Gemini SSE 在已输出后遇到 read error 时不再释放
-未记账的 reservation。
+未记账的 reservation。标准 Gemini/Vertex SSE 的 malformed 或截断后续 metadata
+也不再复用较早、较低的累计 usage。

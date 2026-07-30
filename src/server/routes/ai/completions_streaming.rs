@@ -234,11 +234,19 @@ pub(super) async fn handle_streaming_completion(
 
                     let bytes = match chunk_result {
                         Ok(chunk) => {
-                            saw_upstream_output = true;
+                            let has_candidate_output =
+                                spend::stream_chunk_has_candidate_output(&chunk);
                             if let Some(usage) = &chunk.usage {
-                                tokens_used = u64::from(usage.total_tokens);
                                 final_usage = Some(usage.clone());
                             }
+                            tokens_used = final_usage
+                                .as_ref()
+                                .map(|usage| u64::from(usage.total_tokens))
+                                .unwrap_or(0);
+                            if chunk.choices.is_empty() && chunk.usage.is_none() {
+                                continue;
+                            }
+                            saw_upstream_output |= has_candidate_output;
                             let prefix_for_chunk = if chunk_has_text_delta(&chunk) {
                                 echo_prefix.take()
                             } else {

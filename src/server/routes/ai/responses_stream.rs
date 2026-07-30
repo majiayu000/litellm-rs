@@ -41,6 +41,17 @@ use responses_stream_support::{
     make_shell, output_items_in_stream_order, response_usage_from_chat_usage, sse_error,
 };
 
+fn response_stream_total_tokens(
+    final_usage: Option<&ChatUsage>,
+    input_tokens: u32,
+    output_tokens: u32,
+) -> u32 {
+    final_usage.map_or_else(
+        || input_tokens.saturating_add(output_tokens),
+        |usage| usage.total_tokens,
+    )
+}
+
 /// Accumulated state for one in-progress tool call during streaming.
 struct ToolCallAccum {
     item_id: String,
@@ -346,12 +357,23 @@ pub(crate) async fn handle_streaming_response(
 
                     match result {
                         Ok(chunk) => {
-                            if let Some(u) = &chunk.usage {
+                            let has_candidate_output =
+                                spend::stream_chunk_has_candidate_output(&chunk);
+                            if let Some(usage) = &chunk.usage {
+                                final_usage = Some(usage.clone());
+                            }
+                            if let Some(u) = &final_usage {
                                 in_tokens = u.prompt_tokens;
                                 out_tokens = u.completion_tokens;
-                                final_usage = Some(u.clone());
                                 saw_upstream_output = true;
+                            } else {
+                                in_tokens = 0;
+                                out_tokens = 0;
                             }
+                            if chunk.choices.is_empty() && chunk.usage.is_none() {
+                                continue;
+                            }
+                            saw_upstream_output |= has_candidate_output;
                             for choice in &chunk.choices {
                                 if let Some(r) = &choice.finish_reason {
                                     final_status = finish_reason_enum_to_status(Some(r));
@@ -695,7 +717,8 @@ pub(crate) async fn handle_streaming_response(
 
                 let output_items = output_items_in_stream_order(all_output);
 
-                let total = in_tokens + out_tokens;
+                let total =
+                    response_stream_total_tokens(final_usage.as_ref(), in_tokens, out_tokens);
                 let budget_usage = final_usage.clone().or_else(|| {
                     (total > 0).then_some(ChatUsage {
                         prompt_tokens: in_tokens,

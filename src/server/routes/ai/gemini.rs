@@ -24,7 +24,8 @@ use provider::{
     gemini_router_models, missing_gemini_provider_error, send_gemini_request,
 };
 use spend::{
-    GeminiSpendState, extract_gemini_sse_usage, record_gemini_spend, settle_gemini_stream_spend,
+    GeminiSpendState, GeminiStreamUsage, extract_gemini_sse_observation,
+    finish_gemini_sse_observation, record_gemini_spend, settle_gemini_stream_spend,
 };
 
 const GEMINI_V1: &str = "v1";
@@ -422,7 +423,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
         let mut stream_lease = Some(stream_lease);
         let mut upstream = response.bytes_stream();
         let mut sse_buffer = String::new();
-        let mut final_usage = None;
+        let mut final_usage = GeminiStreamUsage::Missing;
         let mut saw_upstream_output = false;
 
         while let Some(chunk_result) = upstream.next().await {
@@ -430,6 +431,9 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                 Ok(bytes) => bytes,
                 Err(_) => {
                     error!("Gemini SDK upstream stream error; closing client stream");
+                    let observation = finish_gemini_sse_observation(&mut sse_buffer);
+                    final_usage.observe(observation.usage);
+                    saw_upstream_output |= observation.saw_candidate_output;
                     if let Some(lease) = stream_lease.take() {
                         let error = ProviderError::streaming_error(
                             "gemini_proxy",
@@ -450,10 +454,14 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                     settle_gemini_stream_spend(
                         &spend_state,
                         &provider,
-                        should_record_spend.then(|| final_usage.take()).flatten(),
+                        if should_record_spend {
+                            std::mem::take(&mut final_usage)
+                        } else {
+                            GeminiStreamUsage::Missing
+                        },
                         budget_reservation.take(),
                         key_budget_reservation.take(),
-                        false,
+                        should_record_spend && saw_upstream_output,
                     )
                     .await;
                     if tx
@@ -468,11 +476,13 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                     return;
                 }
             };
-            saw_upstream_output = true;
-            if let Some(usage) = extract_gemini_sse_usage(&bytes, &mut sse_buffer) {
-                final_usage = Some(usage);
-            }
+            let observation = extract_gemini_sse_observation(&bytes, &mut sse_buffer);
+            final_usage.observe(observation.usage);
+            saw_upstream_output |= observation.saw_candidate_output;
             if tx.send(bytes).await.is_err() {
+                let observation = finish_gemini_sse_observation(&mut sse_buffer);
+                final_usage.observe(observation.usage);
+                saw_upstream_output |= observation.saw_candidate_output;
                 let spend_state = GeminiSpendState {
                     pricing: pricing.as_ref(),
                     pricing_config: &pricing_config,
@@ -483,7 +493,11 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                 settle_gemini_stream_spend(
                     &spend_state,
                     &provider,
-                    should_record_spend.then(|| final_usage.take()).flatten(),
+                    if should_record_spend {
+                        std::mem::take(&mut final_usage)
+                    } else {
+                        GeminiStreamUsage::Missing
+                    },
                     budget_reservation.take(),
                     key_budget_reservation.take(),
                     should_record_spend && saw_upstream_output,
@@ -493,6 +507,9 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
             }
         }
 
+        let observation = finish_gemini_sse_observation(&mut sse_buffer);
+        final_usage.observe(observation.usage);
+        saw_upstream_output |= observation.saw_candidate_output;
         let spend_state = GeminiSpendState {
             pricing: pricing.as_ref(),
             pricing_config: &pricing_config,
@@ -501,7 +518,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
             api_key_id,
         };
         let tokens_used = final_usage
-            .as_ref()
+            .as_valid()
             .map(|usage| u64::from(usage.total_tokens))
             .unwrap_or(0);
         settle_gemini_stream_spend(
@@ -510,7 +527,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
             if should_record_spend {
                 final_usage
             } else {
-                None
+                GeminiStreamUsage::Missing
             },
             budget_reservation.take(),
             key_budget_reservation.take(),

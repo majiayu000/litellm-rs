@@ -1,6 +1,41 @@
 use super::*;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 
+#[test]
+fn test_client_vertex_usage_parser_is_strict_and_endpoint_aware() {
+    let valid = serde_json::json!({"usageMetadata": {
+        "promptTokenCount": 10, "toolUsePromptTokenCount": 2,
+        "candidatesTokenCount": 3, "thoughtsTokenCount": 4,
+        "cachedContentTokenCount": 5, "totalTokenCount": 19
+    }});
+    let usage = parse_vertex_usage(&valid).unwrap();
+    assert_eq!(
+        (
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens
+        ),
+        (12, 7, 19)
+    );
+    assert!(usage.completion_tokens_details.is_none());
+    let prompt_details = usage.prompt_tokens_details.unwrap();
+    assert_eq!(prompt_details.cached_tokens, Some(5));
+    assert_eq!(prompt_details.cache_read_tokens, Some(5));
+    for bad in [
+        serde_json::json!({}),
+        serde_json::json!({"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3, "totalTokenCount": 12}}),
+        serde_json::json!({"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": null, "totalTokenCount": 10}}),
+        serde_json::json!({"usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}}),
+    ] {
+        assert!(parse_vertex_usage(&bad).is_none());
+    }
+    let huge = serde_json::json!({"usageMetadata": {
+        "promptTokenCount": u64::MAX, "candidatesTokenCount": 0,
+        "totalTokenCount": u64::MAX
+    }});
+    assert_eq!(parse_vertex_usage(&huge).unwrap().total_tokens, u32::MAX);
+}
+
 // ==================== VertexAIErrorMapper Tests ====================
 
 #[test]

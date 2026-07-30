@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
+use crate::core::providers::shared::strict_vertex_usage_metadata;
 use crate::core::{
     traits::{
         error_mapper::trait_def::ErrorMapper,
@@ -674,24 +675,7 @@ impl LLMProvider for VertexAIProvider {
             .to_string();
 
         // Usage statistics information
-        let usage = response_json.get("usageMetadata").map(|usage_json| {
-            let input_tokens = usage_json
-                .get("promptTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            let output_tokens = usage_json
-                .get("candidatesTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            crate::core::types::responses::Usage {
-                prompt_tokens: input_tokens,
-                completion_tokens: output_tokens,
-                total_tokens: input_tokens + output_tokens,
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-                thinking_usage: None,
-            }
-        });
+        let usage = parse_vertex_usage(&response_json);
 
         Ok(ChatResponse {
             id: format!("vertex-ai-{}", uuid::Uuid::new_v4()),
@@ -732,6 +716,12 @@ impl LLMProvider for VertexAIProvider {
     fn get_error_mapper(&self) -> Box<dyn ErrorMapper<ProviderError>> {
         Box::new(VertexAIErrorMapper)
     }
+}
+
+fn parse_vertex_usage(response: &Value) -> Option<crate::core::types::responses::Usage> {
+    response
+        .get("usageMetadata")
+        .and_then(strict_vertex_usage_metadata)
 }
 
 #[cfg(test)]

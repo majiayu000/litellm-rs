@@ -15,7 +15,7 @@ use crate::core::types::{
     context::RequestContext,
     message::MessageContent,
     message::MessageRole,
-    responses::{ChatChoice, ChatChunk, ChatResponse, FinishReason, Usage},
+    responses::{ChatChoice, ChatChunk, ChatResponse, FinishReason},
 };
 
 use super::client::AzureAIClient;
@@ -375,14 +375,9 @@ impl AzureAIChatUtils {
             .map(|(index, choice)| Self::transform_choice(choice, index))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let usage = response.get("usage").map(|usage_data| Usage {
-            prompt_tokens: usage_data["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-            completion_tokens: usage_data["completion_tokens"].as_u64().unwrap_or(0) as u32,
-            total_tokens: usage_data["total_tokens"].as_u64().unwrap_or(0) as u32,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
-            thinking_usage: None,
-        });
+        let usage = response
+            .get("usage")
+            .and_then(crate::core::providers::shared::strict_openai_chat_usage);
 
         Ok(ChatResponse {
             id,

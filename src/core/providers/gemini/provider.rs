@@ -402,6 +402,9 @@ impl LLMProvider for GeminiProvider {
 mod native_tests {
     use super::*;
     use crate::core::net::ProviderEndpointAccess;
+    use crate::core::types::chat::ChatMessage;
+    use crate::core::types::message::{MessageContent, MessageRole};
+    use futures::StreamExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     #[test]
     fn native_transport_timeout_keeps_timeout_classification() {
@@ -439,6 +442,66 @@ mod native_tests {
         task.await.unwrap();
         error
     }
+
+    async fn stream_provider(mut config: GeminiConfig, body: &str) -> Vec<ChatChunk> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        config.base_url = format!("http://{address}");
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        let provider = GeminiProvider::new(config).unwrap();
+        let request = ChatRequest {
+            model: "gemini-1.5-flash".to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("hello".to_string())),
+                ..Default::default()
+            }],
+            stream: true,
+            ..Default::default()
+        };
+        let stream = provider
+            .chat_completion_stream(request, RequestContext::default())
+            .await
+            .unwrap();
+        task.await.unwrap();
+        stream.map(|chunk| chunk.unwrap()).collect().await
+    }
+
+    #[tokio::test]
+    async fn public_provider_stream_never_exposes_invalid_usage_marker_or_zero_usage() {
+        let body = concat!(
+            "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":1,",
+            "\"candidatesTokenCount\":2,\"totalTokenCount\":3}}\n\n",
+            "data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":4,",
+            "\"totalTokenCount\":4}}\n\n"
+        );
+        for config in [
+            GeminiConfig::new_google_ai("test-key-12345678901234567890"),
+            GeminiConfig::new_vertex_ai("project", "location"),
+        ] {
+            let chunks = stream_provider(config, body).await;
+            assert_eq!(chunks.len(), 1);
+            assert!(chunks[0].choices.is_empty());
+            assert!(chunks[0].usage.is_none());
+            assert!(
+                !serde_json::to_string(&chunks[0])
+                    .unwrap()
+                    .contains("__litellm")
+            );
+        }
+    }
+
     #[tokio::test]
     async fn native_error_redacts_raw_and_form_encoded_key() {
         let key = "secret/key+value-12345678901234567890";

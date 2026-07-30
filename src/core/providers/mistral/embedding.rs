@@ -42,7 +42,7 @@ impl MistralEmbeddingHandler {
         &self,
         response: Value,
     ) -> Result<crate::core::types::responses::EmbeddingResponse, MistralError> {
-        use crate::core::types::responses::{EmbeddingData, Usage};
+        use crate::core::types::responses::EmbeddingData;
 
         let object = response
             .get("object")
@@ -81,17 +81,9 @@ impl MistralEmbeddingHandler {
             })
             .unwrap_or_default();
 
-        // Parse usage
-        let usage = response.get("usage").map(|u| {
-            Usage {
-                prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                completion_tokens: 0, // Not applicable for embeddings
-                total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-                thinking_usage: None,
-            }
-        });
+        let usage = response
+            .get("usage")
+            .and_then(crate::core::providers::shared::strict_openai_embedding_usage);
 
         info!("Mistral embedding response transformed successfully");
 
@@ -110,6 +102,7 @@ mod tests {
     use super::*;
     use crate::core::types::embedding::EmbeddingInput;
     use crate::core::types::embedding::EmbeddingRequest;
+    use crate::core::types::responses::EmbeddingResponse;
 
     fn create_test_config() -> MistralConfig {
         MistralConfig {
@@ -330,5 +323,39 @@ mod tests {
         let embeddings = embedding_response.embeddings.unwrap();
         assert_eq!(embeddings.len(), 1);
         assert_eq!(embeddings[0].embedding, vec![0.1f32, 0.2f32, 0.3f32]);
+    }
+
+    fn response_with_usage(usage: Value) -> EmbeddingResponse {
+        MistralEmbeddingHandler::new(create_test_config())
+            .unwrap()
+            .transform_response(json!({
+                "object": "list", "model": "mistral-embed",
+                "data": [{"index": 0, "embedding": [0.1]}],
+                "usage": usage
+            }))
+            .unwrap()
+    }
+
+    #[test]
+    fn test_usage_is_strict_in_raw_domain_and_saturating() {
+        for bad in [
+            json!({"total_tokens": 8}),
+            json!({"prompt_tokens": "8", "total_tokens": 8}),
+            json!({"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 8}),
+            json!({"prompt_tokens": 8, "total_tokens": 9}),
+            json!({"prompt_tokens": 0, "total_tokens": 0}),
+            json!({"prompt_tokens": u64::MAX, "total_tokens": u64::MAX - 1}),
+        ] {
+            assert!(response_with_usage(bad).usage.is_none());
+        }
+        let usage = response_with_usage(json!({
+            "prompt_tokens": u64::MAX, "total_tokens": u64::MAX
+        }))
+        .usage
+        .unwrap();
+        assert_eq!(
+            (usage.prompt_tokens, usage.total_tokens),
+            (u32::MAX, u32::MAX)
+        );
     }
 }

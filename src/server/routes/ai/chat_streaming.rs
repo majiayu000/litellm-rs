@@ -241,11 +241,19 @@ pub(super) async fn handle_streaming_chat_completion(
 
                     let bytes = match chunk_result {
                         Ok(chunk) => {
-                            saw_upstream_output = true;
+                            let has_candidate_output =
+                                spend::stream_chunk_has_candidate_output(&chunk);
                             if let Some(usage) = &chunk.usage {
-                                tokens_used = u64::from(usage.total_tokens);
                                 final_usage = Some(usage.clone());
                             }
+                            tokens_used = final_usage
+                                .as_ref()
+                                .map(|usage| u64::from(usage.total_tokens))
+                                .unwrap_or(0);
+                            if chunk.choices.is_empty() && chunk.usage.is_none() {
+                                continue;
+                            }
+                            saw_upstream_output |= has_candidate_output;
                             let mut chat_chunk = match super::convert_core_chunk_to_streaming(chunk)
                             {
                                 Ok(chat_chunk) => chat_chunk,

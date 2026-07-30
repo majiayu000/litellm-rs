@@ -1,6 +1,9 @@
 //! Request/Response transformers for Vertex AI models
 
 use crate::ProviderError;
+use crate::core::providers::shared::{
+    strict_token_count, strict_usage, strict_vertex_usage_metadata,
+};
 use crate::core::types::responses::FinishReason;
 use crate::core::types::{
     chat::ChatMessage,
@@ -239,14 +242,9 @@ impl GeminiTransformer {
             });
 
         // Parse usage
-        let usage = response.get("usageMetadata").map(|usage_metadata| Usage {
-            prompt_tokens: usage_metadata["promptTokenCount"].as_u64().unwrap_or(0) as u32,
-            completion_tokens: usage_metadata["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
-            total_tokens: usage_metadata["totalTokenCount"].as_u64().unwrap_or(0) as u32,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
-            thinking_usage: None,
-        });
+        let usage = response
+            .get("usageMetadata")
+            .and_then(strict_vertex_usage_metadata);
 
         Ok(ChatResponse {
             id: uuid::Uuid::new_v4().to_string(),
@@ -482,36 +480,9 @@ impl PartnerModelTransformer {
 
         let message_content = content.map(MessageContent::Text);
 
-        // Try to extract usage if available
-        let usage = if let Some(metadata) = response.get("metadata") {
-            metadata.get("tokenMetadata").map(|token_metadata| Usage {
-                prompt_tokens: token_metadata["inputTokens"]["totalTokens"]
-                    .as_u64()
-                    .unwrap_or(0) as u32,
-                completion_tokens: token_metadata["outputTokens"]["totalTokens"]
-                    .as_u64()
-                    .unwrap_or(0) as u32,
-                total_tokens: 0, // Will be calculated
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-                thinking_usage: None,
-            })
-        } else {
-            None
-        };
-
-        let mut usage = usage.unwrap_or(Usage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
-            thinking_usage: None,
-        });
-
-        if usage.total_tokens == 0 {
-            usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-        }
+        let usage = response
+            .pointer("/metadata/tokenMetadata")
+            .and_then(parse_legacy_token_metadata);
 
         Ok(ChatResponse {
             id: uuid::Uuid::new_v4().to_string(),
@@ -533,10 +504,16 @@ impl PartnerModelTransformer {
                 finish_reason: Some(FinishReason::Stop),
                 logprobs: None,
             }],
-            usage: Some(usage),
+            usage,
             system_fingerprint: None,
         })
     }
+}
+
+fn parse_legacy_token_metadata(metadata: &Value) -> Option<Usage> {
+    let prompt = strict_token_count(metadata.pointer("/inputTokens/totalTokens"))?;
+    let completion = strict_token_count(metadata.pointer("/outputTokens/totalTokens"))?;
+    strict_usage(&[prompt], &[completion], None, None)
 }
 #[cfg(test)]
 mod tests {
