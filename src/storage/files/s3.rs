@@ -30,6 +30,24 @@ pub struct S3Storage {
 }
 
 impl S3Storage {
+    #[cfg(all(test, feature = "s3"))]
+    pub(super) fn test_endpoint(endpoint: String) -> Self {
+        use aws_s3::config::{Credentials, Region};
+        let config = aws_s3::Config::builder()
+            .behavior_version_latest()
+            .region(Region::new("us-east-1"))
+            .credentials_provider(Credentials::new("test", "test", None, None, "fixture"))
+            .retry_config(aws_config::retry::RetryConfig::standard().with_max_attempts(1))
+            .endpoint_url(endpoint)
+            .force_path_style(true)
+            .build();
+        Self {
+            bucket: "test-bucket".into(),
+            _region: "us-east-1".into(),
+            client: Some(aws_s3::Client::from_conf(config)),
+        }
+    }
+
     /// Create a new S3 storage instance
     ///
     /// Credential resolution order:

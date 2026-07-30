@@ -215,3 +215,118 @@ fn test_content_type_detection() {
         "application/octet-stream"
     );
 }
+
+#[cfg(feature = "s3")]
+mod s3_pagination {
+    use super::super::s3::S3Storage;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use url::Url;
+
+    async fn fixture(responses: Vec<(u16, String)>) -> (S3Storage, Arc<Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        tokio::spawn(async move {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0; 2048];
+                    let size = stream.read(&mut chunk).await.unwrap();
+                    if size == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..size]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8(request).unwrap());
+                let reason = if status == 200 {
+                    "OK"
+                } else {
+                    "Internal Server Error"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (S3Storage::test_endpoint(endpoint), requests)
+    }
+
+    fn page(keys: impl IntoIterator<Item = String>, truncated: bool, token: &str) -> String {
+        let contents = keys
+            .into_iter()
+            .map(|key| format!("<Contents><Key>{key}</Key></Contents>"))
+            .collect::<String>();
+        format!(
+            r#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>{truncated}</IsTruncated>{token}{contents}</ListBucketResult>"#
+        )
+    }
+
+    fn query(request: &str) -> Vec<(String, String)> {
+        let target = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap();
+        Url::parse(&format!("http://fixture{target}"))
+            .unwrap()
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn gh1130_list_objects_paginates_past_1000_with_stable_prefix_and_limit() {
+        let first = page(
+            (0..1000).map(|index| format!("tenant/{index:04}")),
+            true,
+            "<NextContinuationToken>page-2</NextContinuationToken>",
+        );
+        let second = page(["tenant/1000".into()], false, "");
+        let (storage, requests) = fixture(vec![(200, first), (200, second)]).await;
+
+        let keys = storage.list(Some("tenant/"), Some(1001)).await.unwrap();
+        assert_eq!(keys.len(), 1001);
+        assert_eq!(keys.first().unwrap(), "tenant/0000");
+        assert_eq!(keys.last().unwrap(), "tenant/1000");
+
+        let requests = requests.lock().unwrap();
+        let first_query = query(&requests[0]);
+        let second_query = query(&requests[1]);
+        for query in [&first_query, &second_query] {
+            assert!(query.contains(&("list-type".into(), "2".into())));
+            assert!(query.contains(&("prefix".into(), "tenant/".into())));
+        }
+        assert!(first_query.contains(&("max-keys".into(), "1000".into())));
+        assert!(second_query.contains(&("max-keys".into(), "1".into())));
+        assert!(second_query.contains(&("continuation-token".into(), "page-2".into())));
+    }
+
+    #[tokio::test]
+    async fn gh1130_list_objects_surfaces_later_page_error() {
+        let first = page(
+            ["tenant/0000".into()],
+            true,
+            "<NextContinuationToken>page-2</NextContinuationToken>",
+        );
+        let error = "<Error><Code>InternalError</Code><Message>later page</Message></Error>".into();
+        let (storage, requests) = fixture(vec![(200, first), (500, error)]).await;
+
+        assert!(storage.list(Some("tenant/"), None).await.is_err());
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(query(&requests[1]).contains(&("continuation-token".into(), "page-2".into())));
+    }
+}

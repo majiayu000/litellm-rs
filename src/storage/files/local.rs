@@ -701,7 +701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gh1130_failed_staging_and_meta_only_records_are_not_visible() {
+    async fn gh1130_failed_publish_and_meta_only_records_are_not_visible() {
         let temp = tempfile::TempDir::new().unwrap();
         let storage = LocalStorage::new(temp.path().to_str().unwrap())
             .await
@@ -712,20 +712,34 @@ mod tests {
             FileOwnerScope::User(Uuid::new_v4()),
         );
 
-        let staging_metadata = temp
-            .path()
-            .join(STAGING_DIRECTORY)
-            .join(&file_id)
-            .join("metadata");
-        fs::create_dir_all(&staging_metadata).await.unwrap();
-        assert!(
-            storage
-                .store_envelope_with_id(&file_id, b"{}\n", &metadata)
-                .await
-                .is_err()
-        );
+        let final_metadata = storage.get_metadata_path(&file_id);
+        fs::create_dir_all(&final_metadata).await.unwrap();
+        let error = storage
+            .store_envelope_with_id(&file_id, b"{}\n", &metadata)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("publish file metadata"));
+        assert!(!temp.path().join(STAGING_DIRECTORY).join(&file_id).exists());
         assert!(!storage.get_file_path(&file_id).exists());
-        assert!(!storage.get_metadata_path(&file_id).exists());
+        fs::remove_dir(&final_metadata).await.unwrap();
+
+        let content_failure_id = Uuid::new_v4().to_string();
+        let final_content = storage.get_file_path(&content_failure_id);
+        fs::create_dir_all(&final_content).await.unwrap();
+        let error = storage
+            .store_envelope_with_id(&content_failure_id, b"{}\n", &metadata)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("publish file content"));
+        assert!(!storage.get_metadata_path(&content_failure_id).exists());
+        assert!(
+            !temp
+                .path()
+                .join(STAGING_DIRECTORY)
+                .join(&content_failure_id)
+                .exists()
+        );
+        fs::remove_dir(&final_content).await.unwrap();
 
         let meta_only_id = Uuid::new_v4().to_string();
         let meta_path = storage.get_metadata_path(&meta_only_id);
