@@ -158,11 +158,17 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                 web::get().to(list_fine_tuning_checkpoints),
             )
             // Files
-            .route("/files", web::post().to(create_file))
-            .route("/files", web::get().to(list_files))
-            .route("/files/{file_id}", web::get().to(get_file))
-            .route("/files/{file_id}", web::delete().to(delete_file))
-            .route("/files/{file_id}/content", web::get().to(get_file_content))
+            .route("/files", web::post().to(files::create_file_http))
+            .route("/files", web::get().to(files::list_files_http))
+            .route("/files/{file_id}", web::get().to(files::get_file_http))
+            .route(
+                "/files/{file_id}",
+                web::delete().to(files::delete_file_http),
+            )
+            .route(
+                "/files/{file_id}/content",
+                web::get().to(files::get_file_content_http),
+            )
             // Image generation
             .route("/images/generations", web::post().to(image_generations))
             .route("/images/edits", web::post().to(image_edits))

@@ -243,7 +243,7 @@ where
                         }
                         Err(error) => {
                             warn!("Authenticated API key policy is invalid: {}", error);
-                            return Ok(forbidden_response(req, error.to_string()));
+                            return Ok(authentication_unavailable_response(req));
                         }
                     }
 
