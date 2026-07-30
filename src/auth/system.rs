@@ -1,15 +1,41 @@
 //! Core authentication system implementation
 
 use super::types::{AuthMethod, AuthResult, AuthzResult};
-use crate::auth::jwt::types::TokenType;
+use crate::auth::jwt::types::{TeamScopeMarker, TokenType};
 use crate::config::models::auth::AuthConfig;
 use crate::core::models::user::types::{User, UserRole};
+use crate::core::teams::TeamRepository;
 use crate::core::types::context::RequestContext;
 use crate::storage::StorageLayer;
+use crate::storage::database::SeaOrmTeamRepository;
 use crate::utils::error::gateway_error::Result;
 use std::sync::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
+
+/// Proof that a user's membership and team are both active in canonical storage.
+///
+/// Construction and fields are intentionally private to this module. Callers can
+/// only receive a proof after [`AuthSystem::validate_active_team`] succeeds.
+#[derive(Debug, Clone)]
+pub(crate) struct VerifiedActiveTeam {
+    user_id: Uuid,
+    team_id: Uuid,
+}
+
+impl VerifiedActiveTeam {
+    fn new(user_id: Uuid, team_id: Uuid) -> Self {
+        Self { user_id, team_id }
+    }
+
+    pub(crate) fn matches_user(&self, user_id: Uuid) -> bool {
+        self.user_id == user_id
+    }
+
+    pub(crate) fn team_id(&self) -> Uuid {
+        self.team_id
+    }
+}
 
 /// Main authentication system
 #[derive(Clone)]
@@ -88,8 +114,9 @@ impl AuthSystem {
         token: &str,
         mut context: RequestContext,
     ) -> Result<AuthResult> {
-        match self.jwt.verify_access_token(token).await {
-            Ok(claims) => {
+        match self.jwt.verify_access_token_with_provenance(token).await {
+            Ok(access_claims) => {
+                let claims = access_claims.public;
                 // Reject non-access tokens (e.g. refresh, password reset)
                 if !matches!(claims.token_type, TokenType::Access) {
                     return Ok(AuthResult {
@@ -107,10 +134,43 @@ impl AuthSystem {
                 if let Some(user) = self.storage.db().find_user_by_id(claims.sub).await? {
                     if user.is_active() {
                         context.user_id = Some(user.id().to_string());
-                        if let Some(team_id) = user.team_ids.first().copied() {
-                            context.set_team_id(team_id);
-                        } else {
-                            context.clear_team_id();
+                        match access_claims.team_scope_version {
+                            TeamScopeMarker::Absent => context.clear_team_id(),
+                            TeamScopeMarker::Present(1) => {
+                                if let Some(team_id) = claims.team_id {
+                                    match self.validate_active_team(user.id(), team_id).await? {
+                                        Some(verified) => {
+                                            context.set_team_id(verified.team_id());
+                                        }
+                                        None => {
+                                            return Ok(AuthResult {
+                                                success: false,
+                                                user: None,
+                                                api_key: None,
+                                                session: None,
+                                                error: Some(
+                                                    "Selected team is not active".to_string(),
+                                                ),
+                                                context,
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    context.clear_team_id();
+                                }
+                            }
+                            TeamScopeMarker::Present(_) => {
+                                return Ok(AuthResult {
+                                    success: false,
+                                    user: None,
+                                    api_key: None,
+                                    session: None,
+                                    error: Some(
+                                        "Unsupported access-token team scope version".to_string(),
+                                    ),
+                                    context,
+                                });
+                            }
                         }
 
                         Ok(AuthResult {
@@ -269,6 +329,34 @@ impl AuthSystem {
             UserRole::Viewer => vec!["read:own".to_string()],
         };
         Ok(permissions)
+    }
+
+    /// Validate an explicit active-team selection against canonical team storage.
+    ///
+    /// Missing, inactive, suspended, or mismatched records are semantic rejection
+    /// (`Ok(None)`); repository failures remain errors for the HTTP boundary to
+    /// map to a generic 5xx.
+    pub(crate) async fn validate_active_team(
+        &self,
+        user_id: Uuid,
+        team_id: Uuid,
+    ) -> Result<Option<VerifiedActiveTeam>> {
+        let repository = SeaOrmTeamRepository::new(self.storage.database.clone());
+        let Some(team) = repository.get(team_id).await? else {
+            return Ok(None);
+        };
+        if team.id() != team_id || !team.is_active() {
+            return Ok(None);
+        }
+
+        let Some(member) = repository.get_member(team_id, user_id).await? else {
+            return Ok(None);
+        };
+        if member.team_id != team_id || member.user_id != user_id || !member.is_active() {
+            return Ok(None);
+        }
+
+        Ok(Some(VerifiedActiveTeam::new(user_id, team_id)))
     }
 
     /// Get authentication configuration

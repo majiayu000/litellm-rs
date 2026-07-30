@@ -3,6 +3,7 @@
 use crate::auth::jwt::types::TokenPair;
 use crate::core::models::user::types::User;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// User registration request
 #[derive(Debug, Deserialize)]
@@ -18,6 +19,13 @@ pub struct RegisterRequest {
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct LoginWireRequest {
+    #[serde(flatten)]
+    pub(super) public: LoginRequest,
+    pub(super) team_id: Option<Uuid>,
 }
 
 /// Password change request
@@ -50,6 +58,13 @@ pub struct VerifyEmailRequest {
 #[derive(Debug, Deserialize)]
 pub struct RefreshTokenRequest {
     pub refresh_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RefreshWireRequest {
+    #[serde(flatten)]
+    pub(super) public: RefreshTokenRequest,
+    pub(super) team_id: Option<Uuid>,
 }
 
 /// Authentication response

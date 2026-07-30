@@ -28,6 +28,26 @@ impl AuthSystem {
 
     /// Login user and create session
     pub async fn login(&self, username: &str, password: &str) -> Result<(User, String)> {
+        let user = self.verify_login_credentials(username, password).await?;
+        self.finish_login(user, None).await
+    }
+
+    /// Login with an explicit, server-verified active-team selection.
+    pub(crate) async fn login_with_active_team(
+        &self,
+        username: &str,
+        password: &str,
+        team_id: uuid::Uuid,
+    ) -> Result<(User, String)> {
+        let user = self.verify_login_credentials(username, password).await?;
+        let verified_team = self
+            .validate_active_team(user.id(), team_id)
+            .await?
+            .ok_or_else(|| GatewayError::bad_request("Invalid active team selection"))?;
+        self.finish_login(user, Some(verified_team)).await
+    }
+
+    async fn verify_login_credentials(&self, username: &str, password: &str) -> Result<User> {
         info!("User login attempt: {}", username);
 
         // Find user
@@ -48,24 +68,46 @@ impl AuthSystem {
             return Err(GatewayError::auth("Account is not active"));
         }
 
+        Ok(user)
+    }
+
+    async fn finish_login(
+        &self,
+        user: User,
+        verified_team: Option<super::system::VerifiedActiveTeam>,
+    ) -> Result<(User, String)> {
         // Create session
         let session_id = uuid::Uuid::new_v4();
         let permissions = self.get_user_permissions(&user).await?;
-        let session_token = self
-            .jwt
-            .create_access_token(
-                user.id(),
-                format!("{:?}", user.role),
-                permissions,
-                user.team_ids.first().copied(),
-                Some(session_id),
-            )
-            .await?;
+        let session_token = match verified_team {
+            Some(ref verified_team) => {
+                self.jwt
+                    .create_access_token_for_verified_team(
+                        user.id(),
+                        format!("{:?}", user.role),
+                        permissions,
+                        verified_team,
+                        Some(session_id),
+                    )
+                    .await?
+            }
+            None => {
+                self.jwt
+                    .create_access_token(
+                        user.id(),
+                        format!("{:?}", user.role),
+                        permissions,
+                        None,
+                        Some(session_id),
+                    )
+                    .await?
+            }
+        };
 
         // Update last login
         self.storage.db().update_user_last_login(user.id()).await?;
 
-        info!("User logged in successfully: {}", username);
+        info!("User logged in successfully: {}", user.username);
         Ok((user, session_token))
     }
 

@@ -1,8 +1,11 @@
 //! JWT module tests
 
 #[cfg(test)]
-use crate::auth::jwt::types::{JwtHandler, TokenType};
+use crate::auth::jwt::types::{Claims, JwtHandler, TeamScopeMarker, TokenType};
 use crate::config::models::auth::AuthConfig;
+use jsonwebtoken::{Header, encode};
+use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 async fn create_test_handler() -> JwtHandler {
@@ -22,6 +25,35 @@ async fn create_test_handler() -> JwtHandler {
     };
 
     JwtHandler::new(&config).await.unwrap()
+}
+
+fn access_claims(user_id: Uuid, team_id: Option<Uuid>) -> Claims {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    Claims {
+        sub: user_id,
+        iat: now,
+        exp: now + 3600,
+        iss: "litellm-rs".to_string(),
+        aud: "api".to_string(),
+        jti: Uuid::new_v4().to_string(),
+        role: "user".to_string(),
+        permissions: vec![],
+        team_id,
+        session_id: None,
+        token_type: TokenType::Access,
+    }
+}
+
+fn sign_value(handler: &JwtHandler, value: &Value) -> String {
+    encode(
+        &Header::new(handler.algorithm),
+        value,
+        &handler.encoding_key,
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -45,6 +77,80 @@ async fn test_create_and_verify_access_token() {
     assert_eq!(claims.role, "user");
     assert_eq!(claims.permissions, vec!["read"]);
     assert!(matches!(claims.token_type, TokenType::Access));
+
+    let internal = handler
+        .verify_access_token_with_provenance(&token)
+        .await
+        .unwrap();
+    assert_eq!(internal.team_scope_version, TeamScopeMarker::Present(1));
+    assert!(internal.public.team_id.is_none());
+}
+
+#[tokio::test]
+async fn gh1130_raw_team_access_token_is_rejected_before_encoding() {
+    let handler = create_test_handler().await;
+    let result = handler
+        .create_access_token(
+            Uuid::new_v4(),
+            "user".to_string(),
+            vec![],
+            Some(Uuid::new_v4()),
+            None,
+        )
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn gh1130_marker_presence_state_is_strict() {
+    let handler = create_test_handler().await;
+    let guessed_team = Uuid::new_v4();
+
+    let legacy = serde_json::to_value(access_claims(Uuid::new_v4(), Some(guessed_team))).unwrap();
+    let legacy_token = sign_value(&handler, &legacy);
+    let decoded = handler
+        .verify_access_token_with_provenance(&legacy_token)
+        .await
+        .unwrap();
+    assert_eq!(decoded.team_scope_version, TeamScopeMarker::Absent);
+    assert_eq!(decoded.public.team_id, Some(guessed_team));
+
+    for malformed in [
+        Value::Null,
+        Value::String("1".to_string()),
+        serde_json::json!(1.5),
+        serde_json::json!(256),
+        serde_json::json!({"version": 1}),
+    ] {
+        let mut value =
+            serde_json::to_value(access_claims(Uuid::new_v4(), Some(guessed_team))).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("team_scope_version".to_string(), malformed);
+        let token = sign_value(&handler, &value);
+        assert!(
+            handler
+                .verify_access_token_with_provenance(&token)
+                .await
+                .is_err(),
+            "present malformed marker must not become legacy"
+        );
+    }
+
+    let mut unknown =
+        serde_json::to_value(access_claims(Uuid::new_v4(), Some(guessed_team))).unwrap();
+    unknown
+        .as_object_mut()
+        .unwrap()
+        .insert("team_scope_version".to_string(), serde_json::json!(2));
+    let unknown_token = sign_value(&handler, &unknown);
+    assert!(
+        handler
+            .verify_access_token_with_provenance(&unknown_token)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

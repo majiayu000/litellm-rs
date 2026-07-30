@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info, warn};
 
-use super::models::{LoginRequest, LoginResponse, UserInfo};
+use super::models::{LoginRequest, LoginResponse, LoginWireRequest, UserInfo};
 
 /// Global login rate limiter: 5 attempts per IP per minute
 static LOGIN_RATE_LIMITER: std::sync::OnceLock<Arc<AuthRateLimiter>> = std::sync::OnceLock::new();
@@ -71,6 +71,24 @@ pub async fn login(
     req: HttpRequest,
     state: web::Data<AppState>,
     request: web::Json<LoginRequest>,
+) -> ActixResult<HttpResponse> {
+    login_internal(req, state, request.into_inner(), None).await
+}
+
+pub(super) async fn login_with_wire(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    request: web::Json<LoginWireRequest>,
+) -> ActixResult<HttpResponse> {
+    let request = request.into_inner();
+    login_internal(req, state, request.public, request.team_id).await
+}
+
+async fn login_internal(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    request: LoginRequest,
+    team_id: Option<uuid::Uuid>,
 ) -> ActixResult<HttpResponse> {
     let cfg = state.config.load();
     let client_ip = extract_client_ip(&req, &cfg.gateway.server.trusted_proxies);
@@ -144,6 +162,29 @@ pub async fn login(
             .json(ApiResponse::<()>::error("Invalid credentials".to_string())));
     }
 
+    // Team selection is intentionally checked only after primary credentials and
+    // the active-user gate have succeeded.
+    let verified_team = if let Some(team_id) = team_id {
+        match state.auth.validate_active_team(user.id(), team_id).await {
+            Ok(Some(verified)) => Some(verified),
+            Ok(None) => {
+                return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+                    "Invalid team selection".to_string(),
+                )));
+            }
+            Err(error) => {
+                error!("Team validation failed during login: {}", error);
+                return Ok(
+                    HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
+                        "Internal server error".to_string(),
+                    )),
+                );
+            }
+        }
+    } else {
+        None
+    };
+
     // Update last login time
     if let Err(e) = state
         .storage
@@ -154,13 +195,42 @@ pub async fn login(
         warn!("Failed to update last login time: {}", e);
     }
 
-    // Generate JWT tokens
-    let access_token = match state
-        .auth
-        .jwt()
-        .create_access_token(user.id(), user.role.to_string(), vec![], None, None)
-        .await
-    {
+    let permissions = match state.auth.rbac().get_user_permissions(&user).await {
+        Ok(permissions) => permissions,
+        Err(error) => {
+            error!("Failed to load permissions during login: {}", error);
+            return Ok(
+                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
+                    "Internal server error".to_string(),
+                )),
+            );
+        }
+    };
+
+    // Generate JWT tokens only after every selection and policy check succeeds.
+    let access_token_result = match verified_team.as_ref() {
+        Some(verified_team) => {
+            state
+                .auth
+                .jwt()
+                .create_access_token_for_verified_team(
+                    user.id(),
+                    user.role.to_string(),
+                    permissions,
+                    verified_team,
+                    None,
+                )
+                .await
+        }
+        None => {
+            state
+                .auth
+                .jwt()
+                .create_access_token(user.id(), user.role.to_string(), permissions, None, None)
+                .await
+        }
+    };
+    let access_token = match access_token_result {
         Ok(token) => token,
         Err(e) => {
             error!("Failed to generate access token: {}", e);
