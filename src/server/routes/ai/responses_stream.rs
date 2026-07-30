@@ -357,7 +357,8 @@ pub(crate) async fn handle_streaming_response(
 
                     match result {
                         Ok(chunk) => {
-                            saw_upstream_output = true;
+                            let has_candidate_output =
+                                spend::stream_chunk_has_candidate_output(&chunk);
                             if let Some(usage) = &chunk.usage {
                                 final_usage = Some(usage.clone());
                             }
@@ -372,6 +373,7 @@ pub(crate) async fn handle_streaming_response(
                             if chunk.choices.is_empty() && chunk.usage.is_none() {
                                 continue;
                             }
+                            saw_upstream_output |= has_candidate_output;
                             for choice in &chunk.choices {
                                 if let Some(r) = &choice.finish_reason {
                                     final_status = finish_reason_enum_to_status(Some(r));

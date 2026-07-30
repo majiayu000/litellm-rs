@@ -241,7 +241,8 @@ pub(super) async fn handle_streaming_chat_completion(
 
                     let bytes = match chunk_result {
                         Ok(chunk) => {
-                            saw_upstream_output = true;
+                            let has_candidate_output =
+                                spend::stream_chunk_has_candidate_output(&chunk);
                             if let Some(usage) = &chunk.usage {
                                 final_usage = Some(usage.clone());
                             }
@@ -252,6 +253,7 @@ pub(super) async fn handle_streaming_chat_completion(
                             if chunk.choices.is_empty() && chunk.usage.is_none() {
                                 continue;
                             }
+                            saw_upstream_output |= has_candidate_output;
                             let mut chat_chunk = match super::convert_core_chunk_to_streaming(chunk)
                             {
                                 Ok(chat_chunk) => chat_chunk,

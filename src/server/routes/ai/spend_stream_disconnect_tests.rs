@@ -1,6 +1,34 @@
 use super::*;
 use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
 use crate::core::keys::{CreateKeyConfig, InMemoryKeyRepository};
+use crate::core::types::responses::{ChatDelta, ChatStreamChoice, FinishReason};
+
+#[test]
+fn empty_internal_stream_sentinel_is_not_candidate_output() {
+    let mut chunk = ChatChunk {
+        id: "stream-sentinel".to_string(),
+        object: "chat.completion.chunk".to_string(),
+        created: 0,
+        model: "gemini-test".to_string(),
+        choices: vec![],
+        usage: None,
+        system_fingerprint: None,
+    };
+    assert!(!stream_chunk_has_candidate_output(&chunk));
+
+    let finish_only = ChatStreamChoice {
+        index: 0,
+        delta: ChatDelta::default(),
+        finish_reason: Some(FinishReason::Stop),
+        logprobs: None,
+    };
+    chunk.choices.push(finish_only);
+    assert!(!stream_chunk_has_candidate_output(&chunk));
+
+    chunk.choices[0].finish_reason = None;
+    chunk.choices[0].delta.content = Some("candidate output".to_string());
+    assert!(stream_chunk_has_candidate_output(&chunk));
+}
 
 #[tokio::test]
 async fn stream_disconnect_without_usage_records_reserved_key_cost() {

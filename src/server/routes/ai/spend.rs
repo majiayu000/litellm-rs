@@ -18,7 +18,7 @@ use crate::core::budget::{
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::responses::Usage;
+use crate::core::types::responses::{ChatChunk, FunctionCallDelta, Usage};
 #[cfg(test)]
 use std::sync::LazyLock;
 
@@ -45,6 +45,45 @@ pub(super) use unpriced::{
     fallback_cost_for_usage, is_model_not_priced_error, model_not_priced_error,
     reserve_unpriced_usage_budget, settle_unpriced_usage,
 };
+
+pub(super) fn stream_chunk_has_candidate_output(chunk: &ChatChunk) -> bool {
+    chunk.choices.iter().any(|choice| {
+        let delta = &choice.delta;
+        has_text(delta.content.as_deref())
+            || delta.thinking.as_ref().is_some_and(|thinking| {
+                has_text(thinking.content.as_deref()) || has_text(thinking.signature.as_deref())
+            })
+            || delta.tool_calls.as_ref().is_some_and(|calls| {
+                calls.iter().any(|call| {
+                    has_text(call.id.as_deref())
+                        || has_text(call.tool_type.as_deref())
+                        || call.function.as_ref().is_some_and(function_call_has_output)
+                })
+            })
+            || delta
+                .function_call
+                .as_ref()
+                .is_some_and(function_call_has_output)
+            || delta.audio.as_ref().is_some_and(|audio| {
+                has_text(audio.id.as_deref())
+                    || has_text(audio.data.as_deref())
+                    || has_text(audio.transcript.as_deref())
+                    || has_text(audio.format.as_deref())
+                    || audio.expires_at.is_some()
+            })
+            || choice.logprobs.as_ref().is_some_and(|logprobs| {
+                !logprobs.content.is_empty() || has_text(logprobs.refusal.as_deref())
+            })
+    })
+}
+
+fn function_call_has_output(call: &FunctionCallDelta) -> bool {
+    has_text(call.name.as_deref()) || has_text(call.arguments.as_deref())
+}
+
+fn has_text(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.is_empty())
+}
 
 /// Reject a request before it reaches the upstream provider when the served
 /// provider or model budget is already exhausted.
