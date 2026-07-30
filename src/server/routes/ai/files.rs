@@ -351,7 +351,7 @@ fn authenticated_file_caller(
         if context.api_key_id() != Some(api_key.metadata.id) {
             return Err(GatewayError::internal("API-key identity mismatch"));
         }
-        let context_user = parse_context_user(&context)?;
+        let context_user = parse_context_user(context)?;
         if context_user != api_key.user_id {
             return Err(GatewayError::internal("API-key user identity mismatch"));
         }

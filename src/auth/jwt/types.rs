@@ -61,16 +61,11 @@ pub struct Claims {
 /// Presence-aware provenance for the active-team claim carried by access tokens.
 ///
 /// This stays outside [`Claims`] so the public claims struct remains source-compatible.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum TeamScopeMarker {
+    #[default]
     Absent,
     Present(u8),
-}
-
-impl Default for TeamScopeMarker {
-    fn default() -> Self {
-        Self::Absent
-    }
 }
 
 impl TeamScopeMarker {
