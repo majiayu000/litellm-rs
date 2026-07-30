@@ -121,12 +121,12 @@ async fn create_file_internal(
     };
     let file_id = match store_result {
         Ok(file_id) => file_id,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => return Ok(storage_file_error(&error)),
     };
 
     let metadata = match state.storage.files.metadata_with_owner(&file_id).await {
         Ok(metadata) => metadata,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => return Ok(storage_file_error(&error)),
     };
     if !can_access_file(&caller, &metadata) {
         return Ok(concealed_not_found());
@@ -134,7 +134,7 @@ async fn create_file_internal(
 
     match file_object(&metadata.public) {
         Ok(object) => Ok(HttpResponse::Ok().json(object)),
-        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => Ok(storage_file_error(&error)),
     }
 }
 
@@ -160,21 +160,21 @@ async fn list_files_internal(
     };
     let file_ids = match state.storage.files.list(None, None).await {
         Ok(file_ids) => file_ids,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => return Ok(storage_file_error(&error)),
     };
 
     let mut data = Vec::with_capacity(file_ids.len());
     for file_id in file_ids {
         let metadata = match state.storage.files.metadata_with_owner(&file_id).await {
             Ok(metadata) => metadata,
-            Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+            Err(error) => return Ok(storage_file_error(&error)),
         };
         if !can_access_file(&caller, &metadata) {
             continue;
         }
         let object = match file_object(&metadata.public) {
             Ok(object) => object,
-            Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+            Err(error) => return Ok(storage_file_error(&error)),
         };
         data.push(object);
     }
@@ -220,7 +220,7 @@ async fn get_file_internal(
 
     match file_object(&metadata.public) {
         Ok(object) => Ok(HttpResponse::Ok().json(object)),
-        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => Ok(storage_file_error(&error)),
     }
 }
 
@@ -258,7 +258,7 @@ async fn delete_file_internal(
         return Ok(concealed_not_found());
     }
     if let Err(error) = state.storage.files.delete(&file_id).await {
-        return Ok(openai_errors::gateway_error_response(&error));
+        return Ok(storage_file_error(&error));
     }
 
     Ok(HttpResponse::Ok().json(OpenAiFileDelete {
@@ -303,7 +303,7 @@ async fn get_file_content_internal(
     }
     let content = match state.storage.files.get(&file_id).await {
         Ok(content) => content,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => return Ok(storage_file_error(&error)),
     };
 
     Ok(HttpResponse::Ok()
@@ -348,7 +348,7 @@ fn authenticated_file_caller(
     api_key: Option<&ApiKey>,
 ) -> Result<FileCaller, GatewayError> {
     if let Some(api_key) = api_key {
-        if context.api_key_id() != Some(api_key.metadata.id) {
+        if strict_context_uuid(context, "api_key_id")? != Some(api_key.metadata.id) {
             return Err(GatewayError::internal("API-key identity mismatch"));
         }
         let context_user = parse_context_user(context)?;
@@ -367,7 +367,7 @@ fn authenticated_file_caller(
         });
     }
 
-    if context.api_key_id().is_some() {
+    if strict_context_uuid(context, "api_key_id")?.is_some() {
         return Err(GatewayError::internal(
             "Request context has API-key identity without an authenticated key",
         ));
@@ -378,8 +378,7 @@ fn authenticated_file_caller(
             "Authenticated user identity mismatch",
         ));
     }
-    let scope = context
-        .team_id()
+    let scope = strict_context_uuid(context, "team_id")?
         .map(FileOwnerScope::Team)
         .unwrap_or_else(|| FileOwnerScope::User(user.id()));
     Ok(FileCaller {
@@ -409,6 +408,19 @@ fn parse_context_user(context: &RequestContext) -> Result<Option<Uuid>, GatewayE
         .map_err(|_| GatewayError::internal("Invalid authenticated user identity"))
 }
 
+fn strict_context_uuid(
+    context: &RequestContext,
+    key: &'static str,
+) -> Result<Option<Uuid>, GatewayError> {
+    match context.metadata.get(key) {
+        None => Ok(None),
+        Some(serde_json::Value::String(value)) => Uuid::parse_str(value)
+            .map(Some)
+            .map_err(|_| GatewayError::internal("Invalid authenticated identity")),
+        Some(_) => Err(GatewayError::internal("Invalid authenticated identity")),
+    }
+}
+
 fn can_access_file(caller: &FileCaller, metadata: &StoredFileMetadata) -> bool {
     if !caller.auth_enforced || caller.is_admin {
         return true;
@@ -424,12 +436,17 @@ fn file_lookup_error(error: &GatewayError) -> HttpResponse {
     if matches!(error, GatewayError::NotFound(_)) {
         concealed_not_found()
     } else {
-        openai_errors::gateway_error_response(error)
+        storage_file_error(error)
     }
 }
 
-fn internal_file_error(error: &GatewayError) -> HttpResponse {
-    error!("Files authorization state is invalid: {}", error);
+fn internal_file_error(_error: &GatewayError) -> HttpResponse {
+    error!("Files authorization state is invalid");
+    openai_errors::internal_error("Internal server error")
+}
+
+fn storage_file_error(_error: &GatewayError) -> HttpResponse {
+    error!("Files storage operation failed");
     openai_errors::internal_error("Internal server error")
 }
 
@@ -718,6 +735,11 @@ mod tests {
                 .unwrap()
                 .contains("secret file identifier")
         );
+        let internal = storage_file_error(&GatewayError::Storage("secret backend detail".into()));
+        let body = to_bytes(internal.into_body()).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["message"], "Internal server error");
+        assert!(!serde_json::to_string(&json).unwrap().contains("secret"));
     }
 
     #[test]
@@ -757,5 +779,13 @@ mod tests {
             .with_user(Uuid::new_v4(), None)
             .with_api_key(key.metadata.id);
         assert!(authenticated_file_caller(&mismatched, Some(&admin_user), Some(&key)).is_err());
+        for field in ["team_id", "api_key_id"] {
+            for value in [Value::Null, serde_json::json!(7), serde_json::json!("bad")] {
+                let context = RequestContext::new()
+                    .with_user(admin_user.id(), None)
+                    .with_metadata(field, value);
+                assert!(authenticated_file_caller(&context, Some(&admin_user), None).is_err());
+            }
+        }
     }
 }
