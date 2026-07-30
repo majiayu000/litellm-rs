@@ -14,6 +14,47 @@ use litellm_rs::core::providers::custom_api::{
 };
 #[cfg(not(clippy))]
 use litellm_rs::core::providers::github::{GitHubConfig, GitHubProvider, get_model_info};
+use litellm_rs::server::routes::ai::{
+    create_file, delete_file, get_file, get_file_content, list_files,
+};
+use litellm_rs::server::routes::auth::{LoginRequest, RefreshTokenRequest};
+use litellm_rs::storage::files::{FileMetadata, FileStorage, LocalStorage, S3Storage};
+
+#[test]
+fn gh1130_public_files_auth_and_jwt_shapes_remain_source_compatible() {
+    let now = chrono::Utc::now();
+    let _metadata = FileMetadata {
+        id: "file-public-compat".to_string(),
+        filename: "compat.jsonl".to_string(),
+        content_type: "application/json".to_string(),
+        size: 2,
+        created_at: now,
+        purpose: Some("batch".to_string()),
+        checksum: "checksum".to_string(),
+    };
+    let _login = LoginRequest {
+        username: "compat".to_string(),
+        password: "secret".to_string(),
+    };
+    let _refresh = RefreshTokenRequest {
+        refresh_token: "refresh".to_string(),
+    };
+
+    let _ = create_file;
+    let _ = list_files;
+    let _ = get_file;
+    let _ = delete_file;
+    let _ = get_file_content;
+    let _ = FileStorage::store;
+    let _ = FileStorage::store_with_purpose;
+    let _ = FileStorage::metadata;
+    let _ = LocalStorage::store;
+    let _ = LocalStorage::store_with_purpose;
+    let _ = LocalStorage::metadata;
+    let _ = S3Storage::store;
+    let _ = S3Storage::store_with_purpose;
+    let _ = S3Storage::metadata;
+}
 
 #[cfg(not(clippy))]
 #[test]
