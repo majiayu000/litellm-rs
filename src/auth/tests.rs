@@ -4,6 +4,40 @@
 use crate::auth::types::{AuthMethod, AuthResult, AuthzResult};
 use crate::core::types::context::RequestContext;
 
+#[allow(dead_code)]
+async fn gh1130_compile_public_auth_signatures(
+    handler: &crate::auth::jwt::types::JwtHandler,
+    auth: &super::system::AuthSystem,
+    user_id: uuid::Uuid,
+) -> crate::utils::error::gateway_error::Result<()> {
+    let claims = crate::auth::jwt::types::Claims {
+        sub: user_id,
+        iat: 1,
+        exp: 2,
+        iss: "issuer".to_string(),
+        aud: "api".to_string(),
+        jti: "id".to_string(),
+        role: "user".to_string(),
+        permissions: vec![],
+        team_id: None,
+        session_id: None,
+        token_type: crate::auth::jwt::types::TokenType::Access,
+    };
+    let _: String = handler
+        .create_access_token(user_id, "user".to_string(), vec![], None, None)
+        .await?;
+    let _: crate::auth::jwt::types::TokenPair = handler
+        .create_token_pair(user_id, "user".to_string(), vec![], None, None)
+        .await?;
+    let _: crate::auth::jwt::types::Claims = handler.verify_access_token("token").await?;
+    let _: uuid::Uuid = handler.verify_refresh_token("token").await?;
+    let _: (crate::core::models::user::types::User, String) =
+        auth.login("username", "password").await?;
+    let _: &crate::auth::jwt::types::JwtHandler = auth.jwt();
+    let _ = claims;
+    Ok(())
+}
+
 #[test]
 fn test_auth_result_creation() {
     let context = RequestContext::new();

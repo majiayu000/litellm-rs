@@ -1,7 +1,9 @@
 //! Core JWT handler implementation
 
-use super::types::{AccessTokenClaims, Claims, JwtHandler, TeamScopeMarker, TokenPair, TokenType};
-use crate::auth::system::VerifiedActiveTeam;
+use super::types::{
+    AccessTokenClaims, Claims, JwtHandler, TeamScopeMarker, TokenPair, TokenType,
+    VerifiedActiveTeam,
+};
 use crate::config::models::auth::AuthConfig;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};

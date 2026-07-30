@@ -17,8 +17,38 @@ use litellm_rs::core::providers::github::{GitHubConfig, GitHubProvider, get_mode
 use litellm_rs::server::routes::ai::{
     create_file, delete_file, get_file, get_file_content, list_files,
 };
-use litellm_rs::server::routes::auth::{LoginRequest, RefreshTokenRequest};
+use litellm_rs::server::routes::auth::{
+    LoginRequest, RefreshTokenRequest, configure_routes, login, refresh_token,
+};
+use litellm_rs::storage::StorageLayer;
 use litellm_rs::storage::files::{FileMetadata, FileStorage, LocalStorage, S3Storage};
+
+#[allow(dead_code)]
+async fn gh1130_external_auth_and_storage_signatures(
+    req: actix_web::HttpRequest,
+    state: actix_web::web::Data<litellm_rs::server::state::AppState>,
+    storage: &StorageLayer,
+) -> actix_web::Result<()> {
+    let _: actix_web::HttpResponse = login(
+        req,
+        state.clone(),
+        actix_web::web::Json(LoginRequest {
+            username: "compat".to_string(),
+            password: "secret".to_string(),
+        }),
+    )
+    .await?;
+    let _: actix_web::HttpResponse = refresh_token(
+        state,
+        actix_web::web::Json(RefreshTokenRequest {
+            refresh_token: "refresh".to_string(),
+        }),
+    )
+    .await?;
+    let _: String = storage.store_file("compat.txt", b"compat").await?;
+    let _: Vec<u8> = storage.get_file("file-id").await?;
+    Ok(())
+}
 
 #[test]
 fn gh1130_public_files_auth_and_jwt_shapes_remain_source_compatible() {
@@ -45,6 +75,7 @@ fn gh1130_public_files_auth_and_jwt_shapes_remain_source_compatible() {
     let _ = get_file;
     let _ = delete_file;
     let _ = get_file_content;
+    let _ = configure_routes;
     let _ = FileStorage::store;
     let _ = FileStorage::store_with_purpose;
     let _ = FileStorage::metadata;

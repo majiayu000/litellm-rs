@@ -58,6 +58,34 @@ pub struct Claims {
     pub token_type: TokenType,
 }
 
+/// Proof that a user's membership and team are both active in canonical storage.
+///
+/// The type is nameable inside the crate so auth flows can preserve it across
+/// policy stages. Only the authentication module can construct one.
+#[derive(Debug, Clone)]
+pub(crate) struct VerifiedActiveTeam {
+    user_id: Uuid,
+    team_id: Uuid,
+}
+
+impl VerifiedActiveTeam {
+    pub(in crate::auth) fn new(
+        user_id: Uuid,
+        team_id: Uuid,
+        _seal: crate::auth::system::TeamValidationSeal,
+    ) -> Self {
+        Self { user_id, team_id }
+    }
+
+    pub(crate) fn matches_user(&self, user_id: Uuid) -> bool {
+        self.user_id == user_id
+    }
+
+    pub(crate) fn team_id(&self) -> Uuid {
+        self.team_id
+    }
+}
+
 /// Presence-aware provenance for the active-team claim carried by access tokens.
 ///
 /// This stays outside [`Claims`] so the public claims struct remains source-compatible.

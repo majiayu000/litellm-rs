@@ -1,7 +1,7 @@
 //! Core authentication system implementation
 
 use super::types::{AuthMethod, AuthResult, AuthzResult};
-use crate::auth::jwt::types::{TeamScopeMarker, TokenType};
+use crate::auth::jwt::types::{TeamScopeMarker, TokenType, VerifiedActiveTeam};
 use crate::config::models::auth::AuthConfig;
 use crate::core::models::user::types::{User, UserRole};
 use crate::core::teams::TeamRepository;
@@ -13,29 +13,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-/// Proof that a user's membership and team are both active in canonical storage.
-///
-/// Construction and fields are intentionally private to this module. Callers can
-/// only receive a proof after [`AuthSystem::validate_active_team`] succeeds.
-#[derive(Debug, Clone)]
-pub(crate) struct VerifiedActiveTeam {
-    user_id: Uuid,
-    team_id: Uuid,
-}
-
-impl VerifiedActiveTeam {
-    fn new(user_id: Uuid, team_id: Uuid) -> Self {
-        Self { user_id, team_id }
-    }
-
-    pub(crate) fn matches_user(&self, user_id: Uuid) -> bool {
-        self.user_id == user_id
-    }
-
-    pub(crate) fn team_id(&self) -> Uuid {
-        self.team_id
-    }
-}
+pub(super) struct TeamValidationSeal(());
 
 /// Main authentication system
 #[derive(Clone)]
@@ -356,7 +334,11 @@ impl AuthSystem {
             return Ok(None);
         }
 
-        Ok(Some(VerifiedActiveTeam::new(user_id, team_id)))
+        Ok(Some(VerifiedActiveTeam::new(
+            user_id,
+            team_id,
+            TeamValidationSeal(()),
+        )))
     }
 
     /// Get authentication configuration

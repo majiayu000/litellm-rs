@@ -74,7 +74,7 @@ impl AuthSystem {
     async fn finish_login(
         &self,
         user: User,
-        verified_team: Option<super::system::VerifiedActiveTeam>,
+        verified_team: Option<crate::auth::jwt::types::VerifiedActiveTeam>,
     ) -> Result<(User, String)> {
         // Create session
         let session_id = uuid::Uuid::new_v4();
