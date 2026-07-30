@@ -24,8 +24,8 @@ use provider::{
     gemini_router_models, missing_gemini_provider_error, send_gemini_request,
 };
 use spend::{
-    GeminiSpendState, GeminiStreamUsage, extract_gemini_sse_usage, finish_gemini_sse_usage,
-    record_gemini_spend, settle_gemini_stream_spend,
+    GeminiSpendState, GeminiStreamUsage, extract_gemini_sse_observation,
+    finish_gemini_sse_observation, record_gemini_spend, settle_gemini_stream_spend,
 };
 
 const GEMINI_V1: &str = "v1";
@@ -431,7 +431,9 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                 Ok(bytes) => bytes,
                 Err(_) => {
                     error!("Gemini SDK upstream stream error; closing client stream");
-                    final_usage.observe(finish_gemini_sse_usage(&mut sse_buffer));
+                    let observation = finish_gemini_sse_observation(&mut sse_buffer);
+                    final_usage.observe(observation.usage);
+                    saw_upstream_output |= observation.saw_candidate_output;
                     if let Some(lease) = stream_lease.take() {
                         let error = ProviderError::streaming_error(
                             "gemini_proxy",
@@ -474,10 +476,13 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                     return;
                 }
             };
-            saw_upstream_output = true;
-            final_usage.observe(extract_gemini_sse_usage(&bytes, &mut sse_buffer));
+            let observation = extract_gemini_sse_observation(&bytes, &mut sse_buffer);
+            final_usage.observe(observation.usage);
+            saw_upstream_output |= observation.saw_candidate_output;
             if tx.send(bytes).await.is_err() {
-                final_usage.observe(finish_gemini_sse_usage(&mut sse_buffer));
+                let observation = finish_gemini_sse_observation(&mut sse_buffer);
+                final_usage.observe(observation.usage);
+                saw_upstream_output |= observation.saw_candidate_output;
                 let spend_state = GeminiSpendState {
                     pricing: pricing.as_ref(),
                     pricing_config: &pricing_config,
@@ -502,7 +507,9 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
             }
         }
 
-        final_usage.observe(finish_gemini_sse_usage(&mut sse_buffer));
+        let observation = finish_gemini_sse_observation(&mut sse_buffer);
+        final_usage.observe(observation.usage);
+        saw_upstream_output |= observation.saw_candidate_output;
         let spend_state = GeminiSpendState {
             pricing: pricing.as_ref(),
             pricing_config: &pricing_config,

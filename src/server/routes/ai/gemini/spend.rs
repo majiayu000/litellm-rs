@@ -46,6 +46,19 @@ impl GeminiStreamUsage {
     }
 }
 
+#[derive(Debug, Default)]
+pub(super) struct GeminiSseObservation {
+    pub(super) usage: GeminiStreamUsage,
+    pub(super) saw_candidate_output: bool,
+}
+
+impl GeminiSseObservation {
+    fn observe(&mut self, observation: Self) {
+        self.usage.observe(observation.usage);
+        self.saw_candidate_output |= observation.saw_candidate_output;
+    }
+}
+
 pub(super) async fn settle_gemini_stream_spend(
     spend_state: &GeminiSpendState<'_>,
     provider: &GeminiRouteProvider,
@@ -89,23 +102,36 @@ pub(super) async fn settle_gemini_stream_spend(
     }
 }
 
+#[cfg(test)]
 pub(super) fn extract_gemini_sse_usage(bytes: &Bytes, buffer: &mut String) -> GeminiStreamUsage {
+    extract_gemini_sse_observation(bytes, buffer).usage
+}
+
+pub(super) fn extract_gemini_sse_observation(
+    bytes: &Bytes,
+    buffer: &mut String,
+) -> GeminiSseObservation {
     buffer.push_str(&String::from_utf8_lossy(bytes));
-    let mut usage = GeminiStreamUsage::Missing;
+    let mut observation = GeminiSseObservation::default();
     while let Some((event_end, separator_len)) = next_sse_event_boundary(buffer) {
         let event = buffer[..event_end].to_string();
         buffer.drain(..event_end + separator_len);
-        usage.observe(parse_gemini_sse_event_usage(&event));
+        observation.observe(parse_gemini_sse_event(&event));
     }
-    usage
+    observation
 }
 
+#[cfg(test)]
 pub(super) fn finish_gemini_sse_usage(buffer: &mut String) -> GeminiStreamUsage {
+    finish_gemini_sse_observation(buffer).usage
+}
+
+pub(super) fn finish_gemini_sse_observation(buffer: &mut String) -> GeminiSseObservation {
     let event = std::mem::take(buffer);
     if event.trim().is_empty() {
-        GeminiStreamUsage::Missing
+        GeminiSseObservation::default()
     } else {
-        parse_gemini_sse_event_usage(&event)
+        parse_gemini_sse_event(&event)
     }
 }
 
@@ -313,8 +339,8 @@ fn reservation_error_to_gateway_error(
     }
 }
 
-fn parse_gemini_sse_event_usage(event: &str) -> GeminiStreamUsage {
-    let mut usage = GeminiStreamUsage::Missing;
+fn parse_gemini_sse_event(event: &str) -> GeminiSseObservation {
+    let mut observation = GeminiSseObservation::default();
     for line in event.lines() {
         let Some(data) = line.trim_start().strip_prefix("data:").map(str::trim) else {
             continue;
@@ -323,17 +349,23 @@ fn parse_gemini_sse_event_usage(event: &str) -> GeminiStreamUsage {
             continue;
         }
         let Ok(value) = serde_json::from_str::<Value>(data) else {
-            return GeminiStreamUsage::Invalid;
+            observation.usage = GeminiStreamUsage::Invalid;
+            return observation;
         };
+        observation.saw_candidate_output |= value
+            .get("candidates")
+            .and_then(Value::as_array)
+            .is_some_and(|candidates| !candidates.is_empty());
         if value.get("usageMetadata").is_none() {
             continue;
         }
         let Some(next_usage) = gemini_usage_metadata(&value) else {
-            return GeminiStreamUsage::Invalid;
+            observation.usage = GeminiStreamUsage::Invalid;
+            return observation;
         };
-        usage = GeminiStreamUsage::Valid(next_usage);
+        observation.usage = GeminiStreamUsage::Valid(next_usage);
     }
-    usage
+    observation
 }
 
 fn estimated_gemini_request_usage(request: &Value) -> PricingUsage {
@@ -416,6 +448,21 @@ mod tests {
         assert_eq!(usage.completion_tokens, 2);
         assert_eq!(usage.total_tokens, 3);
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn sse_observation_ignores_heartbeat_as_candidate_output() {
+        let mut buffer = String::new();
+        let heartbeat =
+            extract_gemini_sse_observation(&Bytes::from_static(b": keepalive\n\n"), &mut buffer);
+        assert!(!heartbeat.saw_candidate_output);
+        assert!(matches!(heartbeat.usage, GeminiStreamUsage::Missing));
+
+        let output = extract_gemini_sse_observation(
+            &Bytes::from_static(b"data: {\"candidates\":[{\"content\":{}}]}\n\n"),
+            &mut buffer,
+        );
+        assert!(output.saw_candidate_output);
     }
 
     #[test]

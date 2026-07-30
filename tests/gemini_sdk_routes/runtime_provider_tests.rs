@@ -654,7 +654,7 @@ async fn gemini_sdk_stream_route_settles_reserved_spend_after_output_then_read_e
 }
 
 #[tokio::test]
-async fn gemini_sdk_stream_read_error_before_output_does_not_charge_reservation() {
+async fn gemini_sdk_stream_heartbeat_before_read_error_does_not_charge_reservation() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("empty broken stream should bind");
@@ -668,7 +668,7 @@ async fn gemini_sdk_stream_read_error_before_output_does_not_charge_reservation(
             .expect("request should read");
         socket
             .write_all(
-                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 4096\r\nconnection: close\r\n\r\n",
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 4096\r\nconnection: close\r\n\r\n: keepalive\n\n",
             )
             .await
             .expect("headers should write");
@@ -706,6 +706,7 @@ async fn gemini_sdk_stream_read_error_before_output_does_not_charge_reservation(
     assert_eq!(response.status(), StatusCode::OK);
     let body = String::from_utf8(test::read_body(response).await.to_vec())
         .expect("stream body should be utf8");
+    assert!(body.contains(": keepalive"));
     assert!(!body.contains("partial"));
     assert!(body.contains("Gemini upstream stream error"));
     let provider_usage = budget_limits

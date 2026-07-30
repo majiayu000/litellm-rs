@@ -41,6 +41,17 @@ use responses_stream_support::{
     make_shell, output_items_in_stream_order, response_usage_from_chat_usage, sse_error,
 };
 
+fn response_stream_total_tokens(
+    final_usage: Option<&ChatUsage>,
+    input_tokens: u32,
+    output_tokens: u32,
+) -> u32 {
+    final_usage.map_or_else(
+        || input_tokens.saturating_add(output_tokens),
+        |usage| usage.total_tokens,
+    )
+}
+
 /// Accumulated state for one in-progress tool call during streaming.
 struct ToolCallAccum {
     item_id: String,
@@ -704,7 +715,8 @@ pub(crate) async fn handle_streaming_response(
 
                 let output_items = output_items_in_stream_order(all_output);
 
-                let total = in_tokens + out_tokens;
+                let total =
+                    response_stream_total_tokens(final_usage.as_ref(), in_tokens, out_tokens);
                 let budget_usage = final_usage.clone().or_else(|| {
                     (total > 0).then_some(ChatUsage {
                         prompt_tokens: in_tokens,
