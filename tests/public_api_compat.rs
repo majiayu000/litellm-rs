@@ -18,7 +18,8 @@ use litellm_rs::server::routes::ai::{
     create_file, delete_file, get_file, get_file_content, list_files,
 };
 use litellm_rs::server::routes::auth::{
-    LoginRequest, RefreshTokenRequest, configure_routes, login, refresh_token,
+    AuthSystem, Claims, JwtHandler, LoginRequest, RefreshTokenRequest, configure_routes, login,
+    refresh_token,
 };
 use litellm_rs::storage::StorageLayer;
 use litellm_rs::storage::files::{FileMetadata, FileStorage, LocalStorage, S3Storage};
@@ -29,6 +30,41 @@ async fn gh1130_external_auth_and_storage_signatures(
     state: actix_web::web::Data<litellm_rs::server::state::AppState>,
     storage: &StorageLayer,
 ) -> actix_web::Result<()> {
+    let auth: &AuthSystem = state.auth.as_ref();
+    let jwt: &JwtHandler = auth.jwt();
+    let subject = uuid::Uuid::new_v4();
+    let claims = Claims {
+        sub: subject,
+        iat: 1,
+        exp: 2,
+        iss: "litellm-rs".to_string(),
+        aud: "api".to_string(),
+        jti: "compat-jti".to_string(),
+        role: "user".to_string(),
+        permissions: vec!["read".to_string()],
+        team_id: None,
+        session_id: None,
+        token_type: serde_json::from_value(serde_json::json!("access"))
+            .expect("public TokenType must deserialize from its stable wire value"),
+    };
+    let access_token: String = jwt
+        .create_access_token(
+            subject,
+            claims.role.clone(),
+            claims.permissions.clone(),
+            None,
+            None,
+        )
+        .await?;
+    let token_pair = jwt
+        .create_token_pair(subject, "user".to_string(), vec![], None, None)
+        .await?;
+    let verified: Claims = jwt.verify_access_token(&access_token).await?;
+    let _: String = token_pair.access_token;
+    let _: uuid::Uuid = verified.sub;
+    let _: (litellm_rs::core::models::user::types::User, String) =
+        auth.login("compat-user", "compat-password").await?;
+
     let _: actix_web::HttpResponse = login(
         req,
         state.clone(),

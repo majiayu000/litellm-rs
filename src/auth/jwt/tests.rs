@@ -102,6 +102,75 @@ async fn gh1130_raw_team_access_token_is_rejected_before_encoding() {
 }
 
 #[tokio::test]
+async fn gh1130_verified_team_proof_cannot_issue_for_a_different_subject() {
+    use crate::core::models::team::{Team, TeamMember, TeamRole};
+    use crate::core::models::user::types::{User, UserStatus};
+    use crate::core::teams::TeamRepository;
+    use crate::storage::database::SeaOrmTeamRepository;
+
+    let mut config = crate::config::Config::default();
+    config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+
+    let storage = std::sync::Arc::new(
+        crate::storage::StorageLayer::new(&config.gateway.storage)
+            .await
+            .expect("storage should initialize"),
+    );
+    let mut proof_user = User::new(
+        "jwt-proof-user".to_string(),
+        "jwt-proof@example.com".to_string(),
+        "unused-password-hash".to_string(),
+    );
+    proof_user.status = UserStatus::Active;
+    storage
+        .db()
+        .create_user(&proof_user)
+        .await
+        .expect("proof user should persist");
+
+    let repository = SeaOrmTeamRepository::new(storage.database.clone());
+    let team = repository
+        .create(Team::new("jwt-proof-team".to_string(), None))
+        .await
+        .expect("team should persist");
+    repository
+        .add_member(TeamMember::new(
+            team.id(),
+            proof_user.id(),
+            TeamRole::Member,
+            None,
+        ))
+        .await
+        .expect("proof membership should persist");
+
+    let auth_system = crate::auth::AuthSystem::new(&config.gateway.auth, storage)
+        .await
+        .expect("auth system should initialize");
+    let proof = auth_system
+        .validate_active_team(proof_user.id(), team.id())
+        .await
+        .expect("team validation should not fail")
+        .expect("exact active membership should produce proof");
+    let different_subject = Uuid::new_v4();
+
+    let result = auth_system
+        .jwt()
+        .create_access_token_for_verified_team(
+            different_subject,
+            "user".to_string(),
+            vec!["read".to_string()],
+            &proof,
+            None,
+        )
+        .await;
+
+    let error = result.expect_err("proof must be bound to its validated user");
+    assert!(error.to_string().contains("does not match token subject"));
+}
+
+#[tokio::test]
 async fn gh1130_marker_presence_state_is_strict() {
     let handler = create_test_handler().await;
     let guessed_team = Uuid::new_v4();

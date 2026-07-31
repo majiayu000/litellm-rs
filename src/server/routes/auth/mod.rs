@@ -14,6 +14,8 @@ mod token;
 mod user;
 
 // Re-export public items for backward compatibility
+pub use crate::auth::AuthSystem;
+pub use crate::auth::jwt::types::{Claims, JwtHandler};
 pub use email::verify_email;
 pub use login::login;
 pub use models::{
