@@ -217,8 +217,9 @@ fn test_content_type_detection() {
 }
 
 #[cfg(feature = "s3")]
-mod s3_pagination {
+mod s3_fixture {
     use super::super::s3::S3Storage;
+    use crate::utils::error::gateway_error::GatewayError;
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use url::Url;
@@ -328,5 +329,38 @@ mod s3_pagination {
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
         assert!(query(&requests[1]).contains(&("continuation-token".into(), "page-2".into())));
+    }
+
+    #[tokio::test]
+    async fn gh1130_head_maps_only_404_to_canonical_not_found() {
+        for (status, code, canonical_not_found) in [
+            (404, "NoSuchKey", true),
+            (403, "AccessDenied", false),
+            (500, "InternalError", false),
+        ] {
+            let body = format!("<Error><Code>{code}</Code><Message>fixture</Message></Error>");
+            let (storage, requests) = fixture(vec![(status, body)]).await;
+            let error = storage
+                .metadata_with_owner("tenant/object.jsonl")
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                matches!(&error, GatewayError::NotFound(_)),
+                canonical_not_found,
+                "status {status} mapped to {error:?}"
+            );
+            assert!(
+                canonical_not_found || matches!(&error, GatewayError::Internal(_)),
+                "status {status} was not an explicit internal failure: {error:?}"
+            );
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1, "status {status} retried unexpectedly");
+            assert!(
+                requests[0].starts_with("HEAD /test-bucket/tenant/object.jsonl HTTP/1.1\r\n"),
+                "unexpected HEAD request: {}",
+                requests[0].lines().next().unwrap_or_default()
+            );
+        }
     }
 }
