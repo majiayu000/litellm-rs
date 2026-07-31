@@ -71,7 +71,7 @@ impl<V: RefreshTokenVerifier, U: RefreshUserLookup> PrimaryAuthStage for Refresh
             .await
             .map_err(|error| {
                 warn!("Invalid refresh token: {}", error);
-                AuthFlowFailure::unauthorized("Invalid refresh token")
+                AuthFlowFailure::bad_request("Invalid refresh token")
             })?;
         let user = match self.users.find_user(user_id).await {
             Ok(Some(user)) => user,
@@ -393,9 +393,14 @@ mod tests {
                 Ok(_) => panic!("invalid refresh principal must fail"),
                 Err(failure) => failure,
             };
+            let expected_status = if primary_kind == "invalid" {
+                actix_web::http::StatusCode::BAD_REQUEST
+            } else {
+                actix_web::http::StatusCode::UNAUTHORIZED
+            };
             assert_eq!(
                 failure.into_response().status(),
-                actix_web::http::StatusCode::UNAUTHORIZED,
+                expected_status,
                 "{case_name}"
             );
             assert_eq!(verifier_calls.get(), 1, "{case_name}");
