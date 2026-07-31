@@ -164,15 +164,10 @@ async fn list_files_internal(
     };
 
     let mut data = Vec::with_capacity(file_ids.len());
-    let mut incomplete = false;
     for file_id in file_ids {
         let metadata = match state.storage.files.metadata_with_owner(&file_id).await {
             Ok(metadata) => metadata,
-            Err(error) => {
-                error!("Skipping file {file_id} with unreadable metadata: {error}");
-                incomplete = true;
-                continue;
-            }
+            Err(error) => return Ok(storage_file_error(&error)),
         };
         if !can_access_file(&caller, &metadata) {
             continue;
@@ -184,12 +179,10 @@ async fn list_files_internal(
         data.push(object);
     }
 
-    Ok(HttpResponse::Ok()
-        .insert_header(("x-litellm-partial-result", incomplete.to_string()))
-        .json(OpenAiFileList {
-            object: "list",
-            data,
-        }))
+    Ok(HttpResponse::Ok().json(OpenAiFileList {
+        object: "list",
+        data,
+    }))
 }
 
 /// Retrieve metadata for one file.

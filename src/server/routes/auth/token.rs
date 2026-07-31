@@ -166,7 +166,7 @@ impl
                 self.jwt
                     .create_token_pair_for_verified_team(
                         user.id(),
-                        format!("{:?}", user.role),
+                        user.role.to_string(),
                         permissions,
                         verified_team,
                         None,
@@ -175,13 +175,7 @@ impl
             }
             None => {
                 self.jwt
-                    .create_token_pair(
-                        user.id(),
-                        format!("{:?}", user.role),
-                        permissions,
-                        None,
-                        None,
-                    )
+                    .create_token_pair(user.id(), user.role.to_string(), permissions, None, None)
                     .await
             }
         };

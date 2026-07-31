@@ -317,7 +317,7 @@ impl From<User> for UserResponse {
             username: user.username.clone(),
             email: user.email.clone(),
             display_name: user.display_name.clone(),
-            role: format!("{:?}", user.role),
+            role: user.role.to_string(),
             email_verified: user.email_verified,
             created_at: user.metadata.created_at,
         }
@@ -674,19 +674,16 @@ mod tests {
 
     #[test]
     fn test_user_response_conversion() {
-        // This would require a real User instance in a full test
-        // For now, just test the structure
-        let user_response = UserResponse {
-            id: uuid::Uuid::new_v4(),
-            username: "testuser".to_string(),
-            email: "test@example.com".to_string(),
-            display_name: Some("Test User".to_string()),
-            role: "User".to_string(),
-            email_verified: false,
-            created_at: chrono::Utc::now(),
-        };
+        let mut user = User::new(
+            "testuser".to_string(),
+            "test@example.com".to_string(),
+            "hash".to_string(),
+        );
+        user.role = crate::core::models::user::types::UserRole::ApiUser;
+        let user_response = UserResponse::from(user);
 
         assert_eq!(user_response.username, "testuser");
+        assert_eq!(user_response.role, "api_user");
         assert!(!user_response.email_verified);
     }
 }

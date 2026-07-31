@@ -139,13 +139,6 @@ mod tests {
         let list_req = test::TestRequest::get().uri("/v1/files").to_request();
         let list_resp = test::call_service(&app, list_req).await;
         assert_eq!(list_resp.status(), StatusCode::OK);
-        assert_eq!(
-            list_resp
-                .headers()
-                .get("x-litellm-partial-result")
-                .and_then(|value| value.to_str().ok()),
-            Some("false")
-        );
         let listed: Value = test::read_body_json(list_resp).await;
         assert!(
             listed["data"]
@@ -252,17 +245,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_files_skips_unreadable_metadata_and_marks_partial_result() {
+    async fn list_files_fails_closed_when_metadata_cannot_be_authorized() {
         let tempdir = tempfile::tempdir().expect("temp dir should be created");
         let local_path = tempdir.path().join("files").to_string_lossy().into_owned();
         let state = build_files_state(local_path.clone()).await;
-        let valid_id = state
-            .storage
-            .files
-            .store_with_purpose("valid.jsonl", b"{}\n", Some("batch"))
-            .await
-            .expect("valid file should be stored");
-
         let orphan_id = Uuid::new_v4().to_string();
         let orphan_path = std::path::Path::new(&local_path)
             .join(&orphan_id[..2])
@@ -283,19 +269,10 @@ mod tests {
         let response =
             test::call_service(&app, test::TestRequest::get().uri("/v1/files").to_request()).await;
 
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-litellm-partial-result")
-                .and_then(|value| value.to_str().ok()),
-            Some("true")
-        );
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body: Value = test::read_body_json(response).await;
-        let data = body["data"].as_array().expect("files list");
-        assert_eq!(data.len(), 1);
-        assert_eq!(data[0]["id"], valid_id);
-        assert!(data.iter().all(|file| file["id"] != orphan_id));
+        assert_eq!(body["error"]["message"], "Internal server error");
+        assert!(!body.to_string().contains(&orphan_id));
     }
 
     #[tokio::test]

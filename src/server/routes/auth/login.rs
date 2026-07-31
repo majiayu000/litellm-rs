@@ -206,7 +206,7 @@ impl
                     .jwt()
                     .create_access_token_for_verified_team(
                         user.id(),
-                        format!("{:?}", user.role),
+                        user.role.to_string(),
                         permissions,
                         verified_team,
                         None,
@@ -216,13 +216,7 @@ impl
             None => {
                 self.auth
                     .jwt()
-                    .create_access_token(
-                        user.id(),
-                        format!("{:?}", user.role),
-                        permissions,
-                        None,
-                        None,
-                    )
+                    .create_access_token(user.id(), user.role.to_string(), permissions, None, None)
                     .await
             }
         };
@@ -389,7 +383,7 @@ async fn login_internal(
             username: output.user.username,
             email: output.user.email,
             full_name: output.user.display_name,
-            role: format!("{:?}", output.user.role),
+            role: output.user.role.to_string(),
             email_verified: output.user.email_verified,
         },
     };

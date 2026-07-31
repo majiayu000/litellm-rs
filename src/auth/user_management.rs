@@ -84,7 +84,7 @@ impl AuthSystem {
                 self.jwt
                     .create_access_token_for_verified_team(
                         user.id(),
-                        format!("{:?}", user.role),
+                        user.role.to_string(),
                         permissions,
                         verified_team,
                         Some(session_id),
@@ -95,7 +95,7 @@ impl AuthSystem {
                 self.jwt
                     .create_access_token(
                         user.id(),
-                        format!("{:?}", user.role),
+                        user.role.to_string(),
                         permissions,
                         None,
                         Some(session_id),
