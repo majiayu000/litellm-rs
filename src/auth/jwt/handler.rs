@@ -25,6 +25,11 @@ impl JwtHandler {
         })
     }
 
+    /// Return the configured access-token lifetime in seconds.
+    pub fn expiration(&self) -> u64 {
+        self.expiration
+    }
+
     /// Create an access token for a user
     pub async fn create_access_token(
         &self,

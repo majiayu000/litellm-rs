@@ -59,6 +59,7 @@ fn sign_value(handler: &JwtHandler, value: &Value) -> String {
 #[tokio::test]
 async fn test_create_and_verify_access_token() {
     let handler = create_test_handler().await;
+    assert_eq!(handler.expiration(), 3600);
     let user_id = Uuid::new_v4();
 
     let token = handler

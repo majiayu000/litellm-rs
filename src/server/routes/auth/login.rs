@@ -206,7 +206,7 @@ impl
                     .jwt()
                     .create_access_token_for_verified_team(
                         user.id(),
-                        user.role.to_string(),
+                        format!("{:?}", user.role),
                         permissions,
                         verified_team,
                         None,
@@ -216,7 +216,13 @@ impl
             None => {
                 self.auth
                     .jwt()
-                    .create_access_token(user.id(), user.role.to_string(), permissions, None, None)
+                    .create_access_token(
+                        user.id(),
+                        format!("{:?}", user.role),
+                        permissions,
+                        None,
+                        None,
+                    )
                     .await
             }
         };
@@ -377,13 +383,13 @@ async fn login_internal(
         access_token: output.access_token,
         refresh_token: output.refresh_token,
         token_type: "Bearer".to_string(),
-        expires_in: 3600, // 1 hour
+        expires_in: state.auth.jwt().expiration(),
         user: UserInfo {
             id: output.user.id(),
             username: output.user.username,
             email: output.user.email,
             full_name: output.user.display_name,
-            role: output.user.role.to_string(),
+            role: format!("{:?}", output.user.role),
             email_verified: output.user.email_verified,
         },
     };

@@ -227,7 +227,7 @@ fn runtime_key_permissions(
 
     serde_json::from_value::<RuntimeKeyPermissions>(permissions.clone())
         .map(Some)
-        .map_err(|_| GatewayError::internal("API key runtime policy is invalid"))
+        .map_err(|_| GatewayError::forbidden("API key runtime policy is invalid"))
 }
 
 pub fn api_key_allows_endpoint(
@@ -596,8 +596,14 @@ mod tests {
             serde_json::json!({"permissions": {"is_admin": "yes"}}),
         );
 
-        assert!(api_key_has_admin_permission_checked(&key).is_err());
-        assert!(api_key_allows_endpoint(Some(&key), "/v1/files").is_err());
+        assert!(matches!(
+            api_key_has_admin_permission_checked(&key),
+            Err(GatewayError::Forbidden(_))
+        ));
+        assert!(matches!(
+            api_key_allows_endpoint(Some(&key), "/v1/files"),
+            Err(GatewayError::Forbidden(_))
+        ));
     }
 
     #[test]

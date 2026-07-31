@@ -139,6 +139,13 @@ mod tests {
         let list_req = test::TestRequest::get().uri("/v1/files").to_request();
         let list_resp = test::call_service(&app, list_req).await;
         assert_eq!(list_resp.status(), StatusCode::OK);
+        assert_eq!(
+            list_resp
+                .headers()
+                .get("x-litellm-partial-result")
+                .and_then(|value| value.to_str().ok()),
+            Some("false")
+        );
         let listed: Value = test::read_body_json(list_resp).await;
         assert!(
             listed["data"]
@@ -242,6 +249,53 @@ mod tests {
         let body: Value = test::read_body_json(resp).await;
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["code"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn list_files_skips_unreadable_metadata_and_marks_partial_result() {
+        let tempdir = tempfile::tempdir().expect("temp dir should be created");
+        let local_path = tempdir.path().join("files").to_string_lossy().into_owned();
+        let state = build_files_state(local_path.clone()).await;
+        let valid_id = state
+            .storage
+            .files
+            .store_with_purpose("valid.jsonl", b"{}\n", Some("batch"))
+            .await
+            .expect("valid file should be stored");
+
+        let orphan_id = Uuid::new_v4().to_string();
+        let orphan_path = std::path::Path::new(&local_path)
+            .join(&orphan_id[..2])
+            .join(&orphan_id);
+        tokio::fs::create_dir_all(orphan_path.parent().expect("orphan parent"))
+            .await
+            .expect("orphan shard should be created");
+        tokio::fs::write(&orphan_path, b"orphaned content")
+            .await
+            .expect("orphan content should be written");
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let response =
+            test::call_service(&app, test::TestRequest::get().uri("/v1/files").to_request()).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-litellm-partial-result")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        let body: Value = test::read_body_json(response).await;
+        let data = body["data"].as_array().expect("files list");
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["id"], valid_id);
+        assert!(data.iter().all(|file| file["id"] != orphan_id));
     }
 
     #[tokio::test]
