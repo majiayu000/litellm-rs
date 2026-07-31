@@ -245,6 +245,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gh1130_proofless_public_wrappers_stop_before_storage() {
+        use litellm_rs::server::routes::ai::{
+            create_file, delete_file, get_file, get_file_content, list_files,
+        };
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let local_path = tempdir.path().join("files").to_string_lossy().into_owned();
+        let state = build_files_state_with_auth(local_path, true).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .route("/proofless/files", web::post().to(create_file))
+                .route("/proofless/files", web::get().to(list_files))
+                .route("/proofless/files/{file_id}", web::get().to(get_file))
+                .route("/proofless/files/{file_id}", web::delete().to(delete_file))
+                .route(
+                    "/proofless/files/{file_id}/content",
+                    web::get().to(get_file_content),
+                ),
+        )
+        .await;
+        let boundary = "gh1130-proofless-boundary";
+        let upload = test::TestRequest::post()
+            .uri("/proofless/files")
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(multipart_body(boundary, Some("batch"), b"{}\n"))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, upload).await.status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        let missing = "00000000-0000-0000-0000-000000000000";
+        for (method, uri) in [
+            ("GET", "/proofless/files".to_string()),
+            ("GET", format!("/proofless/files/{missing}")),
+            ("GET", format!("/proofless/files/{missing}/content")),
+            ("DELETE", format!("/proofless/files/{missing}")),
+        ] {
+            let request = test::TestRequest::default()
+                .method(method.parse().unwrap())
+                .uri(&uri)
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, request).await.status(),
+                StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
+        assert!(
+            state
+                .storage
+                .files
+                .list(None, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn gh1130_two_tenants_cannot_list_read_content_or_delete_each_others_file() {
         let tempdir = tempfile::tempdir().unwrap();
         let local_path = tempdir.path().join("files").to_string_lossy().into_owned();
