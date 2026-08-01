@@ -5,9 +5,7 @@ use litellm_rs::core::models::user::types::{User, UserRole, UserStatus};
 use litellm_rs::core::models::{ApiKey, Metadata, RateLimits, UsageStats};
 use litellm_rs::core::types::context::{RequestContext, SharedRequestContext};
 use litellm_rs::server::http::HttpServer;
-use litellm_rs::server::middleware::{
-    AuthMiddleware, RateLimitMiddleware, RequestIdMiddleware, is_public_route,
-};
+use litellm_rs::server::middleware::{AuthMiddleware, RateLimitMiddleware, RequestIdMiddleware};
 use litellm_rs::server::routes;
 use litellm_rs::server::state::AppState;
 use litellm_rs::utils::auth::crypto::keys::{extract_api_key_prefix, hash_api_key};
@@ -19,12 +17,6 @@ const AUTH_PROBE_PATH: &str = "/v1/private/auth-probe";
 
 #[tokio::test]
 async fn gh1130_refresh_route_uses_body_token_as_primary_credential() {
-    assert!(
-        is_public_route("/auth/refresh"),
-        "global auth middleware must allow the refresh handler to validate its body token"
-    );
-    assert!(!is_public_route("/auth/refresh/extra"));
-
     let state = build_test_state(true, true).await;
     let principal = seed_valid_principal(&state).await;
     let user_id = uuid::Uuid::parse_str(&principal.user_id).expect("seeded user UUID");
@@ -64,6 +56,20 @@ async fn gh1130_refresh_route_uses_body_token_as_primary_credential() {
         invalid_response.status(),
         StatusCode::BAD_REQUEST,
         "the request must reach the refresh handler instead of failing as missing authentication"
+    );
+
+    let prefix_response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/auth/refresh/extra")
+            .set_json(serde_json::json!({"refresh_token": "invalid"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(
+        prefix_response.status(),
+        StatusCode::UNAUTHORIZED,
+        "only the exact refresh route may bypass header authentication"
     );
 }
 

@@ -89,7 +89,6 @@ pub fn is_public_route(path: &str) -> bool {
         "/health",
         "/auth/login",
         "/auth/login/callback",
-        "/auth/refresh",
         "/auth/register",
         "/auth/forgot-password",
         "/auth/reset-password",

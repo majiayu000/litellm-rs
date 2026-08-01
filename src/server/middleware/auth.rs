@@ -29,6 +29,10 @@ use tracing::{debug, error, warn};
 /// Auth middleware for Actix-web
 pub struct AuthMiddleware;
 
+fn bypasses_header_auth(path: &str) -> bool {
+    is_public_route(path) || path == "/auth/refresh"
+}
+
 impl<S, B> Transform<S, ServiceRequest> for AuthMiddleware
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
@@ -71,7 +75,7 @@ where
         Box::pin(async move {
             // Check public route with &str reference before any mutable borrows,
             // avoiding a per-request String allocation for the path.
-            let is_public = is_public_route(req.path());
+            let is_public = bypasses_header_auth(req.path());
 
             let app_state = match req.app_data::<web::Data<AppState>>().cloned() {
                 Some(state) => state,
