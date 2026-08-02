@@ -1,16 +1,20 @@
 //! OpenAI-compatible local Files API routes.
 
 use actix_multipart::Multipart;
-use actix_web::{HttpResponse, Result as ActixResult, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result as ActixResult, web};
 use futures::StreamExt;
 use serde::Serialize;
 use tracing::error;
+use uuid::Uuid;
 
+use crate::core::models::ApiKey;
+use crate::core::models::user::types::{User, UserRole};
+use crate::core::types::context::{RequestContext, SharedRequestContext};
 use crate::server::state::AppState;
-use crate::storage::files::FileMetadata;
+use crate::storage::files::{FileMetadata, FileOwnerScope, StoredFileMetadata};
 use crate::utils::error::gateway_error::GatewayError;
 
-use super::openai_errors;
+use super::{context::api_key_has_admin_permission_checked, openai_errors};
 
 const DEFAULT_FILENAME: &str = "upload";
 const FILE_READ_ERROR_MESSAGE: &str = "Error reading file";
@@ -57,53 +61,120 @@ struct ParsedFileUpload {
     purpose: String,
 }
 
+#[derive(Debug, Clone)]
+struct FileCaller {
+    auth_enforced: bool,
+    is_admin: bool,
+    effective_scope: Option<FileOwnerScope>,
+}
+
 /// Upload a file to the configured gateway-local file storage backend.
 pub async fn create_file(
     state: web::Data<AppState>,
     payload: Multipart,
 ) -> ActixResult<HttpResponse> {
+    create_file_internal(state, payload, None).await
+}
+
+pub(super) async fn create_file_http(
+    request: HttpRequest,
+    state: web::Data<AppState>,
+    payload: Multipart,
+) -> ActixResult<HttpResponse> {
+    create_file_internal(state, payload, Some(&request)).await
+}
+
+async fn create_file_internal(
+    state: web::Data<AppState>,
+    payload: Multipart,
+    request: Option<&HttpRequest>,
+) -> ActixResult<HttpResponse> {
     let upload = match parse_upload(payload).await {
         Ok(upload) => upload,
         Err(response) => return Ok(response),
     };
+    let caller = match resolve_file_caller(&state, request) {
+        Ok(caller) => caller,
+        Err(error) => return Ok(internal_file_error(&error)),
+    };
 
-    let file_id = match state
-        .storage
-        .files
-        .store_with_purpose(&upload.filename, &upload.content, Some(&upload.purpose))
-        .await
-    {
+    let store_result = if caller.auth_enforced {
+        let Some(owner) = caller.effective_scope.clone() else {
+            return Ok(openai_errors::internal_error("Internal server error"));
+        };
+        state
+            .storage
+            .files
+            .store_owned_with_purpose(
+                &upload.filename,
+                &upload.content,
+                Some(&upload.purpose),
+                owner,
+            )
+            .await
+    } else {
+        state
+            .storage
+            .files
+            .store_with_purpose(&upload.filename, &upload.content, Some(&upload.purpose))
+            .await
+    };
+    let file_id = match store_result {
         Ok(file_id) => file_id,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => return Ok(storage_file_error(&error)),
     };
 
-    let metadata = match state.storage.files.metadata(&file_id).await {
+    let metadata = match state.storage.files.metadata_with_owner(&file_id).await {
         Ok(metadata) => metadata,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => return Ok(storage_file_error(&error)),
     };
+    if !can_access_file(&caller, &metadata) {
+        return Ok(concealed_not_found());
+    }
 
-    match file_object(&metadata) {
+    match file_object(&metadata.public) {
         Ok(object) => Ok(HttpResponse::Ok().json(object)),
-        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => Ok(storage_file_error(&error)),
     }
 }
 
 /// List files known by the configured file storage backend.
 pub async fn list_files(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
+    list_files_internal(state, None).await
+}
+
+pub(super) async fn list_files_http(
+    request: HttpRequest,
+    state: web::Data<AppState>,
+) -> ActixResult<HttpResponse> {
+    list_files_internal(state, Some(&request)).await
+}
+
+async fn list_files_internal(
+    state: web::Data<AppState>,
+    request: Option<&HttpRequest>,
+) -> ActixResult<HttpResponse> {
+    let caller = match resolve_file_caller(&state, request) {
+        Ok(caller) => caller,
+        Err(error) => return Ok(internal_file_error(&error)),
+    };
     let file_ids = match state.storage.files.list(None, None).await {
         Ok(file_ids) => file_ids,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => return Ok(storage_file_error(&error)),
     };
 
     let mut data = Vec::with_capacity(file_ids.len());
     for file_id in file_ids {
-        let metadata = match state.storage.files.metadata(&file_id).await {
+        let metadata = match state.storage.files.metadata_with_owner(&file_id).await {
             Ok(metadata) => metadata,
-            Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+            Err(error) => return Ok(storage_file_error(&error)),
         };
-        let object = match file_object(&metadata) {
+        if !can_access_file(&caller, &metadata) {
+            continue;
+        }
+        let object = match file_object(&metadata.public) {
             Ok(object) => object,
-            Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+            Err(error) => return Ok(storage_file_error(&error)),
         };
         data.push(object);
     }
@@ -119,14 +190,37 @@ pub async fn get_file(
     state: web::Data<AppState>,
     file_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
-    let metadata = match state.storage.files.metadata(&file_id).await {
-        Ok(metadata) => metadata,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
-    };
+    get_file_internal(state, file_id, None).await
+}
 
-    match file_object(&metadata) {
+pub(super) async fn get_file_http(
+    request: HttpRequest,
+    state: web::Data<AppState>,
+    file_id: web::Path<String>,
+) -> ActixResult<HttpResponse> {
+    get_file_internal(state, file_id, Some(&request)).await
+}
+
+async fn get_file_internal(
+    state: web::Data<AppState>,
+    file_id: web::Path<String>,
+    request: Option<&HttpRequest>,
+) -> ActixResult<HttpResponse> {
+    let caller = match resolve_file_caller(&state, request) {
+        Ok(caller) => caller,
+        Err(error) => return Ok(internal_file_error(&error)),
+    };
+    let metadata = match state.storage.files.metadata_with_owner(&file_id).await {
+        Ok(metadata) => metadata,
+        Err(error) => return Ok(file_lookup_error(&error)),
+    };
+    if !can_access_file(&caller, &metadata) {
+        return Ok(concealed_not_found());
+    }
+
+    match file_object(&metadata.public) {
         Ok(object) => Ok(HttpResponse::Ok().json(object)),
-        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => Ok(storage_file_error(&error)),
     }
 }
 
@@ -135,12 +229,36 @@ pub async fn delete_file(
     state: web::Data<AppState>,
     file_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
+    delete_file_internal(state, file_id, None).await
+}
+
+pub(super) async fn delete_file_http(
+    request: HttpRequest,
+    state: web::Data<AppState>,
+    file_id: web::Path<String>,
+) -> ActixResult<HttpResponse> {
+    delete_file_internal(state, file_id, Some(&request)).await
+}
+
+async fn delete_file_internal(
+    state: web::Data<AppState>,
+    file_id: web::Path<String>,
+    request: Option<&HttpRequest>,
+) -> ActixResult<HttpResponse> {
+    let caller = match resolve_file_caller(&state, request) {
+        Ok(caller) => caller,
+        Err(error) => return Ok(internal_file_error(&error)),
+    };
     let file_id = file_id.into_inner();
-    if let Err(error) = state.storage.files.metadata(&file_id).await {
-        return Ok(openai_errors::gateway_error_response(&error));
+    let metadata = match state.storage.files.metadata_with_owner(&file_id).await {
+        Ok(metadata) => metadata,
+        Err(error) => return Ok(file_lookup_error(&error)),
+    };
+    if !can_access_file(&caller, &metadata) {
+        return Ok(concealed_not_found());
     }
     if let Err(error) = state.storage.files.delete(&file_id).await {
-        return Ok(openai_errors::gateway_error_response(&error));
+        return Ok(storage_file_error(&error));
     }
 
     Ok(HttpResponse::Ok().json(OpenAiFileDelete {
@@ -155,19 +273,181 @@ pub async fn get_file_content(
     state: web::Data<AppState>,
     file_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
-    let file_id = file_id.into_inner();
-    let metadata = match state.storage.files.metadata(&file_id).await {
-        Ok(metadata) => metadata,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    get_file_content_internal(state, file_id, None).await
+}
+
+pub(super) async fn get_file_content_http(
+    request: HttpRequest,
+    state: web::Data<AppState>,
+    file_id: web::Path<String>,
+) -> ActixResult<HttpResponse> {
+    get_file_content_internal(state, file_id, Some(&request)).await
+}
+
+async fn get_file_content_internal(
+    state: web::Data<AppState>,
+    file_id: web::Path<String>,
+    request: Option<&HttpRequest>,
+) -> ActixResult<HttpResponse> {
+    let caller = match resolve_file_caller(&state, request) {
+        Ok(caller) => caller,
+        Err(error) => return Ok(internal_file_error(&error)),
     };
+    let file_id = file_id.into_inner();
+    let metadata = match state.storage.files.metadata_with_owner(&file_id).await {
+        Ok(metadata) => metadata,
+        Err(error) => return Ok(file_lookup_error(&error)),
+    };
+    if !can_access_file(&caller, &metadata) {
+        return Ok(concealed_not_found());
+    }
     let content = match state.storage.files.get(&file_id).await {
         Ok(content) => content,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        Err(error) => return Ok(storage_file_error(&error)),
     };
 
     Ok(HttpResponse::Ok()
-        .content_type(metadata.content_type)
+        .content_type(metadata.public.content_type)
         .body(content))
+}
+
+fn resolve_file_caller(
+    state: &AppState,
+    request: Option<&HttpRequest>,
+) -> Result<FileCaller, GatewayError> {
+    let config = state.config.load();
+    let auth = config.auth();
+    let auth_enforced = auth.enable_api_key || auth.enable_jwt;
+    if !auth_enforced {
+        if !auth.allow_anonymous {
+            return Err(GatewayError::internal(
+                "Files route requires authentication configuration",
+            ));
+        }
+        return Ok(FileCaller {
+            auth_enforced: false,
+            is_admin: false,
+            effective_scope: None,
+        });
+    }
+
+    let request =
+        request.ok_or_else(|| GatewayError::internal("Missing authenticated request proof"))?;
+    let context = authenticated_context(request)?;
+    let extensions = request.extensions();
+    authenticated_file_caller(
+        &context,
+        extensions.get::<User>(),
+        extensions.get::<ApiKey>(),
+    )
+}
+
+fn authenticated_file_caller(
+    context: &RequestContext,
+    user: Option<&User>,
+    api_key: Option<&ApiKey>,
+) -> Result<FileCaller, GatewayError> {
+    if let Some(api_key) = api_key {
+        if strict_context_uuid(context, "api_key_id")? != Some(api_key.metadata.id) {
+            return Err(GatewayError::internal("API-key identity mismatch"));
+        }
+        let context_user = parse_context_user(context)?;
+        if context_user != api_key.user_id {
+            return Err(GatewayError::internal("API-key user identity mismatch"));
+        }
+        let scope = api_key
+            .team_id
+            .map(FileOwnerScope::Team)
+            .or_else(|| api_key.user_id.map(FileOwnerScope::User))
+            .unwrap_or(FileOwnerScope::ApiKey(api_key.metadata.id));
+        return Ok(FileCaller {
+            auth_enforced: true,
+            is_admin: api_key_has_admin_permission_checked(api_key)?,
+            effective_scope: Some(scope),
+        });
+    }
+
+    if strict_context_uuid(context, "api_key_id")?.is_some() {
+        return Err(GatewayError::internal(
+            "Request context has API-key identity without an authenticated key",
+        ));
+    }
+    let user = user.ok_or_else(|| GatewayError::internal("Missing authenticated user identity"))?;
+    if parse_context_user(context)? != Some(user.id()) {
+        return Err(GatewayError::internal(
+            "Authenticated user identity mismatch",
+        ));
+    }
+    let scope = strict_context_uuid(context, "team_id")?
+        .map(FileOwnerScope::Team)
+        .unwrap_or_else(|| FileOwnerScope::User(user.id()));
+    Ok(FileCaller {
+        auth_enforced: true,
+        is_admin: matches!(user.role, UserRole::Admin | UserRole::SuperAdmin),
+        effective_scope: Some(scope),
+    })
+}
+
+fn authenticated_context(request: &HttpRequest) -> Result<RequestContext, GatewayError> {
+    let extensions = request.extensions();
+    if let Some(context) = extensions.get::<SharedRequestContext>() {
+        return Ok(context.as_ref().clone());
+    }
+    extensions
+        .get::<RequestContext>()
+        .cloned()
+        .ok_or_else(|| GatewayError::internal("Missing authenticated request context"))
+}
+
+fn parse_context_user(context: &RequestContext) -> Result<Option<Uuid>, GatewayError> {
+    context
+        .user_id
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| GatewayError::internal("Invalid authenticated user identity"))
+}
+
+fn strict_context_uuid(
+    context: &RequestContext,
+    key: &'static str,
+) -> Result<Option<Uuid>, GatewayError> {
+    match context.metadata.get(key) {
+        None => Ok(None),
+        Some(serde_json::Value::String(value)) => Uuid::parse_str(value)
+            .map(Some)
+            .map_err(|_| GatewayError::internal("Invalid authenticated identity")),
+        Some(_) => Err(GatewayError::internal("Invalid authenticated identity")),
+    }
+}
+
+fn can_access_file(caller: &FileCaller, metadata: &StoredFileMetadata) -> bool {
+    if !caller.auth_enforced || caller.is_admin {
+        return true;
+    }
+    caller.effective_scope.as_ref() == metadata.owner()
+}
+
+fn concealed_not_found() -> HttpResponse {
+    openai_errors::gateway_error_response(&GatewayError::not_found("File not found"))
+}
+
+fn file_lookup_error(error: &GatewayError) -> HttpResponse {
+    if matches!(error, GatewayError::NotFound(_)) {
+        concealed_not_found()
+    } else {
+        storage_file_error(error)
+    }
+}
+
+fn internal_file_error(_error: &GatewayError) -> HttpResponse {
+    error!("Files authorization state is invalid");
+    openai_errors::internal_error("Internal server error")
+}
+
+fn storage_file_error(_error: &GatewayError) -> HttpResponse {
+    error!("Files storage operation failed");
+    openai_errors::internal_error("Internal server error")
 }
 
 async fn parse_upload(mut payload: Multipart) -> Result<ParsedFileUpload, HttpResponse> {
@@ -326,6 +606,7 @@ fn file_object(metadata: &FileMetadata) -> Result<OpenAiFileObject, GatewayError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::models::{Metadata, UsageStats};
     use actix_web::body::to_bytes;
     use chrono::{TimeZone, Utc};
     use serde_json::Value;
@@ -396,5 +677,119 @@ mod tests {
         assert_eq!(json["error"]["message"], "No file provided");
         assert_eq!(json["error"]["type"], "invalid_request_error");
         assert_eq!(json["error"]["code"], "invalid_request");
+    }
+
+    #[test]
+    fn gh1130_file_access_is_exact_scope_not_any_owner_match() {
+        let owner = FileOwnerScope::Team(Uuid::new_v4());
+        let stored = StoredFileMetadata::owned(metadata(), owner.clone());
+        let same = FileCaller {
+            auth_enforced: true,
+            is_admin: false,
+            effective_scope: Some(owner),
+        };
+        let foreign = FileCaller {
+            auth_enforced: true,
+            is_admin: false,
+            effective_scope: Some(FileOwnerScope::User(Uuid::new_v4())),
+        };
+        let admin = FileCaller {
+            auth_enforced: true,
+            is_admin: true,
+            effective_scope: Some(FileOwnerScope::ApiKey(Uuid::new_v4())),
+        };
+        let anonymous_legacy_mode = FileCaller {
+            auth_enforced: false,
+            is_admin: false,
+            effective_scope: None,
+        };
+
+        assert!(can_access_file(&same, &stored));
+        assert!(!can_access_file(&foreign, &stored));
+        assert!(can_access_file(&admin, &stored));
+        assert!(can_access_file(&anonymous_legacy_mode, &stored));
+
+        let legacy = StoredFileMetadata::legacy(metadata());
+        assert!(!can_access_file(&same, &legacy));
+        assert!(can_access_file(&admin, &legacy));
+        assert!(can_access_file(&anonymous_legacy_mode, &legacy));
+    }
+
+    #[actix_web::test]
+    async fn gh1130_foreign_and_missing_use_identical_public_not_found() {
+        let foreign = concealed_not_found();
+        let missing = file_lookup_error(&GatewayError::not_found("secret file identifier"));
+        assert_eq!(foreign.status(), missing.status());
+
+        let foreign_body = to_bytes(foreign.into_body()).await.unwrap();
+        let missing_body = to_bytes(missing.into_body()).await.unwrap();
+        let foreign_json: Value = serde_json::from_slice(&foreign_body).unwrap();
+        let missing_json: Value = serde_json::from_slice(&missing_body).unwrap();
+        assert_eq!(foreign_json, missing_json);
+        assert_eq!(
+            foreign_json["error"]["message"],
+            "Not found: File not found"
+        );
+        assert!(
+            !serde_json::to_string(&foreign_json)
+                .unwrap()
+                .contains("secret file identifier")
+        );
+        let internal = storage_file_error(&GatewayError::Storage("secret backend detail".into()));
+        assert_eq!(
+            internal.status(),
+            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let body = to_bytes(internal.into_body()).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["message"], "Internal server error");
+        assert!(!serde_json::to_string(&json).unwrap().contains("secret"));
+    }
+
+    #[test]
+    fn gh1130_api_key_principal_is_exclusive_and_attenuates_admin_owner() {
+        let user_id = Uuid::new_v4();
+        let key_team = Uuid::new_v4();
+        let residual_jwt_team = Uuid::new_v4();
+        let mut admin_user = User::new(
+            "admin-owner".to_string(),
+            "admin@example.com".to_string(),
+            "hash".to_string(),
+        );
+        admin_user.role = UserRole::Admin;
+        let key = ApiKey {
+            metadata: Metadata::new(),
+            name: "restricted".to_string(),
+            key_hash: "hash".to_string(),
+            key_prefix: "gw-test".to_string(),
+            user_id: Some(user_id),
+            team_id: Some(key_team),
+            permissions: vec![],
+            rate_limits: None,
+            expires_at: None,
+            is_active: true,
+            last_used_at: None,
+            usage_stats: UsageStats::default(),
+        };
+        let context = RequestContext::new()
+            .with_user(user_id, Some(residual_jwt_team))
+            .with_api_key(key.metadata.id);
+
+        let caller = authenticated_file_caller(&context, Some(&admin_user), Some(&key)).unwrap();
+        assert!(!caller.is_admin);
+        assert_eq!(caller.effective_scope, Some(FileOwnerScope::Team(key_team)));
+
+        let mismatched = RequestContext::new()
+            .with_user(Uuid::new_v4(), None)
+            .with_api_key(key.metadata.id);
+        assert!(authenticated_file_caller(&mismatched, Some(&admin_user), Some(&key)).is_err());
+        for field in ["team_id", "api_key_id"] {
+            for value in [Value::Null, serde_json::json!(7), serde_json::json!("bad")] {
+                let context = RequestContext::new()
+                    .with_user(admin_user.id(), None)
+                    .with_metadata(field, value);
+                assert!(authenticated_file_caller(&context, Some(&admin_user), None).is_err());
+            }
+        }
     }
 }

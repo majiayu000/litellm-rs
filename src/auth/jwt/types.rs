@@ -1,7 +1,7 @@
 //! JWT types and data structures
 
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 /// JWT handler for token operations
@@ -56,6 +56,86 @@ pub struct Claims {
     pub session_id: Option<String>,
     /// Token type
     pub token_type: TokenType,
+}
+
+/// Proof that a user's membership and team are both active in canonical storage.
+///
+/// The type is nameable inside the crate so auth flows can preserve it across
+/// policy stages. Only the authentication module can construct one.
+#[derive(Debug, Clone)]
+pub(crate) struct VerifiedActiveTeam {
+    user_id: Uuid,
+    team_id: Uuid,
+}
+
+impl VerifiedActiveTeam {
+    pub(in crate::auth) fn new(
+        user_id: Uuid,
+        team_id: Uuid,
+        _seal: crate::auth::system::TeamValidationSeal,
+    ) -> Self {
+        Self { user_id, team_id }
+    }
+
+    pub(crate) fn matches_user(&self, user_id: Uuid) -> bool {
+        self.user_id == user_id
+    }
+
+    pub(crate) fn team_id(&self) -> Uuid {
+        self.team_id
+    }
+}
+
+/// Presence-aware provenance for the active-team claim carried by access tokens.
+///
+/// This stays outside [`Claims`] so the public claims struct remains source-compatible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum TeamScopeMarker {
+    #[default]
+    Absent,
+    Present(u8),
+}
+
+impl TeamScopeMarker {
+    pub(crate) fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
+fn serialize_team_scope_marker<S>(
+    marker: &TeamScopeMarker,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match marker {
+        TeamScopeMarker::Present(version) => serializer.serialize_u8(*version),
+        TeamScopeMarker::Absent => serializer.serialize_unit(),
+    }
+}
+
+fn deserialize_team_scope_marker<'de, D>(
+    deserializer: D,
+) -> std::result::Result<TeamScopeMarker, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    u8::deserialize(deserializer).map(TeamScopeMarker::Present)
+}
+
+/// Internal access-token envelope. Only a physically absent marker is legacy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AccessTokenClaims {
+    #[serde(flatten)]
+    pub(crate) public: Claims,
+    #[serde(
+        default,
+        skip_serializing_if = "TeamScopeMarker::is_absent",
+        serialize_with = "serialize_team_scope_marker",
+        deserialize_with = "deserialize_team_scope_marker"
+    )]
+    pub(crate) team_scope_version: TeamScopeMarker,
 }
 
 /// Token type enumeration

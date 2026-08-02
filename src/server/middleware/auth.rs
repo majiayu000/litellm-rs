@@ -29,6 +29,10 @@ use tracing::{debug, error, warn};
 /// Auth middleware for Actix-web
 pub struct AuthMiddleware;
 
+fn bypasses_header_auth(path: &str) -> bool {
+    is_public_route(path) || path == "/auth/refresh"
+}
+
 impl<S, B> Transform<S, ServiceRequest> for AuthMiddleware
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
@@ -71,7 +75,7 @@ where
         Box::pin(async move {
             // Check public route with &str reference before any mutable borrows,
             // avoiding a per-request String allocation for the path.
-            let is_public = is_public_route(req.path());
+            let is_public = bypasses_header_auth(req.path());
 
             let app_state = match req.app_data::<web::Data<AppState>>().cloned() {
                 Some(state) => state,
@@ -216,6 +220,20 @@ where
                     rate_limiter.record_success(&client_id);
                     debug!("Authentication succeeded");
 
+                    match api_key_allows_endpoint(result.api_key.as_ref(), req.path()) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            warn!("Authenticated API key is not permitted to access this endpoint");
+                            return Ok(forbidden_response(
+                                req,
+                                "API key is not permitted for this endpoint",
+                            ));
+                        }
+                        Err(error) => {
+                            warn!("Authenticated API key policy is invalid: {}", error);
+                            return Ok(authentication_unavailable_response(req));
+                        }
+                    }
                     if let Some(operation) = ai::operation_for_path(req.path())
                         && !check_permission(
                             result.user.as_ref(),
@@ -231,20 +249,6 @@ where
                             req,
                             "API key is not permitted for this operation",
                         ));
-                    }
-                    match api_key_allows_endpoint(result.api_key.as_ref(), req.path()) {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            warn!("Authenticated API key is not permitted to access this endpoint");
-                            return Ok(forbidden_response(
-                                req,
-                                "API key is not permitted for this endpoint",
-                            ));
-                        }
-                        Err(error) => {
-                            warn!("Authenticated API key policy is invalid: {}", error);
-                            return Ok(forbidden_response(req, error.to_string()));
-                        }
                     }
 
                     insert_request_context(&mut req, result.context);

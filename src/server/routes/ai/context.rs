@@ -134,23 +134,24 @@ pub fn check_permission(user: Option<&User>, api_key: Option<&ApiKey>, operation
 }
 
 fn api_key_has_admin_permission(api_key: &ApiKey) -> bool {
-    if api_key
+    api_key_has_admin_permission_checked(api_key).unwrap_or(false)
+}
+
+/// Resolve API-key admin capability without swallowing malformed runtime policy.
+pub(crate) fn api_key_has_admin_permission_checked(api_key: &ApiKey) -> Result<bool, GatewayError> {
+    let runtime = runtime_key_permissions(api_key)?;
+    let direct = api_key
         .permissions
         .iter()
-        .any(|p| p == "*" || p == "system.admin")
-    {
-        return true;
-    }
-
-    matches!(
-        runtime_key_permissions(api_key),
-        Ok(Some(permissions))
-            if permissions.is_admin
-                || permissions
-                    .custom_permissions
-                    .iter()
-                    .any(|p| p == "*" || p == "system.admin")
-    )
+        .any(|permission| permission == "*" || permission == "system.admin");
+    let runtime_admin = runtime.is_some_and(|permissions| {
+        permissions.is_admin
+            || permissions
+                .custom_permissions
+                .iter()
+                .any(|permission| permission == "*" || permission == "system.admin")
+    });
+    Ok(direct || runtime_admin)
 }
 
 fn api_key_has_explicit_operation_permissions(api_key: &ApiKey) -> bool {
@@ -226,9 +227,7 @@ fn runtime_key_permissions(
 
     serde_json::from_value::<RuntimeKeyPermissions>(permissions.clone())
         .map(Some)
-        .map_err(|error| {
-            GatewayError::forbidden(format!("API key runtime policy is invalid: {error}"))
-        })
+        .map_err(|_| GatewayError::forbidden("API key runtime policy is invalid"))
 }
 
 pub fn api_key_allows_endpoint(
@@ -562,6 +561,48 @@ mod tests {
         assert!(matches!(
             api_key_allows_endpoint(Some(&key), "/v1/embeddings"),
             Ok(false)
+        ));
+    }
+
+    #[test]
+    fn gh1130_checked_admin_capability_honors_key_attenuation() {
+        let restricted = create_test_api_key();
+        assert!(!api_key_has_admin_permission_checked(&restricted).unwrap());
+
+        let direct = create_admin_api_key();
+        assert!(api_key_has_admin_permission_checked(&direct).unwrap());
+
+        let mut runtime = create_test_api_key();
+        runtime.metadata.set_extra(
+            CORE_KEYS_EXTRA_NAMESPACE,
+            serde_json::json!({
+                "permissions": {
+                    "allowed_models": [],
+                    "allowed_endpoints": [],
+                    "max_tokens_per_request": null,
+                    "is_admin": true,
+                    "custom_permissions": []
+                }
+            }),
+        );
+        assert!(api_key_has_admin_permission_checked(&runtime).unwrap());
+    }
+
+    #[test]
+    fn gh1130_malformed_runtime_policy_is_an_error() {
+        let mut key = create_admin_api_key();
+        key.metadata.set_extra(
+            CORE_KEYS_EXTRA_NAMESPACE,
+            serde_json::json!({"permissions": {"is_admin": "yes"}}),
+        );
+
+        assert!(matches!(
+            api_key_has_admin_permission_checked(&key),
+            Err(GatewayError::Forbidden(_))
+        ));
+        assert!(matches!(
+            api_key_allows_endpoint(Some(&key), "/v1/files"),
+            Err(GatewayError::Forbidden(_))
         ));
     }
 

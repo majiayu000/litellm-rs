@@ -15,6 +15,64 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 const AUTH_PROBE_PATH: &str = "/v1/private/auth-probe";
 
+#[tokio::test]
+async fn gh1130_refresh_route_uses_body_token_as_primary_credential() {
+    let state = build_test_state(true, true).await;
+    let principal = seed_valid_principal(&state).await;
+    let user_id = uuid::Uuid::parse_str(&principal.user_id).expect("seeded user UUID");
+    let refresh_token = state
+        .auth
+        .jwt()
+        .create_refresh_token(user_id, None)
+        .await
+        .expect("refresh token");
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .wrap(AuthMiddleware)
+            .configure(routes::auth::configure_routes),
+    )
+    .await;
+    let valid_response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/auth/refresh")
+            .set_json(serde_json::json!({"refresh_token": refresh_token}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(valid_response.status(), StatusCode::OK);
+
+    let invalid_response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/auth/refresh")
+            .set_json(serde_json::json!({"refresh_token": "invalid"}))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(
+        invalid_response.status(),
+        StatusCode::BAD_REQUEST,
+        "the request must reach the refresh handler instead of failing as missing authentication"
+    );
+
+    let prefix_response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/auth/refresh/extra")
+            .set_json(serde_json::json!({"refresh_token": "invalid"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(
+        prefix_response.status(),
+        StatusCode::UNAUTHORIZED,
+        "only the exact refresh route may bypass header authentication"
+    );
+}
+
 #[derive(Debug, Clone)]
 struct SeededPrincipal {
     raw_api_key: String,
@@ -31,6 +89,22 @@ struct AuthProbePayload {
     user_id: Option<String>,
     api_key_id: Option<String>,
     api_key_budget_id: Option<String>,
+    team_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyAccessClaims {
+    sub: uuid::Uuid,
+    iat: u64,
+    exp: u64,
+    iss: String,
+    aud: String,
+    jti: String,
+    role: String,
+    permissions: Vec<String>,
+    team_id: Option<uuid::Uuid>,
+    session_id: Option<String>,
+    token_type: String,
 }
 
 async fn auth_probe(req: HttpRequest, hit_counter: web::Data<Arc<AtomicUsize>>) -> HttpResponse {
@@ -60,6 +134,9 @@ async fn auth_probe(req: HttpRequest, hit_counter: web::Data<Arc<AtomicUsize>>) 
         api_key_budget_id: context
             .as_ref()
             .and_then(|ctx| ctx.api_key_budget_id().map(|id| id.to_string())),
+        team_id: context
+            .as_ref()
+            .and_then(|ctx| ctx.team_id().map(|id| id.to_string())),
     };
 
     HttpResponse::Ok().json(payload)
@@ -195,6 +272,68 @@ async fn seed_principal_with_role_and_api_key(
         user_id: user.id().to_string(),
         api_key_id: api_key.metadata.id.to_string(),
     }
+}
+
+#[tokio::test]
+async fn gh1130_legacy_access_token_ignores_unproven_team_claim() {
+    let state = build_test_state(true, false).await;
+    let guessed_team = uuid::Uuid::new_v4();
+    let mut user = User::new(
+        "legacy-jwt-user".to_string(),
+        "legacy-jwt@example.com".to_string(),
+        "hashed-password".to_string(),
+    );
+    user.status = UserStatus::Active;
+    user.team_ids.push(guessed_team);
+    let user = state.storage.db().create_user(&user).await.unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let legacy_claims = LegacyAccessClaims {
+        sub: user.id(),
+        iat: now,
+        exp: now + 3600,
+        iss: "litellm-rs".to_string(),
+        aud: "api".to_string(),
+        jti: uuid::Uuid::new_v4().to_string(),
+        role: "user".to_string(),
+        permissions: vec!["files".to_string()],
+        team_id: Some(guessed_team),
+        session_id: None,
+        token_type: "access".to_string(),
+    };
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &legacy_claims,
+        &jsonwebtoken::EncodingKey::from_secret(b"AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!"),
+    )
+    .unwrap();
+    let hit_counter = Arc::new(AtomicUsize::new(0));
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .app_data(web::Data::new(hit_counter))
+            .wrap(AuthMiddleware)
+            .route(AUTH_PROBE_PATH, web::get().to(auth_probe)),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .insert_header(("authorization", format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: AuthProbePayload = test::read_body_json(response).await;
+    assert_eq!(
+        payload.user_id.as_deref(),
+        Some(user.id().to_string().as_str())
+    );
+    assert_eq!(payload.team_id, None);
 }
 
 mod disabled_auth;

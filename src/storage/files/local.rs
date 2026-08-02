@@ -7,7 +7,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use super::types::FileMetadata;
+use super::types::{FileMetadata, FileOwnerScope, StoredFileMetadata};
+
+const STAGING_DIRECTORY: &str = ".staging";
 
 /// Local file storage
 #[derive(Debug, Clone)]
@@ -44,52 +46,132 @@ impl LocalStorage {
         purpose: Option<&str>,
     ) -> Result<String> {
         let file_id = Uuid::new_v4().to_string();
-        let file_path = self.get_file_path(&file_id);
-
-        // Create subdirectories if needed
-        if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent).await.map_err(|e| {
-                GatewayError::Internal(format!("Failed to create directory: {}", e))
-            })?;
-        }
-
-        // Write file content
-        let mut file = fs::File::create(&file_path)
+        let metadata =
+            StoredFileMetadata::legacy(Self::build_metadata(&file_id, filename, content, purpose));
+        self.store_envelope_with_id(&file_id, content, &metadata)
             .await
-            .map_err(|e| GatewayError::Internal(format!("Failed to create file: {}", e)))?;
+    }
 
-        file.write_all(content)
+    /// Store a file whose owner has already been resolved from trusted auth state.
+    pub(crate) async fn store_owned_with_purpose(
+        &self,
+        filename: &str,
+        content: &[u8],
+        purpose: Option<&str>,
+        owner: FileOwnerScope,
+    ) -> Result<String> {
+        let file_id = Uuid::new_v4().to_string();
+        let metadata = StoredFileMetadata::owned(
+            Self::build_metadata(&file_id, filename, content, purpose),
+            owner,
+        );
+        self.store_envelope_with_id(&file_id, content, &metadata)
             .await
-            .map_err(|e| GatewayError::Internal(format!("Failed to write file: {}", e)))?;
+    }
 
-        // Store metadata
-        let metadata = FileMetadata {
-            id: file_id.clone(),
+    fn build_metadata(
+        file_id: &str,
+        filename: &str,
+        content: &[u8],
+        purpose: Option<&str>,
+    ) -> FileMetadata {
+        FileMetadata {
+            id: file_id.to_string(),
             filename: filename.to_string(),
             content_type: Self::detect_content_type(filename),
             size: content.len() as u64,
             created_at: chrono::Utc::now(),
             purpose: Self::normalize_purpose(purpose),
             checksum: Self::calculate_checksum(content),
-        };
+        }
+    }
 
-        self.store_metadata(&file_id, &metadata).await?;
+    /// Stage content and complete metadata outside the list-visible namespace.
+    ///
+    /// Metadata is published first; the final content rename is the only commit
+    /// point visible to `list`, `get`, and `metadata_with_owner`.
+    async fn store_envelope_with_id(
+        &self,
+        file_id: &str,
+        content: &[u8],
+        metadata: &StoredFileMetadata,
+    ) -> Result<String> {
+        Self::validate_file_id(file_id)?;
+        let final_content = self.get_file_path(file_id);
+        let final_metadata = self.get_metadata_path(file_id);
+        let final_parent = final_content
+            .parent()
+            .ok_or_else(|| GatewayError::internal("File storage path has no parent directory"))?;
+        fs::create_dir_all(final_parent)
+            .await
+            .map_err(|error| GatewayError::internal(format!("Failed to create shard: {error}")))?;
 
-        debug!("File stored: {} -> {}", filename, file_id);
-        Ok(file_id)
+        let staging_dir = self.base_path.join(STAGING_DIRECTORY).join(file_id);
+        fs::create_dir_all(&staging_dir).await.map_err(|error| {
+            GatewayError::internal(format!("Failed to create file staging directory: {error}"))
+        })?;
+        let staged_content = staging_dir.join("content");
+        let staged_metadata = staging_dir.join("metadata");
+
+        let result = async {
+            Self::write_complete(&staged_content, content).await?;
+            let encoded = serde_json::to_vec_pretty(metadata).map_err(|error| {
+                GatewayError::internal(format!("Failed to serialize file metadata: {error}"))
+            })?;
+            Self::write_complete(&staged_metadata, &encoded).await?;
+
+            fs::rename(&staged_metadata, &final_metadata)
+                .await
+                .map_err(|error| {
+                    GatewayError::internal(format!("Failed to publish file metadata: {error}"))
+                })?;
+            if let Err(error) = fs::rename(&staged_content, &final_content).await {
+                if let Err(cleanup_error) = fs::remove_file(&final_metadata).await {
+                    debug!(
+                        "Failed to clean unpublished metadata sidecar: {}",
+                        cleanup_error
+                    );
+                }
+                return Err(GatewayError::internal(format!(
+                    "Failed to publish file content: {error}"
+                )));
+            }
+            Ok(())
+        }
+        .await;
+
+        if let Err(cleanup_error) = fs::remove_dir_all(&staging_dir).await
+            && cleanup_error.kind() != std::io::ErrorKind::NotFound
+        {
+            debug!("Failed to clean file staging directory: {}", cleanup_error);
+        }
+        result?;
+
+        debug!("File stored: {} -> {}", metadata.public.filename, file_id);
+        Ok(file_id.to_string())
+    }
+
+    async fn write_complete(path: &Path, content: &[u8]) -> Result<()> {
+        let mut file = fs::File::create(path).await.map_err(|error| {
+            GatewayError::internal(format!("Failed to create staged file: {error}"))
+        })?;
+        file.write_all(content).await.map_err(|error| {
+            GatewayError::internal(format!("Failed to write staged file: {error}"))
+        })?;
+        file.flush().await.map_err(|error| {
+            GatewayError::internal(format!("Failed to flush staged file: {error}"))
+        })?;
+        file.sync_all().await.map_err(|error| {
+            GatewayError::internal(format!("Failed to sync staged file: {error}"))
+        })?;
+        Ok(())
     }
 
     /// Retrieve file content
     pub async fn get(&self, file_id: &str) -> Result<Vec<u8>> {
         Self::validate_file_id(file_id)?;
+        self.metadata_with_owner(file_id).await?;
         let file_path = self.get_file_path(file_id);
-
-        if !file_path.exists() {
-            return Err(GatewayError::NotFound(format!(
-                "File not found: {}",
-                file_id
-            )));
-        }
 
         let mut file = fs::File::open(&file_path)
             .await
@@ -131,26 +213,38 @@ impl LocalStorage {
     pub async fn exists(&self, file_id: &str) -> Result<bool> {
         Self::validate_file_id(file_id)?;
         let file_path = self.get_file_path(file_id);
-        Ok(file_path.exists())
+        if !file_path.exists() {
+            return Ok(false);
+        }
+        self.metadata_with_owner(file_id).await?;
+        Ok(true)
     }
 
     /// Get file metadata
     pub async fn metadata(&self, file_id: &str) -> Result<FileMetadata> {
+        Ok(self.metadata_with_owner(file_id).await?.public)
+    }
+
+    /// Get complete internal metadata while preserving owner presence.
+    pub(crate) async fn metadata_with_owner(&self, file_id: &str) -> Result<StoredFileMetadata> {
         Self::validate_file_id(file_id)?;
+        let file_path = self.get_file_path(file_id);
+        if !file_path.exists() {
+            return Err(GatewayError::not_found("File not found"));
+        }
         let metadata_path = self.get_metadata_path(file_id);
 
         if !metadata_path.exists() {
-            return Err(GatewayError::NotFound(format!(
-                "File metadata not found: {}",
-                file_id
-            )));
+            return Err(GatewayError::internal(
+                "Committed file is missing required metadata",
+            ));
         }
 
         let content = fs::read_to_string(&metadata_path)
             .await
             .map_err(|e| GatewayError::Internal(format!("Failed to read metadata: {}", e)))?;
 
-        let metadata: FileMetadata = serde_json::from_str(&content)
+        let metadata: StoredFileMetadata = serde_json::from_str(&content)
             .map_err(|e| GatewayError::Internal(format!("Failed to parse metadata: {}", e)))?;
 
         Ok(metadata)
@@ -158,6 +252,9 @@ impl LocalStorage {
 
     /// List files
     pub async fn list(&self, prefix: Option<&str>, limit: Option<usize>) -> Result<Vec<String>> {
+        if limit == Some(0) {
+            return Ok(Vec::new());
+        }
         let mut files = Vec::new();
         let mut subdirs = fs::read_dir(&self.base_path)
             .await
@@ -288,26 +385,6 @@ impl LocalStorage {
         self.base_path
             .join(subdir)
             .join(format!("{}.meta", file_id))
-    }
-
-    /// Store file metadata
-    async fn store_metadata(&self, file_id: &str, metadata: &FileMetadata) -> Result<()> {
-        let metadata_path = self.get_metadata_path(file_id);
-
-        if let Some(parent) = metadata_path.parent() {
-            fs::create_dir_all(parent).await.map_err(|e| {
-                GatewayError::Internal(format!("Failed to create metadata directory: {}", e))
-            })?;
-        }
-
-        let content = serde_json::to_string_pretty(metadata)
-            .map_err(|e| GatewayError::Internal(format!("Failed to serialize metadata: {}", e)))?;
-
-        fs::write(&metadata_path, content)
-            .await
-            .map_err(|e| GatewayError::Internal(format!("Failed to write metadata: {}", e)))?;
-
-        Ok(())
     }
 
     /// Detect content type from filename
@@ -591,5 +668,114 @@ mod tests {
     fn test_validate_file_id_rejects_overlong() {
         let long = "a".repeat(65);
         assert!(LocalStorage::validate_file_id(&long).is_err());
+    }
+
+    #[tokio::test]
+    async fn gh1130_owned_metadata_round_trips_without_changing_public_shape() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp.path().to_str().unwrap())
+            .await
+            .unwrap();
+        let owner = FileOwnerScope::Team(Uuid::new_v4());
+        let file_id = storage
+            .store_owned_with_purpose("batch.jsonl", b"{}\n", Some("batch"), owner.clone())
+            .await
+            .unwrap();
+
+        let stored = storage.metadata_with_owner(&file_id).await.unwrap();
+        assert_eq!(stored.owner(), Some(&owner));
+        let public_json = serde_json::to_value(storage.metadata(&file_id).await.unwrap()).unwrap();
+        assert!(public_json.get("owner").is_none());
+
+        let reopened = LocalStorage::new(temp.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .metadata_with_owner(&file_id)
+                .await
+                .unwrap()
+                .owner(),
+            Some(&owner)
+        );
+    }
+
+    #[tokio::test]
+    async fn gh1130_failed_publish_and_meta_only_records_are_not_visible() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp.path().to_str().unwrap())
+            .await
+            .unwrap();
+        let file_id = Uuid::new_v4().to_string();
+        let metadata = StoredFileMetadata::owned(
+            LocalStorage::build_metadata(&file_id, "batch.jsonl", b"{}\n", Some("batch")),
+            FileOwnerScope::User(Uuid::new_v4()),
+        );
+
+        let final_metadata = storage.get_metadata_path(&file_id);
+        fs::create_dir_all(&final_metadata).await.unwrap();
+        let error = storage
+            .store_envelope_with_id(&file_id, b"{}\n", &metadata)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("publish file metadata"));
+        assert!(!temp.path().join(STAGING_DIRECTORY).join(&file_id).exists());
+        assert!(!storage.get_file_path(&file_id).exists());
+        fs::remove_dir(&final_metadata).await.unwrap();
+
+        let content_failure_id = Uuid::new_v4().to_string();
+        let final_content = storage.get_file_path(&content_failure_id);
+        fs::create_dir_all(&final_content).await.unwrap();
+        let error = storage
+            .store_envelope_with_id(&content_failure_id, b"{}\n", &metadata)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("publish file content"));
+        assert!(!storage.get_metadata_path(&content_failure_id).exists());
+        assert!(
+            !temp
+                .path()
+                .join(STAGING_DIRECTORY)
+                .join(&content_failure_id)
+                .exists()
+        );
+        fs::remove_dir(&final_content).await.unwrap();
+
+        let meta_only_id = Uuid::new_v4().to_string();
+        let meta_path = storage.get_metadata_path(&meta_only_id);
+        fs::create_dir_all(meta_path.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&meta_path, serde_json::to_vec(&metadata).unwrap())
+            .await
+            .unwrap();
+
+        let reopened = LocalStorage::new(temp.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert!(reopened.list(None, None).await.unwrap().is_empty());
+        assert!(matches!(
+            reopened.metadata_with_owner(&meta_only_id).await,
+            Err(GatewayError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn gh1130_content_without_metadata_is_explicit_corruption() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp.path().to_str().unwrap())
+            .await
+            .unwrap();
+        let file_id = Uuid::new_v4().to_string();
+        let content_path = storage.get_file_path(&file_id);
+        fs::create_dir_all(content_path.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(content_path, b"orphan").await.unwrap();
+
+        assert!(matches!(
+            storage.metadata_with_owner(&file_id).await,
+            Err(GatewayError::Internal(_))
+        ));
     }
 }

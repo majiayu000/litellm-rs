@@ -1,6 +1,8 @@
 //! File storage types and enums
 
 use super::{LocalStorage, S3Storage};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use uuid::Uuid;
 
 /// File storage backend
 #[derive(Debug, Clone)]
@@ -29,6 +31,95 @@ pub struct FileMetadata {
     pub purpose: Option<String>,
     /// File checksum
     pub checksum: String,
+}
+
+/// Canonical single-owner scope persisted with newly uploaded HTTP files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "scope",
+    content = "id",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub(crate) enum FileOwnerScope {
+    Team(Uuid),
+    User(Uuid),
+    ApiKey(Uuid),
+}
+
+/// Presence state for the persisted owner field.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum OwnerField {
+    #[default]
+    Absent,
+    Present(FileOwnerScope),
+}
+
+impl OwnerField {
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+
+    pub(crate) fn as_scope(&self) -> Option<&FileOwnerScope> {
+        match self {
+            Self::Absent => None,
+            Self::Present(scope) => Some(scope),
+        }
+    }
+}
+
+fn serialize_owner_field<S>(
+    owner: &OwnerField,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match owner {
+        OwnerField::Present(scope) => scope.serialize(serializer),
+        OwnerField::Absent => serializer.serialize_unit(),
+    }
+}
+
+fn deserialize_owner_field<'de, D>(deserializer: D) -> std::result::Result<OwnerField, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    FileOwnerScope::deserialize(deserializer).map(OwnerField::Present)
+}
+
+/// Internal persisted metadata envelope. Public API metadata remains unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredFileMetadata {
+    #[serde(flatten)]
+    pub(crate) public: FileMetadata,
+    #[serde(
+        default,
+        skip_serializing_if = "OwnerField::is_absent",
+        serialize_with = "serialize_owner_field",
+        deserialize_with = "deserialize_owner_field"
+    )]
+    pub(crate) owner: OwnerField,
+}
+
+impl StoredFileMetadata {
+    pub(crate) fn legacy(public: FileMetadata) -> Self {
+        Self {
+            public,
+            owner: OwnerField::Absent,
+        }
+    }
+
+    pub(crate) fn owned(public: FileMetadata, owner: FileOwnerScope) -> Self {
+        Self {
+            public,
+            owner: OwnerField::Present(owner),
+        }
+    }
+
+    pub(crate) fn owner(&self) -> Option<&FileOwnerScope> {
+        self.owner.as_scope()
+    }
 }
 
 #[cfg(test)]
@@ -159,5 +250,63 @@ mod tests {
         };
 
         assert_eq!(metadata.size, u64::MAX);
+    }
+
+    #[test]
+    fn gh1130_owner_wire_is_single_adjacent_tag_uuid_scope() {
+        let team_id = Uuid::new_v4();
+        let encoded = serde_json::to_value(FileOwnerScope::Team(team_id)).unwrap();
+        assert_eq!(encoded, serde_json::json!({"scope": "team", "id": team_id}));
+
+        for scope in [
+            FileOwnerScope::Team(Uuid::new_v4()),
+            FileOwnerScope::User(Uuid::new_v4()),
+            FileOwnerScope::ApiKey(Uuid::new_v4()),
+        ] {
+            let round_trip: FileOwnerScope =
+                serde_json::from_value(serde_json::to_value(&scope).unwrap()).unwrap();
+            assert_eq!(round_trip, scope);
+        }
+    }
+
+    #[test]
+    fn gh1130_only_physically_missing_owner_is_legacy() {
+        let public = FileMetadata {
+            id: "legacy".to_string(),
+            filename: "legacy.jsonl".to_string(),
+            content_type: "application/json".to_string(),
+            size: 2,
+            created_at: Utc::now(),
+            purpose: Some("batch".to_string()),
+            checksum: "checksum".to_string(),
+        };
+        let legacy_json = serde_json::to_value(&public).unwrap();
+        let legacy: StoredFileMetadata = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(legacy.owner, OwnerField::Absent);
+
+        let mut explicit_null = serde_json::to_value(&public).unwrap();
+        explicit_null
+            .as_object_mut()
+            .unwrap()
+            .insert("owner".to_string(), serde_json::Value::Null);
+        assert!(serde_json::from_value::<StoredFileMetadata>(explicit_null).is_err());
+
+        for malformed in [
+            serde_json::json!({"scope": "team"}),
+            serde_json::json!({"scope": "unknown", "id": Uuid::new_v4()}),
+            serde_json::json!({"scope": "user", "id": "not-a-uuid"}),
+            serde_json::json!({
+                "scope": "api_key",
+                "id": Uuid::new_v4(),
+                "extra": true
+            }),
+        ] {
+            let mut value = serde_json::to_value(&public).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert("owner".to_string(), malformed);
+            assert!(serde_json::from_value::<StoredFileMetadata>(value).is_err());
+        }
     }
 }

@@ -5,11 +5,242 @@ use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use crate::utils::auth::crypto::password::verify_password;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info, warn};
 
-use super::models::{LoginRequest, LoginResponse, UserInfo};
+use super::models::{
+    AuthFlowFailure, AuthorizationStage, EncodingStage, LoginRequest, LoginResponse,
+    LoginWireRequest, PrimaryAuthStage, SequencedAuthFlow, TeamSelectionStage, UserInfo,
+    execute_auth_flow,
+};
+
+type LoginFlowDriver<P, T, A, E> = SequencedAuthFlow<P, T, A, E>;
+
+struct LoginFlowOutput {
+    user: crate::core::models::user::types::User,
+    access_token: String,
+    refresh_token: String,
+}
+
+#[async_trait(?Send)]
+trait LoginUserLookup {
+    async fn find_user(
+        &mut self,
+        username: &str,
+    ) -> crate::utils::error::gateway_error::Result<Option<crate::core::models::user::types::User>>;
+}
+
+struct DatabaseLoginUserLookup<'a>(&'a crate::storage::database::Database);
+
+#[async_trait(?Send)]
+impl LoginUserLookup for DatabaseLoginUserLookup<'_> {
+    async fn find_user(
+        &mut self,
+        username: &str,
+    ) -> crate::utils::error::gateway_error::Result<Option<crate::core::models::user::types::User>>
+    {
+        self.0.find_user_by_username(username).await
+    }
+}
+
+trait LoginPasswordVerifier {
+    fn verify(
+        &mut self,
+        password: &str,
+        password_hash: &str,
+    ) -> crate::utils::error::gateway_error::Result<bool>;
+}
+
+struct ProductionPasswordVerifier;
+
+impl LoginPasswordVerifier for ProductionPasswordVerifier {
+    fn verify(
+        &mut self,
+        password: &str,
+        password_hash: &str,
+    ) -> crate::utils::error::gateway_error::Result<bool> {
+        verify_password(password, password_hash)
+    }
+}
+
+struct LoginPrimaryStage<'a, U, P> {
+    users: U,
+    password_verifier: P,
+    request: LoginRequest,
+    client_ip: &'a str,
+    limiter: &'a AuthRateLimiter,
+}
+
+#[async_trait(?Send)]
+impl<U: LoginUserLookup, P: LoginPasswordVerifier> PrimaryAuthStage
+    for LoginPrimaryStage<'_, U, P>
+{
+    type Principal = crate::core::models::user::types::User;
+
+    async fn authenticate(&mut self) -> Result<Self::Principal, AuthFlowFailure> {
+        let user = match self.users.find_user(&self.request.username).await {
+            Ok(Some(user)) => user,
+            Ok(None) => {
+                warn!(
+                    "Login attempt with invalid username from IP {}",
+                    self.client_ip
+                );
+                self.limiter.record_failure(self.client_ip);
+                return Err(AuthFlowFailure::unauthorized("Invalid credentials"));
+            }
+            Err(error) => {
+                error!("Database error during login: {}", error);
+                return Err(AuthFlowFailure::internal("Database error"));
+            }
+        };
+
+        if !user.is_active() {
+            warn!("Login attempt for inactive user from IP {}", self.client_ip);
+            self.limiter.record_failure(self.client_ip);
+            return Err(AuthFlowFailure::forbidden("Account is disabled"));
+        }
+
+        let password_valid = match self
+            .password_verifier
+            .verify(&self.request.password, &user.password_hash)
+        {
+            Ok(valid) => valid,
+            Err(error) => {
+                error!("Password verification error: {}", error);
+                return Err(AuthFlowFailure::internal("Authentication error"));
+            }
+        };
+        if !password_valid {
+            warn!(
+                "Login attempt with invalid password from IP {}",
+                self.client_ip
+            );
+            self.limiter.record_failure(self.client_ip);
+            return Err(AuthFlowFailure::unauthorized("Invalid credentials"));
+        }
+
+        Ok(user)
+    }
+}
+
+struct LoginTeamSelectionStage<'a> {
+    auth: &'a crate::auth::AuthSystem,
+    team_id: Option<uuid::Uuid>,
+}
+
+#[async_trait(?Send)]
+impl TeamSelectionStage<crate::core::models::user::types::User> for LoginTeamSelectionStage<'_> {
+    type Selection = crate::auth::jwt::types::VerifiedActiveTeam;
+
+    async fn select_team(
+        &mut self,
+        user: &crate::core::models::user::types::User,
+    ) -> Result<Option<Self::Selection>, AuthFlowFailure> {
+        let Some(team_id) = self.team_id else {
+            return Ok(None);
+        };
+        match self.auth.validate_active_team(user.id(), team_id).await {
+            Ok(Some(verified)) => Ok(Some(verified)),
+            Ok(None) => Err(AuthFlowFailure::bad_request("Invalid team selection")),
+            Err(error) => {
+                error!("Team validation failed during login: {}", error);
+                Err(AuthFlowFailure::internal("Internal server error"))
+            }
+        }
+    }
+}
+
+struct LoginAuthorizationStage<'a> {
+    auth: &'a crate::auth::AuthSystem,
+}
+
+#[async_trait(?Send)]
+impl AuthorizationStage<crate::core::models::user::types::User> for LoginAuthorizationStage<'_> {
+    type Authorization = Vec<String>;
+
+    async fn authorize(
+        &mut self,
+        user: &crate::core::models::user::types::User,
+    ) -> Result<Self::Authorization, AuthFlowFailure> {
+        self.auth
+            .rbac()
+            .get_user_permissions(user)
+            .await
+            .map_err(|error| {
+                error!("Failed to load permissions during login: {}", error);
+                AuthFlowFailure::internal("Internal server error")
+            })
+    }
+}
+
+struct LoginEncodingStage<'a> {
+    auth: &'a crate::auth::AuthSystem,
+    database: &'a crate::storage::database::Database,
+}
+
+#[async_trait(?Send)]
+impl
+    EncodingStage<
+        crate::core::models::user::types::User,
+        crate::auth::jwt::types::VerifiedActiveTeam,
+        Vec<String>,
+    > for LoginEncodingStage<'_>
+{
+    type Output = LoginFlowOutput;
+
+    async fn encode(
+        &mut self,
+        user: crate::core::models::user::types::User,
+        verified_team: Option<crate::auth::jwt::types::VerifiedActiveTeam>,
+        permissions: Vec<String>,
+    ) -> Result<Self::Output, AuthFlowFailure> {
+        if let Err(error) = self.database.update_user_last_login(user.id()).await {
+            warn!("Failed to update last login time: {}", error);
+        }
+
+        let access_token_result = match verified_team.as_ref() {
+            Some(verified_team) => {
+                self.auth
+                    .jwt()
+                    .create_access_token_for_verified_team(
+                        user.id(),
+                        user.role.to_string(),
+                        permissions,
+                        verified_team,
+                        None,
+                    )
+                    .await
+            }
+            None => {
+                self.auth
+                    .jwt()
+                    .create_access_token(user.id(), user.role.to_string(), permissions, None, None)
+                    .await
+            }
+        };
+        let access_token = access_token_result.map_err(|error| {
+            error!("Failed to generate access token: {}", error);
+            AuthFlowFailure::internal("Token generation failed")
+        })?;
+        let refresh_token = self
+            .auth
+            .jwt()
+            .create_refresh_token(user.id(), None)
+            .await
+            .map_err(|error| {
+                error!("Failed to generate refresh token: {}", error);
+                AuthFlowFailure::internal("Token generation failed")
+            })?;
+
+        Ok(LoginFlowOutput {
+            user,
+            access_token,
+            refresh_token,
+        })
+    }
+}
 
 /// Global login rate limiter: 5 attempts per IP per minute
 static LOGIN_RATE_LIMITER: std::sync::OnceLock<Arc<AuthRateLimiter>> = std::sync::OnceLock::new();
@@ -72,6 +303,24 @@ pub async fn login(
     state: web::Data<AppState>,
     request: web::Json<LoginRequest>,
 ) -> ActixResult<HttpResponse> {
+    login_internal(req, state, request.into_inner(), None).await
+}
+
+pub(super) async fn login_with_wire(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    request: web::Json<LoginWireRequest>,
+) -> ActixResult<HttpResponse> {
+    let request = request.into_inner();
+    login_internal(req, state, request.public, request.team_id).await
+}
+
+async fn login_internal(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    request: LoginRequest,
+    team_id: Option<uuid::Uuid>,
+) -> ActixResult<HttpResponse> {
     let cfg = state.config.load();
     let client_ip = extract_client_ip(&req, &cfg.gateway.server.trusted_proxies);
 
@@ -97,107 +346,45 @@ pub async fn login(
     }
 
     info!("User login attempt from IP {}", client_ip);
-
-    // Find user by username
-    let user = match state
-        .storage
-        .database
-        .find_user_by_username(&request.username)
-        .await
-    {
-        Ok(Some(user)) => user,
-        Ok(None) => {
-            warn!("Login attempt with invalid username from IP {}", client_ip);
-            limiter.record_failure(&client_ip);
-            return Ok(HttpResponse::Unauthorized()
-                .json(ApiResponse::<()>::error("Invalid credentials".to_string())));
-        }
-        Err(e) => {
-            error!("Database error during login: {}", e);
-            return Ok(HttpResponse::InternalServerError()
-                .json(ApiResponse::<()>::error("Database error".to_string())));
-        }
+    let mut flow = LoginFlowDriver {
+        primary: LoginPrimaryStage {
+            users: DatabaseLoginUserLookup(state.storage.database.as_ref()),
+            password_verifier: ProductionPasswordVerifier,
+            request,
+            client_ip: &client_ip,
+            limiter: limiter.as_ref(),
+        },
+        team: LoginTeamSelectionStage {
+            auth: state.auth.as_ref(),
+            team_id,
+        },
+        authorization: LoginAuthorizationStage {
+            auth: state.auth.as_ref(),
+        },
+        encoding: LoginEncodingStage {
+            auth: state.auth.as_ref(),
+            database: state.storage.database.as_ref(),
+        },
     };
-
-    // Check if user is active
-    if !user.is_active() {
-        warn!("Login attempt for inactive user from IP {}", client_ip);
-        limiter.record_failure(&client_ip);
-        return Ok(HttpResponse::Forbidden()
-            .json(ApiResponse::<()>::error("Account is disabled".to_string())));
-    }
-
-    // Verify password
-    let password_valid = match verify_password(&request.password, &user.password_hash) {
-        Ok(valid) => valid,
-        Err(e) => {
-            error!("Password verification error: {}", e);
-            return Ok(HttpResponse::InternalServerError()
-                .json(ApiResponse::<()>::error("Authentication error".to_string())));
-        }
-    };
-
-    if !password_valid {
-        warn!("Login attempt with invalid password from IP {}", client_ip);
-        limiter.record_failure(&client_ip);
-        return Ok(HttpResponse::Unauthorized()
-            .json(ApiResponse::<()>::error("Invalid credentials".to_string())));
-    }
-
-    // Update last login time
-    if let Err(e) = state
-        .storage
-        .database
-        .update_user_last_login(user.id())
-        .await
-    {
-        warn!("Failed to update last login time: {}", e);
-    }
-
-    // Generate JWT tokens
-    let access_token = match state
-        .auth
-        .jwt()
-        .create_access_token(user.id(), user.role.to_string(), vec![], None, None)
-        .await
-    {
-        Ok(token) => token,
-        Err(e) => {
-            error!("Failed to generate access token: {}", e);
-            return Ok(
-                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
-                    "Token generation failed".to_string(),
-                )),
-            );
-        }
-    };
-
-    let refresh_token = match state.auth.jwt().create_refresh_token(user.id(), None).await {
-        Ok(token) => token,
-        Err(e) => {
-            error!("Failed to generate refresh token: {}", e);
-            return Ok(
-                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
-                    "Token generation failed".to_string(),
-                )),
-            );
-        }
+    let output = match execute_auth_flow(&mut flow).await {
+        Ok(output) => output,
+        Err(failure) => return Ok(failure.into_response()),
     };
 
     info!("User logged in successfully from IP {}", client_ip);
 
     let response = LoginResponse {
-        access_token,
-        refresh_token,
+        access_token: output.access_token,
+        refresh_token: output.refresh_token,
         token_type: "Bearer".to_string(),
-        expires_in: 3600, // 1 hour
+        expires_in: state.auth.jwt().expiration(),
         user: UserInfo {
-            id: user.id(),
-            username: user.username,
-            email: user.email,
-            full_name: user.display_name,
-            role: user.role.to_string(),
-            email_verified: user.email_verified,
+            id: output.user.id(),
+            username: output.user.username,
+            email: output.user.email,
+            full_name: output.user.display_name,
+            role: output.user.role.to_string(),
+            email_verified: output.user.email_verified,
         },
     };
 
@@ -207,7 +394,143 @@ pub async fn login(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
     use uuid::Uuid;
+
+    struct UserLookupSpy {
+        user: Option<crate::core::models::user::types::User>,
+    }
+
+    #[async_trait(?Send)]
+    impl LoginUserLookup for UserLookupSpy {
+        async fn find_user(
+            &mut self,
+            _username: &str,
+        ) -> crate::utils::error::gateway_error::Result<
+            Option<crate::core::models::user::types::User>,
+        > {
+            Ok(self.user.take())
+        }
+    }
+
+    struct PasswordSpy;
+
+    impl LoginPasswordVerifier for PasswordSpy {
+        fn verify(
+            &mut self,
+            _password: &str,
+            _password_hash: &str,
+        ) -> crate::utils::error::gateway_error::Result<bool> {
+            Ok(false)
+        }
+    }
+
+    struct TeamSpy {
+        selection: Result<Option<u8>, AuthFlowFailure>,
+        calls: Rc<Cell<usize>>,
+    }
+
+    #[async_trait(?Send)]
+    impl TeamSelectionStage<crate::core::models::user::types::User> for TeamSpy {
+        type Selection = u8;
+
+        async fn select_team(
+            &mut self,
+            _principal: &crate::core::models::user::types::User,
+        ) -> Result<Option<Self::Selection>, AuthFlowFailure> {
+            self.calls.set(self.calls.get() + 1);
+            self.selection
+        }
+    }
+
+    struct AuthorizationSpy {
+        calls: Rc<Cell<usize>>,
+    }
+
+    #[async_trait(?Send)]
+    impl AuthorizationStage<crate::core::models::user::types::User> for AuthorizationSpy {
+        type Authorization = u8;
+
+        async fn authorize(
+            &mut self,
+            _principal: &crate::core::models::user::types::User,
+        ) -> Result<u8, AuthFlowFailure> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(1)
+        }
+    }
+
+    struct EncodingSpy {
+        calls: Rc<Cell<usize>>,
+    }
+
+    #[async_trait(?Send)]
+    impl EncodingStage<crate::core::models::user::types::User, u8, u8> for EncodingSpy {
+        type Output = u8;
+
+        async fn encode(
+            &mut self,
+            _principal: crate::core::models::user::types::User,
+            _selection: Option<u8>,
+            _authorization: u8,
+        ) -> Result<Self::Output, AuthFlowFailure> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(1)
+        }
+    }
+
+    #[tokio::test]
+    async fn gh1130_login_driver_wrong_password_never_checks_team_or_encodes() {
+        for selection in [
+            Ok(Some(1)),
+            Err(AuthFlowFailure::bad_request("foreign team")),
+        ] {
+            let team_calls = Rc::new(Cell::new(0));
+            let rbac_calls = Rc::new(Cell::new(0));
+            let encode_calls = Rc::new(Cell::new(0));
+            let mut user = crate::core::models::user::types::User::new(
+                "wrong-password-user".to_string(),
+                "wrong-password@example.com".to_string(),
+                "unused-hash".to_string(),
+            );
+            user.status = crate::core::models::user::types::UserStatus::Active;
+            let limiter = AuthRateLimiter::new(5, 60, 60);
+            let mut flow = LoginFlowDriver {
+                primary: LoginPrimaryStage {
+                    users: UserLookupSpy { user: Some(user) },
+                    password_verifier: PasswordSpy,
+                    request: LoginRequest {
+                        username: "wrong-password-user".to_string(),
+                        password: "wrong".to_string(),
+                    },
+                    client_ip: "192.0.2.10",
+                    limiter: &limiter,
+                },
+                team: TeamSpy {
+                    selection,
+                    calls: team_calls.clone(),
+                },
+                authorization: AuthorizationSpy {
+                    calls: rbac_calls.clone(),
+                },
+                encoding: EncodingSpy {
+                    calls: encode_calls.clone(),
+                },
+            };
+            let failure = match execute_auth_flow(&mut flow).await {
+                Ok(_) => panic!("wrong password must fail"),
+                Err(failure) => failure,
+            };
+            assert_eq!(
+                failure.into_response().status(),
+                actix_web::http::StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(team_calls.get(), 0);
+            assert_eq!(rbac_calls.get(), 0);
+            assert_eq!(encode_calls.get(), 0);
+        }
+    }
 
     // NOTE: Full integration tests require mocking AppState, AuthSystem, and StorageLayer.
 

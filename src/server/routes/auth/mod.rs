@@ -14,6 +14,8 @@ mod token;
 mod user;
 
 // Re-export public items for backward compatibility
+pub use crate::auth::AuthSystem;
+pub use crate::auth::jwt::types::{Claims, JwtHandler};
 pub use email::verify_email;
 pub use login::login;
 pub use models::{
@@ -28,15 +30,17 @@ pub use token::refresh_token;
 pub use user::{get_authenticated_user, get_current_user};
 
 use actix_web::web;
+use login::login_with_wire;
+use token::refresh_token_with_wire;
 
 /// Configure authentication routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/auth")
             .route("/register", web::post().to(register))
-            .route("/login", web::post().to(login))
+            .route("/login", web::post().to(login_with_wire))
             .route("/logout", web::post().to(logout))
-            .route("/refresh", web::post().to(refresh_token))
+            .route("/refresh", web::post().to(refresh_token_with_wire))
             .route("/forgot-password", web::post().to(forgot_password))
             .route("/reset-password", web::post().to(reset_password))
             .route("/verify-email", web::post().to(verify_email))

@@ -225,6 +225,46 @@ async fn test_auth_infrastructure_failures_stay_generic_500_without_lockout() {
 }
 
 #[tokio::test]
+async fn gh1130_malformed_api_key_policy_is_generic_500_not_detailed_403() {
+    let state = build_test_state(true, true).await;
+    let mut metadata = Metadata::new();
+    metadata.set_extra(
+        "__core_keys",
+        serde_json::json!({
+            "permissions": {
+                "allowed_endpoints": "/v1/files",
+                "is_admin": "corrupt"
+            }
+        }),
+    );
+    let principal =
+        seed_principal_with_api_key(&state, vec!["embeddings".to_string()], metadata).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .wrap(AuthMiddleware)
+            .configure(routes::ai::configure_routes),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/v1/files")
+            .insert_header(("x-api-key", principal.raw_api_key))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = test::read_body(response).await;
+    let body = String::from_utf8_lossy(&body);
+    assert!(!body.contains("allowed_endpoints"));
+    assert!(!body.contains("is_admin"));
+    assert!(!body.contains("corrupt"));
+    assert!(!body.contains("Forbidden"));
+}
+
+#[tokio::test]
 async fn test_missing_auth_hits_gateway_rate_limit_before_auth_short_circuit() {
     let state = build_test_state_with_rate_limit(true, true, false, Some(1)).await;
     let hit_counter = Arc::new(AtomicUsize::new(0));
