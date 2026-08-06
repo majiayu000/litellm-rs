@@ -146,7 +146,9 @@ availability；其他证据只证明 Gemini Developer API。
    alias 与 fallback 到该契约都必须使用最终身份得到相同行为；最终选中 OpenAI、
    OpenRouter 或其他 provider 时，post-selection hook 的 `stream_options` 输入/输出必须
    相等，selection failure 也不得修改原请求。unknown/non-bool wire shape 在 API
-   boundary fail closed；对所选 GH1108
+   boundary fail closed：固定 HTTP 400、`error.type=invalid_request_error`、
+   `error.code=invalid_request`，stable message 包含字面量 `provider=unselected`；provider
+   selection 与 network counter 都必须为 0，不能为了填充错误详情提前选择 provider。对所选 GH1108
    Gemini 模型，合法 metadata 与非 streaming 请求并存或内部 canonical metadata
    不一致时也必须在网络前 fail closed。Responses sync/stream/background 必须采用 two-stage
    contract：API adapter 以 typed、trusted、non-serialized route-local provenance
@@ -164,7 +166,8 @@ availability；其他证据只证明 Gemini Developer API。
    background lane 可以先返回既有 queued response，但 selected-model preflight 的 typed
    invalid-request 不能只把 status 改成 `failed`：它必须在任何 provider network 前原子写入
    stored `ResponsesApiResponse.error`（稳定 `code` 与 `message`），并由后续 GET 返回
-   `status=failed` + 该 error；不得留下 opaque failed record。
+   `status=failed` + 该 error；不得留下 opaque failed record，也不得在未收到 upstream
+   success 时记录 usage 或 spend。
    unary response cache 不得成为绕过点：当前 cache canonical policy 会删除
    `stream_options`，因此任何 non-stream request 只要携带该 metadata，就必须在 key lookup/
    store 前安全 bypass cache，再由最终 selected-model hook 判定；cache 中已有合法同 key
@@ -344,7 +347,8 @@ availability；其他证据只证明 Gemini Developer API。
       `include_usage=true` 并到达 streaming transport、从不进入 upstream body；
       OpenAI/OpenRouter 在 post-selection hook 前后值相等、selection failure 不修改请求，
       所选 GH1108 Gemini 模型的非法/不一致 metadata 与 non-stream 组合均 pre-network
-      拒绝。Responses sync/stream/background adapter 保持现有 canonical 字段/serialization，并以
+      拒绝；unknown/non-bool wire rejection 固定 HTTP 400 + invalid_request shape +
+      `provider=unselected`，selection/network=0。Responses sync/stream/background adapter 保持现有 canonical 字段/serialization，并以
       non-serialized route-local provenance 捕获 `top_k` presence/value 与
       `max_output_tokens` 来源；只有 alias/fallback 最终选中两个 exact GH1108 Gemini ID
       后才拒绝 non-null `top_k`、把 null/omitted 视为 absent，并把 token limit 单次归一化
@@ -352,7 +356,7 @@ availability；其他证据只证明 Gemini Developer API。
       OpenAI/OpenAI-like、其他 provider 与其他 Gemini 的 canonical 字段和值保持不变，
       provenance 不进入 extra_body 或 upstream。background non-null `top_k` fixture 还必须
       轮询 stored response，断言 network=0、`status=failed` 与稳定的 typed `error.code`/
-      `error.message`，不能只断言 queued 或 status。cache regression 必须先填充合法同 key response，再证明
+      `error.message`，并断言 usage/spend record=0；不能只断言 queued 或 status。cache regression 必须先填充合法同 key response，再证明
       non-stream + stream_options 在 lookup/store 前 bypass、cache return=0、network=0 和
       stable invalid-request；合法无 metadata 请求仍可命中 cache。
 - [ ] 公开请求入口矩阵闭合覆盖：OpenAI chat unary/stream、legacy completions

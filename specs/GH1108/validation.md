@@ -164,7 +164,10 @@ implementation PR 必须新增并提交 `checks/gh1108_coverage_gate.py` 与
 `checks/test_gh1108_coverage_gate.py`；本 spec PR 不实现 checker，也不需要独立 policy
 JSON。checker 必须只读取 Git metadata/diff、pinned LLVM coverage JSON 与独立生成的
 tool-version attestation；不得自行执行 coverage 工具，不得扫描 Rust 源码文本、注释
-marker、struct literal 字符串或依赖行号 golden。checker 必须验证：
+marker、struct literal 字符串或依赖行号 golden。作为 Python CLI，它必须捕获缺失文件、
+I/O、Git command failure、malformed/non-object JSON 与 schema/type errors，向 stderr 输出
+不含 secret/path contents 的单行明确错误并以 exit 1 结束；禁止未捕获异常、traceback 或
+部分成功 artifact。checker 必须验证：
 
 - `IMPLEMENTATION_BASE_SHA`/`IMPLEMENTATION_HEAD_SHA` 是不同的完整 40 位小写 commits，
   base 是 head ancestor，当前 `HEAD` 等于 head，tracked worktree clean，coverage JSON 存在；
@@ -237,7 +240,8 @@ function policies 都必须达到 100% branch coverage；`live_classification`�
   non-file/multiline/wrong/leading-or-trailing-space tool-version attestation；no-newline、单个
   terminal LF 与单个 terminal CRLF 三个合法 attestation fixtures 均通过；missing/duplicate function、wrong-file
   function、async outer constructor only、ambiguous async closure、zero branch region 与
-  uncovered function branch；
+  uncovered function branch；所有 negative CLI fixtures 均断言 exit 1、单行 stderr、无
+  `Traceback` 且不产生 gate artifact；
 - same-path other function 的 covered branch 不能满足任何 category；checker test 还必须
   证明它从不打开 production Rust source 文件；
 - catalog、deprecated、prefill、native preflight、runtime pricing authority、
@@ -262,7 +266,8 @@ function policies 都必须达到 100% branch coverage；`live_classification`�
     最终 maxOutputTokens sink 且 upstream 无 top_k/provenance；
   - background non-null top_k 等 selected-model preflight failure 等待 terminal 后断言单次
     store mutation 得到 `status=failed` + stable typed `error.code`/`error.message`，GET 可见、
-    network=0，且 cancelled record 不被 late task 覆盖；`error=None` 必须失败；
+    network=0、usage/spend record=0，且 cancelled record 不被 late task 覆盖；
+    `error=None` 或任何 settlement callback 均必须失败；
   - OpenAI exact、OpenAI-like alias/fallback、其他 provider 与其他 Gemini 的 canonical
     field/value 和 serialized upstream baseline parity，selection failure no mutation；
   - Chat Completions extra_body 不能伪造 trusted Responses provenance；
@@ -272,7 +277,10 @@ function policies 都必须达到 100% branch coverage；`live_classification`�
 - stream behavior fixtures 覆盖 selected Gemini direct/alias/fallback 的 canonical
   include_usage=true happy path、selected Gemini internal-inconsistent metadata 与 non-stream
   + stream_options、OpenAI/OpenRouter post-selection input/output equality、selection
-  failure no mutation；任何
+  failure no mutation；unknown/non-bool wire shape 在 provider selection 前返回固定 HTTP
+  400，OpenAI error envelope 精确为 `type=invalid_request_error`、
+  `code=invalid_request`，message 含 stable `provider=unselected`，provider-selection spy 与
+  network counter 均为 0；任何
   conditional consume/preserve/fail-closed branch 未命中均失败；
 - cache selectors 必须以真实 cache seed/hit path 覆盖：无 metadata 合法 hit；同 key 的
   non-stream + canonical stream_options 在 key lookup/store 前 bypass；direct/alias/fallback

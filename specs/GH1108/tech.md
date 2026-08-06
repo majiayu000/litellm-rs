@@ -275,7 +275,9 @@ adapter：
    写到 `generationConfig.maxOutputTokens`，预算也使用 normalized limit。background task
    若在此 selected-model preflight 失败，必须在 provider network 前把 `GatewayError`
    确定性映射为 `ResponseApiError { code, message }`，并用单次 store mutation 同时写入
-   `status=failed` 与 `error=Some(...)`；只调用现有 `set_background_status(..., "failed")`
+   `status=failed` 与 `error=Some(...)`；该 network=0 failure 不得进入 usage/spend
+   settlement 或写入任何 usage/spend record，只有收到 upstream success 后才允许结算。
+   只调用现有 `set_background_status(..., "failed")`
    而留下 `error=None` 不满足契约。后续 GET 必须返回该 typed error，cancelled record
    仍不得被晚到的 task 覆盖。
 5. 最终 selected OpenAI、OpenAI-like、OpenRouter、其他 provider 或其他 Gemini model
@@ -291,7 +293,8 @@ network=0 rejection 与 token single-normalization；null/omitted 不拒绝；si
 extra_body、cache identity 或 upstream。Chat Completions 输入不能通过伪造 extra_body
 获得 trusted Responses provenance。background negative fixture 必须等待 task terminal，
 并断言 stored response 原子进入 `failed`、`error.code`/`error.message` 与 unary
-invalid-request 映射一致、network=0；只观察初始 queued 或 opaque failed 不算通过。
+invalid-request 映射一致、network=0、usage/spend record=0；只观察初始 queued 或
+opaque failed 不算通过。
 
 `stream_options` 走独立的 gateway metadata lane，不进入上表。shared builder 保持
 provider-neutral，并继续执行既有 `include_usage_override=Some(true)` settlement
@@ -304,7 +307,10 @@ fallback 与 capability selection 完成后，selected operation 才调用
 - wire DTO 的闭合 shape 只有 `stream_options.include_usage: bool`；在
   `src/core/models/openai/requests.rs` 以 `deny_unknown_fields` 和 typed bool 让非 boolean
   或未知字段在 API boundary typed fail closed。该 structural validation 不消费合法
-  object，也不执行任何 provider/model-specific normalization；
+  object，也不执行任何 provider/model-specific normalization。该 early rejection 必须使用
+  既有 OpenAI error envelope 的固定 HTTP 400、`type=invalid_request_error`、
+  `code=invalid_request`，message 含 stable `provider=unselected`；provider-selection spy 与
+  network counter 均为 0；
 - 只有最终 selected provider 是 Gemini Developer 且 selected exact model 属于
   `{gemini-3.6-flash, gemini-3.5-flash-lite}` 时，
   `prepare_chat_request_for_provider` 内的 `normalize_selected_gemini_stream_metadata`

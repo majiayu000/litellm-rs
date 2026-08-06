@@ -161,7 +161,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       extra_body 不能伪造 trusted provenance；sync/stream/background positive/negative
       fixtures 均通过；background selected-model preflight error 必须在 network=0 时以
       单次 store mutation 写入 `status=failed` + stable `ResponseApiError` code/message，
-      GET 可观察且 cancelled record 不被 late task 覆盖，禁止 opaque failed status；
+      GET 可观察、usage/spend record=0 且 cancelled record 不被 late task 覆盖，禁止
+      opaque failed status；
       unary cache policy 对任何 non-stream + stream_options 在 key lookup/store 前
       safe bypass，不能依赖当前 key canonicalizer 删除 metadata 后的碰撞；回归先填充同 key
       合法 response，再证明 direct/alias/fallback 最终选中两个新模型时 cache return=0、
@@ -317,14 +318,15 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       覆盖 selected Gemini
       direct/alias/fallback consume、OpenAI/OpenRouter preserve、selection-failure no
       mutation 与 internal-inconsistent/non-stream branches；DTO unit fixtures 另行覆盖
-      unknown/non-bool wire rejection。Responses 五个 selectors 分别覆盖 typed
+      unknown/non-bool wire rejection，并断言固定 HTTP 400 + invalid_request shape +
+      `provider=unselected`、selection/network=0。Responses 五个 selectors 分别覆盖 typed
       non-serialized provenance capture、unary propagation、stream propagation、
       background propagation 与 selected-model normalization；fixtures 锁定 DTO top_k Missing/Null/Value、
       pre-selection dual token fields、no extra_body/upstream leak、selected GH1108
       direct/alias/fallback single-normalization，以及 OpenAI/OpenAI-like alias/fallback、
       其他 provider/其他 Gemini 的 field/value/serialization baseline parity；background
       error branch 还必须覆盖 terminal store 的 `failed` + typed code/message、network=0、
-      GET observability 与 cancelled no-overwrite；
+      usage/spend record=0、GET observability 与 cancelled no-overwrite；
       model capability dispatch selector 覆盖两个新 exact IDs 的
       三项 closed positive capabilities、ToolCalling/FunctionCalling negatives、case/prefix
       mismatch 与旧 Gemini no-record provider-wide fallback；cache-hit preflight 的
@@ -350,7 +352,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       malformed JSON、missing/non-file/multiline/wrong/leading-or-trailing-space tool-version
       attestation；no-newline、单个 terminal LF/CRLF 合法 fixtures 通过；missing/
       duplicate/wrong-path/branchless function、async outer constructor only、ambiguous async
-      closure 或 uncovered branch 全部 fail closed。negative fixtures 证明 same-path other-function
+      closure 或 uncovered branch 全部 fail closed；所有 invalid CLI inputs 必须以单行明确
+      stderr + exit 1 结束且无 traceback。negative fixtures 证明 same-path other-function
       的 covered branch 不能满足 category，并分别证明 classification/redaction/canonicalization/
       interruption-persistence 任一
       missing/uncovered 时失败。`ResponsesApiRequest` constructor completeness 由
