@@ -94,6 +94,7 @@ GH-1108 / #1108
     "tests/live_gemini.rs",
     "checks/gh1108_coverage_gate.py",
     "checks/test_gh1108_coverage_gate.py",
+    ".github/workflows/ci-coverage.yml",
     ".gitignore",
     "docs/providers/README.md",
     "docs/providers/gemini.md"
@@ -755,7 +756,7 @@ requirements 已集中到 [`validation.md`](validation.md)。implementation 与 
 ## Validation Execution
 
 完整命令清单见 [`validation.md#test-plan`](validation.md#test-plan)，versioned checker 的
-mandatory selectors、negative fixtures 与 exact-head fail-closed rules 见
+mandatory function policies、negative fixtures 与 exact-head fail-closed rules 见
 [`validation.md#versioned-exact-head-coverage-checker-contract`](validation.md#versioned-exact-head-coverage-checker-contract)。
 
 ## 回滚方案

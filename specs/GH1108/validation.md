@@ -139,10 +139,16 @@ explicit live opt-in + Developer credential
       `python3 checks/test_gh1108_coverage_gate.py`
 - [ ] Coverage artifact:
       `mkdir -p artifacts/coverage/GH1108 &&
-       cargo llvm-cov --locked --all-features --workspace --branch --lcov
-       --output-path artifacts/coverage/GH1108/lcov.info`
+       cargo llvm-cov --locked --all-features --workspace --branch --json
+       --output-path artifacts/coverage/GH1108/coverage.json`
 - [ ] Exact-head coverage gate:
-      `python3 checks/gh1108_coverage_gate.py --repo . --base "$IMPLEMENTATION_BASE_SHA" --head "$IMPLEMENTATION_HEAD_SHA" --lcov artifacts/coverage/GH1108/lcov.info --output artifacts/coverage/GH1108/gate.json`
+      `python3 checks/gh1108_coverage_gate.py --repo . --base "$IMPLEMENTATION_BASE_SHA" --head "$IMPLEMENTATION_HEAD_SHA" --coverage-json artifacts/coverage/GH1108/coverage.json --output artifacts/coverage/GH1108/gate.json`
+- [ ] Coverage CI contract: `.github/workflows/ci-coverage.yml` pins
+      `taiki-e/install-action@c44f6b046f1c29ae5918b1e0bfdbb2f1813836fd` and
+      `cargo-llvm-cov@0.8.7`, asserts `cargo llvm-cov --version` exactly, and runs the
+      GH1108 JSON/checker path for bounded pull-request changes. The JSON and gate result
+      are uploaded with immutable base/head metadata; missing or failed upload cannot be
+      green. Existing scheduled LCOV/Codecov behavior may remain separate.
 
 full suite、strict Clippy、coverage 与 SpecRail gates 在 exact implementation head 各执行
 一次；reviewer 默认 inspection/focused，避免重复 full run。
@@ -151,64 +157,65 @@ full suite、strict Clippy、coverage 与 SpecRail gates 在 exact implementatio
 
 implementation PR 必须新增并提交 `checks/gh1108_coverage_gate.py` 与
 `checks/test_gh1108_coverage_gate.py`；本 spec PR 不实现 checker，也不需要独立 policy
-JSON。checker 必须验证：
+JSON。checker 必须只读取 Git metadata/diff 与 pinned LLVM coverage JSON；不得扫描 Rust
+源码文本、注释 marker、struct literal 字符串或依赖行号 golden。checker 必须验证：
 
 - `IMPLEMENTATION_BASE_SHA`/`IMPLEMENTATION_HEAD_SHA` 是不同的完整 40 位小写 commits，
-  base 是 head ancestor，当前 `HEAD` 等于 head，tracked worktree clean，LCOV 存在；
+  base 是 head ancestor，当前 `HEAD` 等于 head，tracked worktree clean，coverage JSON 存在；
 - `base...head` changed paths 必须是 [`tech.md`](tech.md) complete planned-changes manifest
   的子集；上述五个 read-only routing/context files 或
   `src/core/providers/vertex_ai/**` 任一路径变化均 fail closed。Vertex neutral overlay
   是否未变仍由 catalog snapshot fixture 独立证明，不能用 path gate 替代；
 - `base...head` changed production Rust executable lines 是非空分母，所有 changed
-  production sources 均存在于 LCOV，changed-line coverage 至少 80%；
-- LCOV malformed/missing `DA`/`BRDA`、selector source/symbol/span 缺失、selector span
-  没有 changed executable line 或没有 branch record、任一 selected branch hit 为零均
-  非零退出；
-- 成功 artifact 保存 immutable base/head、changed-line manifest、LCOV SHA256，以及每个
-  selector 的 path、symbol、marker span、branch 数与 hit 结果。
+  production sources 均存在于 coverage JSON，changed-line coverage 至少 80%；
+- coverage JSON malformed、tool version 不等于 `cargo-llvm-cov 0.8.7`、required function
+  record 缺失/重复、required function 没有 branch region，或任一 required function 的
+  branch covered/count 不相等均非零退出；
+- 成功 artifact 保存 immutable base/head、changed-line manifest、coverage JSON SHA256、
+  tool version，以及每个 required category 的 path、LLVM JSON function identity、region
+  数与 branch covered/count。
 
-关键行为不能只按 path 归类。checker 内置以下 mandatory selectors；每个 selector 都必须
-定位唯一 exact Rust function symbol，并要求唯一、配对的
-`// gh1108-coverage:<marker>:start|end` marker 完全位于该 symbol body 内：
+关键行为不能只按 path 归类。checker 内置以下 mandatory function policies；每项必须在
+pinned LLVM JSON 的 `data[].functions[]` 中按 file + exact demangled function identity
+唯一命中，并以该 function record 自带的 regions/branches 计算覆盖率，不读取源码：
 
-| Required category | Path | Exact symbol(s) and required marker |
+| Required category | Path | Exact function identity |
 | --- | --- | --- |
-| `catalog_evidence_validation` | `src/core/providers/google/models/registry.rs` | `validate_developer_catalog_evidence` / `catalog-evidence-validation` |
-| `deprecated_param_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_deprecated_sampling_params` / `deprecated-param-rejection` |
-| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_gemini_contents` / `final-contents-normalization` **and** `validate_no_model_prefill` / `prefill-rejection`；两个 selector 都必需 |
-| `native_request_preflight` | `src/core/providers/google/models/request_contract.rs` | `normalize_native_gemini_request` / `native-request-preflight` |
-| `runtime_pricing_authority` | `src/core/pricing_service/authority_tests.rs` | `gemini_2026_07_runtime_pricing_authority` / `runtime-pricing-authority` |
-| `responses_provenance_capture` | `src/server/routes/ai/responses.rs` | `responses_request_provenance` / `responses-provenance-capture` |
-| `responses_unary_propagation` | `src/server/routes/ai/chat.rs` | `handle_chat_completion_with_state_and_provenance` / `responses-unary-provenance` |
-| `responses_stream_propagation` | `src/server/routes/ai/responses_stream.rs` | `handle_streaming_response` / `responses-stream-provenance` |
-| `responses_background_propagation` | `src/server/routes/ai/responses/lifecycle.rs` | `handle_background_response` / `responses-background-provenance` |
-| `responses_selected_model_normalization` | `src/server/routes/ai/token_policy.rs` | `normalize_selected_gemini_responses_provenance` / `responses-selected-model-normalization` |
-| `model_capability_dispatch` | `src/core/providers/capability_dispatch.rs` | `supports_capability_for_model` / `gemini-exact-model-capability-dispatch` |
-| `stream_metadata_validation` | `src/server/routes/ai/token_policy.rs` | `prepare_chat_request_for_provider` / `selected-deployment-stream-metadata` |
-| `cache_hit_preflight` | `src/server/routes/ai/response_cache.rs` | `should_bypass_chat_cache` / `stream-metadata-cache-bypass` **and** `src/server/routes/ai/chat.rs` 的 `handle_chat_completion_internal` / `cache-return-contract-order`；两个 selector 都必需 |
-| `live_classification` | `tests/live_gemini.rs` | `classify_live_failure` / `live-classification` |
-| `live_redaction` | `tests/live_gemini.rs` | `redact_live_artifact` / `live-redaction` |
-| `live_observation_canonicalization` | `tests/live_gemini.rs` | planned `canonicalize_live_observation` / `live-observation-canonicalization` |
-| `live_interruption_persistence` | `tests/live_gemini.rs` | planned `run_live_gemini_smoke` / `live-runner-cancellation-persistence` |
+| `catalog_evidence_validation` | `src/core/providers/google/models/registry.rs` | `validate_developer_catalog_evidence` |
+| `deprecated_param_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_deprecated_sampling_params` |
+| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_gemini_contents` **and** `validate_no_model_prefill`；两个 function policies 都必需 |
+| `native_request_preflight` | `src/core/providers/google/models/request_contract.rs` | `normalize_native_gemini_request` |
+| `runtime_pricing_authority` | `src/core/pricing_service/authority_tests.rs` | `gemini_2026_07_runtime_pricing_authority` |
+| `responses_provenance_capture` | `src/server/routes/ai/responses.rs` | `responses_request_provenance` |
+| `responses_unary_propagation` | `src/server/routes/ai/chat.rs` | `handle_chat_completion_with_state_and_provenance` |
+| `responses_stream_propagation` | `src/server/routes/ai/responses_stream.rs` | `handle_streaming_response` |
+| `responses_background_propagation` | `src/server/routes/ai/responses/lifecycle.rs` | `handle_background_response` |
+| `responses_selected_model_normalization` | `src/server/routes/ai/token_policy.rs` | `normalize_selected_gemini_responses_provenance` |
+| `model_capability_dispatch` | `src/core/providers/capability_dispatch.rs` | `supports_capability_for_model` |
+| `stream_metadata_validation` | `src/server/routes/ai/token_policy.rs` | `prepare_chat_request_for_provider` |
+| `cache_hit_preflight` | `src/server/routes/ai/response_cache.rs` | `should_bypass_chat_cache` **and** `src/server/routes/ai/chat.rs` 的 `handle_chat_completion_internal`；两个 function policies 都必需 |
+| `live_classification` | `tests/live_gemini.rs` | `classify_live_failure` |
+| `live_redaction` | `tests/live_gemini.rs` | `redact_live_artifact` |
+| `live_observation_canonicalization` | `tests/live_gemini.rs` | planned `canonicalize_live_observation` |
+| `live_interruption_persistence` | `tests/live_gemini.rs` | planned `run_live_gemini_smoke` |
 
-GH1112 merged API 若不能采用这些 exact symbols/paths，必须先 amend spec、manifest 与 checker，
-不得让 checker 猜 alias。marker 缺失、重复、反序、跨 symbol、空 span，或仅在同 path/
-同 symbol 的 marker 外存在 covered branch，都不得满足 selector。每个 category 的所有
-selector 都必须有自身 span 内的 changed `BRDA`，并达到 100%；`live_classification`、
+GH1112 merged API 若不能采用这些 exact function identities/paths，必须先 amend spec、
+manifest 与 checker，不得让 checker 猜 alias。function record 缺失、重复、来自错误 path、
+无 branch regions 或存在任一 uncovered branch，都不得满足 policy。每个 category 的所有
+function policies 都必须达到 100% branch coverage；`live_classification`、
 `live_redaction`、`live_observation_canonicalization` 与
 `live_interruption_persistence` 分开判定，不能互相替代。
 
-`checks/test_gh1108_coverage_gate.py` 使用 synthetic source/diff/LCOV fixtures，至少覆盖：
+`checks/test_gh1108_coverage_gate.py` 使用 synthetic Git diff/LLVM JSON fixtures，至少覆盖：
 
-- happy path 与 full-SHA/head/ancestor/tracked-clean/LCOV guards；
+- happy path 与 full-SHA/head/ancestor/tracked-clean/coverage-JSON guards；
 - changed path 不在 complete manifest、五个 read-only routing/context files 任一变化、任一
   `src/core/providers/vertex_ai/**` 变化均非零退出；synthetic allowed path 仍通过；
-- missing changed source、empty denominator、line coverage <80%、malformed/missing
-  `DA`/`BRDA`；
-- 每个 required symbol/marker 的 missing/duplicate/out-of-order/outside-symbol/empty
-  span；
-- unrelated covered branch（同 path 但其他 symbol，以及同 symbol 但 marker span 外）
-  不能满足任何 category；
+- missing changed source、empty denominator、line coverage <80%、malformed JSON、wrong
+  tool version、missing/duplicate function、wrong-file function、zero branch region 与
+  uncovered function branch；
+- same-path other function 的 covered branch 不能满足任何 category；checker test 还必须
+  证明它从不打开 production Rust source 文件；
 - catalog、deprecated、prefill、native preflight、runtime pricing authority、
   Responses provenance capture/unary propagation/stream propagation/background propagation/selected-model
   normalization、stream metadata、model capability dispatch、cache-hit preflight 的任一
@@ -220,11 +227,10 @@ selector 都必须有自身 span 内的 changed `BRDA`，并达到 100%；`live_
   Responses fixtures 分别覆盖：
   - DTO deserialize-only typed provenance 的 top_k Missing/Null/Value 与
     max_output_tokens origin，且 serde output 不含 provenance；
-  - 全树 `ResponsesApiRequest {` literal scan 的两个 construction sites：
-    `src/server/routes/ai/responses.rs` 与
-    `src/server/routes/ai/responses/lifecycle_tests.rs` 均编译，并显式初始化 missing
-    provenance；`responses/codex_compat_tests.rs` 仅为 Serde constructor，不伪装成
-    struct-literal coverage；
+  - `cargo check --all-targets` 编译全部 in-crate `ResponsesApiRequest` constructors；
+    `responses_request_provenance_defaults` behavior fixture 分别通过 unary 与 background
+    constructor 构造请求并断言 missing provenance，Serde fixture 独立断言 omitted/null/value；
+    不扫描 `ResponsesApiRequest {` 字符串；
   - pre-selection adapter 保持 `max_tokens=Some(value)` 与
     `max_completion_tokens=Some(value)`，top_k 不进入 extra_body；
   - selected exact GH1108 Gemini sync/stream/background direct/alias/fallback 才执行 non-null top_k
@@ -236,10 +242,10 @@ selector 都必须有自身 span 内的 changed `BRDA`，并达到 100%；`live_
   capability-dispatch fixtures 覆盖两个新 exact IDs 的三项正能力、ToolCalling/
   FunctionCalling 负能力、case/prefix mismatch，以及无 exact neutral record 的既有 Gemini
   model provider-wide fallback；
-- stream selector fixtures 覆盖 selected Gemini direct/alias/fallback 的 canonical
+- stream behavior fixtures 覆盖 selected Gemini direct/alias/fallback 的 canonical
   include_usage=true happy path、selected Gemini internal-inconsistent metadata 与 non-stream
   + stream_options、OpenAI/OpenRouter post-selection input/output equality、selection
-  failure no mutation、同 path 其他 function 与 marker 外 covered branch；任何
+  failure no mutation；任何
   conditional consume/preserve/fail-closed branch 未命中均失败；
 - cache selectors 必须以真实 cache seed/hit path 覆盖：无 metadata 合法 hit；同 key 的
   non-stream + canonical stream_options 在 key lookup/store 前 bypass；direct/alias/fallback

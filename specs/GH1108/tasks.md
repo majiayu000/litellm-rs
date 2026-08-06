@@ -29,7 +29,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       full set; planned-changes manifest is issue=1108/complete=true; official Developer
       sources are recorded，17-row frozen disposition ledger 的 exact
       ID/status/full URL set/reviewed_at/reason 已获批准；manifest 包含 versioned coverage checker/test，validation 已定义
-      十七类 exact selector/span（含 native request preflight、runtime pricing
+      十七类 exact LLVM function policy（含 native request preflight、runtime pricing
       authority、Responses provenance 五段、model capability dispatch 与 cache-hit
       preflight）和 fail-closed negative fixtures；GH1112 implementation
       dependency and no-Vertex-inference boundary are explicit；最终 spec head 已获得
@@ -284,16 +284,20 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `LITELLM_RS_LIVE_GEMINI=1 cargo test --locked --test live_gemini -- --ignored`
       only when a human supplies credentials、documentation diff review.
 
-- [ ] `SP1108-T6` Covers: B-003, B-005, B-006, B-007, B-008, B-011, B-012, B-014, B-016, B-017. Owner: coverage-checker coordinator. Dependencies: SP1108-T2 through T4 stable committed head; validation exact selector contract. Done when: versioned checker and negative fixtures below are implemented before SP1108-T5 read-only review. Verify: checker unit tests and exact-head invocation below pass.
+- [ ] `SP1108-T6` Covers: B-003, B-005, B-006, B-007, B-008, B-011, B-012, B-014, B-016, B-017. Owner: coverage-checker coordinator. Dependencies: SP1108-T2 through T4 stable committed head; validation exact function-policy contract. Done when: versioned checker and negative fixtures below are implemented before SP1108-T5 read-only review. Verify: checker unit tests and exact-head invocation below pass.
       Files: `checks/gh1108_coverage_gate.py`,
-      `checks/test_gh1108_coverage_gate.py`; production/test Rust files read-only.
-      Done when: checker enforces full SHA/head/ancestor/tracked-clean/LCOV guards、non-empty
-      changed-production denominator、all changed production sources in LCOV、changed-line
+      `checks/test_gh1108_coverage_gate.py`, `.github/workflows/ci-coverage.yml`;
+      production/test Rust files read-only.
+      Done when: checker enforces full SHA/head/ancestor/tracked-clean/LLVM JSON guards、non-empty
+      changed-production denominator、all changed production sources in JSON、changed-line
       ≥80%、changed paths 是 complete manifest 子集；tech 列出的五个 read-only
       routing/context files 与 `src/core/providers/vertex_ai/**` 任一变化均
-      fail closed；十七个 mandatory categories 均绑定 validation 表中 exact path + Rust symbol + marker
-      span，prefill 的 `normalize_gemini_contents`/`validate_no_model_prefill` 两个
-      selectors 都满足并覆盖 interleaved System/Developer 原序、developer+user 保留、
+      fail closed；coverage workflow pin installer SHA + `cargo-llvm-cov@0.8.7` 并把
+      GH1108 JSON/checker 接入 bounded PR path；十七个 mandatory categories 均绑定
+      validation 表中 exact path + LLVM function identity，不读取 Rust source、comment
+      marker 或 struct literal；prefill 的 `normalize_gemini_contents`/
+      `validate_no_model_prefill` 两个 function policies 都满足，behavior fixtures 覆盖
+      interleaved System/Developer 原序、developer+user 保留、
       System/Developer non-text rejection、assistant+developer final-model rejection，
       native request preflight selector 覆盖 exact-only、sampling absent/null/non-null、
       malformed/empty/trailing-empty contents、terminal explicit-user/omitted success、
@@ -334,14 +338,16 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       default/override `<run_id>.json`、permission/retention/
       offline-temp-sink branches；只构造 incomplete record 或只测 sink helper 不算覆盖；
       classification/redaction/canonicalization/interruption-persistence 独立满足；missing/
-      malformed selector、DA/BRDA、span 或 uncovered branch 全部 fail closed。negative
-      fixtures 证明 same-path other-symbol 与 same-symbol outside-marker 的 covered branch
-      不能满足 category，并分别证明 classification/redaction/canonicalization/
+      malformed JSON、wrong tool version、missing/duplicate/wrong-path/branchless function
+      或 uncovered branch 全部 fail closed。negative fixtures 证明 same-path other-function
+      的 covered branch 不能满足 category，并分别证明 classification/redaction/canonicalization/
       interruption-persistence 任一
-      missing/uncovered 时失败。Verify:
-      `python3 checks/test_gh1108_coverage_gate.py`；生成 LCOV 后执行
+      missing/uncovered 时失败。`ResponsesApiRequest` constructor completeness 由
+      `cargo check --all-targets` 与 unary/background provenance behavior fixtures 证明，
+      禁止 literal scan。Verify:
+      `python3 checks/test_gh1108_coverage_gate.py`；生成 pinned LLVM coverage JSON 后执行
       `python3 checks/gh1108_coverage_gate.py --repo . --base "$IMPLEMENTATION_BASE_SHA"
-       --head "$IMPLEMENTATION_HEAD_SHA" --lcov artifacts/coverage/GH1108/lcov.info
+       --head "$IMPLEMENTATION_HEAD_SHA" --coverage-json artifacts/coverage/GH1108/coverage.json
        --output artifacts/coverage/GH1108/gate.json`.
 
 - [ ] `SP1108-T5` Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017. Owner: coordinator + independent security reviewer. Dependencies: SP1108-T2 through T4 and SP1108-T6 complete. Done when: detailed exact-head evidence below is satisfied. Verify: every validation Test Plan command plus runtime/remote gates passes.
@@ -356,10 +362,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       propagation/selected-model normalization、model capability dispatch、stream-metadata validation、
       cache-hit preflight、live classification、live redaction、
       live-observation canonicalization、live interruption persistence 的 mandatory
-      symbol/marker spans 各自存在 changed
-      branch records 且 100% covered；coverage gate 验证完整
+      LLVM function records 各自存在 branch regions 且 100% covered；coverage gate 验证完整
       `IMPLEMENTATION_BASE_SHA`/`IMPLEMENTATION_HEAD_SHA`、exact HEAD、tracked clean、
-      LCOV 存在，并对 missing changed production source、empty denominator、missing/
+      pinned LLVM JSON 存在，并对 missing changed production source、empty denominator、missing/
       uncovered category branch fail closed；no raw credential-bearing live output is
       published; final PR uses `Fixes #1108`. Verify: every command in
       `specs/GH1108/validation.md#test-plan` plus
