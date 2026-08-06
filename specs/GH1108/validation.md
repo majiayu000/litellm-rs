@@ -197,7 +197,8 @@ branches 绑定 generated future，而不是无 branch 的 outer constructor：
 | --- | --- | --- |
 | `catalog_evidence_validation` | `src/core/providers/google/models/registry.rs` | `fn:validate_developer_catalog_evidence` |
 | `deprecated_param_rejection` | `src/core/providers/google/models/request_contract.rs` | `fn:normalize_deprecated_sampling_params` |
-| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `fn:normalize_gemini_contents` **and** `fn:validate_no_model_prefill`；两个 function policies 都必需 |
+| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `fn:normalize_gemini_contents` |
+| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `fn:validate_no_model_prefill` |
 | `native_request_preflight` | `src/core/providers/google/models/request_contract.rs` | `fn:normalize_native_gemini_request` |
 | `runtime_pricing_authority` | `src/core/pricing_service/authority_tests.rs` | `fn:gemini_2026_07_runtime_pricing_authority` |
 | `responses_provenance_capture` | `src/server/routes/ai/responses.rs` | `fn:responses_request_provenance` |
@@ -207,11 +208,15 @@ branches 绑定 generated future，而不是无 branch 的 outer constructor：
 | `responses_selected_model_normalization` | `src/server/routes/ai/token_policy.rs` | `fn:normalize_selected_gemini_responses_provenance` |
 | `model_capability_dispatch` | `src/core/providers/capability_dispatch.rs` | `fn:supports_capability_for_model` |
 | `stream_metadata_validation` | `src/server/routes/ai/token_policy.rs` | `fn:prepare_chat_request_for_provider` |
-| `cache_hit_preflight` | `src/server/routes/ai/response_cache.rs` | `fn:should_bypass_chat_cache` **and** `src/server/routes/ai/chat.rs` 的 `async_body:handle_chat_completion_internal`；两个 function policies 都必需 |
+| `cache_hit_preflight` | `src/server/routes/ai/response_cache.rs` | `fn:should_bypass_chat_cache` |
+| `cache_hit_preflight` | `src/server/routes/ai/chat.rs` | `async_body:handle_chat_completion_internal` |
 | `live_classification` | `tests/live_gemini.rs` | `fn:classify_live_failure` |
 | `live_redaction` | `tests/live_gemini.rs` | `fn:redact_live_artifact` |
 | `live_observation_canonicalization` | `tests/live_gemini.rs` | planned `fn:canonicalize_live_observation` |
 | `live_interruption_persistence` | `tests/live_gemini.rs` | planned `async_body:run_live_gemini_smoke` |
+
+重复 category 表示该 category 的每一行 policy 都必须满足；表中每一行只允许一个 exact
+path 和一个 selector，checker 不解析 `and`、逗号列表或嵌套 path。
 
 GH1112 merged API 若不能采用这些 deterministic function selectors/paths，必须先 amend spec、
 manifest 与 checker，不得让 checker 猜 alias。function record 缺失、重复、来自错误 path、
