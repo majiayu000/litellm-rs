@@ -161,6 +161,10 @@ availability；其他证据只证明 Gemini Developer API。
    `generationConfig.maxOutputTokens`。最终选中 OpenAI、OpenAI-like、其他 provider 或
    其他 Gemini model 时丢弃 provenance，canonical request 的字段和值以及 provider-bound
    serialization 必须与当前行为相同；任何路径都不得向 upstream 泄漏 `top_k`。
+   background lane 可以先返回既有 queued response，但 selected-model preflight 的 typed
+   invalid-request 不能只把 status 改成 `failed`：它必须在任何 provider network 前原子写入
+   stored `ResponsesApiResponse.error`（稳定 `code` 与 `message`），并由后续 GET 返回
+   `status=failed` + 该 error；不得留下 opaque failed record。
    unary response cache 不得成为绕过点：当前 cache canonical policy 会删除
    `stream_options`，因此任何 non-stream request 只要携带该 metadata，就必须在 key lookup/
    store 前安全 bypass cache，再由最终 selected-model hook 判定；cache 中已有合法同 key
@@ -346,7 +350,9 @@ availability；其他证据只证明 Gemini Developer API。
       后才拒绝 non-null `top_k`、把 null/omitted 视为 absent，并把 token limit 单次归一化
       为 `max_tokens=Some(value), max_completion_tokens=None` 后命中 maxOutputTokens。
       OpenAI/OpenAI-like、其他 provider 与其他 Gemini 的 canonical 字段和值保持不变，
-      provenance 不进入 extra_body 或 upstream。cache regression 必须先填充合法同 key response，再证明
+      provenance 不进入 extra_body 或 upstream。background non-null `top_k` fixture 还必须
+      轮询 stored response，断言 network=0、`status=failed` 与稳定的 typed `error.code`/
+      `error.message`，不能只断言 queued 或 status。cache regression 必须先填充合法同 key response，再证明
       non-stream + stream_options 在 lookup/store 前 bypass、cache return=0、network=0 和
       stable invalid-request；合法无 metadata 请求仍可命中 cache。
 - [ ] 公开请求入口矩阵闭合覆盖：OpenAI chat unary/stream、legacy completions
@@ -450,7 +456,9 @@ availability；其他证据只证明 Gemini Developer API。
   Gemini consumer 才将 non-null `top_k` network=0 拒绝，并把 token limit 单次归一化为
   `max_tokens=Some(value), max_completion_tokens=None`。OpenAI/OpenAI-like alias/fallback、
   其他 provider 与其他 Gemini 的字段和值及 serialization 必须保持兼容，且任何 upstream
-  body 都不得出现 `top_k`。
+  body 都不得出现 `top_k`。background preflight failure 必须在 network=0 时把 typed
+  invalid-request 原子持久化到 stored response 的 `error`，GET 返回 `status=failed` +
+  stable code/message，禁止 opaque failed status。
 - capability router 以 deployment 的 case-sensitive final exact model 查询 neutral
   registry；两个新 ID 的 ToolCalling/FunctionCalling eligibility 为 false，但没有 exact
   record 的既有 Gemini model 仍使用原 provider-wide能力，不能通过全局删除 ToolCalling

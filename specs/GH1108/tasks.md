@@ -159,7 +159,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       Gemini 丢弃 sidecar且 canonical field/value/serialization 与 baseline 相等；
       selection failure no mutation，所有 upstream 都无 top_k/provenance；Chat request
       extra_body 不能伪造 trusted provenance；sync/stream/background positive/negative
-      fixtures 均通过；
+      fixtures 均通过；background selected-model preflight error 必须在 network=0 时以
+      单次 store mutation 写入 `status=failed` + stable `ResponseApiError` code/message，
+      GET 可观察且 cancelled record 不被 late task 覆盖，禁止 opaque failed status；
       unary cache policy 对任何 non-stream + stream_options 在 key lookup/store 前
       safe bypass，不能依赖当前 key canonicalizer 删除 metadata 后的碰撞；回归先填充同 key
       合法 response，再证明 direct/alias/fallback 最终选中两个新模型时 cache return=0、
@@ -293,11 +295,13 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       ≥80%、changed paths 是 complete manifest 子集；tech 列出的五个 read-only
       routing/context files 与 `src/core/providers/vertex_ai/**` 任一变化均
       fail closed；coverage workflow pin installer SHA + `cargo-llvm-cov@0.8.7` 并把
-      GH1108 JSON/checker 接入 bounded PR path；pull-request lane 必须直接使用
+      独立捕获的单行 exact version attestation 通过 `--tool-version-file` 交给 checker，
+      JSON/version/gate artifacts 均绑定 immutable base/head 并接入 bounded PR path；
+      pull-request lane 必须直接使用
       `github.event.pull_request.head.sha` 作为 checkout ref，且不得添加 `github.sha`
       fallback；scheduled/manual lanes 使用各自单独定义的 immutable ref；十七个
-      mandatory categories 均绑定
-      validation 表中 exact path + LLVM function identity，不读取 Rust source、comment
+      mandatory categories 均绑定 validation 表中的 deterministic file + function selector，
+      async body 使用限定且锚定的 closure selector，不读取 Rust source、comment
       marker 或 struct literal；prefill 的 `normalize_gemini_contents`/
       `validate_no_model_prefill` 两个 function policies 都满足，behavior fixtures 覆盖
       interleaved System/Developer 原序、developer+user 保留、
@@ -318,7 +322,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       background propagation 与 selected-model normalization；fixtures 锁定 DTO top_k Missing/Null/Value、
       pre-selection dual token fields、no extra_body/upstream leak、selected GH1108
       direct/alias/fallback single-normalization，以及 OpenAI/OpenAI-like alias/fallback、
-      其他 provider/其他 Gemini 的 field/value/serialization baseline parity；
+      其他 provider/其他 Gemini 的 field/value/serialization baseline parity；background
+      error branch 还必须覆盖 terminal store 的 `failed` + typed code/message、network=0、
+      GET observability 与 cancelled no-overwrite；
       model capability dispatch selector 覆盖两个新 exact IDs 的
       三项 closed positive capabilities、ToolCalling/FunctionCalling negatives、case/prefix
       mismatch 与旧 Gemini no-record provider-wide fallback；cache-hit preflight 的
@@ -341,8 +347,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       default/override `<run_id>.json`、permission/retention/
       offline-temp-sink branches；只构造 incomplete record 或只测 sink helper 不算覆盖；
       classification/redaction/canonicalization/interruption-persistence 独立满足；missing/
-      malformed JSON、wrong tool version、missing/duplicate/wrong-path/branchless function
-      或 uncovered branch 全部 fail closed。negative fixtures 证明 same-path other-function
+      malformed JSON、missing/non-file/multiline/wrong tool-version attestation、missing/
+      duplicate/wrong-path/branchless function、async outer constructor only、ambiguous async
+      closure 或 uncovered branch 全部 fail closed。negative fixtures 证明 same-path other-function
       的 covered branch 不能满足 category，并分别证明 classification/redaction/canonicalization/
       interruption-persistence 任一
       missing/uncovered 时失败。`ResponsesApiRequest` constructor completeness 由
@@ -351,6 +358,7 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       `python3 checks/test_gh1108_coverage_gate.py`；生成 pinned LLVM coverage JSON 后执行
       `python3 checks/gh1108_coverage_gate.py --repo . --base "$IMPLEMENTATION_BASE_SHA"
        --head "$IMPLEMENTATION_HEAD_SHA" --coverage-json artifacts/coverage/GH1108/coverage.json
+       --tool-version-file artifacts/coverage/GH1108/cargo-llvm-cov.version
        --output artifacts/coverage/GH1108/gate.json`.
 
 - [ ] `SP1108-T5` Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017. Owner: coordinator + independent security reviewer. Dependencies: SP1108-T2 through T4 and SP1108-T6 complete. Done when: detailed exact-head evidence below is satisfied. Verify: every validation Test Plan command plus runtime/remote gates passes.
@@ -443,7 +451,9 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
   `build_chat_request` 保持现有 max_tokens/max_completion_tokens 双字段；只有最终 selected
   exact GH1108 Gemini consumer 才拒绝 non-null top_k，并把 token origin 单次归一化为
   max_tokens only 后进入 Gemini maxOutputTokens。OpenAI/OpenAI-like alias/fallback、其他
-  provider 与其他 Gemini 的 field/value/serialization 保持 baseline parity。
+  provider 与其他 Gemini 的 field/value/serialization 保持 baseline parity。background
+  negative 在 network=0 后必须持久化 `status=failed` + typed error，并可由 GET 观察；
+  不能留下 `error=None` 的 opaque failure。
 - 新模型 positive params 精确为 `{max_tokens, stop, stream}`；tools/tool_choice 仅有现存
   passthrough、无 serializer consumer，因此与 response_format/max_completion_tokens 一并
   排除。stream_options 是 gateway settlement metadata，不是第四个 param；builder 保留到

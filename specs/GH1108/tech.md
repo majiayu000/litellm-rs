@@ -272,7 +272,12 @@ adapter：
    `Missing`/`Null` top_k 为 absent，`Value` 在 budget/network 前返回 typed
    invalid-request；若有 `max_output_tokens` origin，则对该 selected request 单次归一化为
    `max_tokens=Some(value), max_completion_tokens=None`。Gemini mapping 随后把同一 limit
-   写到 `generationConfig.maxOutputTokens`，预算也使用 normalized limit。
+   写到 `generationConfig.maxOutputTokens`，预算也使用 normalized limit。background task
+   若在此 selected-model preflight 失败，必须在 provider network 前把 `GatewayError`
+   确定性映射为 `ResponseApiError { code, message }`，并用单次 store mutation 同时写入
+   `status=failed` 与 `error=Some(...)`；只调用现有 `set_background_status(..., "failed")`
+   而留下 `error=None` 不满足契约。后续 GET 必须返回该 typed error，cancelled record
+   仍不得被晚到的 task 覆盖。
 5. 最终 selected OpenAI、OpenAI-like、OpenRouter、其他 provider 或其他 Gemini model
    时，consumer 丢弃 sidecar且不修改 canonical request；provider-bound 字段、值与
    serialization 必须和本变更前逐字段相等。selection failure 不消费 sidecar，也不修改
@@ -284,7 +289,9 @@ Gemini model 的 canonical request 与 serialized upstream baseline parity；两
 GH1108 Gemini model 的 direct/alias/fallback selected identity 才触发 non-null top_k
 network=0 rejection 与 token single-normalization；null/omitted 不拒绝；sidecar 不进入
 extra_body、cache identity 或 upstream。Chat Completions 输入不能通过伪造 extra_body
-获得 trusted Responses provenance。
+获得 trusted Responses provenance。background negative fixture 必须等待 task terminal，
+并断言 stored response 原子进入 `failed`、`error.code`/`error.message` 与 unary
+invalid-request 映射一致、network=0；只观察初始 queued 或 opaque failed 不算通过。
 
 `stream_options` 走独立的 gateway metadata lane，不进入上表。shared builder 保持
 provider-neutral，并继续执行既有 `include_usage_override=Some(true)` settlement

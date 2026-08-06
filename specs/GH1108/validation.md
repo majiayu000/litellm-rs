@@ -139,15 +139,17 @@ explicit live opt-in + Developer credential
       `python3 checks/test_gh1108_coverage_gate.py`
 - [ ] Coverage artifact:
       `mkdir -p artifacts/coverage/GH1108 &&
+       cargo llvm-cov --version > artifacts/coverage/GH1108/cargo-llvm-cov.version &&
        cargo llvm-cov --locked --all-features --workspace --branch --json
        --output-path artifacts/coverage/GH1108/coverage.json`
 - [ ] Exact-head coverage gate:
-      `python3 checks/gh1108_coverage_gate.py --repo . --base "$IMPLEMENTATION_BASE_SHA" --head "$IMPLEMENTATION_HEAD_SHA" --coverage-json artifacts/coverage/GH1108/coverage.json --output artifacts/coverage/GH1108/gate.json`
+      `python3 checks/gh1108_coverage_gate.py --repo . --base "$IMPLEMENTATION_BASE_SHA" --head "$IMPLEMENTATION_HEAD_SHA" --coverage-json artifacts/coverage/GH1108/coverage.json --tool-version-file artifacts/coverage/GH1108/cargo-llvm-cov.version --output artifacts/coverage/GH1108/gate.json`
 - [ ] Coverage CI contract: `.github/workflows/ci-coverage.yml` pins
       `taiki-e/install-action@c44f6b046f1c29ae5918b1e0bfdbb2f1813836fd` and
       `cargo-llvm-cov@0.8.7`, asserts `cargo llvm-cov --version` exactly, and runs the
-      GH1108 JSON/checker path for bounded pull-request changes. The JSON and gate result
-      are uploaded with immutable base/head metadata; missing or failed upload cannot be
+      GH1108 JSON/checker path for bounded pull-request changes, passing the captured
+      one-line version attestation via `--tool-version-file`. The JSON, version attestation,
+      and gate result are uploaded with immutable base/head metadata; missing or failed upload cannot be
       green. The pull-request lane uses `github.event.pull_request.head.sha` directly as
       its checkout ref and must not add a `github.sha` fallback; scheduled/manual lanes
       use their separately defined immutable refs. Existing scheduled LCOV/Codecov
@@ -160,8 +162,9 @@ full suite、strict Clippy、coverage 与 SpecRail gates 在 exact implementatio
 
 implementation PR 必须新增并提交 `checks/gh1108_coverage_gate.py` 与
 `checks/test_gh1108_coverage_gate.py`；本 spec PR 不实现 checker，也不需要独立 policy
-JSON。checker 必须只读取 Git metadata/diff 与 pinned LLVM coverage JSON；不得扫描 Rust
-源码文本、注释 marker、struct literal 字符串或依赖行号 golden。checker 必须验证：
+JSON。checker 必须只读取 Git metadata/diff、pinned LLVM coverage JSON 与独立生成的
+tool-version attestation；不得自行执行 coverage 工具，不得扫描 Rust 源码文本、注释
+marker、struct literal 字符串或依赖行号 golden。checker 必须验证：
 
 - `IMPLEMENTATION_BASE_SHA`/`IMPLEMENTATION_HEAD_SHA` 是不同的完整 40 位小写 commits，
   base 是 head ancestor，当前 `HEAD` 等于 head，tracked worktree clean，coverage JSON 存在；
@@ -171,38 +174,46 @@ JSON。checker 必须只读取 Git metadata/diff 与 pinned LLVM coverage JSON�
   是否未变仍由 catalog snapshot fixture 独立证明，不能用 path gate 替代；
 - `base...head` changed production Rust executable lines 是非空分母，所有 changed
   production sources 均存在于 coverage JSON，changed-line coverage 至少 80%；
-- coverage JSON malformed、tool version 不等于 `cargo-llvm-cov 0.8.7`、required function
+- `--tool-version-file` 必须存在、是普通文件、只含单行精确值
+  `cargo-llvm-cov 0.8.7` 且无额外空白/行；coverage JSON malformed、tool version
+  attestation 不匹配、required function
   record 缺失/重复、required function 没有 branch region，或任一 required function 的
   branch covered/count 不相等均非零退出；
 - 成功 artifact 保存 immutable base/head、changed-line manifest、coverage JSON SHA256、
-  tool version，以及每个 required category 的 path、LLVM JSON function identity、region
+  tool-version attestation SHA256 与精确值，以及每个 required category 的 path、实际命中的
+  LLVM JSON function identity、region
   数与 branch covered/count。
 
 关键行为不能只按 path 归类。checker 内置以下 mandatory function policies；每项必须在
-pinned LLVM JSON 的 `data[].functions[]` 中按 file + exact demangled function identity
-唯一命中，并以该 function record 自带的 regions/branches 计算覆盖率，不读取源码：
+pinned Rust 1.96.1 生成的 LLVM JSON `data[].functions[]` 中按 exact file + deterministic
+demangled selector 唯一命中，并以该 function record 自带的 regions/branches 计算覆盖率，
+不读取源码。`fn:<name>` 要求 identity 最后一个非 closure path segment 与 name 完全相等
+且拒绝 closure；`async_body:<name>` 要求 identity 以完整 segment 序列
+`::<name>::{{closure}}` 结尾。两种 selector 都是 segment-anchored exact match，不得使用
+substring/contains；同 file 出现零个或多个 match 均 fail closed。这样 async body 的
+branches 绑定 generated future，而不是无 branch 的 outer constructor：
 
-| Required category | Path | Exact function identity |
+| Required category | Path | Deterministic function selector |
 | --- | --- | --- |
-| `catalog_evidence_validation` | `src/core/providers/google/models/registry.rs` | `validate_developer_catalog_evidence` |
-| `deprecated_param_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_deprecated_sampling_params` |
-| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `normalize_gemini_contents` **and** `validate_no_model_prefill`；两个 function policies 都必需 |
-| `native_request_preflight` | `src/core/providers/google/models/request_contract.rs` | `normalize_native_gemini_request` |
-| `runtime_pricing_authority` | `src/core/pricing_service/authority_tests.rs` | `gemini_2026_07_runtime_pricing_authority` |
-| `responses_provenance_capture` | `src/server/routes/ai/responses.rs` | `responses_request_provenance` |
-| `responses_unary_propagation` | `src/server/routes/ai/chat.rs` | `handle_chat_completion_with_state_and_provenance` |
-| `responses_stream_propagation` | `src/server/routes/ai/responses_stream.rs` | `handle_streaming_response` |
-| `responses_background_propagation` | `src/server/routes/ai/responses/lifecycle.rs` | `handle_background_response` |
-| `responses_selected_model_normalization` | `src/server/routes/ai/token_policy.rs` | `normalize_selected_gemini_responses_provenance` |
-| `model_capability_dispatch` | `src/core/providers/capability_dispatch.rs` | `supports_capability_for_model` |
-| `stream_metadata_validation` | `src/server/routes/ai/token_policy.rs` | `prepare_chat_request_for_provider` |
-| `cache_hit_preflight` | `src/server/routes/ai/response_cache.rs` | `should_bypass_chat_cache` **and** `src/server/routes/ai/chat.rs` 的 `handle_chat_completion_internal`；两个 function policies 都必需 |
-| `live_classification` | `tests/live_gemini.rs` | `classify_live_failure` |
-| `live_redaction` | `tests/live_gemini.rs` | `redact_live_artifact` |
-| `live_observation_canonicalization` | `tests/live_gemini.rs` | planned `canonicalize_live_observation` |
-| `live_interruption_persistence` | `tests/live_gemini.rs` | planned `run_live_gemini_smoke` |
+| `catalog_evidence_validation` | `src/core/providers/google/models/registry.rs` | `fn:validate_developer_catalog_evidence` |
+| `deprecated_param_rejection` | `src/core/providers/google/models/request_contract.rs` | `fn:normalize_deprecated_sampling_params` |
+| `prefill_rejection` | `src/core/providers/google/models/request_contract.rs` | `fn:normalize_gemini_contents` **and** `fn:validate_no_model_prefill`；两个 function policies 都必需 |
+| `native_request_preflight` | `src/core/providers/google/models/request_contract.rs` | `fn:normalize_native_gemini_request` |
+| `runtime_pricing_authority` | `src/core/pricing_service/authority_tests.rs` | `fn:gemini_2026_07_runtime_pricing_authority` |
+| `responses_provenance_capture` | `src/server/routes/ai/responses.rs` | `fn:responses_request_provenance` |
+| `responses_unary_propagation` | `src/server/routes/ai/chat.rs` | `async_body:handle_chat_completion_with_state_and_provenance` |
+| `responses_stream_propagation` | `src/server/routes/ai/responses_stream.rs` | `async_body:handle_streaming_response` |
+| `responses_background_propagation` | `src/server/routes/ai/responses/lifecycle.rs` | `async_body:handle_background_response`（匹配该函数内直接 spawned async block） |
+| `responses_selected_model_normalization` | `src/server/routes/ai/token_policy.rs` | `fn:normalize_selected_gemini_responses_provenance` |
+| `model_capability_dispatch` | `src/core/providers/capability_dispatch.rs` | `fn:supports_capability_for_model` |
+| `stream_metadata_validation` | `src/server/routes/ai/token_policy.rs` | `fn:prepare_chat_request_for_provider` |
+| `cache_hit_preflight` | `src/server/routes/ai/response_cache.rs` | `fn:should_bypass_chat_cache` **and** `src/server/routes/ai/chat.rs` 的 `async_body:handle_chat_completion_internal`；两个 function policies 都必需 |
+| `live_classification` | `tests/live_gemini.rs` | `fn:classify_live_failure` |
+| `live_redaction` | `tests/live_gemini.rs` | `fn:redact_live_artifact` |
+| `live_observation_canonicalization` | `tests/live_gemini.rs` | planned `fn:canonicalize_live_observation` |
+| `live_interruption_persistence` | `tests/live_gemini.rs` | planned `async_body:run_live_gemini_smoke` |
 
-GH1112 merged API 若不能采用这些 exact function identities/paths，必须先 amend spec、
+GH1112 merged API 若不能采用这些 deterministic function selectors/paths，必须先 amend spec、
 manifest 与 checker，不得让 checker 猜 alias。function record 缺失、重复、来自错误 path、
 无 branch regions 或存在任一 uncovered branch，都不得满足 policy。每个 category 的所有
 function policies 都必须达到 100% branch coverage；`live_classification`、
@@ -215,8 +226,9 @@ function policies 都必须达到 100% branch coverage；`live_classification`�
 - changed path 不在 complete manifest、[`tech.md`](tech.md) 中列出的五个 read-only
   routing/context files 任一变化、任一
   `src/core/providers/vertex_ai/**` 变化均非零退出；synthetic allowed path 仍通过；
-- missing changed source、empty denominator、line coverage <80%、malformed JSON、wrong
-  tool version、missing/duplicate function、wrong-file function、zero branch region 与
+- missing changed source、empty denominator、line coverage <80%、malformed JSON、missing/
+  non-file/multiline/wrong tool-version attestation、missing/duplicate function、wrong-file
+  function、async outer constructor only、ambiguous async closure、zero branch region 与
   uncovered function branch；
 - same-path other function 的 covered branch 不能满足任何 category；checker test 还必须
   证明它从不打开 production Rust source 文件；
@@ -240,6 +252,9 @@ function policies 都必须达到 100% branch coverage；`live_classification`�
   - selected exact GH1108 Gemini sync/stream/background direct/alias/fallback 才执行 non-null top_k
     typed invalid-request/network=0、null/omitted absent 和 token single-normalization，
     最终 maxOutputTokens sink 且 upstream 无 top_k/provenance；
+  - background non-null top_k 等 selected-model preflight failure 等待 terminal 后断言单次
+    store mutation 得到 `status=failed` + stable typed `error.code`/`error.message`，GET 可见、
+    network=0，且 cancelled record 不被 late task 覆盖；`error=None` 必须失败；
   - OpenAI exact、OpenAI-like alias/fallback、其他 provider 与其他 Gemini 的 canonical
     field/value 和 serialized upstream baseline parity，selection failure no mutation；
   - Chat Completions extra_body 不能伪造 trusted Responses provenance；
