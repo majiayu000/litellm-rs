@@ -148,7 +148,10 @@ explicit live opt-in + Developer credential
       `cargo-llvm-cov@0.8.7`, asserts `cargo llvm-cov --version` exactly, and runs the
       GH1108 JSON/checker path for bounded pull-request changes. The JSON and gate result
       are uploaded with immutable base/head metadata; missing or failed upload cannot be
-      green. Existing scheduled LCOV/Codecov behavior may remain separate.
+      green. The pull-request lane uses `github.event.pull_request.head.sha` directly as
+      its checkout ref and must not add a `github.sha` fallback; scheduled/manual lanes
+      use their separately defined immutable refs. Existing scheduled LCOV/Codecov
+      behavior may remain separate.
 
 full suite、strict Clippy、coverage 与 SpecRail gates 在 exact implementation head 各执行
 一次；reviewer 默认 inspection/focused，避免重复 full run。
@@ -163,7 +166,7 @@ JSON。checker 必须只读取 Git metadata/diff 与 pinned LLVM coverage JSON�
 - `IMPLEMENTATION_BASE_SHA`/`IMPLEMENTATION_HEAD_SHA` 是不同的完整 40 位小写 commits，
   base 是 head ancestor，当前 `HEAD` 等于 head，tracked worktree clean，coverage JSON 存在；
 - `base...head` changed paths 必须是 [`tech.md`](tech.md) complete planned-changes manifest
-  的子集；上述五个 read-only routing/context files 或
+  的子集；[`tech.md`](tech.md) 中列出的五个 read-only routing/context files 或
   `src/core/providers/vertex_ai/**` 任一路径变化均 fail closed。Vertex neutral overlay
   是否未变仍由 catalog snapshot fixture 独立证明，不能用 path gate 替代；
 - `base...head` changed production Rust executable lines 是非空分母，所有 changed
@@ -209,7 +212,8 @@ function policies 都必须达到 100% branch coverage；`live_classification`�
 `checks/test_gh1108_coverage_gate.py` 使用 synthetic Git diff/LLVM JSON fixtures，至少覆盖：
 
 - happy path 与 full-SHA/head/ancestor/tracked-clean/coverage-JSON guards；
-- changed path 不在 complete manifest、五个 read-only routing/context files 任一变化、任一
+- changed path 不在 complete manifest、[`tech.md`](tech.md) 中列出的五个 read-only
+  routing/context files 任一变化、任一
   `src/core/providers/vertex_ai/**` 变化均非零退出；synthetic allowed path 仍通过；
 - missing changed source、empty denominator、line coverage <80%、malformed JSON、wrong
   tool version、missing/duplicate function、wrong-file function、zero branch region 与

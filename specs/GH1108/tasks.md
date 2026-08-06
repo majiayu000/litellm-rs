@@ -293,7 +293,10 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       ≥80%、changed paths 是 complete manifest 子集；tech 列出的五个 read-only
       routing/context files 与 `src/core/providers/vertex_ai/**` 任一变化均
       fail closed；coverage workflow pin installer SHA + `cargo-llvm-cov@0.8.7` 并把
-      GH1108 JSON/checker 接入 bounded PR path；十七个 mandatory categories 均绑定
+      GH1108 JSON/checker 接入 bounded PR path；pull-request lane 必须直接使用
+      `github.event.pull_request.head.sha` 作为 checkout ref，且不得添加 `github.sha`
+      fallback；scheduled/manual lanes 使用各自单独定义的 immutable ref；十七个
+      mandatory categories 均绑定
       validation 表中 exact path + LLVM function identity，不读取 Rust source、comment
       marker 或 struct literal；prefill 的 `normalize_gemini_contents`/
       `validate_no_model_prefill` 两个 function policies 都满足，behavior fixtures 覆盖
