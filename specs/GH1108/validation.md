@@ -175,7 +175,9 @@ marker、struct literal 字符串或依赖行号 golden。checker 必须验证�
 - `base...head` changed production Rust executable lines 是非空分母，所有 changed
   production sources 均存在于 coverage JSON，changed-line coverage 至少 80%；
 - `--tool-version-file` 必须存在、是普通文件、只含单行精确值
-  `cargo-llvm-cov 0.8.7` 且无额外空白/行；coverage JSON malformed、tool version
+  `cargo-llvm-cov 0.8.7`；允许该值后没有换行，或恰好一个标准终止 `LF`/`CRLF`，读取时
+  只移除这个可选终止符。前导空白、尾随空格、额外空行或其他多行内容均 fail closed；
+  coverage JSON malformed、tool version
   attestation 不匹配、required function
   record 缺失/重复、required function 没有 branch region，或任一 required function 的
   branch covered/count 不相等均非零退出；
@@ -232,7 +234,8 @@ function policies 都必须达到 100% branch coverage；`live_classification`�
   routing/context files 任一变化、任一
   `src/core/providers/vertex_ai/**` 变化均非零退出；synthetic allowed path 仍通过；
 - missing changed source、empty denominator、line coverage <80%、malformed JSON、missing/
-  non-file/multiline/wrong tool-version attestation、missing/duplicate function、wrong-file
+  non-file/multiline/wrong/leading-or-trailing-space tool-version attestation；no-newline、单个
+  terminal LF 与单个 terminal CRLF 三个合法 attestation fixtures 均通过；missing/duplicate function、wrong-file
   function、async outer constructor only、ambiguous async closure、zero branch region 与
   uncovered function branch；
 - same-path other function 的 covered branch 不能满足任何 category；checker test 还必须

@@ -347,7 +347,8 @@ catalog delta 写入旧 `src/core/providers/gemini/models/**`。此外，maintai
       default/override `<run_id>.json`、permission/retention/
       offline-temp-sink branches；只构造 incomplete record 或只测 sink helper 不算覆盖；
       classification/redaction/canonicalization/interruption-persistence 独立满足；missing/
-      malformed JSON、missing/non-file/multiline/wrong tool-version attestation、missing/
+      malformed JSON、missing/non-file/multiline/wrong/leading-or-trailing-space tool-version
+      attestation；no-newline、单个 terminal LF/CRLF 合法 fixtures 通过；missing/
       duplicate/wrong-path/branchless function、async outer constructor only、ambiguous async
       closure 或 uncovered branch 全部 fail closed。negative fixtures 证明 same-path other-function
       的 covered branch 不能满足 category，并分别证明 classification/redaction/canonicalization/
