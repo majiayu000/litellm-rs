@@ -4,12 +4,11 @@ Agent instructions for litellm-rs.
 
 ## Workflow
 
-- This repository is SpecRail-governed. Read `AGENT_USAGE.md` before creating
-  issues, specs, PRs, reviews, or handoffs.
-- Spec packets live under `docs/specs/GH<issue>/` (PRODUCT.md, TECH.md,
-  tasks.md). See `docs/specs/README.md`.
-- Queue work routes through the implx / specrail-implement-queue skills;
-  verification gates live in `checks/`.
+- Search existing code, issues, pull requests, and documentation before
+  creating a new implementation or workflow artifact.
+- Work on one GitHub issue per implementation pull request by default.
+- Fix an existing pull request on its original branch instead of opening a
+  competing pull request.
 
 ## Commands
 
@@ -25,7 +24,6 @@ before claiming PR-ready.
 
 ## Rules
 
-- One issue per implementation PR by default; PR tier lanes decide whether
-  spec content ships in the same PR (see the implement-queue skill).
+- Keep changes scoped to the linked issue and document the verification used.
 - Do not merge without green CI and resolved review threads.
 - Builds and tests run only inside the session's own worktree.
