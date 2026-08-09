@@ -721,7 +721,7 @@ bash scripts/guards/check_pr_overlap.sh
 > 在原报告 snapshot 中，产品声明与网关接线面存在明显差距；该判断用于解释后续修复战役。
 > 截至 2026-07-11，typed 参数、deterministic cache、migrate 与 budget 主路径已有修复，不能再称为全部未接线。
 > 仍需实时核对的残余包括 semantic cache、webhook SSRF、provider disposition、auth 生命周期和结构收敛。
-> 当前修复顺序与完成状态只以 GitHub open queue、对应 SpecRail packet 和 fresh verification 为准。
+> 当前修复顺序与完成状态只以 GitHub open queue、当前代码和 fresh verification 为准。
 
 ---
 

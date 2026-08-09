@@ -16,4 +16,4 @@
 - `docs/analysis/vibe-coding-postmortem.md` — 多 agent PR 过程根因
 - `docs/plan/audit-remediation-complete-plan.md` — 历史 remediation 执行记录
 
-当前 remediation 状态必须从 GitHub open issues/PRs 与对应 SpecRail packet 获取，不从历史审计路线图领取。
+当前 remediation 状态必须从 GitHub open issues/PRs、当前代码与 fresh verification 获取，不从历史审计路线图领取。

@@ -5,7 +5,8 @@
 - Date: 2026-06-25
 - Scope: RFC only, no code behavior change
 - Related roadmap: `docs/plan/router-budget-provider-infra-hardening-spec.md`
-- Spec packet: `specs/GH716/` is an issue-scoped snapshot; this RFC under `docs/plan/` remains the long-term source of truth if the two ever diverge.
+- Source of truth: this RFC under `docs/plan/` supersedes historical
+  issue-scoped planning snapshots.
 
 ## Summary
 
