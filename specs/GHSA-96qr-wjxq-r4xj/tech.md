@@ -19,7 +19,7 @@ Link to `product.md`.
 | Canonical classifier | `src/core/net/ssrf_guard.rs:344`, `src/core/net/ssrf_guard.rs:404` | 统一 guard 维护 provider endpoint 的允许/拒绝范围 | 唯一安全策略来源 |
 | Legacy tests | `src/config/validation/ssrf.rs:193`, `src/config/validation/ssrf.rs:615` | 多个成功用例解析真实公网域名 | 全量测试曾因临时 DNS 失败出现单例失败 |
 | Cross-module compatibility tests | `src/config/validation/tests.rs:563` | 另一组公开入口测试也用真实公网域名作为成功输入 | 首次实现全量测试新鲜暴露四个同根因失败 |
-| Prior contract | `specs/GH968/tech.md:36` | 已声明兼容入口必须委托统一实现 | 当前实现遗漏了该收敛项 |
+| Compatibility contract | `src/config/validation/ssrf.rs` | 入口仅接受 HTTP/HTTPS、失败保持 fail closed，并委托统一 guard 的 `PublicOnly` policy | 当前实现遗漏了该收敛项 |
 
 ## 根因
 
