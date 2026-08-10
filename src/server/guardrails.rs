@@ -8,6 +8,8 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use tracing::error;
 
+mod input_scan;
+
 pub(crate) async fn check_chat_input(
     state: &AppState,
     request: &ChatCompletionRequest,
@@ -26,13 +28,10 @@ async fn check_input(
     engine: &GuardrailEngine,
     request: &ChatCompletionRequest,
 ) -> Result<(), GatewayError> {
-    let content = request
-        .messages
-        .iter()
-        .filter_map(|message| message.content.as_ref())
-        .flat_map(content_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    if !engine.input_checks_enabled() {
+        return Ok(());
+    }
+    let content = input_scan::payload(request)?;
     enforce(engine.check_input(&content).await, "input")
 }
 
