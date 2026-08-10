@@ -1,5 +1,17 @@
 use super::*;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
+use crate::core::types::model::ProviderCapability;
+
+fn test_vertex_provider_config() -> VertexAIProviderConfig {
+    VertexAIProviderConfig {
+        project_id: "test-project".to_string(),
+        location: "us-central1".to_string(),
+        credentials: crate::core::providers::vertex_ai::VertexCredentials::AccessToken(
+            "test-token".to_string(),
+        ),
+        ..Default::default()
+    }
+}
 
 #[test]
 fn test_client_vertex_usage_parser_is_strict_and_endpoint_aware() {
@@ -318,6 +330,72 @@ fn test_model_info_structure() {
     assert_eq!(model_info.id, "gemini-1.5-pro");
     assert_eq!(model_info.max_context_length, 2_097_152);
     assert!(model_info.supports_tools);
+}
+
+#[tokio::test]
+async fn test_vertex_models_are_gemini_registry_surface_overlay() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+    let model_ids = provider
+        .models()
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<Vec<_>>();
+
+    let expected_ids = crate::core::providers::gemini::get_gemini_registry()
+        .list_model_infos_for_surface(
+            crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi,
+        )
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(model_ids, expected_ids);
+    assert!(model_ids.iter().any(|id| id == "gemini-3.5-flash"));
+    assert!(!model_ids.iter().any(|id| id == "gemini-1.0-pro"));
+
+    let model = provider
+        .models()
+        .iter()
+        .find(|model| model.id == "gemini-3.5-flash")
+        .unwrap();
+    assert_eq!(model.provider, "vertex_ai");
+    assert_eq!(
+        model.metadata["google_auth_boundary"],
+        serde_json::json!("bearer_token")
+    );
+}
+
+#[tokio::test]
+async fn test_vertex_gemini_cost_uses_shared_catalog_pricing() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+
+    let cost = provider
+        .calculate_cost("gemini-3.5-flash", 1000, 500)
+        .await
+        .unwrap();
+    let expected = crate::core::providers::gemini::models::CostCalculator::calculate_cost(
+        "gemini-3.5-flash",
+        1000,
+        500,
+    )
+    .unwrap();
+    assert!((cost - expected).abs() < f64::EPSILON);
+
+    let alias_cost = provider
+        .calculate_cost("gemini-1.5-pro-002", 1000, 500)
+        .await
+        .unwrap();
+    let canonical_cost = crate::core::providers::gemini::models::CostCalculator::calculate_cost(
+        "gemini-1.5-pro",
+        1000,
+        500,
+    )
+    .unwrap();
+    assert!((alias_cost - canonical_cost).abs() < f64::EPSILON);
 }
 
 // ==================== Cost Calculation Tests ====================

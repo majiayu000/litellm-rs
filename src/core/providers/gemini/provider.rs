@@ -25,7 +25,7 @@ use crate::core::types::{
 use super::client::GeminiClient;
 use super::config::GeminiConfig;
 use super::error::{GeminiErrorMapper, gemini_model_error, gemini_validation_error};
-use super::models::{ModelFeature, get_gemini_registry};
+use super::models::{GoogleGeminiApiSurface, ModelFeature, get_gemini_registry};
 use super::streaming::GeminiStream;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 
@@ -49,11 +49,8 @@ impl GeminiProvider {
 
         // Get
         let registry = get_gemini_registry();
-        let supported_models = registry
-            .list_models()
-            .into_iter()
-            .map(|spec| spec.model_info.clone())
-            .collect();
+        let supported_models =
+            registry.list_model_infos_for_surface(GoogleGeminiApiSurface::DeveloperApi);
 
         Ok(Self {
             client,

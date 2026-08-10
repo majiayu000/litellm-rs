@@ -18,7 +18,7 @@ use crate::core::{
         embedding::EmbeddingRequest,
         health::HealthStatus,
         image::ImageGenerationRequest,
-        model::{ModelInfo, ProviderCapability},
+        model::ModelInfo,
         responses::{ChatResponse, EmbeddingResponse, ImageGenerationResponse},
     },
 };
@@ -286,52 +286,9 @@ impl LLMProvider for VertexAIProvider {
     fn models(&self) -> &[ModelInfo] {
         use std::sync::LazyLock;
         static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-            vec![
-                ModelInfo {
-                    id: "gemini-1.5-pro".to_string(),
-                    name: "Gemini 1.5 Pro".to_string(),
-                    provider: "vertex_ai".to_string(),
-                    max_context_length: 2_097_152,
-                    max_output_length: Some(8192),
-                    supports_streaming: true,
-                    supports_tools: true,
-                    supports_multimodal: true,
-                    input_cost_per_1k_tokens: Some(1.25),
-                    output_cost_per_1k_tokens: Some(3.75),
-                    currency: "USD".to_string(),
-                    capabilities: vec![
-                        ProviderCapability::ChatCompletion,
-                        ProviderCapability::ChatCompletionStream,
-                        ProviderCapability::FunctionCalling,
-                        ProviderCapability::ToolCalling,
-                    ],
-                    created_at: None,
-                    updated_at: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-                ModelInfo {
-                    id: "gemini-1.5-flash".to_string(),
-                    name: "Gemini 1.5 Flash".to_string(),
-                    provider: "vertex_ai".to_string(),
-                    max_context_length: 1_048_576,
-                    max_output_length: Some(8192),
-                    supports_streaming: true,
-                    supports_tools: true,
-                    supports_multimodal: true,
-                    input_cost_per_1k_tokens: Some(0.0625),
-                    output_cost_per_1k_tokens: Some(0.25),
-                    currency: "USD".to_string(),
-                    capabilities: vec![
-                        ProviderCapability::ChatCompletion,
-                        ProviderCapability::ChatCompletionStream,
-                        ProviderCapability::FunctionCalling,
-                        ProviderCapability::ToolCalling,
-                    ],
-                    created_at: None,
-                    updated_at: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-            ]
+            crate::core::providers::gemini::get_gemini_registry().list_model_infos_for_surface(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi,
+            )
         });
         &MODELS
     }
@@ -412,20 +369,19 @@ impl LLMProvider for VertexAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        // Basic cost calculation for Vertex AI models (per 1M tokens)
-        let cost = match model {
-            m if m.contains("gemini-pro") => {
-                (input_tokens as f64 * 0.0005 + output_tokens as f64 * 0.0015) / 1000.0
-            }
-            m if m.contains("gemini-1.5-pro") => {
-                (input_tokens as f64 * 0.00125 + output_tokens as f64 * 0.00375) / 1000.0
-            }
-            m if m.contains("gemini-1.5-flash") => {
-                (input_tokens as f64 * 0.000075 + output_tokens as f64 * 0.0003) / 1000.0
-            }
-            _ => 0.0, // Default cost for unknown models
-        };
-        Ok(cost)
+        let vertex_model = super::parse_vertex_model(model);
+        if let Some(catalog_model_id) = vertex_model.gemini_catalog_model_id()
+            && let Some(cost) =
+                crate::core::providers::gemini::models::CostCalculator::calculate_cost(
+                    catalog_model_id,
+                    input_tokens,
+                    output_tokens,
+                )
+        {
+            return Ok(cost);
+        }
+
+        Ok(0.0)
     }
 
     /// Model
