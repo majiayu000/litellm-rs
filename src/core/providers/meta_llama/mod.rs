@@ -25,7 +25,7 @@ pub mod chat;
 pub mod common_utils;
 
 // Use the new unified cost calculation system
-use crate::core::cost::CostCalculator;
+use crate::core::cost::calculator::CostCalculator;
 use crate::core::cost::providers::generic::StubCostCalculator;
 
 // Re-export main components

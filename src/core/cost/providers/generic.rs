@@ -3,8 +3,7 @@
 //! Default implementation for providers without specific cost calculation needs
 
 use crate::core::cost::{
-    CostCalculator,
-    calculator::{estimate_cost, generic_cost_per_token, get_model_pricing},
+    calculator::{CostCalculator, estimate_cost, generic_cost_per_token, get_model_pricing},
     types::{CostBreakdown, CostError, CostEstimate, ModelPricing, UsageTokens},
 };
 use async_trait::async_trait;
