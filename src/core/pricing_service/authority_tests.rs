@@ -78,14 +78,14 @@ fn google_authority_uses_specialized_character_pricing() {
             "medlm-large",
             0,
             0,
-            Some("abcd"),
-            Some("xy"),
+            Some("é中"),
+            Some("🙂"),
             None,
         )
         .unwrap_or_else(|error| panic!("specialized Vertex row should be priced: {error}"));
 
     assert_eq!(cost.cost_type, CostType::CharacterBased);
-    assert!((cost.total_cost - 0.00005).abs() < 1e-12);
+    assert!((cost.total_cost - 0.000025).abs() < 1e-12);
 }
 
 #[test]

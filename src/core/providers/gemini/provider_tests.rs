@@ -370,6 +370,11 @@ async fn async_calculate_cost_uses_shared_pricing_units() {
         .await
         .expect("provider-prefixed exact Gemini row should be priced");
     assert!((preview - 0.002).abs() < 1e-12);
+
+    let image = LLMProvider::calculate_cost(&provider, "gemini-3-pro-image-preview", 1_000, 500)
+        .await
+        .expect("chat-capable Gemini image row should be token priced");
+    assert!((image - 0.008).abs() < 1e-12);
 }
 
 #[tokio::test]

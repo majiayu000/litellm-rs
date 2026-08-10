@@ -42,7 +42,7 @@ pub(crate) fn calculate_gemini_cost(
     input_tokens: u32,
     output_tokens: u32,
 ) -> Result<f64, ProviderError> {
-    let (service, _) = gemini_chat_pricing(model)?;
+    let (service, _) = gemini_completion_pricing(model)?;
     service
         .calculate_loaded_usage_cost_for_provider(
             "gemini",
@@ -53,7 +53,7 @@ pub(crate) fn calculate_gemini_cost(
         .map_err(|error| gemini_pricing_error(model, error))
 }
 
-fn gemini_chat_pricing(
+fn gemini_completion_pricing(
     model: &str,
 ) -> Result<(&'static PricingService, LiteLLMModelInfo), ProviderError> {
     let service = PricingService::shared_embedded_default()
@@ -61,7 +61,7 @@ fn gemini_chat_pricing(
     let (_, pricing) = service
         .get_model_info_for_provider("gemini", model)
         .ok_or_else(|| ProviderError::model_not_found("gemini", model))?;
-    if pricing.mode != "chat" {
+    if pricing.mode == "embedding" {
         return Err(ProviderError::model_not_found("gemini", model));
     }
     Ok((service, pricing))
@@ -106,7 +106,7 @@ pub fn is_model_supported(model_id: &str) -> bool {
 
 /// Get model pricing
 pub fn get_model_pricing(model_id: &str) -> Result<(f64, f64), ProviderError> {
-    let (_, pricing) = gemini_chat_pricing(model_id)?;
+    let (_, pricing) = gemini_completion_pricing(model_id)?;
     let input = pricing
         .input_cost_per_token
         .ok_or_else(|| ProviderError::Other {
