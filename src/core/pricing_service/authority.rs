@@ -81,36 +81,37 @@ impl PricingService {
             );
         }
 
-        match crate::core::pricing::normalize_pricing_provider(&model_info.litellm_provider)
-            .as_str()
+        let requested_provider = crate::core::pricing::normalize_pricing_provider(provider);
+        let catalog_provider =
+            crate::core::pricing::normalize_pricing_provider(&model_info.litellm_provider);
+        if super::google::uses_google_completion_calculator(&requested_provider, &catalog_provider)
         {
-            "vertex_ai" => self.calculate_google_cost(
+            self.calculate_google_cost(
                 &resolved_model,
                 &model_info,
                 input_tokens,
                 output_tokens,
                 prompt,
                 completion,
-            ),
-            _ => {
-                let usage = PricingUsage::new(input_tokens, output_tokens);
-                let breakdown = calculate_usage_cost_with_pricing(
-                    &model_info.litellm_provider,
-                    &resolved_model,
-                    &model_info,
-                    &usage,
-                )?;
-                Ok(CostResult {
-                    input_cost: breakdown.input_cost,
-                    output_cost: breakdown.output_cost,
-                    total_cost: breakdown.total_cost,
-                    input_tokens,
-                    output_tokens,
-                    model: resolved_model,
-                    provider: model_info.litellm_provider,
-                    cost_type: CostType::TokenBased,
-                })
-            }
+            )
+        } else {
+            let usage = PricingUsage::new(input_tokens, output_tokens);
+            let breakdown = calculate_usage_cost_with_pricing(
+                &model_info.litellm_provider,
+                &resolved_model,
+                &model_info,
+                &usage,
+            )?;
+            Ok(CostResult {
+                input_cost: breakdown.input_cost,
+                output_cost: breakdown.output_cost,
+                total_cost: breakdown.total_cost,
+                input_tokens,
+                output_tokens,
+                model: resolved_model,
+                provider: model_info.litellm_provider,
+                cost_type: CostType::TokenBased,
+            })
         }
     }
 

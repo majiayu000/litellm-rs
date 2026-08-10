@@ -24,19 +24,36 @@ pub(super) fn is_vertex_publisher_prefix(provider: &str, prefix: &str) -> bool {
     provider == "vertex_ai" && matches!(prefix, "ai21" | "meta" | "mistral")
 }
 
+pub(super) fn uses_google_completion_calculator(
+    requested_provider: &str,
+    catalog_provider: &str,
+) -> bool {
+    matches!(requested_provider, "gemini" | "vertex_ai")
+        || catalog_provider == "vertex_ai"
+        || catalog_provider.starts_with("vertex_ai_")
+}
+
 pub(super) fn exact_pricing_candidates(
     provider: &str,
     model: &str,
     normalized_model: &str,
 ) -> Vec<String> {
-    let mut candidates = vec![format!("{provider}/{model}")];
-    let normalized_candidate = format!("{provider}/{normalized_model}");
-    if !candidates.contains(&normalized_candidate) {
-        candidates.push(normalized_candidate);
+    let model = model.to_ascii_lowercase();
+    let normalized_model = normalized_model.to_ascii_lowercase();
+    let mut candidates = Vec::with_capacity(5);
+    for candidate in [
+        model.clone(),
+        normalized_model.clone(),
+        format!("{provider}/{model}"),
+        format!("{provider}/{normalized_model}"),
+    ] {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
     }
 
     if provider == "vertex_ai"
-        && let Some(alias) = vertex_pricing_alias(model)
+        && let Some(alias) = vertex_pricing_alias(&model)
         && !candidates.iter().any(|candidate| candidate == alias)
     {
         candidates.push(alias.to_string());
