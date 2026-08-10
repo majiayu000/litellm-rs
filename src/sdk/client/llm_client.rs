@@ -1,6 +1,7 @@
 //! Core LLM client implementation
 
 use super::types::{LoadBalancer, LoadBalancingStrategy, ProviderStats};
+use crate::core::router::RuntimeBinding;
 use crate::sdk::{config::ClientConfig, config::SdkProviderConfig, errors::*};
 use crate::utils::net::ClientUtils;
 use crate::utils::net::http::{create_custom_client, create_streaming_client};
@@ -19,10 +20,17 @@ pub struct LLMClient {
     pub(crate) stream_http_client: reqwest::Client,
     pub(crate) provider_stats: Arc<RwLock<HashMap<String, ProviderStats>>>,
     pub(crate) load_balancer: Arc<LoadBalancer>,
+    pub(crate) runtime_binding: Option<RuntimeBinding>,
+    pub(crate) runtime_default_model: Option<String>,
 }
 
 impl LLMClient {
     /// Create new LLM client
+    ///
+    /// This constructor retains the 0.6 `ClientConfig` compatibility transport.
+    /// New applications that already own a gateway runtime should use
+    /// [`Self::from_runtime`] so HTTP, SDK, and completion calls share selection
+    /// state and typed errors.
     pub fn new(config: ClientConfig) -> Result<Self> {
         if config.providers.is_empty() {
             return Err(SDKError::ConfigError("No providers configured".to_string()));
@@ -50,6 +58,27 @@ impl LLMClient {
             stream_http_client,
             provider_stats,
             load_balancer,
+            runtime_binding: None,
+            runtime_default_model: None,
+        })
+    }
+
+    /// Create a stateless SDK facade over an explicit canonical runtime.
+    pub fn from_runtime(runtime: RuntimeBinding, default_model: impl Into<String>) -> Result<Self> {
+        let http_client = create_custom_client(Duration::from_secs(30))
+            .map_err(|e| SDKError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
+        let stream_http_client = create_streaming_client().map_err(|e| {
+            SDKError::ConfigError(format!("Failed to create streaming HTTP client: {e}"))
+        })?;
+
+        Ok(Self {
+            config: ClientConfig::default(),
+            http_client,
+            stream_http_client,
+            provider_stats: Arc::new(RwLock::new(HashMap::new())),
+            load_balancer: Arc::new(LoadBalancer::new(LoadBalancingStrategy::WeightedRandom)),
+            runtime_binding: Some(runtime),
+            runtime_default_model: Some(default_model.into()),
         })
     }
 

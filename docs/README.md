@@ -9,6 +9,7 @@ A high-performance AI Gateway written in Rust that provides unified access to 10
 - [Error System](./architecture/error-system.md) - Unified error handling architecture and patterns
 - [Provider Implementation](./architecture/provider-implementation.md) - Guide for implementing individual providers
 - [Cost Compatibility](./architecture/cost-compatibility.md) - Pricing authority and legacy API lifecycle
+- [Router Runtime](./architecture/router-runtime.md) - Canonical runtime ownership and facade lifecycle
 - [Architecture Improvements](./architecture/improvements.md) - Historical improvements and optimizations
 
 ### Implementation Guides

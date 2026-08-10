@@ -69,6 +69,10 @@ impl LLMClient {
 
     /// Send chat message (with options)
     pub async fn chat_with_options(&self, request: SdkChatRequest) -> Result<ChatResponse> {
+        if self.runtime_binding.is_some() {
+            return self.chat_with_runtime(request).await;
+        }
+
         let start_time = SystemTime::now();
         let provider = self.select_provider(&request).await?;
         let result = self.execute_chat_request(&provider.id, request).await;
@@ -84,6 +88,10 @@ impl LLMClient {
         &self,
         messages: Vec<Message>,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
+        if self.runtime_binding.is_some() {
+            return self.chat_stream_with_runtime(messages).await;
+        }
+
         let provider = self.select_provider_for_stream(&messages).await?;
         self.execute_stream_request(&provider.id, messages).await
     }

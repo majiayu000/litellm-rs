@@ -5,7 +5,11 @@
 use super::{Provider, ProviderType};
 use std::collections::HashMap;
 
-/// Provider Registry using enum-based providers
+/// Legacy provider container retained for source compatibility.
+///
+/// This is not a runtime routing authority. New execution paths must register
+/// deployments with [`crate::core::router::UnifiedRouter`] instead.
+#[doc(hidden)]
 pub struct ProviderRegistry {
     providers: HashMap<String, Provider>,
 }
