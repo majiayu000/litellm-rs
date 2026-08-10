@@ -32,6 +32,7 @@ use super::config::GeminiConfig;
 use super::error::{
     GeminiErrorMapper, gemini_multimodal_error, gemini_network_error, gemini_parse_error,
 };
+use super::models::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
 use super::streaming::GeminiUsagePolicy;
 
 /// Gemini API client
@@ -255,6 +256,14 @@ impl GeminiClient {
 
     /// Request
     pub fn transform_chat_request(&self, request: &ChatRequest) -> Result<Value, ProviderError> {
+        if uses_fixed_sampling_contract(&request.model) && has_trailing_assistant_prefill(request) {
+            return Err(
+                crate::core::providers::gemini::error::gemini_validation_error(format!(
+                    "Model {} does not accept a trailing non-empty assistant message",
+                    request.model
+                )),
+            );
+        }
         let mut contents = Vec::new();
         let mut tool_planner = GoogleToolPlanner::new("gemini");
 
@@ -302,12 +311,13 @@ impl GeminiClient {
             generation_config["maxOutputTokens"] = json!(max_tokens);
         }
 
-        if let Some(temperature) = request.temperature {
-            generation_config["temperature"] = json!(temperature);
-        }
-
-        if let Some(top_p) = request.top_p {
-            generation_config["topP"] = json!(top_p);
+        if !uses_fixed_sampling_contract(&request.model) {
+            if let Some(temperature) = request.temperature {
+                generation_config["temperature"] = json!(temperature);
+            }
+            if let Some(top_p) = request.top_p {
+                generation_config["topP"] = json!(top_p);
+            }
         }
 
         if let Some(stop) = &request.stop {

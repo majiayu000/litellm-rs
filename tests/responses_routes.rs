@@ -452,7 +452,7 @@ mod tests {
             "gemini",
             "test-key-12345678901234567890",
             &format!("http://{address}"),
-            vec!["gemini-1.5-flash".to_string()],
+            vec!["gemini-2.5-flash".to_string()],
         )];
         let gateway = GatewayHttpServer::new(&config)
             .await
@@ -466,7 +466,7 @@ mod tests {
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         state.budget_limits.models.set_model_limit(
-            "gemini-1.5-flash",
+            "gemini-2.5-flash",
             ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
@@ -481,7 +481,7 @@ mod tests {
             test::TestRequest::post()
                 .uri("/v1/responses")
                 .set_json(json!({
-                    "model": "gemini-1.5-flash",
+                    "model": "gemini-2.5-flash",
                     "input": "hello",
                     "stream": true
                 }))

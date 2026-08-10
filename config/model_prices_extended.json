@@ -6,9 +6,9 @@
     "source_commit": "0ade44f4da6171e7222c8e4273c3703a6258f972",
     "generated_by": "scripts/sync_litellm_pricing.py",
     "upstream_model_count": 2917,
-    "compatibility_overlay_count": 166,
+    "compatibility_overlay_count": 168,
     "compatibility_overlay_override_count": 54,
-    "compatibility_overlay_add_count": 112,
+    "compatibility_overlay_add_count": 114,
     "compatibility_overlay_keys": [
       "MiniMax-M2",
       "MiniMax-M2.1",
@@ -66,6 +66,8 @@
       "gemini-3.1-flash-lite",
       "gemini-3.1-pro-preview",
       "gemini-3.5-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.6-flash",
       "gemini-pro",
       "gemini-pro-vision",
       "gemini/gemini-2.5-flash",
@@ -177,7 +179,7 @@
       "yi-large",
       "yi-medium"
     ],
-    "total_model_count": 3029
+    "total_model_count": 3031
   },
   "sample_spec": {
     "code_interpreter_cost_per_session": 0.0,
@@ -18338,6 +18340,34 @@
     "supports_vision": true,
     "supports_streaming": true,
     "supports_system_message": true
+  },
+  "gemini-3.5-flash-lite": {
+    "max_tokens": 65536,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 65536,
+    "input_cost_per_token": 3e-07,
+    "output_cost_per_token": 2.5e-06,
+    "litellm_provider": "gemini",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "source": "https://ai.google.dev/gemini-api/docs/pricing"
+  },
+  "gemini-3.6-flash": {
+    "max_tokens": 65536,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 65536,
+    "input_cost_per_token": 1.5e-06,
+    "output_cost_per_token": 7.5e-06,
+    "litellm_provider": "gemini",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_streaming": true,
+    "supports_system_message": true,
+    "source": "https://ai.google.dev/gemini-api/docs/pricing"
   },
   "gemini/gemini-2.5-pro-preview-tts": {
     "cache_read_input_token_cost": 1.25e-07,

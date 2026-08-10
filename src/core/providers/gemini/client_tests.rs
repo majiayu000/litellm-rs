@@ -191,6 +191,35 @@ fn test_gemini_request_rejects_unknown_tool_result_id() {
 }
 
 #[test]
+fn july_2026_request_body_omits_sampling_parameters() {
+    let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
+    let mut request = ChatRequest {
+        model: "gemini-3.6-flash".to_string(),
+        messages: vec![ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("Hello".to_string())),
+            ..Default::default()
+        }],
+        temperature: Some(0.7),
+        top_p: Some(0.9),
+        max_tokens: Some(16),
+        ..Default::default()
+    };
+
+    let body = client.transform_chat_request(&request).unwrap();
+    assert_eq!(body["generationConfig"]["maxOutputTokens"], 16);
+    assert!(body["generationConfig"].get("temperature").is_none());
+    assert!(body["generationConfig"].get("topP").is_none());
+
+    request.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text("prefill".to_string())),
+        ..Default::default()
+    });
+    assert!(client.transform_chat_request(&request).is_err());
+}
+
+#[test]
 fn test_gemini_finish_reason_tool_calls() {
     let config = GeminiConfig::new_google_ai("test-key");
     let client = GeminiClient::new(config).unwrap();

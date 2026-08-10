@@ -141,7 +141,7 @@ pub fn test_models() -> std::collections::HashMap<&'static str, &'static str> {
     models.insert("openai", "gpt-3.5-turbo");
     models.insert("anthropic", "claude-3-haiku-20240307");
     models.insert("groq", "llama-3.1-8b-instant");
-    models.insert("gemini", "gemini-1.5-flash");
+    models.insert("gemini", "gemini-2.5-flash");
     models.insert("mistral", "mistral-small-latest");
     models.insert("deepseek", "deepseek-v4-flash");
     models.insert("xiaomi_mimo", "mimo-v2.5");

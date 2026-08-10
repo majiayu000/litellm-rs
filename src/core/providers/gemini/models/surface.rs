@@ -1,5 +1,69 @@
 use super::{GeminiModelFamily, ModelInfo, ModelSpec};
 
+const OFFICIAL_LIFECYCLE_SOURCE: &str = "https://ai.google.dev/gemini-api/docs/deprecations";
+
+#[derive(Debug, Clone, Copy)]
+struct DeveloperModelLifecycle {
+    id: &'static str,
+    release_date: &'static str,
+    shutdown_date: Option<&'static str>,
+}
+
+const DEVELOPER_CHAT_MODELS: [DeveloperModelLifecycle; 9] = [
+    DeveloperModelLifecycle {
+        id: "gemini-3.6-flash",
+        release_date: "2026-07-21",
+        shutdown_date: None,
+    },
+    DeveloperModelLifecycle {
+        id: "gemini-3.5-flash-lite",
+        release_date: "2026-07-21",
+        shutdown_date: None,
+    },
+    DeveloperModelLifecycle {
+        id: "gemini-3.5-flash",
+        release_date: "2026-05-19",
+        shutdown_date: None,
+    },
+    DeveloperModelLifecycle {
+        id: "gemini-3.1-pro-preview",
+        release_date: "2026-02-19",
+        shutdown_date: None,
+    },
+    DeveloperModelLifecycle {
+        id: "gemini-3.1-flash-lite",
+        release_date: "2026-05-07",
+        shutdown_date: Some("2027-05-07"),
+    },
+    DeveloperModelLifecycle {
+        id: "gemini-3-flash-preview",
+        release_date: "2025-12-17",
+        shutdown_date: None,
+    },
+    DeveloperModelLifecycle {
+        id: "gemini-2.5-pro",
+        release_date: "2025-06-17",
+        shutdown_date: None,
+    },
+    DeveloperModelLifecycle {
+        id: "gemini-2.5-flash",
+        release_date: "2025-06-17",
+        shutdown_date: None,
+    },
+    DeveloperModelLifecycle {
+        id: "gemini-2.5-flash-lite",
+        release_date: "2025-07-22",
+        shutdown_date: None,
+    },
+];
+
+fn developer_lifecycle(model_id: &str) -> Option<DeveloperModelLifecycle> {
+    DEVELOPER_CHAT_MODELS
+        .iter()
+        .copied()
+        .find(|model| model.id == model_id)
+}
+
 /// Google Gemini API surface for provider-specific catalog overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoogleGeminiApiSurface {
@@ -42,11 +106,13 @@ impl GoogleGeminiApiSurface {
 
     pub(crate) fn includes(self, spec: &ModelSpec) -> bool {
         match self {
-            Self::DeveloperApi => true,
+            Self::DeveloperApi => developer_lifecycle(&spec.model_info.id).is_some(),
             Self::VertexAi => {
                 !matches!(
                     spec.family,
-                    GeminiModelFamily::Gemini10Pro
+                    GeminiModelFamily::Gemini36Flash
+                        | GeminiModelFamily::Gemini35FlashLite
+                        | GeminiModelFamily::Gemini10Pro
                         | GeminiModelFamily::Gemini10ProVision
                         | GeminiModelFamily::GeminiExperimental
                         | GeminiModelFamily::Gemini20FlashThinking
@@ -54,7 +120,10 @@ impl GoogleGeminiApiSurface {
             }
             Self::VertexAiExperimental => !matches!(
                 spec.family,
-                GeminiModelFamily::Gemini10Pro | GeminiModelFamily::Gemini10ProVision
+                GeminiModelFamily::Gemini36Flash
+                    | GeminiModelFamily::Gemini35FlashLite
+                    | GeminiModelFamily::Gemini10Pro
+                    | GeminiModelFamily::Gemini10ProVision
             ),
         }
     }
@@ -78,6 +147,22 @@ impl GoogleGeminiApiSurface {
             "google_model_source_provider".to_string(),
             serde_json::json!("gemini"),
         );
+        if let Some(lifecycle) = developer_lifecycle(&spec.model_info.id) {
+            model_info.metadata.insert(
+                "google_lifecycle_source".to_string(),
+                serde_json::json!(OFFICIAL_LIFECYCLE_SOURCE),
+            );
+            model_info.metadata.insert(
+                "google_release_date".to_string(),
+                serde_json::json!(lifecycle.release_date),
+            );
+            if let Some(shutdown_date) = lifecycle.shutdown_date {
+                model_info.metadata.insert(
+                    "google_shutdown_date".to_string(),
+                    serde_json::json!(shutdown_date),
+                );
+            }
+        }
         model_info
     }
 }
@@ -97,17 +182,37 @@ mod tests {
         let experimental_vertex_models =
             registry.list_model_infos_for_surface(GoogleGeminiApiSurface::VertexAiExperimental);
 
-        assert_eq!(developer_models.len(), registry.list_models().len());
-        assert!(
-            developer_models
-                .iter()
-                .any(|model| model.id == "gemini-1.0-pro")
-        );
+        assert_eq!(developer_models.len(), DEVELOPER_CHAT_MODELS.len());
+        let developer_ids = developer_models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>();
+        let mut expected_ids = DEVELOPER_CHAT_MODELS
+            .iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+        expected_ids.sort_unstable();
+        assert_eq!(developer_ids, expected_ids);
+        assert!(!developer_ids.contains(&"gemini-1.0-pro"));
+        assert!(!developer_ids.contains(&"gemini-3.1-flash"));
         assert!(
             vertex_models
                 .iter()
                 .any(|model| model.id == "gemini-3.5-flash")
         );
+        for developer_only_id in ["gemini-3.6-flash", "gemini-3.5-flash-lite"] {
+            assert!(developer_ids.contains(&developer_only_id));
+            assert!(
+                !vertex_models
+                    .iter()
+                    .any(|model| model.id == developer_only_id)
+            );
+            assert!(
+                !experimental_vertex_models
+                    .iter()
+                    .any(|model| model.id == developer_only_id)
+            );
+        }
         assert!(
             !vertex_models
                 .iter()
@@ -144,6 +249,10 @@ mod tests {
         assert_eq!(
             developer_model.metadata["google_auth_boundary"],
             serde_json::json!("api_key")
+        );
+        assert_eq!(
+            developer_model.metadata["google_lifecycle_source"],
+            serde_json::json!(OFFICIAL_LIFECYCLE_SOURCE)
         );
 
         let vertex_model = vertex_models
