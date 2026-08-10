@@ -8,6 +8,7 @@ mod embeddings;
 mod llm_client;
 mod provider_payloads;
 mod routing;
+mod runtime;
 mod stats;
 mod types;
 

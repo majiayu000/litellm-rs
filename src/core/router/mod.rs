@@ -62,6 +62,17 @@ pub use unified::{Router as UnifiedRouter, RoutingMetrics, RoutingSnapshot};
 pub struct RuntimeBinding {
     router: Arc<UnifiedRouter>,
 }
+impl std::fmt::Debug for RuntimeBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeBinding")
+            .field(
+                "generation",
+                &self.router.load_routing_snapshot().generation(),
+            )
+            .finish_non_exhaustive()
+    }
+}
 impl RuntimeBinding {
     pub fn new(router: Arc<UnifiedRouter>) -> Self {
         Self { router }

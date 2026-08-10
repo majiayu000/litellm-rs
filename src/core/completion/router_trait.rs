@@ -9,7 +9,11 @@ use async_trait::async_trait;
 /// Unified message format (OpenAI compatible)
 pub type Message = ChatMessage;
 
-/// Router trait for handling completion requests
+/// Legacy completion facade contract.
+///
+/// Implementations must delegate provider selection and execution to the canonical
+/// [`crate::core::router::UnifiedRouter`] runtime. New runtime implementations
+/// should not use this trait as a second routing abstraction.
 #[async_trait]
 pub trait Router: Send + Sync + 'static {
     /// Complete a chat request

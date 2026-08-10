@@ -1,174 +1,25 @@
-// Default router implementation.
+//! Compatibility facade for the canonical router runtime.
 
-use super::{
-    CompletionOptions, CompletionResponse, CompletionStream, Message, Router,
-    convert_from_chat_completion_response, convert_messages_to_chat_messages,
-    convert_to_chat_completion_request, stream,
-};
+use super::{CompletionOptions, CompletionResponse, CompletionStream, Message, Router};
 
-use crate::core::providers::{Provider, ProviderRegistry};
 use crate::core::router::{RuntimeBinding, default_runtime};
-use crate::core::types::{chat::ChatRequest, context::RequestContext};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use async_trait::async_trait;
-use futures::stream::StreamExt;
-use std::sync::Arc;
-use tokio::sync::OnceCell;
-use tracing::debug;
 
-#[allow(dead_code, unused_imports)]
-// D2 disconnects unary helpers; D3 removes them with streaming migration.
-mod dynamic_providers;
 mod router_impl;
 
-/// Default router implementation using the provider registry
+/// Completion compatibility facade backed only by [`crate::core::router::UnifiedRouter`].
+///
+/// New integrations should retain a [`RuntimeBinding`] and use [`Self::from_runtime`].
+/// The type remains public for the 0.6 compatibility window.
 pub struct DefaultRouter {
-    provider_registry: Arc<ProviderRegistry>,
     runtime_binding: Option<RuntimeBinding>,
 }
 
 impl DefaultRouter {
-    async fn build_catalog_provider(
-        def: &crate::core::providers::registry::ProviderDefinition,
-        api_key: &str,
-    ) -> Result<Provider> {
-        let config = def.to_openai_like_config(Some(api_key), None);
-        let provider = crate::core::providers::openai_like::OpenAILikeProvider::new_for_catalog(
-            config,
-            def.capabilities,
-        )
-        .await
-        .map_err(|error| {
-            GatewayError::Config(format!(
-                "Failed to initialize catalog provider '{}': {error}",
-                def.name
-            ))
-        })?;
-        Ok(Provider::OpenAILike(provider))
-    }
-
-    /// Helper function to find and select a provider by name with model prefix stripping
-    fn select_provider_by_name<'a>(
-        providers: &'a [&'a crate::core::providers::Provider],
-        provider_name: &str,
-        original_model: &str,
-        prefix: &str,
-        chat_request: &ChatRequest,
-    ) -> Option<(&'a crate::core::providers::Provider, ChatRequest)> {
-        if !original_model.starts_with(prefix) {
-            return None;
-        }
-
-        let actual_model = original_model
-            .strip_prefix(prefix)
-            .unwrap_or(original_model);
-
-        debug!(
-            provider = provider_name,
-            model = %actual_model,
-            "Using static {} provider", provider_name
-        );
-
-        for provider in providers.iter() {
-            if provider.name() == provider_name {
-                let mut updated_request = chat_request.clone();
-                updated_request.model = actual_model.to_string();
-                return Some((provider, updated_request));
-            }
-        }
-
-        None
-    }
-
-    fn select_provider_by_any_name<'a>(
-        providers: &'a [&'a crate::core::providers::Provider],
-        provider_names: &[&str],
-        original_model: &str,
-        prefix: &str,
-        chat_request: &ChatRequest,
-    ) -> Option<(&'a crate::core::providers::Provider, ChatRequest)> {
-        provider_names.iter().find_map(|provider_name| {
-            Self::select_provider_by_name(
-                providers,
-                provider_name,
-                original_model,
-                prefix,
-                chat_request,
-            )
-        })
-    }
-
-    async fn register_openai_like_provider_from_env(
-        provider_registry: &mut ProviderRegistry,
-        provider_name: &str,
-    ) -> Result<()> {
-        let def =
-            crate::core::providers::registry::get_definition(provider_name).ok_or_else(|| {
-                GatewayError::Config(format!(
-                    "Default catalog provider '{provider_name}' has no definition"
-                ))
-            })?;
-        let Some(api_key) = def.resolve_api_key(None) else {
-            return Ok(());
-        };
-
-        let provider = Self::build_catalog_provider(def, &api_key).await?;
-        provider_registry.register(provider);
-        Ok(())
-    }
-
-    async fn register_default_openai_like_providers_from_env(
-        provider_registry: &mut ProviderRegistry,
-    ) -> Result<()> {
-        for provider_name in
-            crate::core::providers::registry::default_catalog_runtime_provider_names()
-        {
-            Self::register_openai_like_provider_from_env(provider_registry, provider_name).await?;
-        }
-        Ok(())
-    }
-
+    /// Create a facade that binds the process-default runtime for each operation.
     pub async fn new() -> Result<Self> {
-        let mut provider_registry = ProviderRegistry::new();
-
-        // Add OpenAI provider if API key is available
-        if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
-            use crate::core::providers::base::BaseConfig;
-            use crate::core::providers::openai::OpenAIProvider;
-            use crate::core::providers::openai::config::OpenAIConfig;
-
-            let config = OpenAIConfig {
-                base: BaseConfig {
-                    api_key: Some(api_key),
-                    api_base: Some("https://api.openai.com/v1".to_string()),
-                    organization: std::env::var("OPENAI_ORGANIZATION").ok(),
-                    ..Default::default()
-                },
-                organization: std::env::var("OPENAI_ORGANIZATION").ok(),
-                ..Default::default()
-            };
-
-            if let Ok(openai_provider) = OpenAIProvider::new(config).await {
-                provider_registry.register(Provider::OpenAI(openai_provider));
-            }
-        }
-
-        Self::register_default_openai_like_providers_from_env(&mut provider_registry).await?;
-
-        // Add Anthropic provider if API key is available
-        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-            use crate::core::providers::anthropic::{AnthropicConfig, AnthropicProvider};
-
-            let config = AnthropicConfig::new(api_key)
-                .with_base_url("https://api.anthropic.com")
-                .with_experimental(false);
-
-            let anthropic_provider = AnthropicProvider::new(config)?;
-            provider_registry.register(Provider::Anthropic(anthropic_provider));
-        }
-
         Ok(Self {
-            provider_registry: Arc::new(provider_registry),
             runtime_binding: None,
         })
     }
@@ -176,16 +27,23 @@ impl DefaultRouter {
     /// Create a completion facade backed by an explicit canonical runtime.
     pub fn from_runtime(runtime: RuntimeBinding) -> Self {
         Self {
-            // Retained only for the streaming compatibility path until D3.
-            provider_registry: Arc::new(ProviderRegistry::new()),
             runtime_binding: Some(runtime),
         }
     }
 }
 
-/// Fallback router for when initialization fails
+/// Fallback router retained for source compatibility.
 pub struct ErrorRouter {
     error: String,
+}
+
+impl ErrorRouter {
+    /// Create a facade that always returns the supplied initialization error.
+    pub fn new(error: impl Into<String>) -> Self {
+        Self {
+            error: error.into(),
+        }
+    }
 }
 
 #[async_trait]
@@ -215,24 +73,7 @@ impl Router for ErrorRouter {
     }
 }
 
-/// Global router instance
-static GLOBAL_ROUTER: OnceCell<Box<dyn Router>> = OnceCell::const_new();
-
-/// Get or initialize the global router
-async fn get_global_router() -> &'static Box<dyn Router> {
-    GLOBAL_ROUTER
-        .get_or_init(|| async {
-            match DefaultRouter::new().await {
-                Ok(router) => Box::new(router) as Box<dyn Router>,
-                Err(e) => Box::new(ErrorRouter {
-                    error: e.to_string(),
-                }) as Box<dyn Router>,
-            }
-        })
-        .await
-}
-
-/// Core completion function - the main entry point for all LLM calls
+/// Core completion function backed by the process-default canonical runtime.
 pub async fn completion(
     model: &str,
     messages: Vec<Message>,
@@ -243,7 +84,7 @@ pub async fn completion(
         .await
 }
 
-/// Async version of completion (though all is async in Rust)
+/// Async compatibility alias for [`completion`].
 pub async fn acompletion(
     model: &str,
     messages: Vec<Message>,
@@ -252,23 +93,27 @@ pub async fn acompletion(
     completion(model, messages, options).await
 }
 
-/// Streaming completion function
+/// Streaming completion backed by the process-default canonical runtime.
 pub async fn completion_stream(
     model: &str,
     messages: Vec<Message>,
     options: Option<CompletionOptions>,
 ) -> Result<CompletionStream> {
-    let router = get_global_router().await;
-    router
-        .complete_stream(model, messages, options.unwrap_or_default())
-        .await
+    let handle = default_runtime().map_err(GatewayError::from)?;
+    router_impl::complete_stream_with_runtime_handle(
+        &handle,
+        model,
+        messages,
+        options.unwrap_or_default(),
+    )
+    .await
 }
 
-/// Convert ChatChunk (from provider) to CompletionChunk (for streaming API)
+/// Convert the canonical provider chunk into the compatibility stream shape.
 fn convert_chat_chunk_to_completion_chunk(
     chunk: crate::core::types::responses::ChatChunk,
-) -> stream::CompletionChunk {
-    stream::CompletionChunk {
+) -> super::stream::CompletionChunk {
+    super::stream::CompletionChunk {
         id: chunk.id,
         object: chunk.object,
         created: chunk.created,
@@ -276,65 +121,15 @@ fn convert_chat_chunk_to_completion_chunk(
         choices: chunk
             .choices
             .into_iter()
-            .map(|c| stream::StreamChoice {
-                index: c.index,
-                delta: stream::StreamDelta {
-                    role: c.delta.role.map(|r| r.to_string()),
-                    content: c.delta.content,
+            .map(|choice| super::stream::StreamChoice {
+                index: choice.index,
+                delta: super::stream::StreamDelta {
+                    role: choice.delta.role.map(|role| role.to_string()),
+                    content: choice.delta.content,
                     tool_calls: None,
                 },
-                finish_reason: c.finish_reason,
+                finish_reason: choice.finish_reason,
             })
             .collect(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::types::model::ProviderCapability;
-
-    #[tokio::test]
-    async fn catalog_builder_preserves_definition_capabilities() {
-        let definition = crate::core::providers::registry::get_definition("perplexity")
-            .expect("Perplexity catalog definition should exist");
-
-        let provider = DefaultRouter::build_catalog_provider(definition, "test-key")
-            .await
-            .expect("catalog provider should build");
-
-        assert_eq!(provider.capabilities(), definition.capabilities);
-    }
-
-    #[tokio::test]
-    async fn catalog_builder_propagates_invalid_profile_errors() {
-        static INVALID: &[ProviderCapability] = &[ProviderCapability::ImageEdit];
-        let mut definition = crate::core::providers::registry::get_definition("perplexity")
-            .expect("Perplexity catalog definition should exist")
-            .clone();
-        definition.capabilities = INVALID;
-
-        let error = DefaultRouter::build_catalog_provider(&definition, "test-key")
-            .await
-            .expect_err("invalid catalog profile must fail startup");
-
-        assert!(
-            error
-                .to_string()
-                .contains("not executable for this OpenAI-like profile"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[tokio::test]
-    async fn default_catalog_registration_rejects_missing_definition() {
-        let mut registry = ProviderRegistry::new();
-
-        let error =
-            DefaultRouter::register_openai_like_provider_from_env(&mut registry, "missing-catalog")
-                .await
-                .expect_err("missing catalog definition must fail startup");
-
-        assert!(error.to_string().contains("has no definition"));
     }
 }
