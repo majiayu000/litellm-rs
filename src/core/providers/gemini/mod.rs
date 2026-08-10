@@ -105,15 +105,17 @@ pub fn create_gemini_provider_from_env() -> Result<GeminiProvider, error::Gemini
 /// Get supported models
 pub fn supported_models() -> Vec<String> {
     get_gemini_registry()
-        .list_models()
+        .list_model_infos_for_surface(GoogleGeminiApiSurface::DeveloperApi)
         .into_iter()
-        .map(|spec| spec.model_info.id.clone())
+        .map(|model| model.id)
         .collect()
 }
 
 /// Check if model is supported
 pub fn is_model_supported(model_id: &str) -> bool {
-    get_gemini_registry().get_model_spec(model_id).is_some()
+    get_gemini_registry()
+        .get_model_spec(model_id)
+        .is_some_and(|spec| GoogleGeminiApiSurface::DeveloperApi.includes(spec))
 }
 
 /// Get model pricing
@@ -144,6 +146,11 @@ mod pricing_tests {
             get_model_pricing("gemini-2.5-flash").expect("catalogued model should be priced");
         assert!((input - 0.30).abs() < 1e-12);
         assert!((output - 2.50).abs() < 1e-12);
+        assert_eq!(get_model_pricing("gemini-3.6-flash").unwrap(), (1.5, 7.5));
+        assert_eq!(
+            get_model_pricing("gemini-3.5-flash-lite").unwrap(),
+            (0.3, 2.5)
+        );
         assert!(matches!(
             get_model_pricing("gemini-1.5-flash"),
             Err(ProviderError::ModelNotFound { .. })

@@ -26,7 +26,10 @@ use crate::core::types::{
 use super::client::GeminiClient;
 use super::config::GeminiConfig;
 use super::error::{GeminiErrorMapper, gemini_model_error, gemini_validation_error};
-use super::models::{GoogleGeminiApiSurface, ModelFeature, get_gemini_registry};
+use super::models::{
+    GoogleGeminiApiSurface, ModelFeature, get_gemini_registry, has_trailing_assistant_prefill,
+    uses_fixed_sampling_contract,
+};
 use super::streaming::GeminiStream;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 
@@ -34,6 +37,7 @@ use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 #[derive(Debug)]
 pub struct GeminiProvider {
     client: GeminiClient,
+    surface: GoogleGeminiApiSurface,
     supported_models: Vec<ModelInfo>,
 }
 
@@ -50,11 +54,16 @@ impl GeminiProvider {
 
         // Get
         let registry = get_gemini_registry();
-        let supported_models =
-            registry.list_model_infos_for_surface(GoogleGeminiApiSurface::DeveloperApi);
+        let surface = if config.use_vertex_ai {
+            GoogleGeminiApiSurface::VertexAi
+        } else {
+            GoogleGeminiApiSurface::DeveloperApi
+        };
+        let supported_models = registry.list_model_infos_for_surface(surface);
 
         Ok(Self {
             client,
+            surface,
             supported_models,
         })
     }
@@ -74,6 +83,7 @@ impl GeminiProvider {
 
         let model_spec = registry
             .get_model_spec(&request.model)
+            .filter(|spec| self.surface.includes(spec))
             .ok_or_else(|| gemini_model_error(format!("Unsupported model: {}", request.model)))?;
 
         // Common validation: empty messages + max_tokens
@@ -83,20 +93,26 @@ impl GeminiProvider {
             model_spec.limits.max_output_tokens,
         )?;
 
-        // Check temperature range
-        if let Some(temperature) = request.temperature
-            && !(0.0..=2.0).contains(&temperature)
-        {
-            return Err(gemini_validation_error(
-                "temperature must be between 0.0 and 2.0",
-            ));
-        }
-
-        // Check top_p range
-        if let Some(top_p) = request.top_p
-            && !(0.0..=1.0).contains(&top_p)
-        {
-            return Err(gemini_validation_error("top_p must be between 0.0 and 1.0"));
+        if uses_fixed_sampling_contract(&request.model) {
+            if has_trailing_assistant_prefill(request) {
+                return Err(gemini_validation_error(format!(
+                    "Model {} does not accept a trailing non-empty assistant message",
+                    request.model
+                )));
+            }
+        } else {
+            if let Some(temperature) = request.temperature
+                && !(0.0..=2.0).contains(&temperature)
+            {
+                return Err(gemini_validation_error(
+                    "temperature must be between 0.0 and 2.0",
+                ));
+            }
+            if let Some(top_p) = request.top_p
+                && !(0.0..=1.0).contains(&top_p)
+            {
+                return Err(gemini_validation_error("top_p must be between 0.0 and 1.0"));
+            }
         }
 
         // Check tool calling support
@@ -143,7 +159,9 @@ impl LLMProvider for GeminiProvider {
     }
 
     fn supports_model(&self, model: &str) -> bool {
-        get_gemini_registry().get_model_spec(model).is_some()
+        get_gemini_registry()
+            .get_model_spec(model)
+            .is_some_and(|spec| self.surface.includes(spec))
     }
 
     fn supports_tools(&self) -> bool {
@@ -166,7 +184,10 @@ impl LLMProvider for GeminiProvider {
         true // Gemini supports vision understanding
     }
 
-    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        if uses_fixed_sampling_contract(model) {
+            return &["max_tokens", "stop", "stream", "tools", "tool_choice"];
+        }
         &[
             "temperature",
             "max_tokens",
@@ -181,11 +202,16 @@ impl LLMProvider for GeminiProvider {
     async fn map_openai_params(
         &self,
         params: HashMap<String, Value>,
-        _model: &str,
+        model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
         let mut mapped = HashMap::new();
 
         for (key, value) in params {
+            if uses_fixed_sampling_contract(model)
+                && matches!(key.as_str(), "temperature" | "top_p" | "top_k")
+            {
+                continue;
+            }
             match key.as_str() {
                 // Directly mapped parameters
                 "temperature" | "top_p" | "stop" | "stream" => {
@@ -458,7 +484,7 @@ mod native_tests {
         config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
         let provider = GeminiProvider::new(config).unwrap();
         let request = ChatRequest {
-            model: "gemini-1.5-flash".to_string(),
+            model: "gemini-2.5-flash".to_string(),
             messages: vec![ChatMessage {
                 role: MessageRole::User,
                 content: Some(MessageContent::Text("hello".to_string())),
