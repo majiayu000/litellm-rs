@@ -18,7 +18,7 @@ use crate::core::{
         embedding::EmbeddingRequest,
         health::HealthStatus,
         image::ImageGenerationRequest,
-        model::{ModelInfo, ProviderCapability},
+        model::ModelInfo,
         responses::{ChatResponse, EmbeddingResponse, ImageGenerationResponse},
     },
 };
@@ -46,9 +46,39 @@ pub struct VertexAIProvider {
     config: Box<VertexAIProviderConfig>,
     auth: Arc<VertexAuth>,
     http_client: BaseHttpClient,
+    supported_models: Vec<ModelInfo>,
     // Cost calculation integrated internally
     gemini_transformer: GeminiTransformer,
     partner_transformer: PartnerModelTransformer,
+}
+
+fn vertex_gemini_models(include_experimental: bool) -> Vec<ModelInfo> {
+    let mut models = crate::core::providers::gemini::get_gemini_registry()
+        .list_model_infos_for_surface(
+            crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi {
+                include_experimental,
+            },
+        );
+
+    for model in &mut models {
+        match super::vertex_prices_per_1k(&model.id) {
+            Ok((input, output)) => {
+                model.input_cost_per_1k_tokens = input;
+                model.output_cost_per_1k_tokens = output;
+            }
+            Err(error) => {
+                tracing::error!(
+                    model = %model.id,
+                    %error,
+                    "Vertex AI model pricing is unavailable"
+                );
+                model.input_cost_per_1k_tokens = None;
+                model.output_cost_per_1k_tokens = None;
+            }
+        }
+    }
+
+    models
 }
 
 impl VertexAIProvider {
@@ -67,11 +97,13 @@ impl VertexAIProvider {
                 ..Default::default()
             },
         )?;
+        let supported_models = vertex_gemini_models(config.enable_experimental);
 
         Ok(Self {
             config: Box::new(config),
             auth,
             http_client,
+            supported_models,
             gemini_transformer: GeminiTransformer::new(),
             partner_transformer: PartnerModelTransformer::new(),
         })
@@ -284,64 +316,7 @@ impl LLMProvider for VertexAIProvider {
     }
 
     fn models(&self) -> &[ModelInfo] {
-        use std::sync::LazyLock;
-        static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-            let prices = |model| {
-                super::vertex_prices_per_1k(model).unwrap_or_else(|error| {
-                    tracing::error!(model, %error, "Vertex AI model pricing is unavailable");
-                    (None, None)
-                })
-            };
-            let pro_prices = prices("gemini-1.5-pro");
-            let flash_prices = prices("gemini-1.5-flash");
-            vec![
-                ModelInfo {
-                    id: "gemini-1.5-pro".to_string(),
-                    name: "Gemini 1.5 Pro".to_string(),
-                    provider: "vertex_ai".to_string(),
-                    max_context_length: 2_097_152,
-                    max_output_length: Some(8192),
-                    supports_streaming: true,
-                    supports_tools: true,
-                    supports_multimodal: true,
-                    input_cost_per_1k_tokens: pro_prices.0,
-                    output_cost_per_1k_tokens: pro_prices.1,
-                    currency: "USD".to_string(),
-                    capabilities: vec![
-                        ProviderCapability::ChatCompletion,
-                        ProviderCapability::ChatCompletionStream,
-                        ProviderCapability::FunctionCalling,
-                        ProviderCapability::ToolCalling,
-                    ],
-                    created_at: None,
-                    updated_at: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-                ModelInfo {
-                    id: "gemini-1.5-flash".to_string(),
-                    name: "Gemini 1.5 Flash".to_string(),
-                    provider: "vertex_ai".to_string(),
-                    max_context_length: 1_048_576,
-                    max_output_length: Some(8192),
-                    supports_streaming: true,
-                    supports_tools: true,
-                    supports_multimodal: true,
-                    input_cost_per_1k_tokens: flash_prices.0,
-                    output_cost_per_1k_tokens: flash_prices.1,
-                    currency: "USD".to_string(),
-                    capabilities: vec![
-                        ProviderCapability::ChatCompletion,
-                        ProviderCapability::ChatCompletionStream,
-                        ProviderCapability::FunctionCalling,
-                        ProviderCapability::ToolCalling,
-                    ],
-                    created_at: None,
-                    updated_at: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-            ]
-        });
-        &MODELS
+        &self.supported_models
     }
 
     async fn chat_completion(

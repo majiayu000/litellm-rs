@@ -1,5 +1,24 @@
 use super::*;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
+use crate::core::types::model::ProviderCapability;
+
+fn test_vertex_provider_config_with_experimental(
+    enable_experimental: bool,
+) -> VertexAIProviderConfig {
+    VertexAIProviderConfig {
+        project_id: "test-project".to_string(),
+        location: "us-central1".to_string(),
+        credentials: crate::core::providers::vertex_ai::VertexCredentials::AccessToken(
+            "test-token".to_string(),
+        ),
+        enable_experimental,
+        ..Default::default()
+    }
+}
+
+fn test_vertex_provider_config() -> VertexAIProviderConfig {
+    test_vertex_provider_config_with_experimental(false)
+}
 
 async fn pricing_test_provider() -> VertexAIProvider {
     VertexAIProvider::new(VertexAIProviderConfig {
@@ -27,6 +46,8 @@ async fn vertex_cost_uses_shared_per_token_pricing() {
     for (model, expected) in [
         ("gemini-2.0-flash", 0.0003),
         ("gemini-1.5-pro-002", 0.00875),
+        ("gemini-1.5-pro-vision", 0.00875),
+        ("gemini-pro-vision", 0.00875),
         ("gemini-1.5-flash-002", 0.000225),
         ("claude-3-opus@20240229", 0.0525),
         ("claude-opus-4-6@20260114", 0.0175),
@@ -394,6 +415,101 @@ fn test_model_info_structure() {
     assert!(model_info.supports_tools);
 }
 
+#[tokio::test]
+async fn test_vertex_models_are_gemini_registry_surface_overlay() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+    let model_ids = provider
+        .models()
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<Vec<_>>();
+
+    let expected_ids = crate::core::providers::gemini::get_gemini_registry()
+        .list_model_infos_for_surface(
+            crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi {
+                include_experimental: false,
+            },
+        )
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(model_ids, expected_ids);
+    assert!(model_ids.iter().any(|id| id == "gemini-3.5-flash"));
+    assert!(!model_ids.iter().any(|id| id == "gemini-1.0-pro"));
+    assert!(!model_ids.iter().any(|id| id == "gemini-2.0-flash-exp"));
+    assert!(
+        !model_ids
+            .iter()
+            .any(|id| id == "gemini-2.0-flash-thinking-exp")
+    );
+
+    let model = provider
+        .models()
+        .iter()
+        .find(|model| model.id == "gemini-3.5-flash")
+        .unwrap();
+    assert_eq!(model.provider, "vertex_ai");
+    assert_eq!(
+        model.metadata["google_auth_boundary"],
+        serde_json::json!("bearer_token")
+    );
+
+    let pro = provider
+        .models()
+        .iter()
+        .find(|model| model.id == "gemini-1.5-pro")
+        .unwrap();
+    assert_eq!(pro.max_context_length, 2_097_152);
+    assert!((pro.input_cost_per_1k_tokens.unwrap() - 0.0035).abs() < 1e-12);
+    assert!((pro.output_cost_per_1k_tokens.unwrap() - 0.0105).abs() < 1e-12);
+
+    let flash = provider
+        .models()
+        .iter()
+        .find(|model| model.id == "gemini-1.5-flash")
+        .unwrap();
+    assert_eq!(flash.max_context_length, 1_048_576);
+
+    let flash_preview = provider
+        .models()
+        .iter()
+        .find(|model| model.id == "gemini-3-flash-preview")
+        .unwrap();
+    assert_eq!(flash_preview.max_context_length, 1_000_000);
+}
+
+#[tokio::test]
+async fn test_vertex_models_include_experimental_when_enabled() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config_with_experimental(true))
+        .await
+        .unwrap();
+    let model_ids = provider
+        .models()
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<Vec<_>>();
+
+    let expected_ids = crate::core::providers::gemini::get_gemini_registry()
+        .list_model_infos_for_surface(
+            crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi {
+                include_experimental: true,
+            },
+        )
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(model_ids, expected_ids);
+    assert!(model_ids.iter().any(|id| id == "gemini-2.0-flash-exp"));
+    assert!(
+        model_ids
+            .iter()
+            .any(|id| id == "gemini-2.0-flash-thinking-exp")
+    );
+}
 // ==================== URL Building Tests (logic only) ====================
 
 #[test]

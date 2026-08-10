@@ -65,9 +65,12 @@ pub(super) fn exact_pricing_candidates(
     candidates
 }
 
-fn vertex_pricing_alias(model: &str) -> Option<&'static str> {
-    match model {
-        "gemini-1.5-pro-001" | "gemini-1.5-pro-002" => Some("gemini-1.5-pro"),
+pub(super) fn vertex_pricing_alias(model: &str) -> Option<&'static str> {
+    match model.to_ascii_lowercase().as_str() {
+        "gemini-1.5-pro-001"
+        | "gemini-1.5-pro-002"
+        | "gemini-1.5-pro-vision"
+        | "gemini-pro-vision" => Some("gemini-1.5-pro"),
         "gemini-1.5-flash-001" | "gemini-1.5-flash-002" => Some("gemini-1.5-flash"),
         "claude-opus-4-6@20260114" => Some("vertex_ai/claude-opus-4-6"),
         "claude-opus-4-5@20251110" => Some("vertex_ai/claude-opus-4-5"),

@@ -239,6 +239,24 @@ fn resolve_model_info_for_provider(
         return None;
     }
 
+    let normalized_model = crate::core::pricing::normalize_model_key(model);
+    if normalized_provider == "vertex_ai" {
+        for candidate in [
+            super::google::vertex_pricing_alias(model),
+            super::google::vertex_pricing_alias(normalized_model),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(info) = models
+                .get(candidate)
+                .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
+            {
+                return Some((candidate.to_string(), info.clone()));
+            }
+        }
+    }
+
     if let Some(info) = models
         .get(model)
         .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
@@ -246,7 +264,6 @@ fn resolve_model_info_for_provider(
         return Some((model.to_string(), info.clone()));
     }
 
-    let normalized_model = crate::core::pricing::normalize_model_key(model);
     if normalized_model != model
         && let Some(info) = models
             .get(normalized_model)

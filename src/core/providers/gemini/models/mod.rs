@@ -42,7 +42,7 @@ pub enum ModelFeature {
 }
 
 /// Model family classification
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GeminiModelFamily {
     /// Gemini 3.5 series (2026 - Latest)
     Gemini35Flash,
@@ -139,6 +139,116 @@ pub struct ModelSpec {
     pub limits: ModelLimits,
 }
 
+/// Google Gemini API surface for provider-specific catalog overlays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoogleGeminiApiSurface {
+    /// Google AI Studio / Gemini Developer API.
+    DeveloperApi,
+    /// Google Cloud Vertex AI publisher endpoint.
+    VertexAi { include_experimental: bool },
+}
+
+impl GoogleGeminiApiSurface {
+    fn provider_name(self) -> &'static str {
+        match self {
+            Self::DeveloperApi => "gemini",
+            Self::VertexAi { .. } => "vertex_ai",
+        }
+    }
+
+    fn surface_name(self) -> &'static str {
+        match self {
+            Self::DeveloperApi => "developer_api",
+            Self::VertexAi { .. } => "vertex_ai",
+        }
+    }
+
+    fn auth_boundary(self) -> &'static str {
+        match self {
+            Self::DeveloperApi => "api_key",
+            Self::VertexAi { .. } => "bearer_token",
+        }
+    }
+
+    fn endpoint_family(self) -> &'static str {
+        match self {
+            Self::DeveloperApi => "generativelanguage",
+            Self::VertexAi { .. } => "aiplatform_publishers_google",
+        }
+    }
+
+    fn includes(self, spec: &ModelSpec) -> bool {
+        match self {
+            Self::DeveloperApi => true,
+            Self::VertexAi {
+                include_experimental,
+            } => {
+                !matches!(
+                    spec.family,
+                    GeminiModelFamily::Gemini10Pro | GeminiModelFamily::Gemini10ProVision
+                ) && (include_experimental || !is_experimental_model(spec))
+            }
+        }
+    }
+
+    fn overlay_model_info(self, spec: &ModelSpec) -> ModelInfo {
+        let mut model_info = spec.model_info.clone();
+        if matches!(self, Self::VertexAi { .. })
+            && let Some(max_context_length) = vertex_context_length(spec.family)
+        {
+            model_info.max_context_length = max_context_length;
+        }
+        model_info.provider = self.provider_name().to_string();
+        model_info.metadata.insert(
+            "google_model_catalog_surface".to_string(),
+            serde_json::json!(self.surface_name()),
+        );
+        model_info.metadata.insert(
+            "google_auth_boundary".to_string(),
+            serde_json::json!(self.auth_boundary()),
+        );
+        model_info.metadata.insert(
+            "google_endpoint_family".to_string(),
+            serde_json::json!(self.endpoint_family()),
+        );
+        model_info.metadata.insert(
+            "google_model_source_provider".to_string(),
+            serde_json::json!("gemini"),
+        );
+        model_info
+    }
+}
+
+fn is_experimental_model(spec: &ModelSpec) -> bool {
+    matches!(spec.family, GeminiModelFamily::GeminiExperimental)
+        || spec.model_info.id.contains("-exp")
+        || spec.model_info.id.contains("experimental")
+}
+
+fn vertex_context_length(family: GeminiModelFamily) -> Option<u32> {
+    match family {
+        GeminiModelFamily::Gemini35Flash
+        | GeminiModelFamily::Gemini31ProPreview
+        | GeminiModelFamily::Gemini31Flash
+        | GeminiModelFamily::Gemini31FlashLite
+        | GeminiModelFamily::Gemini25Pro
+        | GeminiModelFamily::Gemini25Flash
+        | GeminiModelFamily::Gemini25FlashLite
+        | GeminiModelFamily::Gemini20Flash
+        | GeminiModelFamily::Gemini20FlashThinking
+        | GeminiModelFamily::Gemini15Flash
+        | GeminiModelFamily::Gemini15Flash8B => Some(1_048_576),
+        GeminiModelFamily::Gemini3Pro
+        | GeminiModelFamily::Gemini3ProDeepThink
+        | GeminiModelFamily::Gemini3Flash => Some(1_000_000),
+        GeminiModelFamily::Gemini3ProImage => Some(65_536),
+        GeminiModelFamily::Gemini15Pro => Some(2_097_152),
+        GeminiModelFamily::Gemini10Pro
+        | GeminiModelFamily::Gemini10ProVision
+        | GeminiModelFamily::GeminiExperimental => None,
+    }
+}
+
 /// Model
 #[derive(Debug, Clone)]
 pub struct GeminiModelRegistry {
@@ -176,6 +286,18 @@ impl GeminiModelRegistry {
     /// Model
     pub fn list_models(&self) -> Vec<&ModelSpec> {
         self.models.values().collect()
+    }
+
+    /// List model metadata for a concrete Google API surface.
+    pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
+        let mut models = self
+            .models
+            .values()
+            .filter(|spec| surface.includes(spec))
+            .map(|spec| surface.overlay_model_info(spec))
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| left.id.cmp(&right.id));
+        models
     }
 
     /// Check
@@ -462,6 +584,119 @@ mod tests {
         let models = registry.list_models();
         assert!(!models.is_empty());
         assert!(models.len() >= 10); // We have at least 10 models registered
+    }
+
+    #[test]
+    fn test_google_api_surface_model_overlays_are_stable() {
+        let registry = get_gemini_registry();
+
+        let developer_models =
+            registry.list_model_infos_for_surface(GoogleGeminiApiSurface::DeveloperApi);
+        let vertex_models =
+            registry.list_model_infos_for_surface(GoogleGeminiApiSurface::VertexAi {
+                include_experimental: true,
+            });
+
+        assert_eq!(developer_models.len(), registry.list_models().len());
+        assert!(
+            developer_models
+                .iter()
+                .any(|model| model.id == "gemini-1.0-pro")
+        );
+        assert!(
+            vertex_models
+                .iter()
+                .any(|model| model.id == "gemini-3.5-flash")
+        );
+        assert!(
+            !vertex_models
+                .iter()
+                .any(|model| model.id == "gemini-1.0-pro")
+        );
+
+        for models in [&developer_models, &vertex_models] {
+            let ids = models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>();
+            let mut sorted_ids = ids.clone();
+            sorted_ids.sort_unstable();
+            assert_eq!(ids, sorted_ids);
+        }
+
+        let developer_model = developer_models
+            .iter()
+            .find(|model| model.id == "gemini-3.5-flash")
+            .unwrap();
+        assert_eq!(developer_model.provider, "gemini");
+        assert_eq!(
+            developer_model.metadata["google_auth_boundary"],
+            serde_json::json!("api_key")
+        );
+
+        let vertex_model = vertex_models
+            .iter()
+            .find(|model| model.id == "gemini-3.5-flash")
+            .unwrap();
+        assert_eq!(vertex_model.provider, "vertex_ai");
+        assert_eq!(
+            vertex_model.metadata["google_auth_boundary"],
+            serde_json::json!("bearer_token")
+        );
+        assert_eq!(
+            vertex_model.metadata["google_endpoint_family"],
+            serde_json::json!("aiplatform_publishers_google")
+        );
+
+        let vertex_pro = vertex_models
+            .iter()
+            .find(|model| model.id == "gemini-1.5-pro")
+            .unwrap();
+        assert_eq!(vertex_pro.max_context_length, 2_097_152);
+        let vertex_flash = vertex_models
+            .iter()
+            .find(|model| model.id == "gemini-1.5-flash")
+            .unwrap();
+        assert_eq!(vertex_flash.max_context_length, 1_048_576);
+        let vertex_preview = vertex_models
+            .iter()
+            .find(|model| model.id == "gemini-3-flash-preview")
+            .unwrap();
+        assert_eq!(vertex_preview.max_context_length, 1_000_000);
+    }
+
+    #[test]
+    fn test_google_vertex_surface_can_filter_experimental_models() {
+        let registry = get_gemini_registry();
+        let stable_models =
+            registry.list_model_infos_for_surface(GoogleGeminiApiSurface::VertexAi {
+                include_experimental: false,
+            });
+        let experimental_models =
+            registry.list_model_infos_for_surface(GoogleGeminiApiSurface::VertexAi {
+                include_experimental: true,
+            });
+
+        assert!(
+            !stable_models
+                .iter()
+                .any(|model| model.id == "gemini-2.0-flash-exp")
+        );
+        assert!(
+            !stable_models
+                .iter()
+                .any(|model| model.id == "gemini-2.0-flash-thinking-exp")
+        );
+        assert!(
+            experimental_models
+                .iter()
+                .any(|model| model.id == "gemini-2.0-flash-exp")
+        );
+        assert!(
+            experimental_models
+                .iter()
+                .any(|model| model.id == "gemini-2.0-flash-thinking-exp")
+        );
     }
 
     #[test]

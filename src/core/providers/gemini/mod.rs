@@ -22,19 +22,29 @@ use crate::core::pricing_service::{LiteLLMModelInfo, PricingService, PricingUsag
 use crate::core::providers::unified_provider::ProviderError;
 use crate::utils::error::gateway_error::GatewayError;
 
+#[cfg(feature = "providers-extended")]
 pub mod client;
+#[cfg(feature = "providers-extended")]
 pub mod config;
+#[cfg(feature = "providers-extended")]
 pub mod error;
 pub mod models;
+#[cfg(feature = "providers-extended")]
 pub mod provider;
+#[cfg(feature = "providers-extended")]
 pub mod streaming;
 
 // Re-export main types
+#[cfg(feature = "providers-extended")]
 pub use client::GeminiClient;
+#[cfg(feature = "providers-extended")]
 pub use config::GeminiConfig;
+#[cfg(feature = "providers-extended")]
 pub use error::GeminiError;
-pub use models::{GeminiModelFamily, ModelFeature, get_gemini_registry};
+pub use models::{GeminiModelFamily, GoogleGeminiApiSurface, ModelFeature, get_gemini_registry};
+#[cfg(feature = "providers-extended")]
 pub use provider::GeminiProvider;
+#[cfg(feature = "providers-extended")]
 pub use streaming::GeminiStream;
 
 pub(crate) fn calculate_gemini_cost(
@@ -80,11 +90,13 @@ fn gemini_pricing_error(model: &str, error: GatewayError) -> ProviderError {
 // Convenience functions
 
 /// Create Gemini provider
+#[cfg(feature = "providers-extended")]
 pub fn create_gemini_provider(config: GeminiConfig) -> Result<GeminiProvider, error::GeminiError> {
     GeminiProvider::new(config)
 }
 
 /// Create Gemini provider from environment
+#[cfg(feature = "providers-extended")]
 pub fn create_gemini_provider_from_env() -> Result<GeminiProvider, error::GeminiError> {
     let config = GeminiConfig::from_env()?;
     GeminiProvider::new(config)
