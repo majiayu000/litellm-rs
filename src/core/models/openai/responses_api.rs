@@ -528,15 +528,30 @@ pub enum ResponseStreamEvent {
     #[serde(rename = "response.function_call_arguments.delta")]
     ResponseFunctionCallArgumentsDelta {
         output_index: u32,
-        call_id: String,
+        item_id: String,
         delta: String,
     },
     /// Function-call arguments finished
     #[serde(rename = "response.function_call_arguments.done")]
     ResponseFunctionCallArgumentsDone {
         output_index: u32,
-        call_id: String,
+        item_id: String,
+        name: String,
         arguments: String,
+    },
+    /// Incremental custom-tool input.
+    #[serde(rename = "response.custom_tool_call_input.delta")]
+    ResponseCustomToolCallInputDelta {
+        output_index: u32,
+        item_id: String,
+        delta: String,
+    },
+    /// Custom-tool input finished.
+    #[serde(rename = "response.custom_tool_call_input.done")]
+    ResponseCustomToolCallInputDone {
+        output_index: u32,
+        item_id: String,
+        input: String,
     },
     /// Incremental reasoning-summary delta (o-series / Anthropic
     /// extended thinking / DeepSeek R1 / Gemini thinking).

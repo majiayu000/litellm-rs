@@ -12,6 +12,9 @@ use crate::core::models::openai::responses_api::{
     ResponseInputItem, ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage,
     ResponseTool, ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
 };
+use crate::core::models::openai::tools::{Function, FunctionCall, Tool, ToolCall};
+use crate::core::types::codex::domain::{CodexTurn, CodexTurnError, CodexTurnItem};
+use crate::core::types::codex::wire::{CodexCustomToolCall, CodexToolOutput};
 use crate::core::types::responses::FinishReason;
 use crate::server::routes::ai::chat::handle_chat_completion_with_state;
 use crate::server::state::AppState;
@@ -28,6 +31,8 @@ pub use lifecycle::{cancel_response, delete_response, get_response, list_respons
 #[cfg(test)]
 static PROVIDER_DISPATCH_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+static CODEX_DISPATCH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// POST /v1/responses handler
 pub async fn create_response(
@@ -78,14 +83,17 @@ pub async fn create_response(
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
 
-    if let Some(feature) = unsupported_codex_feature(&request) {
-        return Ok(openai_errors::unsupported_codex_feature(
-            feature,
-            &request.model,
-        ));
-    }
-
-    let chat_request = match build_chat_request(&request) {
+    let turn = match CodexTurn::try_from(&request) {
+        Ok(turn) => turn,
+        Err(CodexTurnError::UnsupportedFeature(feature)) => {
+            return Ok(openai_errors::unsupported_codex_feature(
+                &feature,
+                &request.model,
+            ));
+        }
+        Err(error) => return Ok(openai_errors::validation_error(error.to_string())),
+    };
+    let chat_request = match build_chat_request_from_turn(&request, &turn) {
         Ok(r) => r,
         Err(e) => return Ok(openai_errors::validation_error(e)),
     };
@@ -154,8 +162,17 @@ async fn handle_sync_response(
 // ── Request conversion ────────────────────────────────────────────────────────
 
 /// Convert a `ResponsesApiRequest` to a `ChatCompletionRequest`.
+#[cfg(test)]
 pub(crate) fn build_chat_request(
     req: &ResponsesApiRequest,
+) -> Result<ChatCompletionRequest, String> {
+    let turn = CodexTurn::try_from(req).map_err(|error| error.to_string())?;
+    build_chat_request_from_turn(req, &turn)
+}
+
+fn build_chat_request_from_turn(
+    req: &ResponsesApiRequest,
+    turn: &CodexTurn,
 ) -> Result<ChatCompletionRequest, String> {
     let mut messages: Vec<ChatMessage> = Vec::new();
 
@@ -171,9 +188,9 @@ pub(crate) fn build_chat_request(
         });
     }
 
-    match &req.input {
-        ResponseInput::Text(text) => {
-            messages.push(ChatMessage {
+    for item in &turn.items {
+        let message = match item {
+            CodexTurnItem::Text(text) => ChatMessage {
                 role: MessageRole::User,
                 content: Some(MessageContent::Text(text.clone())),
                 name: None,
@@ -181,96 +198,82 @@ pub(crate) fn build_chat_request(
                 tool_calls: None,
                 tool_call_id: None,
                 audio: None,
-            });
-        }
-        ResponseInput::Items(items) => {
-            for item in items {
-                let ResponseInputItem::Message(msg) = item else {
-                    return Err(format!(
-                        "unsupported Codex feature: {}",
-                        item.feature_name()
-                    ));
-                };
-                let role = parse_role(&msg.role)?;
-                let content = match &msg.content {
-                    ResponseInputContent::Text(t) => MessageContent::Text(t.clone()),
-                    ResponseInputContent::Parts(parts) => {
-                        let mut content_parts: Vec<ContentPart> = Vec::new();
-                        for p in parts {
-                            match p {
-                                ResponseInputContentPart::InputText { text }
-                                | ResponseInputContentPart::OutputText { text } => {
-                                    content_parts.push(ContentPart::Text { text: text.clone() });
-                                }
-                                ResponseInputContentPart::InputImage { image_url, detail } => {
-                                    match image_url {
-                                        Some(url) => {
-                                            content_parts.push(ContentPart::ImageUrl {
-                                                image_url: ImageUrl {
-                                                    url: url.clone(),
-                                                    detail: detail.clone(),
-                                                },
-                                            });
-                                        }
-                                        None => {
-                                            return Err(
-                                                "input_image part is missing image_url".to_string()
-                                            );
-                                        }
-                                    }
-                                }
-                                ResponseInputContentPart::InputAudio { .. } => {
-                                    return Err(
-                                        "unsupported Codex feature: input_audio".to_string()
-                                    );
-                                }
-                            }
-                        }
-                        if content_parts.len() == 1 {
-                            if let ContentPart::Text { text } = &content_parts[0] {
-                                MessageContent::Text(text.clone())
-                            } else {
-                                MessageContent::Parts(content_parts)
-                            }
-                        } else {
-                            MessageContent::Parts(content_parts)
-                        }
-                    }
-                };
-                messages.push(ChatMessage {
-                    role,
-                    content: Some(content),
-                    name: None,
-                    function_call: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    audio: None,
-                });
+            },
+            CodexTurnItem::Item(ResponseInputItem::Message(message)) => {
+                response_message_to_chat(message)?
             }
-        }
+            CodexTurnItem::Item(ResponseInputItem::FunctionCall(call)) => {
+                push_tool_call(
+                    &mut messages,
+                    &call.call_id,
+                    &call.name,
+                    call.arguments.clone(),
+                );
+                continue;
+            }
+            CodexTurnItem::Item(ResponseInputItem::CustomToolCall(call)) => {
+                push_tool_call(
+                    &mut messages,
+                    &call.call_id,
+                    &call.name,
+                    serde_json::json!({"input": call.input}).to_string(),
+                );
+                continue;
+            }
+            CodexTurnItem::Item(ResponseInputItem::FunctionCallOutput(output)) => {
+                tool_output_message(&output.call_id, tool_output_text(&output.output)?)
+            }
+            CodexTurnItem::Item(ResponseInputItem::CustomToolCallOutput(output)) => {
+                tool_output_message(&output.call_id, tool_output_text(&output.output)?)
+            }
+            CodexTurnItem::Item(item) => {
+                return Err(format!(
+                    "unsupported Codex feature: {}",
+                    item.feature_name()
+                ));
+            }
+        };
+        messages.push(message);
     }
 
     if messages.is_empty() {
         return Err("input must contain at least one message".to_string());
     }
 
-    let mut tools: Vec<crate::core::models::openai::tools::Tool> = Vec::new();
-    if let Some(req_tools) = &req.tools {
-        for t in req_tools {
-            let function = match t {
-                ResponseTool::Function(tool) => &tool.function,
-                ResponseTool::CodexFunction(tool) => tool,
-                _ => return Err(format!("unsupported Codex feature: {}", t.feature_name())),
-            };
-            tools.push(crate::core::models::openai::tools::Tool {
-                tool_type: "function".to_string(),
-                function: crate::core::models::openai::tools::Function {
-                    name: function.name.clone(),
-                    description: function.description.clone(),
-                    parameters: function.parameters.clone(),
-                },
-            });
-        }
+    let mut tools = Vec::new();
+    for tool in &turn.tools {
+        let function = match tool {
+            ResponseTool::Function(tool) => Function {
+                name: tool.function.name.clone(),
+                description: tool.function.description.clone(),
+                parameters: tool.function.parameters.clone(),
+            },
+            ResponseTool::CodexFunction(tool) => Function {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.parameters.clone(),
+            },
+            ResponseTool::Custom(tool) => Function {
+                name: tool.name.clone(),
+                description: Some(tool.description.clone()),
+                parameters: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {"input": {"type": "string"}},
+                    "required": ["input"],
+                    "additionalProperties": false
+                })),
+            },
+            tool => {
+                return Err(format!(
+                    "unsupported Codex feature: {}",
+                    tool.feature_name()
+                ));
+            }
+        };
+        tools.push(Tool {
+            tool_type: "function".to_string(),
+            function,
+        });
     }
 
     Ok(ChatCompletionRequest {
@@ -290,42 +293,99 @@ pub(crate) fn build_chat_request(
     })
 }
 
-fn unsupported_codex_feature(request: &ResponsesApiRequest) -> Option<&str> {
-    if request.additional_tools.is_some() {
-        return Some("additional_tools");
-    }
-    if let ResponseInput::Items(items) = &request.input {
-        for item in items {
-            match item {
-                ResponseInputItem::Message(message) => {
-                    if let ResponseInputContent::Parts(parts) = &message.content
-                        && parts
-                            .iter()
-                            .any(|part| matches!(part, ResponseInputContentPart::InputAudio { .. }))
-                    {
-                        return Some("input_audio");
+fn response_message_to_chat(
+    message: &crate::core::models::openai::responses_api::ResponseInputMessage,
+) -> Result<ChatMessage, String> {
+    let content = match &message.content {
+        ResponseInputContent::Text(text) => MessageContent::Text(text.clone()),
+        ResponseInputContent::Parts(parts) => {
+            let mut converted = Vec::with_capacity(parts.len());
+            for part in parts {
+                match part {
+                    ResponseInputContentPart::InputText { text }
+                    | ResponseInputContentPart::OutputText { text } => {
+                        converted.push(ContentPart::Text { text: text.clone() });
+                    }
+                    ResponseInputContentPart::InputImage { image_url, detail } => {
+                        let url = image_url
+                            .as_ref()
+                            .ok_or_else(|| "input_image part is missing image_url".to_string())?;
+                        converted.push(ContentPart::ImageUrl {
+                            image_url: ImageUrl {
+                                url: url.clone(),
+                                detail: detail.clone(),
+                            },
+                        });
+                    }
+                    ResponseInputContentPart::InputAudio { .. } => {
+                        return Err("unsupported Codex feature: input_audio".to_string());
                     }
                 }
-                item => return Some(item.feature_name()),
+            }
+            match converted.as_slice() {
+                [ContentPart::Text { text }] => MessageContent::Text(text.clone()),
+                _ => MessageContent::Parts(converted),
             }
         }
-    }
-    request.tools.as_ref()?.iter().find_map(|tool| match tool {
-        ResponseTool::Function(tool) if tool.function.defer_loading == Some(true) => {
-            Some("defer_loading")
-        }
-        ResponseTool::CodexFunction(tool) if tool.defer_loading == Some(true) => {
-            Some("defer_loading")
-        }
-        ResponseTool::CodexFunction(tool) if tool.strict == Some(true) => Some("strict"),
-        ResponseTool::CodexFunction(tool)
-            if tool.description.is_none() || tool.parameters.is_none() || tool.strict.is_none() =>
-        {
-            Some("function_schema")
-        }
-        ResponseTool::Function(_) | ResponseTool::CodexFunction(_) => None,
-        tool => Some(tool.feature_name()),
+    };
+    Ok(ChatMessage {
+        role: parse_role(&message.role)?,
+        content: Some(content),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
     })
+}
+
+fn push_tool_call(messages: &mut Vec<ChatMessage>, call_id: &str, name: &str, arguments: String) {
+    let tool_call = ToolCall {
+        id: call_id.to_string(),
+        tool_type: "function".to_string(),
+        function: FunctionCall {
+            name: name.to_string(),
+            arguments,
+        },
+    };
+    if let Some(message) = messages.last_mut()
+        && message.role == MessageRole::Assistant
+        && message.content.is_none()
+        && let Some(tool_calls) = message.tool_calls.as_mut()
+    {
+        tool_calls.push(tool_call);
+        return;
+    }
+    messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: None,
+        name: None,
+        function_call: None,
+        tool_calls: Some(vec![tool_call]),
+        tool_call_id: None,
+        audio: None,
+    });
+}
+
+fn tool_output_message(call_id: &str, output: String) -> ChatMessage {
+    ChatMessage {
+        role: MessageRole::Tool,
+        content: Some(MessageContent::Text(output)),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: Some(call_id.to_string()),
+        audio: None,
+    }
+}
+
+fn tool_output_text(output: &CodexToolOutput) -> Result<String, String> {
+    match output {
+        CodexToolOutput::Text(text) => Ok(text.clone()),
+        CodexToolOutput::ContentItems(items) => {
+            serde_json::to_string(items).map_err(|error| format!("invalid tool output: {error}"))
+        }
+    }
 }
 
 // ── Response conversion ───────────────────────────────────────────────────────
@@ -387,16 +447,28 @@ pub(crate) fn convert_to_responses_api(
                 }));
             }
 
-            // Tool calls → function call output items
+            // Tool calls → function or Codex custom-tool output items.
             if let Some(tool_calls) = choice.message.tool_calls {
                 for tc in tool_calls {
-                    items.push(ResponseOutputItem::FunctionCall(ResponseFunctionCall {
-                        id: format!("fc_{}", uuid_v4_hex()),
-                        name: tc.function.name.clone(),
-                        arguments: tc.function.arguments.clone(),
-                        status: finish_status.to_string(),
-                        call_id: Some(tc.id.clone()),
-                    }));
+                    if is_custom_tool(original, &tc.function.name) {
+                        items.push(ResponseOutputItem::CustomToolCall(CodexCustomToolCall {
+                            id: Some(format!("ct_{}", uuid_v4_hex())),
+                            call_id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            namespace: None,
+                            input: custom_tool_input(&tc.function.arguments),
+                            status: Some(finish_status.to_string()),
+                            internal_chat_message_metadata_passthrough: None,
+                        }));
+                    } else {
+                        items.push(ResponseOutputItem::FunctionCall(ResponseFunctionCall {
+                            id: format!("fc_{}", uuid_v4_hex()),
+                            name: tc.function.name.clone(),
+                            arguments: tc.function.arguments.clone(),
+                            status: finish_status.to_string(),
+                            call_id: Some(tc.id.clone()),
+                        }));
+                    }
                 }
             }
 
@@ -442,6 +514,26 @@ pub(crate) fn convert_to_responses_api(
         previous_response_id: original.previous_response_id.clone(),
         metadata: original.metadata.clone(),
     }
+}
+
+pub(crate) fn is_custom_tool(original: &ResponsesApiRequest, name: &str) -> bool {
+    original.tools.as_ref().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| matches!(tool, ResponseTool::Custom(tool) if tool.name == name))
+    })
+}
+
+pub(crate) fn custom_tool_input(arguments: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("input")
+                .and_then(|input| input.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| arguments.to_string())
 }
 
 /// Map a chat-completion `finish_reason` to a Responses API item/response status.

@@ -13,6 +13,7 @@ A high-performance AI Gateway written in Rust that provides unified access to 10
 ### Implementation Guides
 - [Getting Started](./guides/getting-started.md) - Quick start guide and basic usage
 - [Configuration](./guides/configuration.md) - Configuration management and environment setup
+- [Codex](./guides/codex.md) - Use Codex with the Responses API compatibility layer
 - [Deployment](./guides/deployment.md) - Production deployment strategies
 - [Testing](./guides/testing.md) - Testing strategies and best practices
 

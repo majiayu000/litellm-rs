@@ -1,9 +1,12 @@
 use crate::core::models::openai::responses_api::{
-    ResponseInputItem, ResponseTool, ResponsesApiRequest,
+    ResponseInputItem, ResponseOutputItem, ResponseTool, ResponsesApiRequest,
 };
-use crate::core::types::codex::domain::{
-    CodexCallKind, CodexCallState, CodexTurn, CodexTurnError, CodexTurnItem,
+use crate::core::models::openai::{
+    messages::{ChatMessage, MessageRole},
+    responses::{ChatChoice, ChatCompletionResponse},
+    tools::{FunctionCall, ToolCall},
 };
+use crate::core::types::codex::domain::{CodexCallKind, CodexTurn, CodexTurnError, CodexTurnItem};
 use crate::core::types::codex::wire::CODEX_PROTOCOL_BASELINE;
 use actix_web::{body::to_bytes, http::StatusCode, test as actix_test, web};
 use serde_json::{Value, json};
@@ -78,6 +81,7 @@ fn codex_wire_distinguishes_tier_two_and_redacts_unknown_payload() {
 }
 #[actix_web::test]
 async fn codex_wire_http_rejects_before_provider_dispatch() {
+    let _guard = super::CODEX_DISPATCH_TEST_LOCK.lock().await;
     let mut config = crate::config::Config::default();
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
@@ -85,7 +89,6 @@ async fn codex_wire_http_rejects_before_provider_dispatch() {
     let state = web::Data::new(server.state().clone());
     super::PROVIDER_DISPATCH_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
     let mut fixtures = vec![
-        json!({"model":"m","input":[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"}]}),
         json!({"model":"m","input":[{"type":"future\nsecret=abcdefghijklmnop","secret":"drop"}]}),
         json!({"model":"m","input":"x","additional_tools":[{"type":"function","name":"f"}]}),
         json!({"model":"m","input":"x","additional_tools":[]}),
@@ -93,8 +96,6 @@ async fn codex_wire_http_rejects_before_provider_dispatch() {
     ];
     fixtures.extend(tier_two_items().map(|item| json!({"model":"m","input":[item]})));
     for tool in [
-        json!({"type":"custom","name":"shell","description":"d","format":{}}),
-        json!({"type":"function","name":"f"}),
         json!({"type":"function","name":"f","defer_loading":true}),
         json!({"type":"function","name":"f","strict":true}),
         json!({"type":"namespace"}),
@@ -140,20 +141,43 @@ async fn codex_wire_http_rejects_before_provider_dispatch() {
     );
 }
 
+#[actix_web::test]
+async fn codex_tier_one_reaches_provider_dispatch() {
+    let _guard = super::CODEX_DISPATCH_TEST_LOCK.lock().await;
+    let mut config = crate::config::Config::default();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    let server = crate::server::HttpServer::new(&config).await.unwrap();
+    let state = web::Data::new(server.state().clone());
+    super::PROVIDER_DISPATCH_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+    let payload = codex_request(json!({
+        "model":"m",
+        "store":false,
+        "input":[{"type":"message","role":"user","content":"run"}],
+        "tools":[
+            {"type":"function","name":"lookup","parameters":{"type":"object"}},
+            {"type":"custom","name":"shell","description":"shell","format":{"type":"text"}}
+        ]
+    }));
+    let req = actix_test::TestRequest::post()
+        .insert_header(("x-codex-upstream-counter", "1"))
+        .to_http_request();
+    let _ = super::create_response(state, req, web::Json(payload))
+        .await
+        .unwrap();
+    assert_eq!(
+        super::PROVIDER_DISPATCH_COUNT.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
 #[test]
 fn codex_turn_preserves_order_and_correlates_mixed_calls() {
     let request = codex_request(serde_json::from_str(r#"{"model":"m","stream":true,"input":[{"type":"message","role":"user","content":"run both"},{"type":"function_call","call_id":"function-1","name":"lookup","arguments":"{}"},{"type":"custom_tool_call","call_id":"custom-1","name":"shell","namespace":"tools","input":"pwd"},{"type":"custom_tool_call_output","call_id":"custom-1","name":"shell","output":"/tmp"},{"type":"function_call_output","call_id":"function-1","output":"ok"}],"tools":[{"type":"function","name":"lookup","description":"lookup","parameters":{"type":"object"},"strict":false},{"type":"custom","name":"shell","description":"shell","format":{}}]}"#).unwrap());
 
     let turn = CodexTurn::try_from(&request).unwrap();
 
-    assert_eq!(turn.protocol_version, CODEX_PROTOCOL_BASELINE);
     assert_eq!(turn.tools.len(), 2);
-    assert_eq!(turn.store, None);
-    assert!(!turn.background);
-    assert!(turn.requirements.streaming);
-    assert!(turn.requirements.function_tools);
-    assert!(turn.requirements.custom_tools);
-    assert!(turn.requirements.call_outputs);
     assert!(matches!(
         turn.items[0],
         CodexTurnItem::Item(ResponseInputItem::Message(_))
@@ -175,25 +199,92 @@ fn codex_turn_preserves_order_and_correlates_mixed_calls() {
         CodexTurnItem::Item(ResponseInputItem::FunctionCallOutput(_))
     ));
 
-    let calls = &turn.ledger.calls;
-    assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0].call_id, "function-1");
-    assert_eq!(calls[0].name, "lookup");
-    assert_eq!(calls[0].kind, CodexCallKind::Function);
-    assert_eq!(calls[0].state, CodexCallState::OutputReceived);
+    let chat = super::build_chat_request(&request).unwrap();
+    let encoded = serde_json::to_value(chat).unwrap();
+    assert_eq!(encoded["messages"][1]["tool_calls"][0]["id"], "function-1");
+    assert_eq!(encoded["messages"][1]["tool_calls"][1]["id"], "custom-1");
+    assert_eq!(encoded["messages"][2]["tool_call_id"], "custom-1");
+    assert_eq!(encoded["messages"][3]["tool_call_id"], "function-1");
+    assert_eq!(encoded["tools"][0]["function"]["name"], "lookup");
+    assert_eq!(encoded["tools"][1]["function"]["name"], "shell");
     assert_eq!(
-        (calls[0].declaration_index, calls[0].output_index),
-        (1, Some(4))
+        encoded["tools"][1]["function"]["parameters"]["required"][0],
+        "input"
     );
-    assert_eq!(calls[1].call_id, "custom-1");
-    assert_eq!(calls[1].name, "shell");
-    assert_eq!(calls[1].kind, CodexCallKind::Custom);
-    assert_eq!(calls[1].namespace.as_deref(), Some("tools"));
-    assert_eq!(calls[1].state, CodexCallState::OutputReceived);
-    assert_eq!(
-        (calls[1].declaration_index, calls[1].output_index),
-        (2, Some(3))
-    );
+}
+
+#[test]
+fn codex_non_streaming_reconstructs_custom_tool_output() {
+    let request = codex_request(json!({
+        "model":"m",
+        "input":"run",
+        "tools":[{"type":"custom","name":"shell","description":"shell","format":{"type":"text"}}]
+    }));
+    let chat = ChatCompletionResponse {
+        id: "chat_1".into(),
+        object: "chat.completion".into(),
+        created: 1,
+        model: "m".into(),
+        system_fingerprint: None,
+        choices: vec![ChatChoice {
+            index: 0,
+            message: ChatMessage {
+                role: MessageRole::Assistant,
+                content: None,
+                name: None,
+                function_call: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_1".into(),
+                    tool_type: "function".into(),
+                    function: FunctionCall {
+                        name: "shell".into(),
+                        arguments: r#"{"input":"pwd"}"#.into(),
+                    },
+                }]),
+                tool_call_id: None,
+                audio: None,
+            },
+            logprobs: None,
+            finish_reason: Some("tool_calls".into()),
+        }],
+        usage: None,
+    };
+
+    let response = super::convert_to_responses_api(chat, &request);
+    let ResponseOutputItem::CustomToolCall(call) = &response.output[0] else {
+        panic!("custom tool must remain custom in Responses output");
+    };
+    assert_eq!(call.call_id, "call_1");
+    assert_eq!(call.name, "shell");
+    assert_eq!(call.input, "pwd");
+    assert_eq!(call.status.as_deref(), Some("completed"));
+}
+
+#[test]
+fn portable_codex_turn_has_one_contract_for_supported_adapter_families() {
+    for model in [
+        "openai-compatible/test",
+        "anthropic/claude-test",
+        "gemini/gemini-test",
+    ] {
+        let request = codex_request(json!({
+            "model":model,
+            "input":[
+                {"type":"message","role":"user","content":"run"},
+                {"type":"custom_tool_call","call_id":"call_1","name":"shell","input":"pwd"},
+                {"type":"custom_tool_call_output","call_id":"call_1","name":"shell","output":"/tmp"}
+            ],
+            "tools":[{"type":"custom","name":"shell","description":"shell","format":{"type":"text"}}]
+        }));
+        let chat = super::build_chat_request(&request).unwrap();
+        assert_eq!(chat.model, model);
+        assert_eq!(
+            chat.messages[1].tool_calls.as_ref().unwrap()[0].id,
+            "call_1"
+        );
+        assert_eq!(chat.messages[2].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(chat.tools.as_ref().unwrap()[0].function.name, "shell");
+    }
 }
 
 #[test]
@@ -203,14 +294,7 @@ fn codex_call_ledger_accepts_each_parallel_output_order() {
         r#"[{"type":"function_call","call_id":"function-1","name":"lookup","arguments":"{}"},{"type":"custom_tool_call","call_id":"custom-1","name":"shell","input":"pwd"},{"type":"custom_tool_call_output","call_id":"custom-1","name":"shell","output":"ok"},{"type":"function_call_output","call_id":"function-1","output":"ok"}]"#,
     ] {
         let turn = codex_turn_json(input).unwrap();
-        assert_eq!(turn.ledger.calls[0].call_id, "function-1");
-        assert_eq!(turn.ledger.calls[1].call_id, "custom-1");
-        assert!(
-            turn.ledger
-                .calls
-                .iter()
-                .all(|call| call.state == CodexCallState::OutputReceived)
-        );
+        assert_eq!(turn.items.len(), 4);
     }
 }
 
@@ -261,11 +345,13 @@ fn codex_turn_rejects_invalid_tool_definitions() {
         r#"{"model":"m","input":"x","tools":[{"type":"function","name":" ","parameters":{}}]}"#,
         r#"{"model":"m","input":"x","tools":[{"type":"custom","name":" ","description":"d","format":{}}]}"#,
         r#"{"model":"m","input":"x","tools":[{"type":"function","name":"lookup","defer_loading":true}]}"#,
+        r#"{"model":"m","input":"x","tools":[{"type":"custom","name":"shell","description":"d","format":{"type":"grammar","syntax":"regex","definition":".*"}}]}"#,
     ];
     let expected = [
         CodexTurnError::EmptyToolName { tool_index: 0 },
         CodexTurnError::EmptyToolName { tool_index: 0 },
         CodexTurnError::UnsupportedFeature("defer_loading".into()),
+        CodexTurnError::UnsupportedFeature("custom.format".into()),
     ];
     for (request, expected) in requests.into_iter().zip(expected) {
         let request = codex_request(serde_json::from_str(request).unwrap());

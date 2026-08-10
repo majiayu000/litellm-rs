@@ -243,10 +243,9 @@ pub mod wire {
     }
 }
 
-/// SP1107-T2 builds the canonical model before SP1107-T3 wires it into routing.
-#[allow(dead_code)]
+/// Canonical Codex turn used before provider-specific chat/tool conversion.
 pub(crate) mod domain {
-    use super::wire::{CODEX_PROTOCOL_BASELINE, CodexToolOutput, CodexToolOutputContent};
+    use super::wire::{CodexToolOutput, CodexToolOutputContent};
     use crate::core::models::openai::responses_api::{
         ResponseInput, ResponseInputContent, ResponseInputContentPart, ResponseInputItem,
         ResponseInputMessage, ResponseTool, ResponsesApiRequest,
@@ -349,23 +348,10 @@ pub(crate) mod domain {
         Item(ResponseInputItem),
     }
 
-    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-    pub(crate) struct CodexExecutionRequirements {
-        pub(crate) streaming: bool,
-        pub(crate) function_tools: bool,
-        pub(crate) custom_tools: bool,
-        pub(crate) call_outputs: bool,
-    }
-
     #[derive(Debug, Clone)]
     pub(crate) struct CodexTurn {
-        pub(crate) protocol_version: &'static str,
         pub(crate) items: Vec<CodexTurnItem>,
         pub(crate) tools: Vec<ResponseTool>,
-        pub(crate) store: Option<bool>,
-        pub(crate) background: bool,
-        pub(crate) requirements: CodexExecutionRequirements,
-        pub(crate) ledger: CodexCallLedger,
     }
 
     impl TryFrom<&ResponsesApiRequest> for CodexTurn {
@@ -377,10 +363,6 @@ pub(crate) mod domain {
             }
 
             let mut ledger = CodexCallLedger::default();
-            let mut requirements = CodexExecutionRequirements {
-                streaming: request.stream.unwrap_or(false),
-                ..Default::default()
-            };
             let items = match &request.input {
                 ResponseInput::Text(text) => {
                     if text.trim().is_empty() {
@@ -394,46 +376,52 @@ pub(crate) mod domain {
                     }
                     let mut turn_items = Vec::with_capacity(items.len());
                     for (item_index, item) in items.iter().enumerate() {
-                        turn_items.push(normalize_item(
-                            item,
-                            item_index,
-                            &mut ledger,
-                            &mut requirements,
-                        )?);
+                        turn_items.push(normalize_item(item, item_index, &mut ledger)?);
                     }
                     turn_items
                 }
             };
 
             let tools = request.tools.clone().unwrap_or_default();
+            let mut tool_names = std::collections::HashSet::new();
             for (tool_index, tool) in tools.iter().enumerate() {
-                let (name, deferred, custom) = match tool {
-                    ResponseTool::Function(tool) => {
-                        (&tool.function.name, tool.function.defer_loading, false)
+                let (name, deferred, strict) = match tool {
+                    ResponseTool::Function(tool) => (
+                        &tool.function.name,
+                        tool.function.defer_loading,
+                        tool.function.strict,
+                    ),
+                    ResponseTool::CodexFunction(tool) => {
+                        (&tool.name, tool.defer_loading, tool.strict)
                     }
-                    ResponseTool::CodexFunction(tool) => (&tool.name, tool.defer_loading, false),
-                    ResponseTool::Custom(tool) => (&tool.name, None, true),
+                    ResponseTool::Custom(tool) => {
+                        if tool
+                            .format
+                            .get("type")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|format| format != "text")
+                        {
+                            return Err(unsupported("custom.format"));
+                        }
+                        (&tool.name, None, None)
+                    }
                     tool => return Err(unsupported(tool.feature_name())),
                 };
                 if name.trim().is_empty() {
                     return Err(CodexTurnError::EmptyToolName { tool_index });
                 }
+                if !tool_names.insert(name.as_str()) {
+                    return Err(CodexTurnError::DuplicateToolName { tool_index });
+                }
                 if deferred == Some(true) {
                     return Err(unsupported("defer_loading"));
                 }
-                requirements.custom_tools |= custom;
-                requirements.function_tools |= !custom;
+                if strict == Some(true) {
+                    return Err(unsupported("strict"));
+                }
             }
 
-            Ok(Self {
-                protocol_version: CODEX_PROTOCOL_BASELINE,
-                items,
-                tools,
-                store: request.store,
-                background: request.background.unwrap_or(false),
-                requirements,
-                ledger,
-            })
+            Ok(Self { items, tools })
         }
     }
 
@@ -447,6 +435,8 @@ pub(crate) mod domain {
         InvalidCallName { item_index: usize },
         #[error("Codex tool name must not be empty at tool {tool_index}")]
         EmptyToolName { tool_index: usize },
+        #[error("duplicate Codex tool name at tool {tool_index}")]
+        DuplicateToolName { tool_index: usize },
         #[error("invalid Codex message role at item {item_index}")]
         InvalidMessageRole { item_index: usize },
         #[error("Codex call payload must not be empty at item {item_index}")]
@@ -469,7 +459,6 @@ pub(crate) mod domain {
         item: &ResponseInputItem,
         item_index: usize,
         ledger: &mut CodexCallLedger,
-        requirements: &mut CodexExecutionRequirements,
     ) -> Result<CodexTurnItem, CodexTurnError> {
         use CodexCallKind::{Custom, Function};
         match item {
@@ -485,13 +474,10 @@ pub(crate) mod domain {
                     call.namespace.as_deref(),
                     item_index,
                 )?;
-                requirements.function_tools = true;
             }
             ResponseInputItem::FunctionCallOutput(output) => {
                 validate_tool_output(&output.output, item_index)?;
                 ledger.receive_output(&output.call_id, Function, None, item_index)?;
-                requirements.function_tools = true;
-                requirements.call_outputs = true;
             }
             ResponseInputItem::CustomToolCall(call) => {
                 if call.input.trim().is_empty() {
@@ -504,7 +490,6 @@ pub(crate) mod domain {
                     call.namespace.as_deref(),
                     item_index,
                 )?;
-                requirements.custom_tools = true;
             }
             ResponseInputItem::CustomToolCallOutput(output) => {
                 validate_tool_output(&output.output, item_index)?;
@@ -514,8 +499,6 @@ pub(crate) mod domain {
                     output.name.as_deref(),
                     item_index,
                 )?;
-                requirements.custom_tools = true;
-                requirements.call_outputs = true;
             }
             item => {
                 return Err(unsupported(item.feature_name()));
