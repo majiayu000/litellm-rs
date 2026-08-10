@@ -14,13 +14,20 @@ pub mod calculator;
 pub mod types;
 pub mod utils;
 
-// Re-export main types and functions
+// Compatibility re-exports retained for the 0.6 migration window.
+#[deprecated(
+    note = "use core::cost::calculator::* directly or PricingService for runtime pricing; removal is no earlier than 0.7.0"
+)]
 pub use calculator::{
     CostCalculator, compare_model_costs, estimate_cost, generic_cost_per_token, get_model_pricing,
 };
+#[deprecated(
+    note = "use core::pricing_service::CostResult; this legacy shape is retained only for compatibility and removal is no earlier than 0.7.0"
+)]
+pub use types::CostResult;
 pub use types::{
-    CostBreakdown, CostError, CostEstimate, CostResult, CostSummary, CostTracker,
-    ModelCostComparison, ModelPricing, ProviderPricing, UsageTokens,
+    CostBreakdown, CostError, CostEstimate, CostSummary, CostTracker, ModelCostComparison,
+    ModelPricing, ProviderPricing, UsageTokens,
 };
 pub use utils::{
     calculate_cost_component, format_cost, get_cost_per_unit, select_tiered_pricing, tokens_to_cost,
