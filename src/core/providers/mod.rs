@@ -50,7 +50,7 @@ pub mod fal_ai;
 // fireworks: Tier 1 -> registry/catalog.rs
 // friendliai: Tier 1 -> registry/catalog.rs
 // galadriel: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
+#[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
 pub mod gemini;
 #[cfg(feature = "providers-extended")]
 pub mod github;

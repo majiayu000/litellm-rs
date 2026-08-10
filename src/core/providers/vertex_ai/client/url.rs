@@ -17,6 +17,20 @@ impl VertexAIProvider {
         )
     }
 
+    pub(super) fn build_google_catalog_model_url(
+        &self,
+        model: &str,
+        endpoint: &str,
+        stream: bool,
+    ) -> String {
+        let url = self.build_google_model_url(model, endpoint);
+        if stream {
+            format!("{url}?alt=sse")
+        } else {
+            url
+        }
+    }
+
     /// Build the API URL for a given model and endpoint
     pub(super) fn build_url(&self, model: &VertexAIModel, endpoint: &str, stream: bool) -> String {
         let model_id = model.model_id();

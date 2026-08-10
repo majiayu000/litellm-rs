@@ -18,7 +18,7 @@ use crate::core::{
         embedding::EmbeddingRequest,
         health::HealthStatus,
         image::ImageGenerationRequest,
-        model::{ModelInfo, ProviderCapability},
+        model::ModelInfo,
         responses::{ChatResponse, EmbeddingResponse, ImageGenerationResponse},
     },
 };
@@ -123,9 +123,11 @@ impl VertexAIProvider {
         _context: RequestContext,
     ) -> Result<ChatResponse, VertexAIError> {
         let model = super::parse_vertex_model(&request.model);
+        let is_catalog_gemini =
+            super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental);
 
         // Transform request based on model type
-        let (endpoint, body) = if model.is_gemini() {
+        let (endpoint, body) = if is_catalog_gemini {
             let endpoint = if request.stream {
                 "streamGenerateContent"
             } else {
@@ -147,7 +149,11 @@ impl VertexAIProvider {
             return Err(ProviderError::model_not_found("vertex_ai", &request.model));
         };
 
-        let url = self.build_url(&model, endpoint, request.stream);
+        let url = if is_catalog_gemini {
+            self.build_google_catalog_model_url(&request.model, endpoint, request.stream)
+        } else {
+            self.build_url(&model, endpoint, request.stream)
+        };
         let response = self.make_request(&url, body).await?;
 
         // Parse response
@@ -285,63 +291,39 @@ impl LLMProvider for VertexAIProvider {
 
     fn models(&self) -> &[ModelInfo] {
         use std::sync::LazyLock;
-        static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-            let prices = |model| {
-                super::vertex_prices_per_1k(model).unwrap_or_else(|error| {
-                    tracing::error!(model, %error, "Vertex AI model pricing is unavailable");
-                    (None, None)
-                })
-            };
-            let pro_prices = prices("gemini-1.5-pro");
-            let flash_prices = prices("gemini-1.5-flash");
-            vec![
-                ModelInfo {
-                    id: "gemini-1.5-pro".to_string(),
-                    name: "Gemini 1.5 Pro".to_string(),
-                    provider: "vertex_ai".to_string(),
-                    max_context_length: 2_097_152,
-                    max_output_length: Some(8192),
-                    supports_streaming: true,
-                    supports_tools: true,
-                    supports_multimodal: true,
-                    input_cost_per_1k_tokens: pro_prices.0,
-                    output_cost_per_1k_tokens: pro_prices.1,
-                    currency: "USD".to_string(),
-                    capabilities: vec![
-                        ProviderCapability::ChatCompletion,
-                        ProviderCapability::ChatCompletionStream,
-                        ProviderCapability::FunctionCalling,
-                        ProviderCapability::ToolCalling,
-                    ],
-                    created_at: None,
-                    updated_at: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-                ModelInfo {
-                    id: "gemini-1.5-flash".to_string(),
-                    name: "Gemini 1.5 Flash".to_string(),
-                    provider: "vertex_ai".to_string(),
-                    max_context_length: 1_048_576,
-                    max_output_length: Some(8192),
-                    supports_streaming: true,
-                    supports_tools: true,
-                    supports_multimodal: true,
-                    input_cost_per_1k_tokens: flash_prices.0,
-                    output_cost_per_1k_tokens: flash_prices.1,
-                    currency: "USD".to_string(),
-                    capabilities: vec![
-                        ProviderCapability::ChatCompletion,
-                        ProviderCapability::ChatCompletionStream,
-                        ProviderCapability::FunctionCalling,
-                        ProviderCapability::ToolCalling,
-                    ],
-                    created_at: None,
-                    updated_at: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-            ]
+        fn load_models(
+            surface: crate::core::providers::gemini::GoogleGeminiApiSurface,
+        ) -> Vec<ModelInfo> {
+            let mut models = crate::core::providers::gemini::get_gemini_registry()
+                .list_model_infos_for_surface(surface);
+            for model in &mut models {
+                match super::vertex_prices_per_1k(&model.id) {
+                    Ok((input, output)) => {
+                        model.input_cost_per_1k_tokens = input;
+                        model.output_cost_per_1k_tokens = output;
+                    }
+                    Err(error) => {
+                        tracing::error!(model = %model.id, %error, "Vertex AI model pricing is unavailable");
+                        model.input_cost_per_1k_tokens = None;
+                        model.output_cost_per_1k_tokens = None;
+                    }
+                }
+            }
+            models
+        }
+        static STABLE_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi)
         });
-        &MODELS
+        static EXPERIMENTAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+            )
+        });
+        if self.config.enable_experimental {
+            &EXPERIMENTAL_MODELS
+        } else {
+            &STABLE_MODELS
+        }
     }
 
     async fn chat_completion(

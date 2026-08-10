@@ -1,5 +1,17 @@
 use super::*;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
+use crate::core::types::model::ProviderCapability;
+
+fn test_vertex_provider_config() -> VertexAIProviderConfig {
+    VertexAIProviderConfig {
+        project_id: "test-project".to_string(),
+        location: "us-central1".to_string(),
+        credentials: crate::core::providers::vertex_ai::VertexCredentials::AccessToken(
+            "test-token".to_string(),
+        ),
+        ..Default::default()
+    }
+}
 
 async fn pricing_test_provider() -> VertexAIProvider {
     VertexAIProvider::new(VertexAIProviderConfig {
@@ -394,6 +406,112 @@ fn test_model_info_structure() {
     assert!(model_info.supports_tools);
 }
 
+#[tokio::test]
+async fn test_vertex_models_are_gemini_registry_surface_overlay() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+    let model_ids = provider
+        .models()
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<Vec<_>>();
+
+    let expected_ids = crate::core::providers::gemini::get_gemini_registry()
+        .list_model_infos_for_surface(
+            crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi,
+        )
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(model_ids, expected_ids);
+    assert!(model_ids.iter().any(|id| id == "gemini-3.5-flash"));
+    assert!(!model_ids.iter().any(|id| id == "gemini-1.0-pro"));
+    assert!(!model_ids.iter().any(|id| id == "gemini-2.0-flash-exp"));
+
+    let mut experimental_config = test_vertex_provider_config();
+    experimental_config.enable_experimental = true;
+    let experimental_provider = VertexAIProvider::new(experimental_config).await.unwrap();
+    assert!(
+        experimental_provider
+            .models()
+            .iter()
+            .any(|model| model.id == "gemini-2.0-flash-exp")
+    );
+
+    let model = provider
+        .models()
+        .iter()
+        .find(|model| model.id == "gemini-3.5-flash")
+        .unwrap();
+    assert_eq!(model.provider, "vertex_ai");
+    assert_eq!(
+        model.metadata["google_auth_boundary"],
+        serde_json::json!("bearer_token")
+    );
+
+    for model_id in ["gemini-1.5-flash", "gemini-3-flash-preview"] {
+        let advertised = provider
+            .models()
+            .iter()
+            .find(|model| model.id == model_id)
+            .unwrap();
+        assert_eq!(
+            advertised.max_context_length,
+            crate::core::providers::vertex_ai::parse_vertex_model(model_id).max_context_tokens()
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_vertex_shared_catalog_new_model_request_contract() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+
+    assert!(
+        crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "gemini-3.5-flash",
+            false
+        )
+    );
+    assert!(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "models/gemini-3.5-flash",
+            false
+        )
+    );
+    assert!(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "prefix-gemini-3.5-flash",
+            false
+        )
+    );
+    assert!(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model("gemini-1.0-pro", true)
+    );
+    assert!(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "gemini-2.0-flash-exp",
+            false
+        )
+    );
+    assert!(
+        crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "gemini-2.0-flash-exp",
+            true
+        )
+    );
+
+    let url = provider.build_google_catalog_model_url("gemini-3.5-flash", "generateContent", false);
+    assert!(url.contains("/publishers/google/models/gemini-3.5-flash:generateContent"));
+    assert!(!url.contains("alt=sse"));
+
+    let stream_url =
+        provider.build_google_catalog_model_url("gemini-3.5-flash", "streamGenerateContent", true);
+    assert!(stream_url.ends_with(":streamGenerateContent?alt=sse"));
+}
 // ==================== URL Building Tests (logic only) ====================
 
 #[test]

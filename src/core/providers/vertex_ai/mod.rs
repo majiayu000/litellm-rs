@@ -74,6 +74,17 @@ pub(crate) fn vertex_prices_per_1k(
     ))
 }
 
+pub(crate) fn is_vertex_gemini_catalog_model(model: &str, include_experimental: bool) -> bool {
+    let surface = if include_experimental {
+        crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental
+    } else {
+        crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi
+    };
+    crate::core::providers::gemini::get_gemini_registry()
+        .get_model_spec(model)
+        .is_some_and(|spec| surface.includes(spec))
+}
+
 fn vertex_pricing_error(model: &str, error: GatewayError) -> ProviderError {
     match error {
         GatewayError::NotFound(_) => ProviderError::model_not_found("vertex_ai", model),
@@ -456,6 +467,13 @@ impl VertexAIModel {
 
     /// Get maximum context window
     pub fn max_context_tokens(&self) -> usize {
+        if self.is_gemini()
+            && let Some(spec) = crate::core::providers::gemini::get_gemini_registry()
+                .get_model_spec(&self.model_id())
+        {
+            return spec.model_info.max_context_length as usize;
+        }
+
         match self {
             // Gemini 3.1 models
             Self::Gemini31ProPreview | Self::Gemini31Flash | Self::Gemini31FlashLite => 1_048_576,
