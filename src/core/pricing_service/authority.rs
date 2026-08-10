@@ -455,7 +455,7 @@ fn pricing_provider_aliases(provider: &str, model: &str) -> Vec<String> {
     let normalized = crate::core::pricing::normalize_pricing_provider(provider);
     let aliases = match normalized.as_str() {
         "anthropic" if is_xiaomi_mimo_model(model) => vec!["xiaomi_mimo", "xiaomi", "mimo"],
-        "gemini" => vec!["gemini", "vertex_ai"],
+        "gemini" => vec!["gemini"],
         "vertex_ai" => super::google::VERTEX_PROVIDER_ALIASES.to_vec(),
         "xiaomi_mimo" => vec!["xiaomi_mimo", "xiaomi", "mimo"],
         "zhipuai" => vec!["zhipuai", "glm"],

@@ -21,7 +21,11 @@ pub(super) const VERTEX_PROVIDER_ALIASES: &[&str] = &[
 ];
 
 pub(super) fn is_vertex_publisher_prefix(provider: &str, prefix: &str) -> bool {
-    provider == "vertex_ai" && matches!(prefix, "ai21" | "meta" | "mistral")
+    provider == "vertex_ai"
+        && matches!(
+            prefix.to_ascii_lowercase().as_str(),
+            "ai21" | "meta" | "mistral"
+        )
 }
 
 pub(super) fn uses_google_completion_calculator(

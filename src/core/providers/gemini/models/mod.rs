@@ -421,12 +421,12 @@ mod tests {
 
     #[test]
     fn test_cost_calculation() {
-        let cost = CostCalculator::calculate_cost("gemini-1.5-flash", 1000, 500);
+        let cost = CostCalculator::calculate_cost("gemini-2.5-flash", 1000, 500);
         assert!(cost.is_ok());
 
         let cost_value = cost.unwrap();
-        // Expected: (1000/1M * $0.075) + (500/1M * $0.30) = $0.000075 + $0.00015 = $0.000225
-        assert!((cost_value - 0.000225).abs() < 0.000001);
+        // Expected: (1000/1M * $0.30) + (500/1M * $2.50) = $0.0003 + $0.00125 = $0.00155
+        assert!((cost_value - 0.00155).abs() < 0.000001);
     }
 
     #[test]
