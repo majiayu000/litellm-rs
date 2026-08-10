@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
+#[cfg(test)]
 use crate::core::providers::shared::strict_vertex_usage_metadata;
 use crate::core::{
     traits::{
@@ -527,81 +528,16 @@ impl LLMProvider for VertexAIProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> std::result::Result<Value, ProviderError> {
-        let mut params = HashMap::new();
-
-        params.insert(
-            "messages".to_string(),
-            serde_json::to_value(request.messages)
-                .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?,
-        );
-        params.insert("model".to_string(), Value::String(request.model.clone()));
-
-        if let Some(max_tokens) = request.max_tokens {
-            params.insert(
-                "max_tokens".to_string(),
-                Value::Number(serde_json::Number::from(max_tokens)),
-            );
+        let model = super::parse_vertex_model(&request.model);
+        if model.is_gemini() {
+            self.gemini_transformer
+                .transform_chat_request(&request, &model)
+        } else if model.is_partner_model() {
+            self.partner_transformer
+                .transform_chat_request(&request, &model)
+        } else {
+            Err(ProviderError::model_not_found("vertex_ai", &request.model))
         }
-
-        if let Some(temperature) = request.temperature {
-            let temp_f64 = temperature as f64;
-            params.insert(
-                "temperature".to_string(),
-                Value::Number(serde_json::Number::from_f64(temp_f64).ok_or_else(|| {
-                    ProviderError::invalid_request(
-                        "vertex_ai",
-                        format!("invalid temperature value: {temp_f64} (NaN and Infinity are not allowed)"),
-                    )
-                })?),
-            );
-        }
-
-        if let Some(top_p) = request.top_p {
-            let top_p_f64 = top_p as f64;
-            params.insert(
-                "top_p".to_string(),
-                Value::Number(serde_json::Number::from_f64(top_p_f64).ok_or_else(|| {
-                    ProviderError::invalid_request(
-                        "vertex_ai",
-                        format!(
-                            "invalid top_p value: {top_p_f64} (NaN and Infinity are not allowed)"
-                        ),
-                    )
-                })?),
-            );
-        }
-
-        if let Some(stop) = request.stop {
-            params.insert(
-                "stop".to_string(),
-                serde_json::to_value(stop)
-                    .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?,
-            );
-        }
-
-        if request.stream {
-            params.insert("stream".to_string(), Value::Bool(true));
-        }
-
-        if let Some(tools) = request.tools {
-            params.insert(
-                "tools".to_string(),
-                serde_json::to_value(tools)
-                    .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?,
-            );
-        }
-
-        if let Some(tool_choice) = request.tool_choice {
-            params.insert(
-                "tool_choice".to_string(),
-                serde_json::to_value(tool_choice)
-                    .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?,
-            );
-        }
-
-        let vertex_params = self.map_openai_params(params, &request.model).await?;
-        serde_json::to_value(vertex_params)
-            .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))
     }
 
     /// Response
@@ -625,68 +561,19 @@ impl LLMProvider for VertexAIProvider {
             return Err(error_mapper.map_json_error(&response_json));
         }
 
-        // Response
-        let candidates = response_json
-            .get("candidates")
-            .and_then(|c| c.as_array())
-            .ok_or_else(|| {
-                ProviderError::response_parsing("vertex_ai", "Missing candidates in response")
-            })?;
-
-        if candidates.is_empty() {
-            return Err(ProviderError::response_parsing(
+        let model = super::parse_vertex_model(model);
+        if model.is_gemini() {
+            self.gemini_transformer
+                .transform_chat_response(response_json, &model)
+        } else if model.is_partner_model() {
+            self.partner_transformer
+                .transform_chat_response(response_json, &model)
+        } else {
+            Err(ProviderError::model_not_found(
                 "vertex_ai",
-                "No candidates in response",
-            ));
+                model.model_id(),
+            ))
         }
-
-        let candidate = &candidates[0];
-        let content = candidate
-            .get("content")
-            .and_then(|c| c.get("parts"))
-            .and_then(|p| p.as_array())
-            .and_then(|parts| parts.first())
-            .and_then(|part| part.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        // Usage statistics information
-        let usage = parse_vertex_usage(&response_json);
-
-        Ok(ChatResponse {
-            id: format!("vertex-ai-{}", uuid::Uuid::new_v4()),
-            object: "chat.completion".to_string(),
-            created: chrono::Utc::now().timestamp(),
-            model: model.to_string(),
-            choices: vec![crate::core::types::responses::ChatChoice {
-                index: 0,
-                message: crate::core::types::chat::ChatMessage {
-                    role: crate::core::types::message::MessageRole::Assistant,
-                    content: Some(crate::core::types::message::MessageContent::Text(content)),
-                    thinking: None,
-                    audio: None,
-                    name: None,
-                    tool_calls: None, // Handle
-                    tool_call_id: None,
-                    function_call: None,
-                },
-                finish_reason: candidate
-                    .get("finishReason")
-                    .and_then(|r| r.as_str())
-                    .map(|reason| match reason {
-                        "STOP" => crate::core::types::responses::FinishReason::Stop,
-                        "MAX_TOKENS" => crate::core::types::responses::FinishReason::Length,
-                        "SAFETY" => crate::core::types::responses::FinishReason::ContentFilter,
-                        "RECITATION" => crate::core::types::responses::FinishReason::ContentFilter,
-                        _ => crate::core::types::responses::FinishReason::Stop,
-                    })
-                    .or(Some(crate::core::types::responses::FinishReason::Stop)),
-                logprobs: None,
-            }],
-            usage,
-            system_fingerprint: None,
-        })
     }
 
     /// Error
@@ -695,6 +582,7 @@ impl LLMProvider for VertexAIProvider {
     }
 }
 
+#[cfg(test)]
 fn parse_vertex_usage(response: &Value) -> Option<crate::core::types::responses::Usage> {
     response
         .get("usageMetadata")

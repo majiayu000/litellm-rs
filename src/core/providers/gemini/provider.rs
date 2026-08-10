@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
+use crate::core::providers::google_tool_loop::request_requires_tool_capability;
 use crate::core::providers::{GeminiNativeRequest, ProviderError};
 use crate::core::traits::{
     provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider,
@@ -99,7 +100,9 @@ impl GeminiProvider {
         }
 
         // Check tool calling support
-        if request.tools.is_some() && !model_spec.features.contains(&ModelFeature::ToolCalling) {
+        if request_requires_tool_capability(request)
+            && !model_spec.features.contains(&ModelFeature::ToolCalling)
+        {
             return Err(gemini_validation_error(format!(
                 "Model {} does not support tool calling",
                 request.model

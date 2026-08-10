@@ -11,6 +11,10 @@ use crate::core::providers::base::{
     BaseConfig, BaseHttpClient, HeaderPair, apply_provider_headers, header, header_owned,
     header_static, read_streaming_error_body,
 };
+use crate::core::providers::google_tool_loop::{
+    GoogleToolPlanner, build_tool_config, build_tool_declarations, candidate_index,
+    content_has_tool_part, content_has_tool_use, finish_reason, parse_function_call_parts,
+};
 use crate::core::providers::shared::{
     strict_direct_gemini_usage_metadata, strict_vertex_usage_metadata,
 };
@@ -22,7 +26,6 @@ use crate::core::types::{
     message::MessageContent,
     message::MessageRole,
     responses::{ChatChoice, ChatResponse},
-    tools::{FunctionCall, ToolCall},
 };
 
 use super::config::GeminiConfig;
@@ -253,10 +256,11 @@ impl GeminiClient {
     /// Request
     pub fn transform_chat_request(&self, request: &ChatRequest) -> Result<Value, ProviderError> {
         let mut contents = Vec::new();
+        let mut tool_planner = GoogleToolPlanner::new("gemini");
 
         // Collect system message parts for systemInstruction field
         let mut system_parts: Vec<Value> = Vec::new();
-        for message in &request.messages {
+        for (message_index, message) in request.messages.iter().enumerate() {
             if message.role == MessageRole::System {
                 if let Some(text) = message.content.as_ref() {
                     system_parts.push(json!({"text": text.to_string()}));
@@ -264,7 +268,8 @@ impl GeminiClient {
                 continue;
             }
 
-            let content = self.transform_message_content(message)?;
+            let content =
+                self.transform_message_content(message_index, message, &mut tool_planner)?;
             let role = match message.role {
                 MessageRole::System | MessageRole::Developer => {
                     // Gemini doesn't directly support system/developer role, need to convert to user message prefix
@@ -272,8 +277,7 @@ impl GeminiClient {
                 }
                 MessageRole::User => "user",
                 MessageRole::Assistant => "model",
-                MessageRole::Tool => "function", // Function call result
-                MessageRole::Function => "function", // Function call result
+                MessageRole::Tool | MessageRole::Function => "user",
             };
 
             contents.push(json!({
@@ -335,14 +339,61 @@ impl GeminiClient {
             gemini_request["safetySettings"] = json!(gemini_safety);
         }
 
+        let (tools, declaration_names) = build_tool_declarations("gemini", request)?;
+        if let Some(tools) = tools {
+            gemini_request["tools"] = tools;
+        }
+        if let Some(tool_config) = build_tool_config("gemini", request, &declaration_names)? {
+            gemini_request["toolConfig"] = tool_config;
+        }
+
         Ok(gemini_request)
     }
 
     /// Transform message content
     fn transform_message_content(
         &self,
+        message_index: usize,
         message: &ChatMessage,
+        tool_planner: &mut GoogleToolPlanner,
     ) -> Result<Vec<Value>, ProviderError> {
+        if let Some(tool_result) = tool_planner.top_level_result(message)? {
+            return Ok(vec![tool_result.to_wire_value()]);
+        }
+        if message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
+            && message.role != MessageRole::Assistant
+        {
+            return Err(ProviderError::invalid_request(
+                "gemini",
+                "tool_calls require assistant role",
+            ));
+        }
+        if message.function_call.is_some() && message.role != MessageRole::Assistant {
+            return Err(ProviderError::invalid_request(
+                "gemini",
+                "function_call requires assistant role",
+            ));
+        }
+        if message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
+            && content_has_tool_part(&message.content)
+        {
+            return Err(ProviderError::invalid_request(
+                "gemini",
+                "tool_calls cannot be combined with tool content parts",
+            ));
+        }
+        if message.function_call.is_some() && content_has_tool_use(&message.content) {
+            return Err(ProviderError::invalid_request(
+                "gemini",
+                "function_call cannot be combined with tool_use content parts",
+            ));
+        }
         let mut parts = Vec::new();
 
         match &message.content {
@@ -400,15 +451,29 @@ impl GeminiClient {
                                 "Document content not yet supported in Gemini",
                             ));
                         }
-                        ContentPart::ToolResult { .. } => {
-                            return Err(gemini_multimodal_error(
-                                "Tool result content should be handled separately",
-                            ));
+                        ContentPart::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        } => {
+                            parts.push(
+                                tool_planner
+                                    .content_tool_result(tool_use_id, content, *is_error)?
+                                    .to_wire_value(),
+                            );
                         }
-                        ContentPart::ToolUse { .. } => {
-                            return Err(gemini_multimodal_error(
-                                "Tool use content should be handled separately",
-                            ));
+                        ContentPart::ToolUse { id, name, input } => {
+                            if message.role != MessageRole::Assistant {
+                                return Err(ProviderError::invalid_request(
+                                    "gemini",
+                                    "tool_use content requires assistant role",
+                                ));
+                            }
+                            parts.push(
+                                tool_planner
+                                    .content_tool_use(id, name, input)?
+                                    .to_wire_value(),
+                            );
                         }
                     }
                 }
@@ -421,6 +486,19 @@ impl GeminiClient {
                     }));
                 }
             }
+        }
+
+        if let Some(tool_calls) = &message.tool_calls {
+            for tool_part in tool_planner.top_level_calls(tool_calls)? {
+                parts.push(tool_part.to_wire_value());
+            }
+        }
+        if let Some(function_call) = &message.function_call {
+            parts.push(
+                tool_planner
+                    .legacy_function_call(message_index, function_call)?
+                    .to_wire_value(),
+            );
         }
 
         if parts.is_empty() {
@@ -477,50 +555,20 @@ impl GeminiClient {
 
             // Extract text content and function calls
             let mut text_parts = Vec::new();
-            let mut tool_calls: Vec<ToolCall> = Vec::new();
-            for (part_index, part) in content.iter().enumerate() {
+            for part in content {
                 if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                     text_parts.push(text);
                 }
-                // Map Gemini functionCall parts to unified ToolCall format
-                if let Some(fc) = part.get("functionCall") {
-                    let name = fc
-                        .get("name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let args = fc
-                        .get("args")
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|| "{}".to_string());
-                    tool_calls.push(ToolCall {
-                        id: format!("call_{}_{}", index, part_index),
-                        tool_type: "function".to_string(),
-                        function: FunctionCall {
-                            name,
-                            arguments: args,
-                        },
-                    });
-                }
             }
+            let choice_index = candidate_index("gemini", candidate, index)?;
+            let tool_calls = parse_function_call_parts("gemini", content, choice_index)?;
             let message_content = text_parts.join("");
 
-            let finish_reason = if tool_calls.is_empty() {
-                candidate
-                    .get("finishReason")
-                    .and_then(|r| r.as_str())
-                    .map(|r| match r {
-                        "STOP" => crate::core::types::responses::FinishReason::Stop,
-                        "MAX_TOKENS" => crate::core::types::responses::FinishReason::Length,
-                        "SAFETY" | "RECITATION" => {
-                            crate::core::types::responses::FinishReason::ContentFilter
-                        }
-                        _ => crate::core::types::responses::FinishReason::Stop,
-                    })
-                    .unwrap_or(crate::core::types::responses::FinishReason::Stop)
-            } else {
-                crate::core::types::responses::FinishReason::ToolCalls
-            };
+            let finish_reason = finish_reason(
+                "gemini",
+                candidate.get("finishReason").and_then(|r| r.as_str()),
+                !tool_calls.is_empty(),
+            )?;
 
             let msg_content = if message_content.is_empty() && !tool_calls.is_empty() {
                 None
@@ -529,7 +577,7 @@ impl GeminiClient {
             };
 
             choices.push(ChatChoice {
-                index: index as u32,
+                index: choice_index,
                 message: crate::core::types::chat::ChatMessage {
                     role: MessageRole::Assistant,
                     content: msg_content,
@@ -582,215 +630,5 @@ impl GeminiClient {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_client_creation() {
-        let config = GeminiConfig::new_google_ai("test-key");
-        let client = GeminiClient::new(config);
-        assert!(client.is_ok());
-    }
-
-    #[test]
-    fn test_data_url_parsing() {
-        let config = GeminiConfig::new_google_ai("test-key");
-        let client = GeminiClient::new(config).unwrap();
-
-        let data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
-        let result = client.parse_data_url(data_url).unwrap();
-
-        assert!(result.is_some());
-        let (mime_type, _data) = result.unwrap();
-        assert_eq!(mime_type, "image/png");
-    }
-
-    #[test]
-    fn test_message_transformation() {
-        let config = GeminiConfig::new_google_ai("test-key");
-        let client = GeminiClient::new(config).unwrap();
-
-        let message = ChatMessage {
-            role: MessageRole::User,
-            content: Some(MessageContent::Text("Hello, world!".to_string())),
-            thinking: None,
-            audio: None,
-            name: None,
-            tool_calls: None,
-            tool_call_id: None,
-            function_call: None,
-        };
-
-        let parts = client.transform_message_content(&message).unwrap();
-        assert_eq!(parts.len(), 1);
-        assert_eq!(parts[0]["text"], "Hello, world!");
-    }
-
-    #[test]
-    fn test_multimodal_message() {
-        let config = GeminiConfig::new_google_ai("test-key");
-        let client = GeminiClient::new(config).unwrap();
-
-        let message = ChatMessage {
-            role: MessageRole::User,
-            content: Some(MessageContent::Parts(vec![
-                ContentPart::Text {
-                    text: "What's in this image?".to_string(),
-                },
-                ContentPart::Image {
-                    source: crate::core::types::content::ImageSource {
-                        data: "test".to_string(),
-                        media_type: "image/png".to_string(),
-                    },
-                    image_url: None,
-                    detail: None,
-                },
-            ])),
-            thinking: None,
-            audio: None,
-            name: None,
-            tool_calls: None,
-            tool_call_id: None,
-            function_call: None,
-        };
-
-        let parts = client.transform_message_content(&message).unwrap();
-        assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0]["text"], "What's in this image?");
-        assert!(parts[1].get("inlineData").is_some());
-    }
-
-    #[test]
-    fn test_gemini_finish_reason_tool_calls() {
-        let config = GeminiConfig::new_google_ai("test-key");
-        let client = GeminiClient::new(config).unwrap();
-        let request = ChatRequest {
-            model: "gemini-2.0-flash".to_string(),
-            ..Default::default()
-        };
-
-        let response = json!({
-            "candidates": [{
-                "content": {
-                    "parts": [{
-                        "functionCall": {
-                            "name": "get_weather",
-                            "args": {"city": "Paris"}
-                        }
-                    }]
-                },
-                "finishReason": "STOP"
-            }]
-        });
-
-        let result = client.transform_chat_response(response, &request).unwrap();
-        let choice = result.choices.first().unwrap();
-        assert_eq!(
-            choice.finish_reason,
-            Some(crate::core::types::responses::FinishReason::ToolCalls)
-        );
-        let tool_call = choice
-            .message
-            .tool_calls
-            .as_ref()
-            .and_then(|calls| calls.first())
-            .unwrap();
-        assert_eq!(tool_call.function.name, "get_weather");
-        assert_eq!(tool_call.function.arguments, r#"{"city":"Paris"}"#);
-    }
-
-    #[test]
-    fn test_gemini_usage_preserves_cache_and_thought_tokens() {
-        let config = GeminiConfig::new_google_ai("test-key");
-        let client = GeminiClient::new(config).unwrap();
-        let request = ChatRequest {
-            model: "gemini-2.0-flash".to_string(),
-            ..Default::default()
-        };
-
-        let response = json!({
-            "candidates": [{
-                "content": {
-                    "parts": [{"text": "Hello"}]
-                },
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 100,
-                "toolUsePromptTokenCount": 10,
-                "candidatesTokenCount": 25,
-                "totalTokenCount": 140,
-                "cachedContentTokenCount": 12,
-                "thoughtsTokenCount": 15
-            }
-        });
-
-        let result = client.transform_chat_response(response, &request).unwrap();
-        let usage = result.usage.unwrap();
-        let prompt_details = usage.prompt_tokens_details.unwrap();
-        assert_eq!(usage.prompt_tokens, 110);
-        assert_eq!(usage.completion_tokens, 40);
-        assert_eq!(usage.total_tokens, 150);
-        assert_eq!(prompt_details.cached_tokens, Some(12));
-        assert_eq!(prompt_details.cache_read_tokens, Some(12));
-        assert!(usage.completion_tokens_details.is_none());
-        assert_eq!(
-            usage
-                .thinking_usage
-                .as_ref()
-                .and_then(|thinking| thinking.thinking_tokens),
-            Some(15)
-        );
-    }
-
-    #[test]
-    fn test_gemini_usage_fails_closed_and_saturates_after_raw_total() {
-        let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
-        let request = ChatRequest {
-            model: "gemini-2.0-flash".to_string(),
-            ..Default::default()
-        };
-        let transform = |client: &GeminiClient, usage| {
-            client
-                .transform_chat_response(
-                    json!({
-                        "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
-                        "usageMetadata": usage
-                    }),
-                    &request,
-                )
-                .unwrap()
-                .usage
-        };
-        for bad in [
-            json!({"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 4}),
-            json!({"promptTokenCount": 2, "candidatesTokenCount": "1", "totalTokenCount": 3}),
-            json!({"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}),
-            json!({"promptTokenCount": 2, "candidatesTokenCount": 1, "cachedContentTokenCount": 3, "totalTokenCount": 3}),
-        ] {
-            assert!(transform(&client, bad).is_none());
-        }
-        let usage = transform(
-            &client,
-            json!({
-                "promptTokenCount": u64::MAX, "candidatesTokenCount": 0,
-                "totalTokenCount": u64::MAX
-            }),
-        )
-        .unwrap();
-        assert_eq!(
-            (usage.prompt_tokens, usage.total_tokens),
-            (u32::MAX, u32::MAX)
-        );
-        let vertex = GeminiClient::new(GeminiConfig::new_vertex_ai("project", "location")).unwrap();
-        let mut vertex_usage = json!({
-            "promptTokenCount": 2, "toolUsePromptTokenCount": 1,
-            "candidatesTokenCount": 1, "thoughtsTokenCount": 1, "totalTokenCount": 5
-        });
-        let usage = transform(&vertex, vertex_usage.clone()).unwrap();
-        assert_eq!((usage.prompt_tokens, usage.completion_tokens), (3, 2));
-        assert!(usage.thinking_usage.is_none());
-        vertex_usage["totalTokenCount"] = json!(4);
-        assert!(transform(&vertex, vertex_usage).is_none());
-    }
-}
+#[path = "client_tests.rs"]
+mod tests;
