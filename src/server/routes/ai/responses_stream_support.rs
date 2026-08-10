@@ -13,6 +13,8 @@ use crate::core::providers::ProviderError;
 use crate::core::streaming::types::Event;
 use crate::core::types::responses::Usage as ChatUsage;
 
+use super::super::stream_output_guardrail::{StreamGuardrailError, StreamOutputGuardrail};
+
 pub(super) fn completed_reasoning_item(
     item_id: String,
     status: &str,
@@ -108,10 +110,36 @@ async fn emit_serialized<T: Serialize + ?Sized>(
     tx: &mpsc::Sender<Bytes>,
     event: &T,
 ) -> Result<(), ResponseStreamEmitError> {
+    send_encoded(tx, encode(event)?).await
+}
+
+pub(super) fn encode<T: Serialize + ?Sized>(event: &T) -> Result<Bytes, ResponseStreamEmitError> {
     let json = serde_json::to_string(event).map_err(ResponseStreamEmitError::Serialization)?;
-    tx.send(Event::default().data(&json).to_bytes())
+    Ok(Event::default().data(&json).to_bytes())
+}
+
+pub(super) async fn send_encoded(
+    tx: &mpsc::Sender<Bytes>,
+    event: Bytes,
+) -> Result<(), ResponseStreamEmitError> {
+    tx.send(event)
         .await
         .map_err(|_| ResponseStreamEmitError::ClientDisconnected)
+}
+
+pub(super) async fn flush_output_guardrail(
+    tx: &mpsc::Sender<Bytes>,
+    guardrail: &mut StreamOutputGuardrail,
+) -> Result<bool, StreamGuardrailError> {
+    let Some(pending) = guardrail.finish_until_closed(tx).await? else {
+        return Ok(false);
+    };
+    for event in pending {
+        if send_encoded(tx, event).await.is_err() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub(super) fn sse_error(message: &str, error_type: &str, code: &str) -> Bytes {
@@ -121,6 +149,15 @@ pub(super) fn sse_error(message: &str, error_type: &str, code: &str) -> Bytes {
     let mut bytes = error_event.to_bytes().to_vec();
     bytes.extend_from_slice(&done_event.to_bytes());
     Bytes::from(bytes)
+}
+
+pub(super) async fn send_guardrail_error(
+    tx: &mpsc::Sender<Bytes>,
+    error: StreamGuardrailError,
+) -> bool {
+    tx.send(sse_error(error.message(), error.error_type(), error.code()))
+        .await
+        .is_err()
 }
 
 pub(super) fn classify(error: &ProviderError) -> (&'static str, &'static str) {

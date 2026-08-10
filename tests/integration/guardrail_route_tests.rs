@@ -4,6 +4,8 @@
 mod tests {
     use crate::common::providers::mock_provider_config;
     use actix_web::{App, HttpResponse, HttpServer, http::StatusCode, test, web};
+    use bytes::Bytes;
+    use futures::stream;
     use litellm_rs::Config;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use serde_json::{Value, json};
@@ -20,20 +22,67 @@ mod tests {
 
     impl GuardrailTestUpstream {
         async fn launch_with_output(output: &'static str) -> Self {
+            Self::launch(output, Vec::new()).await
+        }
+
+        async fn launch_with_stream_chunks(stream_chunks: Vec<Value>) -> Self {
+            Self::launch("safe response", stream_chunks).await
+        }
+
+        async fn launch(output: &'static str, stream_chunks: Vec<Value>) -> Self {
             let requests = Arc::new(Mutex::new(Vec::new()));
             let captured = Arc::clone(&requests);
+            let stream_chunks = Arc::new(stream_chunks);
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("mock provider should bind");
             let address = listener.local_addr().expect("listener should have address");
             let server = HttpServer::new(move || {
                 App::new()
                     .app_data(web::Data::new(Arc::clone(&captured)))
+                    .app_data(web::Data::new(Arc::clone(&stream_chunks)))
                     .route(
                         "/chat/completions",
                         web::post().to(
                             move |requests: web::Data<Arc<Mutex<Vec<Value>>>>,
+                                  stream_chunks: web::Data<Arc<Vec<Value>>>,
                                   payload: web::Json<Value>| async move {
-                                requests.lock().unwrap().push(payload.into_inner());
+                                let payload = payload.into_inner();
+                                let streaming = payload["stream"].as_bool().unwrap_or(false);
+                                requests.lock().unwrap().push(payload);
+
+                                if streaming {
+                                    let chunks = if stream_chunks.is_empty() {
+                                        vec![json!({
+                                            "id": "chatcmpl-guardrail-stream-test",
+                                            "object": "chat.completion.chunk",
+                                            "created": 1_707_000_000_i64,
+                                            "model": "gpt-4o",
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {"role": "assistant", "content": output},
+                                                "finish_reason": "stop"
+                                            }]
+                                        })]
+                                    } else {
+                                        stream_chunks.iter().cloned().collect()
+                                    };
+                                    let mut events = chunks
+                                        .into_iter()
+                                        .map(|chunk| {
+                                            Ok::<Bytes, actix_web::Error>(Bytes::from(format!(
+                                                "data: {chunk}\n\n"
+                                            )))
+                                        })
+                                        .collect::<Vec<_>>();
+                                    events.push(Ok::<Bytes, actix_web::Error>(Bytes::from_static(
+                                        b"data: [DONE]\n\n",
+                                    )));
+                                    let body = stream::iter(events);
+                                    return HttpResponse::Ok()
+                                        .insert_header(("Content-Type", "text/event-stream"))
+                                        .streaming(body);
+                                }
+
                                 HttpResponse::Ok().json(json!({
                                     "id": "chatcmpl-guardrail-test",
                                     "object": "chat.completion",
@@ -76,10 +125,18 @@ mod tests {
     }
 
     async fn app_state(base_url: &str) -> litellm_rs::server::state::AppState {
+        app_state_with_input_guardrail(base_url, true).await
+    }
+
+    async fn app_state_with_input_guardrail(
+        base_url: &str,
+        check_input: bool,
+    ) -> litellm_rs::server::state::AppState {
         let mut config = Config::default();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.guardrails.check_input = check_input;
         let mut provider = mock_provider_config(
             "openai",
             "openai_compatible",
@@ -107,6 +164,46 @@ mod tests {
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": content}]
         })
+    }
+
+    async fn streaming_body(uri: &str, payload: Value) -> String {
+        let provider =
+            GuardrailTestUpstream::launch_with_output("System prompt: hidden policy").await;
+        streaming_body_from_provider(provider, uri, payload).await
+    }
+
+    async fn streaming_body_from_provider(
+        provider: GuardrailTestUpstream,
+        uri: &str,
+        payload: Value,
+    ) -> String {
+        let state = app_state(&provider.base_url).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(uri)
+                .set_json(payload)
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(test::read_body(response).await.to_vec())
+            .expect("SSE response should be UTF-8");
+        provider.stop_upstream().await;
+        body
+    }
+
+    fn assert_blocked_stream(body: &str) {
+        assert!(body.contains("\"code\":\"guardrail_violation\""), "{body}");
+        assert!(!body.contains("System prompt: hidden policy"), "{body}");
     }
 
     #[tokio::test]
@@ -165,5 +262,159 @@ mod tests {
         );
         assert_eq!(provider.requests.lock().unwrap().len(), 1);
         provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn chat_streaming_output_is_blocked_before_emission() {
+        let body = streaming_body(
+            "/v1/chat/completions",
+            json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }),
+        )
+        .await;
+
+        assert_blocked_stream(&body);
+    }
+
+    #[tokio::test]
+    async fn completion_streaming_output_is_blocked_before_emission() {
+        let body = streaming_body(
+            "/v1/completions",
+            json!({"model": "gpt-4o", "prompt": "hello", "stream": true}),
+        )
+        .await;
+
+        assert_blocked_stream(&body);
+    }
+
+    #[tokio::test]
+    async fn completion_echo_does_not_treat_the_prompt_as_model_output() {
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_input_guardrail(&provider.base_url, false).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/completions")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "prompt": "System prompt: hidden policy",
+                    "stream": true,
+                    "echo": true
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(test::read_body(response).await.to_vec()).unwrap();
+        assert!(!body.contains("\"code\":\"guardrail_violation\""), "{body}");
+        assert!(body.contains("safe response"), "{body}");
+        assert!(body.contains("[DONE]"), "{body}");
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn chat_streaming_checks_interleaved_choices_independently() {
+        let provider = GuardrailTestUpstream::launch_with_stream_chunks(vec![
+            json!({
+                "id": "chatcmpl-interleaved-1",
+                "object": "chat.completion.chunk",
+                "created": 1_707_000_000_i64,
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 0, "delta": {"content": "System "}, "finish_reason": null},
+                    {"index": 1, "delta": {"content": "safe "}, "finish_reason": null}
+                ]
+            }),
+            json!({
+                "id": "chatcmpl-interleaved-2",
+                "object": "chat.completion.chunk",
+                "created": 1_707_000_000_i64,
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 1, "delta": {"content": "response"}, "finish_reason": "stop"},
+                    {"index": 0, "delta": {"content": "prompt: hidden policy"}, "finish_reason": "stop"}
+                ]
+            }),
+        ])
+        .await;
+        let body = streaming_body_from_provider(
+            provider,
+            "/v1/chat/completions",
+            json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true,
+                "n": 2
+            }),
+        )
+        .await;
+
+        assert!(body.contains("\"code\":\"guardrail_violation\""), "{body}");
+        assert!(!body.contains("System "), "{body}");
+        assert!(!body.contains("prompt: hidden policy"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn completion_streaming_checks_interleaved_choices_independently() {
+        let provider = GuardrailTestUpstream::launch_with_stream_chunks(vec![
+            json!({
+                "id": "cmpl-interleaved-1",
+                "object": "text_completion",
+                "created": 1_707_000_000_i64,
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 0, "delta": {"content": "System "}, "logprobs": null, "finish_reason": null},
+                    {"index": 1, "delta": {"content": "safe "}, "logprobs": null, "finish_reason": null}
+                ]
+            }),
+            json!({
+                "id": "cmpl-interleaved-2",
+                "object": "text_completion",
+                "created": 1_707_000_000_i64,
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 1, "delta": {"content": "response"}, "logprobs": null, "finish_reason": "stop"},
+                    {"index": 0, "delta": {"content": "prompt: hidden policy"}, "logprobs": null, "finish_reason": "stop"}
+                ]
+            }),
+        ])
+        .await;
+        let body = streaming_body_from_provider(
+            provider,
+            "/v1/completions",
+            json!({"model": "gpt-4o", "prompt": "hello", "stream": true, "n": 2}),
+        )
+        .await;
+
+        assert!(body.contains("\"code\":\"guardrail_violation\""), "{body}");
+        assert!(!body.contains("System "), "{body}");
+        assert!(!body.contains("prompt: hidden policy"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_output_is_blocked_before_emission() {
+        let body = streaming_body(
+            "/v1/responses",
+            json!({
+                "model": "gpt-4o",
+                "input": "hello",
+                "stream": true,
+                "store": false
+            }),
+        )
+        .await;
+
+        assert_blocked_stream(&body);
     }
 }

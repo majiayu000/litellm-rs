@@ -6,6 +6,11 @@ use std::collections::HashSet;
 
 use super::types::{GuardrailAction, ModerationCategory, PIIType};
 
+/// Default maximum number of new Unicode characters buffered between streaming checks.
+pub const DEFAULT_STREAM_OUTPUT_CHECK_CHARS: usize = 256;
+/// Upper bound for the streaming output buffer between checks.
+pub const MAX_STREAM_OUTPUT_CHECK_CHARS: usize = 4096;
+
 /// Main configuration for the guardrails system
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuardrailConfig {
@@ -41,6 +46,10 @@ pub struct GuardrailConfig {
     #[serde(default = "default_true")]
     pub check_output: bool,
 
+    /// Maximum new Unicode characters to buffer before checking streaming output.
+    #[serde(default = "default_stream_output_check_chars")]
+    pub stream_output_check_chars: usize,
+
     /// Paths to exclude from guardrail checks
     #[serde(default)]
     pub exclude_paths: Vec<String>,
@@ -61,6 +70,7 @@ impl Default for GuardrailConfig {
             default_action: GuardrailAction::Block,
             check_input: true,
             check_output: true,
+            stream_output_check_chars: DEFAULT_STREAM_OUTPUT_CHECK_CHARS,
             exclude_paths: Vec::new(),
             fail_open: false,
         }
@@ -128,6 +138,11 @@ impl GuardrailConfig {
 
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
+        if !(1..=MAX_STREAM_OUTPUT_CHECK_CHARS).contains(&self.stream_output_check_chars) {
+            return Err(format!(
+                "guardrails.stream_output_check_chars must be between 1 and {MAX_STREAM_OUTPUT_CHECK_CHARS}"
+            ));
+        }
         if let Some(ref moderation) = self.openai_moderation
             && moderation.enabled
             && moderation.api_key.is_none()
@@ -136,6 +151,10 @@ impl GuardrailConfig {
         }
         Ok(())
     }
+}
+
+fn default_stream_output_check_chars() -> usize {
+    DEFAULT_STREAM_OUTPUT_CHECK_CHARS
 }
 
 /// OpenAI Moderation API configuration

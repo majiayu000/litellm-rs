@@ -162,9 +162,12 @@ pub(super) async fn handle_streaming_chat_completion(
         Ok(((mut stream, mut settlement), lease)) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
+            let guardrails = Arc::clone(&state.guardrails);
 
             tokio::spawn(async move {
                 let mut lease = Some(lease);
+                let mut output_guardrail =
+                    super::super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
                 let mut tokens_used = 0_u64;
                 let mut final_usage = None;
                 let mut saw_upstream_output = false;
@@ -174,6 +177,23 @@ pub(super) async fn handle_streaming_chat_completion(
                             settlement.record_disconnect(final_usage.as_ref()).await;
                         }
                     };
+                }
+                macro_rules! return_after_guardrail_error {
+                    ($error:expr) => {{
+                        let guardrail_error = $error;
+                        let error_bytes = super::format_sse_error(
+                            guardrail_error.message(),
+                            guardrail_error.error_type(),
+                            guardrail_error.code(),
+                        );
+                        if tx.send(error_bytes).await.is_err() {
+                            info!("Client disconnected before guardrail error could be sent");
+                        }
+                        drop(lease.take());
+                        callback.fail(guardrail_error.message(), "guardrail_output");
+                        settle_after_upstream_output!();
+                        return;
+                    }};
                 }
 
                 loop {
@@ -239,7 +259,7 @@ pub(super) async fn handle_streaming_chat_completion(
                         break;
                     };
 
-                    let bytes = match chunk_result {
+                    let (output_deltas, bytes) = match chunk_result {
                         Ok(chunk) => {
                             let has_candidate_output =
                                 spend::stream_chunk_has_candidate_output(&chunk);
@@ -285,7 +305,18 @@ pub(super) async fn handle_streaming_chat_completion(
                                     continue;
                                 }
                             }
-                            match serde_json::to_string(&chat_chunk) {
+                            let output_deltas = chat_chunk
+                                .choices
+                                .iter()
+                                .filter_map(|choice| {
+                                    choice
+                                        .delta
+                                        .content
+                                        .as_ref()
+                                        .map(|text| (choice.index, text.clone()))
+                                })
+                                .collect::<Vec<_>>();
+                            let bytes = match serde_json::to_string(&chat_chunk) {
                                 Ok(json) => {
                                     let event = Event::default().data(&json);
                                     event.to_bytes()
@@ -316,7 +347,8 @@ pub(super) async fn handle_streaming_chat_completion(
                                     settle_after_upstream_output!();
                                     return;
                                 }
-                            }
+                            };
+                            (output_deltas, bytes)
                         }
                         Err(e) => {
                             error!("Stream chunk error: {}", e);
@@ -335,8 +367,39 @@ pub(super) async fn handle_streaming_chat_completion(
                         }
                     };
 
+                    let pending = match output_guardrail
+                        .push_many_until_closed(&tx, output_deltas, bytes)
+                        .await
+                    {
+                        Ok(Some(pending)) => pending,
+                        Ok(None) => {
+                            callback.fail("client disconnected", "client_disconnect");
+                            settle_after_upstream_output!();
+                            return;
+                        }
+                        Err(error) => return_after_guardrail_error!(error),
+                    };
+                    for bytes in pending {
+                        if tx.send(bytes).await.is_err() {
+                            info!("Client disconnected during streaming, cancelling upstream");
+                            callback.fail("client disconnected", "client_disconnect");
+                            settle_after_upstream_output!();
+                            return;
+                        }
+                    }
+                }
+
+                let pending = match output_guardrail.finish_until_closed(&tx).await {
+                    Ok(Some(pending)) => pending,
+                    Ok(None) => {
+                        callback.fail("client disconnected", "client_disconnect");
+                        settle_after_upstream_output!();
+                        return;
+                    }
+                    Err(error) => return_after_guardrail_error!(error),
+                };
+                for bytes in pending {
                     if tx.send(bytes).await.is_err() {
-                        info!("Client disconnected during streaming, cancelling upstream");
                         callback.fail("client disconnected", "client_disconnect");
                         settle_after_upstream_output!();
                         return;
