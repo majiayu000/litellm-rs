@@ -1,8 +1,9 @@
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use super::SSETransformer;
-use crate::core::providers::google::tool_loop::{
+use crate::core::providers::google_tool_loop::{
     candidate_index, finish_reason, parse_function_call_parts,
 };
 use crate::core::providers::shared::strict_direct_gemini_usage_metadata;
@@ -40,7 +41,7 @@ pub struct GeminiTransformer {
     chunk_id: String,
     usage_policy: Option<GeminiUsagePolicy>,
     stream_usage: Arc<Mutex<GeminiStreamUsage>>,
-    tool_call_seen: Arc<Mutex<bool>>,
+    tool_call_candidates: Arc<Mutex<HashSet<u32>>>,
 }
 
 impl Clone for GeminiTransformer {
@@ -79,7 +80,7 @@ impl GeminiTransformer {
             chunk_id: format!("gemini-stream-{}", nanos),
             usage_policy,
             stream_usage: Arc::new(Mutex::new(GeminiStreamUsage::Missing)),
-            tool_call_seen: Arc::new(Mutex::new(false)),
+            tool_call_candidates: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -112,18 +113,24 @@ impl GeminiTransformer {
         })
     }
 
-    fn mark_tool_call_seen(&self) -> Result<(), ProviderError> {
-        let mut seen = self.tool_call_seen.lock().map_err(|_| {
+    fn mark_tool_call_seen(&self, candidate_index: u32) -> Result<(), ProviderError> {
+        let mut candidates = self.tool_call_candidates.lock().map_err(|_| {
             ProviderError::response_parsing(self.provider, "Gemini stream tool state is poisoned")
         })?;
-        *seen = true;
+        candidates.insert(candidate_index);
         Ok(())
     }
 
-    fn has_seen_tool_call(&self) -> Result<bool, ProviderError> {
-        self.tool_call_seen.lock().map(|seen| *seen).map_err(|_| {
-            ProviderError::response_parsing(self.provider, "Gemini stream tool state is poisoned")
-        })
+    fn has_seen_tool_call(&self, candidate_index: u32) -> Result<bool, ProviderError> {
+        self.tool_call_candidates
+            .lock()
+            .map(|candidates| candidates.contains(&candidate_index))
+            .map_err(|_| {
+                ProviderError::response_parsing(
+                    self.provider,
+                    "Gemini stream tool state is poisoned",
+                )
+            })
     }
 
     fn observe_stream_usage(&self, parsed: &Value) -> Result<(), ProviderError> {
@@ -256,7 +263,7 @@ impl SSETransformer for GeminiTransformer {
             let delta_content = text_parts.join("");
             let tool_calls = parse_function_call_parts(self.provider, parts, index)?;
             if !tool_calls.is_empty() {
-                self.mark_tool_call_seen()?;
+                self.mark_tool_call_seen(index)?;
             }
             let tool_deltas = if tool_calls.is_empty() {
                 None
@@ -282,7 +289,7 @@ impl SSETransformer for GeminiTransformer {
                 .get("finishReason")
                 .and_then(|r| r.as_str())
                 .map(|reason| {
-                    finish_reason(self.provider, Some(reason), self.has_seen_tool_call()?)
+                    finish_reason(self.provider, Some(reason), self.has_seen_tool_call(index)?)
                 })
                 .transpose()?;
 
@@ -471,6 +478,31 @@ mod tests {
         assert_eq!(
             terminal.choices[0].finish_reason,
             Some(crate::core::types::responses::FinishReason::ToolCalls)
+        );
+    }
+
+    #[test]
+    fn stream_tracks_tool_finish_per_candidate() {
+        let transformer = GeminiTransformer::new("gemini-test");
+        transformer
+            .transform_chunk(
+                r#"{"candidates":[{"index":0,"content":{"parts":[{"functionCall":{"name":"get_weather","args":{}}}]}},{"index":1,"content":{"parts":[{"text":"plain"}]}}]}"#,
+            )
+            .unwrap();
+
+        let terminal = transformer
+            .transform_chunk(
+                r#"{"candidates":[{"index":0,"content":{"parts":[]},"finishReason":"STOP"},{"index":1,"content":{"parts":[]},"finishReason":"STOP"}]}"#,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            terminal.choices[0].finish_reason,
+            Some(crate::core::types::responses::FinishReason::ToolCalls)
+        );
+        assert_eq!(
+            terminal.choices[1].finish_reason,
+            Some(crate::core::types::responses::FinishReason::Stop)
         );
     }
 

@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use crate::core::providers::google::tool_loop::request_requires_tool_capability;
+use crate::core::providers::google_tool_loop::request_requires_tool_capability;
 use crate::core::providers::{GeminiNativeRequest, ProviderError};
 use crate::core::traits::{
     provider::ProviderConfig, provider::llm_provider::trait_definition::LLMProvider,

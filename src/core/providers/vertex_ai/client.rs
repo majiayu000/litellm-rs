@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
+#[cfg(test)]
 use crate::core::providers::shared::strict_vertex_usage_metadata;
 use crate::core::{
     traits::{
@@ -581,6 +582,7 @@ impl LLMProvider for VertexAIProvider {
     }
 }
 
+#[cfg(test)]
 fn parse_vertex_usage(response: &Value) -> Option<crate::core::types::responses::Usage> {
     response
         .get("usageMetadata")

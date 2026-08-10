@@ -206,6 +206,7 @@ impl GoogleToolPlanner {
     }
 }
 
+#[cfg_attr(not(feature = "providers-extended"), allow(dead_code))]
 pub(crate) fn request_requires_tool_capability(request: &ChatRequest) -> bool {
     request.tools.is_some()
         || request.tool_choice.is_some()
@@ -218,6 +219,7 @@ pub(crate) fn request_requires_tool_capability(request: &ChatRequest) -> bool {
             .any(message_requires_tool_capability)
 }
 
+#[cfg_attr(not(feature = "providers-extended"), allow(dead_code))]
 fn message_requires_tool_capability(message: &ChatMessage) -> bool {
     message
         .tool_calls
@@ -359,6 +361,7 @@ fn tool_choice_config(
         return match choice {
             ToolChoice::String(value) if value == "auto" => Ok(Some(json!({"mode": "AUTO"}))),
             ToolChoice::String(value) if value == "none" => Ok(Some(json!({"mode": "NONE"}))),
+            ToolChoice::String(value) if value == "required" => Ok(Some(json!({"mode": "ANY"}))),
             ToolChoice::String(_) => Err(invalid(provider, "unsupported tool_choice string")),
             ToolChoice::Specific {
                 choice_type,
@@ -640,6 +643,33 @@ mod tests {
     }
 
     #[test]
+    fn correlates_multiple_tool_results_by_call_id() {
+        let mut planner = GoogleToolPlanner::new("gemini");
+        planner
+            .top_level_calls(&[
+                tool_call("call_weather", "weather", "{}"),
+                tool_call("call_time", "time", "{}"),
+            ])
+            .unwrap();
+
+        let time = planner
+            .content_tool_result("call_time", &json!({"zone": "UTC"}), None)
+            .unwrap();
+        let weather = planner
+            .content_tool_result("call_weather", &json!({"sunny": true}), None)
+            .unwrap();
+
+        assert_eq!(
+            time.to_wire_value(),
+            json!({"functionResponse":{"name":"time","response":{"zone":"UTC"}}})
+        );
+        assert_eq!(
+            weather.to_wire_value(),
+            json!({"functionResponse":{"name":"weather","response":{"sunny":true}}})
+        );
+    }
+
+    #[test]
     fn maps_declarations_and_forced_choice() {
         let request = ChatRequest {
             tools: Some(vec![Tool {
@@ -669,6 +699,17 @@ mod tests {
         assert_eq!(
             config,
             json!({"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["weather"]}})
+        );
+
+        let required = ChatRequest {
+            tools: request.tools,
+            tool_choice: Some(ToolChoice::String("required".to_string())),
+            ..Default::default()
+        };
+        let (_, names) = build_tool_declarations("gemini", &required).unwrap();
+        assert_eq!(
+            build_tool_config("gemini", &required, &names).unwrap(),
+            Some(json!({"functionCallingConfig":{"mode":"ANY"}}))
         );
     }
 

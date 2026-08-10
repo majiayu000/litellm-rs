@@ -458,7 +458,7 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
             .find(|model| model.id == model_id)
             .unwrap();
         assert_eq!(
-            advertised.max_context_length,
+            advertised.max_context_length as usize,
             crate::core::providers::vertex_ai::parse_vertex_model(model_id).max_context_tokens()
         );
     }
