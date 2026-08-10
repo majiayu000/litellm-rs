@@ -365,6 +365,11 @@ async fn async_calculate_cost_uses_shared_pricing_units() {
         .expect("catalogued Gemini model should be priced");
 
     assert!((cost - 0.000225).abs() < 1e-12);
+
+    let preview = LLMProvider::calculate_cost(&provider, "gemini-3-flash-preview", 1_000, 500)
+        .await
+        .expect("provider-prefixed exact Gemini row should be priced");
+    assert!((preview - 0.002).abs() < 1e-12);
 }
 
 #[tokio::test]

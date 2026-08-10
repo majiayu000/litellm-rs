@@ -18,6 +18,11 @@ async fn vertex_cost_uses_shared_per_token_pricing() {
         .expect("catalogued Vertex model should be priced");
 
     assert!((cost - 0.00875).abs() < 1e-12);
+
+    let preview = LLMProvider::calculate_cost(&provider, "gemini-3-flash-preview", 1_000, 500)
+        .await
+        .expect("provider-prefixed exact Vertex row should be priced");
+    assert!((preview - 0.002).abs() < 1e-12);
 }
 
 #[tokio::test]

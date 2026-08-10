@@ -254,6 +254,13 @@ fn resolve_model_info_for_provider(
     }
 
     if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
+        let provider_prefixed_model = format!("{normalized_provider}/{normalized_model}");
+        if let Some(info) = models
+            .get(&provider_prefixed_model)
+            .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
+        {
+            return Some((provider_prefixed_model, info.clone()));
+        }
         return None;
     }
 
