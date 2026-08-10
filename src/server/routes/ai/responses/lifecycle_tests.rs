@@ -1,7 +1,10 @@
 use super::*;
 use crate::core::models::openai::responses_api::{
-    ResponseInputContent, ResponseInputItem, ResponseInputMessage, ResponseOutputMessage,
-    ResponsesApiRequest,
+    ResponseFunctionCall, ResponseInputContent, ResponseInputItem, ResponseInputMessage,
+    ResponseOutputMessage, ResponsesApiRequest,
+};
+use crate::core::types::codex::wire::{
+    CodexCustomToolCall, CodexFunctionCallOutput, CodexToolOutput,
 };
 use actix_web::{HttpMessage, body::to_bytes, http::StatusCode, test as actix_test};
 use serde_json::Value;
@@ -126,6 +129,66 @@ fn previous_context_prepends_prior_input_output_and_current_input() {
     let mut missing = req("follow up");
     missing.previous_response_id = Some(previous_id);
     assert!(resolve_previous_response_context(missing, &owner).is_err());
+}
+
+#[test]
+fn previous_context_preserves_codex_calls_for_correlated_outputs() {
+    let owner = Some(owner("codex-chain"));
+    let previous_id = format!("resp_test_{}", uuid_v4_hex());
+    let previous_req = req("run tools");
+    let mut previous_resp = resp(&previous_id, &previous_req, "");
+    previous_resp.output = vec![
+        ResponseOutputItem::FunctionCall(ResponseFunctionCall {
+            id: "fc_1".into(),
+            name: "lookup".into(),
+            arguments: "{}".into(),
+            status: "completed".into(),
+            call_id: Some("function-1".into()),
+        }),
+        ResponseOutputItem::CustomToolCall(CodexCustomToolCall {
+            id: Some("ct_1".into()),
+            call_id: "custom-1".into(),
+            name: "shell".into(),
+            namespace: None,
+            input: "pwd".into(),
+            status: Some("completed".into()),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    ];
+    store_response_if_requested(&previous_req, &previous_resp, owner.clone());
+
+    let mut follow_up = req("ignored");
+    follow_up.previous_response_id = Some(previous_id.clone());
+    follow_up.input = ResponseInput::Items(vec![
+        ResponseInputItem::FunctionCallOutput(CodexFunctionCallOutput {
+            id: None,
+            call_id: "function-1".into(),
+            output: CodexToolOutput::Text("found".into()),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        ResponseInputItem::CustomToolCallOutput(
+            crate::core::types::codex::wire::CodexCustomToolCallOutput {
+                id: None,
+                call_id: "custom-1".into(),
+                name: Some("shell".into()),
+                output: CodexToolOutput::Text("/tmp".into()),
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ),
+    ]);
+    let resolved = resolve_previous_response_context(follow_up, &owner).unwrap();
+    assert!(crate::core::types::codex::domain::CodexTurn::try_from(&resolved).is_ok());
+    let ResponseInput::Items(items) = resolved.input else {
+        panic!("item input")
+    };
+    assert!(matches!(items[1], ResponseInputItem::FunctionCall(_)));
+    assert!(matches!(items[2], ResponseInputItem::CustomToolCall(_)));
+    assert!(matches!(items[3], ResponseInputItem::FunctionCallOutput(_)));
+    assert!(matches!(
+        items[4],
+        ResponseInputItem::CustomToolCallOutput(_)
+    ));
+    RESPONSE_STORE.remove(&previous_id);
 }
 
 #[test]

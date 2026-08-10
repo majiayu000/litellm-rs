@@ -5,8 +5,8 @@
 
 use crate::core::models::openai::requests::{ChatCompletionRequest, StreamOptions};
 use crate::core::models::openai::responses_api::{
-    ResponseFunctionCall, ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage,
-    ResponseStreamEvent, ResponsesApiRequest, ResponsesApiResponse,
+    ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage, ResponseStreamEvent,
+    ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::core::providers::ProviderError;
 use crate::core::streaming::types::Event;
@@ -14,8 +14,8 @@ use crate::core::types::responses::Usage as ChatUsage;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
 use crate::server::routes::ai::chat::build_core_chat_request;
 use crate::server::routes::ai::responses::{
-    ResponseOwner, current_unix_ts, finish_reason_enum_to_status, store_response_if_requested,
-    uuid_v4_hex,
+    ResponseOwner, current_unix_ts, custom_tool_input, finish_reason_enum_to_status,
+    is_custom_tool, store_response_if_requested, uuid_v4_hex,
 };
 use crate::server::state::AppState;
 use actix_web::http::header::{CACHE_CONTROL, CONTENT_TYPE};
@@ -520,7 +520,6 @@ pub(crate) async fn handle_streaming_response(
                                             std::collections::hash_map::Entry::Vacant(entry),
                                         ) = (&tc.id, tool_states.entry(idx))
                                         {
-                                            let item_id = format!("fc_{}", uuid_v4_hex());
                                             let out_idx = next_output_index;
                                             next_output_index += 1;
                                             let name = tc
@@ -529,21 +528,25 @@ pub(crate) async fn handle_streaming_response(
                                                 .and_then(|f| f.name.as_deref())
                                                 .unwrap_or("")
                                                 .to_string();
+                                            let custom = is_custom_tool(&original, &name);
+                                            let item_id = format!(
+                                                "{}_{}",
+                                                if custom { "ct" } else { "fc" },
+                                                uuid_v4_hex()
+                                            );
 
-                                            let fc_item = ResponseOutputItem::FunctionCall(
-                                                ResponseFunctionCall {
-                                                    id: item_id.clone(),
-                                                    name: name.clone(),
-                                                    arguments: String::new(),
-                                                    status: "in_progress".to_string(),
-                                                    call_id: Some(call_id.clone()),
-                                                },
+                                            let state = ToolCallAccum::new(
+                                                item_id,
+                                                call_id.clone(),
+                                                name,
+                                                out_idx,
+                                                custom,
                                             );
                                             if let Err(error) = emit(
                                                 &tx,
                                                 &ResponseStreamEvent::ResponseOutputItemAdded {
                                                     output_index: out_idx,
-                                                    item: fc_item,
+                                                    item: state.output_item("in_progress"),
                                                 },
                                             )
                                             .await
@@ -551,12 +554,7 @@ pub(crate) async fn handle_streaming_response(
                                                 return_after_emit_error!(error);
                                             }
 
-                                            entry.insert(ToolCallAccum::new(
-                                                item_id,
-                                                call_id.clone(),
-                                                name,
-                                                out_idx,
-                                            ));
+                                            entry.insert(state);
                                             tool_order.push(idx);
                                         }
 
@@ -568,22 +566,14 @@ pub(crate) async fn handle_streaming_response(
                                                 && state.name.is_empty()
                                             {
                                                 state.name.clone_from(n);
+                                                state.custom = is_custom_tool(&original, n);
                                             }
                                             if let Some(args) = &fn_delta.arguments
                                                 && !args.is_empty()
                                             {
                                                 state.arguments.push_str(args);
-                                                let (cid, oi) =
-                                                    (state.call_id.clone(), state.output_index);
-                                                if let Err(error) = emit(
-                                                    &tx,
-                                                    &ResponseStreamEvent::ResponseFunctionCallArgumentsDelta {
-                                                        output_index: oi,
-                                                        call_id: cid,
-                                                        delta: args.clone(),
-                                                    },
-                                                )
-                                                .await
+                                                if let Some(event) = state.delta_event(args.clone())
+                                                    && let Err(error) = emit(&tx, &event).await
                                                 {
                                                     return_after_emit_error!(error);
                                                 }
@@ -698,20 +688,13 @@ pub(crate) async fn handle_streaming_response(
 
                 for idx in &tool_order {
                     if let Some(state) = tool_states.get(idx) {
-                        if let Err(error) = emit(
-                            &tx,
-                            &ResponseStreamEvent::ResponseFunctionCallArgumentsDone {
-                                output_index: state.output_index,
-                                call_id: state.call_id.clone(),
-                                arguments: state.arguments.clone(),
-                            },
-                        )
-                        .await
-                        {
-                            return_after_emit_error!(error);
+                        for event in state.done_events() {
+                            if let Err(error) = emit(&tx, &event).await {
+                                return_after_emit_error!(error);
+                            }
                         }
 
-                        let fc_done = state.completed_item();
+                        let fc_done = state.output_item("completed");
                         if let Err(error) = emit(
                             &tx,
                             &ResponseStreamEvent::ResponseOutputItemDone {
