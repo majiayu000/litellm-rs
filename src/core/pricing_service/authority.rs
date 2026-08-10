@@ -6,6 +6,8 @@ use super::types::{
 };
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
+#[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
+use std::sync::LazyLock;
 use std::time::SystemTime;
 
 impl PricingService {
@@ -22,6 +24,21 @@ impl PricingService {
             data.last_updated = SystemTime::now();
         }
         Ok(service)
+    }
+
+    /// Return the process-wide embedded pricing authority for compatibility
+    /// adapters that cannot access the runtime service in `AppState`.
+    #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
+    pub(crate) fn shared_embedded_default() -> Result<&'static Self> {
+        static SERVICE: LazyLock<std::result::Result<PricingService, String>> =
+            LazyLock::new(|| {
+                PricingService::with_embedded_default().map_err(|error| error.to_string())
+            });
+        SERVICE.as_ref().map_err(|error| {
+            GatewayError::Internal(format!(
+                "failed to initialize shared embedded pricing authority: {error}"
+            ))
+        })
     }
 
     /// Resolve pricing metadata for a provider/model pair using provider aliases
@@ -234,6 +251,10 @@ fn resolve_model_info_for_provider(
             .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
     {
         return Some((normalized_model.to_string(), info.clone()));
+    }
+
+    if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
+        return None;
     }
 
     let requested = normalized_model.to_lowercase();

@@ -343,20 +343,33 @@ pub struct GeminiCostCalculator;
 
 impl GeminiCostCalculator {
     /// Calculate cost for Gemini models
-    pub fn calculate_cost(model: &str, input_tokens: usize, output_tokens: usize) -> f64 {
-        let (input_rate, output_rate) = match model {
-            "gemini-1.5-pro" | "gemini-1.5-pro-001" | "gemini-1.5-pro-002" => (3.50, 10.50),
-            "gemini-1.5-flash" | "gemini-1.5-flash-001" | "gemini-1.5-flash-002" => (0.075, 0.30),
-            "gemini-2.0-flash-thinking-exp" => (0.0, 0.0), // Free during experimental
-            "gemini-ultra" | "gemini-ultra-1.0" => (10.0, 30.0),
-            "gemini-pro" => (0.50, 1.50),
-            "gemini-pro-vision" => (0.50, 1.50),
-            _ => (0.075, 0.30), // Default to Flash pricing
-        };
+    pub fn calculate_cost(
+        model: &str,
+        input_tokens: usize,
+        output_tokens: usize,
+    ) -> Result<f64, crate::ProviderError> {
+        let input_tokens = u32::try_from(input_tokens).map_err(|_| {
+            crate::ProviderError::invalid_request("vertex_ai", "input token count exceeds u32")
+        })?;
+        let output_tokens = u32::try_from(output_tokens).map_err(|_| {
+            crate::ProviderError::invalid_request("vertex_ai", "output token count exceeds u32")
+        })?;
+        super::calculate_vertex_cost(model, input_tokens, output_tokens)
+    }
+}
 
-        let input_cost = (input_tokens as f64 / 1_000_000.0) * input_rate;
-        let output_cost = (output_tokens as f64 / 1_000_000.0) * output_rate;
+#[cfg(test)]
+mod cost_tests {
+    use super::GeminiCostCalculator;
+    use crate::ProviderError;
 
-        input_cost + output_cost
+    #[test]
+    fn calculator_uses_vertex_authority_and_rejects_unknown_models() {
+        let cost = GeminiCostCalculator::calculate_cost("gemini-1.5-pro", 1_000, 500)
+            .expect("catalogued Vertex model should be priced");
+        assert!((cost - 0.00875).abs() < 1e-12);
+
+        let unknown = GeminiCostCalculator::calculate_cost("unknown-google-model", 1_000, 500);
+        assert!(matches!(unknown, Err(ProviderError::ModelNotFound { .. })));
     }
 }

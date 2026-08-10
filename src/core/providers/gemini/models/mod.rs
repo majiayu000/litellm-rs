@@ -294,21 +294,8 @@ impl CostCalculator {
         model_id: &str,
         prompt_tokens: u32,
         completion_tokens: u32,
-    ) -> Option<f64> {
-        let usage = crate::core::cost::types::UsageTokens::new(prompt_tokens, completion_tokens);
-        if let Ok(breakdown) =
-            crate::core::cost::calculator::generic_cost_per_token(model_id, &usage, "vertex_ai")
-        {
-            return Some(breakdown.total_cost);
-        }
-
-        let registry = get_gemini_registry();
-        let pricing = registry.get_core_model_pricing(model_id)?;
-
-        let input_cost = (prompt_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
-        let output_cost = (completion_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
-
-        Some(input_cost + output_cost)
+    ) -> Result<f64, crate::ProviderError> {
+        super::calculate_gemini_cost(model_id, prompt_tokens, completion_tokens)
     }
 
     /// Calculate multimodal cost
@@ -435,7 +422,7 @@ mod tests {
     #[test]
     fn test_cost_calculation() {
         let cost = CostCalculator::calculate_cost("gemini-1.5-flash", 1000, 500);
-        assert!(cost.is_some());
+        assert!(cost.is_ok());
 
         let cost_value = cost.unwrap();
         // Expected: (1000/1M * $0.075) + (500/1M * $0.30) = $0.000075 + $0.00015 = $0.000225
@@ -443,11 +430,11 @@ mod tests {
     }
 
     #[test]
-    fn test_cost_calculation_keeps_registry_fallback() {
-        let cost = CostCalculator::calculate_cost("gemini-1.0-pro", 1000, 500)
-            .expect("Gemini registry fallback should price gemini-1.0-pro");
-
-        assert!((cost - 0.00125).abs() < 0.000001);
+    fn test_cost_calculation_does_not_use_registry_fallback() {
+        assert!(matches!(
+            CostCalculator::calculate_cost("gemini-1.0-pro", 1000, 500),
+            Err(crate::ProviderError::ModelNotFound { .. })
+        ));
     }
 
     #[test]
@@ -692,7 +679,10 @@ mod tests {
     #[test]
     fn test_cost_calculation_unknown_model() {
         let cost = CostCalculator::calculate_cost("unknown-model", 1000, 500);
-        assert!(cost.is_none());
+        assert!(matches!(
+            cost,
+            Err(crate::ProviderError::ModelNotFound { .. })
+        ));
     }
 
     #[test]

@@ -260,6 +260,78 @@ async fn record_completion_spend_uses_runtime_pricing_service() {
 }
 
 #[tokio::test]
+async fn google_providers_reserve_and_settle_from_runtime_pricing() {
+    for provider in ["vertex_ai", "gemini"] {
+        let pricing = runtime_test_pricing_service(provider);
+        let budget = UnifiedBudgetLimits::new();
+        budget.providers.set_provider_limit(
+            provider,
+            ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
+        );
+        budget.models.set_model_limit(
+            "runtime-only-priced-model",
+            ModelLimitConfig::new(1000.0, ResetPeriod::Monthly),
+        );
+        let keys = KeyManager::new(InMemoryKeyRepository::new());
+        assert!(
+            reserve_completion_budget_with_pricing(
+                &pricing,
+                &budget,
+                provider,
+                "runtime-only-priced-model-9999",
+                1_000,
+                Some(500),
+            )
+            .is_err(),
+            "provider: {provider}"
+        );
+        let reservation = reserve_completion_budget_with_pricing(
+            &pricing,
+            &budget,
+            provider,
+            "runtime-only-priced-model",
+            1_000,
+            Some(500),
+        )
+        .expect("Google model reservation should use runtime pricing")
+        .expect("non-zero runtime price should reserve budget");
+        assert!((reservation.reserved_amount() - 0.025).abs() < f64::EPSILON);
+
+        record_completion_spend_with_reservation_with_pricing(
+            &pricing,
+            usage_spend_settlement(
+                (&budget, &keys, None),
+                (
+                    provider,
+                    "runtime-only-priced-model",
+                    Some(&response_usage(1_000, 500)),
+                ),
+                Some(reservation),
+                None,
+            ),
+        )
+        .await;
+
+        assert_eq!(
+            budget
+                .providers
+                .get_provider_usage(provider)
+                .map(|usage| usage.current_spend),
+            Some(0.025),
+            "provider: {provider}"
+        );
+        assert_eq!(
+            budget
+                .models
+                .get_model_usage("runtime-only-priced-model")
+                .map(|usage| usage.current_spend),
+            Some(0.025),
+            "provider: {provider}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn record_completion_spend_settles_text_cost_when_modal_price_is_missing() {
     let pricing = runtime_test_pricing_service("runtime_provider");
     let budget = UnifiedBudgetLimits::new();
