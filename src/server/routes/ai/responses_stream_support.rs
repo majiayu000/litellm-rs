@@ -131,15 +131,10 @@ pub(super) async fn flush_output_guardrail(
     tx: &mpsc::Sender<Bytes>,
     guardrail: &mut StreamOutputGuardrail,
 ) -> Result<bool, StreamGuardrailError> {
-    let Some(pending) = guardrail.finish_until_closed(tx).await? else {
-        return Ok(false);
-    };
-    for event in pending {
-        if send_encoded(tx, event).await.is_err() {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    guardrail
+        .flush_to_until_closed(tx)
+        .await
+        .map(|result| result.is_some())
 }
 
 pub(super) fn sse_error(message: &str, error_type: &str, code: &str) -> Bytes {

@@ -276,6 +276,7 @@ pub(crate) async fn handle_streaming_response(
                                 callback.fail("client disconnected", "client_disconnect");
                             }
                             ResponseStreamEmitError::Serialization(error) => {
+                                flush_guardrail!();
                                 let message = format!("stream serialization failed: {error}");
                                 if let Some(lease) = lease.take() {
                                     let provider_error =
@@ -334,6 +335,7 @@ pub(crate) async fn handle_streaming_response(
                         match timed_result {
                             Ok(r) => r,
                             Err(_) => {
+                                flush_guardrail!();
                                 warn!("Responses API stream idle timeout after {idle_timeout}s");
                                 let _ = tx
                                     .send(sse_error(
@@ -513,7 +515,6 @@ pub(crate) async fn handle_streaming_response(
                                     for tc in tc_deltas {
                                         let idx = tc.index;
 
-                                        // First chunk for this call (has an id): emit placeholder
                                         if let (
                                             Some(call_id),
                                             std::collections::hash_map::Entry::Vacant(entry),
@@ -568,7 +569,6 @@ pub(crate) async fn handle_streaming_response(
                                             {
                                                 state.name.clone_from(n);
                                             }
-                                            // Emit argument deltas
                                             if let Some(args) = &fn_delta.arguments
                                                 && !args.is_empty()
                                             {
@@ -594,6 +594,7 @@ pub(crate) async fn handle_streaming_response(
                             }
                         }
                         Err(e) => {
+                            flush_guardrail!();
                             error!("Responses API stream error: {e}");
                             let (et, ec) = classify(&e);
                             let _ = tx.send(sse_error(&e.to_string(), et, ec)).await;

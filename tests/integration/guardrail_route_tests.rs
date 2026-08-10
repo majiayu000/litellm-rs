@@ -206,6 +206,36 @@ mod tests {
         assert!(!body.contains("System prompt: hidden policy"), "{body}");
     }
 
+    fn safe_chunk_then_invalid() -> Vec<Value> {
+        vec![
+            json!({
+                "id": "chatcmpl-safe-partial",
+                "object": "chat.completion.chunk",
+                "created": 1_707_000_000_i64,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": "safe partial"},
+                    "finish_reason": null
+                }]
+            }),
+            json!("invalid chat chunk"),
+        ]
+    }
+
+    async fn assert_safe_partial_precedes_upstream_error(uri: &str, payload: Value) {
+        let provider =
+            GuardrailTestUpstream::launch_with_stream_chunks(safe_chunk_then_invalid()).await;
+        let body = streaming_body_from_provider(provider, uri, payload).await;
+        let safe_position = body
+            .find("safe partial")
+            .expect("safe partial output should be flushed");
+        let error_position = body
+            .find("\"error\"")
+            .expect("upstream error should be emitted");
+        assert!(safe_position < error_position, "{body}");
+    }
+
     #[tokio::test]
     async fn malicious_input_is_blocked_before_provider_execution() {
         let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
@@ -321,6 +351,42 @@ mod tests {
         assert!(body.contains("safe response"), "{body}");
         assert!(body.contains("[DONE]"), "{body}");
         provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn chat_stream_flushes_safe_partial_output_before_upstream_error() {
+        assert_safe_partial_precedes_upstream_error(
+            "/v1/chat/completions",
+            json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn completion_stream_flushes_safe_partial_output_before_upstream_error() {
+        assert_safe_partial_precedes_upstream_error(
+            "/v1/completions",
+            json!({"model": "gpt-4o", "prompt": "hello", "stream": true}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn responses_stream_flushes_safe_partial_output_before_upstream_error() {
+        assert_safe_partial_precedes_upstream_error(
+            "/v1/responses",
+            json!({
+                "model": "gpt-4o",
+                "input": "hello",
+                "stream": true,
+                "store": false
+            }),
+        )
+        .await;
     }
 
     #[tokio::test]

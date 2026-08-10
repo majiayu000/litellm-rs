@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::core::guardrails::{CheckResult, GuardrailEngine};
 
-const MAX_CONTEXT_CHARS: usize = 1024 * 1024;
+const CONTEXT_OVERLAP_CHARS: usize = 4096;
 const MAX_PENDING_BYTES: usize = 1024 * 1024;
 const MAX_SURFACES: usize = 128;
 
@@ -50,7 +50,6 @@ pub(super) struct StreamOutputGuardrail {
     active: bool,
     check_chars: usize,
     surfaces: BTreeMap<u32, SurfaceState>,
-    context_chars: usize,
     pending: Vec<Bytes>,
     pending_bytes: usize,
 }
@@ -63,7 +62,6 @@ impl StreamOutputGuardrail {
             check_chars: config.stream_output_check_chars,
             engine,
             surfaces: BTreeMap::new(),
-            context_chars: 0,
             pending: Vec::new(),
             pending_bytes: 0,
         }
@@ -103,11 +101,17 @@ impl StreamOutputGuardrail {
         } else {
             Vec::new()
         };
+        let mut crossed_window = false;
         for (surface, text) in deltas {
-            self.append_and_check(surface, &text).await?;
+            crossed_window |= self.append_and_check(surface, &text).await?;
         }
         self.pending_bytes = self.pending_bytes.saturating_add(event.len());
         self.pending.push(event);
+
+        if crossed_window {
+            released.extend(self.finish().await?);
+            return Ok(released);
+        }
 
         if !self
             .surfaces
@@ -180,39 +184,63 @@ impl StreamOutputGuardrail {
         }
     }
 
+    pub(super) async fn flush_to_until_closed(
+        &mut self,
+        tx: &mpsc::Sender<Bytes>,
+    ) -> Result<Option<()>, StreamGuardrailError> {
+        let Some(pending) = self.finish_until_closed(tx).await? else {
+            return Ok(None);
+        };
+        for event in pending {
+            let sent = tokio::select! {
+                biased;
+                _ = tx.closed() => return Ok(None),
+                sent = tx.send(event) => sent,
+            };
+            if sent.is_err() {
+                return Ok(None);
+            }
+        }
+        Ok(Some(()))
+    }
+
     async fn append_and_check(
         &mut self,
         surface: u32,
         text: &str,
-    ) -> Result<(), StreamGuardrailError> {
+    ) -> Result<bool, StreamGuardrailError> {
         if !text.is_empty() && !self.surfaces.contains_key(&surface) {
             if self.surfaces.len() >= MAX_SURFACES {
                 return Err(StreamGuardrailError::Execution);
             }
             self.surfaces.insert(surface, SurfaceState::default());
         }
-        let added_chars = text.chars().count();
-        if self.context_chars.saturating_add(added_chars) > MAX_CONTEXT_CHARS {
-            return Err(StreamGuardrailError::Execution);
-        }
-        self.context_chars += added_chars;
-
+        let mut crossed_window = false;
         let mut start = 0;
         while start < text.len() {
-            let remaining = self
-                .check_chars
-                .saturating_sub(self.surfaces.entry(surface).or_default().chars_since_check)
-                .max(1);
+            let chars_since_check = self
+                .surfaces
+                .get(&surface)
+                .ok_or(StreamGuardrailError::Execution)?
+                .chars_since_check;
+            let remaining = self.check_chars.saturating_sub(chars_since_check).max(1);
             let end = prefix_end(text, start, remaining);
-            let state = self.surfaces.entry(surface).or_default();
-            state.context.push_str(&text[start..end]);
-            state.chars_since_check += text[start..end].chars().count();
+            let should_check = {
+                let state = self
+                    .surfaces
+                    .get_mut(&surface)
+                    .ok_or(StreamGuardrailError::Execution)?;
+                state.context.push_str(&text[start..end]);
+                state.chars_since_check += text[start..end].chars().count();
+                state.chars_since_check >= self.check_chars
+            };
             start = end;
-            if state.chars_since_check >= self.check_chars {
+            if should_check {
                 self.check_surface(surface).await?;
+                crossed_window = true;
             }
         }
-        Ok(())
+        Ok(crossed_window)
     }
 
     async fn check_surface(&mut self, surface: u32) -> Result<(), StreamGuardrailError> {
@@ -230,6 +258,7 @@ impl StreamOutputGuardrail {
 
         if let Some(state) = self.surfaces.get_mut(&surface) {
             state.chars_since_check = 0;
+            retain_tail_chars(&mut state.context, CONTEXT_OVERLAP_CHARS);
         }
         Ok(())
     }
@@ -237,6 +266,17 @@ impl StreamOutputGuardrail {
     fn release_pending(&mut self) -> Result<Vec<Bytes>, StreamGuardrailError> {
         self.pending_bytes = 0;
         Ok(std::mem::take(&mut self.pending))
+    }
+}
+
+fn retain_tail_chars(text: &mut String, max_chars: usize) {
+    let count = text.chars().count();
+    if count > max_chars {
+        let keep_from = text
+            .char_indices()
+            .nth(count - max_chars)
+            .map_or(text.len(), |(offset, _)| offset);
+        text.drain(..keep_from);
     }
 }
 
@@ -281,6 +321,18 @@ mod tests {
             .expect("safe output should pass");
 
         assert_eq!(released, vec![event]);
+        assert!(guardrail.finish().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn event_is_released_when_a_window_is_crossed_with_a_remainder() {
+        let mut guardrail = guardrail(4, true);
+        let event = Bytes::from_static(b"safe-event");
+
+        assert_eq!(
+            guardrail.push("safe!", event.clone()).await.unwrap(),
+            vec![event]
+        );
         assert!(guardrail.finish().await.unwrap().is_empty());
     }
 
@@ -373,7 +425,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cumulative_context_is_bounded_and_oversized_events_fail_closed() {
+    async fn rolling_context_is_bounded_and_oversized_events_fail_closed() {
         let mut guardrail = guardrail(4096, true);
         let oversized_event = Bytes::from(vec![b'x'; MAX_PENDING_BYTES + 1]);
 
@@ -386,18 +438,17 @@ mod tests {
         );
         assert!(guardrail.pending.is_empty());
 
-        assert_eq!(
+        guardrail
+            .push(&"a".repeat(9000), Bytes::from_static(b"long"))
+            .await
+            .unwrap();
+        guardrail.finish().await.unwrap();
+        assert!(
             guardrail
-                .push(
-                    &"a".repeat(MAX_CONTEXT_CHARS + 1),
-                    Bytes::from_static(b"long")
-                )
-                .await
-                .unwrap_err(),
-            StreamGuardrailError::Execution
+                .surfaces
+                .values()
+                .all(|state| state.context.chars().count() <= CONTEXT_OVERLAP_CHARS)
         );
-        assert!(guardrail.pending.is_empty());
-        assert_eq!(guardrail.pending_bytes, 0);
     }
 
     #[tokio::test]

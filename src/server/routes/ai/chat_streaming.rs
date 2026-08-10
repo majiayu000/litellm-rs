@@ -195,6 +195,19 @@ pub(super) async fn handle_streaming_chat_completion(
                         return;
                     }};
                 }
+                macro_rules! flush_guardrail {
+                    () => {
+                        match output_guardrail.flush_to_until_closed(&tx).await {
+                            Ok(Some(())) => {}
+                            Ok(None) => {
+                                callback.fail("client disconnected", "client_disconnect");
+                                settle_after_upstream_output!();
+                                return;
+                            }
+                            Err(error) => return_after_guardrail_error!(error),
+                        }
+                    };
+                }
 
                 loop {
                     let chunk_result = if idle_timeout_secs == 0 {
@@ -223,6 +236,7 @@ pub(super) async fn handle_streaming_chat_completion(
                         match timed_result {
                             Ok(result) => result,
                             Err(_) => {
+                                flush_guardrail!();
                                 warn!(
                                     "SSE stream idle timeout after {}s, closing connection",
                                     idle_timeout_secs
@@ -278,6 +292,7 @@ pub(super) async fn handle_streaming_chat_completion(
                             {
                                 Ok(chat_chunk) => chat_chunk,
                                 Err(e) => {
+                                    flush_guardrail!();
                                     error!("Stream chunk conversion error: {}", e);
                                     let (error_type, error_code) =
                                         super::sse_error_classification(&e);
@@ -322,6 +337,7 @@ pub(super) async fn handle_streaming_chat_completion(
                                     event.to_bytes()
                                 }
                                 Err(e) => {
+                                    flush_guardrail!();
                                     error!("Stream serialization error: {}", e);
                                     let error_bytes = super::format_sse_error(
                                         &format!("Serialization error: {}", e),
@@ -351,6 +367,7 @@ pub(super) async fn handle_streaming_chat_completion(
                             (output_deltas, bytes)
                         }
                         Err(e) => {
+                            flush_guardrail!();
                             error!("Stream chunk error: {}", e);
                             let (error_type, error_code) = super::sse_error_classification(&e);
                             let error_bytes =
@@ -389,22 +406,7 @@ pub(super) async fn handle_streaming_chat_completion(
                     }
                 }
 
-                let pending = match output_guardrail.finish_until_closed(&tx).await {
-                    Ok(Some(pending)) => pending,
-                    Ok(None) => {
-                        callback.fail("client disconnected", "client_disconnect");
-                        settle_after_upstream_output!();
-                        return;
-                    }
-                    Err(error) => return_after_guardrail_error!(error),
-                };
-                for bytes in pending {
-                    if tx.send(bytes).await.is_err() {
-                        callback.fail("client disconnected", "client_disconnect");
-                        settle_after_upstream_output!();
-                        return;
-                    }
-                }
+                flush_guardrail!();
 
                 let done_event = Event::default().data("[DONE]");
                 if tx.send(done_event.to_bytes()).await.is_err() {
