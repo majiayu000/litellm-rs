@@ -242,3 +242,360 @@ pub mod wire {
         serde_json::from_value(Value::Object(payload))
     }
 }
+
+/// SP1107-T2 builds the canonical model before SP1107-T3 wires it into routing.
+#[allow(dead_code)]
+pub(crate) mod domain {
+    use super::wire::{CODEX_PROTOCOL_BASELINE, CodexToolOutput, CodexToolOutputContent};
+    use crate::core::models::openai::responses_api::{
+        ResponseInput, ResponseInputContent, ResponseInputContentPart, ResponseInputItem,
+        ResponseInputMessage, ResponseTool, ResponsesApiRequest,
+    };
+    use std::collections::HashMap;
+    use thiserror::Error;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum CodexCallKind {
+        Function,
+        Custom,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum CodexCallState {
+        Declared,
+        OutputReceived,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct CodexCallRecord {
+        pub(crate) call_id: String,
+        pub(crate) kind: CodexCallKind,
+        pub(crate) name: String,
+        pub(crate) namespace: Option<String>,
+        pub(crate) state: CodexCallState,
+        pub(crate) declaration_index: usize,
+        pub(crate) output_index: Option<usize>,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub(crate) struct CodexCallLedger {
+        pub(crate) calls: Vec<CodexCallRecord>,
+        call_indices: HashMap<String, usize>,
+    }
+
+    impl CodexCallLedger {
+        fn declare(
+            &mut self,
+            call_id: &str,
+            kind: CodexCallKind,
+            name: &str,
+            namespace: Option<&str>,
+            item_index: usize,
+        ) -> Result<(), CodexTurnError> {
+            validate_call_id(call_id, item_index)?;
+            if name.trim().is_empty() {
+                return Err(CodexTurnError::InvalidCallName { item_index });
+            }
+            if self.call_indices.contains_key(call_id) {
+                return Err(CodexTurnError::DuplicateCallId(item_index));
+            }
+
+            let call_index = self.calls.len();
+            self.calls.push(CodexCallRecord {
+                call_id: call_id.to_string(),
+                kind,
+                name: name.to_string(),
+                namespace: namespace.map(str::to_string),
+                state: CodexCallState::Declared,
+                declaration_index: item_index,
+                output_index: None,
+            });
+            self.call_indices.insert(call_id.to_string(), call_index);
+            Ok(())
+        }
+
+        fn receive_output(
+            &mut self,
+            call_id: &str,
+            kind: CodexCallKind,
+            name: Option<&str>,
+            item_index: usize,
+        ) -> Result<(), CodexTurnError> {
+            validate_call_id(call_id, item_index)?;
+            let Some(&call_index) = self.call_indices.get(call_id) else {
+                return Err(CodexTurnError::UnknownCallId(item_index));
+            };
+            let call = &mut self.calls[call_index];
+            if call.state == CodexCallState::OutputReceived {
+                return Err(CodexTurnError::DuplicateCallOutput(item_index));
+            }
+            if call.kind != kind {
+                return Err(CodexTurnError::CallKindMismatch(
+                    call.kind, kind, item_index,
+                ));
+            }
+            if name.is_some_and(|name| name.trim().is_empty() || name != call.name) {
+                return Err(CodexTurnError::InvalidCallName { item_index });
+            }
+            call.state = CodexCallState::OutputReceived;
+            call.output_index = Some(item_index);
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) enum CodexTurnItem {
+        Text(String),
+        Item(ResponseInputItem),
+    }
+
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct CodexExecutionRequirements {
+        pub(crate) streaming: bool,
+        pub(crate) function_tools: bool,
+        pub(crate) custom_tools: bool,
+        pub(crate) call_outputs: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct CodexTurn {
+        pub(crate) protocol_version: &'static str,
+        pub(crate) items: Vec<CodexTurnItem>,
+        pub(crate) tools: Vec<ResponseTool>,
+        pub(crate) store: Option<bool>,
+        pub(crate) background: bool,
+        pub(crate) requirements: CodexExecutionRequirements,
+        pub(crate) ledger: CodexCallLedger,
+    }
+
+    impl TryFrom<&ResponsesApiRequest> for CodexTurn {
+        type Error = CodexTurnError;
+
+        fn try_from(request: &ResponsesApiRequest) -> Result<Self, Self::Error> {
+            if request.additional_tools.is_some() {
+                return Err(unsupported("additional_tools"));
+            }
+
+            let mut ledger = CodexCallLedger::default();
+            let mut requirements = CodexExecutionRequirements {
+                streaming: request.stream.unwrap_or(false),
+                ..Default::default()
+            };
+            let items = match &request.input {
+                ResponseInput::Text(text) => {
+                    if text.trim().is_empty() {
+                        return Err(CodexTurnError::EmptyInput);
+                    }
+                    vec![CodexTurnItem::Text(text.clone())]
+                }
+                ResponseInput::Items(items) => {
+                    if items.is_empty() {
+                        return Err(CodexTurnError::EmptyInput);
+                    }
+                    let mut turn_items = Vec::with_capacity(items.len());
+                    for (item_index, item) in items.iter().enumerate() {
+                        turn_items.push(normalize_item(
+                            item,
+                            item_index,
+                            &mut ledger,
+                            &mut requirements,
+                        )?);
+                    }
+                    turn_items
+                }
+            };
+
+            let tools = request.tools.clone().unwrap_or_default();
+            for (tool_index, tool) in tools.iter().enumerate() {
+                let (name, deferred, custom) = match tool {
+                    ResponseTool::Function(tool) => {
+                        (&tool.function.name, tool.function.defer_loading, false)
+                    }
+                    ResponseTool::CodexFunction(tool) => (&tool.name, tool.defer_loading, false),
+                    ResponseTool::Custom(tool) => (&tool.name, None, true),
+                    tool => return Err(unsupported(tool.feature_name())),
+                };
+                if name.trim().is_empty() {
+                    return Err(CodexTurnError::EmptyToolName { tool_index });
+                }
+                if deferred == Some(true) {
+                    return Err(unsupported("defer_loading"));
+                }
+                requirements.custom_tools |= custom;
+                requirements.function_tools |= !custom;
+            }
+
+            Ok(Self {
+                protocol_version: CODEX_PROTOCOL_BASELINE,
+                items,
+                tools,
+                store: request.store,
+                background: request.background.unwrap_or(false),
+                requirements,
+                ledger,
+            })
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Error)]
+    pub(crate) enum CodexTurnError {
+        #[error("Codex input must not be empty")]
+        EmptyInput,
+        #[error("Codex call_id must not be empty at item {item_index}")]
+        EmptyCallId { item_index: usize },
+        #[error("invalid Codex call name at item {item_index}")]
+        InvalidCallName { item_index: usize },
+        #[error("Codex tool name must not be empty at tool {tool_index}")]
+        EmptyToolName { tool_index: usize },
+        #[error("invalid Codex message role at item {item_index}")]
+        InvalidMessageRole { item_index: usize },
+        #[error("Codex call payload must not be empty at item {item_index}")]
+        EmptyCallPayload { item_index: usize },
+        #[error("Codex function arguments must be valid JSON at item {item_index}")]
+        InvalidFunctionArguments { item_index: usize },
+        #[error("duplicate Codex call_id at item {0}")]
+        DuplicateCallId(usize),
+        #[error("unknown Codex call_id at item {0}")]
+        UnknownCallId(usize),
+        #[error("duplicate Codex call output at item {0}")]
+        DuplicateCallOutput(usize),
+        #[error("Codex call kind mismatch at item {2}: expected {0:?}, got {1:?}")]
+        CallKindMismatch(CodexCallKind, CodexCallKind, usize),
+        #[error("unsupported Codex feature '{0}'")]
+        UnsupportedFeature(String),
+    }
+
+    fn normalize_item(
+        item: &ResponseInputItem,
+        item_index: usize,
+        ledger: &mut CodexCallLedger,
+        requirements: &mut CodexExecutionRequirements,
+    ) -> Result<CodexTurnItem, CodexTurnError> {
+        use CodexCallKind::{Custom, Function};
+        match item {
+            ResponseInputItem::Message(message) => validate_message(message, item_index)?,
+            ResponseInputItem::FunctionCall(call) => {
+                if serde_json::from_str::<serde_json::Value>(&call.arguments).is_err() {
+                    return Err(CodexTurnError::InvalidFunctionArguments { item_index });
+                }
+                ledger.declare(
+                    &call.call_id,
+                    Function,
+                    &call.name,
+                    call.namespace.as_deref(),
+                    item_index,
+                )?;
+                requirements.function_tools = true;
+            }
+            ResponseInputItem::FunctionCallOutput(output) => {
+                validate_tool_output(&output.output, item_index)?;
+                ledger.receive_output(&output.call_id, Function, None, item_index)?;
+                requirements.function_tools = true;
+                requirements.call_outputs = true;
+            }
+            ResponseInputItem::CustomToolCall(call) => {
+                if call.input.trim().is_empty() {
+                    return Err(CodexTurnError::EmptyCallPayload { item_index });
+                }
+                ledger.declare(
+                    &call.call_id,
+                    Custom,
+                    &call.name,
+                    call.namespace.as_deref(),
+                    item_index,
+                )?;
+                requirements.custom_tools = true;
+            }
+            ResponseInputItem::CustomToolCallOutput(output) => {
+                validate_tool_output(&output.output, item_index)?;
+                ledger.receive_output(
+                    &output.call_id,
+                    Custom,
+                    output.name.as_deref(),
+                    item_index,
+                )?;
+                requirements.custom_tools = true;
+                requirements.call_outputs = true;
+            }
+            item => {
+                return Err(unsupported(item.feature_name()));
+            }
+        }
+        Ok(CodexTurnItem::Item(item.clone()))
+    }
+
+    fn validate_call_id(call_id: &str, item_index: usize) -> Result<(), CodexTurnError> {
+        if call_id.trim().is_empty() {
+            return Err(CodexTurnError::EmptyCallId { item_index });
+        }
+        Ok(())
+    }
+
+    fn unsupported(feature: &str) -> CodexTurnError {
+        CodexTurnError::UnsupportedFeature(feature.into())
+    }
+
+    fn validate_message(
+        message: &ResponseInputMessage,
+        item_index: usize,
+    ) -> Result<(), CodexTurnError> {
+        if !matches!(
+            message.role.as_str(),
+            "user" | "assistant" | "system" | "developer"
+        ) {
+            return Err(CodexTurnError::InvalidMessageRole { item_index });
+        }
+        let empty = match &message.content {
+            ResponseInputContent::Text(text) => text.trim().is_empty(),
+            ResponseInputContent::Parts(parts) => {
+                if parts
+                    .iter()
+                    .any(|part| matches!(part, ResponseInputContentPart::InputAudio { .. }))
+                {
+                    return Err(unsupported("input_audio"));
+                }
+                parts.is_empty()
+                    || parts.iter().any(|part| match part {
+                        ResponseInputContentPart::InputText { text }
+                        | ResponseInputContentPart::OutputText { text } => text.trim().is_empty(),
+                        ResponseInputContentPart::InputImage { image_url, .. } => image_url
+                            .as_ref()
+                            .is_none_or(|image_url| image_url.trim().is_empty()),
+                        _ => false,
+                    })
+            }
+        };
+        if empty {
+            return Err(CodexTurnError::EmptyCallPayload { item_index });
+        }
+        Ok(())
+    }
+
+    fn validate_tool_output(
+        output: &CodexToolOutput,
+        item_index: usize,
+    ) -> Result<(), CodexTurnError> {
+        let empty = match output {
+            CodexToolOutput::Text(text) => text.trim().is_empty(),
+            CodexToolOutput::ContentItems(items) => {
+                items.is_empty()
+                    || items.iter().any(|item| match item {
+                        CodexToolOutputContent::InputText { text } => text.trim().is_empty(),
+                        CodexToolOutputContent::InputImage { image_url, .. } => {
+                            image_url.trim().is_empty()
+                        }
+                        CodexToolOutputContent::InputAudio { audio_url } => {
+                            audio_url.trim().is_empty()
+                        }
+                        CodexToolOutputContent::EncryptedContent { encrypted_content } => {
+                            encrypted_content.trim().is_empty()
+                        }
+                    })
+            }
+        };
+        if empty {
+            return Err(CodexTurnError::EmptyCallPayload { item_index });
+        }
+        Ok(())
+    }
+}
