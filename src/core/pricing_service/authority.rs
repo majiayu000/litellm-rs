@@ -232,6 +232,7 @@ fn resolve_model_info_for_provider(
     let provider_aliases = pricing_provider_aliases(provider, model);
     if let Some((prefixed_provider, _)) = provider_prefixed_model(model)
         && crate::core::providers::registry::selector_has_matrix_entry(prefixed_provider)
+        && !super::google::is_vertex_publisher_prefix(&normalized_provider, prefixed_provider)
         && !provider_name_matches(prefixed_provider, &provider_aliases)
     {
         return None;
@@ -254,20 +255,15 @@ fn resolve_model_info_for_provider(
     }
 
     if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
-        let provider_prefixed_model = format!("{normalized_provider}/{normalized_model}");
-        if let Some(info) = models
-            .get(&provider_prefixed_model)
-            .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
+        for candidate in
+            super::google::exact_pricing_candidates(&normalized_provider, model, normalized_model)
         {
-            return Some((provider_prefixed_model, info.clone()));
-        }
-        if let Some(alias_model) =
-            exact_google_pricing_alias(&normalized_provider, normalized_model)
-            && let Some(info) = models
-                .get(alias_model)
+            if let Some(info) = models
+                .get(&candidate)
                 .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
-        {
-            return Some((alias_model.to_string(), info.clone()));
+            {
+                return Some((candidate, info.clone()));
+            }
         }
         return None;
     }
@@ -459,25 +455,7 @@ fn pricing_provider_aliases(provider: &str, model: &str) -> Vec<String> {
     let aliases = match normalized.as_str() {
         "anthropic" if is_xiaomi_mimo_model(model) => vec!["xiaomi_mimo", "xiaomi", "mimo"],
         "gemini" => vec!["gemini", "vertex_ai"],
-        "vertex_ai" => vec![
-            "vertex_ai",
-            "google",
-            "vertex_ai-ai21_models",
-            "vertex_ai-anthropic_models",
-            "vertex_ai-deepseek_models",
-            "vertex_ai-embedding-models",
-            "vertex_ai-image-models",
-            "vertex_ai-language-models",
-            "vertex_ai-llama_models",
-            "vertex_ai-minimax_models",
-            "vertex_ai-mistral_models",
-            "vertex_ai-moonshot_models",
-            "vertex_ai-openai_models",
-            "vertex_ai-qwen_models",
-            "vertex_ai-text-models",
-            "vertex_ai-video-models",
-            "vertex_ai-zai_models",
-        ],
+        "vertex_ai" => super::google::VERTEX_PROVIDER_ALIASES.to_vec(),
         "xiaomi_mimo" => vec!["xiaomi_mimo", "xiaomi", "mimo"],
         "zhipuai" => vec!["zhipuai", "glm"],
         "amazon_nova" => vec!["amazon_nova", "bedrock"],
@@ -492,14 +470,6 @@ fn pricing_provider_aliases(provider: &str, model: &str) -> Vec<String> {
             }
             unique
         })
-}
-
-fn exact_google_pricing_alias<'a>(provider: &str, model: &'a str) -> Option<&'a str> {
-    match (provider, model) {
-        ("vertex_ai", "gemini-1.5-pro-001" | "gemini-1.5-pro-002") => Some("gemini-1.5-pro"),
-        ("vertex_ai", "gemini-1.5-flash-001" | "gemini-1.5-flash-002") => Some("gemini-1.5-flash"),
-        _ => None,
-    }
 }
 
 fn provider_prefixed_model(model: &str) -> Option<(&str, &str)> {

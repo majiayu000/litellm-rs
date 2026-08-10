@@ -29,6 +29,15 @@ async fn vertex_cost_uses_shared_per_token_pricing() {
         ("gemini-1.5-pro-002", 0.00875),
         ("gemini-1.5-flash-002", 0.000225),
         ("claude-3-opus@20240229", 0.0525),
+        ("claude-opus-4-6@20260114", 0.0175),
+        ("claude-opus-4-5@20251110", 0.0175),
+        ("claude-3-5-sonnet@20241022", 0.0105),
+        ("meta/llama3-70b-instruct-maas", 0.0),
+        ("meta/llama-4-scout-17b-16e-instruct", 0.0006),
+        ("meta/llama-4-maverick-17b-128e-instruct", 0.000925),
+        ("ai21/jamba-1.5-large", 0.006),
+        ("mistral/mistral-large-2411", 0.005),
+        ("mistral/mistral-nemo", 0.000225),
     ] {
         let cost = LLMProvider::calculate_cost(&provider, model, 1_000, 500)
             .await
