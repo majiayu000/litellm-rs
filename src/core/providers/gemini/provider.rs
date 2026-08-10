@@ -118,7 +118,7 @@ impl GeminiProvider {
         model: &str,
         input_tokens: u32,
         output_tokens: u32,
-    ) -> Option<f64> {
+    ) -> Result<f64, ProviderError> {
         super::models::CostCalculator::calculate_cost(model, input_tokens, output_tokens)
     }
 }
@@ -391,10 +391,7 @@ impl LLMProvider for GeminiProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        Ok(
-            super::models::CostCalculator::calculate_cost(model, input_tokens, output_tokens)
-                .unwrap_or(0.0),
-        )
+        super::calculate_gemini_cost(model, input_tokens, output_tokens)
     }
 }
 

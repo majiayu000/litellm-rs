@@ -286,6 +286,14 @@ impl LLMProvider for VertexAIProvider {
     fn models(&self) -> &[ModelInfo] {
         use std::sync::LazyLock;
         static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            let prices = |model| {
+                super::vertex_prices_per_1k(model).unwrap_or_else(|error| {
+                    tracing::error!(model, %error, "Vertex AI model pricing is unavailable");
+                    (None, None)
+                })
+            };
+            let pro_prices = prices("gemini-1.5-pro");
+            let flash_prices = prices("gemini-1.5-flash");
             vec![
                 ModelInfo {
                     id: "gemini-1.5-pro".to_string(),
@@ -296,8 +304,8 @@ impl LLMProvider for VertexAIProvider {
                     supports_streaming: true,
                     supports_tools: true,
                     supports_multimodal: true,
-                    input_cost_per_1k_tokens: Some(1.25),
-                    output_cost_per_1k_tokens: Some(3.75),
+                    input_cost_per_1k_tokens: pro_prices.0,
+                    output_cost_per_1k_tokens: pro_prices.1,
                     currency: "USD".to_string(),
                     capabilities: vec![
                         ProviderCapability::ChatCompletion,
@@ -318,8 +326,8 @@ impl LLMProvider for VertexAIProvider {
                     supports_streaming: true,
                     supports_tools: true,
                     supports_multimodal: true,
-                    input_cost_per_1k_tokens: Some(0.0625),
-                    output_cost_per_1k_tokens: Some(0.25),
+                    input_cost_per_1k_tokens: flash_prices.0,
+                    output_cost_per_1k_tokens: flash_prices.1,
                     currency: "USD".to_string(),
                     capabilities: vec![
                         ProviderCapability::ChatCompletion,
@@ -412,20 +420,7 @@ impl LLMProvider for VertexAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        // Basic cost calculation for Vertex AI models (per 1M tokens)
-        let cost = match model {
-            m if m.contains("gemini-pro") => {
-                (input_tokens as f64 * 0.0005 + output_tokens as f64 * 0.0015) / 1000.0
-            }
-            m if m.contains("gemini-1.5-pro") => {
-                (input_tokens as f64 * 0.00125 + output_tokens as f64 * 0.00375) / 1000.0
-            }
-            m if m.contains("gemini-1.5-flash") => {
-                (input_tokens as f64 * 0.000075 + output_tokens as f64 * 0.0003) / 1000.0
-            }
-            _ => 0.0, // Default cost for unknown models
-        };
-        Ok(cost)
+        super::calculate_vertex_cost(model, input_tokens, output_tokens)
     }
 
     /// Model

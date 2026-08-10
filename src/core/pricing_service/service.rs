@@ -219,8 +219,8 @@ impl PricingService {
                 "output_cost_per_character",
             )?;
 
-            let input_chars = prompt.map(|p| p.len()).unwrap_or(0) as f64;
-            let output_chars = completion.map(|c| c.len()).unwrap_or(0) as f64;
+            let input_chars = prompt.map(|p| p.chars().count()).unwrap_or(0) as f64;
+            let output_chars = completion.map(|c| c.chars().count()).unwrap_or(0) as f64;
 
             let input_cost = input_chars * input_cost_per_char;
             let output_cost = output_chars * output_cost_per_char;
