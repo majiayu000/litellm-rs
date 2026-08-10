@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 mod catalog;
+mod surface;
+
+pub use surface::GoogleGeminiApiSurface;
 
 pub use crate::core::cost::types::ModelPricing;
 use crate::core::types::model::ModelInfo;
@@ -176,6 +179,18 @@ impl GeminiModelRegistry {
     /// Model
     pub fn list_models(&self) -> Vec<&ModelSpec> {
         self.models.values().collect()
+    }
+
+    /// List model metadata for a concrete Google API surface.
+    pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
+        let mut models = self
+            .models
+            .values()
+            .filter(|spec| surface.includes(spec))
+            .map(|spec| surface.overlay_model_info(spec))
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| left.id.cmp(&right.id));
+        models
     }
 
     /// Check
