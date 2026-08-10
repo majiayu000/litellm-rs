@@ -23,6 +23,7 @@ struct GatewayGuardrailsWire {
     default_action: Option<GuardrailAction>,
     check_input: Option<bool>,
     check_output: Option<bool>,
+    stream_output_check_chars: Option<usize>,
     exclude_paths: Option<Vec<String>>,
     fail_open: Option<bool>,
 }
@@ -98,6 +99,9 @@ where
     if let Some(value) = wire.check_output {
         config.check_output = value;
     }
+    if let Some(value) = wire.stream_output_check_chars {
+        config.stream_output_check_chars = value;
+    }
     if let Some(value) = wire.exclude_paths {
         config.exclude_paths = value;
     }
@@ -153,5 +157,25 @@ mod tests {
 
         assert!(serde_json::from_value::<GatewayConfig>(guardrail_typo).is_err());
         assert!(serde_json::from_value::<GatewayConfig>(ip_typo).is_err());
+    }
+
+    #[test]
+    fn gateway_stream_output_window_defaults_and_validates_bounds() {
+        let config = GatewayConfig::default();
+        assert_eq!(config.guardrails.stream_output_check_chars, 256);
+
+        for valid in [1, 4096] {
+            let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
+            value["guardrails"] = serde_json::json!({"stream_output_check_chars": valid});
+            let config: GatewayConfig = serde_json::from_value(value).unwrap();
+            assert!(config.guardrails.validate().is_ok());
+        }
+
+        for invalid in [0, 4097] {
+            let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
+            value["guardrails"] = serde_json::json!({"stream_output_check_chars": invalid});
+            let config: GatewayConfig = serde_json::from_value(value).unwrap();
+            assert!(config.guardrails.validate().is_err());
+        }
     }
 }
