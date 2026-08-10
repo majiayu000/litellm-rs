@@ -18,6 +18,10 @@
 //! - Batch processing
 //! - Real-time streaming responses
 
+use crate::core::pricing_service::{LiteLLMModelInfo, PricingService, PricingUsage};
+use crate::core::providers::unified_provider::ProviderError;
+use crate::utils::error::gateway_error::GatewayError;
+
 #[cfg(feature = "providers-extended")]
 pub mod client;
 #[cfg(feature = "providers-extended")]
@@ -42,6 +46,46 @@ pub use models::{GeminiModelFamily, GoogleGeminiApiSurface, ModelFeature, get_ge
 pub use provider::GeminiProvider;
 #[cfg(feature = "providers-extended")]
 pub use streaming::GeminiStream;
+
+pub(crate) fn calculate_gemini_cost(
+    model: &str,
+    input_tokens: u32,
+    output_tokens: u32,
+) -> Result<f64, ProviderError> {
+    let (service, _) = gemini_completion_pricing(model)?;
+    service
+        .calculate_loaded_usage_cost_for_provider(
+            "gemini",
+            model,
+            &PricingUsage::new(input_tokens, output_tokens),
+        )
+        .map(|cost| cost.total_cost)
+        .map_err(|error| gemini_pricing_error(model, error))
+}
+
+fn gemini_completion_pricing(
+    model: &str,
+) -> Result<(&'static PricingService, LiteLLMModelInfo), ProviderError> {
+    let service = PricingService::shared_embedded_default()
+        .map_err(|error| gemini_pricing_error(model, error))?;
+    let (_, pricing) = service
+        .get_model_info_for_provider("gemini", model)
+        .ok_or_else(|| ProviderError::model_not_found("gemini", model))?;
+    if pricing.mode == "embedding" {
+        return Err(ProviderError::model_not_found("gemini", model));
+    }
+    Ok((service, pricing))
+}
+
+fn gemini_pricing_error(model: &str, error: GatewayError) -> ProviderError {
+    match error {
+        GatewayError::NotFound(_) => ProviderError::model_not_found("gemini", model),
+        error => ProviderError::Other {
+            provider: "gemini",
+            message: format!("pricing authority failed for model '{model}': {error}"),
+        },
+    }
+}
 
 // Convenience functions
 
@@ -73,11 +117,40 @@ pub fn is_model_supported(model_id: &str) -> bool {
 }
 
 /// Get model pricing
-pub fn get_model_pricing(model_id: &str) -> Option<(f64, f64)> {
-    get_gemini_registry().get_model_pricing(model_id).map(|p| {
-        (
-            p.input_cost_per_1k_tokens * 1000.0,
-            p.output_cost_per_1k_tokens * 1000.0,
-        )
-    })
+pub fn get_model_pricing(model_id: &str) -> Result<(f64, f64), ProviderError> {
+    let (_, pricing) = gemini_completion_pricing(model_id)?;
+    let input = pricing
+        .input_cost_per_token
+        .ok_or_else(|| ProviderError::Other {
+            provider: "gemini",
+            message: format!("missing input token pricing for model '{model_id}'"),
+        })?;
+    let output = pricing
+        .output_cost_per_token
+        .ok_or_else(|| ProviderError::Other {
+            provider: "gemini",
+            message: format!("missing output token pricing for model '{model_id}'"),
+        })?;
+    Ok((input * 1_000_000.0, output * 1_000_000.0))
+}
+
+#[cfg(test)]
+mod pricing_tests {
+    use super::*;
+
+    #[test]
+    fn public_pricing_uses_per_million_catalog_units() {
+        let (input, output) =
+            get_model_pricing("gemini-2.5-flash").expect("catalogued model should be priced");
+        assert!((input - 0.30).abs() < 1e-12);
+        assert!((output - 2.50).abs() < 1e-12);
+        assert!(matches!(
+            get_model_pricing("gemini-1.5-flash"),
+            Err(ProviderError::ModelNotFound { .. })
+        ));
+        assert!(matches!(
+            get_model_pricing("unknown-google-model"),
+            Err(ProviderError::ModelNotFound { .. })
+        ));
+    }
 }

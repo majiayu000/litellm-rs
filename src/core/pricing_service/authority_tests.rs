@@ -69,6 +69,43 @@ fn provider_aware_authority_resolves_anthropic_mimo_alias() {
 }
 
 #[test]
+fn google_authority_uses_specialized_character_pricing() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+    let cost = service
+        .calculate_loaded_completion_cost_for_provider(
+            "vertex_ai",
+            "medlm-large",
+            0,
+            0,
+            Some("é中"),
+            Some("🙂"),
+            None,
+        )
+        .unwrap_or_else(|error| panic!("specialized Vertex row should be priced: {error}"));
+
+    assert_eq!(cost.cost_type, CostType::CharacterBased);
+    assert!((cost.total_cost - 0.000025).abs() < 1e-12);
+}
+
+#[test]
+fn google_authority_is_case_insensitive_but_not_suffix_fuzzy() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    assert!(
+        service
+            .get_model_info_for_provider("vertex_ai", "GEMINI-1.5-PRO")
+            .is_some()
+    );
+    assert!(
+        service
+            .get_model_info_for_provider("vertex_ai", "GEMINI-1.5-PRO-9999")
+            .is_none()
+    );
+}
+
+#[test]
 fn provider_aware_authority_resolves_loaded_openai_like_model_without_prefix() {
     let service = PricingService::new(None);
     service.add_custom_model(

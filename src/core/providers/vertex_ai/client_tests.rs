@@ -13,6 +13,80 @@ fn test_vertex_provider_config() -> VertexAIProviderConfig {
     }
 }
 
+async fn pricing_test_provider() -> VertexAIProvider {
+    VertexAIProvider::new(VertexAIProviderConfig {
+        project_id: "pricing-test-project".to_string(),
+        ..Default::default()
+    })
+    .await
+    .expect("Vertex AI provider should initialize")
+}
+
+#[tokio::test]
+async fn vertex_cost_uses_shared_per_token_pricing() {
+    let provider = pricing_test_provider().await;
+    let cost = LLMProvider::calculate_cost(&provider, "gemini-1.5-pro", 1_000, 500)
+        .await
+        .expect("catalogued Vertex model should be priced");
+
+    assert!((cost - 0.00875).abs() < 1e-12);
+
+    let preview = LLMProvider::calculate_cost(&provider, "gemini-3-flash-preview", 1_000, 500)
+        .await
+        .expect("provider-prefixed exact Vertex row should be priced");
+    assert!((preview - 0.002).abs() < 1e-12);
+
+    for (model, expected) in [
+        ("gemini-2.0-flash", 0.0003),
+        ("gemini-1.5-pro-002", 0.00875),
+        ("gemini-1.5-flash-002", 0.000225),
+        ("claude-3-opus@20240229", 0.0525),
+        ("claude-opus-4-6@20260114", 0.0175),
+        ("claude-opus-4-5@20251110", 0.0175),
+        ("claude-3-5-sonnet@20241022", 0.0105),
+        ("meta/llama3-70b-instruct-maas", 0.0),
+        ("meta/llama-4-scout-17b-16e-instruct", 0.0006),
+        ("meta/llama-4-maverick-17b-128e-instruct", 0.000925),
+        ("ai21/jamba-1.5-large", 0.006),
+        ("mistral/mistral-large-2411", 0.005),
+        ("mistral/mistral-nemo", 0.000225),
+    ] {
+        let cost = LLMProvider::calculate_cost(&provider, model, 1_000, 500)
+            .await
+            .expect("canonical Vertex model should be priced");
+        assert!((cost - expected).abs() < 1e-12, "model: {model}");
+    }
+}
+
+#[tokio::test]
+async fn vertex_unknown_model_returns_typed_error() {
+    let provider = pricing_test_provider().await;
+
+    for model in ["unknown-google-model", "gemini-1.5-flash-9999"] {
+        let result = LLMProvider::calculate_cost(&provider, model, 1_000, 500).await;
+        assert!(matches!(result, Err(ProviderError::ModelNotFound { .. })));
+    }
+}
+
+#[tokio::test]
+async fn vertex_model_metadata_uses_per_1k_units() {
+    let provider = pricing_test_provider().await;
+    let pro = provider
+        .models()
+        .iter()
+        .find(|model| model.id == "gemini-1.5-pro")
+        .expect("Gemini 1.5 Pro metadata should exist");
+
+    let input = pro
+        .input_cost_per_1k_tokens
+        .expect("input pricing should be present");
+    let output = pro
+        .output_cost_per_1k_tokens
+        .expect("output pricing should be present");
+    assert!((input - 0.0035).abs() < 1e-12);
+    assert!((output - 0.0105).abs() < 1e-12);
+}
+
 #[test]
 fn test_client_vertex_usage_parser_is_strict_and_endpoint_aware() {
     let valid = serde_json::json!({"usageMetadata": {
@@ -354,6 +428,17 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
     assert_eq!(model_ids, expected_ids);
     assert!(model_ids.iter().any(|id| id == "gemini-3.5-flash"));
     assert!(!model_ids.iter().any(|id| id == "gemini-1.0-pro"));
+    assert!(!model_ids.iter().any(|id| id == "gemini-2.0-flash-exp"));
+
+    let mut experimental_config = test_vertex_provider_config();
+    experimental_config.enable_experimental = true;
+    let experimental_provider = VertexAIProvider::new(experimental_config).await.unwrap();
+    assert!(
+        experimental_provider
+            .models()
+            .iter()
+            .any(|model| model.id == "gemini-2.0-flash-exp")
+    );
 
     let model = provider
         .models()
@@ -365,77 +450,68 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
         model.metadata["google_auth_boundary"],
         serde_json::json!("bearer_token")
     );
+
+    for model_id in ["gemini-1.5-flash", "gemini-3-flash-preview"] {
+        let advertised = provider
+            .models()
+            .iter()
+            .find(|model| model.id == model_id)
+            .unwrap();
+        assert_eq!(
+            advertised.max_context_length,
+            crate::core::providers::vertex_ai::parse_vertex_model(model_id).max_context_tokens()
+        );
+    }
 }
 
 #[tokio::test]
-async fn test_vertex_gemini_cost_uses_shared_catalog_pricing() {
+async fn test_vertex_shared_catalog_new_model_request_contract() {
     let provider = VertexAIProvider::new(test_vertex_provider_config())
         .await
         .unwrap();
 
-    let cost = provider
-        .calculate_cost("gemini-3.5-flash", 1000, 500)
-        .await
-        .unwrap();
-    let expected = crate::core::providers::gemini::models::CostCalculator::calculate_cost(
-        "gemini-3.5-flash",
-        1000,
-        500,
-    )
-    .unwrap();
-    assert!((cost - expected).abs() < f64::EPSILON);
+    assert!(
+        crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "gemini-3.5-flash",
+            false
+        )
+    );
+    assert!(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "models/gemini-3.5-flash",
+            false
+        )
+    );
+    assert!(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "prefix-gemini-3.5-flash",
+            false
+        )
+    );
+    assert!(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model("gemini-1.0-pro", true)
+    );
+    assert!(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "gemini-2.0-flash-exp",
+            false
+        )
+    );
+    assert!(
+        crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+            "gemini-2.0-flash-exp",
+            true
+        )
+    );
 
-    let alias_cost = provider
-        .calculate_cost("gemini-1.5-pro-002", 1000, 500)
-        .await
-        .unwrap();
-    let canonical_cost = crate::core::providers::gemini::models::CostCalculator::calculate_cost(
-        "gemini-1.5-pro",
-        1000,
-        500,
-    )
-    .unwrap();
-    assert!((alias_cost - canonical_cost).abs() < f64::EPSILON);
+    let url = provider.build_google_catalog_model_url("gemini-3.5-flash", "generateContent", false);
+    assert!(url.contains("/publishers/google/models/gemini-3.5-flash:generateContent"));
+    assert!(!url.contains("alt=sse"));
+
+    let stream_url =
+        provider.build_google_catalog_model_url("gemini-3.5-flash", "streamGenerateContent", true);
+    assert!(stream_url.ends_with(":streamGenerateContent?alt=sse"));
 }
-
-// ==================== Cost Calculation Tests ====================
-
-#[test]
-fn test_cost_calculation_gemini_pro() {
-    let input_tokens = 1000_u32;
-    let output_tokens = 500_u32;
-    let cost = (input_tokens as f64 * 0.0005 + output_tokens as f64 * 0.0015) / 1000.0;
-    assert!(cost > 0.0);
-    // 1000 * 0.0005 + 500 * 0.0015 = 0.5 + 0.75 = 1.25 / 1000 = 0.00125
-    assert!((cost - 0.00125).abs() < 0.0001);
-}
-
-#[test]
-fn test_cost_calculation_gemini_1_5_pro() {
-    let input_tokens = 1000_u32;
-    let output_tokens = 500_u32;
-    let cost = (input_tokens as f64 * 0.00125 + output_tokens as f64 * 0.00375) / 1000.0;
-    assert!(cost > 0.0);
-    // 1000 * 0.00125 + 500 * 0.00375 = 1.25 + 1.875 = 3.125 / 1000 = 0.003125
-    assert!((cost - 0.003125).abs() < 0.0001);
-}
-
-#[test]
-fn test_cost_calculation_gemini_1_5_flash() {
-    let input_tokens = 1000_u32;
-    let output_tokens = 500_u32;
-    let cost = (input_tokens as f64 * 0.000075 + output_tokens as f64 * 0.0003) / 1000.0;
-    assert!(cost > 0.0);
-    // 1000 * 0.000075 + 500 * 0.0003 = 0.075 + 0.15 = 0.225 / 1000 = 0.000225
-    assert!((cost - 0.000225).abs() < 0.0001);
-}
-
-#[test]
-fn test_cost_calculation_unknown_model() {
-    let cost = 0.0_f64;
-    assert_eq!(cost, 0.0);
-}
-
 // ==================== URL Building Tests (logic only) ====================
 
 #[test]

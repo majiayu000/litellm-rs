@@ -87,7 +87,6 @@ fn test_vertex_ai_provider_config_max_retries() {
 
 #[test]
 fn test_vertex_ai_model_gemini_ids() {
-    assert_eq!(VertexAIModel::Gemini35Flash.model_id(), "gemini-3.5-flash");
     assert_eq!(
         VertexAIModel::Gemini31ProPreview.model_id(),
         "gemini-3.1-pro-preview"
@@ -179,25 +178,7 @@ fn test_vertex_ai_model_custom() {
 }
 
 #[test]
-fn test_vertex_ai_model_gemini_catalog_ids() {
-    assert_eq!(
-        VertexAIModel::Gemini35Flash.gemini_catalog_model_id(),
-        Some("gemini-3.5-flash")
-    );
-    assert_eq!(
-        VertexAIModel::GeminiPro.gemini_catalog_model_id(),
-        Some("gemini-1.5-pro")
-    );
-    assert_eq!(
-        VertexAIModel::Gemini20FlashThinking.gemini_catalog_model_id(),
-        Some("gemini-2.0-flash-thinking-exp")
-    );
-    assert_eq!(VertexAIModel::Claude3Opus.gemini_catalog_model_id(), None);
-}
-
-#[test]
 fn test_vertex_ai_model_is_gemini() {
-    assert!(VertexAIModel::Gemini35Flash.is_gemini());
     assert!(VertexAIModel::Gemini31ProPreview.is_gemini());
     assert!(VertexAIModel::Gemini3FlashPreview.is_gemini());
     assert!(VertexAIModel::Gemini25Pro.is_gemini());
@@ -231,7 +212,6 @@ fn test_vertex_ai_model_is_partner_model() {
 
 #[test]
 fn test_vertex_ai_model_supports_vision() {
-    assert!(VertexAIModel::Gemini35Flash.supports_vision());
     assert!(VertexAIModel::Gemini31ProPreview.supports_vision());
     assert!(VertexAIModel::Gemini3FlashPreview.supports_vision());
     assert!(VertexAIModel::Gemini25Pro.supports_vision());
@@ -289,8 +269,6 @@ fn test_vertex_ai_model_supports_thinking_mode() {
 
 #[test]
 fn test_vertex_ai_model_max_context_tokens() {
-    assert_eq!(VertexAIModel::Gemini35Flash.max_context_tokens(), 1_048_576);
-
     // Gemini 3
     assert_eq!(
         VertexAIModel::Gemini31ProPreview.max_context_tokens(),
@@ -298,7 +276,7 @@ fn test_vertex_ai_model_max_context_tokens() {
     );
     assert_eq!(
         VertexAIModel::Gemini3FlashPreview.max_context_tokens(),
-        1_000_000
+        1_048_576
     );
     assert_eq!(VertexAIModel::Gemini3ProImage.max_context_tokens(), 65_536);
 
@@ -306,7 +284,7 @@ fn test_vertex_ai_model_max_context_tokens() {
     assert_eq!(VertexAIModel::Gemini25Pro.max_context_tokens(), 1_048_576);
 
     // Gemini 1.5 Pro has largest
-    assert_eq!(VertexAIModel::GeminiPro.max_context_tokens(), 2_097_152);
+    assert_eq!(VertexAIModel::GeminiPro.max_context_tokens(), 2_000_000);
 
     assert_eq!(VertexAIModel::ClaudeOpus47.max_context_tokens(), 1_000_000);
     assert_eq!(VertexAIModel::ClaudeOpus46.max_context_tokens(), 1_000_000);
@@ -332,10 +310,6 @@ fn test_vertex_ai_model_max_context_tokens() {
 
 #[test]
 fn test_parse_vertex_model_gemini_3() {
-    assert!(matches!(
-        parse_vertex_model("gemini-3.5-flash"),
-        VertexAIModel::Gemini35Flash
-    ));
     assert!(matches!(
         parse_vertex_model("gemini-3.1-pro-preview"),
         VertexAIModel::Gemini31ProPreview

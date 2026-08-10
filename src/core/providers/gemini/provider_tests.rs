@@ -324,9 +324,8 @@ fn test_calculate_cost() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let cost = provider.calculate_cost("gemini-1.0-pro", 1000, 500);
-    // Cost should be Some value (may be 0 for free models)
-    assert!(cost.is_some());
+    let cost = provider.calculate_cost("gemini-2.5-flash", 1000, 500);
+    assert!(cost.is_ok());
 }
 
 #[test]
@@ -335,7 +334,7 @@ fn test_calculate_cost_unknown_model() {
     let provider = GeminiProvider::new(config).unwrap();
 
     let cost = provider.calculate_cost("unknown-model", 1000, 500);
-    assert!(cost.is_none());
+    assert!(matches!(cost, Err(ProviderError::ModelNotFound { .. })));
 }
 
 #[test]
@@ -343,10 +342,8 @@ fn test_calculate_cost_zero_tokens() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let cost = provider.calculate_cost("gemini-1.0-pro", 0, 0);
-    if let Some(c) = cost {
-        assert!((c - 0.0).abs() < 0.0001);
-    }
+    let cost = provider.calculate_cost("gemini-2.5-flash", 0, 0);
+    assert_eq!(cost.expect("catalogued model should be priced"), 0.0);
 }
 
 #[tokio::test]
@@ -354,8 +351,45 @@ async fn test_async_calculate_cost() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let cost = LLMProvider::calculate_cost(&provider, "gemini-1.0-pro", 1000, 500).await;
+    let cost = LLMProvider::calculate_cost(&provider, "gemini-2.5-flash", 1000, 500).await;
     assert!(cost.is_ok());
+}
+
+#[tokio::test]
+async fn async_calculate_cost_uses_shared_pricing_units() {
+    let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
+    let provider = GeminiProvider::new(config).unwrap();
+
+    let cost = LLMProvider::calculate_cost(&provider, "gemini-2.5-flash", 1_000, 500)
+        .await
+        .expect("catalogued Gemini model should be priced");
+
+    assert!((cost - 0.00155).abs() < 1e-12);
+
+    let preview = LLMProvider::calculate_cost(&provider, "gemini-3-flash-preview", 1_000, 500)
+        .await
+        .expect("provider-prefixed exact Gemini row should be priced");
+    assert!((preview - 0.002).abs() < 1e-12);
+
+    let image = LLMProvider::calculate_cost(&provider, "gemini-3-pro-image-preview", 1_000, 500)
+        .await
+        .expect("chat-capable Gemini image row should be token priced");
+    assert!((image - 0.008).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn async_calculate_cost_unknown_model_returns_typed_error() {
+    let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
+    let provider = GeminiProvider::new(config).unwrap();
+
+    for model in [
+        "unknown-google-model",
+        "gemini-1.5-flash-9999",
+        "gemini-1.5-flash",
+    ] {
+        let result = LLMProvider::calculate_cost(&provider, model, 1_000, 500).await;
+        assert!(matches!(result, Err(ProviderError::ModelNotFound { .. })));
+    }
 }
 
 // ==================== Unsupported Feature Tests ====================

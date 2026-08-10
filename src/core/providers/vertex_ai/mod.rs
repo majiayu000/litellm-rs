@@ -40,6 +40,60 @@ pub use common_utils::VertexAIConfig;
 pub use error::VertexAIError;
 
 use crate::core::net::{ProviderEndpointAccess, ProviderEndpointPolicy};
+use crate::core::pricing_service::{PricingService, PricingUsage};
+use crate::core::providers::unified_provider::ProviderError;
+use crate::utils::error::gateway_error::GatewayError;
+
+pub(crate) fn calculate_vertex_cost(
+    model: &str,
+    input_tokens: u32,
+    output_tokens: u32,
+) -> Result<f64, ProviderError> {
+    PricingService::shared_embedded_default()
+        .and_then(|service| {
+            service.calculate_loaded_usage_cost_for_provider(
+                "vertex_ai",
+                model,
+                &PricingUsage::new(input_tokens, output_tokens),
+            )
+        })
+        .map(|cost| cost.total_cost)
+        .map_err(|error| vertex_pricing_error(model, error))
+}
+
+pub(crate) fn vertex_prices_per_1k(
+    model: &str,
+) -> Result<(Option<f64>, Option<f64>), ProviderError> {
+    let (_, pricing) = PricingService::shared_embedded_default()
+        .map_err(|error| vertex_pricing_error(model, error))?
+        .get_model_info_for_provider("vertex_ai", model)
+        .ok_or_else(|| ProviderError::model_not_found("vertex_ai", model))?;
+    Ok((
+        pricing.input_cost_per_token.map(|price| price * 1_000.0),
+        pricing.output_cost_per_token.map(|price| price * 1_000.0),
+    ))
+}
+
+pub(crate) fn is_vertex_gemini_catalog_model(model: &str, include_experimental: bool) -> bool {
+    let surface = if include_experimental {
+        crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental
+    } else {
+        crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi
+    };
+    crate::core::providers::gemini::get_gemini_registry()
+        .get_model_spec(model)
+        .is_some_and(|spec| surface.includes(spec))
+}
+
+fn vertex_pricing_error(model: &str, error: GatewayError) -> ProviderError {
+    match error {
+        GatewayError::NotFound(_) => ProviderError::model_not_found("vertex_ai", model),
+        error => ProviderError::Other {
+            provider: "vertex_ai",
+            message: format!("pricing authority failed for model '{model}': {error}"),
+        },
+    }
+}
 
 /// Main VertexAI Provider Configuration
 #[derive(Debug, Clone)]
@@ -136,9 +190,6 @@ impl crate::core::traits::provider::ProviderConfig for VertexAIProviderConfig {
 /// Supported Vertex AI models
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VertexAIModel {
-    // Gemini 3.5 models (2026 - latest)
-    Gemini35Flash, // gemini-3.5-flash
-
     // Gemini 3.1 models (2026 - latest previews)
     Gemini31ProPreview, // gemini-3.1-pro-preview
     Gemini31Flash,      // gemini-3.1-flash
@@ -210,9 +261,6 @@ impl VertexAIModel {
     /// Get the model ID string for API calls
     pub fn model_id(&self) -> String {
         match self {
-            // Gemini 3.5 models
-            Self::Gemini35Flash => "gemini-3.5-flash".to_string(),
-
             // Gemini 3.1 models
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview".to_string(),
             Self::Gemini31Flash => "gemini-3.1-flash".to_string(),
@@ -284,8 +332,7 @@ impl VertexAIModel {
     pub fn is_gemini(&self) -> bool {
         matches!(
             self,
-            Self::Gemini35Flash
-                | Self::Gemini31ProPreview
+            Self::Gemini31ProPreview
                 | Self::Gemini31Flash
                 | Self::Gemini31FlashLite
                 | Self::Gemini3Pro
@@ -342,8 +389,7 @@ impl VertexAIModel {
     pub fn supports_vision(&self) -> bool {
         matches!(
             self,
-            Self::Gemini35Flash
-                | Self::Gemini31ProPreview
+            Self::Gemini31ProPreview
                 | Self::Gemini31Flash
                 | Self::Gemini31FlashLite
                 | Self::Gemini3Pro
@@ -419,35 +465,16 @@ impl VertexAIModel {
         )
     }
 
-    /// Get the shared Gemini catalog ID for Gemini models routed through Vertex AI.
-    pub fn gemini_catalog_model_id(&self) -> Option<&'static str> {
-        match self {
-            Self::Gemini35Flash => Some("gemini-3.5-flash"),
-            Self::Gemini31ProPreview => Some("gemini-3.1-pro-preview"),
-            Self::Gemini31Flash => Some("gemini-3.1-flash"),
-            Self::Gemini31FlashLite => Some("gemini-3.1-flash-lite"),
-            Self::Gemini3Pro => Some("gemini-3-pro"),
-            Self::Gemini3ProDeepThink => Some("gemini-3-pro-deep-think"),
-            Self::Gemini3FlashPreview => Some("gemini-3-flash-preview"),
-            Self::Gemini3ProImage => Some("gemini-3-pro-image-preview"),
-            Self::Gemini25Pro => Some("gemini-2.5-pro"),
-            Self::Gemini25Flash => Some("gemini-2.5-flash"),
-            Self::Gemini25FlashLite => Some("gemini-2.5-flash-lite"),
-            Self::Gemini20FlashExp => Some("gemini-2.0-flash-exp"),
-            Self::Gemini20FlashThinking => Some("gemini-2.0-flash-thinking-exp"),
-            Self::GeminiPro => Some("gemini-1.5-pro"),
-            Self::GeminiFlash => Some("gemini-1.5-flash"),
-            Self::GeminiFlash8B => Some("gemini-1.5-flash-8b"),
-            _ => None,
-        }
-    }
-
     /// Get maximum context window
     pub fn max_context_tokens(&self) -> usize {
-        match self {
-            // Gemini 3.5 models
-            Self::Gemini35Flash => 1_048_576,
+        if self.is_gemini()
+            && let Some(spec) = crate::core::providers::gemini::get_gemini_registry()
+                .get_model_spec(&self.model_id())
+        {
+            return spec.model_info.max_context_length as usize;
+        }
 
+        match self {
             // Gemini 3.1 models
             Self::Gemini31ProPreview | Self::Gemini31Flash | Self::Gemini31FlashLite => 1_048_576,
 
@@ -515,11 +542,6 @@ impl VertexAIModel {
 /// Parse model string to VertexAIModel enum
 pub fn parse_vertex_model(model: &str) -> VertexAIModel {
     let model_lower = model.to_lowercase();
-
-    // Gemini 3.5 models
-    if model_lower.contains("gemini-3.5-flash") {
-        return VertexAIModel::Gemini35Flash;
-    }
 
     // Gemini 3.1 models (check before Gemini 3.0 as more specific)
     if model_lower.contains("gemini-3.1-flash-lite") {

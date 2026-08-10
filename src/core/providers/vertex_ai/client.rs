@@ -123,9 +123,11 @@ impl VertexAIProvider {
         _context: RequestContext,
     ) -> Result<ChatResponse, VertexAIError> {
         let model = super::parse_vertex_model(&request.model);
+        let is_catalog_gemini =
+            super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental);
 
         // Transform request based on model type
-        let (endpoint, body) = if model.is_gemini() {
+        let (endpoint, body) = if is_catalog_gemini {
             let endpoint = if request.stream {
                 "streamGenerateContent"
             } else {
@@ -147,7 +149,11 @@ impl VertexAIProvider {
             return Err(ProviderError::model_not_found("vertex_ai", &request.model));
         };
 
-        let url = self.build_url(&model, endpoint, request.stream);
+        let url = if is_catalog_gemini {
+            self.build_google_catalog_model_url(&request.model, endpoint, request.stream)
+        } else {
+            self.build_url(&model, endpoint, request.stream)
+        };
         let response = self.make_request(&url, body).await?;
 
         // Parse response
@@ -285,12 +291,39 @@ impl LLMProvider for VertexAIProvider {
 
     fn models(&self) -> &[ModelInfo] {
         use std::sync::LazyLock;
-        static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-            crate::core::providers::gemini::get_gemini_registry().list_model_infos_for_surface(
-                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi,
+        fn load_models(
+            surface: crate::core::providers::gemini::GoogleGeminiApiSurface,
+        ) -> Vec<ModelInfo> {
+            let mut models = crate::core::providers::gemini::get_gemini_registry()
+                .list_model_infos_for_surface(surface);
+            for model in &mut models {
+                match super::vertex_prices_per_1k(&model.id) {
+                    Ok((input, output)) => {
+                        model.input_cost_per_1k_tokens = input;
+                        model.output_cost_per_1k_tokens = output;
+                    }
+                    Err(error) => {
+                        tracing::error!(model = %model.id, %error, "Vertex AI model pricing is unavailable");
+                        model.input_cost_per_1k_tokens = None;
+                        model.output_cost_per_1k_tokens = None;
+                    }
+                }
+            }
+            models
+        }
+        static STABLE_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi)
+        });
+        static EXPERIMENTAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
             )
         });
-        &MODELS
+        if self.config.enable_experimental {
+            &EXPERIMENTAL_MODELS
+        } else {
+            &STABLE_MODELS
+        }
     }
 
     async fn chat_completion(
@@ -369,19 +402,7 @@ impl LLMProvider for VertexAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        let vertex_model = super::parse_vertex_model(model);
-        if let Some(catalog_model_id) = vertex_model.gemini_catalog_model_id()
-            && let Some(cost) =
-                crate::core::providers::gemini::models::CostCalculator::calculate_cost(
-                    catalog_model_id,
-                    input_tokens,
-                    output_tokens,
-                )
-        {
-            return Ok(cost);
-        }
-
-        Ok(0.0)
+        super::calculate_vertex_cost(model, input_tokens, output_tokens)
     }
 
     /// Model
