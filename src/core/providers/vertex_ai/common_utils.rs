@@ -41,11 +41,25 @@ pub struct Content {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Part {
-    Text { text: String },
-    InlineData { inline_data: InlineData },
-    FileData { file_data: FileData },
-    FunctionCall { function_call: FunctionCall },
-    FunctionResponse { function_response: FunctionResponse },
+    Text {
+        text: String,
+    },
+    InlineData {
+        #[serde(rename = "inlineData")]
+        inline_data: InlineData,
+    },
+    FileData {
+        #[serde(rename = "fileData")]
+        file_data: FileData,
+    },
+    FunctionCall {
+        #[serde(rename = "functionCall")]
+        function_call: FunctionCall,
+    },
+    FunctionResponse {
+        #[serde(rename = "functionResponse")]
+        function_response: FunctionResponse,
+    },
 }
 
 /// Inline data for images/media
@@ -82,21 +96,27 @@ pub struct GenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
 
+    #[serde(rename = "topP")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
 
+    #[serde(rename = "topK")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<i32>,
 
+    #[serde(rename = "maxOutputTokens")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<i32>,
 
+    #[serde(rename = "stopSequences")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
 
+    #[serde(rename = "responseMimeType")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_mime_type: Option<String>,
 
+    #[serde(rename = "responseSchema")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<Value>,
 }
@@ -111,6 +131,7 @@ pub struct SafetySettings {
 /// Tool config
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolConfig {
+    #[serde(rename = "functionCallingConfig")]
     pub function_calling_config: FunctionCallingConfig,
 }
 
@@ -118,6 +139,7 @@ pub struct ToolConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionCallingConfig {
     pub mode: String, // "AUTO", "ANY", "NONE"
+    #[serde(rename = "allowedFunctionNames")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_function_names: Option<Vec<String>>,
 }
@@ -133,6 +155,7 @@ pub struct FunctionDeclaration {
 /// Tool definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
+    #[serde(rename = "functionDeclarations")]
     pub function_declarations: Vec<FunctionDeclaration>,
 }
 

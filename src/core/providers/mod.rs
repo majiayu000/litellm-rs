@@ -56,6 +56,7 @@ pub mod gemini;
 pub mod github;
 #[cfg(feature = "providers-extended")]
 pub mod github_copilot;
+pub(crate) mod google;
 // groq: Tier 1 -> registry/catalog.rs
 // heroku: Tier 1 -> registry/catalog.rs
 // hosted_vllm: Tier 1 -> registry/catalog.rs

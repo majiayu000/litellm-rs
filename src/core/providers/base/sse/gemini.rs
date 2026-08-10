@@ -2,12 +2,17 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
 use super::SSETransformer;
+use crate::core::providers::google::tool_loop::{
+    candidate_index, finish_reason, parse_function_call_parts,
+};
 use crate::core::providers::shared::strict_direct_gemini_usage_metadata;
 #[cfg(any(feature = "providers-extended", test))]
 use crate::core::providers::shared::strict_vertex_usage_metadata;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
-use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason, Usage};
+use crate::core::types::responses::{
+    ChatChunk, ChatDelta, ChatStreamChoice, FunctionCallDelta, ToolCallDelta, Usage,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum GeminiUsagePolicy {
@@ -30,34 +35,37 @@ enum GeminiStreamUsage {
 /// Handles Gemini's streaming format with candidates/parts structure.
 #[derive(Debug)]
 pub struct GeminiTransformer {
+    provider: &'static str,
     model: String,
     chunk_id: String,
     usage_policy: Option<GeminiUsagePolicy>,
     stream_usage: Arc<Mutex<GeminiStreamUsage>>,
+    tool_call_seen: Arc<Mutex<bool>>,
 }
 
 impl Clone for GeminiTransformer {
     fn clone(&self) -> Self {
-        Self::with_usage_policy(self.model.clone(), self.usage_policy)
+        Self::with_usage_policy(self.provider, self.model.clone(), self.usage_policy)
     }
 }
 
 impl GeminiTransformer {
     pub fn new(model: impl Into<String>) -> Self {
-        Self::with_usage_policy(model, Some(GeminiUsagePolicy::Direct))
+        Self::with_usage_policy("gemini", model, Some(GeminiUsagePolicy::Direct))
     }
 
     #[cfg(any(feature = "providers-extended", test))]
     pub(crate) fn new_vertex(model: impl Into<String>) -> Self {
-        Self::with_usage_policy(model, Some(GeminiUsagePolicy::Vertex))
+        Self::with_usage_policy("vertex_ai", model, Some(GeminiUsagePolicy::Vertex))
     }
 
     #[cfg(feature = "providers-extended")]
     pub(crate) fn new_without_usage_policy(model: impl Into<String>) -> Self {
-        Self::with_usage_policy(model, None)
+        Self::with_usage_policy("gemini", model, None)
     }
 
     fn with_usage_policy(
+        provider: &'static str,
         model: impl Into<String>,
         usage_policy: Option<GeminiUsagePolicy>,
     ) -> Self {
@@ -66,10 +74,12 @@ impl GeminiTransformer {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         Self {
+            provider,
             model: model.into(),
             chunk_id: format!("gemini-stream-{}", nanos),
             usage_policy,
             stream_usage: Arc::new(Mutex::new(GeminiStreamUsage::Missing)),
+            tool_call_seen: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -99,6 +109,20 @@ impl GeminiTransformer {
     ) -> Result<std::sync::MutexGuard<'_, GeminiStreamUsage>, ProviderError> {
         self.stream_usage.lock().map_err(|_| {
             ProviderError::response_parsing("gemini", "Gemini stream usage state is poisoned")
+        })
+    }
+
+    fn mark_tool_call_seen(&self) -> Result<(), ProviderError> {
+        let mut seen = self.tool_call_seen.lock().map_err(|_| {
+            ProviderError::response_parsing(self.provider, "Gemini stream tool state is poisoned")
+        })?;
+        *seen = true;
+        Ok(())
+    }
+
+    fn has_seen_tool_call(&self) -> Result<bool, ProviderError> {
+        self.tool_call_seen.lock().map(|seen| *seen).map_err(|_| {
+            ProviderError::response_parsing(self.provider, "Gemini stream tool state is poisoned")
         })
     }
 
@@ -164,7 +188,7 @@ impl GeminiTransformer {
 
 impl SSETransformer for GeminiTransformer {
     fn provider_name(&self) -> &'static str {
-        "gemini"
+        self.provider
     }
 
     fn transform_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
@@ -214,11 +238,7 @@ impl SSETransformer for GeminiTransformer {
         for (position, candidate) in candidates.iter().enumerate() {
             // Prefer the upstream candidate index (n>1 sends real indices);
             // fall back to the array position only when absent.
-            let index = candidate
-                .get("index")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32)
-                .unwrap_or(position as u32);
+            let index = candidate_index(self.provider, candidate, position)?;
 
             let empty_parts = vec![];
             let parts = candidate
@@ -234,21 +254,45 @@ impl SSETransformer for GeminiTransformer {
                 }
             }
             let delta_content = text_parts.join("");
+            let tool_calls = parse_function_call_parts(self.provider, parts, index)?;
+            if !tool_calls.is_empty() {
+                self.mark_tool_call_seen()?;
+            }
+            let tool_deltas = if tool_calls.is_empty() {
+                None
+            } else {
+                Some(
+                    tool_calls
+                        .into_iter()
+                        .enumerate()
+                        .map(|(call_index, call)| ToolCallDelta {
+                            index: call_index as u32,
+                            id: Some(call.id),
+                            tool_type: Some(call.tool_type),
+                            function: Some(FunctionCallDelta {
+                                name: Some(call.function.name),
+                                arguments: Some(call.function.arguments),
+                            }),
+                        })
+                        .collect(),
+                )
+            };
 
             let finish_reason = candidate
                 .get("finishReason")
                 .and_then(|r| r.as_str())
-                .map(|r| match r {
-                    "STOP" => FinishReason::Stop,
-                    "MAX_TOKENS" => FinishReason::Length,
-                    "SAFETY" | "RECITATION" => FinishReason::ContentFilter,
-                    _ => FinishReason::Stop,
-                });
+                .map(|reason| {
+                    finish_reason(self.provider, Some(reason), self.has_seen_tool_call()?)
+                })
+                .transpose()?;
 
             choices.push(ChatStreamChoice {
                 index,
                 delta: ChatDelta {
-                    role: if !delta_content.is_empty() || finish_reason.is_some() {
+                    role: if !delta_content.is_empty()
+                        || tool_deltas.is_some()
+                        || finish_reason.is_some()
+                    {
                         Some(MessageRole::Assistant)
                     } else {
                         None
@@ -260,7 +304,7 @@ impl SSETransformer for GeminiTransformer {
                     },
                     thinking: None,
                     function_call: None,
-                    tool_calls: None,
+                    tool_calls: tool_deltas,
                     audio: None,
                 },
                 finish_reason,
@@ -398,6 +442,36 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(huge.usage.unwrap().total_tokens, u32::MAX);
+    }
+
+    #[test]
+    fn stream_maps_function_call_delta_and_terminal_tool_finish() {
+        let transformer = GeminiTransformer::new("gemini-test");
+        let first = transformer
+            .transform_chunk(
+                r#"{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_weather_1","name":"get_weather","args":{"city":"Paris"}}}]}}]}"#,
+            )
+            .unwrap()
+            .unwrap();
+        let tool_delta = first.choices[0]
+            .delta
+            .tool_calls
+            .as_ref()
+            .and_then(|calls| calls.first())
+            .unwrap();
+        assert_eq!(tool_delta.id.as_deref(), Some("call_weather_1"));
+        let function = tool_delta.function.as_ref().unwrap();
+        assert_eq!(function.name.as_deref(), Some("get_weather"));
+        assert_eq!(function.arguments.as_deref(), Some(r#"{"city":"Paris"}"#));
+
+        let terminal = transformer
+            .transform_chunk(r#"{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            terminal.choices[0].finish_reason,
+            Some(crate::core::types::responses::FinishReason::ToolCalls)
+        );
     }
 
     async fn collect_stream(transformer: GeminiTransformer, events: &[&str]) -> Vec<ChatChunk> {
