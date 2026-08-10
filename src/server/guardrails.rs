@@ -6,7 +6,7 @@ use crate::core::models::openai::{
 };
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
-use tracing::error;
+use tracing::{error, warn};
 
 mod input_scan;
 
@@ -31,7 +31,14 @@ async fn check_input(
     if !engine.input_checks_enabled() {
         return Ok(());
     }
-    let content = input_scan::payload(request)?;
+    let content = match input_scan::payload(request) {
+        Ok(content) => content,
+        Err(cause) if engine.config().fail_open => {
+            warn!(%cause, "Input guardrail projection failed open");
+            return Ok(());
+        }
+        Err(cause) => return Err(cause),
+    };
     enforce(engine.check_input(&content).await, "input")
 }
 
@@ -164,6 +171,26 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn explicit_fail_open_allows_unscannable_input() {
+        use crate::core::models::openai::DocumentSource;
+        use base64::Engine as _;
+
+        let mut config = GatewayConfig::default().guardrails;
+        config.fail_open = true;
+        let engine = GuardrailEngine::new(config).expect("guardrail policy must compile");
+        let mut request = request("safe");
+        request.messages[0].content = Some(MessageContent::Parts(vec![ContentPart::Document {
+            source: DocumentSource {
+                media_type: "application/pdf".to_string(),
+                data: base64::engine::general_purpose::STANDARD.encode("%PDF"),
+            },
+            cache_control: None,
+        }]));
+
+        assert!(check_input(&engine, &request).await.is_ok());
     }
 
     #[tokio::test]
