@@ -145,6 +145,13 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         true,
     ),
     entry(
+        ProviderType::Ollama,
+        "ollama",
+        &[],
+        providers_extended_native_dispatch_kind(),
+        false,
+    ),
+    entry(
         ProviderType::Mistral,
         "mistral",
         &["mistralai"],
@@ -490,6 +497,8 @@ mod tests {
             ProviderType::Gemini,
             #[cfg(feature = "providers-extended")]
             ProviderType::GitHubCopilot,
+            #[cfg(feature = "providers-extended")]
+            ProviderType::Ollama,
         ])
         .collect::<HashSet<_>>();
 
@@ -508,6 +517,10 @@ mod tests {
         );
         assert_eq!(
             dispatch_kind_for(&ProviderType::Gemini),
+            providers_extended_native_dispatch_kind()
+        );
+        assert_eq!(
+            dispatch_kind_for(&ProviderType::Ollama),
             providers_extended_native_dispatch_kind()
         );
         assert_eq!(

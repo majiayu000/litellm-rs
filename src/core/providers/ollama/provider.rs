@@ -11,7 +11,9 @@ use tracing::debug;
 use super::config::OllamaConfig;
 use super::model_info::{OllamaModelInfo, OllamaShowResponse, OllamaTagsResponse, get_model_info};
 use super::streaming::OllamaStream;
-use crate::core::providers::base::{GlobalPoolManager, HttpErrorMapper, HttpMethod, header};
+use crate::core::providers::base::{
+    BaseConfig, GlobalPoolManager, HttpErrorMapper, HttpMethod, header,
+};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::error_mapper::types::GenericErrorMapper;
@@ -59,10 +61,27 @@ impl OllamaProvider {
             .validate()
             .map_err(|e| ProviderError::configuration("ollama", e))?;
 
-        // Create pool manager
-        let pool_manager = Arc::new(GlobalPoolManager::new().map_err(|e| {
-            ProviderError::configuration("ollama", format!("Failed to create pool manager: {}", e))
-        })?);
+        let api_base = config.get_api_base();
+        let endpoint_access = config.resolved_endpoint_access(&api_base);
+        let pool_manager = Arc::new(
+            GlobalPoolManager::new_for_provider(
+                "ollama",
+                BaseConfig {
+                    api_key: config.get_api_key(),
+                    api_base: Some(api_base),
+                    endpoint_access,
+                    timeout: config.timeout,
+                    max_retries: config.max_retries,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| {
+                ProviderError::configuration(
+                    "ollama",
+                    format!("Failed to create pool manager: {}", e),
+                )
+            })?,
+        );
 
         // Initialize with empty models (will be populated on first list_models call)
         let models = Vec::new();
@@ -559,37 +578,29 @@ impl LLMProvider for OllamaProvider {
 
         let request_body = self.build_chat_request(&request, true)?;
 
-        // Use reqwest directly for streaming
         let url = self.config.get_chat_endpoint();
-        let mut req = crate::core::http::outbound::streaming_outbound_client()
-            .clone()
-            .post(&url);
-
-        // Add auth header if API key is set
+        let mut headers = vec![header("Content-Type", "application/json".to_string())];
         if let Some(api_key) = self.config.get_api_key() {
-            req = req.header("Authorization", format!("Bearer {}", api_key));
+            headers.push(header("Authorization", format!("Bearer {}", api_key)));
         }
-
-        let response = crate::core::providers::base::connection_pool::send_streaming_request(
-            req.header("Content-Type", "application/json")
-                .json(&request_body),
-            "ollama",
-        )
-        .await
-        .map_err(|error| {
-            let error_msg = error.to_string();
-            if error_msg.contains("Connection refused") || error_msg.contains("connect error") {
-                ProviderError::network(
-                    "ollama",
-                    format!(
-                        "Failed to connect to Ollama server at {}. Is Ollama running?",
-                        self.config.get_api_base()
-                    ),
-                )
-            } else {
-                error
-            }
-        })?;
+        let response = self
+            .pool_manager
+            .execute_streaming_request(&url, headers, request_body, "ollama")
+            .await
+            .map_err(|error| {
+                let error_msg = error.to_string();
+                if error_msg.contains("Connection refused") || error_msg.contains("connect error") {
+                    ProviderError::network(
+                        "ollama",
+                        format!(
+                            "Failed to connect to Ollama server at {}. Is Ollama running?",
+                            self.config.get_api_base()
+                        ),
+                    )
+                } else {
+                    error
+                }
+            })?;
 
         // Check status
         if !response.status().is_success() {

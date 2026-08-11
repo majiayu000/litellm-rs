@@ -15,6 +15,8 @@ mod cohere_builder;
 #[cfg(test)]
 mod endpoint_access_tests;
 mod endpoint_policy;
+#[cfg(test)]
+mod factory_creation_tests;
 #[cfg(feature = "providers-extended")]
 mod fal_ai_builder;
 #[cfg(feature = "providers-extended")]
@@ -784,31 +786,5 @@ mod tests {
                 provider_type
             );
         }
-    }
-
-    #[tokio::test]
-    async fn test_create_provider_reports_unknown_custom_provider() {
-        let config = crate::config::models::provider::ProviderConfig {
-            name: "my-custom-provider".to_string(),
-            provider_type: "".to_string(),
-            api_key: "test-key".to_string(),
-            ..Default::default()
-        };
-
-        let err = create_provider(config)
-            .await
-            .expect_err("Expected unknown custom provider to fail");
-        // Unknown provider strings now produce InvalidRequest (via ConfigError::InvalidValue)
-        // instead of NotImplemented, so callers get a clear parse-time error.
-        assert!(
-            matches!(err, ProviderError::InvalidRequest { .. }),
-            "Expected InvalidRequest error, got {}",
-            err
-        );
-        assert!(
-            err.to_string().contains("my-custom-provider"),
-            "Expected custom provider name in error, got {}",
-            err
-        );
     }
 }

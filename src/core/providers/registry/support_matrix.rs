@@ -185,8 +185,8 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
     ),
     row(
         "ollama",
-        [U, U, U, U, U, S, U, U, U],
-        "SDK streaming reuses the OpenAI-compatible stream parser; chat is not implemented.",
+        [EXTENDED, EXTENDED, EXTENDED, U, U, S, U, U, U],
+        "Native HTTP chat, NDJSON streaming, and embeddings require providers-extended; SDK streaming keeps its existing OpenAI-compatible parser.",
     ),
     row(
         "openrouter",
