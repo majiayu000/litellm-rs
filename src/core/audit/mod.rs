@@ -41,6 +41,7 @@ pub mod middleware;
 #[cfg(feature = "gateway")]
 mod middleware_body;
 pub mod outputs;
+mod redaction;
 pub mod types;
 
 #[cfg(test)]

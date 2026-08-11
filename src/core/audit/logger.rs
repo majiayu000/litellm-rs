@@ -2,9 +2,9 @@
 //!
 //! The main logger that orchestrates audit event collection and output.
 
+use futures::FutureExt;
+use futures::stream::{FuturesUnordered, StreamExt};
 use regex::Regex;
-use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 use super::config::AuditConfig;
 use super::events::AuditEvent;
 use super::outputs::{BoxedAuditOutput, FileOutput, NullOutput, StderrOutput};
-use super::types::{AuditError, AuditResult, LogLevel, UserAction};
+use super::types::{AuditError, AuditResult, LogLevel};
 
 struct AuditWorker {
     shutdown: oneshot::Sender<()>,
@@ -22,12 +22,21 @@ struct AuditWorker {
 }
 
 #[cfg(feature = "gateway")]
-pub(crate) struct AuditEventPermit(Option<mpsc::OwnedPermit<AuditEvent>>);
+pub(crate) struct AuditEventPermit(Option<oneshot::Sender<AuditEvent>>);
+
+enum AuditCommand {
+    Event(AuditEvent),
+    #[cfg(feature = "gateway")]
+    Request {
+        started: AuditEvent,
+        terminal: oneshot::Receiver<AuditEvent>,
+    },
+}
 
 /// The main audit logger
 pub struct AuditLogger {
     config: AuditConfig,
-    sender: mpsc::Sender<AuditEvent>,
+    sender: mpsc::Sender<AuditCommand>,
     outputs: Arc<Vec<BoxedAuditOutput>>,
     redact_patterns: Vec<Regex>,
     failure: Arc<StdRwLock<Option<String>>>,
@@ -127,7 +136,7 @@ impl AuditLogger {
 
     /// Background writer task
     async fn background_writer(
-        mut receiver: mpsc::Receiver<AuditEvent>,
+        mut receiver: mpsc::Receiver<AuditCommand>,
         outputs: Arc<Vec<BoxedAuditOutput>>,
         flush_interval_ms: u64,
         min_level: LogLevel,
@@ -135,6 +144,7 @@ impl AuditLogger {
         failure: Arc<StdRwLock<Option<String>>>,
     ) -> AuditResult<()> {
         let mut flush_timer = interval(Duration::from_millis(flush_interval_ms));
+        let mut terminals = FuturesUnordered::new();
 
         let writer_result: AuditResult<()> = async {
             loop {
@@ -142,7 +152,14 @@ impl AuditLogger {
                     biased;
                     _ = &mut shutdown => {
                         receiver.close();
-                        while let Some(event) = receiver.recv().await {
+                        while let Some(command) = receiver.recv().await {
+                            Self::accept_command(command, &outputs, min_level, &mut terminals)
+                                .await?;
+                        }
+                        while let Some(terminal) = terminals.next().now_or_never().flatten() {
+                            let event = terminal.map_err(|_| AuditError::Channel(
+                                "audit request ended without a terminal event".to_string(),
+                            ))?;
                             Self::write_event(&outputs, &event, min_level).await?;
                         }
                         break;
@@ -150,9 +167,23 @@ impl AuditLogger {
                     _ = flush_timer.tick() => {
                         Self::flush_outputs(&outputs).await?;
                     }
-                    event = receiver.recv() => {
-                        match event {
-                            Some(event) => Self::write_event(&outputs, &event, min_level).await?,
+                    terminal = terminals.next(), if !terminals.is_empty() => {
+                        match terminal {
+                            Some(Ok(event)) => Self::write_event(&outputs, &event, min_level).await?,
+                            Some(Err(_)) => return Err(AuditError::Channel(
+                                "audit request ended without a terminal event".to_string(),
+                            )),
+                            None => {}
+                        }
+                    }
+                    command = receiver.recv() => {
+                        match command {
+                            Some(command) => Self::accept_command(
+                                command,
+                                &outputs,
+                                min_level,
+                                &mut terminals,
+                            ).await?,
                             None => break,
                         }
                     }
@@ -171,6 +202,23 @@ impl AuditLogger {
             Self::record_failure(&failure, error.to_string());
         }
         writer_result.and(close_result)
+    }
+
+    async fn accept_command(
+        command: AuditCommand,
+        outputs: &[BoxedAuditOutput],
+        min_level: LogLevel,
+        terminals: &mut FuturesUnordered<oneshot::Receiver<AuditEvent>>,
+    ) -> AuditResult<()> {
+        match command {
+            AuditCommand::Event(event) => Self::write_event(outputs, &event, min_level).await,
+            #[cfg(feature = "gateway")]
+            AuditCommand::Request { started, terminal } => {
+                Self::write_event(outputs, &started, min_level).await?;
+                terminals.push(terminal);
+                Ok(())
+            }
+        }
     }
 
     async fn write_event(
@@ -225,9 +273,11 @@ impl AuditLogger {
         }
         self.ensure_available()?;
         let event = self.prepare_event(event);
-        self.sender.try_send(event).map_err(|error| {
-            AuditError::Channel(format!("audit event queue rejected an event: {error}"))
-        })
+        self.sender
+            .try_send(AuditCommand::Event(event))
+            .map_err(|error| {
+                AuditError::Channel(format!("audit event queue rejected an event: {error}"))
+            })
     }
 
     #[cfg(feature = "gateway")]
@@ -236,27 +286,29 @@ impl AuditLogger {
             return Ok(AuditEventPermit(None));
         }
         self.ensure_available()?;
-        let permit = self.sender.clone().try_reserve_owned().map_err(|error| {
-            AuditError::Channel(format!("audit terminal reservation failed: {error}"))
-        })?;
-        if let Err(error) = self.sender.try_send(self.prepare_event(event)) {
-            drop(permit);
-            return Err(AuditError::Channel(format!(
-                "audit start event was rejected: {error}"
-            )));
-        }
-        Ok(AuditEventPermit(Some(permit)))
+        let (terminal, terminal_receiver) = oneshot::channel();
+        self.sender
+            .try_send(AuditCommand::Request {
+                started: self.prepare_event(event),
+                terminal: terminal_receiver,
+            })
+            .map_err(|error| {
+                AuditError::Channel(format!("audit start event was rejected: {error}"))
+            })?;
+        Ok(AuditEventPermit(Some(terminal)))
     }
 
     #[cfg(feature = "gateway")]
     pub(crate) fn complete_request(
         &self,
-        permit: AuditEventPermit,
+        terminal: AuditEventPermit,
         event: AuditEvent,
     ) -> AuditResult<()> {
-        if let Some(permit) = permit.0 {
+        if let Some(terminal) = terminal.0 {
             self.ensure_available()?;
-            permit.send(self.prepare_event(event));
+            terminal.send(self.prepare_event(event)).map_err(|_| {
+                AuditError::Channel("audit worker rejected a terminal event".to_string())
+            })?;
         }
         Ok(())
     }
@@ -288,89 +340,8 @@ impl AuditLogger {
     }
 
     /// Redact sensitive data from an event
-    fn redact_event(&self, mut event: AuditEvent) -> AuditEvent {
-        Self::redact_optional_string(self, &mut event.request_id);
-        Self::redact_optional_string(self, &mut event.user_id);
-        Self::redact_optional_string(self, &mut event.api_key_id);
-        Self::redact_optional_string(self, &mut event.team_id);
-        event.message = self.redact_string(&event.message);
-        Self::redact_optional_string(self, &mut event.source);
-
-        if let Some(request) = &mut event.request {
-            request.request_id = self.redact_string(&request.request_id);
-            request.method = self.redact_string(&request.method);
-            request.path = self.redact_string(&request.path);
-            self.redact_string_map(&mut request.query_params);
-            self.redact_string_map(&mut request.headers);
-            Self::redact_optional_string(self, &mut request.body);
-            Self::redact_optional_string(self, &mut request.client_ip);
-            Self::redact_optional_string(self, &mut request.user_agent);
-        }
-
-        if let Some(response) = &mut event.response {
-            response.request_id = self.redact_string(&response.request_id);
-            self.redact_string_map(&mut response.headers);
-            Self::redact_optional_string(self, &mut response.body);
-        }
-
-        if let Some(UserAction::Custom(action)) = &mut event.action {
-            *action = self.redact_string(action);
-        }
-
-        let metadata = std::mem::take(&mut event.metadata);
-        event.metadata = metadata
-            .into_iter()
-            .map(|(key, mut value)| {
-                self.redact_json_value(&mut value);
-                (self.redact_string(&key), value)
-            })
-            .collect();
-
-        event
-    }
-
-    fn redact_optional_string(&self, value: &mut Option<String>) {
-        if let Some(value) = value {
-            *value = self.redact_string(value);
-        }
-    }
-
-    fn redact_string_map(&self, values: &mut HashMap<String, String>) {
-        *values = std::mem::take(values)
-            .into_iter()
-            .map(|(key, value)| (self.redact_string(&key), self.redact_string(&value)))
-            .collect();
-    }
-
-    fn redact_json_value(&self, value: &mut Value) {
-        match value {
-            Value::String(text) => *text = self.redact_string(text),
-            Value::Array(values) => {
-                for value in values {
-                    self.redact_json_value(value);
-                }
-            }
-            Value::Object(values) => {
-                let original = std::mem::take(values);
-                *values = original
-                    .into_iter()
-                    .map(|(key, mut value)| {
-                        self.redact_json_value(&mut value);
-                        (self.redact_string(&key), value)
-                    })
-                    .collect();
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) => {}
-        }
-    }
-
-    /// Redact sensitive data from a string
-    fn redact_string(&self, s: &str) -> String {
-        let mut result = s.to_string();
-        for pattern in &self.redact_patterns {
-            result = pattern.replace_all(&result, "[REDACTED]").to_string();
-        }
-        result
+    fn redact_event(&self, event: AuditEvent) -> AuditEvent {
+        super::redaction::redact_event(&self.redact_patterns, event)
     }
 
     /// Check if logging is enabled
@@ -456,7 +427,7 @@ mod tests {
     use super::*;
     use crate::core::audit::events::EventType;
     use crate::core::audit::outputs::AuditOutput;
-    use crate::core::audit::types::{AuditError, RequestLog, ResponseLog};
+    use crate::core::audit::types::{AuditError, RequestLog, ResponseLog, UserAction};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
@@ -513,7 +484,7 @@ mod tests {
         };
 
         let input = "API key: sk-abcdefghijklmnopqrstuvwxyz";
-        let redacted = logger.redact_string(input);
+        let redacted = super::super::redaction::redact_string(&logger.redact_patterns, input);
 
         assert!(redacted.contains("[REDACTED]"));
         assert!(!redacted.contains("sk-abcdefghijklmnopqrstuvwxyz"));
@@ -544,7 +515,7 @@ mod tests {
             "anthropic=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 ",
             "gateway=gw-abcdefghijklmnopqrstuvwxyz0123456789"
         );
-        let redacted = logger.redact_string(input);
+        let redacted = super::super::redaction::redact_string(&logger.redact_patterns, input);
 
         assert!(!redacted.contains("Bearer eyJ"));
         assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));

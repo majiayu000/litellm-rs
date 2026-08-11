@@ -591,4 +591,43 @@ mod tests {
         assert_eq!(events[1].event_type, EventType::RequestFailed);
         assert!(events[1].message.contains("stream emitted an error event"));
     }
+
+    #[actix_web::test]
+    async fn long_lived_requests_do_not_hold_audit_queue_slots() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let output = RecordingOutput {
+            events: Arc::clone(&events),
+        };
+        let mut config = AuditConfig::new().enable();
+        config.buffer_size = 2;
+        let logger = AuditLoggerBuilder::new()
+            .config(config)
+            .add_output(Box::new(output))
+            .build()
+            .await
+            .expect("recording audit logger");
+
+        let first = logger
+            .start_request(AuditEvent::request_started("first", "/stream"))
+            .expect("first request should be accepted");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while events.lock().await.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("worker should drain the first start event");
+        let second = logger
+            .start_request(AuditEvent::request_started("second", "/stream"))
+            .expect("an active stream must not reserve a queue slot");
+
+        logger
+            .complete_request(first, AuditEvent::request_completed("first", 200, 1))
+            .expect("first terminal event should be delivered");
+        logger
+            .complete_request(second, AuditEvent::request_completed("second", 200, 1))
+            .expect("second terminal event should be delivered");
+        logger.shutdown().await.expect("audit shutdown");
+        assert_eq!(events.lock().await.len(), 4);
+    }
 }
