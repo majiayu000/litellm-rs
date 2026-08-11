@@ -320,13 +320,19 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.friendli.ai/v1",
             "FRIENDLIAI_API_KEY",
         ),
-        def_chat(
-            "meta_llama",
-            "Meta Llama API",
-            "https://api.llama.com/compat/v1",
-            "META_LLAMA_API_KEY",
-        ),
-        def_chat("v0", "Vercel v0", "https://api.v0.dev/v1", "V0_API_KEY"),
+        ProviderDefinition {
+            capabilities: super::catalog_policy::META_LLAMA_CAPABILITIES,
+            ..def_chat(
+                "meta_llama",
+                "Meta Llama API",
+                "https://api.llama.com/compat/v1",
+                "META_LLAMA_API_KEY",
+            )
+        },
+        ProviderDefinition {
+            capabilities: super::catalog_policy::V0_CAPABILITIES,
+            ..def_chat("v0", "Vercel v0", "https://api.v0.dev/v1", "V0_API_KEY")
+        },
         ProviderDefinition {
             capabilities: AMAZON_NOVA_CATALOG_CAPABILITIES,
             ..def_chat(
