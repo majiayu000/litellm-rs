@@ -304,12 +304,20 @@ pub(crate) fn health_failure_is_unhealthy(provider: &str) -> bool {
     provider == "v0"
 }
 
+pub(crate) fn preserves_configured_name_route(provider: &str) -> bool {
+    matches!(provider, "meta_llama" | "v0")
+}
+
 pub(crate) fn catalog_error_response(
     provider: &str,
     status: u16,
     body: &str,
 ) -> Option<ProviderError> {
-    (provider == "v0").then(|| HttpErrorMapper::map_status_code("v0", status, body))
+    match provider {
+        "meta_llama" => Some(HttpErrorMapper::map_status_code("meta_llama", status, body)),
+        "v0" => Some(HttpErrorMapper::map_status_code("v0", status, body)),
+        _ => None,
+    }
 }
 
 fn find_catalog_model(models: &'static [CatalogModel], id: &str) -> Option<&'static CatalogModel> {
@@ -400,6 +408,10 @@ mod tests {
             catalog_error_response("v0", 404, r#"{"error":{"message":"missing"}}"#),
             Some(ProviderError::ModelNotFound { provider, .. }) if provider == "v0"
         ));
+        assert!(matches!(
+            catalog_error_response("meta_llama", 408, "request timeout"),
+            Some(ProviderError::Timeout { provider, .. }) if provider == "meta_llama"
+        ));
 
         let definition = get_definition("v0").expect("V0 catalog definition");
         let provider = OpenAILikeProvider::new_for_catalog(
@@ -436,7 +448,7 @@ mod tests {
     async fn v0_catalog_registers_canonical_and_provider_alias_routes() {
         let router = Router::from_gateway_config(
             &[ProviderConfig {
-                name: "v0".to_string(),
+                name: "frontend".to_string(),
                 provider_type: "v0".to_string(),
                 api_key: "test-key".to_string(),
                 ..ProviderConfig::default()
@@ -449,5 +461,23 @@ mod tests {
         let models = router.list_models();
         assert!(models.contains(&"v0-default".to_string()));
         assert!(models.contains(&"v0".to_string()));
+        assert!(models.contains(&"frontend".to_string()));
+
+        let meta_router = Router::from_gateway_config(
+            &[ProviderConfig {
+                name: "llama_frontend".to_string(),
+                provider_type: "meta_llama".to_string(),
+                api_key: "test-key".to_string(),
+                ..ProviderConfig::default()
+            }],
+            None,
+        )
+        .await
+        .expect("Meta router should build");
+        assert!(
+            meta_router
+                .list_models()
+                .contains(&"llama_frontend".to_string())
+        );
     }
 }
