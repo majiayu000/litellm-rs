@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use super::config::AuditConfig;
 use super::events::AuditEvent;
-use super::outputs::{AuditOutput, BoxedAuditOutput, FileOutput, MemoryOutput, NullOutput};
+use super::outputs::{AuditOutput, BoxedAuditOutput, FileOutput, NullOutput, TracingOutput};
 use super::types::{AuditResult, LogLevel};
 
 /// The main audit logger
@@ -33,10 +33,11 @@ impl AuditLogger {
             outputs.push(Box::new(file_output));
         }
 
-        // Add memory output for testing/debugging
+        // A configured audit logger must always have an externally observable
+        // destination. File output is optional; tracing is the safe default.
         if outputs.is_empty() {
-            debug!("No outputs configured, using memory output");
-            outputs.push(Box::new(MemoryOutput::default()));
+            debug!("No file audit output configured, using structured tracing");
+            outputs.push(Box::new(TracingOutput));
         }
 
         // Compile redact patterns

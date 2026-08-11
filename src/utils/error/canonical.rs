@@ -4,7 +4,9 @@
 //! be reused by HTTP/OpenAI-compatible, A2A, and MCP layers.
 
 use super::gateway_error::GatewayError;
+#[cfg(feature = "a2a")]
 use crate::core::a2a::error::A2AError;
+#[cfg(feature = "mcp")]
 use crate::core::mcp::error::McpError;
 use crate::core::providers::unified_provider::ProviderError;
 
@@ -144,6 +146,7 @@ impl CanonicalError for GatewayError {
     }
 }
 
+#[cfg(feature = "a2a")]
 impl CanonicalError for A2AError {
     fn canonical_code(&self) -> ErrorCode {
         match self {
@@ -175,6 +178,7 @@ impl CanonicalError for A2AError {
     }
 }
 
+#[cfg(feature = "mcp")]
 impl CanonicalError for McpError {
     fn canonical_code(&self) -> ErrorCode {
         match self {
@@ -266,6 +270,7 @@ mod tests {
         assert!(err.canonical_retryable());
     }
 
+    #[cfg(feature = "a2a")]
     #[test]
     fn test_a2a_busy_mapping() {
         let err = A2AError::AgentBusy {
@@ -276,6 +281,7 @@ mod tests {
         assert!(err.canonical_retryable());
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn test_mcp_auth_mapping() {
         let err = McpError::AuthenticationError {

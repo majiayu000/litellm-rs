@@ -32,6 +32,30 @@ pub trait AuditOutput: Send + Sync {
 /// Boxed audit output for dynamic dispatch
 pub type BoxedAuditOutput = Box<dyn AuditOutput>;
 
+/// Structured tracing output used when no file destination is configured.
+pub struct TracingOutput;
+
+#[async_trait]
+impl AuditOutput for TracingOutput {
+    fn name(&self) -> &str {
+        "tracing"
+    }
+
+    async fn write(&self, event: &AuditEvent) -> AuditResult<()> {
+        let serialized = event.to_json()?;
+        tracing::info!(target: "audit", event = %serialized, "gateway audit event");
+        Ok(())
+    }
+
+    async fn flush(&self) -> AuditResult<()> {
+        Ok(())
+    }
+
+    async fn close(&self) -> AuditResult<()> {
+        Ok(())
+    }
+}
+
 // ============================================================================
 // File Output
 // ============================================================================

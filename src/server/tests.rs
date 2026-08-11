@@ -3,6 +3,7 @@
 //! This module contains all tests for the server components.
 
 use crate::config::models::gateway::GATEWAY_ENV_LOCK;
+use crate::server::HttpServer;
 #[cfg(test)]
 use crate::server::builder::{ServerBuilder, load_default_config_or_env, load_explicit_config};
 use crate::server::types::ServerRequestMetrics;
@@ -180,4 +181,21 @@ fn test_request_metrics_creation() {
     assert_eq!(metrics.request_id, "req-123");
     assert_eq!(metrics.method, "GET");
     assert_eq!(metrics.status_code, 200);
+}
+
+#[tokio::test]
+async fn enabled_audit_logging_is_constructed_in_gateway_state() {
+    let mut config = crate::config::Config::default();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.pricing.source = None;
+    config.gateway.enterprise.audit_logging = true;
+
+    let server = HttpServer::new(&config)
+        .await
+        .unwrap_or_else(|error| panic!("audit-enabled server must initialize: {error}"));
+
+    assert!(server.state().audit_logger.is_enabled());
+    assert!(server.state().audit_logger.should_log_path("/v1/models"));
+    assert!(!server.state().audit_logger.should_log_path("/health"));
 }

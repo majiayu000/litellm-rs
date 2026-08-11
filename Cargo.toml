@@ -197,8 +197,15 @@ cloud-secrets = ["aws-secrets", "gcp-secrets", "azure-secrets", "vault-secrets"]
 metrics = ["dep:sysinfo"]
 tracing = ["dep:tracing-subscriber"]
 
+# Default-off protocol and platform experiments. These features expose library
+# modules only; they do not mount gateway routes by themselves.
+a2a = []
+mcp = []
+webhooks = []
+user-management = ["storage"]
+
 # JSON Schema validation for MCP tool parameters
-mcp-validation = ["dep:jsonschema"]
+mcp-validation = ["dep:jsonschema", "mcp"]
 
 # Advanced feature gates
 vector-db = ["storage"]
@@ -210,7 +217,7 @@ analytics = ["storage"]
 enterprise = ["analytics", "vector-db"]
 
 # Full feature set
-full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "cloud-secrets", "providers-extra", "providers-extended", "mcp-validation"]
+full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "a2a", "mcp-validation", "webhooks", "user-management", "cloud-secrets", "providers-extra", "providers-extended"]
 
 # Metadata
 [package.metadata.docs.rs]

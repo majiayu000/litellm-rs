@@ -1,5 +1,9 @@
 # A2A Protocol
 
+> Deprecated 0.6 library-only surface scheduled for 0.7 removal. Compile with Cargo feature `a2a`. The
+> gateway binary does not construct this module or mount an A2A HTTP route;
+> enabling the feature alone does not make A2A a runtime capability.
+
 Agent-to-Agent (A2A) Protocol enables LiteLLM-RS to communicate with AI agents from multiple platforms, providing a unified interface for agent orchestration.
 
 ## Overview

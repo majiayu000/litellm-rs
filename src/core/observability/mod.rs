@@ -24,3 +24,9 @@ pub use types::{
     AlertCondition, AlertSeverity, AlertState, ErrorDetails, LogEntry, LogLevel, MetricValue,
     ObservabilityLogRecord, SpanLog, TokenUsage, TraceSpan,
 };
+
+/// Canonical gateway observability handle.
+///
+/// The gateway stores this dispatcher in `AppState`; configured integrations
+/// receive request start/success/failure events from the real LLM lifecycle.
+pub type RuntimeObservability = crate::core::integrations::CallbackDispatcher;

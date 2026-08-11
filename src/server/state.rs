@@ -3,14 +3,16 @@
 //! This module provides the AppState struct and its implementations.
 
 use crate::config::Config;
+use crate::core::audit::AuditLogger;
 use crate::core::budget::{BudgetManager, UnifiedBudgetLimits};
 use crate::core::cache::{DualCacheConfig, LLMCache, LLMCacheConfig};
 use crate::core::guardrails::GuardrailEngine;
-use crate::core::integrations::CallbackDispatcher;
 use crate::core::ip_access::IpAccessControl;
 use crate::core::keys::{DatabaseKeyRepository, KeyManager};
+use crate::core::observability::RuntimeObservability;
 use crate::core::pricing_service::PricingService;
 use crate::core::teams::TeamManager;
+use crate::core::virtual_keys::RuntimeVirtualKeyManager;
 use crate::server::routes::ai::budgeted::BudgetedExecutor;
 use crate::storage::database::SeaOrmTeamRepository;
 use crate::storage::redis::RedisPool;
@@ -47,13 +49,15 @@ pub struct AppState {
     /// Team manager for team lifecycle operations (shared, in-memory by default)
     pub team_manager: Arc<TeamManager>,
     /// API key manager for `/v1/keys` route handlers (shared across requests)
-    pub key_manager: KeyManager,
+    pub key_manager: RuntimeVirtualKeyManager,
     /// Budget orchestration service for AI route reserve/call/settle lifecycles
     pub(crate) budgeted: BudgetedExecutor,
     /// Optional deterministic response cache for non-streaming chat and embeddings
     pub response_cache: Option<Arc<LLMCache>>,
     /// Non-blocking external request lifecycle callback dispatcher
-    pub callbacks: CallbackDispatcher,
+    pub callbacks: RuntimeObservability,
+    /// Explicitly configured request audit logger.
+    pub audit_logger: Arc<AuditLogger>,
     /// Content guardrails executed on real LLM request/response paths.
     pub guardrails: Arc<GuardrailEngine>,
     /// IP policy consumed by the outer HTTP middleware.
@@ -96,15 +100,22 @@ impl AppState {
             key_manager,
             budgeted,
             response_cache,
-            callbacks: CallbackDispatcher::disabled(),
+            callbacks: RuntimeObservability::disabled(),
+            audit_logger: Arc::new(AuditLogger::disabled()),
             guardrails: Arc::new(GuardrailEngine::disabled()),
             ip_access: Arc::new(IpAccessControl::disabled()),
         }
     }
 
     /// Attach a configured callback dispatcher.
-    pub fn with_callbacks(mut self, callbacks: CallbackDispatcher) -> Self {
+    pub fn with_callbacks(mut self, callbacks: RuntimeObservability) -> Self {
         self.callbacks = callbacks;
+        self
+    }
+
+    /// Attach the request audit logger built during startup.
+    pub fn with_audit_logger(mut self, audit_logger: Arc<AuditLogger>) -> Self {
+        self.audit_logger = audit_logger;
         self
     }
 

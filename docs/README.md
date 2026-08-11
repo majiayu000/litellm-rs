@@ -10,6 +10,7 @@ A high-performance AI Gateway written in Rust that provides unified access to 10
 - [Provider Implementation](./architecture/provider-implementation.md) - Guide for implementing individual providers
 - [Cost Compatibility](./architecture/cost-compatibility.md) - Pricing authority and legacy API lifecycle
 - [Router Runtime](./architecture/router-runtime.md) - Canonical runtime ownership and facade lifecycle
+- [GH838 subsystem migration](./architecture/GH838-subsystem-migration-0.6-to-0.7.md) - Runtime gates and 0.6-to-0.7 removals
 - [Architecture Improvements](./architecture/improvements.md) - Historical improvements and optimizations
 
 ### Implementation Guides
@@ -27,9 +28,9 @@ A high-performance AI Gateway written in Rust that provides unified access to 10
 - [Anthropic](./providers/anthropic.md) - Claude models integration
 - [Adding Providers](./providers/adding-new-provider.md) - Step-by-step provider implementation
 
-### Protocol Gateways
-- [MCP Gateway](./protocols/mcp.md) - Model Context Protocol integration
-- [A2A Protocol](./protocols/a2a.md) - Agent-to-Agent communication
+### Experimental protocol libraries
+- [MCP library](./protocols/mcp.md) - Default-off `mcp` feature; no HTTP gateway route
+- [A2A library](./protocols/a2a.md) - Default-off `a2a` feature; no HTTP gateway route
 
 ### Examples & Tutorials
 - [Basic Examples](./examples/basic-usage.md) - Simple completion examples
@@ -65,8 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Intelligent Routing**: Smart load balancing and failover
 - **Enterprise Ready**: Authentication, monitoring, cost tracking
 - **Type Safety**: Compile-time guarantees and zero-cost abstractions
-- **MCP Gateway**: Model Context Protocol for external tool integration
-- **A2A Protocol**: Agent-to-Agent communication with multi-provider support
+- **Experimental MCP library**: Default-off protocol types and client orchestration; no mounted gateway route
+- **Experimental A2A library**: Default-off agent protocol types; no mounted gateway route
 
 ## Pricing Configuration
 

@@ -2,7 +2,16 @@
 //!
 //! This module contains the core business logic and data structures.
 
+#[deprecated(
+    since = "0.6.0",
+    note = "core::a2a is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
+#[cfg(feature = "a2a")]
 pub mod a2a; // Experimental module-only A2A gateway; see subsystem_registry.
+#[deprecated(
+    since = "0.6.0",
+    note = "core::analytics is scheduled for removal in 0.7.0; use wired request metrics and callback integrations"
+)]
 #[cfg(feature = "analytics")]
 pub mod analytics;
 pub mod audio; // Audio API (transcription, translation, speech)
@@ -24,6 +33,11 @@ pub mod http; // Shared outbound HTTP client utilities
 pub mod integrations; // Experimental module-only integrations; see subsystem_registry.
 pub mod ip_access; // Experimental module-only IP access control; see subsystem_registry.
 pub mod keys; // API Key Management System
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
+#[cfg(feature = "mcp")]
 pub mod mcp; // Experimental module-only MCP gateway; see subsystem_registry.
 pub mod models;
 pub mod net; // Network validation and safety utilities
@@ -32,6 +46,10 @@ pub mod pricing; // Shared pricing data types
 pub mod pricing_service; // Runtime pricing service
 pub mod providers;
 pub mod rate_limiter; // Rate limiting system
+#[deprecated(
+    since = "0.6.0",
+    note = "core::realtime is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 #[cfg(feature = "websockets")]
 pub mod realtime; // Experimental module-only realtime API; see subsystem_registry.
 pub mod rerank; // Rerank API for RAG systems
@@ -49,4 +67,9 @@ pub mod types;
 pub mod user_management; // Experimental module-only user management; see subsystem_registry.
 #[cfg(feature = "gateway")]
 pub mod virtual_keys; // Experimental module-only virtual keys; see subsystem_registry.
+#[deprecated(
+    since = "0.6.0",
+    note = "core::webhooks is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
+#[cfg(feature = "webhooks")]
 pub mod webhooks; // Experimental module-only webhooks; see subsystem_registry.

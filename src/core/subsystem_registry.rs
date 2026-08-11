@@ -16,32 +16,12 @@ pub enum SubsystemDecision {
     /// Shared support code used below wired modules rather than exposed as its
     /// own gateway subsystem.
     InternalDependency,
-    /// Retained module-only implementation recorded in the explicit GH838
-    /// temporary exemption baseline. It is not a feature gate or runtime
-    /// capability.
-    TemporaryExemption,
     /// Module is hidden from the default build behind a default-off feature.
     FeatureGated,
     /// Parsed configuration exists but validation rejects enabling it until the
     /// runtime path lands.
     ConfigRejected,
 }
-
-/// Issue backing the temporary unwired-subsystem baseline.
-pub const GH838_TEMPORARY_EXEMPTION_ISSUE: u32 = 838;
-
-/// Gateway-facing modules that remain exported only because GH838 tracks their
-/// later wire/gate/remove tranche.
-pub const GH838_TEMPORARY_EXEMPTIONS: &[&str] = &[
-    "a2a",
-    "batch",
-    "integrations",
-    "mcp",
-    "observability",
-    "user_management",
-    "virtual_keys",
-    "webhooks",
-];
 
 impl CoreSubsystem {
     /// Returns true when a module can be absent from direct server/main
@@ -53,9 +33,6 @@ impl CoreSubsystem {
             | SubsystemDecision::InternalDependency
             | SubsystemDecision::FeatureGated
             | SubsystemDecision::ConfigRejected => true,
-            SubsystemDecision::TemporaryExemption => {
-                GH838_TEMPORARY_EXEMPTIONS.contains(&self.name)
-            }
         }
     }
 }
@@ -73,15 +50,15 @@ pub struct CoreSubsystem {
 pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     CoreSubsystem {
         name: "a2a",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: None,
-        note: "A2A gateway types compile, but no server route or AppState entry mounts them.",
+        decision: SubsystemDecision::FeatureGated,
+        runtime_path: Some("Cargo feature: a2a"),
+        note: "A2A library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
     },
     CoreSubsystem {
         name: "analytics",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: analytics"),
-        note: "Analytics module is excluded from the default build behind the analytics feature.",
+        note: "Deprecated analytics types remain default-off for the 0.6 migration window and are scheduled for removal in 0.7.",
     },
     CoreSubsystem {
         name: "audio",
@@ -91,15 +68,15 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "audit",
-        decision: SubsystemDecision::ConfigRejected,
-        runtime_path: None,
-        note: "enterprise.audit_logging is rejected until audit middleware/logger are registered by the gateway server.",
+        decision: SubsystemDecision::Wired,
+        runtime_path: Some("AppState AuditLogger and AuditMiddleware"),
+        note: "enterprise.audit_logging explicitly enables request lifecycle audit events; the default remains disabled.",
     },
     CoreSubsystem {
         name: "batch",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: Some("/v1/batches provider proxy only"),
-        note: "The HTTP batch API is a provider proxy; core::batch::BatchProcessor is not constructed.",
+        decision: SubsystemDecision::LibraryOnly,
+        runtime_path: None,
+        note: "The HTTP /v1/batches surface is a provider proxy; the legacy BatchProcessor is deprecated for 0.6 and scheduled for 0.7 removal.",
     },
     CoreSubsystem {
         name: "budget",
@@ -163,9 +140,9 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "integrations",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: None,
-        note: "Langfuse/OpenTelemetry integration managers are not initialized by the binary.",
+        decision: SubsystemDecision::Wired,
+        runtime_path: Some("AppState callback dispatcher and LLM request lifecycle"),
+        note: "Configured Langfuse, OpenTelemetry, and Datadog callbacks are initialized and receive real request lifecycle events.",
     },
     CoreSubsystem {
         name: "ip_access",
@@ -181,9 +158,9 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "mcp",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: None,
-        note: "MCP gateway is not mounted; Responses API only passes MCP tool descriptors through.",
+        decision: SubsystemDecision::FeatureGated,
+        runtime_path: Some("Cargo feature: mcp"),
+        note: "MCP library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
     },
     CoreSubsystem {
         name: "models",
@@ -199,9 +176,9 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "observability",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: None,
-        note: "Basic tracing/metrics are wired elsewhere; core observability exporters are not.",
+        decision: SubsystemDecision::Wired,
+        runtime_path: Some("AppState RuntimeObservability callback dispatcher"),
+        note: "The core observability facade points at the configured callback dispatcher used by real LLM request lifecycles.",
     },
     CoreSubsystem {
         name: "pricing",
@@ -259,9 +236,9 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "semantic_cache",
-        decision: SubsystemDecision::ConfigRejected, // GatewayConfig::validate rejects cache.semantic_cache.
+        decision: SubsystemDecision::ConfigRejected,
         runtime_path: None,
-        note: "GatewayConfig::validate rejects cache.semantic_cache until runtime handling is wired.",
+        note: "Deprecated types remain available during the 0.6 compatibility window, while cache.semantic_cache stays rejected before 0.7 removal.",
     },
     CoreSubsystem {
         name: "streaming",
@@ -295,21 +272,21 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
     },
     CoreSubsystem {
         name: "user_management",
-        decision: SubsystemDecision::TemporaryExemption,
+        decision: SubsystemDecision::InternalDependency,
         runtime_path: None,
-        note: "User-management domain code is not constructed by the gateway server.",
+        note: "Compatibility user/team records back current auth and storage paths; the optional UserManager implementation is default-off behind user-management.",
     },
     CoreSubsystem {
         name: "virtual_keys",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: None,
-        note: "Gateway key routes use core::keys; VirtualKeyManager is not in AppState.",
+        decision: SubsystemDecision::Wired,
+        runtime_path: Some("AppState canonical RuntimeVirtualKeyManager"),
+        note: "The virtual-keys runtime facade resolves to the canonical KeyManager used by auth and /v1/keys; the duplicate legacy manager is deprecated.",
     },
     CoreSubsystem {
         name: "webhooks",
-        decision: SubsystemDecision::TemporaryExemption,
-        runtime_path: None,
-        note: "WebhookManager is not configured or constructed by the gateway runtime.",
+        decision: SubsystemDecision::FeatureGated,
+        runtime_path: Some("Cargo feature: webhooks"),
+        note: "Webhook library types are excluded from the default build and are not advertised as a gateway runtime capability.",
     },
 ];
 
