@@ -461,6 +461,11 @@ impl OpenAILikeProvider {
             }
         }
 
+        crate::core::providers::registry::catalog_policy::filter_request(
+            &self.provider_name,
+            &mut openai_request,
+        );
+
         Ok(openai_request)
     }
 
@@ -567,10 +572,10 @@ impl OpenAILikeProvider {
 
     /// Get model information
     pub fn get_model_info(&self, model_id: &str) -> ModelInfo {
-        if self.provider_name == "amazon_nova"
-            && let Some(info) =
-                crate::core::providers::registry::catalog::amazon_nova_catalog_model_info(model_id)
-        {
+        if let Some(info) = crate::core::providers::registry::catalog_policy::catalog_model_info(
+            &self.provider_name,
+            model_id,
+        ) {
             return info;
         }
         let mut info = self.model_registry.get_model_info(model_id);
@@ -663,18 +668,16 @@ impl LLMProvider for OpenAILikeProvider {
     }
 
     fn models(&self) -> &[ModelInfo] {
-        if self.provider_name == "amazon_nova" {
-            return crate::core::providers::registry::catalog::amazon_nova_catalog_model_infos();
-        }
-        if self.provider_name == "github" {
-            return crate::core::providers::registry::github_policy::github_catalog_model_infos();
-        }
-        &[]
+        crate::core::providers::registry::catalog_policy::catalog_model_infos(&self.provider_name)
+            .unwrap_or(&[])
     }
 
-    fn supports_model(&self, _model: &str) -> bool {
-        // Accept any model name
-        true
+    fn supports_model(&self, model: &str) -> bool {
+        crate::core::providers::registry::catalog_policy::catalog_provider_supports_model(
+            &self.provider_name,
+            model,
+        )
+        .unwrap_or(true)
     }
 
     async fn chat_completion(
@@ -703,6 +706,9 @@ impl LLMProvider for OpenAILikeProvider {
             .await
         {
             Ok(response) if response.status().is_success() => HealthStatus::Healthy,
+            Ok(_) if crate::core::providers::registry::catalog_policy::health_failure_is_unhealthy(
+                &self.provider_name,
+            ) => HealthStatus::Unhealthy,
             Ok(_) => HealthStatus::Degraded,
             Err(_) => HealthStatus::Unhealthy,
         }
@@ -734,33 +740,9 @@ impl LLMProvider for OpenAILikeProvider {
     }
 
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
-        // Support all common OpenAI parameters
-        &[
-            "messages",
-            "model",
-            "temperature",
-            "max_tokens",
-            "max_completion_tokens",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "stop",
-            "stream",
-            "tools",
-            "tool_choice",
-            "parallel_tool_calls",
-            "response_format",
-            "user",
-            "seed",
-            "n",
-            "logit_bias",
-            "logprobs",
-            "top_logprobs",
-            "reasoning_effort",
-            "store",
-            "metadata",
-            "service_tier",
-        ]
+        crate::core::providers::registry::catalog_policy::catalog_provider_supported_openai_params(
+            &self.provider_name,
+        )
     }
 
     async fn map_openai_params(
@@ -768,8 +750,12 @@ impl LLMProvider for OpenAILikeProvider {
         params: HashMap<String, Value>,
         _model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
-        // Pass through all params without modification
-        Ok(params)
+        Ok(
+            crate::core::providers::registry::catalog_policy::filter_openai_params(
+                &self.provider_name,
+                params,
+            ),
+        )
     }
 
     async fn transform_request(
