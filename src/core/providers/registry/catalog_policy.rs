@@ -4,6 +4,8 @@ use std::{collections::HashMap, sync::LazyLock};
 
 use serde_json::Value;
 
+use crate::core::providers::base::HttpErrorMapper;
+use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::model::{ModelInfo, ProviderCapability};
 
 pub(crate) const META_LLAMA_CAPABILITIES: &[ProviderCapability] = &[
@@ -70,6 +72,8 @@ const V0_OPENAI_PARAMS: &[&str] = &[
     "stream",
     "tools",
     "tool_choice",
+    "functions",
+    "function_call",
     "user",
     "seed",
 ];
@@ -167,10 +171,10 @@ static META_LLAMA_MODEL_INFOS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
         .collect()
 });
 static V0_MODEL_INFOS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-    V0_MODELS
-        .iter()
-        .map(catalog_model_info_from_entry)
-        .collect()
+    let canonical = catalog_model_info_from_entry(&V0_MODELS[0]);
+    let mut alias = canonical.clone();
+    alias.id = "v0".to_string();
+    vec![canonical, alias]
 });
 
 #[allow(clippy::too_many_arguments)]
@@ -197,6 +201,11 @@ const fn catalog_model(
 }
 
 fn catalog_model_info_from_entry(model: &CatalogModel) -> ModelInfo {
+    let capabilities = if model.provider == "v0" {
+        V0_CAPABILITIES.to_vec()
+    } else {
+        META_LLAMA_CAPABILITIES.to_vec()
+    };
     ModelInfo {
         id: model.id.to_string(),
         name: model.name.to_string(),
@@ -209,11 +218,7 @@ fn catalog_model_info_from_entry(model: &CatalogModel) -> ModelInfo {
         input_cost_per_1k_tokens: Some(model.input_cost),
         output_cost_per_1k_tokens: Some(model.output_cost),
         currency: "USD".to_string(),
-        capabilities: vec![
-            ProviderCapability::ChatCompletion,
-            ProviderCapability::ChatCompletionStream,
-            ProviderCapability::ToolCalling,
-        ],
+        capabilities,
         ..Default::default()
     }
 }
@@ -265,6 +270,9 @@ pub(crate) fn filter_openai_params(
     provider: &str,
     params: HashMap<String, Value>,
 ) -> HashMap<String, Value> {
+    if !matches!(provider, "meta_llama" | "v0") {
+        return params;
+    }
     let supported = catalog_provider_supported_openai_params(provider);
     params
         .into_iter()
@@ -296,6 +304,14 @@ pub(crate) fn health_failure_is_unhealthy(provider: &str) -> bool {
     provider == "v0"
 }
 
+pub(crate) fn catalog_error_response(
+    provider: &str,
+    status: u16,
+    body: &str,
+) -> Option<ProviderError> {
+    (provider == "v0").then(|| HttpErrorMapper::map_status_code("v0", status, body))
+}
+
 fn find_catalog_model(models: &'static [CatalogModel], id: &str) -> Option<&'static CatalogModel> {
     models.iter().find(|model| model.id == id)
 }
@@ -307,8 +323,10 @@ fn v0_canonical_model(model: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::models::provider::ProviderConfig;
     use crate::core::providers::openai_like::OpenAILikeProvider;
     use crate::core::providers::registry::catalog::get_definition;
+    use crate::core::router::unified::Router;
     use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
     use crate::core::types::chat::ChatRequest;
     use crate::core::types::context::RequestContext;
@@ -372,7 +390,16 @@ mod tests {
         assert_eq!(canonical.input_cost_per_1k_tokens, Some(0.1));
         assert_eq!(canonical.output_cost_per_1k_tokens, Some(0.2));
         assert_eq!(V0_CAPABILITIES.len(), 4);
+        assert!(
+            canonical
+                .capabilities
+                .contains(&ProviderCapability::FunctionCalling)
+        );
         assert!(health_failure_is_unhealthy("v0"));
+        assert!(matches!(
+            catalog_error_response("v0", 404, r#"{"error":{"message":"missing"}}"#),
+            Some(ProviderError::ModelNotFound { provider, .. }) if provider == "v0"
+        ));
 
         let definition = get_definition("v0").expect("V0 catalog definition");
         let provider = OpenAILikeProvider::new_for_catalog(
@@ -383,13 +410,44 @@ mod tests {
         )
         .await
         .expect("V0 catalog runtime");
-        assert_eq!(provider.models().len(), 1);
-        assert_eq!(provider.models()[0].id, canonical.id);
+        assert_eq!(provider.models().len(), 2);
+        assert!(
+            provider
+                .models()
+                .iter()
+                .any(|model| model.id == canonical.id)
+        );
+        assert!(provider.models().iter().any(|model| model.id == "v0"));
         assert_eq!(provider.get_model_info("v0").id, "v0-default");
         let cost = provider
             .calculate_cost("v0", 1_000, 1_000)
             .await
             .expect("V0 catalog pricing");
         assert!((cost - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn unscoped_catalog_params_remain_passthrough() {
+        let params = HashMap::from([("provider_extension".to_string(), Value::from(true))]);
+        assert_eq!(filter_openai_params("openrouter", params.clone()), params);
+    }
+
+    #[tokio::test]
+    async fn v0_catalog_registers_canonical_and_provider_alias_routes() {
+        let router = Router::from_gateway_config(
+            &[ProviderConfig {
+                name: "v0".to_string(),
+                provider_type: "v0".to_string(),
+                api_key: "test-key".to_string(),
+                ..ProviderConfig::default()
+            }],
+            None,
+        )
+        .await
+        .expect("V0 router should build");
+
+        let models = router.list_models();
+        assert!(models.contains(&"v0-default".to_string()));
+        assert!(models.contains(&"v0".to_string()));
     }
 }

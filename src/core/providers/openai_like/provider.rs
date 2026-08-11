@@ -526,6 +526,16 @@ impl OpenAILikeProvider {
 
     /// Map HTTP error response to OpenAILikeError
     fn map_error_response(&self, status: u16, body: &str) -> OpenAILikeError {
+        if let Some(error) =
+            crate::core::providers::registry::catalog_policy::catalog_error_response(
+                &self.provider_name,
+                status,
+                body,
+            )
+        {
+            return error;
+        }
+
         // Try to parse error JSON
         if let Ok(error_json) = serde_json::from_str::<Value>(body)
             && let Some(error) = error_json.get("error")
