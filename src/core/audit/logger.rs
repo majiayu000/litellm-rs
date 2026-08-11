@@ -5,7 +5,7 @@
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, interval};
@@ -21,12 +21,16 @@ struct AuditWorker {
     handle: JoinHandle<AuditResult<()>>,
 }
 
+#[cfg(feature = "gateway")]
+pub(crate) struct AuditEventPermit(Option<mpsc::OwnedPermit<AuditEvent>>);
+
 /// The main audit logger
 pub struct AuditLogger {
     config: AuditConfig,
     sender: mpsc::Sender<AuditEvent>,
     outputs: Arc<Vec<BoxedAuditOutput>>,
     redact_patterns: Vec<Regex>,
+    failure: Arc<StdRwLock<Option<String>>>,
     worker: Mutex<Option<AuditWorker>>,
 }
 
@@ -40,6 +44,7 @@ impl AuditLogger {
         config: AuditConfig,
         mut outputs: Vec<BoxedAuditOutput>,
     ) -> AuditResult<Self> {
+        config.validate().map_err(AuditError::Config)?;
         // Add file output if configured
         if let Some(ref file_config) = config.file_output {
             info!("Initializing file audit output: {:?}", file_config.path);
@@ -73,6 +78,8 @@ impl AuditLogger {
         let flush_interval = config.flush_interval_ms;
         let min_level = config.min_level;
         let (shutdown, shutdown_receiver) = oneshot::channel();
+        let failure = Arc::new(StdRwLock::new(None));
+        let writer_failure = Arc::clone(&failure);
 
         let handle = tokio::spawn(async move {
             Self::background_writer(
@@ -81,6 +88,7 @@ impl AuditLogger {
                 flush_interval,
                 min_level,
                 shutdown_receiver,
+                writer_failure,
             )
             .await
         });
@@ -92,6 +100,7 @@ impl AuditLogger {
             sender,
             outputs,
             redact_patterns,
+            failure,
             worker: Mutex::new(Some(AuditWorker { shutdown, handle })),
         })
     }
@@ -111,6 +120,7 @@ impl AuditLogger {
             sender,
             outputs: Arc::new(outputs),
             redact_patterns: Vec::new(),
+            failure: Arc::new(StdRwLock::new(None)),
             worker: Mutex::new(None),
         }
     }
@@ -122,49 +132,70 @@ impl AuditLogger {
         flush_interval_ms: u64,
         min_level: LogLevel,
         mut shutdown: oneshot::Receiver<()>,
+        failure: Arc<StdRwLock<Option<String>>>,
     ) -> AuditResult<()> {
         let mut flush_timer = interval(Duration::from_millis(flush_interval_ms));
 
-        loop {
-            tokio::select! {
-                biased;
-                _ = &mut shutdown => {
-                    receiver.close();
-                    while let Some(event) = receiver.recv().await {
-                        Self::write_event(&outputs, &event, min_level).await;
+        let writer_result: AuditResult<()> = async {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut shutdown => {
+                        receiver.close();
+                        while let Some(event) = receiver.recv().await {
+                            Self::write_event(&outputs, &event, min_level).await?;
+                        }
+                        break;
                     }
-                    break;
-                }
-                event = receiver.recv() => {
-                    match event {
-                        Some(event) => Self::write_event(&outputs, &event, min_level).await,
-                        None => break,
+                    _ = flush_timer.tick() => {
+                        Self::flush_outputs(&outputs).await?;
                     }
-                }
-                _ = flush_timer.tick() => {
-                    // Periodic flush
-                    for output in outputs.iter() {
-                        if let Err(e) = output.flush().await {
-                            error!("Failed to flush audit output '{}': {}", output.name(), e);
+                    event = receiver.recv() => {
+                        match event {
+                            Some(event) => Self::write_event(&outputs, &event, min_level).await?,
+                            None => break,
                         }
                     }
+                    else => break,
                 }
-                else => break,
             }
+            Ok(())
         }
+        .await;
 
-        Self::flush_and_close_outputs(&outputs).await
+        if let Err(error) = &writer_result {
+            Self::record_failure(&failure, error.to_string());
+        }
+        let close_result = Self::flush_and_close_outputs(&outputs).await;
+        if let Err(error) = &close_result {
+            Self::record_failure(&failure, error.to_string());
+        }
+        writer_result.and(close_result)
     }
 
-    async fn write_event(outputs: &[BoxedAuditOutput], event: &AuditEvent, min_level: LogLevel) {
+    async fn write_event(
+        outputs: &[BoxedAuditOutput],
+        event: &AuditEvent,
+        min_level: LogLevel,
+    ) -> AuditResult<()> {
         if !event.level.should_log(min_level) {
-            return;
+            return Ok(());
         }
         for output in outputs {
-            if let Err(e) = output.write(event).await {
-                error!("Failed to write to audit output '{}': {}", output.name(), e);
-            }
+            output.write(event).await.map_err(|error| {
+                AuditError::Output(format!("write audit output '{}': {error}", output.name()))
+            })?;
         }
+        Ok(())
+    }
+
+    async fn flush_outputs(outputs: &[BoxedAuditOutput]) -> AuditResult<()> {
+        for output in outputs {
+            output.flush().await.map_err(|error| {
+                AuditError::Output(format!("flush audit output '{}': {error}", output.name()))
+            })?;
+        }
+        Ok(())
     }
 
     async fn flush_and_close_outputs(outputs: &[BoxedAuditOutput]) -> AuditResult<()> {
@@ -192,17 +223,68 @@ impl AuditLogger {
         if !self.config.enabled {
             return Ok(());
         }
-
-        // Apply redaction if needed
-        let event = if self.config.redact_sensitive {
-            self.redact_event(event)
-        } else {
-            event
-        };
-
+        self.ensure_available()?;
+        let event = self.prepare_event(event);
         self.sender.try_send(event).map_err(|error| {
             AuditError::Channel(format!("audit event queue rejected an event: {error}"))
         })
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) fn start_request(&self, event: AuditEvent) -> AuditResult<AuditEventPermit> {
+        if !self.config.enabled {
+            return Ok(AuditEventPermit(None));
+        }
+        self.ensure_available()?;
+        let permit = self.sender.clone().try_reserve_owned().map_err(|error| {
+            AuditError::Channel(format!("audit terminal reservation failed: {error}"))
+        })?;
+        if let Err(error) = self.sender.try_send(self.prepare_event(event)) {
+            drop(permit);
+            return Err(AuditError::Channel(format!(
+                "audit start event was rejected: {error}"
+            )));
+        }
+        Ok(AuditEventPermit(Some(permit)))
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) fn complete_request(
+        &self,
+        permit: AuditEventPermit,
+        event: AuditEvent,
+    ) -> AuditResult<()> {
+        if let Some(permit) = permit.0 {
+            self.ensure_available()?;
+            permit.send(self.prepare_event(event));
+        }
+        Ok(())
+    }
+
+    fn prepare_event(&self, event: AuditEvent) -> AuditEvent {
+        if self.config.redact_sensitive {
+            self.redact_event(event)
+        } else {
+            event
+        }
+    }
+
+    fn ensure_available(&self) -> AuditResult<()> {
+        let failure = self.failure.read().unwrap_or_else(|lock| lock.into_inner());
+        match failure.as_deref() {
+            Some(failure) => Err(AuditError::Output(format!(
+                "audit worker unavailable: {failure}"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    fn record_failure(failure: &StdRwLock<Option<String>>, message: String) {
+        error!("Audit worker stopped: {message}");
+        let mut failure = failure.write().unwrap_or_else(|lock| lock.into_inner());
+        if failure.is_none() {
+            *failure = Some(message);
+        }
     }
 
     /// Redact sensitive data from an event
@@ -426,6 +508,7 @@ mod tests {
             sender: logger.sender,
             outputs: logger.outputs,
             redact_patterns: patterns,
+            failure: logger.failure,
             worker: Mutex::new(None),
         };
 
@@ -451,6 +534,7 @@ mod tests {
             sender: disabled.sender,
             outputs: disabled.outputs,
             redact_patterns: patterns,
+            failure: disabled.failure,
             worker: Mutex::new(None),
         };
 
@@ -483,6 +567,7 @@ mod tests {
             sender: disabled.sender,
             outputs: disabled.outputs,
             redact_patterns: patterns,
+            failure: disabled.failure,
             worker: Mutex::new(None),
         };
         let secret = "sk-abcdefghijklmnopqrstuvwxyz";
@@ -654,7 +739,7 @@ mod tests {
             release: Arc::clone(&release),
         };
         let mut config = AuditConfig::new().enable();
-        config.buffer_size = 1;
+        config.buffer_size = 2;
         let logger = AuditLoggerBuilder::new()
             .config(config)
             .add_output(Box::new(output))
@@ -665,8 +750,9 @@ mod tests {
         assert!(logger.log(AuditEvent::system("first")).await.is_ok());
         started.notified().await;
         assert!(logger.log(AuditEvent::system("second")).await.is_ok());
+        assert!(logger.log(AuditEvent::system("third")).await.is_ok());
         assert!(matches!(
-            logger.log(AuditEvent::system("third")).await,
+            logger.log(AuditEvent::system("fourth")).await,
             Err(AuditError::Channel(_))
         ));
 

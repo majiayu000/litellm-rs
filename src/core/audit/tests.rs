@@ -3,8 +3,8 @@
 use self::config::AuditConfig;
 use self::events::{AuditEvent, EventType};
 use self::logger::{AuditLogger, AuditLoggerBuilder};
-use self::outputs::MemoryOutput;
-use self::types::{LogLevel, RequestLog, ResponseLog, UserAction};
+use self::outputs::{AuditOutput, MemoryOutput};
+use self::types::{AuditError, AuditResult, LogLevel, RequestLog, ResponseLog, UserAction};
 use super::*;
 use std::sync::Arc;
 
@@ -281,6 +281,59 @@ async fn test_concurrent_logging() {
     }
 
     logger.shutdown().await.unwrap();
+}
+
+struct FailingWriteOutput;
+
+#[async_trait::async_trait]
+impl AuditOutput for FailingWriteOutput {
+    fn name(&self) -> &str {
+        "failing_write"
+    }
+
+    async fn write(&self, _event: &AuditEvent) -> AuditResult<()> {
+        Err(AuditError::Output("sink failed".to_string()))
+    }
+
+    async fn flush(&self) -> AuditResult<()> {
+        Ok(())
+    }
+
+    async fn close(&self) -> AuditResult<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn test_sink_failure_stops_accepting_new_events() {
+    let logger = AuditLoggerBuilder::new()
+        .config(AuditConfig::new().enable())
+        .add_output(Box::new(FailingWriteOutput))
+        .build()
+        .await
+        .unwrap();
+
+    assert!(
+        logger
+            .log(AuditEvent::system("trigger failure"))
+            .await
+            .is_ok()
+    );
+    let rejection = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            match logger.log(AuditEvent::system("probe")).await {
+                Err(error @ AuditError::Output(_)) => break error,
+                Ok(()) | Err(AuditError::Channel(_)) => {}
+                Err(error) => panic!("unexpected audit error: {error}"),
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(matches!(rejection, AuditError::Output(_)));
+    assert!(logger.shutdown().await.is_err());
 }
 
 #[test]

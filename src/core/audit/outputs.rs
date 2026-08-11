@@ -36,7 +36,10 @@ pub trait AuditOutput: Send + Sync {
 pub type BoxedAuditOutput = Box<dyn AuditOutput>;
 
 enum StderrCommand {
-    Write(String),
+    Write {
+        serialized: String,
+        completion: tokio::sync::oneshot::Sender<std::io::Result<()>>,
+    },
     Close,
 }
 
@@ -58,14 +61,27 @@ impl StderrOutput {
             .spawn(move || {
                 while let Ok(command) = receiver.recv() {
                     match command {
-                        StderrCommand::Write(serialized) => {
+                        StderrCommand::Write {
+                            serialized,
+                            completion,
+                        } => {
                             // Do not retain the global stderr lock while waiting
                             // for the next audit event.
                             let stderr = std::io::stderr();
                             let mut stderr = stderr.lock();
-                            stderr.write_all(serialized.as_bytes())?;
-                            stderr.write_all(b"\n")?;
-                            stderr.flush()?;
+                            let result = stderr
+                                .write_all(serialized.as_bytes())
+                                .and_then(|_| stderr.write_all(b"\n"))
+                                .and_then(|_| stderr.flush());
+                            if let Err(error) = result {
+                                let thread_error =
+                                    std::io::Error::new(error.kind(), error.to_string());
+                                // Receiver cancellation cannot change the sink failure.
+                                drop(completion.send(Err(error)));
+                                return Err(thread_error);
+                            }
+                            // The record is durable even if its waiter was cancelled.
+                            drop(completion.send(Ok(())));
                         }
                         StderrCommand::Close => break,
                     }
@@ -87,22 +103,16 @@ impl AuditOutput for StderrOutput {
 
     async fn write(&self, event: &AuditEvent) -> AuditResult<()> {
         let serialized = event.to_json()?;
-        let command = StderrCommand::Write(serialized);
-        match self.sender.try_send(command) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Disconnected(_)) => Err(AuditError::Channel(
-                "audit stderr writer stopped".to_string(),
-            )),
-            Err(TrySendError::Full(command)) => {
-                let sender = self.sender.clone();
-                tokio::task::spawn_blocking(move || sender.send(command))
-                    .await
-                    .map_err(|error| {
-                        AuditError::Output(format!("audit stderr enqueue failed: {error}"))
-                    })?
-                    .map_err(|_| AuditError::Channel("audit stderr writer stopped".to_string()))
-            }
-        }
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        let command = StderrCommand::Write {
+            serialized,
+            completion,
+        };
+        self.enqueue(command).await?;
+        completed
+            .await
+            .map_err(|_| AuditError::Channel("audit stderr writer stopped".to_string()))??;
+        Ok(())
     }
 
     async fn flush(&self) -> AuditResult<()> {
@@ -126,6 +136,26 @@ impl AuditOutput for StderrOutput {
         })
         .await
         .map_err(|error| AuditError::Output(format!("audit stderr join failed: {error}")))?
+    }
+}
+
+impl StderrOutput {
+    async fn enqueue(&self, command: StderrCommand) -> AuditResult<()> {
+        match self.sender.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Disconnected(_)) => Err(AuditError::Channel(
+                "audit stderr writer stopped".to_string(),
+            )),
+            Err(TrySendError::Full(command)) => {
+                let sender = self.sender.clone();
+                tokio::task::spawn_blocking(move || sender.send(command))
+                    .await
+                    .map_err(|error| {
+                        AuditError::Output(format!("audit stderr enqueue failed: {error}"))
+                    })?
+                    .map_err(|_| AuditError::Channel("audit stderr writer stopped".to_string()))
+            }
+        }
     }
 }
 
@@ -350,12 +380,15 @@ mod tests {
             worker: Mutex::new(None),
         };
 
-        output
-            .write(&AuditEvent::new(EventType::System, "event-1"))
-            .await
-            .unwrap();
-        let second_event = AuditEvent::new(EventType::System, "event-2");
-        let second_write = output.write(&second_event);
+        let command = |serialized: &str| {
+            let (completion, _) = tokio::sync::oneshot::channel();
+            StderrCommand::Write {
+                serialized: serialized.to_string(),
+                completion,
+            }
+        };
+        output.enqueue(command("event-1")).await.unwrap();
+        let second_write = output.enqueue(command("event-2"));
         tokio::pin!(second_write);
 
         assert!(
@@ -363,13 +396,19 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(matches!(receiver.recv().unwrap(), StderrCommand::Write(_)));
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            StderrCommand::Write { .. }
+        ));
         tokio::time::timeout(std::time::Duration::from_secs(1), second_write)
             .await
             .unwrap()
             .unwrap();
 
-        assert!(matches!(receiver.recv().unwrap(), StderrCommand::Write(_)));
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            StderrCommand::Write { .. }
+        ));
     }
 
     #[tokio::test]

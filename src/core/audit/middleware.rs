@@ -3,8 +3,9 @@
 //! This module provides middleware for automatic request/response logging.
 
 use crate::core::types::context::{RequestContext, SharedRequestContext};
-use actix_web::body::MessageBody;
+use actix_web::body::{BodySize, MessageBody};
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
+use actix_web::http::header::CONTENT_TYPE;
 use actix_web::{Error, HttpMessage};
 use futures::future::{LocalBoxFuture, Ready, ready};
 use std::rc::Rc;
@@ -14,9 +15,11 @@ use tracing::debug;
 
 use super::events::AuditEvent;
 use super::logger::AuditLogger;
+pub use super::middleware_body::AuditResponseBody;
+use super::middleware_body::{AuditBodyOutcome, AuditTerminalRecorder};
 use super::types::{AuditError, RequestLog};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct AuditPrincipal {
     user_id: Option<String>,
     api_key_id: Option<String>,
@@ -73,7 +76,7 @@ where
     S::Future: 'static,
     B: MessageBody + 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<AuditResponseBody<B>>;
     type Error = Error;
     type InitError = ();
     type Transform = AuditMiddlewareService<S>;
@@ -101,7 +104,7 @@ where
     S::Future: 'static,
     B: MessageBody + 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<AuditResponseBody<B>>;
     type Error = Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -117,7 +120,11 @@ where
         // Check if path should be logged
         if !logger.should_log_path(&path) {
             let fut = service.call(req);
-            return Box::pin(fut);
+            return Box::pin(async move {
+                fut.await.map(|response| {
+                    response.map_body(|_, body| AuditResponseBody::passthrough(body))
+                })
+            });
         }
 
         let principal = Arc::new(RwLock::new(AuditPrincipal::default()));
@@ -156,42 +163,47 @@ where
         let start_time = Instant::now();
 
         Box::pin(async move {
-            // Awaiting the enqueue preserves start-before-terminal ordering for
-            // every request on the bounded audit channel.
-            logger
-                .log(start_event)
-                .await
+            let terminal_permit = logger
+                .start_request(start_event)
                 .map_err(audit_service_unavailable)?;
             let result = service.call(req).await;
-            let duration_ms = start_time.elapsed().as_millis() as u64;
-
-            match &result {
-                Ok(response) => {
-                    let status_code = response.status().as_u16();
-                    let event = Self::with_authenticated_principal(
-                        AuditEvent::request_completed(&request_id, status_code, duration_ms),
-                        response,
+            let response = match result {
+                Ok(response) => response,
+                Err(error) => {
+                    let event = Self::with_principal(
+                        AuditEvent::request_failed(&request_id, error.to_string()),
+                        &Self::recorded_principal(&principal),
                     );
-                    logger
-                        .log(Self::with_recorded_principal(event, &principal))
-                        .await
-                        .map_err(audit_service_unavailable)?;
-                    debug!(
-                        "Request {} completed: status={}, duration={}ms",
-                        request_id, status_code, duration_ms
-                    );
+                    Self::complete_terminal(&logger, terminal_permit, event);
+                    debug!("Request {} failed: {}", request_id, error);
+                    return Err(error);
                 }
-                Err(e) => {
-                    let event = Self::with_recorded_principal(
-                        AuditEvent::request_failed(&request_id, e.to_string()),
-                        &principal,
-                    );
-                    logger.log(event).await.map_err(audit_service_unavailable)?;
-                    debug!("Request {} failed: {}", request_id, e);
-                }
-            }
+            };
 
-            result
+            let status_code = response.status().as_u16();
+            let principal = Self::response_principal(&response, &principal);
+            let recorder = Self::terminal_recorder(
+                Arc::clone(&logger),
+                terminal_permit,
+                request_id,
+                status_code,
+                start_time,
+                principal,
+            );
+            let is_stream = matches!(response.response().body().size(), BodySize::Stream);
+            let is_sse = response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("text/event-stream"));
+            Ok(response.map_body(|_, body| {
+                if is_stream {
+                    AuditResponseBody::streaming(body, recorder, is_sse)
+                } else {
+                    recorder.record(AuditBodyOutcome::Completed);
+                    AuditResponseBody::passthrough(body)
+                }
+            }))
         })
     }
 }
@@ -224,10 +236,7 @@ fn trusted_client_ip(req: &ServiceRequest, trusted_proxies: &[String]) -> Option
 }
 
 impl<S> AuditMiddlewareService<S> {
-    fn with_recorded_principal(
-        mut event: AuditEvent,
-        principal: &SharedAuditPrincipal,
-    ) -> AuditEvent {
+    fn recorded_principal(principal: &SharedAuditPrincipal) -> AuditPrincipal {
         let principal = match principal.read() {
             Ok(principal) => principal,
             Err(poisoned) => {
@@ -235,6 +244,10 @@ impl<S> AuditMiddlewareService<S> {
                 poisoned.into_inner()
             }
         };
+        principal.clone()
+    }
+
+    fn with_principal(mut event: AuditEvent, principal: &AuditPrincipal) -> AuditEvent {
         if let Some(user_id) = principal.user_id.as_deref() {
             event = event.with_user_id(user_id);
         }
@@ -247,25 +260,55 @@ impl<S> AuditMiddlewareService<S> {
         event
     }
 
-    fn with_authenticated_principal<B>(
-        mut event: AuditEvent,
+    fn response_principal<B>(
         response: &ServiceResponse<B>,
-    ) -> AuditEvent {
+        recorded: &SharedAuditPrincipal,
+    ) -> AuditPrincipal {
+        let mut principal = Self::recorded_principal(recorded);
         let extensions = response.request().extensions();
         let Some(context) = extensions.get::<SharedRequestContext>() else {
-            return event;
+            return principal;
         };
+        principal.user_id.clone_from(&context.user_id);
+        principal.api_key_id = context.api_key_id().map(|id| id.to_string());
+        principal.team_id = context.team_id().map(|id| id.to_string());
+        principal
+    }
 
-        if let Some(user_id) = context.user_id.as_deref() {
-            event = event.with_user_id(user_id);
+    fn terminal_recorder(
+        logger: Arc<AuditLogger>,
+        permit: super::logger::AuditEventPermit,
+        request_id: String,
+        status_code: u16,
+        start_time: Instant,
+        principal: AuditPrincipal,
+    ) -> AuditTerminalRecorder {
+        AuditTerminalRecorder::new(move |outcome| {
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            let event = match outcome {
+                AuditBodyOutcome::Completed => {
+                    AuditEvent::request_completed(&request_id, status_code, duration_ms)
+                }
+                AuditBodyOutcome::Failed(message) => {
+                    AuditEvent::request_failed(&request_id, message)
+                }
+            };
+            Self::complete_terminal(&logger, permit, Self::with_principal(event, &principal));
+            debug!(
+                "Request {} terminated: status={}, duration={}ms",
+                request_id, status_code, duration_ms
+            );
+        })
+    }
+
+    fn complete_terminal(
+        logger: &AuditLogger,
+        permit: super::logger::AuditEventPermit,
+        event: AuditEvent,
+    ) {
+        if let Err(error) = logger.complete_request(permit, event) {
+            tracing::error!("Failed to record reserved audit terminal event: {error}");
         }
-        if let Some(api_key_id) = context.api_key_id() {
-            event = event.with_api_key_id(&api_key_id.to_string());
-        }
-        if let Some(team_id) = context.team_id() {
-            event = event.with_team_id(&team_id.to_string());
-        }
-        event
     }
 }
 
@@ -280,6 +323,7 @@ mod tests {
     use crate::core::ip_access::{IpAccessConfig, IpAccessControl, IpAccessMiddleware};
     use crate::core::types::context::RequestContext;
     use actix_web::{App, HttpRequest, HttpResponse, http::StatusCode, test as actix_test, web};
+    use bytes::Bytes;
     use tokio::sync::Mutex;
 
     #[derive(Clone)]
@@ -501,5 +545,50 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event_type, EventType::RequestStarted);
         assert_eq!(events[1].event_type, EventType::RequestCompleted);
+    }
+
+    #[actix_web::test]
+    async fn streaming_audit_waits_for_body_and_records_error_event() {
+        let (logger, events) = recording_logger().await;
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(AuditMiddleware::new(Arc::clone(&logger)))
+                .route(
+                    "/stream",
+                    web::get().to(|| async {
+                        let body = futures::stream::iter(vec![Ok::<_, actix_web::Error>(
+                            Bytes::from_static(b"data: {\"error\":{\"code\":\"timeout\"}}\n\n"),
+                        )]);
+                        HttpResponse::Ok()
+                            .insert_header((CONTENT_TYPE, "text/event-stream"))
+                            .streaming(body)
+                    }),
+                ),
+        )
+        .await;
+        let request = actix_test::TestRequest::get().uri("/stream").to_request();
+
+        let response = actix_test::call_service(&app, request).await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if events.lock().await.len() == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("request start audit should be written");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(events.lock().await.len(), 1);
+
+        drop(actix_test::read_body(response).await);
+        logger.shutdown().await.expect("audit shutdown");
+        let events = events.lock().await;
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, EventType::RequestStarted);
+        assert_eq!(events[1].event_type, EventType::RequestFailed);
+        assert!(events[1].message.contains("stream emitted an error event"));
     }
 }

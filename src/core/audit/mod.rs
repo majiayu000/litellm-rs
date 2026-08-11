@@ -38,6 +38,8 @@ pub mod events;
 pub mod logger;
 #[cfg(feature = "gateway")]
 pub mod middleware;
+#[cfg(feature = "gateway")]
+mod middleware_body;
 pub mod outputs;
 pub mod types;
 
