@@ -7,12 +7,14 @@ use std::collections::VecDeque;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{SyncSender, TrySendError};
+use std::thread::JoinHandle;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use super::events::AuditEvent;
-use super::types::AuditResult;
+use super::types::{AuditError, AuditResult};
 
 /// Trait for audit output targets
 #[async_trait]
@@ -33,11 +35,47 @@ pub trait AuditOutput: Send + Sync {
 /// Boxed audit output for dynamic dispatch
 pub type BoxedAuditOutput = Box<dyn AuditOutput>;
 
+enum StderrCommand {
+    Write(String),
+    Close,
+}
+
 /// Structured stderr output used when no file destination is configured.
 ///
-/// This sink is independent of tracing subscriber installation and filtering,
-/// so explicitly enabled audit events cannot disappear behind a log level.
-pub struct StderrOutput;
+/// A dedicated thread owns blocking stderr I/O. The async audit worker only
+/// performs a non-blocking bounded enqueue, so a slow stderr consumer cannot
+/// stall request handling; queue saturation is returned as an explicit error.
+pub struct StderrOutput {
+    sender: SyncSender<StderrCommand>,
+    worker: Mutex<Option<JoinHandle<std::io::Result<()>>>>,
+}
+
+impl StderrOutput {
+    pub fn new(buffer_size: usize) -> AuditResult<Self> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(buffer_size.max(1));
+        let worker = std::thread::Builder::new()
+            .name("audit-stderr-writer".to_string())
+            .spawn(move || {
+                let stderr = std::io::stderr();
+                let mut stderr = stderr.lock();
+                while let Ok(command) = receiver.recv() {
+                    match command {
+                        StderrCommand::Write(serialized) => {
+                            stderr.write_all(serialized.as_bytes())?;
+                            stderr.write_all(b"\n")?;
+                            stderr.flush()?;
+                        }
+                        StderrCommand::Close => break,
+                    }
+                }
+                Ok(())
+            })?;
+        Ok(Self {
+            sender,
+            worker: Mutex::new(Some(worker)),
+        })
+    }
+}
 
 #[async_trait]
 impl AuditOutput for StderrOutput {
@@ -47,11 +85,16 @@ impl AuditOutput for StderrOutput {
 
     async fn write(&self, event: &AuditEvent) -> AuditResult<()> {
         let serialized = event.to_json()?;
-        let mut stderr = std::io::stderr().lock();
-        stderr.write_all(serialized.as_bytes())?;
-        stderr.write_all(b"\n")?;
-        stderr.flush()?;
-        Ok(())
+        self.sender
+            .try_send(StderrCommand::Write(serialized))
+            .map_err(|error| match error {
+                TrySendError::Full(_) => {
+                    AuditError::Channel("audit stderr queue is full".to_string())
+                }
+                TrySendError::Disconnected(_) => {
+                    AuditError::Channel("audit stderr writer stopped".to_string())
+                }
+            })
     }
 
     async fn flush(&self) -> AuditResult<()> {
@@ -59,7 +102,22 @@ impl AuditOutput for StderrOutput {
     }
 
     async fn close(&self) -> AuditResult<()> {
-        Ok(())
+        let Some(worker) = self.worker.lock().await.take() else {
+            return Ok(());
+        };
+        let sender = self.sender.clone();
+        tokio::task::spawn_blocking(move || {
+            let close_result = sender.send(StderrCommand::Close);
+            let worker_result = worker
+                .join()
+                .map_err(|_| AuditError::Output("audit stderr writer panicked".to_string()))?;
+            worker_result?;
+            close_result.map_err(|_| {
+                AuditError::Channel("audit stderr writer stopped before close".to_string())
+            })
+        })
+        .await
+        .map_err(|error| AuditError::Output(format!("audit stderr join failed: {error}")))?
     }
 }
 
@@ -275,6 +333,21 @@ impl AuditOutput for NullOutput {
 mod tests {
     use super::*;
     use crate::core::audit::events::EventType;
+
+    #[tokio::test]
+    async fn stderr_queue_saturation_returns_without_blocking() {
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(1);
+        let output = StderrOutput {
+            sender,
+            worker: Mutex::new(None),
+        };
+        let event = AuditEvent::new(EventType::System, "queued");
+
+        output.write(&event).await.unwrap();
+        let error = output.write(&event).await.unwrap_err();
+
+        assert!(error.to_string().contains("queue is full"));
+    }
 
     #[tokio::test]
     async fn test_memory_output() {

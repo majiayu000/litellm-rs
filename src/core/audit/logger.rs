@@ -51,7 +51,7 @@ impl AuditLogger {
         // ordinary tracing filters. File/custom outputs take precedence.
         if outputs.is_empty() {
             debug!("No file audit output configured, using structured stderr");
-            outputs.push(Box::new(StderrOutput));
+            outputs.push(Box::new(StderrOutput::new(config.buffer_size)?));
         }
 
         // Compile redact patterns

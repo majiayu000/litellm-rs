@@ -237,6 +237,7 @@ impl HttpServer {
         let metrics_enabled = cfg.gateway.monitoring.metrics.enabled;
         let audit_enabled = state.audit_logger.is_enabled();
         let audit_logger = Arc::clone(&state.audit_logger);
+        let trusted_proxies = cfg.gateway.server.trusted_proxies.clone();
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
 
@@ -266,7 +267,7 @@ impl HttpServer {
             // Audit wraps IP denials; request IDs wrap the complete lifecycle.
             .wrap(Condition::new(
                 audit_enabled,
-                AuditMiddleware::new(audit_logger),
+                AuditMiddleware::with_trusted_proxies(audit_logger, trusted_proxies),
             ))
             .wrap(RequestIdMiddleware)
             .configure(routes::health::configure_routes)

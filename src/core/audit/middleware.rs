@@ -19,12 +19,24 @@ use super::types::RequestLog;
 /// Audit middleware for Actix-web
 pub struct AuditMiddleware {
     logger: Arc<AuditLogger>,
+    trusted_proxies: Arc<Vec<String>>,
 }
 
 impl AuditMiddleware {
     /// Create a new audit middleware
     pub fn new(logger: Arc<AuditLogger>) -> Self {
-        Self { logger }
+        Self {
+            logger,
+            trusted_proxies: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Create audit middleware with explicitly trusted immediate proxy IPs.
+    pub fn with_trusted_proxies(logger: Arc<AuditLogger>, trusted_proxies: Vec<String>) -> Self {
+        Self {
+            logger,
+            trusted_proxies: Arc::new(trusted_proxies),
+        }
     }
 }
 
@@ -44,6 +56,7 @@ where
         ready(Ok(AuditMiddlewareService {
             service: Rc::new(service),
             logger: self.logger.clone(),
+            trusted_proxies: Arc::clone(&self.trusted_proxies),
         }))
     }
 }
@@ -52,6 +65,7 @@ where
 pub struct AuditMiddlewareService<S> {
     service: Rc<S>,
     logger: Arc<AuditLogger>,
+    trusted_proxies: Arc<Vec<String>>,
 }
 
 impl<S, B> Service<ServiceRequest> for AuditMiddlewareService<S>
@@ -69,6 +83,7 @@ where
     fn call(&self, req: ServiceRequest) -> Self::Future {
         let logger = self.logger.clone();
         let service = Rc::clone(&self.service);
+        let trusted_proxies = Arc::clone(&self.trusted_proxies);
         let path = req.path().to_string();
         let method = req.method().to_string();
 
@@ -87,10 +102,7 @@ where
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Extract request info
-        let client_ip = req
-            .connection_info()
-            .realip_remote_addr()
-            .map(|s| s.to_string());
+        let client_ip = trusted_client_ip(&req, &trusted_proxies);
 
         let user_agent = req
             .headers()
@@ -142,6 +154,28 @@ where
             result
         })
     }
+}
+
+fn trusted_client_ip(req: &ServiceRequest, trusted_proxies: &[String]) -> Option<String> {
+    let peer = req.connection_info().peer_addr()?.to_string();
+    let peer_ip = peer
+        .parse::<std::net::SocketAddr>()
+        .map(|address| address.ip().to_string())
+        .unwrap_or(peer);
+
+    if trusted_proxies.iter().any(|proxy| proxy == &peer_ip)
+        && let Some(forwarded) = req.headers().get("x-forwarded-for")
+        && let Ok(forwarded) = forwarded.to_str()
+        && let Some(client_ip) = forwarded
+            .split(',')
+            .next()
+            .map(str::trim)
+            .and_then(|value| value.parse::<std::net::IpAddr>().ok())
+    {
+        return Some(client_ip.to_string());
+    }
+
+    Some(peer_ip)
 }
 
 impl<S> AuditMiddlewareService<S> {
@@ -254,6 +288,8 @@ mod tests {
         let request = actix_test::TestRequest::get()
             .uri("/secured")
             .insert_header(("x-request-id", "req-principal"))
+            .insert_header(("x-forwarded-for", "198.51.100.250"))
+            .peer_addr("203.0.113.20:9000".parse().expect("valid socket address"))
             .to_request();
 
         let response = actix_test::call_service(&app, request).await;
@@ -265,6 +301,13 @@ mod tests {
         assert_eq!(events[0].event_type, EventType::RequestStarted);
         assert_eq!(events[1].event_type, EventType::RequestCompleted);
         assert_eq!(
+            events[0]
+                .request
+                .as_ref()
+                .and_then(|request| request.client_ip.as_deref()),
+            Some("203.0.113.20")
+        );
+        assert_eq!(
             events[1].user_id.as_deref(),
             Some(user_id.to_string().as_str())
         );
@@ -275,6 +318,41 @@ mod tests {
         assert_eq!(
             events[1].team_id.as_deref(),
             Some(team_id.to_string().as_str())
+        );
+    }
+
+    #[actix_web::test]
+    async fn audit_accepts_forwarded_ip_only_from_configured_proxy() {
+        let (logger, events) = recording_logger().await;
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(AuditMiddleware::with_trusted_proxies(
+                    Arc::clone(&logger),
+                    vec!["203.0.113.20".to_string()],
+                ))
+                .route(
+                    "/proxied",
+                    web::get().to(|| async { HttpResponse::Ok().finish() }),
+                ),
+        )
+        .await;
+        let request = actix_test::TestRequest::get()
+            .uri("/proxied")
+            .insert_header(("x-forwarded-for", "198.51.100.25, 203.0.113.20"))
+            .peer_addr("203.0.113.20:9000".parse().expect("valid socket address"))
+            .to_request();
+
+        let response = actix_test::call_service(&app, request).await;
+        logger.shutdown().await.expect("audit shutdown");
+        let events = events.lock().await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            events[0]
+                .request
+                .as_ref()
+                .and_then(|request| request.client_ip.as_deref()),
+            Some("198.51.100.25")
         );
     }
 

@@ -220,6 +220,9 @@ where
                     rate_limiter.record_success(&client_id);
                     debug!("Authentication succeeded");
 
+                    // Attach the authenticated principal before authorization
+                    // checks so audit middleware can attribute 403 responses.
+                    insert_request_context(&mut req, result.context);
                     match api_key_allows_endpoint(result.api_key.as_ref(), req.path()) {
                         Ok(true) => {}
                         Ok(false) => {
@@ -251,7 +254,6 @@ where
                         ));
                     }
 
-                    insert_request_context(&mut req, result.context);
                     if let Some(user) = result.user {
                         req.extensions_mut().insert::<User>(user);
                     }
@@ -604,6 +606,33 @@ mod tests {
             .expect("request context should be stored as a shared handle");
         assert_eq!(stored.api_key_id(), Some(api_key_id));
         assert!(extensions.get::<RequestContext>().is_none());
+    }
+
+    #[test]
+    fn forbidden_response_retains_authenticated_principal_context() {
+        let user_id = uuid::Uuid::new_v4();
+        let api_key_id = uuid::Uuid::new_v4();
+        let team_id = uuid::Uuid::new_v4();
+        let mut req = TestRequest::default().to_srv_request();
+        insert_request_context(
+            &mut req,
+            RequestContext::new()
+                .with_user(user_id, Some(team_id))
+                .with_api_key(api_key_id),
+        );
+
+        let response = forbidden_response::<actix_web::body::BoxBody>(req, "denied");
+        let extensions = response.request().extensions();
+        let context = extensions
+            .get::<SharedRequestContext>()
+            .expect("authenticated context should survive a 403 response");
+
+        assert_eq!(
+            context.user_id.as_deref(),
+            Some(user_id.to_string().as_str())
+        );
+        assert_eq!(context.api_key_id(), Some(api_key_id));
+        assert_eq!(context.team_id(), Some(team_id));
     }
 
     #[test]
