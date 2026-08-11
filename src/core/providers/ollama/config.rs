@@ -20,6 +20,10 @@ pub struct OllamaConfig {
     #[serde(default)]
     pub endpoint_access: ProviderEndpointAccess,
 
+    /// Models explicitly assigned to this provider. Empty means discover via `/api/tags`.
+    #[serde(default)]
+    pub models: Vec<String>,
+
     /// Request timeout in seconds
     #[serde(default = "default_timeout")]
     pub timeout: u64,
@@ -79,6 +83,7 @@ impl Default for OllamaConfig {
             api_key: None,
             api_base: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            models: Vec::new(),
             timeout: default_timeout(),
             max_retries: default_max_retries(),
             debug: false,

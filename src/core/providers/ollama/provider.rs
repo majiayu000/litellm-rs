@@ -9,12 +9,15 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::config::OllamaConfig;
-use super::error::{parse_http_json_response, parse_tool_arguments};
+use super::error::{
+    parse_http_json_response, parse_tool_arguments, response_format_value, should_send_tools,
+};
 use super::model_info::{OllamaModelInfo, OllamaShowResponse, OllamaTagsResponse, get_model_info};
 use super::streaming::OllamaStream;
 use crate::core::providers::base::{
     BaseConfig, GlobalPoolManager, HttpErrorMapper, HttpMethod, header,
 };
+use crate::core::providers::shared::MessageTransformer;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::error_mapper::types::GenericErrorMapper;
@@ -84,8 +87,11 @@ impl OllamaProvider {
             })?,
         );
 
-        // Initialize with empty models (will be populated on first list_models call)
-        let models = Vec::new();
+        let models = config
+            .models
+            .iter()
+            .map(|model| get_model_info(model).into())
+            .collect();
 
         Ok(Self {
             config,
@@ -293,7 +299,7 @@ impl OllamaProvider {
             if let Some(top_p) = request.top_p {
                 opts.insert("top_p".to_string(), serde_json::json!(top_p));
             }
-            if let Some(max_tokens) = request.max_tokens {
+            if let Some(max_tokens) = request.max_completion_tokens.or(request.max_tokens) {
                 opts.insert("num_predict".to_string(), serde_json::json!(max_tokens));
             }
             if let Some(stop) = &request.stop {
@@ -318,7 +324,9 @@ impl OllamaProvider {
         body["options"] = options;
 
         // Add tools if present
-        if let Some(tools) = &request.tools {
+        if should_send_tools(request.tool_choice.as_ref())?
+            && let Some(tools) = &request.tools
+        {
             let ollama_tools: Vec<_> = tools
                 .iter()
                 .map(|t| {
@@ -336,10 +344,8 @@ impl OllamaProvider {
         }
 
         // Add response format if set
-        if let Some(format) = &request.response_format
-            && format.format_type == "json_object"
-        {
-            body["format"] = serde_json::json!("json");
+        if let Some(format) = response_format_value(request.response_format.as_ref())? {
+            body["format"] = format;
         }
 
         // Add keep_alive if set in config
@@ -403,17 +409,14 @@ impl OllamaProvider {
         };
 
         // Determine finish reason
-        let done_reason_str = response
-            .get("done_reason")
-            .and_then(|r| r.as_str())
-            .unwrap_or("stop");
-        let finish_reason = match done_reason_str {
-            "stop" => FinishReason::Stop,
-            "length" => FinishReason::Length,
-            "tool_calls" => FinishReason::ToolCalls,
-            "content_filter" => FinishReason::ContentFilter,
-            "function_call" => FinishReason::FunctionCall,
-            _ => FinishReason::Stop,
+        let finish_reason = if tool_calls.is_some() {
+            FinishReason::ToolCalls
+        } else {
+            response
+                .get("done_reason")
+                .and_then(|reason| reason.as_str())
+                .and_then(MessageTransformer::parse_finish_reason)
+                .unwrap_or(FinishReason::Stop)
         };
 
         // Build usage info
@@ -754,30 +757,7 @@ impl OllamaProvider {
     pub async fn refresh_models(&mut self) -> Result<(), ProviderError> {
         let ollama_models = self.list_models().await?;
 
-        self.models = ollama_models
-            .into_iter()
-            .map(|m| ModelInfo {
-                id: m.name.clone(),
-                name: m.display_name.clone(),
-                provider: "ollama".to_string(),
-                max_context_length: m.max_context_length.unwrap_or(4096),
-                max_output_length: None,
-                supports_streaming: true,
-                supports_tools: m.supports_tools,
-                supports_multimodal: m.supports_multimodal,
-                input_cost_per_1k_tokens: Some(0.0), // Ollama is free
-                output_cost_per_1k_tokens: Some(0.0), // Ollama is free
-                currency: "USD".to_string(),
-                capabilities: vec![
-                    ProviderCapability::ChatCompletion,
-                    ProviderCapability::ChatCompletionStream,
-                    ProviderCapability::Embeddings,
-                ],
-                created_at: None,
-                updated_at: None,
-                metadata: HashMap::new(),
-            })
-            .collect();
+        self.models = ollama_models.into_iter().map(Into::into).collect();
 
         Ok(())
     }

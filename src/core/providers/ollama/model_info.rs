@@ -4,7 +4,9 @@
 //! Unlike cloud providers, Ollama models are locally managed and can be
 //! dynamically discovered via the API.
 
+use crate::core::types::model::{ModelInfo, ProviderCapability};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Ollama model information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +125,32 @@ impl OllamaModelInfo {
         self.max_context_length = infer_context_length(&name_lower);
 
         self
+    }
+}
+
+impl From<OllamaModelInfo> for ModelInfo {
+    fn from(model: OllamaModelInfo) -> Self {
+        Self {
+            id: model.name,
+            name: model.display_name,
+            provider: "ollama".to_string(),
+            max_context_length: model.max_context_length.unwrap_or(4096),
+            max_output_length: None,
+            supports_streaming: true,
+            supports_tools: model.supports_tools,
+            supports_multimodal: model.supports_multimodal,
+            input_cost_per_1k_tokens: Some(0.0),
+            output_cost_per_1k_tokens: Some(0.0),
+            currency: "USD".to_string(),
+            capabilities: vec![
+                ProviderCapability::ChatCompletion,
+                ProviderCapability::ChatCompletionStream,
+                ProviderCapability::Embeddings,
+            ],
+            created_at: None,
+            updated_at: None,
+            metadata: HashMap::new(),
+        }
     }
 }
 

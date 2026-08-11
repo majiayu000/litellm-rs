@@ -59,10 +59,11 @@ fn build_ollama_config_from_factory(
     let object = normalized
         .as_object_mut()
         .ok_or_else(|| ProviderError::configuration("ollama", "configuration must be an object"))?;
-    if !object.contains_key("api_base")
-        && let Some(base_url) = base_url
-    {
-        object.insert("api_base".to_string(), base_url.into());
+    if let Some(endpoint) = api_base.or(base_url) {
+        object.insert(
+            "api_base".to_string(),
+            endpoint.trim_end_matches('/').into(),
+        );
     }
     object.remove("base_url");
     let ollama_config: ollama::OllamaConfig = serde_json::from_value(normalized)
@@ -255,7 +256,11 @@ impl Provider {
                 #[cfg(feature = "providers-extended")]
                 {
                     let ollama_config = build_ollama_config_from_factory(&config)?;
-                    let provider = ollama::OllamaProvider::new(ollama_config).await?;
+                    let discover_models = ollama_config.models.is_empty();
+                    let mut provider = ollama::OllamaProvider::new(ollama_config).await?;
+                    if discover_models {
+                        provider.refresh_models().await?;
+                    }
                     Ok(Provider::Ollama(provider))
                 }
                 #[cfg(not(feature = "providers-extended"))]

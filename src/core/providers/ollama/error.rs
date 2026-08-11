@@ -2,6 +2,7 @@
 
 use crate::core::providers::base::HttpErrorMapper;
 pub use crate::core::providers::unified_provider::ProviderError;
+use crate::core::types::tools::{ResponseFormat, ToolChoice};
 
 /// Ollama error type (alias to unified ProviderError)
 pub type OllamaError = ProviderError;
@@ -36,4 +37,35 @@ pub(super) fn parse_tool_arguments(raw: &str) -> Result<serde_json::Value, Provi
         ));
     }
     Ok(arguments)
+}
+
+pub(super) fn should_send_tools(tool_choice: Option<&ToolChoice>) -> Result<bool, ProviderError> {
+    match tool_choice {
+        None => Ok(true),
+        Some(ToolChoice::String(choice)) if choice == "auto" => Ok(true),
+        Some(ToolChoice::String(choice)) if choice == "none" => Ok(false),
+        Some(_) => Err(ProviderError::invalid_request(
+            "ollama",
+            "native Ollama supports only tool_choice auto or none",
+        )),
+    }
+}
+
+pub(super) fn response_format_value(
+    format: Option<&ResponseFormat>,
+) -> Result<Option<serde_json::Value>, ProviderError> {
+    let Some(format) = format else {
+        return Ok(None);
+    };
+    match format.format_type.as_str() {
+        "text" => Ok(None),
+        "json_object" => Ok(Some(serde_json::Value::String("json".to_string()))),
+        "json_schema" => format.json_schema.clone().map(Some).ok_or_else(|| {
+            ProviderError::invalid_request("ollama", "json_schema response format needs a schema")
+        }),
+        other => Err(ProviderError::invalid_request(
+            "ollama",
+            format!("unsupported response format: {other}"),
+        )),
+    }
 }

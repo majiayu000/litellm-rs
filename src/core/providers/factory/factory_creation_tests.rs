@@ -34,6 +34,7 @@ async fn creates_native_ollama_from_gateway_config() {
         provider_type: "ollama".to_string(),
         base_url: Some("http://127.0.0.1:11434".to_string()),
         endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+        models: vec!["llama3:8b".to_string()],
         ..Default::default()
     };
 

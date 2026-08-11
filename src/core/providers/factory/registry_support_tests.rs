@@ -1,5 +1,9 @@
 use crate::core::providers::provider_type::{ProviderType, all_non_custom_provider_types};
 use crate::core::providers::{Provider, ProviderError};
+#[cfg(feature = "providers-extended")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(feature = "providers-extended")]
+use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn supported_variants_do_not_fallthrough_to_not_implemented() {
@@ -48,7 +52,8 @@ async fn ollama_factory_creates_policy_wired_native_provider() {
         ProviderType::Ollama,
         serde_json::json!({
             "base_url": "http://127.0.0.1:11434",
-            "endpoint_access": "private_network"
+            "endpoint_access": "private_network",
+            "models": ["llama3:8b"]
         }),
     )
     .await
@@ -63,6 +68,47 @@ async fn ollama_factory_creates_policy_wired_native_provider() {
         capabilities.contains(&crate::core::types::model::ProviderCapability::ChatCompletionStream)
     );
     assert!(capabilities.contains(&crate::core::types::model::ProviderCapability::Embeddings));
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn ollama_factory_discovers_models_and_normalizes_trailing_slash() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("test listener binds");
+    let address = listener.local_addr().expect("test listener has address");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("factory requests tags");
+        let mut request = [0_u8; 4096];
+        let read = socket
+            .read(&mut request)
+            .await
+            .expect("request is readable");
+        let body = r#"{"models":[{"name":"llama3:8b"}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("tags response is writable");
+        String::from_utf8_lossy(&request[..read]).into_owned()
+    });
+
+    let provider = Provider::from_config_async(
+        ProviderType::Ollama,
+        serde_json::json!({
+            "api_base": format!("http://{address}/"),
+            "endpoint_access": "private_network"
+        }),
+    )
+    .await
+    .expect("Ollama factory should discover models");
+
+    assert_eq!(provider.list_models()[0].id, "llama3:8b");
+    let request = server.await.expect("test server completes");
+    assert!(request.starts_with("GET /api/tags "), "{request}");
 }
 
 #[cfg(feature = "providers-extended")]

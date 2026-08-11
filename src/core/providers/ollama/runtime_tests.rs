@@ -5,7 +5,11 @@ use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::chat::{ChatMessage, ChatRequest};
 use crate::core::types::context::RequestContext;
 use crate::core::types::message::{MessageContent, MessageRole};
-use crate::core::types::tools::{FunctionCall, ToolCall};
+use crate::core::types::responses::FinishReason;
+use crate::core::types::tools::{
+    FunctionCall, FunctionChoice, FunctionDefinition, ResponseFormat, Tool, ToolCall, ToolChoice,
+    ToolType,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -36,6 +40,96 @@ async fn transform_request_emits_tool_arguments_as_json_object() {
     assert_eq!(
         body["messages"][0]["tool_calls"][0]["function"]["arguments"],
         serde_json::json!({"location": "NYC"})
+    );
+}
+
+fn weather_tool() -> Tool {
+    Tool {
+        tool_type: ToolType::Function,
+        function: FunctionDefinition {
+            name: "get_weather".to_string(),
+            description: None,
+            parameters: Some(serde_json::json!({"type": "object"})),
+        },
+    }
+}
+
+#[tokio::test]
+async fn transform_request_preserves_generation_and_tool_selection_contract() {
+    let provider = OllamaProvider::new(OllamaConfig::default()).await.unwrap();
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string"}}
+    });
+    let mut request = ChatRequest {
+        model: "ollama/llama3:8b".to_string(),
+        tools: Some(vec![weather_tool()]),
+        tool_choice: Some(ToolChoice::String("none".to_string())),
+        max_tokens: Some(10),
+        max_completion_tokens: Some(20),
+        response_format: Some(ResponseFormat {
+            format_type: "json_schema".to_string(),
+            json_schema: Some(schema.clone()),
+            response_type: None,
+        }),
+        ..Default::default()
+    };
+
+    let body =
+        LLMProvider::transform_request(&provider, request.clone(), RequestContext::default())
+            .await
+            .expect("supported generation controls should transform");
+    assert!(body.get("tools").is_none());
+    assert_eq!(body["options"]["num_predict"], 20);
+    assert_eq!(body["format"], schema);
+
+    request.tool_choice = Some(ToolChoice::String("auto".to_string()));
+    let body =
+        LLMProvider::transform_request(&provider, request.clone(), RequestContext::default())
+            .await
+            .expect("automatic tool selection should transform");
+    assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+
+    request.tool_choice = Some(ToolChoice::Specific {
+        choice_type: "function".to_string(),
+        function: Some(FunctionChoice {
+            name: "get_weather".to_string(),
+        }),
+    });
+    let error = LLMProvider::transform_request(&provider, request, RequestContext::default())
+        .await
+        .expect_err("native Ollama cannot force a specific tool");
+    assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+}
+
+#[tokio::test]
+async fn non_streaming_tool_calls_override_stop_finish_reason() {
+    let provider = OllamaProvider::new(OllamaConfig::default()).await.unwrap();
+    let raw = serde_json::to_vec(&serde_json::json!({
+        "model": "llama3:8b",
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": {"name": "get_weather", "arguments": {"city": "Paris"}}
+            }]
+        },
+        "done": true,
+        "done_reason": "stop"
+    }))
+    .unwrap();
+
+    let response = LLMProvider::transform_response(&provider, &raw, "llama3:8b", "request-1")
+        .await
+        .expect("tool response should parse");
+    assert_eq!(
+        response.choices[0].finish_reason,
+        Some(FinishReason::ToolCalls)
+    );
+    assert!(
+        response.choices[0].message.tool_calls.as_ref().unwrap()[0]
+            .id
+            .starts_with("call_")
     );
 }
 

@@ -3,11 +3,12 @@
 //! Handles Ollama's streaming response format (NDJSON - newline-delimited JSON).
 //! Ollama uses a different format than OpenAI's SSE, so we need a custom parser.
 
+use crate::core::providers::shared::MessageTransformer;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
 #[cfg(test)]
 use crate::core::types::responses::ChatResponse;
-use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, Usage};
+use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason, Usage};
 use bytes::Bytes;
 use futures::Stream;
 use std::pin::Pin;
@@ -163,7 +164,10 @@ where
                     .enumerate()
                     .map(|(i, tc)| crate::core::types::responses::ToolCallDelta {
                         index: i as u32,
-                        id: tc.id.clone(),
+                        id: tc
+                            .id
+                            .clone()
+                            .or_else(|| Some(format!("call_{}_{i}", self.chunk_id))),
                         tool_type: Some("function".to_string()),
                         function: Some(crate::core::types::responses::FunctionCallDelta {
                             name: Some(tc.function.name.clone()),
@@ -180,15 +184,21 @@ where
 
         // Determine finish reason
         let finish_reason = if chunk.done {
-            let reason_str = chunk.done_reason.as_deref().unwrap_or("stop");
-            Some(match reason_str {
-                "stop" => crate::core::types::responses::FinishReason::Stop,
-                "length" => crate::core::types::responses::FinishReason::Length,
-                "tool_calls" => crate::core::types::responses::FinishReason::ToolCalls,
-                "content_filter" => crate::core::types::responses::FinishReason::ContentFilter,
-                "function_call" => crate::core::types::responses::FinishReason::FunctionCall,
-                _ => crate::core::types::responses::FinishReason::Stop,
-            })
+            Some(
+                if delta
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty())
+                {
+                    FinishReason::ToolCalls
+                } else {
+                    chunk
+                        .done_reason
+                        .as_deref()
+                        .and_then(MessageTransformer::parse_finish_reason)
+                        .unwrap_or(FinishReason::Stop)
+                },
+            )
         } else {
             None
         };
@@ -501,6 +511,37 @@ mod tests {
             .expect("stream should emit a chunk")
             .expect("split UTF-8 should remain valid");
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("你好"));
+    }
+
+    #[tokio::test]
+    async fn streamed_tool_ids_are_stable_and_override_stop_reason() {
+        let first = concat!(
+            "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",",
+            "\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":{}}}]},",
+            "\"done\":false}\n"
+        );
+        let last = concat!(
+            "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",",
+            "\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":{}}}]},",
+            "\"done\":true,\"done_reason\":\"stop\"}\n"
+        );
+        let chunks = vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from_static(first.as_bytes())),
+            Ok(Bytes::from_static(last.as_bytes())),
+        ];
+        let mut stream = OllamaStream::new(futures::stream::iter(chunks));
+
+        let first = stream.next().await.unwrap().unwrap();
+        let last = stream.next().await.unwrap().unwrap();
+        let first_id = first.choices[0].delta.tool_calls.as_ref().unwrap()[0]
+            .id
+            .as_deref();
+        let last_id = last.choices[0].delta.tool_calls.as_ref().unwrap()[0]
+            .id
+            .as_deref();
+        assert_eq!(first_id, last_id);
+        assert!(first_id.is_some_and(|id| id.starts_with("call_ollama-")));
+        assert_eq!(last.choices[0].finish_reason, Some(FinishReason::ToolCalls));
     }
 
     #[test]
