@@ -407,6 +407,7 @@ mod tests {
                 "use_streaming": true
             }),
             ProviderType::Ollama => serde_json::json!({
+                "models": ["llama3:8b"],
                 "timeout": 30,
                 "max_retries": 2
             }),

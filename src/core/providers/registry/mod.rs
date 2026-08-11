@@ -46,3 +46,14 @@ pub fn catalog_definition_for_provider_type(
             .and_then(|entry| get_definition(entry.canonical_name)),
     }
 }
+
+/// Whether a provider selector can authenticate without an API key.
+pub fn selector_skips_api_key(selector: &str) -> bool {
+    let selector = selector.trim().to_ascii_lowercase();
+    get_definition(&selector).is_some_and(|definition| definition.skip_api_key)
+        || selector
+            .parse::<super::provider_type::ProviderType>()
+            .is_ok_and(|provider_type| {
+                matches!(provider_type, super::provider_type::ProviderType::Ollama)
+            })
+}

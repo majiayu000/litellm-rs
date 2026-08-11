@@ -262,15 +262,7 @@ impl Validate for ProviderConfig {
         .map_err(|message| format!("Provider {} {message}", self.name))?;
 
         let requires_api_key =
-            crate::core::providers::registry::get_definition(&provider_selector.to_lowercase())
-                .map(|def| !def.skip_api_key)
-                .unwrap_or_else(|| {
-                    provider_selector
-                        .parse::<crate::core::providers::ProviderType>()
-                        .map_or(true, |provider_type| {
-                            !matches!(provider_type, crate::core::providers::ProviderType::Ollama)
-                        })
-                });
+            !crate::core::providers::registry::selector_skips_api_key(provider_selector);
 
         if requires_api_key && self.api_key.is_empty() {
             return Err(format!("Provider {} API key cannot be empty", self.name));

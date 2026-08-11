@@ -113,6 +113,9 @@ impl ProviderConfig for OllamaConfig {
         if self.timeout == 0 {
             return Err("Timeout must be greater than 0".to_string());
         }
+        if self.template.is_some() {
+            return Err("Native Ollama chat does not support template overrides".to_string());
+        }
 
         // Validate mirostat value if set
         if let Some(mirostat) = self.mirostat

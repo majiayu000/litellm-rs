@@ -39,6 +39,21 @@ pub(super) fn parse_tool_arguments(raw: &str) -> Result<serde_json::Value, Provi
     Ok(arguments)
 }
 
+pub(super) fn inline_image_data(url: &str) -> Result<String, ProviderError> {
+    url.strip_prefix("data:")
+        .and_then(|data| {
+            let (metadata, payload) = data.split_once(',')?;
+            metadata.ends_with(";base64").then_some(payload.to_string())
+        })
+        .filter(|payload| !payload.is_empty())
+        .ok_or_else(|| {
+            ProviderError::invalid_request(
+                "ollama",
+                "native Ollama image URLs must be non-empty base64 data URLs",
+            )
+        })
+}
+
 pub(super) fn should_send_tools(tool_choice: Option<&ToolChoice>) -> Result<bool, ProviderError> {
     match tool_choice {
         None => Ok(true),
@@ -60,9 +75,20 @@ pub(super) fn response_format_value(
     match format.format_type.as_str() {
         "text" => Ok(None),
         "json_object" => Ok(Some(serde_json::Value::String("json".to_string()))),
-        "json_schema" => format.json_schema.clone().map(Some).ok_or_else(|| {
-            ProviderError::invalid_request("ollama", "json_schema response format needs a schema")
-        }),
+        "json_schema" => {
+            let schema = format.json_schema.as_ref().ok_or_else(|| {
+                ProviderError::invalid_request(
+                    "ollama",
+                    "json_schema response format needs a schema",
+                )
+            })?;
+            let schema = schema
+                .as_object()
+                .filter(|wrapper| wrapper.contains_key("name") || wrapper.contains_key("strict"))
+                .and_then(|wrapper| wrapper.get("schema"))
+                .unwrap_or(schema);
+            Ok(Some(schema.clone()))
+        }
         other => Err(ProviderError::invalid_request(
             "ollama",
             format!("unsupported response format: {other}"),

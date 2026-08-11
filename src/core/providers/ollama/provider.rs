@@ -10,7 +10,8 @@ use tracing::debug;
 
 use super::config::OllamaConfig;
 use super::error::{
-    parse_http_json_response, parse_tool_arguments, response_format_value, should_send_tools,
+    inline_image_data, parse_http_json_response, parse_tool_arguments, response_format_value,
+    should_send_tools,
 };
 use super::model_info::{OllamaModelInfo, OllamaShowResponse, OllamaTagsResponse, get_model_info};
 use super::streaming::OllamaStream;
@@ -193,9 +194,30 @@ impl OllamaProvider {
         request: &ChatRequest,
         stream: bool,
     ) -> Result<serde_json::Value, ProviderError> {
-        let mut messages = Vec::new();
+        if request.n.is_some_and(|n| n != 1) {
+            return Err(ProviderError::invalid_request(
+                "ollama",
+                "native Ollama supports exactly one choice",
+            ));
+        }
+        let tool_names: HashMap<&str, &str> = request
+            .messages
+            .iter()
+            .filter_map(|message| message.tool_calls.as_ref())
+            .flatten()
+            .map(|call| (call.id.as_str(), call.function.name.as_str()))
+            .collect();
+        let mut messages = self
+            .config
+            .system
+            .as_ref()
+            .map(|system| vec![serde_json::json!({"role": "system", "content": system})])
+            .unwrap_or_default();
 
         for msg in &request.messages {
+            if self.config.system.is_some() && msg.role == MessageRole::System {
+                continue;
+            }
             let role = match &msg.role {
                 MessageRole::System | MessageRole::Developer => "system",
                 MessageRole::User => "user",
@@ -224,18 +246,7 @@ impl OllamaProvider {
                                 text_parts.push(text.clone());
                             }
                             crate::core::types::content::ContentPart::ImageUrl { image_url } => {
-                                // Extract base64 image data from data URL or URL
-                                let url = &image_url.url;
-                                if url.starts_with("data:") {
-                                    // Extract base64 data
-                                    if let Some(comma_pos) = url.find(',') {
-                                        let base64_data = &url[comma_pos + 1..];
-                                        images.push(base64_data.to_string());
-                                    }
-                                } else {
-                                    // Regular URL - Ollama expects base64, so this might not work
-                                    images.push(url.clone());
-                                }
+                                images.push(inline_image_data(&image_url.url)?);
                             }
                             crate::core::types::content::ContentPart::Image { source, .. } => {
                                 // Base64 encoded image
@@ -263,6 +274,7 @@ impl OllamaProvider {
                     .map(|tc| {
                         let arguments = parse_tool_arguments(&tc.function.arguments)?;
                         Ok(serde_json::json!({
+                            "id": tc.id,
                             "function": {
                                 "name": tc.function.name,
                                 "arguments": arguments
@@ -273,11 +285,23 @@ impl OllamaProvider {
                 message["tool_calls"] = serde_json::json!(ollama_tool_calls);
             }
 
-            // Handle tool call id for tool messages
-            if msg.role == MessageRole::Tool
-                && let Some(name) = &msg.name
-            {
-                message["name"] = serde_json::json!(name);
+            if msg.role == MessageRole::Tool {
+                if let Some(id) = msg.tool_call_id.as_deref() {
+                    message["tool_call_id"] = serde_json::json!(id);
+                    let name = msg
+                        .name
+                        .as_deref()
+                        .or_else(|| tool_names.get(id).copied())
+                        .ok_or_else(|| {
+                            ProviderError::invalid_request(
+                                "ollama",
+                                format!("tool result references unknown call ID: {id}"),
+                            )
+                        })?;
+                    message["tool_name"] = serde_json::json!(name);
+                } else if let Some(name) = &msg.name {
+                    message["tool_name"] = serde_json::json!(name);
+                }
             }
 
             messages.push(message);
@@ -681,15 +705,20 @@ impl LLMProvider for OllamaProvider {
                 }
             })
             .collect();
+        let prompt_tokens = response
+            .get("prompt_eval_count")
+            .and_then(serde_json::Value::as_u64)
+            .map(|count| u32::try_from(count).unwrap_or(u32::MAX))
+            .unwrap_or(0);
 
         Ok(EmbeddingResponse {
             object: "list".to_string(),
             data,
             model: format!("ollama/{}", model),
             usage: Some(Usage {
-                prompt_tokens: 0, // Ollama doesn't report token usage for embeddings
+                prompt_tokens,
                 completion_tokens: 0,
-                total_tokens: 0,
+                total_tokens: prompt_tokens,
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
                 thinking_usage: None,
