@@ -30,7 +30,7 @@
 //! let logger = AuditLogger::new(config).await?;
 //!
 //! // Log an event
-//! logger.log(AuditEvent::request_started("req-123", "/v1/chat/completions")).await;
+//! logger.log(AuditEvent::request_started("req-123", "/v1/chat/completions")).await?;
 //! ```
 
 pub mod config;

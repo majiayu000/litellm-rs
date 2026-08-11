@@ -18,6 +18,13 @@ pub enum SubsystemDecision {
     InternalDependency,
     /// Deprecated 0.6 source-compatibility variant. No active registry entry
     /// uses it; removal is scheduled for 0.7.
+    #[cfg_attr(
+        not(test),
+        deprecated(
+            since = "0.6.0",
+            note = "temporary exemptions are resolved; this variant is removed in 0.7.0"
+        )
+    )]
     TemporaryExemption,
     /// Module is hidden from the default build behind a default-off feature.
     FeatureGated,
@@ -30,14 +37,7 @@ impl CoreSubsystem {
     /// Returns true when a module can be absent from direct server/main
     /// references without creating a new declaration-execution gap.
     pub fn has_gateway_reference_exemption(&self) -> bool {
-        match self.decision {
-            SubsystemDecision::Wired => false,
-            SubsystemDecision::LibraryOnly
-            | SubsystemDecision::InternalDependency
-            | SubsystemDecision::TemporaryExemption
-            | SubsystemDecision::FeatureGated
-            | SubsystemDecision::ConfigRejected => true,
-        }
+        self.decision != SubsystemDecision::Wired
     }
 }
 

@@ -223,7 +223,7 @@ full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db",
 [package.metadata.docs.rs]
 # Exclude vector-db feature because qdrant-client fails on docs.rs read-only filesystem
 all-features = false
-features = ["gateway", "postgres", "sqlite", "redis", "s3", "metrics", "tracing", "websockets", "analytics", "providers-extra", "providers-extended"]
+features = ["gateway", "postgres", "sqlite", "redis", "s3", "metrics", "tracing", "websockets", "analytics", "a2a", "mcp-validation", "webhooks", "user-management", "providers-extra", "providers-extended"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.playground]

@@ -18,21 +18,33 @@ async fn test_full_audit_pipeline() {
     let logger = AuditLogger::new(config).await.unwrap();
 
     // Log various events
-    logger
-        .log(AuditEvent::request_started(
-            "req-1",
-            r"/v1/chat/completions",
-        ))
-        .await;
-    logger
-        .log(AuditEvent::request_completed("req-1", 200, 150))
-        .await;
-    logger
-        .log(AuditEvent::user_action("user-1", UserAction::Login))
-        .await;
-    logger
-        .log(AuditEvent::security("Suspicious activity"))
-        .await;
+    assert!(
+        logger
+            .log(AuditEvent::request_started(
+                "req-1",
+                r"/v1/chat/completions",
+            ))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::request_completed("req-1", 200, 150))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::user_action("user-1", UserAction::Login))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::security("Suspicious activity"))
+            .await
+            .is_ok()
+    );
 
     // Flush
     logger.flush().await.unwrap();
@@ -55,14 +67,14 @@ async fn test_request_response_logging() {
 
     let event = AuditEvent::request_started("req-1", r"/v1/chat/completions").with_request(request);
 
-    logger.log(event).await;
+    assert!(logger.log(event).await.is_ok());
 
     // Create response log
     let response = ResponseLog::new("req-1", 200, 150).with_body(r#"{"choices": []}"#, 15);
 
     let event = AuditEvent::request_completed("req-1", 200, 150).with_response(response);
 
-    logger.log(event).await;
+    assert!(logger.log(event).await.is_ok());
 
     logger.flush().await.unwrap();
 }
@@ -83,7 +95,7 @@ async fn test_user_action_logging() {
 
     for action in actions {
         let event = AuditEvent::user_action("user-123", action);
-        logger.log(event).await;
+        assert!(logger.log(event).await.is_ok());
     }
 
     logger.flush().await.unwrap();
@@ -96,20 +108,32 @@ async fn test_log_level_filtering() {
     let logger = AuditLogger::new(config).await.unwrap();
 
     // Debug and Info should be filtered
-    logger
-        .log(AuditEvent::new(EventType::System, "Debug").with_level(LogLevel::Debug))
-        .await;
-    logger
-        .log(AuditEvent::new(EventType::System, "Info").with_level(LogLevel::Info))
-        .await;
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Debug").with_level(LogLevel::Debug))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Info").with_level(LogLevel::Info))
+            .await
+            .is_ok()
+    );
 
     // Warn and above should pass
-    logger
-        .log(AuditEvent::new(EventType::System, "Warn").with_level(LogLevel::Warn))
-        .await;
-    logger
-        .log(AuditEvent::new(EventType::System, "Error").with_level(LogLevel::Error))
-        .await;
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Warn").with_level(LogLevel::Warn))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Error").with_level(LogLevel::Error))
+            .await
+            .is_ok()
+    );
 
     logger.flush().await.unwrap();
 }
@@ -200,7 +224,12 @@ async fn test_disabled_logger() {
     let logger = AuditLogger::disabled();
 
     // Should not panic
-    logger.log(AuditEvent::new(EventType::System, "Test")).await;
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Test"))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -216,7 +245,7 @@ async fn test_high_volume_logging() {
     // Log many events quickly
     for i in 0..1000 {
         let event = AuditEvent::new(EventType::System, format!("Event {}", i));
-        logger.log(event).await;
+        assert!(logger.log(event).await.is_ok());
     }
 
     logger.shutdown().await.unwrap();
@@ -241,7 +270,7 @@ async fn test_concurrent_logging() {
         let handle = tokio::spawn(async move {
             for j in 0..100 {
                 let event = AuditEvent::new(EventType::System, format!("Thread {} Event {}", i, j));
-                logger.log(event).await;
+                assert!(logger.log(event).await.is_ok());
             }
         });
         handles.push(handle);

@@ -14,7 +14,7 @@ use tracing::debug;
 
 use super::events::AuditEvent;
 use super::logger::AuditLogger;
-use super::types::RequestLog;
+use super::types::{AuditError, RequestLog};
 
 #[derive(Default)]
 struct AuditPrincipal {
@@ -158,7 +158,10 @@ where
         Box::pin(async move {
             // Awaiting the enqueue preserves start-before-terminal ordering for
             // every request on the bounded audit channel.
-            logger.log(start_event).await;
+            logger
+                .log(start_event)
+                .await
+                .map_err(audit_service_unavailable)?;
             let result = service.call(req).await;
             let duration_ms = start_time.elapsed().as_millis() as u64;
 
@@ -171,7 +174,8 @@ where
                     );
                     logger
                         .log(Self::with_recorded_principal(event, &principal))
-                        .await;
+                        .await
+                        .map_err(audit_service_unavailable)?;
                     debug!(
                         "Request {} completed: status={}, duration={}ms",
                         request_id, status_code, duration_ms
@@ -182,7 +186,7 @@ where
                         AuditEvent::request_failed(&request_id, e.to_string()),
                         &principal,
                     );
-                    logger.log(event).await;
+                    logger.log(event).await.map_err(audit_service_unavailable)?;
                     debug!("Request {} failed: {}", request_id, e);
                 }
             }
@@ -190,6 +194,11 @@ where
             result
         })
     }
+}
+
+fn audit_service_unavailable(error: AuditError) -> Error {
+    tracing::error!("Audit logging unavailable: {error}");
+    actix_web::error::ErrorServiceUnavailable("audit logging unavailable")
 }
 
 fn trusted_client_ip(req: &ServiceRequest, trusted_proxies: &[String]) -> Option<String> {

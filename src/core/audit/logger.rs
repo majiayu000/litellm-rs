@@ -51,7 +51,7 @@ impl AuditLogger {
         // ordinary tracing filters. File/custom outputs take precedence.
         if outputs.is_empty() {
             debug!("No file audit output configured, using structured stderr");
-            outputs.push(Box::new(StderrOutput::new()?));
+            outputs.push(Box::new(StderrOutput::new(config.buffer_size)?));
         }
 
         // Compile redact patterns
@@ -188,9 +188,9 @@ impl AuditLogger {
     }
 
     /// Log an audit event
-    pub async fn log(&self, event: AuditEvent) {
+    pub async fn log(&self, event: AuditEvent) -> AuditResult<()> {
         if !self.config.enabled {
-            return;
+            return Ok(());
         }
 
         // Apply redaction if needed
@@ -200,9 +200,9 @@ impl AuditLogger {
             event
         };
 
-        if let Err(e) = self.sender.send(event).await {
-            error!("Failed to send audit event: {}", e);
-        }
+        self.sender.try_send(event).map_err(|error| {
+            AuditError::Channel(format!("audit event queue rejected an event: {error}"))
+        })
     }
 
     /// Redact sensitive data from an event
@@ -398,7 +398,7 @@ mod tests {
         let logger = AuditLogger::new(config).await.unwrap();
 
         let event = AuditEvent::new(EventType::System, "Test event");
-        logger.log(event).await;
+        assert!(logger.log(event).await.is_ok());
         logger.shutdown().await.unwrap();
     }
 
@@ -560,9 +560,12 @@ mod tests {
             .unwrap();
 
         for index in 0..32 {
-            logger
-                .log(AuditEvent::system(format!("event-{index}")))
-                .await;
+            assert!(
+                logger
+                    .log(AuditEvent::system(format!("event-{index}")))
+                    .await
+                    .is_ok()
+            );
         }
         logger.shutdown().await.unwrap();
 
@@ -612,6 +615,65 @@ mod tests {
         assert_eq!(close_count.load(Ordering::SeqCst), 1);
     }
 
+    struct BlockingFirstOutput {
+        writes: AtomicUsize,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl AuditOutput for BlockingFirstOutput {
+        fn name(&self) -> &str {
+            "blocking_first"
+        }
+
+        async fn write(&self, _event: &AuditEvent) -> AuditResult<()> {
+            if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            Ok(())
+        }
+
+        async fn flush(&self) -> AuditResult<()> {
+            Ok(())
+        }
+
+        async fn close(&self) -> AuditResult<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn full_audit_queue_fails_fast_instead_of_waiting() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let output = BlockingFirstOutput {
+            writes: AtomicUsize::new(0),
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        };
+        let mut config = AuditConfig::new().enable();
+        config.buffer_size = 1;
+        let logger = AuditLoggerBuilder::new()
+            .config(config)
+            .add_output(Box::new(output))
+            .build()
+            .await
+            .unwrap();
+
+        assert!(logger.log(AuditEvent::system("first")).await.is_ok());
+        started.notified().await;
+        assert!(logger.log(AuditEvent::system("second")).await.is_ok());
+        assert!(matches!(
+            logger.log(AuditEvent::system("third")).await,
+            Err(AuditError::Channel(_))
+        ));
+
+        release.notify_one();
+        logger.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn test_logger_with_file_output() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -622,7 +684,7 @@ mod tests {
         let logger = AuditLogger::new(config).await.unwrap();
 
         let event = AuditEvent::new(EventType::System, "Logger test event");
-        logger.log(event).await;
+        assert!(logger.log(event).await.is_ok());
         logger.shutdown().await.unwrap();
 
         // Verify file was written
