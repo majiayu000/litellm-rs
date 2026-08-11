@@ -2,19 +2,46 @@
 //!
 //! This module provides middleware for automatic request/response logging.
 
-use crate::core::types::context::SharedRequestContext;
+use crate::core::types::context::{RequestContext, SharedRequestContext};
 use actix_web::body::MessageBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::{Error, HttpMessage};
 use futures::future::{LocalBoxFuture, Ready, ready};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tracing::debug;
 
 use super::events::AuditEvent;
 use super::logger::AuditLogger;
 use super::types::RequestLog;
+
+#[derive(Default)]
+struct AuditPrincipal {
+    user_id: Option<String>,
+    api_key_id: Option<String>,
+    team_id: Option<String>,
+}
+
+type SharedAuditPrincipal = Arc<RwLock<AuditPrincipal>>;
+
+/// Record authenticated identity in a handle retained by the outer audit layer.
+pub(crate) fn record_authenticated_principal(message: &impl HttpMessage, context: &RequestContext) {
+    let extensions = message.extensions();
+    let Some(principal) = extensions.get::<SharedAuditPrincipal>() else {
+        return;
+    };
+    let mut principal = match principal.write() {
+        Ok(principal) => principal,
+        Err(poisoned) => {
+            tracing::error!("Recovering poisoned audit principal lock");
+            poisoned.into_inner()
+        }
+    };
+    principal.user_id.clone_from(&context.user_id);
+    principal.api_key_id = context.api_key_id().map(|id| id.to_string());
+    principal.team_id = context.team_id().map(|id| id.to_string());
+}
 
 /// Audit middleware for Actix-web
 pub struct AuditMiddleware {
@@ -93,6 +120,10 @@ where
             return Box::pin(fut);
         }
 
+        let principal = Arc::new(RwLock::new(AuditPrincipal::default()));
+        req.extensions_mut()
+            .insert::<SharedAuditPrincipal>(Arc::clone(&principal));
+
         // Generate request ID
         let request_id = req
             .headers()
@@ -138,14 +169,19 @@ where
                         AuditEvent::request_completed(&request_id, status_code, duration_ms),
                         response,
                     );
-                    logger.log(event).await;
+                    logger
+                        .log(Self::with_recorded_principal(event, &principal))
+                        .await;
                     debug!(
                         "Request {} completed: status={}, duration={}ms",
                         request_id, status_code, duration_ms
                     );
                 }
                 Err(e) => {
-                    let event = AuditEvent::request_failed(&request_id, e.to_string());
+                    let event = Self::with_recorded_principal(
+                        AuditEvent::request_failed(&request_id, e.to_string()),
+                        &principal,
+                    );
                     logger.log(event).await;
                     debug!("Request {} failed: {}", request_id, e);
                 }
@@ -179,6 +215,29 @@ fn trusted_client_ip(req: &ServiceRequest, trusted_proxies: &[String]) -> Option
 }
 
 impl<S> AuditMiddlewareService<S> {
+    fn with_recorded_principal(
+        mut event: AuditEvent,
+        principal: &SharedAuditPrincipal,
+    ) -> AuditEvent {
+        let principal = match principal.read() {
+            Ok(principal) => principal,
+            Err(poisoned) => {
+                tracing::error!("Recovering poisoned audit principal lock");
+                poisoned.into_inner()
+            }
+        };
+        if let Some(user_id) = principal.user_id.as_deref() {
+            event = event.with_user_id(user_id);
+        }
+        if let Some(api_key_id) = principal.api_key_id.as_deref() {
+            event = event.with_api_key_id(api_key_id);
+        }
+        if let Some(team_id) = principal.team_id.as_deref() {
+            event = event.with_team_id(team_id);
+        }
+        event
+    }
+
     fn with_authenticated_principal<B>(
         mut event: AuditEvent,
         response: &ServiceResponse<B>,
@@ -353,6 +412,53 @@ mod tests {
                 .as_ref()
                 .and_then(|request| request.client_ip.as_deref()),
             Some("198.51.100.25")
+        );
+    }
+
+    #[actix_web::test]
+    async fn failed_requests_retain_the_authenticated_principal() {
+        let (logger, events) = recording_logger().await;
+        let user_id = uuid::Uuid::new_v4();
+        let api_key_id = uuid::Uuid::new_v4();
+        let team_id = uuid::Uuid::new_v4();
+        let context = RequestContext::new()
+            .with_user(user_id, Some(team_id))
+            .with_api_key(api_key_id);
+        let context = Arc::new(context);
+        let service = actix_web::dev::fn_service(move |request: ServiceRequest| {
+            let context = Arc::clone(&context);
+            async move {
+                record_authenticated_principal(&request, &context);
+                Err::<ServiceResponse<actix_web::body::BoxBody>, _>(
+                    actix_web::error::ErrorBadRequest("invalid"),
+                )
+            }
+        });
+        let service = AuditMiddleware::new(Arc::clone(&logger))
+            .new_transform(service)
+            .await
+            .expect("audit transform");
+        let request = actix_test::TestRequest::get()
+            .uri("/failed")
+            .to_srv_request();
+
+        assert!(service.call(request).await.is_err());
+        logger.shutdown().await.expect("audit shutdown");
+        let events = events.lock().await;
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].event_type, EventType::RequestFailed);
+        assert_eq!(
+            events[1].user_id.as_deref(),
+            Some(user_id.to_string().as_str())
+        );
+        assert_eq!(
+            events[1].api_key_id.as_deref(),
+            Some(api_key_id.to_string().as_str())
+        );
+        assert_eq!(
+            events[1].team_id.as_deref(),
+            Some(team_id.to_string().as_str())
         );
     }
 

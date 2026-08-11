@@ -13,12 +13,12 @@ use tracing::{debug, error, info, warn};
 
 use super::config::AuditConfig;
 use super::events::AuditEvent;
-use super::outputs::{AuditOutput, BoxedAuditOutput, FileOutput, NullOutput, StderrOutput};
+use super::outputs::{BoxedAuditOutput, FileOutput, NullOutput, StderrOutput};
 use super::types::{AuditError, AuditResult, LogLevel, UserAction};
 
 struct AuditWorker {
     shutdown: oneshot::Sender<()>,
-    handle: JoinHandle<()>,
+    handle: JoinHandle<AuditResult<()>>,
 }
 
 /// The main audit logger
@@ -51,7 +51,7 @@ impl AuditLogger {
         // ordinary tracing filters. File/custom outputs take precedence.
         if outputs.is_empty() {
             debug!("No file audit output configured, using structured stderr");
-            outputs.push(Box::new(StderrOutput::new(config.buffer_size)?));
+            outputs.push(Box::new(StderrOutput::new()?));
         }
 
         // Compile redact patterns
@@ -82,7 +82,7 @@ impl AuditLogger {
                 min_level,
                 shutdown_receiver,
             )
-            .await;
+            .await
         });
 
         info!("Audit logger initialized with {} outputs", outputs.len());
@@ -122,7 +122,7 @@ impl AuditLogger {
         flush_interval_ms: u64,
         min_level: LogLevel,
         mut shutdown: oneshot::Receiver<()>,
-    ) {
+    ) -> AuditResult<()> {
         let mut flush_timer = interval(Duration::from_millis(flush_interval_ms));
 
         loop {
@@ -153,7 +153,7 @@ impl AuditLogger {
             }
         }
 
-        Self::flush_and_close_outputs(&outputs).await;
+        Self::flush_and_close_outputs(&outputs).await
     }
 
     async fn write_event(outputs: &[BoxedAuditOutput], event: &AuditEvent, min_level: LogLevel) {
@@ -167,28 +167,23 @@ impl AuditLogger {
         }
     }
 
-    async fn flush_and_close_outputs(outputs: &[BoxedAuditOutput]) {
+    async fn flush_and_close_outputs(outputs: &[BoxedAuditOutput]) -> AuditResult<()> {
+        let mut failures = Vec::new();
         for output in outputs.iter() {
-            Self::log_output_result(
-                output.as_ref(),
-                "flush audit output during shutdown",
-                output.flush().await,
-            );
-            Self::log_output_result(
-                output.as_ref(),
-                "close audit output during shutdown",
-                output.close().await,
-            );
+            for (operation, result) in [
+                ("flush audit output during shutdown", output.flush().await),
+                ("close audit output during shutdown", output.close().await),
+            ] {
+                if let Err(error) = result {
+                    error!("Failed to {} '{}': {}", operation, output.name(), error);
+                    failures.push(format!("{operation} '{}': {error}", output.name()));
+                }
+            }
         }
-    }
-
-    fn log_output_result(
-        output: &dyn AuditOutput,
-        operation: &'static str,
-        result: AuditResult<()>,
-    ) {
-        if let Err(e) = result {
-            error!("Failed to {} '{}': {}", operation, output.name(), e);
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(AuditError::Output(failures.join("; ")))
         }
     }
 
@@ -331,7 +326,7 @@ impl AuditLogger {
         worker
             .handle
             .await
-            .map_err(|error| AuditError::Output(format!("audit worker join failed: {error}")))
+            .map_err(|error| AuditError::Output(format!("audit worker join failed: {error}")))?
     }
 }
 
@@ -378,6 +373,7 @@ impl Default for AuditLoggerBuilder {
 mod tests {
     use super::*;
     use crate::core::audit::events::EventType;
+    use crate::core::audit::outputs::AuditOutput;
     use crate::core::audit::types::{AuditError, RequestLog, ResponseLog};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -609,8 +605,9 @@ mod tests {
             close_count: Arc::clone(&close_count),
         })];
 
-        AuditLogger::flush_and_close_outputs(&outputs).await;
+        let result = AuditLogger::flush_and_close_outputs(&outputs).await;
 
+        assert!(result.is_err());
         assert_eq!(flush_count.load(Ordering::SeqCst), 1);
         assert_eq!(close_count.load(Ordering::SeqCst), 1);
     }

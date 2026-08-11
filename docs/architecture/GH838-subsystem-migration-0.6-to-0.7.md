@@ -10,7 +10,7 @@ release confirmation in `.github/workflows/version-bump.yml`.
 | Surface | 0.6 behavior | 0.7 direction |
 | --- | --- | --- |
 | `guardrails`, `ip_access` | Wired into the request path | Keep wired |
-| `core::integrations`, `core::observability` | Configured callback backends receive real LLM lifecycle events | Keep the canonical callback runtime |
+| `core::integrations`, `core::observability::RuntimeObservability` | Configured callback backends receive real LLM lifecycle events; other `core::observability` exports are deprecated library-only compatibility types | Keep the canonical callback runtime; remove legacy exports |
 | `core::audit` | `enterprise.audit_logging` explicitly enables request middleware and emits redacted JSON to stderr; default off | Keep wired |
 | `core::mcp`, `core::a2a`, `core::webhooks` | Deprecated default-off library features (`mcp`, `a2a`, `webhooks`); no gateway routes | Remove unless a separately approved runtime design supersedes the decision |
 | `core::realtime` | Deprecated default-off `websockets` library feature; no mounted route | Remove unless a separately approved runtime design supersedes the decision |

@@ -1,6 +1,7 @@
 //! Authentication middleware
 
 use crate::auth::{AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE, AuthMethod};
+use crate::core::audit::middleware::record_authenticated_principal;
 use crate::core::models::{ApiKey, user::types::User};
 use crate::core::types::context::{RequestContext, SharedRequestContext};
 use crate::server::middleware::auth_rate_limiter::get_auth_rate_limiter;
@@ -222,6 +223,7 @@ where
 
                     // Attach the authenticated principal before authorization
                     // checks so audit middleware can attribute 403 responses.
+                    record_authenticated_principal(&req, &result.context);
                     insert_request_context(&mut req, result.context);
                     match api_key_allows_endpoint(result.api_key.as_ref(), req.path()) {
                         Ok(true) => {}

@@ -205,7 +205,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "observability",
         decision: SubsystemDecision::Wired,
         runtime_path: Some("AppState RuntimeObservability callback dispatcher"),
-        note: "The core observability facade points at the configured callback dispatcher used by real LLM request lifecycles.",
+        note: "RuntimeObservability is wired to real LLM callbacks; all other legacy exports are deprecated library-only compatibility surfaces for 0.6.",
     },
     CoreSubsystem {
         name: "pricing",
