@@ -103,6 +103,7 @@ fn disabled_feature_gated_runtime_module_names() -> BTreeSet<&'static str> {
         ProviderType::FalAI,
         ProviderType::Gemini,
         ProviderType::GitHubCopilot,
+        ProviderType::Ollama,
         ProviderType::Replicate,
     ] {
         insert_disabled_feature_gated_module(
@@ -236,6 +237,7 @@ fn lifecycle_classifies_phase0_key_provider_modules() {
         ("fal_ai", cfg!(feature = "providers-extended")),
         ("replicate", cfg!(feature = "providers-extended")),
         ("gemini", cfg!(feature = "providers-extended")),
+        ("ollama", cfg!(feature = "providers-extended")),
     ] {
         let expected = if feature_enabled {
             ProviderModuleLifecycle::Wire

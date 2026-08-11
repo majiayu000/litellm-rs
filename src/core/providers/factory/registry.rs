@@ -12,7 +12,9 @@ use crate::core::providers::{
 #[cfg(feature = "providers-extra")]
 use crate::core::providers::{azure, azure_ai, vertex_ai};
 #[cfg(feature = "providers-extended")]
-use crate::core::providers::{cohere, fal_ai, gemini, github_copilot, replicate};
+use crate::core::providers::{cohere, fal_ai, gemini, github_copilot, ollama, replicate};
+#[cfg(feature = "providers-extended")]
+use crate::core::traits::provider::ProviderConfig as _;
 
 #[cfg(feature = "providers-extended")]
 use super::builder::build_github_copilot_config_from_factory;
@@ -39,6 +41,38 @@ use super::fal_ai_builder::build_fal_ai_config_from_factory;
 use super::gemini_builder::build_gemini_config_from_factory;
 #[cfg(feature = "providers-extended")]
 use super::replicate_builder::build_replicate_config_from_factory;
+
+#[cfg(feature = "providers-extended")]
+fn build_ollama_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<ollama::OllamaConfig, ProviderError> {
+    let base_url = config_str(config, "base_url");
+    let api_base = config_str(config, "api_base");
+    if matches!((base_url, api_base), (Some(base_url), Some(api_base)) if base_url.trim_end_matches('/') != api_base.trim_end_matches('/'))
+    {
+        return Err(ProviderError::configuration(
+            "ollama",
+            "base_url and api_base must not configure different endpoints",
+        ));
+    }
+    let mut normalized = config.clone();
+    let object = normalized
+        .as_object_mut()
+        .ok_or_else(|| ProviderError::configuration("ollama", "configuration must be an object"))?;
+    if let Some(endpoint) = api_base.or(base_url) {
+        object.insert(
+            "api_base".to_string(),
+            endpoint.trim_end_matches('/').into(),
+        );
+    }
+    object.remove("base_url");
+    let ollama_config: ollama::OllamaConfig = serde_json::from_value(normalized)
+        .map_err(|error| ProviderError::configuration("ollama", error.to_string()))?;
+    ollama_config
+        .validate()
+        .map_err(|error| ProviderError::configuration("ollama", error))?;
+    Ok(ollama_config)
+}
 
 impl Provider {
     /// Create provider from configuration asynchronously
@@ -218,6 +252,25 @@ impl Provider {
                     ))
                 }
             }
+            ProviderType::Ollama => {
+                #[cfg(feature = "providers-extended")]
+                {
+                    let ollama_config = build_ollama_config_from_factory(&config)?;
+                    let discover_models = ollama_config.models.is_empty();
+                    let mut provider = ollama::OllamaProvider::new(ollama_config).await?;
+                    if discover_models {
+                        provider.refresh_models().await?;
+                    }
+                    Ok(Provider::Ollama(provider))
+                }
+                #[cfg(not(feature = "providers-extended"))]
+                {
+                    Err(ProviderError::not_implemented(
+                        "ollama",
+                        "Ollama native dispatch requires the providers-extended feature",
+                    ))
+                }
+            }
             ProviderType::GitHubCopilot => {
                 #[cfg(feature = "providers-extended")]
                 {
@@ -276,10 +329,6 @@ mod tests {
     #[cfg(feature = "providers-extended")]
     use crate::core::providers::{fal_ai::FalAIConfig, replicate::ReplicateConfig};
     use provider_registry::{ProviderDispatchKind, provider_type_registry};
-
-    fn supported_factory_provider_types() -> Vec<ProviderType> {
-        Provider::factory_supported_provider_types().to_vec()
-    }
 
     fn minimal_dispatch_config() -> serde_json::Value {
         serde_json::json!({
@@ -357,6 +406,11 @@ mod tests {
                 "polling_retries": 3,
                 "use_streaming": true
             }),
+            ProviderType::Ollama => serde_json::json!({
+                "models": ["llama3:8b"],
+                "timeout": 30,
+                "max_retries": 2
+            }),
             _ => minimal_dispatch_config(),
         }
     }
@@ -398,6 +452,8 @@ mod tests {
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::Replicate, Provider::Replicate(_)) => {}
                     #[cfg(feature = "providers-extended")]
+                    (ProviderType::Ollama, Provider::Ollama(_)) => {}
+                    #[cfg(feature = "providers-extended")]
                     (ProviderType::Gemini, Provider::Gemini(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::GitHubCopilot, Provider::GitHubCopilot(_)) => {}
@@ -422,51 +478,6 @@ mod tests {
             if entry.dispatch_kind == ProviderDispatchKind::CatalogOpenAiLike {
                 assert_eq!(provider.name(), entry.canonical_name);
             }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_from_config_async_supported_variants_do_not_fallthrough_to_not_implemented() {
-        for provider_type in supported_factory_provider_types() {
-            let result =
-                Provider::from_config_async(provider_type.clone(), serde_json::json!({})).await;
-            // Success is fine (e.g. local catalog providers with skip_api_key);
-            // a real config error is also fine. Only NotImplemented is wrong.
-            if let Err(err) = result {
-                assert!(
-                    !matches!(err, ProviderError::NotImplemented { .. }),
-                    "{:?} unexpectedly fell through to NotImplemented: {}",
-                    provider_type,
-                    err
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_from_config_async_unsupported_variants_return_not_implemented() {
-        let supported = supported_factory_provider_types();
-
-        for provider_type in crate::core::providers::provider_type::all_non_custom_provider_types()
-        {
-            if supported.contains(&provider_type) {
-                continue;
-            }
-
-            let err = Provider::from_config_async(provider_type.clone(), serde_json::json!({}))
-                .await
-                .expect_err("Expected unsupported provider to fail");
-            assert!(
-                matches!(err, ProviderError::NotImplemented { .. }),
-                "Expected NotImplemented for {:?}, got {}",
-                provider_type,
-                err
-            );
-            assert_eq!(
-                err.provider(),
-                provider_type.to_string(),
-                "NotImplemented provider name should identify the requested provider"
-            );
         }
     }
 
@@ -757,36 +768,12 @@ mod tests {
             "error should identify static api_key rejection: {err}"
         );
     }
-
-    #[tokio::test]
-    async fn issue_606_catalogified_candidates_use_catalog_runtime_path() {
-        for provider_type in [
-            ProviderType::MetaLlama,
-            ProviderType::V0,
-            ProviderType::AmazonNova,
-            ProviderType::GitHub,
-            ProviderType::Custom("together".to_string()),
-        ] {
-            let expected_capabilities =
-                provider_registry::catalog_definition_for_provider_type(&provider_type)
-                    .expect("catalogified provider should have a definition")
-                    .capabilities;
-            let provider = Provider::from_config_async(
-                provider_type.clone(),
-                serde_json::json!({
-                    "api_key": "sk-test-key",
-                    "headers": {"x-test-header": "test-value"},
-                    "custom_headers": {"x-custom-header": "custom-value"},
-                    "timeout": 42,
-                    "max_retries": 4
-                }),
-            )
-            .await
-            .unwrap_or_else(|err| panic!("{provider_type:?} should be creatable: {err}"));
-
-            assert!(matches!(provider, Provider::OpenAILike(_)));
-            assert_eq!(provider.name(), provider_type.to_string());
-            assert_eq!(provider.capabilities(), expected_capabilities);
-        }
-    }
 }
+
+#[cfg(test)]
+#[path = "registry_catalog_tests.rs"]
+mod catalog_tests;
+
+#[cfg(test)]
+#[path = "registry_support_tests.rs"]
+mod support_tests;

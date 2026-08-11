@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Wired the `ollama` selector to its native chat, streaming, embeddings, tools, and health runtime behind `providers-extended`, with policy-bound public/private endpoint handling for #837.
 - Wired `guardrails` into canonical chat request/response execution with default-on prompt-injection protection and an explicit `guardrails.enabled: false` opt-out.
 - Added gateway `ip_access` configuration and registered its middleware ahead of authentication, handlers, and provider execution; default empty rules remain allow-all.
 - Wired `enterprise.audit_logging` into request audit middleware with structured JSON stderr/file output, and aligned the observability facade with configured Langfuse/OpenTelemetry/Datadog lifecycle callbacks.

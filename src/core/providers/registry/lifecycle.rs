@@ -89,9 +89,9 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "native Meta Llama module retained; ProviderType::MetaLlama currently uses a generic OpenAI-compatible adapter",
     ),
     wire("mistral", "native Provider enum variant"),
-    stub(
+    providers_extended_wire(
         "ollama",
-        "specialized provider module; not wired through the LLM factory yet",
+        "ProviderType::Ollama dispatches to the native Ollama protocol when providers-extended is enabled",
     ),
     wire("openai", "native Provider enum variant"),
     wire("openai_like", "shared OpenAI-compatible runtime provider"),
@@ -130,11 +130,6 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
         "meta_llama",
         "demote-to-catalog",
         "catalog-backed duplicate with native provider retained until demote tranche",
-    ),
-    baseline(
-        "ollama",
-        "demote-to-catalog",
-        "local OpenAI-compatible candidate",
     ),
     baseline(
         "v0",

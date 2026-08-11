@@ -9,9 +9,16 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::config::OllamaConfig;
+use super::error::{
+    inline_image_data, parse_http_json_response, parse_tool_arguments, response_format_value,
+    should_send_tools,
+};
 use super::model_info::{OllamaModelInfo, OllamaShowResponse, OllamaTagsResponse, get_model_info};
 use super::streaming::OllamaStream;
-use crate::core::providers::base::{GlobalPoolManager, HttpErrorMapper, HttpMethod, header};
+use crate::core::providers::base::{
+    BaseConfig, GlobalPoolManager, HttpErrorMapper, HttpMethod, header,
+};
+use crate::core::providers::shared::MessageTransformer;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::error_mapper::types::GenericErrorMapper;
@@ -59,13 +66,33 @@ impl OllamaProvider {
             .validate()
             .map_err(|e| ProviderError::configuration("ollama", e))?;
 
-        // Create pool manager
-        let pool_manager = Arc::new(GlobalPoolManager::new().map_err(|e| {
-            ProviderError::configuration("ollama", format!("Failed to create pool manager: {}", e))
-        })?);
+        let api_base = config.get_api_base();
+        let endpoint_access = config.resolved_endpoint_access(&api_base);
+        let pool_manager = Arc::new(
+            GlobalPoolManager::new_for_provider(
+                "ollama",
+                BaseConfig {
+                    api_key: config.get_api_key(),
+                    api_base: Some(api_base),
+                    endpoint_access,
+                    timeout: config.timeout,
+                    max_retries: config.max_retries,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| {
+                ProviderError::configuration(
+                    "ollama",
+                    format!("Failed to create pool manager: {}", e),
+                )
+            })?,
+        );
 
-        // Initialize with empty models (will be populated on first list_models call)
-        let models = Vec::new();
+        let models = config
+            .models
+            .iter()
+            .map(|model| get_model_info(model).into())
+            .collect();
 
         Ok(Self {
             config,
@@ -127,14 +154,12 @@ impl OllamaProvider {
                 }
             })?;
 
+        let status = response.status().as_u16();
         let response_bytes = response
             .bytes()
             .await
             .map_err(|e| ProviderError::network("ollama", e.to_string()))?;
-
-        serde_json::from_slice(&response_bytes).map_err(|e| {
-            ProviderError::api_error("ollama", 500, format!("Failed to parse response: {}", e))
-        })
+        parse_http_json_response(status, &response_bytes)
     }
 
     /// List available models from Ollama server
@@ -169,9 +194,30 @@ impl OllamaProvider {
         request: &ChatRequest,
         stream: bool,
     ) -> Result<serde_json::Value, ProviderError> {
-        let mut messages = Vec::new();
+        if request.n.is_some_and(|n| n != 1) {
+            return Err(ProviderError::invalid_request(
+                "ollama",
+                "native Ollama supports exactly one choice",
+            ));
+        }
+        let tool_names: HashMap<&str, &str> = request
+            .messages
+            .iter()
+            .filter_map(|message| message.tool_calls.as_ref())
+            .flatten()
+            .map(|call| (call.id.as_str(), call.function.name.as_str()))
+            .collect();
+        let mut messages = self
+            .config
+            .system
+            .as_ref()
+            .map(|system| vec![serde_json::json!({"role": "system", "content": system})])
+            .unwrap_or_default();
 
         for msg in &request.messages {
+            if self.config.system.is_some() && msg.role == MessageRole::System {
+                continue;
+            }
             let role = match &msg.role {
                 MessageRole::System | MessageRole::Developer => "system",
                 MessageRole::User => "user",
@@ -200,18 +246,7 @@ impl OllamaProvider {
                                 text_parts.push(text.clone());
                             }
                             crate::core::types::content::ContentPart::ImageUrl { image_url } => {
-                                // Extract base64 image data from data URL or URL
-                                let url = &image_url.url;
-                                if url.starts_with("data:") {
-                                    // Extract base64 data
-                                    if let Some(comma_pos) = url.find(',') {
-                                        let base64_data = &url[comma_pos + 1..];
-                                        images.push(base64_data.to_string());
-                                    }
-                                } else {
-                                    // Regular URL - Ollama expects base64, so this might not work
-                                    images.push(url.clone());
-                                }
+                                images.push(inline_image_data(&image_url.url)?);
                             }
                             crate::core::types::content::ContentPart::Image { source, .. } => {
                                 // Base64 encoded image
@@ -234,25 +269,39 @@ impl OllamaProvider {
 
             // Handle tool calls for assistant messages
             if let Some(tool_calls) = &msg.tool_calls {
-                let ollama_tool_calls: Vec<_> = tool_calls
+                let ollama_tool_calls = tool_calls
                     .iter()
                     .map(|tc| {
-                        serde_json::json!({
+                        let arguments = parse_tool_arguments(&tc.function.arguments)?;
+                        Ok(serde_json::json!({
+                            "id": tc.id,
                             "function": {
                                 "name": tc.function.name,
-                                "arguments": tc.function.arguments
+                                "arguments": arguments
                             }
-                        })
+                        }))
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, ProviderError>>()?;
                 message["tool_calls"] = serde_json::json!(ollama_tool_calls);
             }
 
-            // Handle tool call id for tool messages
-            if msg.role == MessageRole::Tool
-                && let Some(name) = &msg.name
-            {
-                message["name"] = serde_json::json!(name);
+            if msg.role == MessageRole::Tool {
+                if let Some(id) = msg.tool_call_id.as_deref() {
+                    message["tool_call_id"] = serde_json::json!(id);
+                    let name = msg
+                        .name
+                        .as_deref()
+                        .or_else(|| tool_names.get(id).copied())
+                        .ok_or_else(|| {
+                            ProviderError::invalid_request(
+                                "ollama",
+                                format!("tool result references unknown call ID: {id}"),
+                            )
+                        })?;
+                    message["tool_name"] = serde_json::json!(name);
+                } else if let Some(name) = &msg.name {
+                    message["tool_name"] = serde_json::json!(name);
+                }
             }
 
             messages.push(message);
@@ -274,7 +323,7 @@ impl OllamaProvider {
             if let Some(top_p) = request.top_p {
                 opts.insert("top_p".to_string(), serde_json::json!(top_p));
             }
-            if let Some(max_tokens) = request.max_tokens {
+            if let Some(max_tokens) = request.max_completion_tokens.or(request.max_tokens) {
                 opts.insert("num_predict".to_string(), serde_json::json!(max_tokens));
             }
             if let Some(stop) = &request.stop {
@@ -299,7 +348,9 @@ impl OllamaProvider {
         body["options"] = options;
 
         // Add tools if present
-        if let Some(tools) = &request.tools {
+        if should_send_tools(request.tool_choice.as_ref())?
+            && let Some(tools) = &request.tools
+        {
             let ollama_tools: Vec<_> = tools
                 .iter()
                 .map(|t| {
@@ -317,10 +368,8 @@ impl OllamaProvider {
         }
 
         // Add response format if set
-        if let Some(format) = &request.response_format
-            && format.format_type == "json_object"
-        {
-            body["format"] = serde_json::json!("json");
+        if let Some(format) = response_format_value(request.response_format.as_ref())? {
+            body["format"] = format;
         }
 
         // Add keep_alive if set in config
@@ -384,17 +433,14 @@ impl OllamaProvider {
         };
 
         // Determine finish reason
-        let done_reason_str = response
-            .get("done_reason")
-            .and_then(|r| r.as_str())
-            .unwrap_or("stop");
-        let finish_reason = match done_reason_str {
-            "stop" => FinishReason::Stop,
-            "length" => FinishReason::Length,
-            "tool_calls" => FinishReason::ToolCalls,
-            "content_filter" => FinishReason::ContentFilter,
-            "function_call" => FinishReason::FunctionCall,
-            _ => FinishReason::Stop,
+        let finish_reason = if tool_calls.is_some() {
+            FinishReason::ToolCalls
+        } else {
+            response
+                .get("done_reason")
+                .and_then(|reason| reason.as_str())
+                .and_then(MessageTransformer::parse_finish_reason)
+                .unwrap_or(FinishReason::Stop)
         };
 
         // Build usage info
@@ -559,37 +605,29 @@ impl LLMProvider for OllamaProvider {
 
         let request_body = self.build_chat_request(&request, true)?;
 
-        // Use reqwest directly for streaming
         let url = self.config.get_chat_endpoint();
-        let mut req = crate::core::http::outbound::streaming_outbound_client()
-            .clone()
-            .post(&url);
-
-        // Add auth header if API key is set
+        let mut headers = vec![header("Content-Type", "application/json".to_string())];
         if let Some(api_key) = self.config.get_api_key() {
-            req = req.header("Authorization", format!("Bearer {}", api_key));
+            headers.push(header("Authorization", format!("Bearer {}", api_key)));
         }
-
-        let response = crate::core::providers::base::connection_pool::send_streaming_request(
-            req.header("Content-Type", "application/json")
-                .json(&request_body),
-            "ollama",
-        )
-        .await
-        .map_err(|error| {
-            let error_msg = error.to_string();
-            if error_msg.contains("Connection refused") || error_msg.contains("connect error") {
-                ProviderError::network(
-                    "ollama",
-                    format!(
-                        "Failed to connect to Ollama server at {}. Is Ollama running?",
-                        self.config.get_api_base()
-                    ),
-                )
-            } else {
-                error
-            }
-        })?;
+        let response = self
+            .pool_manager
+            .execute_streaming_request(&url, headers, request_body, "ollama")
+            .await
+            .map_err(|error| {
+                let error_msg = error.to_string();
+                if error_msg.contains("Connection refused") || error_msg.contains("connect error") {
+                    ProviderError::network(
+                        "ollama",
+                        format!(
+                            "Failed to connect to Ollama server at {}. Is Ollama running?",
+                            self.config.get_api_base()
+                        ),
+                    )
+                } else {
+                    error
+                }
+            })?;
 
         // Check status
         if !response.status().is_success() {
@@ -667,15 +705,20 @@ impl LLMProvider for OllamaProvider {
                 }
             })
             .collect();
+        let prompt_tokens = response
+            .get("prompt_eval_count")
+            .and_then(serde_json::Value::as_u64)
+            .map(|count| u32::try_from(count).unwrap_or(u32::MAX))
+            .unwrap_or(0);
 
         Ok(EmbeddingResponse {
             object: "list".to_string(),
             data,
             model: format!("ollama/{}", model),
             usage: Some(Usage {
-                prompt_tokens: 0, // Ollama doesn't report token usage for embeddings
+                prompt_tokens,
                 completion_tokens: 0,
-                total_tokens: 0,
+                total_tokens: prompt_tokens,
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
                 thinking_usage: None,
@@ -743,30 +786,7 @@ impl OllamaProvider {
     pub async fn refresh_models(&mut self) -> Result<(), ProviderError> {
         let ollama_models = self.list_models().await?;
 
-        self.models = ollama_models
-            .into_iter()
-            .map(|m| ModelInfo {
-                id: m.name.clone(),
-                name: m.display_name.clone(),
-                provider: "ollama".to_string(),
-                max_context_length: m.max_context_length.unwrap_or(4096),
-                max_output_length: None,
-                supports_streaming: true,
-                supports_tools: m.supports_tools,
-                supports_multimodal: m.supports_multimodal,
-                input_cost_per_1k_tokens: Some(0.0), // Ollama is free
-                output_cost_per_1k_tokens: Some(0.0), // Ollama is free
-                currency: "USD".to_string(),
-                capabilities: vec![
-                    ProviderCapability::ChatCompletion,
-                    ProviderCapability::ChatCompletionStream,
-                    ProviderCapability::Embeddings,
-                ],
-                created_at: None,
-                updated_at: None,
-                metadata: HashMap::new(),
-            })
-            .collect();
+        self.models = ollama_models.into_iter().map(Into::into).collect();
 
         Ok(())
     }

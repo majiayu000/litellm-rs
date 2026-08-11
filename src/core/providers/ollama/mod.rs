@@ -21,6 +21,8 @@ mod config;
 mod error;
 mod model_info;
 mod provider;
+#[cfg(test)]
+mod runtime_tests;
 mod streaming;
 
 // Re-export main types for external use
