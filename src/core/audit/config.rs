@@ -220,9 +220,6 @@ impl AuditConfig {
         if self.buffer_size == 0 {
             return Err("audit buffer_size must be greater than zero".to_string());
         }
-        if self.enabled && self.buffer_size < 2 {
-            return Err("enabled audit buffer_size must reserve at least two events".to_string());
-        }
         if self.flush_interval_ms == 0 {
             return Err("audit flush_interval_ms must be greater than zero".to_string());
         }
@@ -386,8 +383,10 @@ mod tests {
 
         let mut invalid = AuditConfig::new().enable();
         invalid.buffer_size = 1;
+        assert!(invalid.validate().is_ok());
+        invalid.buffer_size = 0;
         assert!(invalid.validate().is_err());
-        invalid.buffer_size = 2;
+        invalid.buffer_size = 1;
         invalid.flush_interval_ms = 0;
         assert!(invalid.validate().is_err());
     }

@@ -8,7 +8,7 @@ use regex::Regex;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, interval};
+use tokio::time::{Duration, MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
 
 use super::config::AuditConfig;
@@ -144,6 +144,7 @@ impl AuditLogger {
         failure: Arc<StdRwLock<Option<String>>>,
     ) -> AuditResult<()> {
         let mut flush_timer = interval(Duration::from_millis(flush_interval_ms));
+        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut terminals = FuturesUnordered::new();
 
         let writer_result: AuditResult<()> = async {
@@ -347,6 +348,11 @@ impl AuditLogger {
     /// Check if logging is enabled
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
+    }
+
+    /// Whether an enabled audit worker can still accept lifecycle events.
+    pub fn is_available(&self) -> bool {
+        !self.config.enabled || self.ensure_available().is_ok()
     }
 
     /// Check if a path should be logged

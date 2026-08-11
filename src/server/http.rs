@@ -372,35 +372,31 @@ impl HttpServer {
         let shutdown = Self::shutdown_signal();
         let mut stopped_by_signal = false;
 
-        tokio::select! {
+        let mut server_result = tokio::select! {
             result = &mut server_task => {
                 match result {
-                    Ok(Ok(())) => info!("HTTP server exited"),
-                    Ok(Err(e)) => {
-                        return Err(GatewayError::server(format!("Server error: {}", e)));
-                    }
-                    Err(e) => {
-                        return Err(GatewayError::server(format!("Server task failed: {}", e)));
-                    }
+                    Ok(Ok(())) => { info!("HTTP server exited"); Ok(()) }
+                    Ok(Err(e)) => Err(GatewayError::server(format!("Server error: {}", e))),
+                    Err(e) => Err(GatewayError::server(format!("Server task failed: {}", e))),
                 }
             }
             _ = shutdown => {
                 info!("Shutdown signal received; stopping accept loop");
                 server_handle.stop(true).await;
                 stopped_by_signal = true;
+                Ok(())
             }
-        }
+        };
 
         if stopped_by_signal {
-            match server_task.await {
-                Ok(Ok(())) => info!("HTTP server exited after graceful stop"),
-                Ok(Err(e)) => {
-                    return Err(GatewayError::server(format!("Server error: {}", e)));
+            server_result = match server_task.await {
+                Ok(Ok(())) => {
+                    info!("HTTP server exited after graceful stop");
+                    Ok(())
                 }
-                Err(e) => {
-                    return Err(GatewayError::server(format!("Server task failed: {}", e)));
-                }
-            }
+                Ok(Err(e)) => Err(GatewayError::server(format!("Server error: {}", e))),
+                Err(e) => Err(GatewayError::server(format!("Server task failed: {}", e))),
+            };
         }
 
         // AppState clones are gone, so worker queues can now drain.
@@ -426,6 +422,7 @@ impl HttpServer {
             warn!("Storage close reported an error: {}", e);
         }
 
+        server_result?;
         audit_shutdown.map_err(|e| GatewayError::server(format!("Audit shutdown failed: {e}")))?;
 
         info!("HTTP server stopped");

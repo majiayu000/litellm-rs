@@ -333,6 +333,7 @@ async fn test_sink_failure_stops_accepting_new_events() {
     .unwrap();
 
     assert!(matches!(rejection, AuditError::Output(_)));
+    assert!(!logger.is_available());
     assert!(logger.shutdown().await.is_err());
 }
 
