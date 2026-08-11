@@ -2,12 +2,16 @@
 
 use super::types::GatewayError;
 #[cfg(feature = "a2a")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with A2A in 0.7.
 use crate::core::a2a::error::A2AError;
 #[cfg(feature = "a2a")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with A2A in 0.7.
 use crate::core::a2a::message::A2AResponseError;
 #[cfg(feature = "mcp")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with MCP in 0.7.
 use crate::core::mcp::error::McpError;
 #[cfg(feature = "mcp")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with MCP in 0.7.
 use crate::core::mcp::protocol::JsonRpcError;
 use crate::core::providers::unified_provider::ProviderError;
 
@@ -27,6 +31,7 @@ fn retry_after_ms_to_secs(retry_after_ms: Option<u64>) -> Option<u64> {
 
 // Conversion from A2AError to GatewayError
 #[cfg(feature = "a2a")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with A2A in 0.7.
 impl From<A2AError> for GatewayError {
     fn from(err: A2AError) -> Self {
         // Keep protocol mapping in the runtime path so canonical A2A mapping is exercised.
@@ -127,6 +132,7 @@ impl From<A2AError> for GatewayError {
 
 // Conversion from McpError to GatewayError
 #[cfg(feature = "mcp")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with MCP in 0.7.
 impl From<McpError> for GatewayError {
     fn from(err: McpError) -> Self {
         // Keep protocol mapping in the runtime path so canonical MCP mapping is exercised.

@@ -131,7 +131,7 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | `core/a2a` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `a2a`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. |
 | `core/realtime` | experimental-gate | Deprecated in 0.6 and default-off behind `websockets`; no gateway route is mounted. Removal is scheduled for 0.7. |
 | `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
-| `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured tracing unless a library caller supplies a file output. Default is off. |
+| `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
 | `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. The unreachable `BatchProcessor` is deprecated in 0.6 and scheduled for removal in 0.7. |
 | `core/webhooks` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `webhooks`; it is not a gateway runtime capability and is scheduled for 0.7 removal. |
 | `core/semantic_cache` | remove | Deprecated but retained with `storage` during the 0.6 compatibility window; `cache.semantic_cache=true` remains rejected before the planned 0.7 removal. |

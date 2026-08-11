@@ -256,19 +256,19 @@ impl HttpServer {
                 RateLimitMiddleware::optional(default_rate_limit_rpm),
             ))
             .wrap(AuthMiddleware)
-            .wrap(Condition::new(
-                audit_enabled,
-                AuditMiddleware::new(audit_logger),
-            ))
-            .wrap(RequestIdMiddleware)
             .wrap(Condition::new(metrics_enabled, MetricsMiddleware))
             // CORS must run outside auth/rate-limit, but only standard browser
             // preflight may be short-circuited before those layers.
             .wrap(Condition::new(cors_config.enabled, cors))
             .wrap(from_fn(normalize_non_cors_options_before_cors))
-            // These policy layers are registered last so Actix executes them
-            // before authentication, routing, and provider side effects.
+            // IP policy remains before authentication/provider side effects.
             .wrap(IpAccessMiddleware::new(ip_access))
+            // Audit wraps IP denials; request IDs wrap the complete lifecycle.
+            .wrap(Condition::new(
+                audit_enabled,
+                AuditMiddleware::new(audit_logger),
+            ))
+            .wrap(RequestIdMiddleware)
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)
             .configure(routes::keys::configure_routes)
@@ -344,10 +344,7 @@ impl HttpServer {
 
     /// Start the HTTP server
     ///
-    /// Listens for SIGINT / SIGTERM via [`Self::shutdown_signal`]. When the
-    /// signal fires, the actix server is told to stop gracefully (in-flight
-    /// requests get a chance to finish), then the storage layer is closed
-    /// so connection pools and pending writes are released cleanly.
+    /// Gracefully stops requests, drains workers, then closes storage.
     pub async fn start(mut self) -> Result<()> {
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
         let port = self.config.port;
@@ -359,6 +356,7 @@ impl HttpServer {
 
         let state = web::Data::new(self.state);
         let storage = Arc::clone(&state.storage);
+        let audit_logger = Arc::clone(&state.audit_logger);
 
         let server = ActixHttpServer::new(move || Self::create_app(state.clone()))
             .bind(&bind_addr)
@@ -404,9 +402,7 @@ impl HttpServer {
             }
         }
 
-        // The server task owns the app factory, which owns AppState clones that
-        // hold budget persistence senders. It has completed here, so the channel
-        // can close after all queued events are drained by the worker.
+        // AppState clones are gone, so worker queues can now drain.
         drop(server_handle);
 
         if let Some(task) = budget_persistence_task {
@@ -421,10 +417,15 @@ impl HttpServer {
             warn!("Callback worker shutdown reported an error: {}", e);
         }
 
+        info!("Draining audit worker");
+        let audit_shutdown = audit_logger.shutdown().await;
+
         info!("Closing storage layer");
         if let Err(e) = storage.close().await {
             warn!("Storage close reported an error: {}", e);
         }
+
+        audit_shutdown.map_err(|e| GatewayError::server(format!("Audit shutdown failed: {e}")))?;
 
         info!("HTTP server stopped");
         Ok(())

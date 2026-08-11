@@ -120,6 +120,7 @@ impl<'ast> Visit<'ast> for SourceVisitor<'_> {
         } else { visit::visit_pat_tuple_struct(self, item); }
     }
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        item.attrs.iter().for_each(|attr| self.visit_attribute(attr));
         let mut uses = Vec::new(); flatten_use(&item.tree, &mut Vec::new(), &mut uses);
         if uses.iter().any(|(path, _)| path.windows(2).any(|part| {
             part == ["SDKError", "ProviderError"] || part == ["SDKError", "*"]
@@ -214,7 +215,9 @@ fn expected_attrs(sources: &Sources) -> BTreeMap<String, usize> {
         ("src/core/traits/provider/llm_provider/sub_traits.rs".into(), 9),
         ("src/server/routes/mod.rs".into(), 1),
         // SP965-T017 (GH965 D1E-c): allow(deprecated) sites for the six 0.6-deprecated retry helpers.
-        ("src/utils/error/canonical.rs".into(), 1),
+        // GH838 compatibility adapters consume protocol modules deprecated for 0.7 removal.
+        ("src/utils/error/canonical.rs".into(), 5),
+        ("src/utils/error/gateway_error/conversions.rs".into(), 6),
         ("src/core/providers/provider_error_conversions.rs".into(), 1),
         ("src/core/providers/contextual_error.rs".into(), 2),
         ("src/core/providers/unified_provider_tests.rs".into(), 1),

@@ -2,8 +2,22 @@
 //!
 //! This module contains the core business logic and data structures.
 
+#[cfg_attr(
+    not(test),
+    deprecated(
+        since = "0.6.0",
+        note = "core::a2a is a default-off compatibility surface scheduled for removal in 0.7.0"
+    )
+)]
 #[cfg(feature = "a2a")]
 pub mod a2a; // Experimental module-only A2A gateway; see subsystem_registry.
+#[cfg_attr(
+    not(test),
+    deprecated(
+        since = "0.6.0",
+        note = "core::analytics is scheduled for removal in 0.7.0; use wired request metrics and callback integrations"
+    )
+)]
 #[cfg(feature = "analytics")]
 pub mod analytics;
 pub mod audio; // Audio API (transcription, translation, speech)
@@ -25,6 +39,13 @@ pub mod http; // Shared outbound HTTP client utilities
 pub mod integrations; // Experimental module-only integrations; see subsystem_registry.
 pub mod ip_access; // Experimental module-only IP access control; see subsystem_registry.
 pub mod keys; // API Key Management System
+#[cfg_attr(
+    not(test),
+    deprecated(
+        since = "0.6.0",
+        note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+    )
+)]
 #[cfg(feature = "mcp")]
 pub mod mcp; // Experimental module-only MCP gateway; see subsystem_registry.
 pub mod models;
@@ -34,12 +55,26 @@ pub mod pricing; // Shared pricing data types
 pub mod pricing_service; // Runtime pricing service
 pub mod providers;
 pub mod rate_limiter; // Rate limiting system
+#[cfg_attr(
+    not(test),
+    deprecated(
+        since = "0.6.0",
+        note = "core::realtime is a default-off compatibility surface scheduled for removal in 0.7.0"
+    )
+)]
 #[cfg(feature = "websockets")]
 pub mod realtime; // Experimental module-only realtime API; see subsystem_registry.
 pub mod rerank; // Rerank API for RAG systems
 pub mod router;
 pub mod secret_managers; // Secret management system
 pub mod security;
+#[cfg_attr(
+    not(test),
+    deprecated(
+        since = "0.6.0",
+        note = "core::semantic_cache is scheduled for removal in 0.7.0; cache.semantic_cache remains rejected"
+    )
+)]
 #[cfg(feature = "storage")]
 pub mod semantic_cache; // Semantic similarity cache (vector-based)
 pub mod streaming;
@@ -51,5 +86,12 @@ pub mod types;
 pub mod user_management; // Experimental module-only user management; see subsystem_registry.
 #[cfg(feature = "gateway")]
 pub mod virtual_keys; // Experimental module-only virtual keys; see subsystem_registry.
+#[cfg_attr(
+    not(test),
+    deprecated(
+        since = "0.6.0",
+        note = "core::webhooks is a default-off compatibility surface scheduled for removal in 0.7.0"
+    )
+)]
 #[cfg(feature = "webhooks")]
 pub mod webhooks; // Experimental module-only webhooks; see subsystem_registry.

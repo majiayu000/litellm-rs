@@ -63,7 +63,7 @@ jobs:
 
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           BREAKING=false
-          if git log ${LAST_TAG:+${LAST_TAG}..HEAD} --format='%s%n%b' | grep -qE '(^|[[:space:]])(BREAKING[ -]CHANGE:|[[:alnum:]_-]+(\([^)]+\))?!:)'; then
+          if git log ${LAST_TAG:+${LAST_TAG}..HEAD} --format='%s%n%b' | grep -E '(^|[[:space:]])(BREAKING[ -]CHANGE:|[[:alnum:]_-]+(\([^)]+\))?!:)' >/dev/null; then
             BREAKING=true
           fi
 
@@ -81,9 +81,9 @@ jobs:
             else
               BUMP_TYPE="major"
             fi
-          elif echo "$COMMITS" | grep -qE "^[a-f0-9]+ feat(\(.+\))?:"; then
+          elif grep -E "^[a-f0-9]+ feat(\(.+\))?:" <<< "$COMMITS" >/dev/null; then
             BUMP_TYPE="minor"
-          elif echo "$COMMITS" | grep -qE "^[a-f0-9]+ (fix|perf|refactor|style|docs|test|chore)(\(.+\))?:"; then
+          elif grep -E "^[a-f0-9]+ (fix|perf|refactor|style|docs|test|chore)(\(.+\))?:" <<< "$COMMITS" >/dev/null; then
             BUMP_TYPE="patch"
           fi
 

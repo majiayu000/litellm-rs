@@ -2,12 +2,11 @@
 
 use self::config::AuditConfig;
 use self::events::{AuditEvent, EventType};
-use self::logger::AuditLogger;
+use self::logger::{AuditLogger, AuditLoggerBuilder};
 use self::outputs::MemoryOutput;
 use self::types::{LogLevel, RequestLog, ResponseLog, UserAction};
 use super::*;
 use std::sync::Arc;
-use tokio::time::Duration;
 
 // ============================================================================
 // Integration Tests
@@ -202,29 +201,38 @@ async fn test_disabled_logger() {
 
     // Should not panic
     logger.log(AuditEvent::new(EventType::System, "Test")).await;
-    logger.log_sync(AuditEvent::new(EventType::System, "Test sync"));
 }
 
 #[tokio::test]
 async fn test_high_volume_logging() {
     let config = AuditConfig::new().enable();
-    let logger = AuditLogger::new(config).await.unwrap();
+    let logger = AuditLoggerBuilder::new()
+        .config(config)
+        .add_output(Box::new(MemoryOutput::new(1000)))
+        .build()
+        .await
+        .unwrap();
 
     // Log many events quickly
     for i in 0..1000 {
         let event = AuditEvent::new(EventType::System, format!("Event {}", i));
-        logger.log_sync(event);
+        logger.log(event).await;
     }
 
-    // Give time for async processing
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    logger.flush().await.unwrap();
+    logger.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn test_concurrent_logging() {
     let config = AuditConfig::new().enable();
-    let logger = Arc::new(AuditLogger::new(config).await.unwrap());
+    let logger = Arc::new(
+        AuditLoggerBuilder::new()
+            .config(config)
+            .add_output(Box::new(MemoryOutput::new(1000)))
+            .build()
+            .await
+            .unwrap(),
+    );
 
     let mut handles = Vec::new();
 
@@ -243,7 +251,7 @@ async fn test_concurrent_logging() {
         handle.await.unwrap();
     }
 
-    logger.flush().await.unwrap();
+    logger.shutdown().await.unwrap();
 }
 
 #[test]

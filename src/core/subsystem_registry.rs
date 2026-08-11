@@ -16,6 +16,9 @@ pub enum SubsystemDecision {
     /// Shared support code used below wired modules rather than exposed as its
     /// own gateway subsystem.
     InternalDependency,
+    /// Deprecated 0.6 source-compatibility variant. No active registry entry
+    /// uses it; removal is scheduled for 0.7.
+    TemporaryExemption,
     /// Module is hidden from the default build behind a default-off feature.
     FeatureGated,
     /// Parsed configuration exists but validation rejects enabling it until the
@@ -31,11 +34,35 @@ impl CoreSubsystem {
             SubsystemDecision::Wired => false,
             SubsystemDecision::LibraryOnly
             | SubsystemDecision::InternalDependency
+            | SubsystemDecision::TemporaryExemption
             | SubsystemDecision::FeatureGated
             | SubsystemDecision::ConfigRejected => true,
         }
     }
 }
+
+/// Deprecated issue number retained for 0.6 source compatibility.
+#[deprecated(
+    since = "0.6.0",
+    note = "GH838 is resolved; this compatibility constant is removed in 0.7.0"
+)]
+pub const GH838_TEMPORARY_EXEMPTION_ISSUE: u32 = 838;
+
+/// Deprecated exemption names retained for 0.6 source compatibility only.
+#[deprecated(
+    since = "0.6.0",
+    note = "GH838 has explicit final dispositions; this compatibility constant is removed in 0.7.0"
+)]
+pub const GH838_TEMPORARY_EXEMPTIONS: &[&str] = &[
+    "a2a",
+    "batch",
+    "integrations",
+    "mcp",
+    "observability",
+    "user_management",
+    "virtual_keys",
+    "webhooks",
+];
 
 /// Explicit runtime status for one exported `core` module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

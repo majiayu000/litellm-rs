@@ -242,8 +242,8 @@ rate_limit:
 enterprise:
   enabled: false
   sso: null
-  # Explicitly enables request audit middleware. Events are emitted through
-  # structured tracing; request/response bodies remain disabled by default.
+  # Explicitly enables request audit middleware. Events are emitted as JSON on
+  # stderr; request/response bodies remain disabled by default.
   audit_logging: false
   # Deprecated removal candidate; enabling remains rejected.
   advanced_analytics: false

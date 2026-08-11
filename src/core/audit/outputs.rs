@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use std::collections::VecDeque;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::{File, OpenOptions};
@@ -32,18 +33,24 @@ pub trait AuditOutput: Send + Sync {
 /// Boxed audit output for dynamic dispatch
 pub type BoxedAuditOutput = Box<dyn AuditOutput>;
 
-/// Structured tracing output used when no file destination is configured.
-pub struct TracingOutput;
+/// Structured stderr output used when no file destination is configured.
+///
+/// This sink is independent of tracing subscriber installation and filtering,
+/// so explicitly enabled audit events cannot disappear behind a log level.
+pub struct StderrOutput;
 
 #[async_trait]
-impl AuditOutput for TracingOutput {
+impl AuditOutput for StderrOutput {
     fn name(&self) -> &str {
-        "tracing"
+        "stderr"
     }
 
     async fn write(&self, event: &AuditEvent) -> AuditResult<()> {
         let serialized = event.to_json()?;
-        tracing::info!(target: "audit", event = %serialized, "gateway audit event");
+        let mut stderr = std::io::stderr().lock();
+        stderr.write_all(serialized.as_bytes())?;
+        stderr.write_all(b"\n")?;
+        stderr.flush()?;
         Ok(())
     }
 

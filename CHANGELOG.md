@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Wired `guardrails` into canonical chat request/response execution with default-on prompt-injection protection and an explicit `guardrails.enabled: false` opt-out.
 - Added gateway `ip_access` configuration and registered its middleware ahead of authentication, handlers, and provider execution; default empty rules remain allow-all.
-- Wired `enterprise.audit_logging` into request audit middleware with structured tracing output, and aligned the observability facade with configured Langfuse/OpenTelemetry/Datadog lifecycle callbacks.
+- Wired `enterprise.audit_logging` into request audit middleware with structured JSON stderr/file output, and aligned the observability facade with configured Langfuse/OpenTelemetry/Datadog lifecycle callbacks.
 - Added real default-off Cargo gates for the module-only `a2a`, `mcp`, and `webhooks` experimental libraries.
 - Added the `pricing.unpriced_model_policy` and `pricing.unpriced_fallback_cost_per_1k_tokens` configuration surface for #831 fail-closed unpriced-model enforcement; `pricing.allow_degraded` remains startup-only.
 - Added `gateway_unpriced_events_total{provider,model_bucket,policy,outcome}` and `gateway_unpriced_spend_total{provider,model_bucket,policy,outcome}` Prometheus metrics for unpriced-model rejects, router candidate exclusions, and fallback settlements.

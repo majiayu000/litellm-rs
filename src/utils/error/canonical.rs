@@ -5,8 +5,10 @@
 
 use super::gateway_error::GatewayError;
 #[cfg(feature = "a2a")]
+#[allow(deprecated)] // GH838: canonical adapter remains until core::a2a removal in 0.7.
 use crate::core::a2a::error::A2AError;
 #[cfg(feature = "mcp")]
+#[allow(deprecated)] // GH838: canonical adapter remains until core::mcp removal in 0.7.
 use crate::core::mcp::error::McpError;
 use crate::core::providers::unified_provider::ProviderError;
 
@@ -147,6 +149,7 @@ impl CanonicalError for GatewayError {
 }
 
 #[cfg(feature = "a2a")]
+#[allow(deprecated)] // GH838: canonical adapter remains until core::a2a removal in 0.7.
 impl CanonicalError for A2AError {
     fn canonical_code(&self) -> ErrorCode {
         match self {
@@ -179,6 +182,7 @@ impl CanonicalError for A2AError {
 }
 
 #[cfg(feature = "mcp")]
+#[allow(deprecated)] // GH838: canonical adapter remains until core::mcp removal in 0.7.
 impl CanonicalError for McpError {
     fn canonical_code(&self) -> ErrorCode {
         match self {
