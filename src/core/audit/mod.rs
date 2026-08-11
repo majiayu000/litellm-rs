@@ -35,6 +35,7 @@
 
 pub mod config;
 pub mod events;
+mod lifecycle;
 pub mod logger;
 #[cfg(feature = "gateway")]
 pub mod middleware;

@@ -163,8 +163,18 @@ where
         let start_time = Instant::now();
 
         Box::pin(async move {
+            let cancellation_request_id = request_id.clone();
+            let cancellation_principal = Arc::clone(&principal);
             let terminal_permit = logger
-                .start_request(start_event)
+                .start_request(start_event, move || {
+                    Self::with_principal(
+                        AuditEvent::request_failed(
+                            cancellation_request_id,
+                            "request future cancelled",
+                        ),
+                        &Self::recorded_principal(&cancellation_principal),
+                    )
+                })
                 .map_err(audit_service_unavailable)?;
             let result = service.call(req).await;
             let response = match result {
@@ -600,15 +610,19 @@ mod tests {
         };
         let mut config = AuditConfig::new().enable();
         config.buffer_size = 2;
-        let logger = AuditLoggerBuilder::new()
-            .config(config)
-            .add_output(Box::new(output))
-            .build()
-            .await
-            .expect("recording audit logger");
+        let logger = Arc::new(
+            AuditLoggerBuilder::new()
+                .config(config)
+                .add_output(Box::new(output))
+                .build()
+                .await
+                .expect("recording audit logger"),
+        );
 
         let first = logger
-            .start_request(AuditEvent::request_started("first", "/stream"))
+            .start_request(AuditEvent::request_started("first", "/stream"), || {
+                AuditEvent::request_failed("first", "cancelled")
+            })
             .expect("first request should be accepted");
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while events.lock().await.is_empty() {
@@ -618,7 +632,9 @@ mod tests {
         .await
         .expect("worker should drain the first start event");
         let second = logger
-            .start_request(AuditEvent::request_started("second", "/stream"))
+            .start_request(AuditEvent::request_started("second", "/stream"), || {
+                AuditEvent::request_failed("second", "cancelled")
+            })
             .expect("an active stream must not reserve a queue slot");
 
         logger
@@ -634,10 +650,27 @@ mod tests {
     #[actix_web::test]
     async fn cancelled_request_records_failure_without_stopping_worker() {
         let (logger, events) = recording_logger().await;
+        let principal = Arc::new(RwLock::new(AuditPrincipal::default()));
+        let cancellation_principal = Arc::clone(&principal);
         let terminal = logger
-            .start_request(AuditEvent::request_started("cancelled", "/slow"))
+            .start_request(
+                AuditEvent::request_started("cancelled", "/slow"),
+                move || {
+                    AuditMiddlewareService::<()>::with_principal(
+                        AuditEvent::request_failed("cancelled", "request future cancelled"),
+                        &AuditMiddlewareService::<()>::recorded_principal(&cancellation_principal),
+                    )
+                },
+            )
             .expect("request should be accepted");
 
+        {
+            let mut principal = principal.write().expect("audit principal lock");
+            principal.user_id = Some("user-after-start".to_string());
+            principal.api_key_id = Some("key-after-start".to_string());
+            principal.team_id = Some("team-after-start".to_string());
+        }
+        let cancellation_time = chrono::Utc::now();
         drop(terminal);
         logger.shutdown().await.expect("audit shutdown");
         let events = events.lock().await;
@@ -645,5 +678,9 @@ mod tests {
         assert_eq!(events[0].event_type, EventType::RequestStarted);
         assert_eq!(events[1].event_type, EventType::RequestFailed);
         assert!(events[1].message.contains("request future cancelled"));
+        assert!(events[1].timestamp >= cancellation_time);
+        assert_eq!(events[1].user_id.as_deref(), Some("user-after-start"));
+        assert_eq!(events[1].api_key_id.as_deref(), Some("key-after-start"));
+        assert_eq!(events[1].team_id.as_deref(), Some("team-after-start"));
     }
 }

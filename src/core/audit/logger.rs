@@ -13,40 +13,15 @@ use tracing::{debug, error, info, warn};
 
 use super::config::AuditConfig;
 use super::events::AuditEvent;
+use super::lifecycle::AuditCommand;
+#[cfg(feature = "gateway")]
+pub(crate) use super::lifecycle::AuditEventPermit;
 use super::outputs::{BoxedAuditOutput, FileOutput, NullOutput, StderrOutput};
 use super::types::{AuditError, AuditResult, LogLevel};
 
 struct AuditWorker {
     shutdown: oneshot::Sender<()>,
     handle: JoinHandle<AuditResult<()>>,
-}
-
-#[cfg(feature = "gateway")]
-pub(crate) struct AuditEventPermit {
-    terminal: Option<oneshot::Sender<AuditEvent>>,
-    cancelled: Option<AuditEvent>,
-}
-
-#[cfg(feature = "gateway")]
-impl Drop for AuditEventPermit {
-    fn drop(&mut self) {
-        let (Some(terminal), Some(cancelled)) = (self.terminal.take(), self.cancelled.take())
-        else {
-            return;
-        };
-        if terminal.send(cancelled).is_err() {
-            error!("Audit worker rejected a cancelled-request terminal event");
-        }
-    }
-}
-
-enum AuditCommand {
-    Event(AuditEvent),
-    #[cfg(feature = "gateway")]
-    Request {
-        started: AuditEvent,
-        terminal: oneshot::Receiver<AuditEvent>,
-    },
 }
 
 /// The main audit logger
@@ -298,19 +273,15 @@ impl AuditLogger {
     }
 
     #[cfg(feature = "gateway")]
-    pub(crate) fn start_request(&self, event: AuditEvent) -> AuditResult<AuditEventPermit> {
+    pub(crate) fn start_request(
+        self: &Arc<Self>,
+        event: AuditEvent,
+        cancellation: impl FnOnce() -> AuditEvent + 'static,
+    ) -> AuditResult<AuditEventPermit> {
         if !self.config.enabled {
-            return Ok(AuditEventPermit {
-                terminal: None,
-                cancelled: None,
-            });
+            return Ok(AuditEventPermit::disabled());
         }
         self.ensure_available()?;
-        let request_id = event.request_id.clone().unwrap_or_default();
-        let cancelled = self.prepare_event(AuditEvent::request_failed(
-            request_id,
-            "request future cancelled",
-        ));
         let (terminal, terminal_receiver) = oneshot::channel();
         self.sender
             .try_send(AuditCommand::Request {
@@ -320,29 +291,30 @@ impl AuditLogger {
             .map_err(|error| {
                 AuditError::Channel(format!("audit start event was rejected: {error}"))
             })?;
-        Ok(AuditEventPermit {
-            terminal: Some(terminal),
-            cancelled: Some(cancelled),
-        })
+        Ok(AuditEventPermit::new(
+            terminal,
+            cancellation,
+            Arc::clone(self),
+        ))
     }
 
     #[cfg(feature = "gateway")]
     pub(crate) fn complete_request(
         &self,
-        mut terminal: AuditEventPermit,
+        terminal: AuditEventPermit,
         event: AuditEvent,
     ) -> AuditResult<()> {
-        if let Some(sender) = terminal.terminal.take() {
-            self.ensure_available()?;
-            terminal.cancelled = None;
-            sender.send(self.prepare_event(event)).map_err(|_| {
-                AuditError::Channel("audit worker rejected a terminal event".to_string())
-            })?;
+        self.ensure_available()?;
+        if terminal.complete(self.prepare_event(event)) {
+            Ok(())
+        } else {
+            Err(AuditError::Channel(
+                "audit worker rejected a terminal event".to_string(),
+            ))
         }
-        Ok(())
     }
 
-    fn prepare_event(&self, event: AuditEvent) -> AuditEvent {
+    pub(super) fn prepare_event(&self, event: AuditEvent) -> AuditEvent {
         if self.config.redact_sensitive {
             self.redact_event(event)
         } else {
