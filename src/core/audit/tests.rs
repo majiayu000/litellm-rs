@@ -2,12 +2,11 @@
 
 use self::config::AuditConfig;
 use self::events::{AuditEvent, EventType};
-use self::logger::AuditLogger;
-use self::outputs::MemoryOutput;
-use self::types::{LogLevel, RequestLog, ResponseLog, UserAction};
+use self::logger::{AuditLogger, AuditLoggerBuilder};
+use self::outputs::{AuditOutput, MemoryOutput};
+use self::types::{AuditError, AuditResult, LogLevel, RequestLog, ResponseLog, UserAction};
 use super::*;
 use std::sync::Arc;
-use tokio::time::Duration;
 
 // ============================================================================
 // Integration Tests
@@ -19,21 +18,33 @@ async fn test_full_audit_pipeline() {
     let logger = AuditLogger::new(config).await.unwrap();
 
     // Log various events
-    logger
-        .log(AuditEvent::request_started(
-            "req-1",
-            r"/v1/chat/completions",
-        ))
-        .await;
-    logger
-        .log(AuditEvent::request_completed("req-1", 200, 150))
-        .await;
-    logger
-        .log(AuditEvent::user_action("user-1", UserAction::Login))
-        .await;
-    logger
-        .log(AuditEvent::security("Suspicious activity"))
-        .await;
+    assert!(
+        logger
+            .log(AuditEvent::request_started(
+                "req-1",
+                r"/v1/chat/completions",
+            ))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::request_completed("req-1", 200, 150))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::user_action("user-1", UserAction::Login))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::security("Suspicious activity"))
+            .await
+            .is_ok()
+    );
 
     // Flush
     logger.flush().await.unwrap();
@@ -56,14 +67,14 @@ async fn test_request_response_logging() {
 
     let event = AuditEvent::request_started("req-1", r"/v1/chat/completions").with_request(request);
 
-    logger.log(event).await;
+    assert!(logger.log(event).await.is_ok());
 
     // Create response log
     let response = ResponseLog::new("req-1", 200, 150).with_body(r#"{"choices": []}"#, 15);
 
     let event = AuditEvent::request_completed("req-1", 200, 150).with_response(response);
 
-    logger.log(event).await;
+    assert!(logger.log(event).await.is_ok());
 
     logger.flush().await.unwrap();
 }
@@ -84,7 +95,7 @@ async fn test_user_action_logging() {
 
     for action in actions {
         let event = AuditEvent::user_action("user-123", action);
-        logger.log(event).await;
+        assert!(logger.log(event).await.is_ok());
     }
 
     logger.flush().await.unwrap();
@@ -97,20 +108,32 @@ async fn test_log_level_filtering() {
     let logger = AuditLogger::new(config).await.unwrap();
 
     // Debug and Info should be filtered
-    logger
-        .log(AuditEvent::new(EventType::System, "Debug").with_level(LogLevel::Debug))
-        .await;
-    logger
-        .log(AuditEvent::new(EventType::System, "Info").with_level(LogLevel::Info))
-        .await;
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Debug").with_level(LogLevel::Debug))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Info").with_level(LogLevel::Info))
+            .await
+            .is_ok()
+    );
 
     // Warn and above should pass
-    logger
-        .log(AuditEvent::new(EventType::System, "Warn").with_level(LogLevel::Warn))
-        .await;
-    logger
-        .log(AuditEvent::new(EventType::System, "Error").with_level(LogLevel::Error))
-        .await;
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Warn").with_level(LogLevel::Warn))
+            .await
+            .is_ok()
+    );
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Error").with_level(LogLevel::Error))
+            .await
+            .is_ok()
+    );
 
     logger.flush().await.unwrap();
 }
@@ -201,30 +224,44 @@ async fn test_disabled_logger() {
     let logger = AuditLogger::disabled();
 
     // Should not panic
-    logger.log(AuditEvent::new(EventType::System, "Test")).await;
-    logger.log_sync(AuditEvent::new(EventType::System, "Test sync"));
+    assert!(
+        logger
+            .log(AuditEvent::new(EventType::System, "Test"))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
 async fn test_high_volume_logging() {
     let config = AuditConfig::new().enable();
-    let logger = AuditLogger::new(config).await.unwrap();
+    let logger = AuditLoggerBuilder::new()
+        .config(config)
+        .add_output(Box::new(MemoryOutput::new(1000)))
+        .build()
+        .await
+        .unwrap();
 
     // Log many events quickly
     for i in 0..1000 {
         let event = AuditEvent::new(EventType::System, format!("Event {}", i));
-        logger.log_sync(event);
+        assert!(logger.log(event).await.is_ok());
     }
 
-    // Give time for async processing
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    logger.flush().await.unwrap();
+    logger.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn test_concurrent_logging() {
     let config = AuditConfig::new().enable();
-    let logger = Arc::new(AuditLogger::new(config).await.unwrap());
+    let logger = Arc::new(
+        AuditLoggerBuilder::new()
+            .config(config)
+            .add_output(Box::new(MemoryOutput::new(1000)))
+            .build()
+            .await
+            .unwrap(),
+    );
 
     let mut handles = Vec::new();
 
@@ -233,7 +270,7 @@ async fn test_concurrent_logging() {
         let handle = tokio::spawn(async move {
             for j in 0..100 {
                 let event = AuditEvent::new(EventType::System, format!("Thread {} Event {}", i, j));
-                logger.log(event).await;
+                assert!(logger.log(event).await.is_ok());
             }
         });
         handles.push(handle);
@@ -243,7 +280,61 @@ async fn test_concurrent_logging() {
         handle.await.unwrap();
     }
 
-    logger.flush().await.unwrap();
+    logger.shutdown().await.unwrap();
+}
+
+struct FailingWriteOutput;
+
+#[async_trait::async_trait]
+impl AuditOutput for FailingWriteOutput {
+    fn name(&self) -> &str {
+        "failing_write"
+    }
+
+    async fn write(&self, _event: &AuditEvent) -> AuditResult<()> {
+        Err(AuditError::Output("sink failed".to_string()))
+    }
+
+    async fn flush(&self) -> AuditResult<()> {
+        Ok(())
+    }
+
+    async fn close(&self) -> AuditResult<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn test_sink_failure_stops_accepting_new_events() {
+    let logger = AuditLoggerBuilder::new()
+        .config(AuditConfig::new().enable())
+        .add_output(Box::new(FailingWriteOutput))
+        .build()
+        .await
+        .unwrap();
+
+    assert!(
+        logger
+            .log(AuditEvent::system("trigger failure"))
+            .await
+            .is_ok()
+    );
+    let rejection = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            match logger.log(AuditEvent::system("probe")).await {
+                Err(error @ AuditError::Output(_)) => break error,
+                Ok(()) | Err(AuditError::Channel(_)) => {}
+                Err(error) => panic!("unexpected audit error: {error}"),
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(matches!(rejection, AuditError::Output(_)));
+    assert!(!logger.is_available());
+    assert!(logger.shutdown().await.is_err());
 }
 
 #[test]

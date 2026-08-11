@@ -30,15 +30,19 @@
 //! let logger = AuditLogger::new(config).await?;
 //!
 //! // Log an event
-//! logger.log(AuditEvent::request_started("req-123", "/v1/chat/completions")).await;
+//! logger.log(AuditEvent::request_started("req-123", "/v1/chat/completions")).await?;
 //! ```
 
 pub mod config;
 pub mod events;
+mod lifecycle;
 pub mod logger;
 #[cfg(feature = "gateway")]
 pub mod middleware;
+#[cfg(feature = "gateway")]
+mod middleware_body;
 pub mod outputs;
+mod redaction;
 pub mod types;
 
 #[cfg(test)]

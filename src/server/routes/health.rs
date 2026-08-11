@@ -90,7 +90,10 @@ async fn readiness_check(state: web::Data<AppState>) -> ActixResult<HttpResponse
     debug!("Readiness check requested");
 
     let (storage_health, provider_health) = collect_component_health(&state).await;
-    let verdict = aggregate_readiness(&storage_health, &provider_health);
+    let verdict = include_audit_readiness(
+        aggregate_readiness(&storage_health, &provider_health),
+        state.audit_logger.is_available(),
+    );
 
     let body = ReadinessStatus {
         ready: verdict.ready,
@@ -118,7 +121,10 @@ async fn detailed_health_check(state: web::Data<AppState>) -> ActixResult<HttpRe
     debug!("Detailed health check requested");
 
     let (storage_health, provider_health) = collect_component_health(&state).await;
-    let verdict = aggregate_readiness(&storage_health, &provider_health);
+    let verdict = include_audit_readiness(
+        aggregate_readiness(&storage_health, &provider_health),
+        state.audit_logger.is_available(),
+    );
 
     let detailed_status = DetailedHealthStatus {
         status: if verdict.ready {
@@ -379,6 +385,17 @@ struct VersionInfo {
 struct ReadinessVerdict {
     ready: bool,
     reason: Cow<'static, str>,
+}
+
+fn include_audit_readiness(verdict: ReadinessVerdict, audit_available: bool) -> ReadinessVerdict {
+    if audit_available {
+        verdict
+    } else {
+        ReadinessVerdict {
+            ready: false,
+            reason: Cow::Borrowed("audit logging unavailable"),
+        }
+    }
 }
 
 /// Collect both storage and provider health snapshots used by readiness and
@@ -696,6 +713,15 @@ mod tests {
         let verdict = aggregate_readiness(&storage_ok(), &providers);
         assert!(verdict.ready);
         assert_eq!(providers.enabled_providers, 1);
+    }
+
+    #[test]
+    fn readiness_fails_when_audit_logging_is_unavailable() {
+        let providers = provider_status(vec![provider("openai", "healthy")]);
+        let verdict =
+            include_audit_readiness(aggregate_readiness(&storage_ok(), &providers), false);
+        assert!(!verdict.ready);
+        assert_eq!(verdict.reason, "audit logging unavailable");
     }
 
     #[test]

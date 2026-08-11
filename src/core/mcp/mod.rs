@@ -71,16 +71,56 @@ pub mod validation;
 
 // Re-export commonly used types
 #[doc(hidden)]
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use config::AuthType;
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use config::{AuthConfig, McpAuthType, McpServerConfig};
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use error::{McpError, McpResult};
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use gateway::McpGateway;
 #[doc(hidden)]
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use permissions::PermissionLevel;
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use permissions::{McpPermissionLevel, PermissionManager, PermissionPolicy, PermissionRule};
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, McpMessage};
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use server::McpServer;
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use tools::{Tool, ToolCall, ToolResult};
+#[deprecated(
+    since = "0.6.0",
+    note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use transport::Transport;
 
 #[cfg(test)]
@@ -90,7 +130,9 @@ mod tests {
     #[test]
     fn test_module_exports() {
         // Verify all public types are accessible
-        let _ = Transport::Http;
-        let _ = McpAuthType::ApiKey;
+        let transport = transport::Transport::Http;
+        let auth_type = config::McpAuthType::ApiKey;
+        assert!(matches!(transport, transport::Transport::Http));
+        assert!(matches!(auth_type, config::McpAuthType::ApiKey));
     }
 }

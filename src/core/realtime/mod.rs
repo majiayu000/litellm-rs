@@ -39,9 +39,21 @@ pub mod config;
 pub mod events;
 pub mod session;
 
+#[deprecated(
+    since = "0.6.0",
+    note = "core::realtime is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use config::RealtimeConfig;
+#[deprecated(
+    since = "0.6.0",
+    note = "core::realtime is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use events::{
     ClientEvent, ContentPart, RealtimeError, RealtimeEvent, RealtimeResult, ResponseStatus,
     ServerEvent, SessionConfig, TurnDetection, Voice,
 };
+#[deprecated(
+    since = "0.6.0",
+    note = "core::realtime is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use session::{RealtimeSession, SessionState};

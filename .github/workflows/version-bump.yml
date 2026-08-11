@@ -2,6 +2,20 @@ name: Version Bump
 
 on:
   workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Release bump (auto follows conventional commits)"
+        type: choice
+        default: auto
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+      confirm_breaking_changes:
+        description: "I verified the public compatibility gate and migration notes for a breaking release"
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,21 +61,48 @@ jobs:
           echo "Analyzing commits since $LAST_TAG:"
           echo "$COMMITS"
 
-          # Determine bump type based on conventional commits
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          BREAKING=false
+          if git log ${LAST_TAG:+${LAST_TAG}..HEAD} --format='%s%n%b' | grep -E '(^|[[:space:]])(BREAKING[ -]CHANGE:|[[:alnum:]_-]+(\([^)]+\))?!:)' >/dev/null; then
+            BREAKING=true
+          fi
+
+          if [ "$BREAKING" = true ] && [ "${{ inputs.confirm_breaking_changes }}" != "true" ]; then
+            echo "::error::Breaking commits require confirm_breaking_changes=true after compatibility and migration review"
+            exit 1
+          fi
+
+          REQUESTED_BUMP="${{ inputs.bump_type }}"
           BUMP_TYPE="patch"
 
-          if echo "$COMMITS" | grep -qE "^[a-f0-9]+ (BREAKING CHANGE|feat!|fix!|refactor!):"; then
-            BUMP_TYPE="major"
-          elif echo "$COMMITS" | grep -qE "^[a-f0-9]+ feat(\(.+\))?:"; then
+          if [ "$BREAKING" = true ]; then
+            if [ "$MAJOR" -eq 0 ]; then
+              BUMP_TYPE="minor"
+            else
+              BUMP_TYPE="major"
+            fi
+          elif grep -E "^[a-f0-9]+ feat(\(.+\))?:" <<< "$COMMITS" >/dev/null; then
             BUMP_TYPE="minor"
-          elif echo "$COMMITS" | grep -qE "^[a-f0-9]+ (fix|perf|refactor|style|docs|test|chore)(\(.+\))?:"; then
+          elif grep -E "^[a-f0-9]+ (fix|perf|refactor|style|docs|test|chore)(\(.+\))?:" <<< "$COMMITS" >/dev/null; then
             BUMP_TYPE="patch"
+          fi
+
+          if [ "$REQUESTED_BUMP" != "auto" ]; then
+            if [ "$BREAKING" = true ]; then
+              if [ "$MAJOR" -eq 0 ] && [ "$REQUESTED_BUMP" = "patch" ]; then
+                echo "::error::Requested bump '$REQUESTED_BUMP' is too small for detected breaking changes"
+                exit 1
+              elif [ "$MAJOR" -gt 0 ] && [ "$REQUESTED_BUMP" != "major" ]; then
+                echo "::error::Requested bump '$REQUESTED_BUMP' is too small for detected breaking changes"
+                exit 1
+              fi
+            fi
+            BUMP_TYPE="$REQUESTED_BUMP"
           fi
 
           echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
 
           # Calculate new version
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           case $BUMP_TYPE in
             major)
               NEW_VERSION="$((MAJOR + 1)).0.0"

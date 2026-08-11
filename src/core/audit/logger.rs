@@ -2,30 +2,49 @@
 //!
 //! The main logger that orchestrates audit event collection and output.
 
+use futures::FutureExt;
+use futures::stream::{FuturesUnordered, StreamExt};
 use regex::Regex;
-use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio::time::{Duration, interval};
+use std::sync::{Arc, RwLock as StdRwLock};
+use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::task::JoinHandle;
+use tokio::time::{Duration, MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
 
 use super::config::AuditConfig;
 use super::events::AuditEvent;
-use super::outputs::{AuditOutput, BoxedAuditOutput, FileOutput, MemoryOutput, NullOutput};
-use super::types::{AuditResult, LogLevel};
+use super::lifecycle::AuditCommand;
+#[cfg(feature = "gateway")]
+pub(crate) use super::lifecycle::AuditEventPermit;
+use super::outputs::{BoxedAuditOutput, FileOutput, NullOutput, StderrOutput};
+use super::types::{AuditError, AuditResult, LogLevel};
+
+struct AuditWorker {
+    shutdown: oneshot::Sender<()>,
+    handle: JoinHandle<AuditResult<()>>,
+}
 
 /// The main audit logger
 pub struct AuditLogger {
     config: AuditConfig,
-    sender: mpsc::Sender<AuditEvent>,
+    sender: mpsc::Sender<AuditCommand>,
     outputs: Arc<Vec<BoxedAuditOutput>>,
     redact_patterns: Vec<Regex>,
+    failure: Arc<StdRwLock<Option<String>>>,
+    worker: Mutex<Option<AuditWorker>>,
 }
 
 impl AuditLogger {
     /// Create a new audit logger
     pub async fn new(config: AuditConfig) -> AuditResult<Self> {
-        let mut outputs: Vec<BoxedAuditOutput> = Vec::new();
+        Self::new_with_outputs(config, Vec::new()).await
+    }
 
+    async fn new_with_outputs(
+        config: AuditConfig,
+        mut outputs: Vec<BoxedAuditOutput>,
+    ) -> AuditResult<Self> {
+        config.validate().map_err(AuditError::Config)?;
         // Add file output if configured
         if let Some(ref file_config) = config.file_output {
             info!("Initializing file audit output: {:?}", file_config.path);
@@ -33,10 +52,11 @@ impl AuditLogger {
             outputs.push(Box::new(file_output));
         }
 
-        // Add memory output for testing/debugging
+        // Enabled logging always gets an external destination independent of
+        // ordinary tracing filters. File/custom outputs take precedence.
         if outputs.is_empty() {
-            debug!("No outputs configured, using memory output");
-            outputs.push(Box::new(MemoryOutput::default()));
+            debug!("No file audit output configured, using structured stderr");
+            outputs.push(Box::new(StderrOutput::new(config.buffer_size)?));
         }
 
         // Compile redact patterns
@@ -57,9 +77,20 @@ impl AuditLogger {
         let writer_outputs = outputs.clone();
         let flush_interval = config.flush_interval_ms;
         let min_level = config.min_level;
+        let (shutdown, shutdown_receiver) = oneshot::channel();
+        let failure = Arc::new(StdRwLock::new(None));
+        let writer_failure = Arc::clone(&failure);
 
-        tokio::spawn(async move {
-            Self::background_writer(receiver, writer_outputs, flush_interval, min_level).await;
+        let handle = tokio::spawn(async move {
+            Self::background_writer(
+                receiver,
+                writer_outputs,
+                flush_interval,
+                min_level,
+                shutdown_receiver,
+                writer_failure,
+            )
+            .await
         });
 
         info!("Audit logger initialized with {} outputs", outputs.len());
@@ -69,6 +100,8 @@ impl AuditLogger {
             sender,
             outputs,
             redact_patterns,
+            failure,
+            worker: Mutex::new(Some(AuditWorker { shutdown, handle })),
         })
     }
 
@@ -87,145 +120,239 @@ impl AuditLogger {
             sender,
             outputs: Arc::new(outputs),
             redact_patterns: Vec::new(),
+            failure: Arc::new(StdRwLock::new(None)),
+            worker: Mutex::new(None),
         }
     }
 
     /// Background writer task
     async fn background_writer(
-        mut receiver: mpsc::Receiver<AuditEvent>,
+        mut receiver: mpsc::Receiver<AuditCommand>,
         outputs: Arc<Vec<BoxedAuditOutput>>,
         flush_interval_ms: u64,
         min_level: LogLevel,
-    ) {
+        mut shutdown: oneshot::Receiver<()>,
+        failure: Arc<StdRwLock<Option<String>>>,
+    ) -> AuditResult<()> {
         let mut flush_timer = interval(Duration::from_millis(flush_interval_ms));
+        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut terminals = FuturesUnordered::new();
 
-        loop {
-            tokio::select! {
-                Some(event) = receiver.recv() => {
-                    // Check log level
-                    if !event.level.should_log(min_level) {
-                        continue;
+        let writer_result: AuditResult<()> = async {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut shutdown => {
+                        receiver.close();
+                        while let Some(command) = receiver.recv().await {
+                            Self::accept_command(command, &outputs, min_level, &mut terminals)
+                                .await?;
+                        }
+                        while let Some(terminal) = terminals.next().now_or_never().flatten() {
+                            let event = terminal.map_err(|_| AuditError::Channel(
+                                "audit request ended without a terminal event".to_string(),
+                            ))?;
+                            Self::write_event(&outputs, &event, min_level).await?;
+                        }
+                        break;
                     }
-
-                    // Write to all outputs
-                    for output in outputs.iter() {
-                        if let Err(e) = output.write(&event).await {
-                            error!("Failed to write to audit output '{}': {}", output.name(), e);
+                    _ = flush_timer.tick() => {
+                        Self::flush_outputs(&outputs).await?;
+                    }
+                    terminal = terminals.next(), if !terminals.is_empty() => {
+                        match terminal {
+                            Some(Ok(event)) => Self::write_event(&outputs, &event, min_level).await?,
+                            Some(Err(_)) => return Err(AuditError::Channel(
+                                "audit request ended without a terminal event".to_string(),
+                            )),
+                            None => {}
                         }
                     }
-                }
-                _ = flush_timer.tick() => {
-                    // Periodic flush
-                    for output in outputs.iter() {
-                        if let Err(e) = output.flush().await {
-                            error!("Failed to flush audit output '{}': {}", output.name(), e);
+                    command = receiver.recv() => {
+                        match command {
+                            Some(command) => Self::accept_command(
+                                command,
+                                &outputs,
+                                min_level,
+                                &mut terminals,
+                            ).await?,
+                            None => break,
                         }
                     }
+                    else => break,
                 }
-                else => break,
+            }
+            Ok(())
+        }
+        .await;
+
+        if let Err(error) = &writer_result {
+            Self::record_failure(&failure, error.to_string());
+        }
+        let close_result = Self::flush_and_close_outputs(&outputs).await;
+        if let Err(error) = &close_result {
+            Self::record_failure(&failure, error.to_string());
+        }
+        writer_result.and(close_result)
+    }
+
+    async fn accept_command(
+        command: AuditCommand,
+        outputs: &[BoxedAuditOutput],
+        min_level: LogLevel,
+        terminals: &mut FuturesUnordered<oneshot::Receiver<AuditEvent>>,
+    ) -> AuditResult<()> {
+        match command {
+            AuditCommand::Event(event) => Self::write_event(outputs, &event, min_level).await,
+            #[cfg(feature = "gateway")]
+            AuditCommand::Request { started, terminal } => {
+                Self::write_event(outputs, &started, min_level).await?;
+                terminals.push(terminal);
+                Ok(())
             }
         }
-
-        Self::flush_and_close_outputs(&outputs).await;
     }
 
-    async fn flush_and_close_outputs(outputs: &[BoxedAuditOutput]) {
-        for output in outputs.iter() {
-            Self::log_output_result(
-                output.as_ref(),
-                "flush audit output during shutdown",
-                output.flush().await,
-            );
-            Self::log_output_result(
-                output.as_ref(),
-                "close audit output during shutdown",
-                output.close().await,
-            );
+    async fn write_event(
+        outputs: &[BoxedAuditOutput],
+        event: &AuditEvent,
+        min_level: LogLevel,
+    ) -> AuditResult<()> {
+        if !event.level.should_log(min_level) {
+            return Ok(());
         }
+        for output in outputs {
+            output.write(event).await.map_err(|error| {
+                AuditError::Output(format!("write audit output '{}': {error}", output.name()))
+            })?;
+        }
+        Ok(())
     }
 
-    fn log_output_result(
-        output: &dyn AuditOutput,
-        operation: &'static str,
-        result: AuditResult<()>,
-    ) {
-        if let Err(e) = result {
-            error!("Failed to {} '{}': {}", operation, output.name(), e);
+    async fn flush_outputs(outputs: &[BoxedAuditOutput]) -> AuditResult<()> {
+        for output in outputs {
+            output.flush().await.map_err(|error| {
+                AuditError::Output(format!("flush audit output '{}': {error}", output.name()))
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn flush_and_close_outputs(outputs: &[BoxedAuditOutput]) -> AuditResult<()> {
+        let mut failures = Vec::new();
+        for output in outputs.iter() {
+            for (operation, result) in [
+                ("flush audit output during shutdown", output.flush().await),
+                ("close audit output during shutdown", output.close().await),
+            ] {
+                if let Err(error) = result {
+                    error!("Failed to {} '{}': {}", operation, output.name(), error);
+                    failures.push(format!("{operation} '{}': {error}", output.name()));
+                }
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(AuditError::Output(failures.join("; ")))
         }
     }
 
     /// Log an audit event
-    pub async fn log(&self, event: AuditEvent) {
+    pub async fn log(&self, event: AuditEvent) -> AuditResult<()> {
         if !self.config.enabled {
-            return;
+            return Ok(());
         }
+        self.ensure_available()?;
+        let event = self.prepare_event(event);
+        self.sender
+            .try_send(AuditCommand::Event(event))
+            .map_err(|error| {
+                AuditError::Channel(format!("audit event queue rejected an event: {error}"))
+            })
+    }
 
-        // Apply redaction if needed
-        let event = if self.config.redact_sensitive {
-            self.redact_event(event)
+    #[cfg(feature = "gateway")]
+    pub(crate) fn start_request(
+        self: &Arc<Self>,
+        event: AuditEvent,
+        cancellation: impl FnOnce() -> AuditEvent + 'static,
+    ) -> AuditResult<AuditEventPermit> {
+        if !self.config.enabled {
+            return Ok(AuditEventPermit::disabled());
+        }
+        self.ensure_available()?;
+        let (terminal, terminal_receiver) = oneshot::channel();
+        self.sender
+            .try_send(AuditCommand::Request {
+                started: self.prepare_event(event),
+                terminal: terminal_receiver,
+            })
+            .map_err(|error| {
+                AuditError::Channel(format!("audit start event was rejected: {error}"))
+            })?;
+        Ok(AuditEventPermit::new(
+            terminal,
+            cancellation,
+            Arc::clone(self),
+        ))
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) fn complete_request(
+        &self,
+        terminal: AuditEventPermit,
+        event: AuditEvent,
+    ) -> AuditResult<()> {
+        self.ensure_available()?;
+        if terminal.complete(self.prepare_event(event)) {
+            Ok(())
         } else {
-            event
-        };
-
-        if let Err(e) = self.sender.send(event).await {
-            error!("Failed to send audit event: {}", e);
+            Err(AuditError::Channel(
+                "audit worker rejected a terminal event".to_string(),
+            ))
         }
     }
 
-    /// Log an event without async (fire and forget)
-    pub fn log_sync(&self, event: AuditEvent) {
-        if !self.config.enabled {
-            return;
-        }
-
-        let event = if self.config.redact_sensitive {
+    pub(super) fn prepare_event(&self, event: AuditEvent) -> AuditEvent {
+        if self.config.redact_sensitive {
             self.redact_event(event)
         } else {
             event
-        };
+        }
+    }
 
-        let sender = self.sender.clone();
-        tokio::spawn(async move {
-            if let Err(e) = sender.send(event).await {
-                error!("Failed to send audit event from sync logger: {}", e);
-            }
-        });
+    fn ensure_available(&self) -> AuditResult<()> {
+        let failure = self.failure.read().unwrap_or_else(|lock| lock.into_inner());
+        match failure.as_deref() {
+            Some(failure) => Err(AuditError::Output(format!(
+                "audit worker unavailable: {failure}"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    fn record_failure(failure: &StdRwLock<Option<String>>, message: String) {
+        error!("Audit worker stopped: {message}");
+        let mut failure = failure.write().unwrap_or_else(|lock| lock.into_inner());
+        if failure.is_none() {
+            *failure = Some(message);
+        }
     }
 
     /// Redact sensitive data from an event
-    fn redact_event(&self, mut event: AuditEvent) -> AuditEvent {
-        // Redact message
-        event.message = self.redact_string(&event.message);
-
-        // Redact request body
-        if let Some(ref mut request) = event.request
-            && let Some(ref mut body) = request.body
-        {
-            *body = self.redact_string(body);
-        }
-
-        // Redact response body
-        if let Some(ref mut response) = event.response
-            && let Some(ref mut body) = response.body
-        {
-            *body = self.redact_string(body);
-        }
-
-        event
-    }
-
-    /// Redact sensitive data from a string
-    fn redact_string(&self, s: &str) -> String {
-        let mut result = s.to_string();
-        for pattern in &self.redact_patterns {
-            result = pattern.replace_all(&result, "[REDACTED]").to_string();
-        }
-        result
+    fn redact_event(&self, event: AuditEvent) -> AuditEvent {
+        super::redaction::redact_event(&self.redact_patterns, event)
     }
 
     /// Check if logging is enabled
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
+    }
+
+    /// Whether an enabled audit worker can still accept lifecycle events.
+    pub fn is_available(&self) -> bool {
+        !self.config.enabled || self.ensure_available().is_ok()
     }
 
     /// Check if a path should be logged
@@ -244,6 +371,21 @@ impl AuditLogger {
             output.flush().await?;
         }
         Ok(())
+    }
+
+    /// Stop accepting events, drain the queue, and close every output.
+    pub async fn shutdown(&self) -> AuditResult<()> {
+        let Some(worker) = self.worker.lock().await.take() else {
+            return self.flush().await;
+        };
+
+        if worker.shutdown.send(()).is_err() {
+            warn!("Audit worker stopped before receiving the shutdown signal");
+        }
+        worker
+            .handle
+            .await
+            .map_err(|error| AuditError::Output(format!("audit worker join failed: {error}")))?
     }
 }
 
@@ -276,22 +418,7 @@ impl AuditLoggerBuilder {
 
     /// Build the logger
     pub async fn build(self) -> AuditResult<AuditLogger> {
-        let mut logger = AuditLogger::new(self.config).await?;
-
-        // Add custom outputs
-        let mut outputs = Arc::try_unwrap(logger.outputs).unwrap_or_else(|arc| {
-            (*arc)
-                .iter()
-                .map(|_| Box::new(NullOutput) as BoxedAuditOutput)
-                .collect()
-        });
-
-        for output in self.custom_outputs {
-            outputs.push(output);
-        }
-
-        logger.outputs = Arc::new(outputs);
-        Ok(logger)
+        AuditLogger::new_with_outputs(self.config, self.custom_outputs).await
     }
 }
 
@@ -305,7 +432,8 @@ impl Default for AuditLoggerBuilder {
 mod tests {
     use super::*;
     use crate::core::audit::events::EventType;
-    use crate::core::audit::types::AuditError;
+    use crate::core::audit::outputs::AuditOutput;
+    use crate::core::audit::types::{AuditError, RequestLog, ResponseLog, UserAction};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
@@ -314,6 +442,7 @@ mod tests {
         let logger = AuditLogger::new(config).await.unwrap();
 
         assert!(logger.is_enabled());
+        logger.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -328,10 +457,8 @@ mod tests {
         let logger = AuditLogger::new(config).await.unwrap();
 
         let event = AuditEvent::new(EventType::System, "Test event");
-        logger.log(event).await;
-
-        // Give time for async processing
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(logger.log(event).await.is_ok());
+        logger.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -342,6 +469,7 @@ mod tests {
         assert!(!logger.should_log_path("/health"));
         assert!(!logger.should_log_path("/metrics"));
         assert!(logger.should_log_path("/v1/chat/completions"));
+        logger.shutdown().await.unwrap();
     }
 
     #[test]
@@ -357,10 +485,12 @@ mod tests {
             sender: logger.sender,
             outputs: logger.outputs,
             redact_patterns: patterns,
+            failure: logger.failure,
+            worker: Mutex::new(None),
         };
 
         let input = "API key: sk-abcdefghijklmnopqrstuvwxyz";
-        let redacted = logger.redact_string(input);
+        let redacted = super::super::redaction::redact_string(&logger.redact_patterns, input);
 
         assert!(redacted.contains("[REDACTED]"));
         assert!(!redacted.contains("sk-abcdefghijklmnopqrstuvwxyz"));
@@ -381,6 +511,8 @@ mod tests {
             sender: disabled.sender,
             outputs: disabled.outputs,
             redact_patterns: patterns,
+            failure: disabled.failure,
+            worker: Mutex::new(None),
         };
 
         let input = concat!(
@@ -389,13 +521,119 @@ mod tests {
             "anthropic=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 ",
             "gateway=gw-abcdefghijklmnopqrstuvwxyz0123456789"
         );
-        let redacted = logger.redact_string(input);
+        let redacted = super::super::redaction::redact_string(&logger.redact_patterns, input);
 
         assert!(!redacted.contains("Bearer eyJ"));
         assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!redacted.contains("sk-ant-api03"));
         assert!(!redacted.contains("gw-abcdefghijklmnopqrstuvwxyz"));
         assert!(redacted.matches("[REDACTED]").count() >= 4);
+    }
+
+    #[test]
+    fn test_redaction_covers_all_string_bearing_event_fields() {
+        let config = AuditConfig::new().enable();
+        let disabled = AuditLogger::disabled();
+        let patterns = config
+            .redact_patterns
+            .iter()
+            .map(|pattern| Regex::new(pattern).unwrap())
+            .collect();
+        let logger = AuditLogger {
+            config,
+            sender: disabled.sender,
+            outputs: disabled.outputs,
+            redact_patterns: patterns,
+            failure: disabled.failure,
+            worker: Mutex::new(None),
+        };
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz";
+        let request = RequestLog::new(secret, secret, secret)
+            .with_header(secret, secret)
+            .with_body(secret, secret.len())
+            .with_client_ip(secret)
+            .with_user_agent(secret);
+        let response = ResponseLog::new(secret, 200, 1)
+            .with_header(secret, secret)
+            .with_body(secret, secret.len());
+        let mut event = AuditEvent::new(EventType::UserAction, secret)
+            .with_request_id(secret)
+            .with_user_id(secret)
+            .with_api_key_id(secret)
+            .with_team_id(secret)
+            .with_request(request)
+            .with_response(response)
+            .with_action(UserAction::Custom(secret.to_string()))
+            .with_metadata(secret, serde_json::json!({secret: [secret]}))
+            .with_source(secret);
+        event.id = secret.to_string();
+        event
+            .request
+            .as_mut()
+            .unwrap()
+            .query_params
+            .insert(secret.to_string(), secret.to_string());
+
+        let serialized = serde_json::to_string(&logger.redact_event(event)).unwrap();
+
+        assert!(!serialized.contains(secret));
+        assert!(serialized.matches("[REDACTED]").count() >= 20);
+    }
+
+    #[derive(Clone)]
+    struct RecordingOutput {
+        events: Arc<Mutex<Vec<AuditEvent>>>,
+        close_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl AuditOutput for RecordingOutput {
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        async fn write(&self, event: &AuditEvent) -> AuditResult<()> {
+            self.events.lock().await.push(event.clone());
+            Ok(())
+        }
+
+        async fn flush(&self) -> AuditResult<()> {
+            Ok(())
+        }
+
+        async fn close(&self) -> AuditResult<()> {
+            self.close_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_drains_pending_events_and_closes_custom_output() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let close_count = Arc::new(AtomicUsize::new(0));
+        let output = RecordingOutput {
+            events: Arc::clone(&events),
+            close_count: Arc::clone(&close_count),
+        };
+        let logger = AuditLoggerBuilder::new()
+            .config(AuditConfig::new().enable())
+            .add_output(Box::new(output))
+            .build()
+            .await
+            .unwrap();
+
+        for index in 0..32 {
+            assert!(
+                logger
+                    .log(AuditEvent::system(format!("event-{index}")))
+                    .await
+                    .is_ok()
+            );
+        }
+        logger.shutdown().await.unwrap();
+
+        assert_eq!(events.lock().await.len(), 32);
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
     }
 
     struct FailingShutdownOutput {
@@ -433,37 +671,89 @@ mod tests {
             close_count: Arc::clone(&close_count),
         })];
 
-        AuditLogger::flush_and_close_outputs(&outputs).await;
+        let result = AuditLogger::flush_and_close_outputs(&outputs).await;
 
+        assert!(result.is_err());
         assert_eq!(flush_count.load(Ordering::SeqCst), 1);
         assert_eq!(close_count.load(Ordering::SeqCst), 1);
     }
 
+    struct BlockingFirstOutput {
+        writes: AtomicUsize,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl AuditOutput for BlockingFirstOutput {
+        fn name(&self) -> &str {
+            "blocking_first"
+        }
+
+        async fn write(&self, _event: &AuditEvent) -> AuditResult<()> {
+            if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            Ok(())
+        }
+
+        async fn flush(&self) -> AuditResult<()> {
+            Ok(())
+        }
+
+        async fn close(&self) -> AuditResult<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn full_audit_queue_fails_fast_instead_of_waiting() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let output = BlockingFirstOutput {
+            writes: AtomicUsize::new(0),
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        };
+        let mut config = AuditConfig::new().enable();
+        config.buffer_size = 2;
+        let logger = AuditLoggerBuilder::new()
+            .config(config)
+            .add_output(Box::new(output))
+            .build()
+            .await
+            .unwrap();
+
+        assert!(logger.log(AuditEvent::system("first")).await.is_ok());
+        started.notified().await;
+        assert!(logger.log(AuditEvent::system("second")).await.is_ok());
+        assert!(logger.log(AuditEvent::system("third")).await.is_ok());
+        assert!(matches!(
+            logger.log(AuditEvent::system("fourth")).await,
+            Err(AuditError::Channel(_))
+        ));
+
+        release.notify_one();
+        logger.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn test_logger_with_file_output() {
-        let temp_dir = std::env::temp_dir();
-        let path = temp_dir.join("test_audit_logger.log");
-
-        // Clean up if exists
-        let _ = tokio::fs::remove_file(&path).await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("audit.log");
 
         let config = AuditConfig::new().enable().with_file_output(&path);
 
         let logger = AuditLogger::new(config).await.unwrap();
 
         let event = AuditEvent::new(EventType::System, "Logger test event");
-        logger.log(event).await;
-
-        // Flush and wait
-        logger.flush().await.unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(logger.log(event).await.is_ok());
+        logger.shutdown().await.unwrap();
 
         // Verify file was written
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(content.contains("Logger test event"));
-
-        // Clean up
-        let _ = tokio::fs::remove_file(&path).await;
     }
 
     #[tokio::test]
@@ -476,5 +766,6 @@ mod tests {
             .unwrap();
 
         assert!(logger.is_enabled());
+        logger.shutdown().await.unwrap();
     }
 }

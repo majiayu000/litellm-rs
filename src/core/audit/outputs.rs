@@ -4,14 +4,17 @@
 
 use async_trait::async_trait;
 use std::collections::VecDeque;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{SyncSender, TrySendError};
+use std::thread::JoinHandle;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use super::events::AuditEvent;
-use super::types::AuditResult;
+use super::types::{AuditError, AuditResult};
 
 /// Trait for audit output targets
 #[async_trait]
@@ -31,6 +34,130 @@ pub trait AuditOutput: Send + Sync {
 
 /// Boxed audit output for dynamic dispatch
 pub type BoxedAuditOutput = Box<dyn AuditOutput>;
+
+enum StderrCommand {
+    Write {
+        serialized: String,
+        completion: tokio::sync::oneshot::Sender<std::io::Result<()>>,
+    },
+    Close,
+}
+
+/// Structured stderr output used when no file destination is configured.
+///
+/// A dedicated thread owns blocking stderr I/O. Both audit queues are bounded;
+/// a full stderr handoff backpressures only the blocking pool, while the outer
+/// logger queue rejects new events instead of stalling a runtime worker.
+pub struct StderrOutput {
+    sender: SyncSender<StderrCommand>,
+    worker: Mutex<Option<JoinHandle<std::io::Result<()>>>>,
+}
+
+impl StderrOutput {
+    pub fn new(buffer_size: usize) -> AuditResult<Self> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(buffer_size);
+        let worker = std::thread::Builder::new()
+            .name("audit-stderr-writer".to_string())
+            .spawn(move || {
+                while let Ok(command) = receiver.recv() {
+                    match command {
+                        StderrCommand::Write {
+                            serialized,
+                            completion,
+                        } => {
+                            // Do not retain the global stderr lock while waiting
+                            // for the next audit event.
+                            let stderr = std::io::stderr();
+                            let mut stderr = stderr.lock();
+                            let result = stderr
+                                .write_all(serialized.as_bytes())
+                                .and_then(|_| stderr.write_all(b"\n"))
+                                .and_then(|_| stderr.flush());
+                            if let Err(error) = result {
+                                let thread_error =
+                                    std::io::Error::new(error.kind(), error.to_string());
+                                // Receiver cancellation cannot change the sink failure.
+                                drop(completion.send(Err(error)));
+                                return Err(thread_error);
+                            }
+                            // The record is durable even if its waiter was cancelled.
+                            drop(completion.send(Ok(())));
+                        }
+                        StderrCommand::Close => break,
+                    }
+                }
+                Ok(())
+            })?;
+        Ok(Self {
+            sender,
+            worker: Mutex::new(Some(worker)),
+        })
+    }
+}
+
+#[async_trait]
+impl AuditOutput for StderrOutput {
+    fn name(&self) -> &str {
+        "stderr"
+    }
+
+    async fn write(&self, event: &AuditEvent) -> AuditResult<()> {
+        let serialized = event.to_json()?;
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        let command = StderrCommand::Write {
+            serialized,
+            completion,
+        };
+        self.enqueue(command).await?;
+        completed
+            .await
+            .map_err(|_| AuditError::Channel("audit stderr writer stopped".to_string()))??;
+        Ok(())
+    }
+
+    async fn flush(&self) -> AuditResult<()> {
+        Ok(())
+    }
+
+    async fn close(&self) -> AuditResult<()> {
+        let Some(worker) = self.worker.lock().await.take() else {
+            return Ok(());
+        };
+        let sender = self.sender.clone();
+        tokio::task::spawn_blocking(move || {
+            let close_result = sender.send(StderrCommand::Close);
+            let worker_result = worker
+                .join()
+                .map_err(|_| AuditError::Output("audit stderr writer panicked".to_string()))?;
+            worker_result?;
+            close_result.map_err(|_| {
+                AuditError::Channel("audit stderr writer stopped before close".to_string())
+            })
+        })
+        .await
+        .map_err(|error| AuditError::Output(format!("audit stderr join failed: {error}")))?
+    }
+}
+
+impl StderrOutput {
+    async fn enqueue(&self, command: StderrCommand) -> AuditResult<()> {
+        match self.sender.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Disconnected(_)) => Err(AuditError::Channel(
+                "audit stderr writer stopped".to_string(),
+            )),
+            Err(TrySendError::Full(command)) => {
+                let sender = self.sender.clone();
+                tokio::task::spawn_blocking(move || sender.send(command))
+                    .await
+                    .map_err(|error| {
+                        AuditError::Output(format!("audit stderr enqueue failed: {error}"))
+                    })?
+                    .map_err(|_| AuditError::Channel("audit stderr writer stopped".to_string()))
+            }
+        }
+    }
+}
 
 // ============================================================================
 // File Output
@@ -244,6 +371,45 @@ impl AuditOutput for NullOutput {
 mod tests {
     use super::*;
     use crate::core::audit::events::EventType;
+
+    #[tokio::test]
+    async fn stderr_handoff_applies_bounded_backpressure_without_dropping() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let output = StderrOutput {
+            sender,
+            worker: Mutex::new(None),
+        };
+
+        let command = |serialized: &str| {
+            let (completion, _) = tokio::sync::oneshot::channel();
+            StderrCommand::Write {
+                serialized: serialized.to_string(),
+                completion,
+            }
+        };
+        output.enqueue(command("event-1")).await.unwrap();
+        let second_write = output.enqueue(command("event-2"));
+        tokio::pin!(second_write);
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut second_write)
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            StderrCommand::Write { .. }
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(1), second_write)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            StderrCommand::Write { .. }
+        ));
+    }
 
     #[tokio::test]
     async fn test_memory_output() {

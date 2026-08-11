@@ -106,8 +106,8 @@ This is a **high-performance AI Gateway** written in Rust that provides OpenAI-c
 - `src/auth/` - Multi-layered authentication (JWT, API keys, RBAC)
 - `src/core/providers/` - Pluggable provider system (OpenAI, Anthropic, Azure, Google, etc.)
 - `src/core/router/` - Intelligent routing with multiple strategies
-- `src/core/mcp/` - Module-only experimental MCP gateway code; not mounted by the HTTP server
-- `src/core/a2a/` - Module-only experimental A2A gateway code; not mounted by the HTTP server
+- `src/core/mcp/` - Deprecated default-off `mcp` compatibility feature; not mounted and scheduled for 0.7 removal
+- `src/core/a2a/` - Deprecated default-off `a2a` compatibility feature; not mounted and scheduled for 0.7 removal
 - `src/storage/` - Multi-backend storage (PostgreSQL, Redis, S3, Vector DB)
 - `src/monitoring/` - Observability (Prometheus, tracing, health checks)
 
