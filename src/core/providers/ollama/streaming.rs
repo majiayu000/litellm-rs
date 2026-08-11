@@ -84,7 +84,7 @@ pub struct OllamaToolFunction {
 /// Ollama stream wrapper that handles NDJSON parsing
 pub struct OllamaStream<S> {
     inner: S,
-    buffer: String,
+    buffer: Vec<u8>,
     chunk_id: String,
     finished: bool,
 }
@@ -96,7 +96,7 @@ where
     pub fn new(stream: S) -> Self {
         Self {
             inner: stream,
-            buffer: String::new(),
+            buffer: Vec::new(),
             chunk_id: format!("ollama-{}", uuid::Uuid::new_v4()),
             finished: false,
         }
@@ -121,6 +121,13 @@ where
         // Convert to ChatChunk
         let chat_chunk = self.convert_chunk(chunk)?;
         Ok(Some(chat_chunk))
+    }
+
+    fn parse_bytes(&self, line: &[u8]) -> Result<Option<ChatChunk>, ProviderError> {
+        let line = std::str::from_utf8(line).map_err(|error| {
+            ProviderError::streaming_error("ollama", "chat", None, None, error.to_string())
+        })?;
+        self.parse_line(line)
     }
 
     /// Convert Ollama chunk to standard ChatChunk
@@ -230,11 +237,11 @@ where
 
         loop {
             // Check if we have a complete line in the buffer
-            if let Some(newline_pos) = self.buffer.find('\n') {
-                let line = self.buffer[..newline_pos].to_string();
-                self.buffer = self.buffer[newline_pos + 1..].to_string();
+            if let Some(newline_pos) = self.buffer.iter().position(|byte| *byte == b'\n') {
+                let mut line = self.buffer.drain(..=newline_pos).collect::<Vec<_>>();
+                line.pop();
 
-                match self.parse_line(&line) {
+                match self.parse_bytes(&line) {
                     Ok(Some(chunk)) => {
                         // Check if this is the final chunk
                         if chunk
@@ -254,8 +261,7 @@ where
             // Need more data from the underlying stream
             match Pin::new(&mut self.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    self.buffer.push_str(&text);
+                    self.buffer.extend_from_slice(&bytes);
                     // Continue loop to check for complete lines
                 }
                 Poll::Ready(Some(Err(e))) => {
@@ -271,7 +277,7 @@ where
                     // Stream ended, process any remaining data
                     if !self.buffer.is_empty() {
                         let line = std::mem::take(&mut self.buffer);
-                        match self.parse_line(&line) {
+                        match self.parse_bytes(&line) {
                             Ok(Some(chunk)) => {
                                 self.finished = true;
                                 return Poll::Ready(Some(Ok(chunk)));
@@ -374,6 +380,7 @@ fn response_to_chunks(response: ChatResponse) -> Vec<ChatChunk> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt as _;
 
     #[test]
     fn test_ollama_stream_chunk_deserialization() {
@@ -473,6 +480,27 @@ mod tests {
 
         let chunk: OllamaStreamChunk = serde_json::from_str(json).unwrap();
         assert_eq!(chunk.error, Some("model not found".to_string()));
+    }
+
+    #[tokio::test]
+    async fn stream_preserves_utf8_split_across_transport_chunks() {
+        let json = concat!(
+            "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",",
+            "\"content\":\"你好\"},\"done\":true,\"done_reason\":\"stop\"}\n"
+        );
+        let split = json.find('你').expect("fixture contains multibyte content") + 1;
+        let chunks = vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::copy_from_slice(&json.as_bytes()[..split])),
+            Ok(Bytes::copy_from_slice(&json.as_bytes()[split..])),
+        ];
+        let mut stream = OllamaStream::new(futures::stream::iter(chunks));
+
+        let chunk = stream
+            .next()
+            .await
+            .expect("stream should emit a chunk")
+            .expect("split UTF-8 should remain valid");
+        assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("你好"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::config::OllamaConfig;
+use super::error::{parse_http_json_response, parse_tool_arguments};
 use super::model_info::{OllamaModelInfo, OllamaShowResponse, OllamaTagsResponse, get_model_info};
 use super::streaming::OllamaStream;
 use crate::core::providers::base::{
@@ -146,14 +147,12 @@ impl OllamaProvider {
                 }
             })?;
 
+        let status = response.status().as_u16();
         let response_bytes = response
             .bytes()
             .await
             .map_err(|e| ProviderError::network("ollama", e.to_string()))?;
-
-        serde_json::from_slice(&response_bytes).map_err(|e| {
-            ProviderError::api_error("ollama", 500, format!("Failed to parse response: {}", e))
-        })
+        parse_http_json_response(status, &response_bytes)
     }
 
     /// List available models from Ollama server
@@ -253,17 +252,18 @@ impl OllamaProvider {
 
             // Handle tool calls for assistant messages
             if let Some(tool_calls) = &msg.tool_calls {
-                let ollama_tool_calls: Vec<_> = tool_calls
+                let ollama_tool_calls = tool_calls
                     .iter()
                     .map(|tc| {
-                        serde_json::json!({
+                        let arguments = parse_tool_arguments(&tc.function.arguments)?;
+                        Ok(serde_json::json!({
                             "function": {
                                 "name": tc.function.name,
-                                "arguments": tc.function.arguments
+                                "arguments": arguments
                             }
-                        })
+                        }))
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, ProviderError>>()?;
                 message["tool_calls"] = serde_json::json!(ollama_tool_calls);
             }
 
