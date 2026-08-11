@@ -630,4 +630,20 @@ mod tests {
         logger.shutdown().await.expect("audit shutdown");
         assert_eq!(events.lock().await.len(), 4);
     }
+
+    #[actix_web::test]
+    async fn cancelled_request_records_failure_without_stopping_worker() {
+        let (logger, events) = recording_logger().await;
+        let terminal = logger
+            .start_request(AuditEvent::request_started("cancelled", "/slow"))
+            .expect("request should be accepted");
+
+        drop(terminal);
+        logger.shutdown().await.expect("audit shutdown");
+        let events = events.lock().await;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, EventType::RequestStarted);
+        assert_eq!(events[1].event_type, EventType::RequestFailed);
+        assert!(events[1].message.contains("request future cancelled"));
+    }
 }

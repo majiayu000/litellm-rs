@@ -6,6 +6,7 @@ use super::events::AuditEvent;
 use super::types::UserAction;
 
 pub(super) fn redact_event(patterns: &[Regex], mut event: AuditEvent) -> AuditEvent {
+    event.id = redact_string(patterns, &event.id);
     redact_optional_string(patterns, &mut event.request_id);
     redact_optional_string(patterns, &mut event.user_id);
     redact_optional_string(patterns, &mut event.api_key_id);
