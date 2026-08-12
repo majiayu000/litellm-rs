@@ -35,6 +35,7 @@ pub mod error;
 pub mod execute_impl;
 pub mod execution;
 pub mod fallback;
+mod gateway_aliases;
 pub mod gateway_config;
 mod health_probe;
 pub mod retry_policy;

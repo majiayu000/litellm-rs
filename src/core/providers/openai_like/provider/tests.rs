@@ -653,6 +653,27 @@ async fn test_non_openrouter_provider_no_or_headers() {
 }
 
 #[tokio::test]
+async fn test_meta_llama_uses_native_organization_header() {
+    let mut config = OpenAILikeConfig::new("https://api.llama.com/compat/v1")
+        .with_provider_name("meta_llama")
+        .with_skip_api_key(true);
+    config.base.organization = Some("org-123".to_string());
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    let headers = provider.get_request_headers();
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "X-Organization-ID" && value == "org-123")
+    );
+    assert!(
+        headers
+            .iter()
+            .all(|(name, _)| name != "OpenAI-Organization")
+    );
+}
+
+#[tokio::test]
 async fn test_openrouter_thinking_wired_in_transform() {
     use crate::core::types::thinking::{ThinkingConfig, ThinkingEffort};
 

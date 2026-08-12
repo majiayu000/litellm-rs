@@ -236,7 +236,10 @@ impl OpenAILikeProvider {
         }
 
         if let Some(org) = &self.config.base.organization {
-            headers.push(header("OpenAI-Organization", org.clone()));
+            let name = crate::core::providers::registry::catalog_policy::organization_header(
+                &self.config.provider_name,
+            );
+            headers.push(header(name, org.clone()));
         }
 
         for (key, value) in &self.config.base.headers {

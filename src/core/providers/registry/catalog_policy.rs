@@ -77,19 +77,6 @@ const V0_OPENAI_PARAMS: &[&str] = &[
     "user",
     "seed",
 ];
-const META_LLAMA_SUPPORTED_MODELS: &[&str] = &[
-    "llama4-scout",
-    "llama4-maverick",
-    "llama3.3-70b",
-    "llama3.2-1b",
-    "llama3.2-3b",
-    "llama3.2-11b-vision",
-    "llama3.2-90b-vision",
-    "llama3.1-8b",
-    "llama3.1-70b",
-    "llama3.1-405b",
-];
-
 struct CatalogModel {
     id: &'static str,
     name: &'static str,
@@ -97,8 +84,8 @@ struct CatalogModel {
     context: u32,
     output: Option<u32>,
     multimodal: bool,
-    input_cost: f64,
-    output_cost: f64,
+    input_cost: Option<f64>,
+    output_cost: Option<f64>,
 }
 
 const META_LLAMA_MODELS: &[CatalogModel] = &[
@@ -109,8 +96,8 @@ const META_LLAMA_MODELS: &[CatalogModel] = &[
         10_000_000,
         Some(128_000),
         true,
-        0.00008,
-        0.0003,
+        Some(0.00008),
+        Some(0.0003),
     ),
     catalog_model(
         "llama4-maverick",
@@ -119,8 +106,8 @@ const META_LLAMA_MODELS: &[CatalogModel] = &[
         1_000_000,
         Some(128_000),
         true,
-        0.00020,
-        0.0006,
+        Some(0.00020),
+        Some(0.0006),
     ),
     catalog_model(
         "llama3.3-70b",
@@ -129,8 +116,58 @@ const META_LLAMA_MODELS: &[CatalogModel] = &[
         128_000,
         Some(32_000),
         false,
-        0.0006,
-        0.0006,
+        Some(0.0006),
+        Some(0.0006),
+    ),
+    catalog_model(
+        "llama3.2-1b",
+        "Llama 3.2 1B",
+        "meta",
+        128_000,
+        None,
+        false,
+        None,
+        None,
+    ),
+    catalog_model(
+        "llama3.2-3b",
+        "Llama 3.2 3B",
+        "meta",
+        128_000,
+        None,
+        false,
+        None,
+        None,
+    ),
+    catalog_model(
+        "llama3.2-11b-vision",
+        "Llama 3.2 11B Vision",
+        "meta",
+        128_000,
+        None,
+        true,
+        None,
+        None,
+    ),
+    catalog_model(
+        "llama3.2-90b-vision",
+        "Llama 3.2 90B Vision",
+        "meta",
+        128_000,
+        None,
+        true,
+        None,
+        None,
+    ),
+    catalog_model(
+        "llama3.1-8b",
+        "Llama 3.1 8B",
+        "meta",
+        128_000,
+        None,
+        false,
+        None,
+        None,
     ),
     catalog_model(
         "llama3.1-405b",
@@ -139,8 +176,8 @@ const META_LLAMA_MODELS: &[CatalogModel] = &[
         128_000,
         None,
         false,
-        0.002,
-        0.002,
+        Some(0.002),
+        Some(0.002),
     ),
     catalog_model(
         "llama3.1-70b",
@@ -149,8 +186,8 @@ const META_LLAMA_MODELS: &[CatalogModel] = &[
         128_000,
         None,
         false,
-        0.001,
-        0.001,
+        Some(0.001),
+        Some(0.001),
     ),
 ];
 const V0_MODELS: &[CatalogModel] = &[catalog_model(
@@ -160,8 +197,8 @@ const V0_MODELS: &[CatalogModel] = &[catalog_model(
     32_768,
     Some(8_192),
     false,
-    0.1,
-    0.2,
+    Some(0.1),
+    Some(0.2),
 )];
 
 static META_LLAMA_MODEL_INFOS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
@@ -171,10 +208,10 @@ static META_LLAMA_MODEL_INFOS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
         .collect()
 });
 static V0_MODEL_INFOS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-    let canonical = catalog_model_info_from_entry(&V0_MODELS[0]);
-    let mut alias = canonical.clone();
-    alias.id = "v0".to_string();
-    vec![canonical, alias]
+    V0_MODELS
+        .iter()
+        .map(catalog_model_info_from_entry)
+        .collect()
 });
 
 #[allow(clippy::too_many_arguments)]
@@ -185,8 +222,8 @@ const fn catalog_model(
     context: u32,
     output: Option<u32>,
     multimodal: bool,
-    input_cost: f64,
-    output_cost: f64,
+    input_cost: Option<f64>,
+    output_cost: Option<f64>,
 ) -> CatalogModel {
     CatalogModel {
         id,
@@ -215,8 +252,8 @@ fn catalog_model_info_from_entry(model: &CatalogModel) -> ModelInfo {
         supports_streaming: true,
         supports_tools: true,
         supports_multimodal: model.multimodal,
-        input_cost_per_1k_tokens: Some(model.input_cost),
-        output_cost_per_1k_tokens: Some(model.output_cost),
+        input_cost_per_1k_tokens: model.input_cost,
+        output_cost_per_1k_tokens: model.output_cost,
         currency: "USD".to_string(),
         capabilities,
         ..Default::default()
@@ -249,9 +286,9 @@ pub(crate) fn catalog_model_info(provider: &str, model_id: &str) -> Option<Model
 pub(crate) fn catalog_provider_supports_model(provider: &str, model_id: &str) -> Option<bool> {
     match provider {
         "meta_llama" => Some(
-            META_LLAMA_SUPPORTED_MODELS
+            META_LLAMA_MODELS
                 .iter()
-                .any(|supported| model_id == *supported || model_id.contains(supported)),
+                .any(|model| model_id == model.id || model_id.contains(model.id)),
         ),
         "v0" => Some(true),
         _ => None,
@@ -305,7 +342,36 @@ pub(crate) fn health_failure_is_unhealthy(provider: &str) -> bool {
 }
 
 pub(crate) fn preserves_configured_name_route(provider: &str) -> bool {
-    matches!(provider, "meta_llama" | "v0")
+    provider == "meta_llama"
+}
+
+pub(crate) fn extend_model_aliases(
+    provider: &str,
+    configured_name: &str,
+    uses_configured_models: bool,
+    models: &[String],
+    aliases: &mut HashMap<String, String>,
+) {
+    let target = "v0-default";
+    if provider != "v0" || !models.iter().any(|model| model == target) {
+        return;
+    }
+
+    aliases
+        .entry("v0".to_string())
+        .or_insert_with(|| target.to_string());
+    if !uses_configured_models && configured_name != target {
+        aliases
+            .entry(configured_name.to_string())
+            .or_insert_with(|| target.to_string());
+    }
+}
+
+pub(crate) fn organization_header(provider: &str) -> &'static str {
+    match provider {
+        "meta_llama" => "X-Organization-ID",
+        _ => "OpenAI-Organization",
+    }
 }
 
 pub(crate) fn catalog_error_response(
@@ -343,7 +409,7 @@ mod tests {
     #[tokio::test]
     async fn meta_llama_catalog_runtime_preserves_models_and_filtering() {
         let models = catalog_model_infos("meta_llama").expect("Meta catalog models");
-        assert_eq!(models.len(), 5);
+        assert_eq!(models.len(), 10);
         assert_eq!(models[0].provider, "meta");
         assert_eq!(models[0].max_context_length, 10_000_000);
         assert_eq!(models[0].input_cost_per_1k_tokens, Some(0.00008));
@@ -368,8 +434,11 @@ mod tests {
         )
         .await
         .expect("Meta catalog runtime");
-        assert_eq!(provider.models().len(), 5);
+        assert_eq!(provider.models().len(), 10);
         assert!(!provider.supports_model("gpt-4"));
+        for model in models {
+            assert!(provider.supports_model(&model.id));
+        }
         let request = ChatRequest {
             model: "llama4-scout".to_string(),
             service_tier: Some("flex".to_string()),
@@ -422,14 +491,14 @@ mod tests {
         )
         .await
         .expect("V0 catalog runtime");
-        assert_eq!(provider.models().len(), 2);
+        assert_eq!(provider.models().len(), 1);
         assert!(
             provider
                 .models()
                 .iter()
                 .any(|model| model.id == canonical.id)
         );
-        assert!(provider.models().iter().any(|model| model.id == "v0"));
+        assert!(!provider.models().iter().any(|model| model.id == "v0"));
         assert_eq!(provider.get_model_info("v0").id, "v0-default");
         let cost = provider
             .calculate_cost("v0", 1_000, 1_000)
@@ -458,10 +527,20 @@ mod tests {
         .await
         .expect("V0 router should build");
 
-        let models = router.list_models();
-        assert!(models.contains(&"v0-default".to_string()));
-        assert!(models.contains(&"v0".to_string()));
-        assert!(models.contains(&"frontend".to_string()));
+        assert_eq!(router.list_models(), vec!["v0-default".to_string()]);
+        assert_eq!(router.resolve_model_name("v0"), "v0-default");
+        assert_eq!(router.resolve_model_name("frontend"), "v0-default");
+        let canonical = router
+            .select_deployment_lease("v0-default")
+            .expect("canonical route");
+        let v0_alias = router
+            .select_deployment_lease("v0")
+            .expect("v0 alias route");
+        let configured_alias = router
+            .select_deployment_lease("frontend")
+            .expect("configured-name alias route");
+        assert_eq!(canonical.deployment_id(), v0_alias.deployment_id());
+        assert_eq!(canonical.deployment_id(), configured_alias.deployment_id());
 
         let meta_router = Router::from_gateway_config(
             &[ProviderConfig {
@@ -479,5 +558,12 @@ mod tests {
                 .list_models()
                 .contains(&"llama_frontend".to_string())
         );
+        for model in META_LLAMA_MODELS {
+            assert!(
+                meta_router.select_deployment_lease(model.id).is_ok(),
+                "default Meta router should resolve {}",
+                model.id
+            );
+        }
     }
 }

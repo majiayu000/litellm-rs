@@ -283,3 +283,23 @@ async fn legacy_constructor_keeps_empty_aliases_and_zero_priority() {
         0
     );
 }
+
+#[tokio::test]
+async fn explicit_alias_takes_priority_over_catalog_alias() {
+    let providers = [
+        ProviderConfig {
+            name: "frontend".to_string(),
+            provider_type: "v0".to_string(),
+            api_key: "test-key".to_string(),
+            ..ProviderConfig::default()
+        },
+        provider("primary", &["gpt-4o"], 0),
+    ];
+    let router =
+        Router::from_gateway_config_with_aliases(&providers, None, &aliases(&[("v0", "gpt-4o")]))
+            .await
+            .expect("explicit alias should override the implicit catalog alias");
+
+    assert_eq!(router.resolve_model_name("v0"), "gpt-4o");
+    assert_eq!(router.resolve_model_name("frontend"), "v0-default");
+}

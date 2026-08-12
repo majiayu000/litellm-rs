@@ -16,13 +16,16 @@ use super::deployment::{
     Deployment, DeploymentConfig, HealthCheckPolicy, LegacySelectorMetadata, RetrySchedule,
 };
 use super::error::RouterError;
+use super::gateway_aliases::normalize_model_aliases;
 use super::unified::Router;
 use crate::config::Validate;
 use crate::config::models::gateway::GatewayConfig;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
 use crate::core::providers::provider_type::ProviderType;
-use crate::core::providers::registry::{self as provider_registry, ProviderDispatchKind};
+use crate::core::providers::registry::{
+    self as provider_registry, ProviderDispatchKind, catalog_policy,
+};
 use crate::core::providers::{Provider, create_provider};
 use std::collections::{HashMap, HashSet};
 
@@ -192,6 +195,7 @@ impl Router {
         let mut staged = Vec::new();
         let mut canonical_models = HashSet::new();
         let mut generated_deployment_ids = HashSet::new();
+        let mut effective_model_aliases = model_aliases.clone();
 
         for provider_config in providers {
             provider_config
@@ -234,6 +238,13 @@ impl Router {
             };
 
             let uses_provider_name_fallback = models.is_empty();
+            catalog_policy::extend_model_aliases(
+                provider.name(),
+                &provider_name,
+                uses_configured_models,
+                &models,
+                &mut effective_model_aliases,
+            );
             let preserves_configured_name_route = !uses_configured_models
                 && crate::core::providers::registry::catalog_policy::preserves_configured_name_route(
                     provider.name(),
@@ -273,7 +284,8 @@ impl Router {
             }
         }
 
-        let normalized_aliases = normalize_model_aliases(model_aliases, &canonical_models)?;
+        let normalized_aliases =
+            normalize_model_aliases(&effective_model_aliases, &canonical_models)?;
         let mut aliases = normalized_aliases.iter().collect::<Vec<_>>();
         aliases.sort_unstable_by_key(|(alias, _)| *alias);
         router.try_update_routing_snapshot(move |snapshot| {
@@ -307,37 +319,6 @@ impl Router {
     pub fn model_aliases(&self) -> HashMap<String, String> {
         self.load_routing_snapshot().model_aliases.clone()
     }
-}
-
-fn normalize_model_aliases(
-    model_aliases: &HashMap<String, String>,
-    canonical_models: &HashSet<String>,
-) -> Result<HashMap<String, String>, RouterError> {
-    let mut alias_names = model_aliases.keys().map(String::as_str).collect::<Vec<_>>();
-    alias_names.sort_unstable();
-
-    for alias in &alias_names {
-        if canonical_models.contains(*alias) {
-            return Err(RouterError::InvalidConfiguration(format!(
-                "model alias '{alias}' collides with an enabled canonical model"
-            )));
-        }
-    }
-
-    let mut normalized = HashMap::with_capacity(model_aliases.len());
-    for alias in alias_names {
-        let mut target = &model_aliases[alias];
-        while let Some(next) = model_aliases.get(target) {
-            target = next;
-        }
-        if !canonical_models.contains(target) {
-            return Err(RouterError::InvalidConfiguration(format!(
-                "model alias '{alias}' resolves to unavailable model '{target}'"
-            )));
-        }
-        normalized.insert(alias.to_string(), target.clone());
-    }
-    Ok(normalized)
 }
 
 /// Helper function to create deployment from provider config
