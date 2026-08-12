@@ -59,6 +59,78 @@ pub struct OllamaProvider {
 }
 
 impl OllamaProvider {
+    const REQUEST_INTEGER_OPTIONS: [&'static str; 2] = ["num_ctx", "num_predict"];
+    const REQUEST_FLOAT_OPTIONS: [&'static str; 1] = ["repeat_penalty"];
+
+    fn merge_request_options(
+        &self,
+        options: &mut serde_json::Map<String, serde_json::Value>,
+        request: &ChatRequest,
+    ) -> Result<(), ProviderError> {
+        for name in Self::REQUEST_INTEGER_OPTIONS {
+            let Some(value) = request.extra_params.get(name) else {
+                continue;
+            };
+            let integer = value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+                .or_else(|| {
+                    value.as_f64().and_then(|value| {
+                        (value.is_finite()
+                            && value.fract() == 0.0
+                            && value >= i64::MIN as f64
+                            && value <= i64::MAX as f64)
+                            .then_some(value as i64)
+                    })
+                });
+            let valid = match (name, integer) {
+                ("num_ctx", Some(value)) => value > 0 && u32::try_from(value).is_ok(),
+                (_, Some(_)) => true,
+                (_, None) => false,
+            };
+            if !valid {
+                return Err(ProviderError::invalid_request(
+                    "ollama",
+                    format!("native Ollama option {name} must be a valid integer"),
+                ));
+            }
+            let integer = integer.expect("validated integer option");
+            if name == "num_ctx"
+                && self
+                    .config
+                    .num_ctx
+                    .is_some_and(|configured_max| integer as u64 > u64::from(configured_max))
+            {
+                return Err(ProviderError::invalid_request(
+                    "ollama",
+                    format!(
+                        "native Ollama option num_ctx exceeds the configured maximum of {}",
+                        self.config.num_ctx.expect("checked configured num_ctx")
+                    ),
+                ));
+            }
+            options.insert(name.to_string(), serde_json::json!(integer));
+        }
+
+        for name in Self::REQUEST_FLOAT_OPTIONS {
+            let Some(value) = request.extra_params.get(name) else {
+                continue;
+            };
+            let valid = value
+                .as_f64()
+                .is_some_and(|value| value.is_finite() && (value as f32).is_finite());
+            if !valid {
+                return Err(ProviderError::invalid_request(
+                    "ollama",
+                    format!("native Ollama option {name} must be a finite number"),
+                ));
+            }
+            options.insert(name.to_string(), value.clone());
+        }
+
+        Ok(())
+    }
+
     /// Create a new Ollama provider instance
     pub async fn new(config: OllamaConfig) -> Result<Self, ProviderError> {
         // Validate configuration
@@ -317,6 +389,7 @@ impl OllamaProvider {
         // Add options from request parameters
         let mut options = self.config.build_options();
         if let serde_json::Value::Object(ref mut opts) = options {
+            self.merge_request_options(opts, request)?;
             if let Some(temp) = request.temperature {
                 opts.insert("temperature".to_string(), serde_json::json!(temp));
             }
@@ -530,9 +603,6 @@ impl LLMProvider for OllamaProvider {
             "num_ctx",
             "num_predict",
             "repeat_penalty",
-            "mirostat",
-            "mirostat_eta",
-            "mirostat_tau",
         ]
     }
 
@@ -661,6 +731,7 @@ impl LLMProvider for OllamaProvider {
             crate::core::types::embedding::EmbeddingInput::Text(text) => vec![text],
             crate::core::types::embedding::EmbeddingInput::Array(texts) => texts,
         };
+        let expected_embedding_count = input.len();
 
         let body = serde_json::json!({
             "model": model,
@@ -678,33 +749,71 @@ impl LLMProvider for OllamaProvider {
             .get("embeddings")
             .and_then(|e| e.as_array())
             .ok_or_else(|| {
-                ProviderError::api_error(
-                    "ollama",
-                    500,
-                    "Missing embeddings in response".to_string(),
-                )
+                ProviderError::response_parsing("ollama", "Missing embeddings in response")
             })?;
 
+        if embeddings.len() != expected_embedding_count {
+            return Err(ProviderError::response_parsing(
+                "ollama",
+                format!(
+                    "Ollama returned {} embeddings for {expected_embedding_count} inputs",
+                    embeddings.len()
+                ),
+            ));
+        }
+
+        let mut expected_dimension = None;
         let data: Vec<EmbeddingData> = embeddings
             .iter()
             .enumerate()
-            .map(|(i, emb)| {
-                let embedding: Vec<f32> = emb
+            .map(|(i, emb)| -> Result<EmbeddingData, ProviderError> {
+                let values = emb
                     .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_f64().map(|f| f as f32))
-                            .collect()
+                    .ok_or_else(|| {
+                        ProviderError::response_parsing(
+                            "ollama",
+                            format!("Ollama embedding at index {i} is not an array"),
+                        )
+                    })?;
+                if values.is_empty() {
+                    return Err(ProviderError::response_parsing(
+                        "ollama",
+                        format!("Ollama embedding at index {i} is empty"),
+                    ));
+                }
+                if expected_dimension.is_some_and(|dimension| dimension != values.len()) {
+                    return Err(ProviderError::response_parsing(
+                        "ollama",
+                        format!("Ollama embedding at index {i} has an inconsistent dimension"),
+                    ));
+                }
+                expected_dimension.get_or_insert(values.len());
+                let embedding = values
+                    .iter()
+                    .enumerate()
+                    .map(|(coordinate, value)| {
+                        value
+                            .as_f64()
+                            .filter(|value| value.is_finite() && (*value as f32).is_finite())
+                            .map(|value| value as f32)
+                            .ok_or_else(|| {
+                                ProviderError::response_parsing(
+                                    "ollama",
+                                    format!(
+                                        "Ollama embedding at index {i} has an invalid coordinate at {coordinate}"
+                                    ),
+                                )
+                            })
                     })
-                    .unwrap_or_default();
+                    .collect::<Result<Vec<_>, _>>()?;
 
-                EmbeddingData {
+                Ok(EmbeddingData {
                     object: "embedding".to_string(),
                     embedding,
                     index: i as u32,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         let prompt_tokens = response
             .get("prompt_eval_count")
             .and_then(serde_json::Value::as_u64)
