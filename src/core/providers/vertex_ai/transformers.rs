@@ -1,6 +1,10 @@
 //! Request/Response transformers for Vertex AI models
 
 use crate::ProviderError;
+use crate::core::providers::google_tool_loop::{
+    GoogleToolPlanner, build_tool_config, build_tool_declarations, candidate_index,
+    content_has_tool_part, content_has_tool_use, finish_reason, parse_function_call_parts,
+};
 use crate::core::providers::shared::{
     strict_token_count, strict_usage, strict_vertex_usage_metadata,
 };
@@ -15,7 +19,7 @@ use crate::core::types::{
 use serde_json::{Value, json};
 
 use super::{
-    common_utils::{Content, FunctionDeclaration, GenerationConfig, Part, Tool, convert_role},
+    common_utils::{GenerationConfig, Part, convert_role},
     models::VertexAIModel,
 };
 
@@ -36,25 +40,28 @@ impl GeminiTransformer {
     ) -> Result<Value, ProviderError> {
         let mut contents = Vec::new();
         let mut system_instruction = None;
+        let mut tool_planner = GoogleToolPlanner::new("vertex_ai");
 
         // Process messages
-        for message in &request.messages {
+        for (message_index, message) in request.messages.iter().enumerate() {
             match message.role {
                 MessageRole::System => {
                     // Gemini uses system instruction separately
                     if let Some(ref content) = message.content {
-                        system_instruction = Some(self.message_content_to_parts(content)?);
+                        system_instruction = Some(self.message_content_to_values(content)?);
                     }
                 }
                 _ => {
-                    let role = convert_role(&message.role.to_string());
-                    let parts = if let Some(ref content) = message.content {
-                        self.message_content_to_parts(content)?
+                    let role = if matches!(message.role, MessageRole::Tool | MessageRole::Function)
+                    {
+                        "user".to_string()
                     } else {
-                        vec![]
+                        convert_role(&message.role.to_string())
                     };
+                    let parts =
+                        self.transform_message_content(message_index, message, &mut tool_planner)?;
 
-                    contents.push(Content { role, parts });
+                    contents.push(json!({ "role": role, "parts": parts }));
                 }
             }
         }
@@ -80,19 +87,8 @@ impl GeminiTransformer {
             }
         }
 
-        // Handle tools/functions
-        let tools = request.tools.as_ref().map(|tools| {
-            vec![Tool {
-                function_declarations: tools
-                    .iter()
-                    .map(|tool| FunctionDeclaration {
-                        name: tool.function.name.clone(),
-                        description: tool.function.description.clone().unwrap_or_default(),
-                        parameters: tool.function.parameters.clone().unwrap_or(json!({})),
-                    })
-                    .collect(),
-            }]
-        });
+        let (tools, declaration_names) = build_tool_declarations("vertex_ai", request)?;
+        let tool_config = build_tool_config("vertex_ai", request, &declaration_names)?;
 
         // Build request body
         let mut body = json!({
@@ -107,7 +103,11 @@ impl GeminiTransformer {
         }
 
         if let Some(tools) = tools {
-            body["tools"] = serde_json::to_value(tools)?;
+            body["tools"] = tools;
+        }
+
+        if let Some(tool_config) = tool_config {
+            body["toolConfig"] = tool_config;
         }
 
         Ok(body)
@@ -194,6 +194,121 @@ impl GeminiTransformer {
         }
     }
 
+    fn message_content_to_values(
+        &self,
+        content: &MessageContent,
+    ) -> Result<Vec<Value>, ProviderError> {
+        self.message_content_to_parts(content)?
+            .into_iter()
+            .map(|part| {
+                serde_json::to_value(part)
+                    .map_err(|error| ProviderError::serialization("vertex_ai", error.to_string()))
+            })
+            .collect()
+    }
+
+    fn transform_message_content(
+        &self,
+        message_index: usize,
+        message: &ChatMessage,
+        tool_planner: &mut GoogleToolPlanner,
+    ) -> Result<Vec<Value>, ProviderError> {
+        if let Some(tool_result) = tool_planner.top_level_result(message)? {
+            return Ok(vec![tool_result.to_wire_value()]);
+        }
+        if message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
+            && message.role != MessageRole::Assistant
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "tool_calls require assistant role",
+            ));
+        }
+        if message.function_call.is_some() && message.role != MessageRole::Assistant {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "function_call requires assistant role",
+            ));
+        }
+        if message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
+            && content_has_tool_part(&message.content)
+        {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "tool_calls cannot be combined with tool content parts",
+            ));
+        }
+        if message.function_call.is_some() && content_has_tool_use(&message.content) {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                "function_call cannot be combined with tool_use content parts",
+            ));
+        }
+
+        let mut parts = Vec::new();
+        match &message.content {
+            Some(MessageContent::Text(text)) => parts.push(json!({ "text": text })),
+            Some(MessageContent::Parts(content_parts)) => {
+                for part in content_parts {
+                    match part {
+                        crate::core::types::content::ContentPart::ToolUse { id, name, input } => {
+                            if message.role != MessageRole::Assistant {
+                                return Err(ProviderError::invalid_request(
+                                    "vertex_ai",
+                                    "tool_use content requires assistant role",
+                                ));
+                            }
+                            parts.push(
+                                tool_planner
+                                    .content_tool_use(id, name, input)?
+                                    .to_wire_value(),
+                            );
+                        }
+                        crate::core::types::content::ContentPart::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        } => {
+                            parts.push(
+                                tool_planner
+                                    .content_tool_result(tool_use_id, content, *is_error)?
+                                    .to_wire_value(),
+                            );
+                        }
+                        _ => {
+                            let content = MessageContent::Parts(vec![part.clone()]);
+                            parts.extend(self.message_content_to_values(&content)?);
+                        }
+                    }
+                }
+            }
+            None => {}
+        }
+
+        if let Some(tool_calls) = &message.tool_calls {
+            for tool_part in tool_planner.top_level_calls(tool_calls)? {
+                parts.push(tool_part.to_wire_value());
+            }
+        }
+        if let Some(function_call) = &message.function_call {
+            parts.push(
+                tool_planner
+                    .legacy_function_call(message_index, function_call)?
+                    .to_wire_value(),
+            );
+        }
+        if parts.is_empty() {
+            parts.push(json!({ "text": "" }));
+        }
+        Ok(parts)
+    }
+
     /// Transform Gemini response to standard format
     pub fn transform_chat_response(
         &self,
@@ -211,35 +326,61 @@ impl GeminiTransformer {
             ));
         }
 
-        let candidate = &candidates[0];
-        let content = &candidate["content"];
+        let mut choices = Vec::with_capacity(candidates.len());
+        for (position, candidate) in candidates.iter().enumerate() {
+            let parts = candidate
+                .get("content")
+                .and_then(|content| content.get("parts"))
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    ProviderError::response_parsing(
+                        "vertex_ai",
+                        "Invalid candidate content structure",
+                    )
+                })?;
 
-        // Extract text from parts
-        let mut text_parts = Vec::new();
-        if let Some(parts) = content["parts"].as_array() {
+            // Extract text from parts
+            let mut text_parts = Vec::new();
             for part in parts {
                 if let Some(text) = part["text"].as_str() {
                     text_parts.push(text.to_string());
                 }
             }
-        }
+            let index = candidate_index("vertex_ai", candidate, position)?;
+            let tool_calls = parse_function_call_parts("vertex_ai", parts, index)?;
 
-        let message_content = if text_parts.is_empty() {
-            None
-        } else {
-            Some(MessageContent::Text(text_parts.join("")))
-        };
+            let message_content = if text_parts.is_empty() && !tool_calls.is_empty() {
+                None
+            } else {
+                Some(MessageContent::Text(text_parts.join("")))
+            };
 
-        // Parse finish reason
-        let finish_reason = candidate["finishReason"]
-            .as_str()
-            .map(|reason| match reason {
-                "STOP" => FinishReason::Stop,
-                "MAX_TOKENS" => FinishReason::Length,
-                "SAFETY" => FinishReason::ContentFilter,
-                "RECITATION" => FinishReason::ContentFilter,
-                _ => FinishReason::Stop,
+            let finish_reason = finish_reason(
+                "vertex_ai",
+                candidate["finishReason"].as_str(),
+                !tool_calls.is_empty(),
+            )?;
+
+            choices.push(ChatChoice {
+                index,
+                message: ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: message_content,
+                    thinking: None,
+                    audio: None,
+                    name: None,
+                    tool_calls: if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(tool_calls)
+                    },
+                    function_call: None,
+                    tool_call_id: None,
+                },
+                finish_reason: Some(finish_reason),
+                logprobs: None,
             });
+        }
 
         // Parse usage
         let usage = response
@@ -251,21 +392,7 @@ impl GeminiTransformer {
             object: "chat.completion".to_string(),
             created: chrono::Utc::now().timestamp(),
             model: model.model_id(),
-            choices: vec![ChatChoice {
-                index: 0,
-                message: ChatMessage {
-                    role: MessageRole::Assistant,
-                    content: message_content,
-                    thinking: None,
-                    audio: None,
-                    name: None,
-                    tool_calls: None,
-                    function_call: None,
-                    tool_call_id: None,
-                },
-                finish_reason,
-                logprobs: None,
-            }],
+            choices,
             usage,
             system_fingerprint: None,
         })
@@ -516,224 +643,8 @@ fn parse_legacy_token_metadata(metadata: &Value) -> Option<Usage> {
     strict_usage(&[prompt], &[completion], None, None)
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn create_test_message(role: MessageRole, content: &str) -> ChatMessage {
-        ChatMessage {
-            role,
-            content: Some(MessageContent::Text(content.to_string())),
-            thinking: None,
-            audio: None,
-            name: None,
-            function_call: None,
-            tool_calls: None,
-            tool_call_id: None,
-        }
-    }
-
-    fn create_test_request() -> ChatRequest {
-        ChatRequest {
-            model: "gemini-1.5-pro".to_string(),
-            messages: vec![create_test_message(MessageRole::User, "Hello")],
-            ..Default::default()
-        }
-    }
-
-    // ==================== GeminiTransformer Tests ====================
-
-    #[test]
-    fn test_gemini_transformer_new() {
-        let transformer = GeminiTransformer::new();
-        assert!(format!("{:?}", transformer).contains("GeminiTransformer"));
-    }
-
-    #[test]
-    fn test_gemini_transformer_default() {
-        let transformer = GeminiTransformer;
-        assert!(format!("{:?}", transformer).contains("GeminiTransformer"));
-    }
-
-    #[test]
-    fn test_gemini_transformer_clone() {
-        let transformer = GeminiTransformer::new();
-        let cloned = transformer.clone();
-        assert!(format!("{:?}", cloned).contains("GeminiTransformer"));
-    }
-
-    #[test]
-    fn test_transform_chat_request_basic() {
-        let transformer = GeminiTransformer::new();
-        let request = create_test_request();
-        let model = VertexAIModel::GeminiPro;
-
-        let result = transformer.transform_chat_request(&request, &model);
-        assert!(result.is_ok());
-        let body = result.unwrap();
-        assert!(body["contents"].is_array());
-        assert!(body["generationConfig"].is_object());
-    }
-
-    #[test]
-    fn test_transform_chat_request_with_system_message() {
-        let transformer = GeminiTransformer::new();
-        let request = ChatRequest {
-            model: "gemini-1.5-pro".to_string(),
-            messages: vec![
-                create_test_message(MessageRole::System, "You are helpful"),
-                create_test_message(MessageRole::User, "Hello"),
-            ],
-            ..Default::default()
-        };
-        let model = VertexAIModel::GeminiPro;
-
-        let result = transformer.transform_chat_request(&request, &model);
-        assert!(result.is_ok());
-        let body = result.unwrap();
-        assert!(body["systemInstruction"].is_object());
-        assert!(body["systemInstruction"]["parts"].is_array());
-    }
-
-    #[test]
-    fn test_transform_chat_request_with_temperature() {
-        let transformer = GeminiTransformer::new();
-        let mut request = create_test_request();
-        request.temperature = Some(0.7);
-        let model = VertexAIModel::GeminiPro;
-
-        let result = transformer.transform_chat_request(&request, &model);
-        assert!(result.is_ok());
-        let body = result.unwrap();
-        assert!((body["generationConfig"]["temperature"].as_f64().unwrap() - 0.7).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_transform_chat_request_with_max_tokens() {
-        let transformer = GeminiTransformer::new();
-        let mut request = create_test_request();
-        request.max_tokens = Some(1000);
-        let model = VertexAIModel::GeminiPro;
-
-        let result = transformer.transform_chat_request(&request, &model);
-        assert!(result.is_ok());
-        let body = result.unwrap();
-        assert_eq!(body["generationConfig"]["max_output_tokens"], 1000);
-    }
-
-    #[test]
-    fn test_transform_chat_request_with_top_p() {
-        let transformer = GeminiTransformer::new();
-        let mut request = create_test_request();
-        request.top_p = Some(0.9);
-        let model = VertexAIModel::GeminiPro;
-
-        let result = transformer.transform_chat_request(&request, &model);
-        assert!(result.is_ok());
-        let body = result.unwrap();
-        assert!((body["generationConfig"]["top_p"].as_f64().unwrap() - 0.9).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_transform_chat_request_with_stop_sequences() {
-        let transformer = GeminiTransformer::new();
-        let mut request = create_test_request();
-        request.stop = Some(vec!["END".to_string(), "STOP".to_string()]);
-        let model = VertexAIModel::GeminiPro;
-
-        let result = transformer.transform_chat_request(&request, &model);
-        assert!(result.is_ok());
-        let body = result.unwrap();
-        let stop_seqs = body["generationConfig"]["stop_sequences"]
-            .as_array()
-            .unwrap();
-        assert_eq!(stop_seqs.len(), 2);
-    }
-
-    #[test]
-    fn test_transform_chat_request_multi_turn() {
-        let transformer = GeminiTransformer::new();
-        let request = ChatRequest {
-            model: "gemini-1.5-pro".to_string(),
-            messages: vec![
-                create_test_message(MessageRole::User, "Hello"),
-                create_test_message(MessageRole::Assistant, "Hi there!"),
-                create_test_message(MessageRole::User, "How are you?"),
-            ],
-            ..Default::default()
-        };
-        let model = VertexAIModel::GeminiPro;
-
-        let result = transformer.transform_chat_request(&request, &model);
-        assert!(result.is_ok());
-        let body = result.unwrap();
-        let contents = body["contents"].as_array().unwrap();
-        assert_eq!(contents.len(), 3);
-    }
-
-    #[test]
-    fn test_transform_chat_response_basic() {
-        let transformer = GeminiTransformer::new();
-        let response = json!({
-            "candidates": [{
-                "content": {
-                    "parts": [{"text": "Hello! How can I help?"}]
-                },
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 10,
-                "candidatesTokenCount": 20,
-                "totalTokenCount": 30
-            }
-        });
-        let model = VertexAIModel::GeminiPro;
-
-        let result = transformer.transform_chat_response(response, &model);
-        assert!(result.is_ok());
-        let chat_response = result.unwrap();
-        assert_eq!(chat_response.object, "chat.completion");
-        assert_eq!(chat_response.choices.len(), 1);
-        assert_eq!(
-            chat_response.choices[0].finish_reason,
-            Some(FinishReason::Stop)
-        );
-    }
-
-    #[test]
-    fn test_transform_chat_response_finish_reasons() {
-        let transformer = GeminiTransformer::new();
-        let model = VertexAIModel::GeminiPro;
-
-        // Test STOP
-        let response = json!({
-            "candidates": [{"content": {"parts": [{"text": "Done"}]}, "finishReason": "STOP"}]
-        });
-        let result = transformer
-            .transform_chat_response(response, &model)
-            .unwrap();
-        assert_eq!(result.choices[0].finish_reason, Some(FinishReason::Stop));
-
-        // Test MAX_TOKENS
-        let response = json!({
-            "candidates": [{"content": {"parts": [{"text": "Done"}]}, "finishReason": "MAX_TOKENS"}]
-        });
-        let result = transformer
-            .transform_chat_response(response, &model)
-            .unwrap();
-        assert_eq!(result.choices[0].finish_reason, Some(FinishReason::Length));
-
-        // Test SAFETY
-        let response = json!({
-            "candidates": [{"content": {"parts": [{"text": ""}]}, "finishReason": "SAFETY"}]
-        });
-        let result = transformer
-            .transform_chat_response(response, &model)
-            .unwrap();
-        assert_eq!(
-            result.choices[0].finish_reason,
-            Some(FinishReason::ContentFilter)
-        );
-    }
-}
+#[path = "transformers/basic_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod split_tests;

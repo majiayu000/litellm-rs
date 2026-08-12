@@ -2,8 +2,10 @@
 //!
 //! Configuration for Ollama API access including connection settings and model options.
 
+use crate::core::net::ProviderEndpointAccess;
 use crate::core::traits::provider::ProviderConfig;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 /// Ollama provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,6 +15,14 @@ pub struct OllamaConfig {
 
     /// API base URL (default: <http://localhost:11434>)
     pub api_base: Option<String>,
+
+    /// Network scope allowed for the configured Ollama endpoint.
+    #[serde(default)]
+    pub endpoint_access: ProviderEndpointAccess,
+
+    /// Models explicitly assigned to this provider. Empty means discover via `/api/tags`.
+    #[serde(default)]
+    pub models: Vec<String>,
 
     /// Request timeout in seconds
     #[serde(default = "default_timeout")]
@@ -72,6 +82,8 @@ impl Default for OllamaConfig {
         Self {
             api_key: None,
             api_base: None,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
+            models: Vec::new(),
             timeout: default_timeout(),
             max_retries: default_max_retries(),
             debug: false,
@@ -101,6 +113,9 @@ impl ProviderConfig for OllamaConfig {
         if self.timeout == 0 {
             return Err("Timeout must be greater than 0".to_string());
         }
+        if self.template.is_some() {
+            return Err("Native Ollama chat does not support template overrides".to_string());
+        }
 
         // Validate mirostat value if set
         if let Some(mirostat) = self.mirostat
@@ -120,6 +135,10 @@ impl ProviderConfig for OllamaConfig {
         self.api_base.as_deref()
     }
 
+    fn endpoint_access(&self) -> ProviderEndpointAccess {
+        self.endpoint_access
+    }
+
     fn timeout(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.timeout)
     }
@@ -130,6 +149,23 @@ impl ProviderConfig for OllamaConfig {
 }
 
 impl OllamaConfig {
+    pub(crate) fn resolved_endpoint_access(&self, api_base: &str) -> ProviderEndpointAccess {
+        if self.api_base.is_none()
+            && self.endpoint_access == ProviderEndpointAccess::PublicOnly
+            && url::Url::parse(api_base)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .is_some_and(|host| {
+                    host.eq_ignore_ascii_case("localhost")
+                        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+                })
+        {
+            ProviderEndpointAccess::PrivateNetwork
+        } else {
+            self.endpoint_access
+        }
+    }
+
     /// Get API key with environment variable fallback
     pub fn get_api_key(&self) -> Option<String> {
         self.api_key

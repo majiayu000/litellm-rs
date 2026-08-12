@@ -6,6 +6,7 @@
 use super::config::RoutingStrategy;
 use super::deployment::{Deployment, DeploymentId};
 use super::error::RouterError;
+use super::execution::router_error_to_provider_error;
 use super::strategy_impl::{self, RoutingContext};
 use super::unified::Router;
 use super::{RoutingSnapshot, RuntimeHandle};
@@ -471,6 +472,23 @@ impl Router {
             .active_requests
             .fetch_update(Relaxed, Relaxed, |v| Some(v.saturating_sub(1)));
         debug_assert!(result.is_ok());
+    }
+}
+
+impl RuntimeHandle {
+    /// Select and reserve a deployment from this handle's pinned generation.
+    pub(crate) fn select_deployment_lease_typed(
+        &self,
+        model_name: &str,
+    ) -> Result<DeploymentLease, crate::core::providers::ProviderError> {
+        self.binding
+            .router
+            .select_deployment_lease_matching_in_snapshot(
+                self.snapshot.as_ref(),
+                model_name,
+                |_| true,
+            )
+            .map_err(router_error_to_provider_error)
     }
 }
 

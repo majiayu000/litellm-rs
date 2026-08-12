@@ -3,6 +3,7 @@ use crate::core::models::openai::responses_api::{
     ResponseInput, ResponseInputContent, ResponseInputItem, ResponseInputMessage,
     ResponseOutputContent, ResponseOutputItem, ResponsesApiRequest, ResponsesApiResponse,
 };
+use crate::core::types::codex::wire::CodexFunctionCall;
 use crate::server::routes::ai::chat::handle_chat_completion_with_state;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
@@ -507,21 +508,35 @@ fn stable_input_item_id(index: usize, item: &ResponseInputItem) -> String {
 fn output_items_as_input_context(output: &[ResponseOutputItem]) -> Vec<ResponseInputItem> {
     output
         .iter()
-        .filter_map(|item| {
-            let ResponseOutputItem::Message(message) = item else {
-                return None;
-            };
-            let text = output_text_content(&message.content);
-            if text.trim().is_empty() {
-                return None;
+        .filter_map(|item| match item {
+            ResponseOutputItem::Message(message) => {
+                let text = output_text_content(&message.content);
+                if text.trim().is_empty() {
+                    return None;
+                }
+                Some(ResponseInputItem::Message(ResponseInputMessage {
+                    id: Some(message.id.clone()),
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                    role: "assistant".to_string(),
+                    content: ResponseInputContent::Text(text),
+                }))
             }
-            Some(ResponseInputItem::Message(ResponseInputMessage {
-                id: Some(message.id.clone()),
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-                role: "assistant".to_string(),
-                content: ResponseInputContent::Text(text),
-            }))
+            ResponseOutputItem::FunctionCall(call) => {
+                Some(ResponseInputItem::FunctionCall(CodexFunctionCall {
+                    id: Some(call.id.clone()),
+                    call_id: call.call_id.clone().unwrap_or_else(|| call.id.clone()),
+                    name: call.name.clone(),
+                    namespace: None,
+                    arguments: call.arguments.clone(),
+                    status: Some(call.status.clone()),
+                    internal_chat_message_metadata_passthrough: None,
+                }))
+            }
+            ResponseOutputItem::CustomToolCall(call) => {
+                Some(ResponseInputItem::CustomToolCall(call.clone()))
+            }
+            _ => None,
         })
         .collect()
 }

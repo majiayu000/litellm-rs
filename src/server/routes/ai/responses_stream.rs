@@ -5,8 +5,8 @@
 
 use crate::core::models::openai::requests::{ChatCompletionRequest, StreamOptions};
 use crate::core::models::openai::responses_api::{
-    ResponseFunctionCall, ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage,
-    ResponseStreamEvent, ResponsesApiRequest, ResponsesApiResponse,
+    ResponseOutputContent, ResponseOutputItem, ResponseOutputMessage, ResponseStreamEvent,
+    ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::core::providers::ProviderError;
 use crate::core::streaming::types::Event;
@@ -14,8 +14,8 @@ use crate::core::types::responses::Usage as ChatUsage;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
 use crate::server::routes::ai::chat::build_core_chat_request;
 use crate::server::routes::ai::responses::{
-    ResponseOwner, current_unix_ts, finish_reason_enum_to_status, store_response_if_requested,
-    uuid_v4_hex,
+    ResponseOwner, current_unix_ts, custom_tool_input, finish_reason_enum_to_status,
+    is_custom_tool, store_response_if_requested, uuid_v4_hex,
 };
 use crate::server::state::AppState;
 use actix_web::http::header::{CACHE_CONTROL, CONTENT_TYPE};
@@ -34,33 +34,18 @@ use super::{openai_errors, spend};
 #[path = "responses_stream_budget.rs"]
 mod responses_stream_budget;
 use responses_stream_budget::StreamBudgetSettlement;
+#[path = "responses_stream_state.rs"]
+mod responses_stream_state;
+#[cfg(test)]
+use responses_stream_state::response_stream_total_tokens;
+use responses_stream_state::{ToolCallAccum, response_stream_budget_usage};
 #[path = "responses_stream_support.rs"]
 mod responses_stream_support;
 use responses_stream_support::{
-    ResponseStreamEmitError, classify, completed_reasoning_item, emit, in_progress_reasoning_item,
-    make_shell, output_items_in_stream_order, response_usage_from_chat_usage, sse_error,
+    ResponseStreamEmitError, classify, completed_reasoning_item, emit, encode,
+    flush_output_guardrail, in_progress_reasoning_item, make_shell, output_items_in_stream_order,
+    response_usage_from_chat_usage, send_encoded, send_guardrail_error, sse_error,
 };
-
-fn response_stream_total_tokens(
-    final_usage: Option<&ChatUsage>,
-    input_tokens: u32,
-    output_tokens: u32,
-) -> u32 {
-    final_usage.map_or_else(
-        || input_tokens.saturating_add(output_tokens),
-        |usage| usage.total_tokens,
-    )
-}
-
-/// Accumulated state for one in-progress tool call during streaming.
-struct ToolCallAccum {
-    item_id: String,
-    call_id: String,
-    name: String,
-    arguments: String,
-    output_index: u32,
-}
-
 /// Streaming path for POST /v1/responses.
 pub(crate) async fn handle_streaming_response(
     state: &AppState,
@@ -87,7 +72,6 @@ pub(crate) async fn handle_streaming_response(
     let model_name = chat_request.model.clone();
     let resp_id = format!("resp_{}", uuid_v4_hex());
     let created_at = current_unix_ts();
-
     let core_request =
         match build_core_chat_request(chat_request.as_ref(), model_name.clone(), true) {
             Ok(r) => r,
@@ -95,7 +79,6 @@ pub(crate) async fn handle_streaming_response(
                 return Ok(openai_errors::gateway_error_response(&e));
             }
         };
-
     let requested_model = core_request.model.clone();
     let callback = CallbackLifecycle::new(
         &state.callbacks,
@@ -112,7 +95,6 @@ pub(crate) async fn handle_streaming_response(
     let api_key_budget_id = context.api_key_budget_id();
     let settlement_budgeted = state.budgeted.clone();
     let callback_for_execution = callback.clone();
-
     match run_stream(
         state.unified_router.clone(),
         &requested_model,
@@ -210,6 +192,7 @@ pub(crate) async fn handle_streaming_response(
         )) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout = state.config.load().gateway.server.stream_idle_timeout;
+            let guardrails = Arc::clone(&state.guardrails);
             let settlement = StreamBudgetSettlement {
                 pricing_service: settlement_budgeted.pricing(),
                 pricing_config: state.config().gateway.pricing.clone(),
@@ -227,6 +210,8 @@ pub(crate) async fn handle_streaming_response(
             tokio::spawn(async move {
                 let mut lease = Some(lease);
                 let mut settlement = settlement;
+                let mut output_guardrail =
+                    super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
 
                 let shell = make_shell(&resp_id, created_at, &model_name, "in_progress", &original);
                 if let Err(error) = emit(
@@ -271,26 +256,27 @@ pub(crate) async fn handle_streaming_response(
                 let mut reasoning_output_index: u32 = 0;
                 let mut reasoning_started = false;
                 macro_rules! settle_if_chargeable {
-                    () => {
+                    () => {{
                         if final_usage.is_some() || saw_upstream_output {
                             settlement.record_disconnect(final_usage.as_ref()).await;
                         }
-                    };
+                    }};
                 }
                 macro_rules! return_after_disconnect {
-                    () => {
+                    () => {{
                         callback.fail("client disconnected", "client_disconnect");
                         settle_if_chargeable!();
                         return;
-                    };
+                    }};
                 }
                 macro_rules! return_after_emit_error {
-                    ($error:expr) => {
+                    ($error:expr) => {{
                         match $error {
                             ResponseStreamEmitError::ClientDisconnected => {
                                 callback.fail("client disconnected", "client_disconnect");
                             }
                             ResponseStreamEmitError::Serialization(error) => {
+                                flush_guardrail!();
                                 let message = format!("stream serialization failed: {error}");
                                 if let Some(lease) = lease.take() {
                                     let provider_error =
@@ -302,6 +288,27 @@ pub(crate) async fn handle_streaming_response(
                         }
                         settle_if_chargeable!();
                         return;
+                    }};
+                }
+                macro_rules! return_after_guardrail_error {
+                    ($error:expr) => {{
+                        let error = $error;
+                        if send_guardrail_error(&tx, error).await {
+                            info!("Client disconnected before guardrail error could be sent");
+                        }
+                        drop(lease.take());
+                        callback.fail(error.message(), "guardrail_output");
+                        settle_if_chargeable!();
+                        return;
+                    }};
+                }
+                macro_rules! flush_guardrail {
+                    () => {
+                        match flush_output_guardrail(&tx, &mut output_guardrail).await {
+                            Ok(true) => {}
+                            Ok(false) => return_after_disconnect!(),
+                            Err(error) => return_after_guardrail_error!(error),
+                        }
                     };
                 }
 
@@ -328,6 +335,7 @@ pub(crate) async fn handle_streaming_response(
                         match timed_result {
                             Ok(r) => r,
                             Err(_) => {
+                                flush_guardrail!();
                                 warn!("Responses API stream idle timeout after {idle_timeout}s");
                                 let _ = tx
                                     .send(sse_error(
@@ -383,6 +391,7 @@ pub(crate) async fn handle_streaming_response(
                                     && let Some(reasoning_text) = thinking.content.as_deref()
                                     && !reasoning_text.is_empty()
                                 {
+                                    flush_guardrail!();
                                     saw_upstream_output = true;
                                     if !reasoning_started {
                                         if text_started {
@@ -474,34 +483,43 @@ pub(crate) async fn handle_streaming_response(
                                     }
 
                                     full_text.push_str(text);
-                                    if let Err(error) = emit(
-                                        &tx,
-                                        &ResponseStreamEvent::ResponseOutputTextDelta {
-                                            output_index: text_output_index,
-                                            content_index: 0,
-                                            delta: text.to_string(),
-                                        },
-                                    )
-                                    .await
+                                    let event = ResponseStreamEvent::ResponseOutputTextDelta {
+                                        output_index: text_output_index,
+                                        content_index: 0,
+                                        delta: text.to_string(),
+                                    };
+                                    let encoded = match encode(&event) {
+                                        Ok(encoded) => encoded,
+                                        Err(error) => return_after_emit_error!(error),
+                                    };
+                                    let pending = match output_guardrail
+                                        .push_until_closed(&tx, text, encoded)
+                                        .await
                                     {
-                                        return_after_emit_error!(error);
+                                        Ok(Some(pending)) => pending,
+                                        Ok(None) => return_after_disconnect!(),
+                                        Err(error) => return_after_guardrail_error!(error),
+                                    };
+                                    for encoded in pending {
+                                        if let Err(error) = send_encoded(&tx, encoded).await {
+                                            return_after_emit_error!(error);
+                                        }
                                     }
                                 }
 
                                 if let Some(tc_deltas) = &choice.delta.tool_calls {
                                     if !tc_deltas.is_empty() {
+                                        flush_guardrail!();
                                         saw_upstream_output = true;
                                     }
                                     for tc in tc_deltas {
                                         let idx = tc.index;
 
-                                        // First chunk for this call (has an id): emit placeholder
                                         if let (
                                             Some(call_id),
                                             std::collections::hash_map::Entry::Vacant(entry),
                                         ) = (&tc.id, tool_states.entry(idx))
                                         {
-                                            let item_id = format!("fc_{}", uuid_v4_hex());
                                             let out_idx = next_output_index;
                                             next_output_index += 1;
                                             let name = tc
@@ -510,21 +528,25 @@ pub(crate) async fn handle_streaming_response(
                                                 .and_then(|f| f.name.as_deref())
                                                 .unwrap_or("")
                                                 .to_string();
+                                            let custom = is_custom_tool(&original, &name);
+                                            let item_id = format!(
+                                                "{}_{}",
+                                                if custom { "ct" } else { "fc" },
+                                                uuid_v4_hex()
+                                            );
 
-                                            let fc_item = ResponseOutputItem::FunctionCall(
-                                                ResponseFunctionCall {
-                                                    id: item_id.clone(),
-                                                    name: name.clone(),
-                                                    arguments: String::new(),
-                                                    status: "in_progress".to_string(),
-                                                    call_id: Some(call_id.clone()),
-                                                },
+                                            let state = ToolCallAccum::new(
+                                                item_id,
+                                                call_id.clone(),
+                                                name,
+                                                out_idx,
+                                                custom,
                                             );
                                             if let Err(error) = emit(
                                                 &tx,
                                                 &ResponseStreamEvent::ResponseOutputItemAdded {
                                                     output_index: out_idx,
-                                                    item: fc_item,
+                                                    item: state.output_item("in_progress"),
                                                 },
                                             )
                                             .await
@@ -532,13 +554,7 @@ pub(crate) async fn handle_streaming_response(
                                                 return_after_emit_error!(error);
                                             }
 
-                                            entry.insert(ToolCallAccum {
-                                                item_id,
-                                                call_id: call_id.clone(),
-                                                name,
-                                                arguments: String::new(),
-                                                output_index: out_idx,
-                                            });
+                                            entry.insert(state);
                                             tool_order.push(idx);
                                         }
 
@@ -550,23 +566,14 @@ pub(crate) async fn handle_streaming_response(
                                                 && state.name.is_empty()
                                             {
                                                 state.name.clone_from(n);
+                                                state.custom = is_custom_tool(&original, n);
                                             }
-                                            // Emit argument deltas
                                             if let Some(args) = &fn_delta.arguments
                                                 && !args.is_empty()
                                             {
                                                 state.arguments.push_str(args);
-                                                let (cid, oi) =
-                                                    (state.call_id.clone(), state.output_index);
-                                                if let Err(error) = emit(
-                                                    &tx,
-                                                    &ResponseStreamEvent::ResponseFunctionCallArgumentsDelta {
-                                                        output_index: oi,
-                                                        call_id: cid,
-                                                        delta: args.clone(),
-                                                    },
-                                                )
-                                                .await
+                                                if let Some(event) = state.delta_event(args.clone())
+                                                    && let Err(error) = emit(&tx, &event).await
                                                 {
                                                     return_after_emit_error!(error);
                                                 }
@@ -577,6 +584,7 @@ pub(crate) async fn handle_streaming_response(
                             }
                         }
                         Err(e) => {
+                            flush_guardrail!();
                             error!("Responses API stream error: {e}");
                             let (et, ec) = classify(&e);
                             let _ = tx.send(sse_error(&e.to_string(), et, ec)).await;
@@ -589,7 +597,7 @@ pub(crate) async fn handle_streaming_response(
                         }
                     }
                 }
-
+                flush_guardrail!();
                 let item_status = final_status;
                 let mut all_output: Vec<(u32, ResponseOutputItem)> = Vec::new();
 
@@ -680,26 +688,13 @@ pub(crate) async fn handle_streaming_response(
 
                 for idx in &tool_order {
                     if let Some(state) = tool_states.get(idx) {
-                        if let Err(error) = emit(
-                            &tx,
-                            &ResponseStreamEvent::ResponseFunctionCallArgumentsDone {
-                                output_index: state.output_index,
-                                call_id: state.call_id.clone(),
-                                arguments: state.arguments.clone(),
-                            },
-                        )
-                        .await
-                        {
-                            return_after_emit_error!(error);
+                        for event in state.done_events() {
+                            if let Err(error) = emit(&tx, &event).await {
+                                return_after_emit_error!(error);
+                            }
                         }
 
-                        let fc_done = ResponseOutputItem::FunctionCall(ResponseFunctionCall {
-                            id: state.item_id.clone(),
-                            name: state.name.clone(),
-                            arguments: state.arguments.clone(),
-                            status: "completed".to_string(),
-                            call_id: Some(state.call_id.clone()),
-                        });
+                        let fc_done = state.output_item("completed");
                         if let Err(error) = emit(
                             &tx,
                             &ResponseStreamEvent::ResponseOutputItemDone {
@@ -717,18 +712,8 @@ pub(crate) async fn handle_streaming_response(
 
                 let output_items = output_items_in_stream_order(all_output);
 
-                let total =
-                    response_stream_total_tokens(final_usage.as_ref(), in_tokens, out_tokens);
-                let budget_usage = final_usage.clone().or_else(|| {
-                    (total > 0).then_some(ChatUsage {
-                        prompt_tokens: in_tokens,
-                        completion_tokens: out_tokens,
-                        total_tokens: total,
-                        prompt_tokens_details: None,
-                        completion_tokens_details: None,
-                        thinking_usage: None,
-                    })
-                });
+                let (total, budget_usage) =
+                    response_stream_budget_usage(final_usage.clone(), in_tokens, out_tokens);
                 let usage = budget_usage.as_ref().map(response_usage_from_chat_usage);
                 let completed = ResponsesApiResponse {
                     id: resp_id,

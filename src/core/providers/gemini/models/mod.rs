@@ -6,6 +6,11 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 mod catalog;
+mod contract;
+mod surface;
+
+pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
+pub use surface::GoogleGeminiApiSurface;
 
 pub use crate::core::cost::types::ModelPricing;
 use crate::core::types::model::ModelInfo;
@@ -41,42 +46,36 @@ pub enum ModelFeature {
     RealtimeStreaming,
 }
 
-/// Model family classification
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeminiModelFamily {
+    Gemini36Flash,
     /// Gemini 3.5 series (2026 - Latest)
     Gemini35Flash,
+    Gemini35FlashLite,
 
-    /// Gemini 3.1 series (2026)
     Gemini31ProPreview,
     Gemini31Flash,
     Gemini31FlashLite,
 
-    /// Gemini 3 series (2025-2026)
     Gemini3Pro,
     Gemini3ProDeepThink,
     Gemini3Flash,
     Gemini3ProImage,
 
-    /// Gemini 2.5 series (2025)
     Gemini25Pro,
     Gemini25Flash,
     Gemini25FlashLite,
 
-    /// Gemini 2.0 series
     Gemini20Flash,
     Gemini20FlashThinking,
 
-    /// Gemini 1.5 series
     Gemini15Pro,
     Gemini15Flash,
     Gemini15Flash8B,
 
-    /// Gemini 1.0 series
     Gemini10Pro,
     Gemini10ProVision,
 
-    /// Experimental models
     GeminiExperimental,
 }
 
@@ -147,9 +146,8 @@ pub struct GeminiModelRegistry {
 
 impl GeminiModelRegistry {
     /// Expected number of Gemini models for capacity hint
-    const EXPECTED_MODEL_COUNT: usize = 17;
+    const EXPECTED_MODEL_COUNT: usize = 19;
 
-    /// Create
     pub fn new() -> Self {
         let mut registry = Self {
             models: HashMap::with_capacity(Self::EXPECTED_MODEL_COUNT),
@@ -158,7 +156,6 @@ impl GeminiModelRegistry {
         registry
     }
 
-    /// Initialize all Gemini models
     fn initialize_models(&mut self) {
         catalog::register_all(self);
     }
@@ -168,14 +165,24 @@ impl GeminiModelRegistry {
         self.models.insert(id.to_string(), spec);
     }
 
-    /// Model
     pub fn get_model_spec(&self, model_id: &str) -> Option<&ModelSpec> {
         self.models.get(model_id)
     }
 
-    /// Model
     pub fn list_models(&self) -> Vec<&ModelSpec> {
         self.models.values().collect()
+    }
+
+    /// List model metadata for a concrete Google API surface.
+    pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
+        let mut models = self
+            .models
+            .values()
+            .filter(|spec| surface.includes(spec))
+            .map(|spec| surface.overlay_model_info(spec))
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| left.id.cmp(&right.id));
+        models
     }
 
     /// Check
@@ -210,8 +217,11 @@ impl GeminiModelRegistry {
     pub fn from_model_name(model_name: &str) -> Option<GeminiModelFamily> {
         let model_lower = model_name.to_lowercase();
 
-        // Gemini 3.5 series
-        if model_lower.contains("gemini-3.5-flash") {
+        if model_lower.contains("gemini-3.6-flash") {
+            Some(GeminiModelFamily::Gemini36Flash)
+        } else if model_lower.contains("gemini-3.5-flash-lite") {
+            Some(GeminiModelFamily::Gemini35FlashLite)
+        } else if model_lower.contains("gemini-3.5-flash") {
             Some(GeminiModelFamily::Gemini35Flash)
         }
         // Gemini 3.1 series (check before 3.0 as more specific)
@@ -294,21 +304,8 @@ impl CostCalculator {
         model_id: &str,
         prompt_tokens: u32,
         completion_tokens: u32,
-    ) -> Option<f64> {
-        let usage = crate::core::cost::types::UsageTokens::new(prompt_tokens, completion_tokens);
-        if let Ok(breakdown) =
-            crate::core::cost::calculator::generic_cost_per_token(model_id, &usage, "vertex_ai")
-        {
-            return Some(breakdown.total_cost);
-        }
-
-        let registry = get_gemini_registry();
-        let pricing = registry.get_core_model_pricing(model_id)?;
-
-        let input_cost = (prompt_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
-        let output_cost = (completion_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
-
-        Some(input_cost + output_cost)
+    ) -> Result<f64, crate::ProviderError> {
+        super::calculate_gemini_cost(model_id, prompt_tokens, completion_tokens)
     }
 
     /// Calculate multimodal cost
@@ -434,20 +431,20 @@ mod tests {
 
     #[test]
     fn test_cost_calculation() {
-        let cost = CostCalculator::calculate_cost("gemini-1.5-flash", 1000, 500);
-        assert!(cost.is_some());
+        let cost = CostCalculator::calculate_cost("gemini-2.5-flash", 1000, 500);
+        assert!(cost.is_ok());
 
         let cost_value = cost.unwrap();
-        // Expected: (1000/1M * $0.075) + (500/1M * $0.30) = $0.000075 + $0.00015 = $0.000225
-        assert!((cost_value - 0.000225).abs() < 0.000001);
+        // Expected: (1000/1M * $0.30) + (500/1M * $2.50) = $0.0003 + $0.00125 = $0.00155
+        assert!((cost_value - 0.00155).abs() < 0.000001);
     }
 
     #[test]
-    fn test_cost_calculation_keeps_registry_fallback() {
-        let cost = CostCalculator::calculate_cost("gemini-1.0-pro", 1000, 500)
-            .expect("Gemini registry fallback should price gemini-1.0-pro");
-
-        assert!((cost - 0.00125).abs() < 0.000001);
+    fn test_cost_calculation_does_not_use_registry_fallback() {
+        assert!(matches!(
+            CostCalculator::calculate_cost("gemini-1.0-pro", 1000, 500),
+            Err(crate::ProviderError::ModelNotFound { .. })
+        ));
     }
 
     #[test]
@@ -692,7 +689,10 @@ mod tests {
     #[test]
     fn test_cost_calculation_unknown_model() {
         let cost = CostCalculator::calculate_cost("unknown-model", 1000, 500);
-        assert!(cost.is_none());
+        assert!(matches!(
+            cost,
+            Err(crate::ProviderError::ModelNotFound { .. })
+        ));
     }
 
     #[test]

@@ -276,7 +276,7 @@ fn test_vertex_ai_model_max_context_tokens() {
     );
     assert_eq!(
         VertexAIModel::Gemini3FlashPreview.max_context_tokens(),
-        1_000_000
+        1_048_576
     );
     assert_eq!(VertexAIModel::Gemini3ProImage.max_context_tokens(), 65_536);
 
@@ -284,7 +284,7 @@ fn test_vertex_ai_model_max_context_tokens() {
     assert_eq!(VertexAIModel::Gemini25Pro.max_context_tokens(), 1_048_576);
 
     // Gemini 1.5 Pro has largest
-    assert_eq!(VertexAIModel::GeminiPro.max_context_tokens(), 2_097_152);
+    assert_eq!(VertexAIModel::GeminiPro.max_context_tokens(), 2_000_000);
 
     assert_eq!(VertexAIModel::ClaudeOpus47.max_context_tokens(), 1_000_000);
     assert_eq!(VertexAIModel::ClaudeOpus46.max_context_tokens(), 1_000_000);

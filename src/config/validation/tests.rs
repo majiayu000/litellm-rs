@@ -537,15 +537,13 @@ fn test_enterprise_validation_skips_when_disabled() {
 }
 
 #[test]
-fn test_enterprise_validation_rejects_unwired_audit_logging() {
+fn test_enterprise_validation_accepts_wired_audit_logging() {
     let config = EnterpriseConfig {
         audit_logging: true,
         ..Default::default()
     };
 
-    let error = Validate::validate(&config).unwrap_err();
-    assert!(error.contains("enterprise.audit_logging"));
-    assert!(error.contains("not wired into the gateway runtime"));
+    assert!(Validate::validate(&config).is_ok());
 }
 
 #[test]

@@ -2,10 +2,12 @@
 
 use crate::config::models::file_storage::S3Config;
 use crate::utils::error::gateway_error::{GatewayError, Result};
+#[cfg(any(test, feature = "s3"))]
 use std::collections::HashSet;
 #[cfg(feature = "s3")]
 use tracing::debug;
 use tracing::info;
+#[cfg(any(test, feature = "s3"))]
 use uuid::Uuid;
 
 #[cfg(feature = "s3")]
@@ -15,6 +17,7 @@ use aws_sdk_s3 as aws_s3;
 
 use super::types::{FileMetadata, FileOwnerScope, StoredFileMetadata};
 
+#[cfg(feature = "s3")]
 const OWNER_METADATA_KEY: &str = "litellm-owner";
 
 /// S3 file storage
@@ -498,6 +501,7 @@ impl S3Storage {
             .map(ToOwned::to_owned)
     }
 
+    #[cfg(any(test, feature = "s3"))]
     fn encode_owner(owner: &FileOwnerScope) -> Result<String> {
         let (scope, id) = match owner {
             FileOwnerScope::Team(id) => ("team", id),
@@ -512,6 +516,7 @@ impl S3Storage {
         .map_err(|error| GatewayError::internal(format!("Failed to encode file owner: {error}")))
     }
 
+    #[cfg(any(test, feature = "s3"))]
     fn decode_owner(raw: Option<&str>) -> Result<Option<FileOwnerScope>> {
         let Some(raw) = raw else {
             return Ok(None);
@@ -555,10 +560,12 @@ impl S3Storage {
         Self::is_canonical_not_found(modeled, status)
     }
 
+    #[cfg(any(test, feature = "s3"))]
     fn is_canonical_not_found(modeled: bool, raw_status: Option<u16>) -> bool {
         modeled || raw_status == Some(404)
     }
 
+    #[cfg(any(test, feature = "s3"))]
     fn validate_next_token(
         token: Option<&str>,
         seen_tokens: &mut HashSet<String>,

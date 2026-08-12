@@ -53,10 +53,30 @@ pub mod provider;
 pub mod registry;
 
 // Re-export commonly used types
+#[deprecated(
+    since = "0.6.0",
+    note = "core::a2a is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use config::{AgentConfig, AgentProvider};
+#[deprecated(
+    since = "0.6.0",
+    note = "core::a2a is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use error::{A2AError, A2AResult};
+#[deprecated(
+    since = "0.6.0",
+    note = "core::a2a is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use gateway::A2AGateway;
+#[deprecated(
+    since = "0.6.0",
+    note = "core::a2a is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use message::{A2AMessage, A2AResponse, MessagePart, TaskState};
+#[deprecated(
+    since = "0.6.0",
+    note = "core::a2a is a default-off compatibility surface scheduled for removal in 0.7.0"
+)]
 pub use registry::AgentRegistry;
 
 #[cfg(test)]
@@ -66,7 +86,9 @@ mod tests {
     #[test]
     fn test_module_exports() {
         // Verify all public types are accessible
-        let _ = AgentProvider::LangGraph;
-        let _ = TaskState::Pending;
+        let provider = config::AgentProvider::LangGraph;
+        let state = message::TaskState::Pending;
+        assert!(matches!(provider, config::AgentProvider::LangGraph));
+        assert!(matches!(state, message::TaskState::Pending));
     }
 }

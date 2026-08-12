@@ -127,15 +127,17 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | --- | --- | --- |
 | `core/guardrails` | wire | Default-on prompt-injection checks run before provider execution and on non-streaming output; `guardrails.enabled: false` is the explicit opt-out. |
 | `core/ip_access` | wire | Configured allow/block rules run as an outer Actix middleware and short-circuit before downstream side effects; empty/default rules allow all. |
-| `core/mcp` | experimental-gate | MCP gateway is not mounted; Responses API only passes MCP tool descriptors through to providers. |
-| `core/a2a` | experimental-gate | A2A gateway types compile, but no route or `AppState` entry mounts them. |
-| `core/realtime` | experimental-gate | Realtime WebSocket types exist, but no gateway route is mounted. |
-| `core/observability` and `core/integrations` | experimental-gate | Basic tracing, metrics middleware, and health endpoints are wired elsewhere; Langfuse/OpenTelemetry managers and exporters are not initialized by the binary. |
-| `core/batch` | experimental-gate | `/v1/batches` is wired as a provider proxy; `core::batch::BatchProcessor` is not constructed. |
-| `core/webhooks` | experimental-gate | `WebhookManager` is not configured or constructed by the gateway runtime. |
-| `core/semantic_cache` | config-rejected | `cache.semantic_cache=true` fails validation until runtime semantic cache handling is wired. |
-| `core/analytics` | experimental-gate | Analytics types and engine are feature-gated, with no runtime collector or route. |
-| `core/virtual_keys` | experimental-gate | Gateway key routes use `core::keys`; `VirtualKeyManager` is not in `AppState`. |
+| `core/mcp` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `mcp`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. Responses API MCP descriptors still pass through independently. |
+| `core/a2a` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `a2a`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. |
+| `core/realtime` | experimental-gate | Deprecated in 0.6 and default-off behind `websockets`; no gateway route is mounted. Removal is scheduled for 0.7. |
+| `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
+| `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
+| `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. The unreachable `BatchProcessor` is deprecated in 0.6 and scheduled for removal in 0.7. |
+| `core/webhooks` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `webhooks`; it is not a gateway runtime capability and is scheduled for 0.7 removal. |
+| `core/semantic_cache` | remove | Deprecated but retained with `storage` during the 0.6 compatibility window; `cache.semantic_cache=true` remains rejected before the planned 0.7 removal. |
+| `core/analytics` | remove | Deprecated and default-off behind `analytics`, with removal planned for 0.7. |
+| `core/virtual_keys` | wire | Runtime virtual keys use the canonical `core::keys::KeyManager`; the duplicate legacy `VirtualKeyManager` is deprecated for 0.7 removal. |
+| `core/user_management` | internal/gated | Compatibility records back current auth/storage paths; the deprecated `UserManager` implementation is default-off behind `user-management` and scheduled for 0.7 removal. |
 
 ## Installation
 
@@ -180,7 +182,7 @@ into the enum, dispatch, registry metadata, and factory.
 | `azure` | passthrough / passthrough | `providers-extra` / `providers-extra` | – / – / ✅ | passthrough / passthrough | SDK exposes Azure embeddings; SDK chat is not implemented. |
 | `azure_ai` | passthrough / passthrough | `providers-extra` / `providers-extra` | – / – / – | `providers-extra` / `providers-extra` | `completion()` supports `azure_ai/` and `azure-ai/` routes when the native feature is enabled. |
 | `bedrock` | ✅ / ✅ | ✅ / – | – / – / – | – / – | SDK Bedrock and public `completion()` routing are not implemented. |
-| `mistral`, `cloudflare`, `cohere`, `vertex_ai`, `gemini`, `fal_ai`, `replicate` | provider-specific | provider-specific | – / – / – | – / – | See `support_matrix.rs` for feature-gated HTTP support. |
+| `mistral`, `cloudflare`, `cohere`, `vertex_ai`, `gemini`, `fal_ai`, `replicate`, `ollama` | provider-specific | provider-specific | – / – / – | – / – | See `support_matrix.rs` for feature-gated HTTP support. Ollama retains its existing SDK stream-only path. |
 | `google` / SDK `Google` | – / – | – / – | – / – / – | – / – | Google/Gemini SDK chat is intentionally unsupported until a real adapter exists. |
 | Default catalog dynamic routes: `openrouter`, `deepseek`, `moonshot`, `minimax`, `zhipu`, `zai`, `together_ai`, `fireworks_ai`, `aiml`, `groq`, `xiaomi_mimo`, `xai` | passthrough / passthrough | – / – | – / – / – | ✅ / ✅ | OpenAI-compatible routes wired into default `completion()` routing. |
 | Other Tier 1 catalog providers | passthrough / passthrough | – / – | – / – / – | – / – | HTTP gateway chat/stream only unless routed through explicit OpenAI-compatible config. |
@@ -206,6 +208,7 @@ into the enum, dispatch, registry metadata, and factory.
 | Amazon Nova (`amazon_nova`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
 | fal.ai (`fal_ai`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native Fal AI image-generation endpoints; chat and streaming are explicitly unsupported. |
 | Replicate (`replicate`) | native factory (`providers-extended`) | ✅ | ✅ | – | ✅ | – | Uses native Replicate prediction lifecycle handling for chat, streaming, and image generation; explicitly unsupported without `providers-extended`. |
+| Ollama (`ollama`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native `/api/chat` NDJSON streaming, `/api/embed`, and model tags/show endpoints. Localhost defaults to private-network endpoint policy; explicit endpoints keep their configured policy. |
 | GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
 | GitHub Copilot (`github_copilot`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native GitHub Copilot auth and model access when `providers-extended` is enabled; otherwise explicitly unsupported. |
 | Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | – | – | – | For self-hosted / unlisted chat-completions endpoints. |
@@ -226,7 +229,7 @@ All entries below route through `OpenAILikeProvider`. Chat and streaming work fo
 
 The following modules exist under `src/core/providers/` (gated on `providers-extra` or `providers-extended`) but are **not wired into the unified `Provider` enum or the factory** today. They compile but cannot be selected through `create_provider`/`from_config_async`. Treat them as experimental scaffolding subject to change:
 
-`custom_api`, `ollama`
+`custom_api`
 
 For self-hosted or unlisted OpenAI-compatible endpoints, prefer the generic `openai_compatible` provider type instead.
 

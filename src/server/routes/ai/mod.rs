@@ -28,6 +28,7 @@ mod responses;
 mod responses_stream;
 mod route_http;
 mod spend;
+mod stream_output_guardrail;
 mod token_policy;
 
 // Public re-exports for backward compatibility

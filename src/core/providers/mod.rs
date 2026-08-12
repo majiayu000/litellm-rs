@@ -50,12 +50,13 @@ pub mod fal_ai;
 // fireworks: Tier 1 -> registry/catalog.rs
 // friendliai: Tier 1 -> registry/catalog.rs
 // galadriel: Tier 1 -> registry/catalog.rs
-#[cfg(feature = "providers-extended")]
+#[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
 pub mod gemini;
 #[cfg(feature = "providers-extended")]
 pub mod github;
 #[cfg(feature = "providers-extended")]
 pub mod github_copilot;
+pub(crate) mod google_tool_loop;
 // groq: Tier 1 -> registry/catalog.rs
 // heroku: Tier 1 -> registry/catalog.rs
 // hosted_vllm: Tier 1 -> registry/catalog.rs
@@ -288,6 +289,8 @@ macro_rules! dispatch_provider {
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
+            Provider::Ollama(p) => p.$method($($arg),*),
+            #[cfg(feature = "providers-extended")]
             Provider::FalAI(p) => p.$method($($arg),*),
             Provider::Mistral(p) => p.$method($($arg),*),
             Provider::Cloudflare(p) => p.$method($($arg),*),
@@ -314,6 +317,8 @@ macro_rules! dispatch_provider {
             Provider::Gemini(p) => LLMProvider::$method(p.as_ref(), $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            #[cfg(feature = "providers-extended")]
+            Provider::Ollama(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::FalAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
@@ -342,6 +347,8 @@ macro_rules! dispatch_provider {
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
+            Provider::Ollama(p) => LLMProvider::$method(p, $($arg),*),
+            #[cfg(feature = "providers-extended")]
             Provider::FalAI(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Mistral(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Cloudflare(p) => LLMProvider::$method(p, $($arg),*),
@@ -368,6 +375,8 @@ macro_rules! dispatch_provider {
             Provider::Gemini(p) => LLMProvider::$method(p.as_ref()).await,
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(p) => LLMProvider::$method(p).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::Ollama(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
             Provider::FalAI(p) => LLMProvider::$method(p).await,
             Provider::Mistral(p) => LLMProvider::$method(p).await,
@@ -426,6 +435,8 @@ pub enum Provider {
     #[cfg(feature = "providers-extended")]
     GitHubCopilot(github_copilot::GitHubCopilotProvider),
     #[cfg(feature = "providers-extended")]
+    Ollama(ollama::OllamaProvider),
+    #[cfg(feature = "providers-extended")]
     FalAI(fal_ai::FalAIProvider),
     Mistral(mistral::MistralProvider),
     Cloudflare(cloudflare::CloudflareProvider),
@@ -473,6 +484,8 @@ impl Provider {
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(_) => "github_copilot",
             #[cfg(feature = "providers-extended")]
+            Provider::Ollama(_) => "ollama",
+            #[cfg(feature = "providers-extended")]
             Provider::FalAI(_) => "fal_ai",
             Provider::Mistral(_) => "mistral",
             Provider::Cloudflare(_) => "cloudflare",
@@ -503,6 +516,8 @@ impl Provider {
             Provider::Gemini(_) => ProviderType::Gemini,
             #[cfg(feature = "providers-extended")]
             Provider::GitHubCopilot(_) => ProviderType::GitHubCopilot,
+            #[cfg(feature = "providers-extended")]
+            Provider::Ollama(_) => ProviderType::Ollama,
             #[cfg(feature = "providers-extended")]
             Provider::FalAI(_) => ProviderType::FalAI,
             Provider::Mistral(_) => ProviderType::Mistral,
@@ -645,156 +660,6 @@ impl Provider {
     }
 }
 
-// ==================== Unit Tests ====================
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_provider_enum_is_send_sync() {
-        assert!(matches!(ProviderType::from("openai"), ProviderType::OpenAI));
-    }
-
-    #[tokio::test]
-    async fn test_provider_capabilities_embeddings_error_names_real_provider() {
-        let provider = Provider::Anthropic(
-            anthropic::AnthropicProvider::new(anthropic::AnthropicConfig::new_test("test-key"))
-                .unwrap(),
-        );
-
-        assert!(!provider.supports_capability(&ProviderCapability::Embeddings));
-
-        let err = provider
-            .create_embeddings(
-                crate::core::types::embedding::EmbeddingRequest {
-                    model: "claude-3-opus-20240229".to_string(),
-                    input: crate::core::types::embedding::EmbeddingInput::Text("hello".to_string()),
-                    user: None,
-                    encoding_format: None,
-                    dimensions: None,
-                    task_type: None,
-                },
-                crate::core::types::context::RequestContext::default(),
-            )
-            .await
-            .unwrap_err();
-
-        assert!(
-            matches!(
-                err,
-                ProviderError::NotSupported {
-                    provider: "anthropic",
-                    ..
-                }
-            ),
-            "expected provider-specific NotSupported, got {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_provider_enum_calculate_cost_delegates_mistral_aliases() {
-        let Ok(mistral_provider) = mistral::MistralProvider::new(mistral::MistralConfig {
-            api_key: "sk-test".to_string(),
-            ..mistral::MistralConfig::default()
-        })
-        .await
-        else {
-            panic!("Mistral provider should initialize with a test API key");
-        };
-        let provider = Provider::Mistral(mistral_provider);
-
-        let Ok(alias_cost) = provider
-            .calculate_cost("magistral-medium-1-2", 1000, 500)
-            .await
-        else {
-            panic!("Mistral alias cost should calculate");
-        };
-        let Ok(canonical_cost) = provider
-            .calculate_cost("magistral-medium-2509", 1000, 500)
-            .await
-        else {
-            panic!("Mistral canonical cost should calculate");
-        };
-        let Ok(devstral_alias_cost) = provider.calculate_cost("devstral-2-2512", 1000, 500).await
-        else {
-            panic!("Devstral alias cost should calculate");
-        };
-
-        assert!((alias_cost - canonical_cost).abs() < 1e-12);
-        assert!((alias_cost - 0.0045).abs() < 1e-12);
-        assert!((devstral_alias_cost - 0.0014).abs() < 1e-12);
-    }
-
-    #[tokio::test]
-    async fn test_provider_enum_calculate_cost_strips_openai_prefix() {
-        let mut config = openai::OpenAIConfig::default();
-        config.base.api_key = Some("sk-test123456789012345678901234567890123456".to_string());
-        let Ok(openai_provider) = openai::OpenAIProvider::new(config).await else {
-            panic!("OpenAI provider should initialize with a test API key");
-        };
-        let provider = Provider::OpenAI(openai_provider);
-
-        let Ok(cost) = provider
-            .calculate_cost("openai/gpt-5.5-pro", 1000, 500)
-            .await
-        else {
-            panic!("prefixed OpenAI cost should calculate");
-        };
-
-        assert!((cost - 0.12).abs() < 1e-12);
-    }
-
-    #[tokio::test]
-    async fn test_provider_capabilities_image_error_names_real_provider() {
-        let provider = Provider::Anthropic(
-            anthropic::AnthropicProvider::new(anthropic::AnthropicConfig::new_test("test-key"))
-                .unwrap(),
-        );
-
-        assert!(!provider.supports_capability(&ProviderCapability::ImageGeneration));
-
-        let err = provider
-            .create_images(
-                crate::core::types::image::ImageGenerationRequest {
-                    prompt: "a small test image".to_string(),
-                    model: Some("claude-3-opus-20240229".to_string()),
-                    n: None,
-                    size: None,
-                    quality: None,
-                    response_format: None,
-                    style: None,
-                    user: None,
-                },
-                crate::core::types::context::RequestContext::default(),
-            )
-            .await
-            .unwrap_err();
-
-        assert!(
-            matches!(
-                err,
-                ProviderError::NotSupported {
-                    provider: "anthropic",
-                    ..
-                }
-            ),
-            "expected provider-specific NotSupported, got {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_provider_supports_capability_for_optional_provider() {
-        let mut config = openai::OpenAIConfig::default();
-        config.base.api_key = Some("sk-test123456789012345678901234567890123456".to_string());
-        let Ok(openai_provider) = openai::OpenAIProvider::new(config).await else {
-            panic!("OpenAI provider should initialize with a test API key");
-        };
-        let provider = Provider::OpenAI(openai_provider);
-
-        assert!(provider.supports_capability(&ProviderCapability::ChatCompletion));
-        assert!(provider.supports_capability(&ProviderCapability::ChatCompletionStream));
-        assert!(provider.supports_capability(&ProviderCapability::Embeddings));
-        assert!(provider.supports_capability(&ProviderCapability::TextToSpeech));
-    }
-}
+#[path = "provider_tests.rs"]
+mod tests;

@@ -15,6 +15,10 @@ pub use async_batch::{
     AsyncBatchConfig, AsyncBatchError, AsyncBatchExecutor, AsyncBatchItemResult, AsyncBatchSummary,
     batch_execute,
 };
+#[deprecated(
+    since = "0.6.0",
+    note = "BatchProcessor is unreachable from the gateway and is scheduled for removal in 0.7.0; use the /v1/batches provider proxy"
+)]
 pub use processor::core::BatchProcessor;
 pub use types::{
     BatchError, BatchHttpResponse, BatchItem, BatchRecord, BatchRequest, BatchRequestCounts,

@@ -25,7 +25,7 @@ const TEST_ENV_KEYS: [&str; 24] = [
     "LITELLM_PROVIDER_OPENAI_MODELS",
     "LITELLM_PROVIDER_OPENAI_TAGS",
     "LITELLM_PROVIDER_OPENAI_MAX_RETRIES",
-    "LITELLM_PROVIDER_VLLM_TYPE",
+    "LITELLM_PROVIDER_OLLAMA_TYPE",
 ];
 
 fn clear_test_env() {
@@ -165,8 +165,8 @@ fn test_gateway_config_from_env_allows_local_provider_without_api_key() {
     unsafe {
         env::set_var(ENV_ENABLE_JWT, "true");
         env::set_var(ENV_JWT_SECRET, "StrongJwtSecretWithMixedCaseAndNumbers1234");
-        env::set_var(ENV_PROVIDERS, "vllm");
-        env::set_var("LITELLM_PROVIDER_VLLM_TYPE", "vllm");
+        env::set_var(ENV_PROVIDERS, "ollama");
+        env::set_var("LITELLM_PROVIDER_OLLAMA_TYPE", "ollama");
     }
 
     let config = match GatewayConfig::from_env() {
@@ -174,7 +174,7 @@ fn test_gateway_config_from_env_allows_local_provider_without_api_key() {
         Err(error) => panic!("expected GatewayConfig::from_env() to succeed: {}", error),
     };
     assert_eq!(config.providers.len(), 1);
-    assert_eq!(config.providers[0].provider_type, "vllm");
+    assert_eq!(config.providers[0].provider_type, "ollama");
     assert_eq!(config.providers[0].api_key, "");
 
     clear_test_env();

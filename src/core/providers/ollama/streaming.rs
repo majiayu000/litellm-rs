@@ -3,11 +3,12 @@
 //! Handles Ollama's streaming response format (NDJSON - newline-delimited JSON).
 //! Ollama uses a different format than OpenAI's SSE, so we need a custom parser.
 
+use crate::core::providers::shared::MessageTransformer;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
 #[cfg(test)]
 use crate::core::types::responses::ChatResponse;
-use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, Usage};
+use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason, Usage};
 use bytes::Bytes;
 use futures::Stream;
 use std::pin::Pin;
@@ -84,7 +85,7 @@ pub struct OllamaToolFunction {
 /// Ollama stream wrapper that handles NDJSON parsing
 pub struct OllamaStream<S> {
     inner: S,
-    buffer: String,
+    buffer: Vec<u8>,
     chunk_id: String,
     finished: bool,
 }
@@ -96,7 +97,7 @@ where
     pub fn new(stream: S) -> Self {
         Self {
             inner: stream,
-            buffer: String::new(),
+            buffer: Vec::new(),
             chunk_id: format!("ollama-{}", uuid::Uuid::new_v4()),
             finished: false,
         }
@@ -121,6 +122,13 @@ where
         // Convert to ChatChunk
         let chat_chunk = self.convert_chunk(chunk)?;
         Ok(Some(chat_chunk))
+    }
+
+    fn parse_bytes(&self, line: &[u8]) -> Result<Option<ChatChunk>, ProviderError> {
+        let line = std::str::from_utf8(line).map_err(|error| {
+            ProviderError::streaming_error("ollama", "chat", None, None, error.to_string())
+        })?;
+        self.parse_line(line)
     }
 
     /// Convert Ollama chunk to standard ChatChunk
@@ -156,7 +164,10 @@ where
                     .enumerate()
                     .map(|(i, tc)| crate::core::types::responses::ToolCallDelta {
                         index: i as u32,
-                        id: tc.id.clone(),
+                        id: tc
+                            .id
+                            .clone()
+                            .or_else(|| Some(format!("call_{}_{i}", self.chunk_id))),
                         tool_type: Some("function".to_string()),
                         function: Some(crate::core::types::responses::FunctionCallDelta {
                             name: Some(tc.function.name.clone()),
@@ -173,15 +184,21 @@ where
 
         // Determine finish reason
         let finish_reason = if chunk.done {
-            let reason_str = chunk.done_reason.as_deref().unwrap_or("stop");
-            Some(match reason_str {
-                "stop" => crate::core::types::responses::FinishReason::Stop,
-                "length" => crate::core::types::responses::FinishReason::Length,
-                "tool_calls" => crate::core::types::responses::FinishReason::ToolCalls,
-                "content_filter" => crate::core::types::responses::FinishReason::ContentFilter,
-                "function_call" => crate::core::types::responses::FinishReason::FunctionCall,
-                _ => crate::core::types::responses::FinishReason::Stop,
-            })
+            Some(
+                if delta
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty())
+                {
+                    FinishReason::ToolCalls
+                } else {
+                    chunk
+                        .done_reason
+                        .as_deref()
+                        .and_then(MessageTransformer::parse_finish_reason)
+                        .unwrap_or(FinishReason::Stop)
+                },
+            )
         } else {
             None
         };
@@ -230,11 +247,11 @@ where
 
         loop {
             // Check if we have a complete line in the buffer
-            if let Some(newline_pos) = self.buffer.find('\n') {
-                let line = self.buffer[..newline_pos].to_string();
-                self.buffer = self.buffer[newline_pos + 1..].to_string();
+            if let Some(newline_pos) = self.buffer.iter().position(|byte| *byte == b'\n') {
+                let mut line = self.buffer.drain(..=newline_pos).collect::<Vec<_>>();
+                line.pop();
 
-                match self.parse_line(&line) {
+                match self.parse_bytes(&line) {
                     Ok(Some(chunk)) => {
                         // Check if this is the final chunk
                         if chunk
@@ -254,8 +271,7 @@ where
             // Need more data from the underlying stream
             match Pin::new(&mut self.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    self.buffer.push_str(&text);
+                    self.buffer.extend_from_slice(&bytes);
                     // Continue loop to check for complete lines
                 }
                 Poll::Ready(Some(Err(e))) => {
@@ -271,7 +287,7 @@ where
                     // Stream ended, process any remaining data
                     if !self.buffer.is_empty() {
                         let line = std::mem::take(&mut self.buffer);
-                        match self.parse_line(&line) {
+                        match self.parse_bytes(&line) {
                             Ok(Some(chunk)) => {
                                 self.finished = true;
                                 return Poll::Ready(Some(Ok(chunk)));
@@ -374,6 +390,7 @@ fn response_to_chunks(response: ChatResponse) -> Vec<ChatChunk> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt as _;
 
     #[test]
     fn test_ollama_stream_chunk_deserialization() {
@@ -473,6 +490,58 @@ mod tests {
 
         let chunk: OllamaStreamChunk = serde_json::from_str(json).unwrap();
         assert_eq!(chunk.error, Some("model not found".to_string()));
+    }
+
+    #[tokio::test]
+    async fn stream_preserves_utf8_split_across_transport_chunks() {
+        let json = concat!(
+            "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",",
+            "\"content\":\"你好\"},\"done\":true,\"done_reason\":\"stop\"}\n"
+        );
+        let split = json.find('你').expect("fixture contains multibyte content") + 1;
+        let chunks = vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::copy_from_slice(&json.as_bytes()[..split])),
+            Ok(Bytes::copy_from_slice(&json.as_bytes()[split..])),
+        ];
+        let mut stream = OllamaStream::new(futures::stream::iter(chunks));
+
+        let chunk = stream
+            .next()
+            .await
+            .expect("stream should emit a chunk")
+            .expect("split UTF-8 should remain valid");
+        assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("你好"));
+    }
+
+    #[tokio::test]
+    async fn streamed_tool_ids_are_stable_and_override_stop_reason() {
+        let first = concat!(
+            "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",",
+            "\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":{}}}]},",
+            "\"done\":false}\n"
+        );
+        let last = concat!(
+            "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",",
+            "\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":{}}}]},",
+            "\"done\":true,\"done_reason\":\"stop\"}\n"
+        );
+        let chunks = vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from_static(first.as_bytes())),
+            Ok(Bytes::from_static(last.as_bytes())),
+        ];
+        let mut stream = OllamaStream::new(futures::stream::iter(chunks));
+
+        let first = stream.next().await.unwrap().unwrap();
+        let last = stream.next().await.unwrap().unwrap();
+        let first_id = first.choices[0].delta.tool_calls.as_ref().unwrap()[0]
+            .id
+            .as_deref();
+        let last_id = last.choices[0].delta.tool_calls.as_ref().unwrap()[0]
+            .id
+            .as_deref();
+        assert_eq!(first_id, last_id);
+        assert!(first_id.is_some_and(|id| id.starts_with("call_ollama-")));
+        assert_eq!(last.choices[0].finish_reason, Some(FinishReason::ToolCalls));
     }
 
     #[test]

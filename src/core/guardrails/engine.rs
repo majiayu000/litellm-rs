@@ -86,6 +86,16 @@ impl GuardrailEngine {
         self.config.enabled && !self.guardrails.is_empty()
     }
 
+    /// Whether request content will be inspected by this engine.
+    pub(crate) fn input_checks_enabled(&self) -> bool {
+        self.config.enabled
+            && self.config.check_input
+            && self
+                .guardrails
+                .iter()
+                .any(|guardrail| guardrail.is_enabled())
+    }
+
     /// Get the number of active guardrails
     pub fn guardrail_count(&self) -> usize {
         self.guardrails.iter().filter(|g| g.is_enabled()).count()
@@ -98,7 +108,7 @@ impl GuardrailEngine {
 
     /// Check input content (request)
     pub async fn check_input(&self, content: &str) -> GuardrailResult<CheckResult> {
-        if !self.is_enabled() || !self.config.check_input {
+        if !self.input_checks_enabled() {
             return Ok(CheckResult::pass());
         }
 
@@ -427,6 +437,23 @@ mod tests {
         should_block: bool,
     }
 
+    struct DisabledGuardrail;
+
+    #[async_trait::async_trait]
+    impl Guardrail for DisabledGuardrail {
+        fn name(&self) -> &str {
+            "disabled_guardrail"
+        }
+
+        fn is_enabled(&self) -> bool {
+            false
+        }
+
+        async fn check_input(&self, _content: &str) -> GuardrailResult<CheckResult> {
+            panic!("disabled guardrail must not execute")
+        }
+    }
+
     #[async_trait::async_trait]
     impl Guardrail for TestGuardrail {
         fn name(&self) -> &str {
@@ -456,6 +483,18 @@ mod tests {
 
         assert_eq!(engine.guardrail_count(), 1);
         assert!(engine.guardrail_names().contains(&"test_guardrail"));
+    }
+
+    #[test]
+    fn input_projection_is_disabled_without_an_active_guardrail() {
+        let config = GuardrailConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let mut engine = GuardrailEngine::new(config).unwrap();
+        engine.add_guardrail(Box::new(DisabledGuardrail));
+
+        assert!(!engine.input_checks_enabled());
     }
 
     #[tokio::test]

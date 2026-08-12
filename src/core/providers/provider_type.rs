@@ -15,6 +15,7 @@ pub enum ProviderType {
     DeepInfra,
     V0,
     MetaLlama,
+    Ollama,
     Mistral,
     Moonshot,
     Minimax,
@@ -104,6 +105,7 @@ pub fn all_non_custom_provider_types() -> Vec<ProviderType> {
         ProviderType::DeepInfra,
         ProviderType::V0,
         ProviderType::MetaLlama,
+        ProviderType::Ollama,
         ProviderType::Mistral,
         ProviderType::Moonshot,
         ProviderType::Minimax,
@@ -200,6 +202,11 @@ mod tests {
     }
 
     #[test]
+    fn test_provider_type_from_str_ollama() {
+        assert_eq!(ProviderType::from("ollama"), ProviderType::Ollama);
+    }
+
+    #[test]
     fn test_provider_type_from_str_mistral() {
         assert_eq!(ProviderType::from("mistral"), ProviderType::Mistral);
         assert_eq!(ProviderType::from("mistralai"), ProviderType::Mistral);
@@ -258,6 +265,7 @@ mod tests {
         assert_eq!(format!("{}", ProviderType::DeepInfra), "deepinfra");
         assert_eq!(format!("{}", ProviderType::V0), "v0");
         assert_eq!(format!("{}", ProviderType::MetaLlama), "meta_llama");
+        assert_eq!(format!("{}", ProviderType::Ollama), "ollama");
         assert_eq!(format!("{}", ProviderType::Mistral), "mistral");
         assert_eq!(format!("{}", ProviderType::Moonshot), "moonshot");
         assert_eq!(format!("{}", ProviderType::Groq), "groq");

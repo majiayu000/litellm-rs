@@ -140,7 +140,7 @@ auth:
     default_role: "user"
     admin_roles: ["admin", "superuser"]
 
-# Content safety is enforced on LLM request input and non-streaming output.
+# Content safety is enforced on LLM request input and output, including SSE.
 # Prompt-injection protection is enabled by default; this explicit switch is
 # the operational escape hatch for deployments that accept that risk.
 guardrails:
@@ -152,6 +152,10 @@ guardrails:
     use_heuristics: true
   check_input: true
   check_output: true
+  # Streaming text is withheld for at most this many new characters per check.
+  # Routes may check sooner at an output-event boundary.
+  # Smaller windows reduce latency and increase guardrail check frequency.
+  stream_output_check_chars: 256
   fail_open: false
 
 # Empty/default rules preserve allow-all behavior. Enable a configured
@@ -238,5 +242,8 @@ rate_limit:
 enterprise:
   enabled: false
   sso: null
+  # Explicitly enables request audit middleware. Events are emitted as JSON on
+  # stderr; request/response bodies remain disabled by default.
   audit_logging: false
+  # Deprecated removal candidate; enabling remains rejected.
   advanced_analytics: false

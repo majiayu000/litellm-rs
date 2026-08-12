@@ -1,5 +1,8 @@
 use super::*;
 use crate::core::types::content::ContentPart;
+use crate::core::types::tools::{
+    FunctionCall, FunctionChoice, FunctionDefinition, Tool, ToolCall, ToolChoice, ToolType,
+};
 
 fn create_test_message(role: MessageRole, content: &str) -> ChatMessage {
     ChatMessage {
@@ -86,6 +89,40 @@ fn test_vertex_usage_metadata_fails_closed_and_saturates() {
 }
 
 #[test]
+fn test_vertex_transform_chat_response_preserves_tool_calls() {
+    let transformer = GeminiTransformer::new();
+    let response = json!({
+        "candidates": [{
+            "index": 3,
+            "content": {"parts": [
+                {"text": "checking"},
+                {"functionCall": {
+                    "id": "call_weather_1",
+                    "name": "get_weather",
+                    "args": {"city": "Paris"}
+                }}
+            ]},
+            "finishReason": "STOP"
+        }]
+    });
+
+    let result = transformer
+        .transform_chat_response(response, &VertexAIModel::GeminiPro)
+        .unwrap();
+    let choice = &result.choices[0];
+    assert_eq!(choice.index, 3);
+    assert_eq!(choice.finish_reason, Some(FinishReason::ToolCalls));
+    assert_eq!(
+        choice.message.content.as_ref().unwrap().to_string(),
+        "checking"
+    );
+    let call = choice.message.tool_calls.as_ref().unwrap().first().unwrap();
+    assert_eq!(call.id, "call_weather_1");
+    assert_eq!(call.function.name, "get_weather");
+    assert_eq!(call.function.arguments, r#"{"city":"Paris"}"#);
+}
+
+#[test]
 fn test_transform_chat_response_missing_candidates() {
     let transformer = GeminiTransformer::new();
     let response = json!({});
@@ -136,6 +173,90 @@ fn test_message_content_to_parts_multipart_text() {
     assert!(result.is_ok());
     let parts = result.unwrap();
     assert_eq!(parts.len(), 2);
+}
+
+fn weather_tool() -> Tool {
+    Tool {
+        tool_type: ToolType::Function,
+        function: FunctionDefinition {
+            name: "get_weather".to_string(),
+            description: Some("Get weather".to_string()),
+            parameters: Some(json!({
+                "type": "object",
+                "properties": {"city": {"type": "string"}}
+            })),
+        },
+    }
+}
+
+fn weather_call() -> ToolCall {
+    ToolCall {
+        id: "call_weather_1".to_string(),
+        tool_type: "function".to_string(),
+        function: FunctionCall {
+            name: "get_weather".to_string(),
+            arguments: r#"{"city":"Paris"}"#.to_string(),
+        },
+    }
+}
+
+#[test]
+fn test_vertex_gemini_tool_loop_wire_uses_camel_case() {
+    let transformer = GeminiTransformer::new();
+    let request = ChatRequest {
+        model: "gemini-1.5-pro".to_string(),
+        messages: vec![
+            ChatMessage {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Text("checking".to_string())),
+                tool_calls: Some(vec![weather_call()]),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: MessageRole::Tool,
+                tool_call_id: Some("call_weather_1".to_string()),
+                content: Some(MessageContent::Text("sunny".to_string())),
+                ..Default::default()
+            },
+        ],
+        tools: Some(vec![weather_tool()]),
+        tool_choice: Some(ToolChoice::Specific {
+            choice_type: "function".to_string(),
+            function: Some(FunctionChoice {
+                name: "get_weather".to_string(),
+            }),
+        }),
+        ..Default::default()
+    };
+
+    let body = transformer
+        .transform_chat_request(&request, &VertexAIModel::GeminiPro)
+        .unwrap();
+    assert_eq!(
+        body["tools"][0]["functionDeclarations"][0]["name"],
+        "get_weather"
+    );
+    assert_eq!(
+        body["toolConfig"]["functionCallingConfig"]["allowedFunctionNames"][0],
+        "get_weather"
+    );
+    assert_eq!(
+        body["contents"][0]["parts"][1]["functionCall"]["id"],
+        "call_weather_1"
+    );
+    assert_eq!(
+        body["contents"][1]["parts"][0]["functionResponse"],
+        json!({"name":"get_weather","response":{"result":"sunny"}})
+    );
+    let wire = serde_json::to_string(&body).unwrap();
+    assert!(wire.contains("functionDeclarations"));
+    assert!(wire.contains("functionCallingConfig"));
+    assert!(wire.contains("allowedFunctionNames"));
+    assert!(wire.contains("functionCall"));
+    assert!(wire.contains("functionResponse"));
+    assert!(!wire.contains("function_declarations"));
+    assert!(!wire.contains("function_calling_config"));
+    assert!(!wire.contains("allowed_function_names"));
 }
 
 // ==================== PartnerModelTransformer Tests ====================

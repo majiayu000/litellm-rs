@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
+#[cfg(test)]
 use crate::core::providers::shared::strict_vertex_usage_metadata;
 use crate::core::{
     traits::{
@@ -18,7 +19,7 @@ use crate::core::{
         embedding::EmbeddingRequest,
         health::HealthStatus,
         image::ImageGenerationRequest,
-        model::{ModelInfo, ProviderCapability},
+        model::ModelInfo,
         responses::{ChatResponse, EmbeddingResponse, ImageGenerationResponse},
     },
 };
@@ -123,9 +124,11 @@ impl VertexAIProvider {
         _context: RequestContext,
     ) -> Result<ChatResponse, VertexAIError> {
         let model = super::parse_vertex_model(&request.model);
+        let is_catalog_gemini =
+            super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental);
 
         // Transform request based on model type
-        let (endpoint, body) = if model.is_gemini() {
+        let (endpoint, body) = if is_catalog_gemini {
             let endpoint = if request.stream {
                 "streamGenerateContent"
             } else {
@@ -147,7 +150,11 @@ impl VertexAIProvider {
             return Err(ProviderError::model_not_found("vertex_ai", &request.model));
         };
 
-        let url = self.build_url(&model, endpoint, request.stream);
+        let url = if is_catalog_gemini {
+            self.build_google_catalog_model_url(&request.model, endpoint, request.stream)
+        } else {
+            self.build_url(&model, endpoint, request.stream)
+        };
         let response = self.make_request(&url, body).await?;
 
         // Parse response
@@ -285,55 +292,39 @@ impl LLMProvider for VertexAIProvider {
 
     fn models(&self) -> &[ModelInfo] {
         use std::sync::LazyLock;
-        static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-            vec![
-                ModelInfo {
-                    id: "gemini-1.5-pro".to_string(),
-                    name: "Gemini 1.5 Pro".to_string(),
-                    provider: "vertex_ai".to_string(),
-                    max_context_length: 2_097_152,
-                    max_output_length: Some(8192),
-                    supports_streaming: true,
-                    supports_tools: true,
-                    supports_multimodal: true,
-                    input_cost_per_1k_tokens: Some(1.25),
-                    output_cost_per_1k_tokens: Some(3.75),
-                    currency: "USD".to_string(),
-                    capabilities: vec![
-                        ProviderCapability::ChatCompletion,
-                        ProviderCapability::ChatCompletionStream,
-                        ProviderCapability::FunctionCalling,
-                        ProviderCapability::ToolCalling,
-                    ],
-                    created_at: None,
-                    updated_at: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-                ModelInfo {
-                    id: "gemini-1.5-flash".to_string(),
-                    name: "Gemini 1.5 Flash".to_string(),
-                    provider: "vertex_ai".to_string(),
-                    max_context_length: 1_048_576,
-                    max_output_length: Some(8192),
-                    supports_streaming: true,
-                    supports_tools: true,
-                    supports_multimodal: true,
-                    input_cost_per_1k_tokens: Some(0.0625),
-                    output_cost_per_1k_tokens: Some(0.25),
-                    currency: "USD".to_string(),
-                    capabilities: vec![
-                        ProviderCapability::ChatCompletion,
-                        ProviderCapability::ChatCompletionStream,
-                        ProviderCapability::FunctionCalling,
-                        ProviderCapability::ToolCalling,
-                    ],
-                    created_at: None,
-                    updated_at: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-            ]
+        fn load_models(
+            surface: crate::core::providers::gemini::GoogleGeminiApiSurface,
+        ) -> Vec<ModelInfo> {
+            let mut models = crate::core::providers::gemini::get_gemini_registry()
+                .list_model_infos_for_surface(surface);
+            for model in &mut models {
+                match super::vertex_prices_per_1k(&model.id) {
+                    Ok((input, output)) => {
+                        model.input_cost_per_1k_tokens = input;
+                        model.output_cost_per_1k_tokens = output;
+                    }
+                    Err(error) => {
+                        tracing::error!(model = %model.id, %error, "Vertex AI model pricing is unavailable");
+                        model.input_cost_per_1k_tokens = None;
+                        model.output_cost_per_1k_tokens = None;
+                    }
+                }
+            }
+            models
+        }
+        static STABLE_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi)
         });
-        &MODELS
+        static EXPERIMENTAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+            )
+        });
+        if self.config.enable_experimental {
+            &EXPERIMENTAL_MODELS
+        } else {
+            &STABLE_MODELS
+        }
     }
 
     async fn chat_completion(
@@ -412,20 +403,7 @@ impl LLMProvider for VertexAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        // Basic cost calculation for Vertex AI models (per 1M tokens)
-        let cost = match model {
-            m if m.contains("gemini-pro") => {
-                (input_tokens as f64 * 0.0005 + output_tokens as f64 * 0.0015) / 1000.0
-            }
-            m if m.contains("gemini-1.5-pro") => {
-                (input_tokens as f64 * 0.00125 + output_tokens as f64 * 0.00375) / 1000.0
-            }
-            m if m.contains("gemini-1.5-flash") => {
-                (input_tokens as f64 * 0.000075 + output_tokens as f64 * 0.0003) / 1000.0
-            }
-            _ => 0.0, // Default cost for unknown models
-        };
-        Ok(cost)
+        super::calculate_vertex_cost(model, input_tokens, output_tokens)
     }
 
     /// Model
@@ -550,81 +528,16 @@ impl LLMProvider for VertexAIProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> std::result::Result<Value, ProviderError> {
-        let mut params = HashMap::new();
-
-        params.insert(
-            "messages".to_string(),
-            serde_json::to_value(request.messages)
-                .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?,
-        );
-        params.insert("model".to_string(), Value::String(request.model.clone()));
-
-        if let Some(max_tokens) = request.max_tokens {
-            params.insert(
-                "max_tokens".to_string(),
-                Value::Number(serde_json::Number::from(max_tokens)),
-            );
+        let model = super::parse_vertex_model(&request.model);
+        if model.is_gemini() {
+            self.gemini_transformer
+                .transform_chat_request(&request, &model)
+        } else if model.is_partner_model() {
+            self.partner_transformer
+                .transform_chat_request(&request, &model)
+        } else {
+            Err(ProviderError::model_not_found("vertex_ai", &request.model))
         }
-
-        if let Some(temperature) = request.temperature {
-            let temp_f64 = temperature as f64;
-            params.insert(
-                "temperature".to_string(),
-                Value::Number(serde_json::Number::from_f64(temp_f64).ok_or_else(|| {
-                    ProviderError::invalid_request(
-                        "vertex_ai",
-                        format!("invalid temperature value: {temp_f64} (NaN and Infinity are not allowed)"),
-                    )
-                })?),
-            );
-        }
-
-        if let Some(top_p) = request.top_p {
-            let top_p_f64 = top_p as f64;
-            params.insert(
-                "top_p".to_string(),
-                Value::Number(serde_json::Number::from_f64(top_p_f64).ok_or_else(|| {
-                    ProviderError::invalid_request(
-                        "vertex_ai",
-                        format!(
-                            "invalid top_p value: {top_p_f64} (NaN and Infinity are not allowed)"
-                        ),
-                    )
-                })?),
-            );
-        }
-
-        if let Some(stop) = request.stop {
-            params.insert(
-                "stop".to_string(),
-                serde_json::to_value(stop)
-                    .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?,
-            );
-        }
-
-        if request.stream {
-            params.insert("stream".to_string(), Value::Bool(true));
-        }
-
-        if let Some(tools) = request.tools {
-            params.insert(
-                "tools".to_string(),
-                serde_json::to_value(tools)
-                    .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?,
-            );
-        }
-
-        if let Some(tool_choice) = request.tool_choice {
-            params.insert(
-                "tool_choice".to_string(),
-                serde_json::to_value(tool_choice)
-                    .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))?,
-            );
-        }
-
-        let vertex_params = self.map_openai_params(params, &request.model).await?;
-        serde_json::to_value(vertex_params)
-            .map_err(|e| ProviderError::serialization("vertex_ai", e.to_string()))
     }
 
     /// Response
@@ -648,68 +561,19 @@ impl LLMProvider for VertexAIProvider {
             return Err(error_mapper.map_json_error(&response_json));
         }
 
-        // Response
-        let candidates = response_json
-            .get("candidates")
-            .and_then(|c| c.as_array())
-            .ok_or_else(|| {
-                ProviderError::response_parsing("vertex_ai", "Missing candidates in response")
-            })?;
-
-        if candidates.is_empty() {
-            return Err(ProviderError::response_parsing(
+        let model = super::parse_vertex_model(model);
+        if model.is_gemini() {
+            self.gemini_transformer
+                .transform_chat_response(response_json, &model)
+        } else if model.is_partner_model() {
+            self.partner_transformer
+                .transform_chat_response(response_json, &model)
+        } else {
+            Err(ProviderError::model_not_found(
                 "vertex_ai",
-                "No candidates in response",
-            ));
+                model.model_id(),
+            ))
         }
-
-        let candidate = &candidates[0];
-        let content = candidate
-            .get("content")
-            .and_then(|c| c.get("parts"))
-            .and_then(|p| p.as_array())
-            .and_then(|parts| parts.first())
-            .and_then(|part| part.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        // Usage statistics information
-        let usage = parse_vertex_usage(&response_json);
-
-        Ok(ChatResponse {
-            id: format!("vertex-ai-{}", uuid::Uuid::new_v4()),
-            object: "chat.completion".to_string(),
-            created: chrono::Utc::now().timestamp(),
-            model: model.to_string(),
-            choices: vec![crate::core::types::responses::ChatChoice {
-                index: 0,
-                message: crate::core::types::chat::ChatMessage {
-                    role: crate::core::types::message::MessageRole::Assistant,
-                    content: Some(crate::core::types::message::MessageContent::Text(content)),
-                    thinking: None,
-                    audio: None,
-                    name: None,
-                    tool_calls: None, // Handle
-                    tool_call_id: None,
-                    function_call: None,
-                },
-                finish_reason: candidate
-                    .get("finishReason")
-                    .and_then(|r| r.as_str())
-                    .map(|reason| match reason {
-                        "STOP" => crate::core::types::responses::FinishReason::Stop,
-                        "MAX_TOKENS" => crate::core::types::responses::FinishReason::Length,
-                        "SAFETY" => crate::core::types::responses::FinishReason::ContentFilter,
-                        "RECITATION" => crate::core::types::responses::FinishReason::ContentFilter,
-                        _ => crate::core::types::responses::FinishReason::Stop,
-                    })
-                    .or(Some(crate::core::types::responses::FinishReason::Stop)),
-                logprobs: None,
-            }],
-            usage,
-            system_fingerprint: None,
-        })
     }
 
     /// Error
@@ -718,6 +582,7 @@ impl LLMProvider for VertexAIProvider {
     }
 }
 
+#[cfg(test)]
 fn parse_vertex_usage(response: &Value) -> Option<crate::core::types::responses::Usage> {
     response
         .get("usageMetadata")

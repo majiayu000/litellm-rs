@@ -159,9 +159,12 @@ pub(super) async fn handle_streaming_completion(
             let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
             let include_usage = adapter_request.include_usage;
             let mut echo_prefix = adapter_request.echo.then_some(adapter_request.prompt);
+            let guardrails = Arc::clone(&state.guardrails);
 
             tokio::spawn(async move {
                 let mut lease = Some(lease);
+                let mut output_guardrail =
+                    super::super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
                 let mut tokens_used = 0_u64;
                 let mut final_usage = None;
                 let mut saw_upstream_output = false;
@@ -169,6 +172,35 @@ pub(super) async fn handle_streaming_completion(
                     () => {
                         if final_usage.is_some() || saw_upstream_output {
                             settlement.record_disconnect(final_usage.as_ref()).await;
+                        }
+                    };
+                }
+                macro_rules! return_after_guardrail_error {
+                    ($error:expr) => {{
+                        let guardrail_error = $error;
+                        send_stream_error(
+                            &tx,
+                            guardrail_error.message(),
+                            guardrail_error.error_type(),
+                            guardrail_error.code(),
+                        )
+                        .await;
+                        drop(lease.take());
+                        callback.fail(guardrail_error.message(), "guardrail_output");
+                        settle_if_chargeable!();
+                        return;
+                    }};
+                }
+                macro_rules! flush_guardrail {
+                    () => {
+                        match output_guardrail.flush_to_until_closed(&tx).await {
+                            Ok(Some(())) => {}
+                            Ok(None) => {
+                                callback.fail("client disconnected", "client_disconnect");
+                                settle_if_chargeable!();
+                                return;
+                            }
+                            Err(error) => return_after_guardrail_error!(error),
                         }
                     };
                 }
@@ -200,6 +232,7 @@ pub(super) async fn handle_streaming_completion(
                         match timed_result {
                             Ok(result) => result,
                             Err(_) => {
+                                flush_guardrail!();
                                 warn!(
                                     "Completion SSE stream idle timeout after {}s",
                                     idle_timeout_secs
@@ -232,7 +265,7 @@ pub(super) async fn handle_streaming_completion(
                         break;
                     };
 
-                    let bytes = match chunk_result {
+                    let (output_deltas, bytes) = match chunk_result {
                         Ok(chunk) => {
                             let has_candidate_output =
                                 spend::stream_chunk_has_candidate_output(&chunk);
@@ -252,6 +285,16 @@ pub(super) async fn handle_streaming_completion(
                             } else {
                                 None
                             };
+                            let output_deltas = chunk
+                                .choices
+                                .iter()
+                                .map(|choice| {
+                                    (
+                                        choice.index,
+                                        choice.delta.content.clone().unwrap_or_default(),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
                             let completion_chunk = completion_chunk_from_core(
                                 chunk,
                                 prefix_for_chunk.as_deref(),
@@ -260,9 +303,10 @@ pub(super) async fn handle_streaming_completion(
                             if !include_usage && completion_chunk.choices.is_empty() {
                                 continue;
                             }
-                            match serde_json::to_string(&completion_chunk) {
+                            let bytes = match serde_json::to_string(&completion_chunk) {
                                 Ok(json) => Event::default().data(&json).to_bytes(),
                                 Err(error) => {
+                                    flush_guardrail!();
                                     error!("Completion stream serialization error: {}", error);
                                     send_stream_error(
                                         &tx,
@@ -285,9 +329,11 @@ pub(super) async fn handle_streaming_completion(
                                     settle_if_chargeable!();
                                     return;
                                 }
-                            }
+                            };
+                            (output_deltas, bytes)
                         }
                         Err(error) => {
+                            flush_guardrail!();
                             error!("Completion stream chunk error: {}", error);
                             let (error_type, error_code) = chat::sse_error_classification(&error);
                             send_stream_error(&tx, &error.to_string(), error_type, error_code)
@@ -301,12 +347,28 @@ pub(super) async fn handle_streaming_completion(
                         }
                     };
 
-                    if tx.send(bytes).await.is_err() {
-                        callback.fail("client disconnected", "client_disconnect");
-                        settle_if_chargeable!();
-                        return;
+                    let pending = match output_guardrail
+                        .push_many_until_closed(&tx, output_deltas, bytes)
+                        .await
+                    {
+                        Ok(Some(pending)) => pending,
+                        Ok(None) => {
+                            callback.fail("client disconnected", "client_disconnect");
+                            settle_if_chargeable!();
+                            return;
+                        }
+                        Err(error) => return_after_guardrail_error!(error),
+                    };
+                    for bytes in pending {
+                        if tx.send(bytes).await.is_err() {
+                            callback.fail("client disconnected", "client_disconnect");
+                            settle_if_chargeable!();
+                            return;
+                        }
                     }
                 }
+
+                flush_guardrail!();
 
                 if tx
                     .send(Event::default().data("[DONE]").to_bytes())

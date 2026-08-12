@@ -8,8 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Wired the `ollama` selector to its native chat, streaming, embeddings, tools, and health runtime behind `providers-extended`, with policy-bound public/private endpoint handling for #837.
 - Wired `guardrails` into canonical chat request/response execution with default-on prompt-injection protection and an explicit `guardrails.enabled: false` opt-out.
 - Added gateway `ip_access` configuration and registered its middleware ahead of authentication, handlers, and provider execution; default empty rules remain allow-all.
+- Wired `enterprise.audit_logging` into request audit middleware with structured JSON stderr/file output, and aligned the observability facade with configured Langfuse/OpenTelemetry/Datadog lifecycle callbacks.
+- Added real default-off Cargo gates for the module-only `a2a`, `mcp`, and `webhooks` experimental libraries.
 - Added the `pricing.unpriced_model_policy` and `pricing.unpriced_fallback_cost_per_1k_tokens` configuration surface for #831 fail-closed unpriced-model enforcement; `pricing.allow_degraded` remains startup-only.
 - Added `gateway_unpriced_events_total{provider,model_bucket,policy,outcome}` and `gateway_unpriced_spend_total{provider,model_bucket,policy,outcome}` Prometheus metrics for unpriced-model rejects, router candidate exclusions, and fallback settlements.
 
@@ -17,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Breaking behavior: runtime requests for unpriced models now fail closed by default even when `pricing.allow_degraded=true`; deployments that intentionally allow unpriced traffic must set `pricing.unpriced_model_policy=allow_unpriced` and configure a finite `pricing.unpriced_fallback_cost_per_1k_tokens`.
 
 ### Deprecated
+- Deprecated the unreachable `core::batch::BatchProcessor`, duplicate `core::virtual_keys::VirtualKeyManager`, `core::semantic_cache`, `core::analytics`, default-off `core::a2a`/`core::mcp`/`core::realtime`/`core::webhooks`, and optional `core::user_management::UserManager` public surfaces for the 0.6 line. They remain available behind their documented compatibility/features until the approved 0.7 removal; see `docs/architecture/GH838-subsystem-migration-0.6-to-0.7.md`.
 - Deprecated the `providers-extended` public `amazon_nova` native module for the 0.6.0 line while preserving its symbols, constructors, and runtime behavior. The catalog policy now records the same Amazon Nova endpoint/auth contract, five canonical models, token pricing, multimodal/tool metadata, and provider capabilities as the native implementation. Direct Rust imports should migrate to the `amazon_nova` catalog selector before the planned 0.7.0 native demotion; see `docs/providers/GH837-migration-0.6-to-0.7.md`.
 - Deprecated the `providers-extended` public `github` native module for the 0.6.0 line while preserving its symbols, constructors, and runtime behavior. The catalog policy now records the same `GITHUB_MODELS_API_BASE` (`https://models.inference.ai.azure.com`) endpoint/Bearer `GITHUB_TOKEN` auth contract, all 16 GitHub Models, token pricing, multimodal/tool metadata, and provider capabilities as the native implementation, with health served by the OpenAI-compatible catalog route. Direct Rust imports should migrate to the `github` catalog selector before the planned 0.7.0 native demotion; see `docs/providers/GH837-migration-0.6-to-0.7.md`.
 - Deprecated the `providers-extended` public `custom_api` module and its `CustomHttpxConfig`, `CustomApiErrorMapper`, and `CustomHttpxProvider` exports for the 0.6.0 line. Existing symbols, signatures, and runtime behavior remain available in 0.6.x, but arbitrary URL/method/template/parser support is no longer a product goal and the surface is scheduled for removal in 0.7.0. See `docs/providers/GH837-migration-0.6-to-0.7.md` for alternatives.

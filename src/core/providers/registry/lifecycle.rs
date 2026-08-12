@@ -86,12 +86,12 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     internal("macros", "provider macro infrastructure"),
     stub(
         "meta_llama",
-        "native Meta Llama module retained; ProviderType::MetaLlama currently uses a generic OpenAI-compatible adapter",
+        "catalog runtime preserves Meta Llama auth, identity, params, capabilities, and model metadata; deprecated native public surface remains until the 0.7.0 compatibility gate",
     ),
     wire("mistral", "native Provider enum variant"),
-    stub(
+    providers_extended_wire(
         "ollama",
-        "specialized provider module; not wired through the LLM factory yet",
+        "ProviderType::Ollama dispatches to the native Ollama protocol when providers-extended is enabled",
     ),
     wire("openai", "native Provider enum variant"),
     wire("openai_like", "shared OpenAI-compatible runtime provider"),
@@ -103,7 +103,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     internal("thinking", "shared thinking/reasoning support"),
     stub(
         "v0",
-        "native V0 module retained; ProviderType::V0 currently uses a generic OpenAI-compatible adapter",
+        "catalog runtime preserves V0 aliases, model metadata, pricing, capabilities, health, and error policy; deprecated native public surface remains until the 0.7.0 compatibility gate",
     ),
     provider_extra_wire(
         "vertex_ai",
@@ -129,17 +129,12 @@ pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
     baseline(
         "meta_llama",
         "demote-to-catalog",
-        "catalog-backed duplicate with native provider retained until demote tranche",
-    ),
-    baseline(
-        "ollama",
-        "demote-to-catalog",
-        "local OpenAI-compatible candidate",
+        "catalog equivalence complete; native public surface retained until the approved 0.7.0 removal gate",
     ),
     baseline(
         "v0",
         "demote-to-catalog",
-        "catalog-backed duplicate with native provider retained until demote tranche",
+        "catalog equivalence complete; native public surface retained until the approved 0.7.0 removal gate",
     ),
 ];
 

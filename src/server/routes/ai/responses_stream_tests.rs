@@ -107,6 +107,48 @@ fn test_completed_response_output_contains_reasoning_item() {
 }
 
 #[test]
+fn codex_custom_tool_stream_events_are_ordered_and_lossless() {
+    let mut state = ToolCallAccum::new("ct_1".into(), "call_1".into(), "shell".into(), 2, true);
+    state.arguments = r#"{"input":"echo hello"}"#.into();
+    let added = serde_json::to_value(ResponseStreamEvent::ResponseOutputItemAdded {
+        output_index: 2,
+        item: state.output_item("in_progress"),
+    })
+    .unwrap();
+    let events = state
+        .done_events()
+        .into_iter()
+        .map(|event| serde_json::to_value(event).unwrap())
+        .collect::<Vec<_>>();
+    let done = serde_json::to_value(ResponseStreamEvent::ResponseOutputItemDone {
+        output_index: 2,
+        item: state.output_item("completed"),
+    })
+    .unwrap();
+
+    assert_eq!(added["item"]["type"], "custom_tool_call");
+    assert_eq!(events[0]["type"], "response.custom_tool_call_input.delta");
+    assert_eq!(events[0]["item_id"], "ct_1");
+    assert_eq!(events[0]["delta"], "echo hello");
+    assert_eq!(events[1]["type"], "response.custom_tool_call_input.done");
+    assert_eq!(events[1]["input"], "echo hello");
+    assert_eq!(done["item"]["call_id"], "call_1");
+    assert_eq!(done["item"]["input"], "echo hello");
+}
+
+#[test]
+fn function_call_stream_events_use_response_item_id() {
+    let mut state = ToolCallAccum::new("fc_1".into(), "call_1".into(), "lookup".into(), 0, false);
+    state.arguments = "{}".into();
+    let delta = serde_json::to_value(state.delta_event("{".into()).unwrap()).unwrap();
+    let done = serde_json::to_value(state.done_events().remove(0)).unwrap();
+    assert_eq!(delta["item_id"], "fc_1");
+    assert!(delta.get("call_id").is_none());
+    assert_eq!(done["item_id"], "fc_1");
+    assert_eq!(done["name"], "lookup");
+}
+
+#[test]
 fn test_response_usage_from_chat_usage_preserves_details() {
     let usage = ChatUsage {
         prompt_tokens: 100,

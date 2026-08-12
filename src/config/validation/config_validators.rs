@@ -262,9 +262,7 @@ impl Validate for ProviderConfig {
         .map_err(|message| format!("Provider {} {message}", self.name))?;
 
         let requires_api_key =
-            crate::core::providers::registry::get_definition(&provider_selector.to_lowercase())
-                .map(|def| !def.skip_api_key)
-                .unwrap_or(true);
+            !crate::core::providers::registry::selector_skips_api_key(provider_selector);
 
         if requires_api_key && self.api_key.is_empty() {
             return Err(format!("Provider {} API key cannot be empty", self.name));
@@ -601,6 +599,25 @@ mod endpoint_access_tests {
                 .unwrap_err()
                 .contains("top-level")
         );
+    }
+
+    #[cfg(feature = "providers-extended")]
+    #[test]
+    fn keyless_ollama_startup_validation_preserves_endpoint_policy() {
+        let mut config = public_provider();
+        config.name = "local-ollama".to_string();
+        config.provider_type = "ollama".to_string();
+        config.api_key.clear();
+        config.base_url = None;
+        assert!(Validate::validate(&config).is_ok());
+
+        config.base_url = Some("http://127.0.0.1:11434".to_string());
+        let error = Validate::validate(&config)
+            .expect_err("explicit public-only loopback must remain fail-closed");
+        assert!(error.contains("private or reserved"), "{error}");
+
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        assert!(Validate::validate(&config).is_ok());
     }
 
     #[test]

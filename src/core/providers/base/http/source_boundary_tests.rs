@@ -60,9 +60,6 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
     exception!("src/core/providers/meta_llama/common_utils.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
             "<module>: raw HTTP path crate::utils::net::http::create_custom_client", "<module>: raw HTTP path reqwest::Client",
     ]),
-    exception!("src/core/providers/ollama/provider.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
-            "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client", "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request", "new: legacy GlobalPoolManager::new() constructor",
-    ]),
     exception!("src/core/providers/replicate/provider.rs", "native runtime is restricted by the factory to the fixed Replicate API endpoint", [
             "<module>: raw HTTP path crate::core::providers::base::apply_headers", "build_request: raw HTTP client accessor .client()", "build_request: raw HTTP client accessor .client()", "build_request: raw HTTP client accessor .client()", "build_request: raw HTTP client accessor .client()", "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client", "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request_with_timeout", "new: legacy GlobalPoolManager::new() constructor",
     ]),

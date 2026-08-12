@@ -155,9 +155,7 @@ fn load_providers_from_env() -> crate::utils::error::gateway_error::Result<Vec<P
         let api_key_key = provider_env_name(&name, "API_KEY");
         let provider_type = required_env(&type_key)?;
         let selector = provider_type.to_lowercase();
-        let skip_api_key = crate::core::providers::registry::get_definition(&selector)
-            .map(|def| def.skip_api_key)
-            .unwrap_or(false);
+        let skip_api_key = crate::core::providers::registry::selector_skips_api_key(&selector);
         let api_key = if skip_api_key {
             env_var(&api_key_key).unwrap_or_default()
         } else {

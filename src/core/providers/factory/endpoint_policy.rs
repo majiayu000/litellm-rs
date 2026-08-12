@@ -7,7 +7,7 @@ pub(super) fn provider_type_supports(provider_type: &ProviderType) -> bool {
     use ProviderType::*;
     match provider_type {
         OpenAI | OpenAICompatible | Anthropic | Mistral | Cohere | Azure | AzureAI | Bedrock
-        | VertexAI | Gemini => true,
+        | VertexAI | Gemini | Ollama => true,
         Cloudflare | FalAI | Replicate | GitHubCopilot => false,
         _ => provider_registry::catalog_definition_for_provider_type(provider_type).is_some(),
     }
@@ -21,12 +21,11 @@ pub(crate) fn selector_supports_endpoint_access(selector: &str) -> bool {
 }
 
 pub(crate) fn selector_allows_implicit_private(selector: &str) -> bool {
-    selector
-        .parse::<ProviderType>()
-        .is_ok_and(|provider_type| matches!(provider_type, ProviderType::Bedrock))
-        || catalog_definition_for_supported_selector(selector)
-            .and_then(|definition| url::Url::parse(definition.base_url).ok())
-            .is_some_and(|url| url.host_str() == Some("localhost"))
+    selector.parse::<ProviderType>().is_ok_and(|provider_type| {
+        matches!(provider_type, ProviderType::Bedrock | ProviderType::Ollama)
+    }) || catalog_definition_for_supported_selector(selector)
+        .and_then(|definition| url::Url::parse(definition.base_url).ok())
+        .is_some_and(|url| url.host_str() == Some("localhost"))
 }
 
 const STANDARD_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base"];

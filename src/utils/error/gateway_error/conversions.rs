@@ -1,9 +1,17 @@
 //! Type conversions for GatewayError
 
 use super::types::GatewayError;
+#[cfg(feature = "a2a")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with A2A in 0.7.
 use crate::core::a2a::error::A2AError;
+#[cfg(feature = "a2a")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with A2A in 0.7.
 use crate::core::a2a::message::A2AResponseError;
+#[cfg(feature = "mcp")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with MCP in 0.7.
 use crate::core::mcp::error::McpError;
+#[cfg(feature = "mcp")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with MCP in 0.7.
 use crate::core::mcp::protocol::JsonRpcError;
 use crate::core::providers::unified_provider::ProviderError;
 
@@ -16,11 +24,14 @@ impl From<ProviderError> for GatewayError {
     }
 }
 
+#[cfg(any(feature = "a2a", feature = "mcp"))]
 fn retry_after_ms_to_secs(retry_after_ms: Option<u64>) -> Option<u64> {
     retry_after_ms.map(|ms| (ms.saturating_add(999) / 1000).max(1))
 }
 
 // Conversion from A2AError to GatewayError
+#[cfg(feature = "a2a")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with A2A in 0.7.
 impl From<A2AError> for GatewayError {
     fn from(err: A2AError) -> Self {
         // Keep protocol mapping in the runtime path so canonical A2A mapping is exercised.
@@ -120,6 +131,8 @@ impl From<A2AError> for GatewayError {
 }
 
 // Conversion from McpError to GatewayError
+#[cfg(feature = "mcp")]
+#[allow(deprecated)] // GH838 protocol compatibility adapter; removed with MCP in 0.7.
 impl From<McpError> for GatewayError {
     fn from(err: McpError) -> Self {
         // Keep protocol mapping in the runtime path so canonical MCP mapping is exercised.
@@ -244,6 +257,10 @@ impl From<McpError> for GatewayError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "a2a", feature = "mcp"))]
 #[path = "conversions_tests.rs"]
-mod tests;
+mod protocol_tests;
+
+#[cfg(test)]
+#[path = "provider_conversion_tests.rs"]
+mod provider_tests;

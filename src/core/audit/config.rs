@@ -217,8 +217,12 @@ impl AuditConfig {
 
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
-        // At least one output should be configured when enabled
-        // For now, we allow no output (memory only)
+        if self.buffer_size == 0 {
+            return Err("audit buffer_size must be greater than zero".to_string());
+        }
+        if self.flush_interval_ms == 0 {
+            return Err("audit flush_interval_ms must be greater than zero".to_string());
+        }
         Ok(())
     }
 }
@@ -376,6 +380,15 @@ mod tests {
 
         let enabled_config = AuditConfig::new().enable();
         assert!(enabled_config.validate().is_ok());
+
+        let mut invalid = AuditConfig::new().enable();
+        invalid.buffer_size = 1;
+        assert!(invalid.validate().is_ok());
+        invalid.buffer_size = 0;
+        assert!(invalid.validate().is_err());
+        invalid.buffer_size = 1;
+        invalid.flush_interval_ms = 0;
+        assert!(invalid.validate().is_err());
     }
 
     #[test]

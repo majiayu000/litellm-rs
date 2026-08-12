@@ -565,48 +565,22 @@ fn known_non_gateway_modules_are_positive_exemptions() {
 }
 
 #[test]
-fn gh838_temporary_exemptions_match_explicit_issue_baseline() {
-    assert_eq!(GH838_TEMPORARY_EXEMPTION_ISSUE, 838);
-
-    let baseline: BTreeSet<&str> = GH838_TEMPORARY_EXEMPTIONS.iter().copied().collect();
-    for name in &baseline {
-        let Some(subsystem) = subsystem_for(name) else {
-            panic!("temporary exemption {name} exists");
-        };
-        assert_eq!(
-            subsystem.decision,
-            SubsystemDecision::TemporaryExemption,
-            "{name} must use the GH838 temporary exemption decision"
-        );
-    }
-
-    for subsystem in CORE_SUBSYSTEMS {
-        if subsystem.decision == SubsystemDecision::TemporaryExemption {
-            assert!(
-                baseline.contains(subsystem.name),
-                "{} must be added to the explicit GH838 temporary exemption baseline",
-                subsystem.name
-            );
-        }
-    }
-}
-
-#[test]
 fn issue_838_subsystems_have_explicit_non_silent_decisions() {
     let expected = [
-        ("a2a", SubsystemDecision::TemporaryExemption),
+        ("a2a", SubsystemDecision::FeatureGated),
         ("analytics", SubsystemDecision::FeatureGated),
-        ("audit", SubsystemDecision::ConfigRejected),
-        ("batch", SubsystemDecision::TemporaryExemption),
+        ("audit", SubsystemDecision::Wired),
+        ("batch", SubsystemDecision::LibraryOnly),
         ("guardrails", SubsystemDecision::Wired),
-        ("integrations", SubsystemDecision::TemporaryExemption),
+        ("integrations", SubsystemDecision::Wired),
         ("ip_access", SubsystemDecision::Wired),
-        ("mcp", SubsystemDecision::TemporaryExemption),
-        ("observability", SubsystemDecision::TemporaryExemption),
+        ("mcp", SubsystemDecision::FeatureGated),
+        ("observability", SubsystemDecision::Wired),
         ("realtime", SubsystemDecision::FeatureGated),
         ("semantic_cache", SubsystemDecision::ConfigRejected),
-        ("virtual_keys", SubsystemDecision::TemporaryExemption),
-        ("webhooks", SubsystemDecision::TemporaryExemption),
+        ("user_management", SubsystemDecision::InternalDependency),
+        ("virtual_keys", SubsystemDecision::Wired),
+        ("webhooks", SubsystemDecision::FeatureGated),
     ];
 
     for (name, decision) in expected {
@@ -620,4 +594,32 @@ fn issue_838_subsystems_have_explicit_non_silent_decisions() {
             "{name} must explain the decision"
         );
     }
+
+    assert!(
+        CORE_SUBSYSTEMS
+            .iter()
+            .all(|subsystem| subsystem.decision != SubsystemDecision::TemporaryExemption),
+        "GH838 compatibility variant must not classify an active subsystem"
+    );
+
+    let source = std::fs::read_to_string(manifest_path("src/core/subsystem_registry.rs"))
+        .expect("read subsystem registry source");
+    for symbol in [
+        "GH838_TEMPORARY_EXEMPTION_ISSUE",
+        "GH838_TEMPORARY_EXEMPTIONS",
+    ] {
+        assert!(source.contains(symbol), "0.6 compatibility symbol {symbol}");
+    }
+}
+
+#[test]
+fn breaking_release_workflow_requires_explicit_confirmation() {
+    let workflow = std::fs::read_to_string(manifest_path(".github/workflows/version-bump.yml"))
+        .expect("read version bump workflow");
+
+    assert!(workflow.contains("confirm_breaking_changes"));
+    assert!(workflow.contains("compatibility and migration review"));
+    assert!(workflow.contains("too small for detected breaking changes"));
+    assert!(workflow.contains("| grep -E '(^|[[:space:]])"));
+    assert!(!workflow.contains("grep -qE"));
 }

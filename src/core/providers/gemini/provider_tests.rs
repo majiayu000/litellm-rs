@@ -90,17 +90,29 @@ fn test_model_support() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    assert!(provider.supports_model("gemini-1.0-pro"));
-    assert!(provider.supports_model("gemini-1.5-flash"));
+    assert!(provider.supports_model("gemini-3.6-flash"));
+    assert!(provider.supports_model("gemini-3.5-flash-lite"));
+    assert!(provider.supports_model("gemini-2.5-flash"));
+    assert!(!provider.supports_model("gemini-1.0-pro"));
+    assert!(!provider.supports_model("gemini-3.1-flash"));
     assert!(!provider.supports_model("gpt-4"));
 }
 
 #[test]
-fn test_model_support_gemini_1_0_pro() {
+fn vertex_provider_does_not_assume_developer_only_models() {
+    let provider = GeminiProvider::new(GeminiConfig::new_vertex_ai("project", "location")).unwrap();
+
+    assert!(!provider.supports_model("gemini-3.6-flash"));
+    assert!(!provider.supports_model("gemini-3.5-flash-lite"));
+    assert!(provider.supports_model("gemini-3.5-flash"));
+}
+
+#[test]
+fn test_retired_gemini_1_0_pro_is_not_published() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    assert!(provider.supports_model("gemini-1.0-pro"));
+    assert!(!provider.supports_model("gemini-1.0-pro"));
 }
 
 #[test]
@@ -130,7 +142,7 @@ fn test_request_validation_empty_messages() {
     let provider = GeminiProvider::new(config).unwrap();
 
     let empty_request = ChatRequest {
-        model: "gemini-1.0-pro".to_string(),
+        model: "gemini-2.5-flash".to_string(),
         messages: vec![],
         ..Default::default()
     };
@@ -143,7 +155,7 @@ fn test_request_validation_invalid_temperature_high() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let mut request = create_valid_request("gemini-1.0-pro");
+    let mut request = create_valid_request("gemini-2.5-flash");
     request.temperature = Some(3.0); // Out of range
 
     assert!(provider.validate_request(&request).is_err());
@@ -154,7 +166,7 @@ fn test_request_validation_invalid_temperature_negative() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let mut request = create_valid_request("gemini-1.0-pro");
+    let mut request = create_valid_request("gemini-2.5-flash");
     request.temperature = Some(-0.5);
 
     assert!(provider.validate_request(&request).is_err());
@@ -165,7 +177,7 @@ fn test_request_validation_valid_temperature() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let mut request = create_valid_request("gemini-1.0-pro");
+    let mut request = create_valid_request("gemini-2.5-flash");
     request.temperature = Some(1.0);
 
     assert!(provider.validate_request(&request).is_ok());
@@ -176,7 +188,7 @@ fn test_request_validation_temperature_edge_low() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let mut request = create_valid_request("gemini-1.0-pro");
+    let mut request = create_valid_request("gemini-2.5-flash");
     request.temperature = Some(0.0);
 
     assert!(provider.validate_request(&request).is_ok());
@@ -187,7 +199,7 @@ fn test_request_validation_temperature_edge_high() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let mut request = create_valid_request("gemini-1.0-pro");
+    let mut request = create_valid_request("gemini-2.5-flash");
     request.temperature = Some(2.0);
 
     assert!(provider.validate_request(&request).is_ok());
@@ -198,7 +210,7 @@ fn test_request_validation_invalid_top_p_high() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let mut request = create_valid_request("gemini-1.0-pro");
+    let mut request = create_valid_request("gemini-2.5-flash");
     request.top_p = Some(1.5);
 
     assert!(provider.validate_request(&request).is_err());
@@ -209,7 +221,7 @@ fn test_request_validation_invalid_top_p_negative() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let mut request = create_valid_request("gemini-1.0-pro");
+    let mut request = create_valid_request("gemini-2.5-flash");
     request.top_p = Some(-0.1);
 
     assert!(provider.validate_request(&request).is_err());
@@ -220,7 +232,7 @@ fn test_request_validation_valid_top_p() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let mut request = create_valid_request("gemini-1.0-pro");
+    let mut request = create_valid_request("gemini-2.5-flash");
     request.top_p = Some(0.9);
 
     assert!(provider.validate_request(&request).is_ok());
@@ -235,6 +247,27 @@ fn test_request_validation_unsupported_model() {
     assert!(provider.validate_request(&request).is_err());
 }
 
+#[test]
+fn july_2026_models_reject_non_empty_assistant_prefill() {
+    let provider = GeminiProvider::new(GeminiConfig::new_google_ai(
+        "test-api-key-12345678901234567890",
+    ))
+    .unwrap();
+
+    for model in ["gemini-3.6-flash", "gemini-3.5-flash-lite"] {
+        let mut request = create_valid_request(model);
+        request.messages.push(ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Text("prefill".to_string())),
+            ..Default::default()
+        });
+        assert!(provider.validate_request(&request).is_err(), "{model}");
+
+        request.messages.last_mut().unwrap().content = Some(MessageContent::Text("  ".to_string()));
+        assert!(provider.validate_request(&request).is_ok(), "{model}");
+    }
+}
+
 // ==================== Supported Params Tests ====================
 
 #[test]
@@ -242,7 +275,7 @@ fn test_supported_openai_params() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let params = provider.get_supported_openai_params("gemini-1.0-pro");
+    let params = provider.get_supported_openai_params("gemini-2.5-flash");
     assert!(params.contains(&"temperature"));
     assert!(params.contains(&"max_tokens"));
     assert!(params.contains(&"top_p"));
@@ -250,6 +283,45 @@ fn test_supported_openai_params() {
     assert!(params.contains(&"stream"));
     assert!(params.contains(&"tools"));
     assert!(params.contains(&"tool_choice"));
+}
+
+#[test]
+fn july_2026_models_do_not_advertise_sampling_parameters() {
+    let provider = GeminiProvider::new(GeminiConfig::new_google_ai(
+        "test-api-key-12345678901234567890",
+    ))
+    .unwrap();
+
+    for model in ["gemini-3.6-flash", "gemini-3.5-flash-lite"] {
+        let params = provider.get_supported_openai_params(model);
+        assert!(!params.contains(&"temperature"), "{model}");
+        assert!(!params.contains(&"top_p"), "{model}");
+        assert!(!params.contains(&"top_k"), "{model}");
+        assert!(params.contains(&"max_tokens"), "{model}");
+    }
+}
+
+#[tokio::test]
+async fn july_2026_models_drop_sampling_parameters() {
+    let provider = GeminiProvider::new(GeminiConfig::new_google_ai(
+        "test-api-key-12345678901234567890",
+    ))
+    .unwrap();
+    let params = HashMap::from([
+        ("temperature".to_string(), serde_json::json!(0.7)),
+        ("top_p".to_string(), serde_json::json!(0.9)),
+        ("top_k".to_string(), serde_json::json!(20)),
+        ("max_tokens".to_string(), serde_json::json!(16)),
+    ]);
+
+    let mapped = provider
+        .map_openai_params(params, "gemini-3.6-flash")
+        .await
+        .unwrap();
+    assert!(!mapped.contains_key("temperature"));
+    assert!(!mapped.contains_key("top_p"));
+    assert!(!mapped.contains_key("top_k"));
+    assert_eq!(mapped["max_output_tokens"], serde_json::json!(16));
 }
 
 #[tokio::test]
@@ -261,7 +333,7 @@ async fn test_map_openai_params_max_tokens() {
     params.insert("max_tokens".to_string(), serde_json::json!(100));
 
     let mapped = provider
-        .map_openai_params(params, "gemini-1.0-pro")
+        .map_openai_params(params, "gemini-2.5-flash")
         .await
         .unwrap();
     assert!(mapped.contains_key("max_output_tokens"));
@@ -277,7 +349,7 @@ async fn test_map_openai_params_temperature() {
     params.insert("temperature".to_string(), serde_json::json!(0.7));
 
     let mapped = provider
-        .map_openai_params(params, "gemini-1.0-pro")
+        .map_openai_params(params, "gemini-2.5-flash")
         .await
         .unwrap();
     assert!(mapped.contains_key("temperature"));
@@ -293,7 +365,7 @@ async fn test_map_openai_params_unsupported_ignored() {
     params.insert("presence_penalty".to_string(), serde_json::json!(0.5));
 
     let mapped = provider
-        .map_openai_params(params, "gemini-1.0-pro")
+        .map_openai_params(params, "gemini-2.5-flash")
         .await
         .unwrap();
     assert!(!mapped.contains_key("frequency_penalty"));
@@ -310,7 +382,7 @@ async fn test_map_openai_params_tools() {
     params.insert("tool_choice".to_string(), serde_json::json!("auto"));
 
     let mapped = provider
-        .map_openai_params(params, "gemini-1.0-pro")
+        .map_openai_params(params, "gemini-2.5-flash")
         .await
         .unwrap();
     assert!(mapped.contains_key("tools"));
@@ -324,9 +396,8 @@ fn test_calculate_cost() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let cost = provider.calculate_cost("gemini-1.0-pro", 1000, 500);
-    // Cost should be Some value (may be 0 for free models)
-    assert!(cost.is_some());
+    let cost = provider.calculate_cost("gemini-2.5-flash", 1000, 500);
+    assert!(cost.is_ok());
 }
 
 #[test]
@@ -335,7 +406,7 @@ fn test_calculate_cost_unknown_model() {
     let provider = GeminiProvider::new(config).unwrap();
 
     let cost = provider.calculate_cost("unknown-model", 1000, 500);
-    assert!(cost.is_none());
+    assert!(matches!(cost, Err(ProviderError::ModelNotFound { .. })));
 }
 
 #[test]
@@ -343,10 +414,8 @@ fn test_calculate_cost_zero_tokens() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let cost = provider.calculate_cost("gemini-1.0-pro", 0, 0);
-    if let Some(c) = cost {
-        assert!((c - 0.0).abs() < 0.0001);
-    }
+    let cost = provider.calculate_cost("gemini-2.5-flash", 0, 0);
+    assert_eq!(cost.expect("catalogued model should be priced"), 0.0);
 }
 
 #[tokio::test]
@@ -354,8 +423,45 @@ async fn test_async_calculate_cost() {
     let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
     let provider = GeminiProvider::new(config).unwrap();
 
-    let cost = LLMProvider::calculate_cost(&provider, "gemini-1.0-pro", 1000, 500).await;
+    let cost = LLMProvider::calculate_cost(&provider, "gemini-2.5-flash", 1000, 500).await;
     assert!(cost.is_ok());
+}
+
+#[tokio::test]
+async fn async_calculate_cost_uses_shared_pricing_units() {
+    let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
+    let provider = GeminiProvider::new(config).unwrap();
+
+    let cost = LLMProvider::calculate_cost(&provider, "gemini-2.5-flash", 1_000, 500)
+        .await
+        .expect("catalogued Gemini model should be priced");
+
+    assert!((cost - 0.00155).abs() < 1e-12);
+
+    let preview = LLMProvider::calculate_cost(&provider, "gemini-3-flash-preview", 1_000, 500)
+        .await
+        .expect("provider-prefixed exact Gemini row should be priced");
+    assert!((preview - 0.002).abs() < 1e-12);
+
+    let image = LLMProvider::calculate_cost(&provider, "gemini-3-pro-image-preview", 1_000, 500)
+        .await
+        .expect("chat-capable Gemini image row should be token priced");
+    assert!((image - 0.008).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn async_calculate_cost_unknown_model_returns_typed_error() {
+    let config = GeminiConfig::new_google_ai("test-api-key-12345678901234567890");
+    let provider = GeminiProvider::new(config).unwrap();
+
+    for model in [
+        "unknown-google-model",
+        "gemini-1.5-flash-9999",
+        "gemini-1.5-flash",
+    ] {
+        let result = LLMProvider::calculate_cost(&provider, model, 1_000, 500).await;
+        assert!(matches!(result, Err(ProviderError::ModelNotFound { .. })));
+    }
 }
 
 // ==================== Unsupported Feature Tests ====================
