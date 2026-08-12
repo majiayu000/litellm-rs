@@ -7,6 +7,486 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-12
+
+### Added
+- feat(providers): preserve Meta Llama and v0 catalog policies (#1165)
+- feat(providers): wire native Ollama factory (#1164)
+- feat(responses): add Codex tool protocol compatibility (#1160)
+- feat(gemini): refresh developer API model catalog (#1159)
+- Merge pull request #1125 from majiayu000/impl/gh1105-model-alias-priority
+- feat(gateway): implement GH1105 model aliases and priorities
+- Merge pull request #1094 from majiayu000/impl/gh837-t13-github-0-6-policy
+- Merge pull request #1122 from majiayu000/workflow/gh1107-retained-branch-disposition
+- feat(specrail): gate retained branch dispositions
+- Merge pull request #1110 from majiayu000/codex/gh1107-codex-responses-compat
+- feat(responses): accept Codex wire items (GH1107 T1)
+- feat(providers): add GitHub Models catalog policy for 0.6 (GH837 T13)
+- Merge pull request #1090 from majiayu000/codex/gh838-guardrails-ip-access
+- Merge pull request #1093 from majiayu000/impl/gh837-amazon-nova-0-6-policy
+- feat(providers): add Amazon Nova catalog policy
+- feat(providers): deprecate custom API for 0.6
+- feat(core): wire guardrails and IP access for GH838
+- feat(admin): add built-in dashboard (#1085)
+- feat(observability): wire external lifecycle callbacks (#1078)
+- feat: adopt SpecRail workflow pack (#1071)
+- feat(gemini): execute SDK routes through runtime providers (#1019)
+- Merge pull request #996 from majiayu000/codex/issue-968-propagate-shared-endpoint-access
+- feat: propagate provider endpoint access contract
+- Merge pull request #994 from majiayu000/codex/issue-968-wire-gateway-runtime-policy
+- feat: stage provider endpoint access configuration
+- feat: enforce endpoint policy for gateway OpenAI runtimes
+- feat(security): add policy-aware provider HTTP client (#985)
+- feat(security): add provider endpoint policy foundation (#984)
+- feat(spend): expose unpriced model metrics
+- Merge pull request #901 from majiayu000/harness/issue-831-unpriced-usage-record
+- feat(keys): track unpriced usage records
+- feat(pricing): add usage-aware dry run (#899)
+- feat(config): add unpriced model policy (#897)
+- feat(anthropic): allow compatible model ids (#704)
+- feat(deepseek): update v4 model metadata
+- feat(catalog): refresh gemini and cohere models
+- feat(openai): add gpt-5.5 catalog entries
+- feat(bedrock): introduce unified catalog
+- feat(bedrock): wire native provider
+
+### Fixed
+- fix(security): upgrade jsonwebtoken to patched 10.x (#1167)
+- fix(core)!: resolve unwired subsystem dispositions (#1163)
+- fix(gemini): complete Google tool result loop (#1158)
+- fix(vertex-ai): unify Google pricing authority (#1156)
+- fix(pricing): preserve Google unit semantics
+- fix(gemini): keep pricing surface-specific
+- fix(pricing): preserve Google exact lookup semantics
+- fix(vertex-ai): resolve canonical catalog models
+- fix(vertex-ai): preserve canonical pricing IDs
+- fix(pricing): resolve exact Google provider rows
+- fix(vertex-ai): unify Google pricing authority
+- Merge pull request #1155 from majiayu000/impl/gh1128-guardrail-input-minimal
+- fix(guardrails): scan tool definitions and partial args
+- fix(guardrails): close structured input bypasses
+- fix(guardrails): scan structured chat input
+- Merge pull request #1154 from majiayu000/impl/gh1127-stream-output-guardrails-minimal
+- fix(guardrails): address streaming review feedback
+- fix(guardrails): enforce streaming output checks
+- fix(storage): gate S3-only helpers by feature (#1151)
+- fix(files): enforce tenant-isolated ownership and access (GH1130) (#1149)
+- Merge pull request #1144 from majiayu000/codex/gh1129-usage-normalization-recovery
+- fix(streaming): ignore empty usage sentinels for billing
+- fix(streaming): ignore empty usage sentinels for billing
+- fix(streaming): distinguish output from heartbeat frames
+- fix(gemini): isolate cloned stream usage state
+- fix(streaming): keep Gemini usage state private
+- fix(streaming): invalidate malformed Gemini usage
+- fix(billing): reject malformed final stream usage
+- fix(billing): fail closed on malformed provider usage
+- Merge pull request #1139 from majiayu000/impl/gh1132-dev-config-pricing
+- fix(config): make dev pricing example usable
+- fix(config): reject padded model alias names
+- fix(gateway): preserve alias compatibility edges
+- fix(gateway): route aliases across specialized endpoints
+- fix(gateway): reject duplicate generated deployment ids
+- fix(gateway): address PR1125 hosted review
+- fix(gateway): satisfy GH1105 strict clippy
+- Merge pull request #1124 from vrieswang/issue-1123-factory-auto-detect
+- fix(factory): auto-detect private network for localhost catalog providers
+- fix(specrail): allow verified merged retained branches
+- fix(specrail): revalidate duplicate evidence at gate time
+- fix(router): align credential provenance with provider construction
+- fix(responses): close final Codex review gaps
+- fix(responses): close final Codex review gaps
+- fix(responses): address Codex wire review gaps
+- fix(responses): enforce Codex T1 wire boundary
+- fix(providers): address T13 review findings on github deprecation
+- fix(providers): expose Amazon Nova catalog metadata
+- fix(providers): unify Amazon Nova model authority
+- fix(providers): wire Amazon Nova catalog runtime
+- fix(guardrails): fail closed on unsupported policy config
+- Merge pull request #1083 from majiayu000/security/gh1066-callback-runtime-hardening
+- fix(opentelemetry): serialize export state handoff
+- fix(opentelemetry): reap completed export tasks
+- Merge pull request #1086 from majiayu000/refactor/gh965-t012-provider-error-redaction
+- fix(errors): preserve redacted provider response details
+- fix(errors): redact provider gateway responses
+- fix(observability): harden Datadog export boundary (#1081)
+- fix(callbacks): preserve terminal delivery and shutdown
+- Merge pull request #1080 from majiayu000/security/gh1066-stream-terminal-hardening
+- fix(observability): report streaming terminal delivery failures
+- fix(observability): harden webhook admission redaction
+- fix(auth): reject corrupt persisted user state (#1049)
+- fix(teams): reject deletes for missing rows (#1061)
+- fix(teams): reject updates for missing rows (#1058)
+- fix(teams): fail closed on corrupt legacy data (#1055)
+- fix(mcp): enforce initialization lifecycle (#1043)
+- fix(batch): canonicalize persisted status encoding (#1052)
+- fix(auth): reject corrupt API key JSON (#1046)
+- fix(deps): update anyhow to 1.0.103 (#1034)
+- fix(router): preserve model group insertion order (#1029)
+- fix(gemini): preserve endpoint policy errors (#1021)
+- fix(vertex-ai): shrink provider runtime state (#1016)
+- fix(bedrock): narrow failed dependency retries (#1014)
+- fix(bedrock): preserve InvokeAgent compatibility (#1013)
+- fix(security): reject private access to official OpenAI endpoint (#1012)
+- fix(bedrock): close protocol review gaps (#1011)
+- fix(security): close provider endpoint policy gaps (#1010)
+- fix(providers): activate endpoint policy runtime (#1007)
+- fix(routes): enforce endpoint policy for remaining AI proxies (#1006)
+- fix(routes): enforce endpoint policy for direct AI proxies (#1005)
+- fix(azure-ai): enforce native endpoint policy (#1003)
+- fix(azure): enforce native endpoint policy (#1001)
+- Merge pull request #1000 from majiayu000/codex/issue-968-native-anthropic-gemini-vertex
+- fix(providers): enforce native endpoint policy
+- fix(providers): enforce policy for shared runtime extras (#999)
+- fix(providers): wire shared providers to endpoint policy (#997)
+- fix: allow policy-bound private OpenAI test paths
+- fix: stage private endpoint access until all routes are wired
+- fix: retain DNS validation for unwired providers
+- fix: use standard image edit test module
+- fix(storage): restrict API key owner deletion (#983)
+- fix(auth): redact session identifiers from logs (#982)
+- fix(auth): redact AuthMethod debug credentials (#981)
+- fix(auth): distinguish infrastructure failures from invalid credentials (#980)
+- fix(auth): make API key lifecycle database authoritative (#979)
+- fix(auth): reject API keys with invalid owners (#978)
+- fix(providers): derive Tier-1 capabilities from catalog (#977)
+- fix(router): honor provider health check config (#976)
+- fix(router): apply per-provider retry policy (#975)
+- fix(openai): preserve legacy functions in upstream payloads (#972)
+- fix(build): pin Rust toolchain (#956)
+- fix(providers): restore deepgram feature gate
+- fix(providers): keep gradient_ai pricing rows
+- fix(providers): remove stale gradient_ai cfg
+- fix(providers): drop google_pse pricing metadata
+- Merge pull request #926 from majiayu000/harness/runtime-wf-github-issue-pr-d657b8f7
+- fix(error): normalize OpenAI middleware errors
+- fix(error): scope OpenAI extractor handlers
+- fix(error): normalize OpenAI route boundary errors
+- Merge pull request #929 from majiayu000/harness/runtime-wf-github-issue-pr-c6556130
+- fix(cache): bound eviction sampling queue
+- fix(cache): preserve indexed eviction semantics
+- fix(cache): guard stale eviction metadata
+- fix(cache): address in-memory eviction feedback
+- fix(cache): remove global in-memory lru mutex
+- fix(error): address HTTP mapping review feedback
+- fix(error): unify gateway HTTP mappings
+- fix(error): unify HTTP error mapping
+- fix(ai): reserve image proxy budgets atomically
+- fix(spend): fail closed unpriced runtime models
+- fix(core): classify unwired subsystems (#889)
+- fix(rate-limit): fail closed on Redis degradation (#887)
+- fix(routes): map unconfigured batch image to client errors (#890)
+- fix(error): preserve rate-limit response headers
+- fix(images): require model before image generation authz
+- fix(server): let CORS preflight bypass auth
+- fix(cache): wire response cache runtime (#804)
+- fix(anthropic): preserve rich request content (#802)
+- fix(anthropic): keep stream chunk message id (#801)
+- fix(openai): preserve upstream error envelopes (#800)
+- fix: wire http metrics into prometheus output (#790)
+- fix: add OpenAI-compatible files routes (#768)
+- Merge pull request #734 from majiayu000/fix/issue-728-support-matrix
+- fix: unify provider route support matrix
+- Merge pull request #733 from majiayu000/fix/issue-729-provider-capability
+- fix(provider): enforce capability dispatch contract
+- Merge pull request #732 from majiayu000/fix/issue-726-pricing-service
+- fix: apply tiered pricing in provider route
+- fix: address pricing authority review gaps
+- fix: cover xai pricing authority
+- fix: converge pricing service spend authority
+- Merge pull request #731 from majiayu000/fix/issue-725-provider-instantiation
+- fix: preserve custom catalog provider construction
+- fix: gate catalog selectors through provider registry
+- fix: converge provider instantiation registry
+- Merge pull request #730 from majiayu000/fix/issue-724-canonical-type-tree
+- fix: forward OpenAI stream options
+- fix: converge canonical chat model types
+- Merge pull request #721 from majiayu000/fix/issue-713-provider-contract
+- fix: align provider contract docs
+- Merge pull request #720 from majiayu000/fix/issue-711-budget-reserve-settle
+- fix: settle no-usage completion reservations
+- fix: close response stream budget gaps
+- fix: settle stream budget review gaps
+- fix: align core router budget fallback
+- fix: tighten budget fallback review handling
+- fix: close budget reservation review gaps
+- fix: price provider budget reservations
+- fix: make bedrock budget reservations model aware
+- fix: align budget reservations with provider output caps
+- fix: add atomic budget reservations
+- fix(router): install atomic routing snapshots (#719)
+- fix(router): harden deployment reservations (#717)
+- Merge pull request #712 from majiayu000/fix/main-ci-quinn-proto-audit
+- fix(ci): update quinn-proto audit advisory
+- fix(pricing): tolerate LiteLLM schema drift (#708)
+- fix(cost): price Xiaomi MiMo anthropic-compatible routes (#706)
+- fix(server): require admin role for budget mutation endpoints (#683)
+- fix(provider): wire replicate native dispatch (#698)
+- fix(provider): wire fal ai native image dispatch (#697)
+- fix(provider): wire Cohere native dispatch (#696)
+- fix(provider): wire gemini native dispatch (#695)
+- fix(provider): wire vertex ai native dispatch (#694)
+- fix(provider): wire github copilot native dispatch (#693)
+- fix(streaming): avoid shared request timeout (#692)
+- fix(server): reject chat completions when budget is exhausted
+- fix(providers): preserve choice index, usage, logprobs and refusal in streaming
+- fix(anthropic): reject n!=1 and preserve cache usage details
+- fix(provider): catalogify OpenAI-like adapter providers
+- fix(server): record budget spend and key usage for chat completions
+- fix(cost): error on missing model pricing instead of charging zero
+- fix(config): surface not-yet-implemented cache and rate-limit config
+- fix(auth): fail closed when no auth method is enabled (#685)
+- fix(audio): fail closed for unwired routes (#680)
+- fix(audio): enforce multipart upload limits (#678)
+- fix(config): redact secrets in config exports (#679)
+- fix(ci): restore clippy baseline (#682)
+- Merge pull request #673 from majiayu000/harness/runtime-wf-github-issue-pr-63a99a35
+- fix(rate-limit): reserve before auth verification
+- Merge pull request #671 from majiayu000/split/issue-599-azure-native-dispatch-wire
+- fix(provider): patch Azure review follow-ups (#672)
+- fix(provider): wire Azure native dispatch
+- Merge pull request #668 from majiayu000/split/issue-599-azure-native-dispatch
+- fix(provider): harden Azure native parity
+- Merge pull request #670 from majiayu000/split/issue-653-rate-limit-reservation-core
+- fix(rate-limit): add releaseable reservations
+- Merge pull request #667 from majiayu000/harness/runtime-wf-github-issue-pr-5fabd280
+- fix(provider): migrate openai stream callers
+- fix(provider): add bounded streaming request helper
+- fix(security): resolve outbound hostnames for SSRF guard (#662)
+- fix(bedrock): reject invalid tool call arguments (#656)
+- fix(bedrock): stabilize streaming chunk metadata (#654)
+- fix(bedrock): harden runtime model-id fallback (#640)
+- fix(router): distinguish unsupported capability (#661)
+- fix(config): fail fast for explicit config files (#660)
+- fix(providers): report requested factory provider (#659)
+- fix(ci): scope release token permissions (#663)
+- fix(config): preserve pricing source on merge
+- fix(sse): parse Gemini uppercase finish reasons
+- fix(guardrails): redact moderation error bodies
+- fix(config): preserve auto migrate overlay intent
+- fix(router): prefer xai key for api base overrides
+- fix(openai): advertise forwarded chat params
+- fix(health): reuse readiness aggregates
+- fix(openai): preserve streaming audio metadata and reasoning deltas
+- fix(storage): simplify Redis init status
+- fix(providers): reconcile Mistral Nova xAI and Llama catalogs
+- fix(anthropic): lock opus alias metadata
+- Merge pull request #613 from majiayu000/codex/issue-611-startup-migrations
+- fix(storage): respect budget degradation during schema check
+- fix(storage): address migration review feedback
+- fix(storage): migrate sqlite fallback on startup
+- fix(storage): make startup migrations configurable
+- Merge pull request #609 from majiayu000/codex/pricing-review-fixes
+- fix(pricing): reject nan pricing inputs
+- fix(pricing): validate negative costs and duration dispatch
+- Merge pull request #607 from majiayu000/codex/phase0-provider-dispatch
+- fix(provider): enforce dispatch classification contract
+- Merge pull request #598 from majiayu000/codex/phase0-cache
+- fix(cache): reject unwired gateway cache config
+- Merge pull request #597 from majiayu000/codex/phase0-pricing
+- fix(pricing): reject missing pricing costs
+- fix(storage): migrate database during startup
+- fix(openai): forward typed chat parameters
+- fix(bedrock): enforce model parameter policy (#589)
+- fix(ollama): add missing audio field to streaming ChatDelta literals (#585)
+- fix(health): treat configured-but-unknown providers as not-ready (#583)
+- Merge pull request #586 from majiayu000/fix/issue-556-runtime-degradation
+- fix(runtime): fail-fast on enabled-but-failed dependencies (#556)
+- fix(ollama): add missing audio field to streaming ChatDelta literals
+- fix(bedrock): drop redundant model-id re-parse and allow IAM credential chain
+- fix(bedrock): reject prompt arns from converse fallback
+- fix(bedrock): stream converse tool calls
+- fix(bedrock): parse converse stream events
+- fix(bedrock): use converse body for streaming
+- fix(bedrock): stream converse catalog models
+- fix(bedrock): encode runtime model ids
+- fix(bedrock): preserve converse tool calls
+- fix(bedrock): allow runtime-resolved model ARNs
+- fix(health): treat configured-but-unknown providers as not-ready (#555)
+- fix bedrock family hint parsing
+- fix bedrock sigv4 clippy lint
+- Merge pull request #568 from majiayu000/codex/issue552-openai-stream-audio
+- fix(openai): preserve streaming audio deltas
+- fix(config): reject unsupported sticky router fields (#562)
+- fix(security): stop logging raw upstream response bodies (#551)
+- fix(chat): preserve audio in core message round trips (#550)
+- fix(server): drain budget persistence on shutdown (#548)
+- fix(storage): return retrievable s3 file ids (#547)
+- fix(responses): include reasoning items in completed stream output (#546)
+- fix(cache): keep volatile extras out of keys (#545)
+- fix(cache): preserve nested schema ids in keys (#544)
+- fix(oauth): redact generic oidc error bodies (#543)
+- fix(responses-stream): emit reasoning_summary_text events for delta.thinking (#532)
+- fix(oauth): redact response bodies in error logs (#504)
+- fix(http): wire HttpServer::shutdown_signal into start() and close storage (#527)
+- fix(http): stop disabling pricing source when semantic_cache is enabled (#502)
+- fix(cache): split llm_cache tests + fix invalidate_chat user_specific (#531)
+- fix(openai_like): route Tier-1 responses through OpenAIResponseTransformer (#528)
+- fix(rate-limit): bound fallback DashMap to prevent memory DoS (#525)
+- fix(s3): wire S3Config credentials and endpoint into the AWS client (#523)
+- fix(storage): validate file_id in LocalStorage to block path traversal (#524)
+- fix(anthropic-stream): extract cache_creation/read tokens in message_delta (#526)
+- fix(sse): map Anthropic/Gemini finish reasons in default parse_finish_reason (#500)
+- fix(openai): propagate tool_calls and function_call through stream delta (#498)
+- fix(cache): include output-affecting fields in chat key, bump schema to v3 (#506)
+
+### Changed
+- refactor(router): converge completion and SDK runtime (#1162)
+- refactor(cost): deprecate legacy compatibility surface (#1161)
+- refactor(google): share Gemini catalog with Vertex (#1157)
+- Merge pull request #1121 from majiayu000/impl/gh965-t013b-credential-provenance
+- refactor(router): normalize credential provenance
+- refactor(completion): route unary facade through runtime (#1098)
+- Merge pull request #1096 from majiayu000/impl/gh965-t017-retry-helper-deprecation
+- refactor(errors): deprecate six provider retry helpers for 0.6 (GH965 D1E-c)
+- perf(providers): map GitHub ModelInfos directly from catalog entries
+- Merge pull request #1092 from majiayu000/impl/gh837-custom-api-0-6-deprecation
+- refactor(sdk): deprecate legacy provider error (T023b) (#1074)
+- refactor(errors): add canonical provider redaction (T023a) (#1073)
+- Merge pull request #1070 from majiayu000/refactor/gh965-d1e-a1-canonical-retry
+- refactor(errors): converge provider retry facts
+- refactor(router): pin canonical runtime generations
+- refactor(gemini): discover providers from runtime router (#1026)
+- refactor(providers): remove unreachable codestral module (#1028)
+- refactor(gemini): keep selected runtime identity (#1023)
+- Merge pull request #995 from majiayu000/codex/issue-968-normalize-base-config-literals
+- refactor: normalize BaseConfig construction
+- refactor(providers): delete 14 approved GH837 orphan modules (#971)
+- refactor(providers): delete unwired oci module (#952)
+- refactor(providers): delete unwired huggingface module (#951)
+- refactor(providers): delete unwired langgraph module (#950)
+- Merge pull request #949 from majiayu000/harness/gh837-delete-deepl
+- refactor(providers): delete unwired deepl module
+- Merge pull request #948 from majiayu000/harness/gh837-delete-datarobot
+- refactor(providers): delete unwired datarobot module
+- Merge pull request #947 from majiayu000/harness/gh837-delete-spark
+- refactor(providers): delete unwired spark module
+- Merge pull request #946 from majiayu000/harness/gh837-delete-gradient-ai
+- refactor(providers): remove unreachable gradient_ai module
+- Merge pull request #945 from majiayu000/harness/gh837-delete-google-pse
+- refactor(providers): remove unreachable google_pse module
+- Merge pull request #944 from majiayu000/harness/gh837-delete-nlp-cloud
+- refactor(providers): remove unreachable nlp_cloud module
+- Merge pull request #942 from majiayu000/harness/gh842-share-chat-request
+- perf(chat): share chat request budget views
+- Merge pull request #941 from majiayu000/harness/gh837-delete-triton
+- refactor(providers): remove unreachable triton module
+- Merge pull request #940 from majiayu000/harness/gh837-delete-predibase
+- refactor(providers): remove unreachable predibase module
+- Merge pull request #939 from majiayu000/harness/gh837-delete-ragflow
+- refactor(providers): remove unreachable ragflow module
+- Merge pull request #938 from majiayu000/harness/gh837-delete-morph
+- refactor(providers): remove unreachable morph module
+- Merge pull request #937 from majiayu000/harness/gh837-delete-manus
+- refactor(providers): remove unreachable manus module
+- Merge pull request #936 from majiayu000/harness/gh837-delete-exa-ai
+- refactor(providers): remove unreachable exa_ai module
+- Merge pull request #935 from majiayu000/harness/gh837-delete-databricks
+- refactor(providers): remove unreachable databricks module
+- Merge pull request #934 from majiayu000/harness/gh837-delete-clarifai
+- refactor(providers): remove unreachable clarifai module
+- Merge pull request #932 from majiayu000/harness/gh837-delete-baseten
+- refactor(providers): remove unreachable baseten module
+- Merge pull request #931 from majiayu000/harness/gh837-delete-petals
+- refactor(providers): remove unreachable petals module
+- Merge pull request #930 from majiayu000/harness/gh837-delete-ai21
+- refactor(providers): remove unreachable ai21 module
+- Merge pull request #927 from majiayu000/harness/runtime-wf-github-issue-pr-c95565e9
+- Merge pull request #928 from majiayu000/harness/runtime-wf-github-issue-pr-cc57a939
+- refactor(providers): remove unreachable gigachat module
+- perf(ai): remove redundant context clones
+- perf(ai): share request context handles
+- refactor(providers): remove unreachable firecrawl module
+- Merge pull request #923 from majiayu000/codex/issue-837-delete-empower
+- refactor(providers): remove unreachable empower module
+- Merge pull request #922 from majiayu000/codex/issue-837-delete-vercel-ai
+- refactor(providers): remove unreachable vercel ai module
+- Merge pull request #921 from majiayu000/codex/issue-842-request-context-arc
+- perf(context): share request context extensions
+- Merge pull request #920 from majiayu000/codex/issue-837-delete-sap-ai
+- refactor(providers): remove unreachable sap ai module
+- Merge pull request #919 from majiayu000/codex/issue-842-key-manager-arc
+- perf(keys): share hmac secret across key manager clones
+- Merge pull request #918 from majiayu000/codex/issue-837-delete-topaz
+- refactor(providers): remove unreachable topaz module
+- Merge pull request #916 from majiayu000/codex/issue-840-execution-gate
+- refactor(ai): route execution through budgeted entrypoints
+- Merge pull request #915 from majiayu000/codex/issue-840-image-proxy-budgeted
+- refactor(ai): route image proxy budgets through executor
+- Merge pull request #914 from majiayu000/codex/issue-840-response-cache-budgeted
+- refactor(ai): route cache pricing through budgeted executor
+- Merge pull request #913 from majiayu000/codex/issue-840-gemini-budgeted
+- refactor(ai): route gemini budgets through executor
+- Merge pull request #912 from majiayu000/codex/issue-840-responses-stream-budgeted
+- refactor(ai): route responses stream budgets through executor
+- Merge pull request #911 from majiayu000/codex/issue-840-images-budgeted
+- refactor(ai): route image generation budgets through executor
+- Merge pull request #910 from majiayu000/codex/issue-840-audio-budgeted
+- refactor(ai): route audio budgets through executor
+- Merge pull request #909 from majiayu000/codex/issue-840-chat-budget-manager-access
+- refactor(ai): use budgeted key reservations in chat routes
+- Merge pull request #908 from majiayu000/codex/issue-840-embeddings-budgeted
+- refactor(ai): route embeddings budgets through executor
+- Merge pull request #907 from majiayu000/codex/issue-840-availability-routes
+- refactor(ai): route availability checks through budgeted
+- Merge pull request #906 from majiayu000/codex/issue-840-chat-stream-driver
+- refactor(ai): route chat streams through settled finalizer
+- Merge pull request #905 from majiayu000/codex/issue-840-settled-stream
+- refactor(ai): centralize stream settlement finalizer
+- Merge pull request #895 from majiayu000/harness/runtime-wf-github-issue-pr-ab9b0b2b
+- refactor(ai): add budgeted executor scaffold
+- refactor(ai): centralize budgeted provider calls
+- refactor(user-management): split type tests for GH727
+- refactor(sync): split versioned map tests for GH727
+- refactor(sync): split concurrent vec tests for GH727
+- refactor(observability): split metrics tests for GH727
+- refactor(openai): split client tests for GH727
+- refactor(tests): split moderation routes for GH727
+- refactor(anthropic): split client tests for GH727
+- refactor(langfuse): split types tests for GH727
+- refactor(integrations): split manager tests for GH727
+- refactor(gemini): split provider tests for GH727 (#867)
+- refactor(virtual-keys): split type tests for GH727 (#866)
+- refactor(budget): split alert tests for GH727 (#865)
+- refactor(user): split user type tests for GH727
+- refactor(teams): split manager tests for GH727
+- refactor(config): split server config tests for GH727
+- refactor(audio): split audio type tests for GH727
+- refactor(tests): split auth middleware integration suite for GH727
+- refactor(net): split client utils tests for GH727
+- refactor(config): split helper tests for GH727
+- refactor(metrics): split aggregate tests for GH727
+- refactor(v0): split provider tests for GH727 (#856)
+- refactor(observability): split type tests for GH727
+- refactor(analytics): split report tests for GH727
+- refactor(cache): split type tests for GH727
+- refactor(bedrock): split provider tests for GH727 (#852)
+- refactor(monitoring): split type tests for GH727 (#851)
+- refactor(validation): split request validator for GH727 (#850)
+- refactor(oauth): split session module for GH727 (#849)
+- refactor(router): split strategy implementation tests for GH727
+- refactor(event): split event tests for GH727
+- refactor(observability): split OpenTelemetry integration
+- refactor(utils): split DataUtils tests for GH727 (#824)
+- refactor(storage): split SeaORM team repository for GH727 (#823)
+- refactor(cost): extract cost type tests for GH727 (#822)
+- refactor(server): extract teams route tests for GH727 (#821)
+- refactor(security): extract security type tests for GH727 (#820)
+- refactor(providers): split unified provider error facade for GH727 (#819)
+- refactor(analytics): split analytics types facade for GH727 (#818)
+- refactor(bedrock): project model config from catalog for GH727 (#816)
+- refactor(sdk): split SDK types facade for GH727 (#815)
+- refactor(vertex): split client modules for GH727 (#814)
+- Merge pull request #723 from majiayu000/fix/issue-715-provider-failure-policy
+- refactor: split provider retry policy
+- style(cache): use validate method syntax
+- refactor(openai-models): re-export Usage / *TokensDetails from canonical types (#535)
+- refactor(types): collapse FunctionCallDelta / ToolCallDelta to canonical (#538)
+- refactor(providers/base): extract shared ProviderModelEntry struct (#537)
+- refactor(pricing): collapse pricing::Usage into core::types::responses::Usage (#536)
+
+
+
+
 ### Added
 - Wired the `ollama` selector to its native chat, streaming, embeddings, tools, and health runtime behind `providers-extended`, with policy-bound public/private endpoint handling for #837.
 - Wired `guardrails` into canonical chat request/response execution with default-on prompt-injection protection and an explicit `guardrails.enabled: false` opt-out.
