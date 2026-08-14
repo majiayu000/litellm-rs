@@ -9,11 +9,13 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::config::OllamaConfig;
+use super::embedding::parse_embedding_response;
 use super::error::{
     inline_image_data, parse_http_json_response, parse_tool_arguments, response_format_value,
     should_send_tools,
 };
 use super::model_info::{OllamaModelInfo, OllamaShowResponse, OllamaTagsResponse, get_model_info};
+use super::request_options::merge_request_options;
 use super::streaming::OllamaStream;
 use crate::core::providers::base::{
     BaseConfig, GlobalPoolManager, HttpErrorMapper, HttpMethod, header,
@@ -35,9 +37,7 @@ use crate::core::types::{
     message::MessageRole,
     model::ModelInfo,
     model::ProviderCapability,
-    responses::{
-        ChatChoice, ChatChunk, ChatResponse, EmbeddingData, EmbeddingResponse, FinishReason, Usage,
-    },
+    responses::{ChatChoice, ChatChunk, ChatResponse, EmbeddingResponse, FinishReason, Usage},
     tools::FunctionCall,
     tools::ToolCall,
 };
@@ -317,6 +317,7 @@ impl OllamaProvider {
         // Add options from request parameters
         let mut options = self.config.build_options();
         if let serde_json::Value::Object(ref mut opts) = options {
+            merge_request_options(&self.config, opts, request)?;
             if let Some(temp) = request.temperature {
                 opts.insert("temperature".to_string(), serde_json::json!(temp));
             }
@@ -530,9 +531,6 @@ impl LLMProvider for OllamaProvider {
             "num_ctx",
             "num_predict",
             "repeat_penalty",
-            "mirostat",
-            "mirostat_eta",
-            "mirostat_tau",
         ]
     }
 
@@ -661,6 +659,7 @@ impl LLMProvider for OllamaProvider {
             crate::core::types::embedding::EmbeddingInput::Text(text) => vec![text],
             crate::core::types::embedding::EmbeddingInput::Array(texts) => texts,
         };
+        let expected_embedding_count = input.len();
 
         let body = serde_json::json!({
             "model": model,
@@ -672,59 +671,7 @@ impl LLMProvider for OllamaProvider {
             .execute_request(&url, HttpMethod::POST, Some(body))
             .await?;
 
-        // Parse Ollama embeddings response
-        // Ollama returns: { "embeddings": [[...], [...]] }
-        let embeddings = response
-            .get("embeddings")
-            .and_then(|e| e.as_array())
-            .ok_or_else(|| {
-                ProviderError::api_error(
-                    "ollama",
-                    500,
-                    "Missing embeddings in response".to_string(),
-                )
-            })?;
-
-        let data: Vec<EmbeddingData> = embeddings
-            .iter()
-            .enumerate()
-            .map(|(i, emb)| {
-                let embedding: Vec<f32> = emb
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_f64().map(|f| f as f32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                EmbeddingData {
-                    object: "embedding".to_string(),
-                    embedding,
-                    index: i as u32,
-                }
-            })
-            .collect();
-        let prompt_tokens = response
-            .get("prompt_eval_count")
-            .and_then(serde_json::Value::as_u64)
-            .map(|count| u32::try_from(count).unwrap_or(u32::MAX))
-            .unwrap_or(0);
-
-        Ok(EmbeddingResponse {
-            object: "list".to_string(),
-            data,
-            model: format!("ollama/{}", model),
-            usage: Some(Usage {
-                prompt_tokens,
-                completion_tokens: 0,
-                total_tokens: prompt_tokens,
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-                thinking_usage: None,
-            }),
-            embeddings: None,
-        })
+        parse_embedding_response(&response, expected_embedding_count, model)
     }
 
     async fn health_check(&self) -> HealthStatus {

@@ -130,6 +130,14 @@ impl OllamaModelInfo {
 
 impl From<OllamaModelInfo> for ModelInfo {
     fn from(model: OllamaModelInfo) -> Self {
+        let mut capabilities = vec![
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+            ProviderCapability::Embeddings,
+        ];
+        if model.supports_tools {
+            capabilities.push(ProviderCapability::ToolCalling);
+        }
         Self {
             id: model.name,
             name: model.display_name,
@@ -142,11 +150,7 @@ impl From<OllamaModelInfo> for ModelInfo {
             input_cost_per_1k_tokens: Some(0.0),
             output_cost_per_1k_tokens: Some(0.0),
             currency: "USD".to_string(),
-            capabilities: vec![
-                ProviderCapability::ChatCompletion,
-                ProviderCapability::ChatCompletionStream,
-                ProviderCapability::Embeddings,
-            ],
+            capabilities,
             created_at: None,
             updated_at: None,
             metadata: HashMap::new(),
@@ -329,6 +333,25 @@ mod tests {
         assert!(info.supports_tools);
         assert!(!info.supports_multimodal);
         assert_eq!(info.parameter_size, Some("8B".to_string()));
+
+        let model: ModelInfo = info.into();
+        assert!(model.supports_tools);
+        assert!(
+            model
+                .capabilities
+                .contains(&ProviderCapability::ToolCalling)
+        );
+    }
+
+    #[test]
+    fn model_without_tools_does_not_advertise_tool_calling() {
+        let model: ModelInfo = get_model_info("gemma:7b").into();
+        assert!(!model.supports_tools);
+        assert!(
+            !model
+                .capabilities
+                .contains(&ProviderCapability::ToolCalling)
+        );
     }
 
     #[test]

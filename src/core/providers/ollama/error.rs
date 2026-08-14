@@ -82,11 +82,38 @@ pub(super) fn response_format_value(
                     "json_schema response format needs a schema",
                 )
             })?;
-            let schema = schema
-                .as_object()
-                .filter(|wrapper| wrapper.contains_key("name") || wrapper.contains_key("strict"))
-                .and_then(|wrapper| wrapper.get("schema"))
-                .unwrap_or(schema);
+            let schema = match schema.as_object() {
+                Some(wrapper)
+                    if wrapper.get("name").is_some_and(|name| name.is_string())
+                        && wrapper
+                            .get("schema")
+                            .is_some_and(|schema| schema.is_object())
+                        && wrapper
+                            .get("description")
+                            .is_none_or(serde_json::Value::is_string)
+                        && wrapper
+                            .get("strict")
+                            .is_none_or(serde_json::Value::is_boolean)
+                        && wrapper.keys().all(|key| {
+                            matches!(key.as_str(), "name" | "description" | "strict" | "schema")
+                        }) =>
+                {
+                    &wrapper["schema"]
+                }
+                Some(_) => schema,
+                None => {
+                    return Err(ProviderError::invalid_request(
+                        "ollama",
+                        "json_schema response format must be a JSON object",
+                    ));
+                }
+            };
+            if !schema.is_object() {
+                return Err(ProviderError::invalid_request(
+                    "ollama",
+                    "json_schema response format inner schema must be a JSON object",
+                ));
+            }
             Ok(Some(schema.clone()))
         }
         other => Err(ProviderError::invalid_request(

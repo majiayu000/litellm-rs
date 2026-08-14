@@ -18,9 +18,11 @@
 
 // Core modules
 mod config;
+mod embedding;
 mod error;
 mod model_info;
 mod provider;
+mod request_options;
 #[cfg(test)]
 mod runtime_tests;
 mod streaming;
