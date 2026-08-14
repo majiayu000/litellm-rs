@@ -3,6 +3,7 @@
 //! Handles Ollama's streaming response format (NDJSON - newline-delimited JSON).
 //! Ollama uses a different format than OpenAI's SSE, so we need a custom parser.
 
+use crate::core::providers::base::HttpErrorMapper;
 use crate::core::providers::shared::MessageTransformer;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
@@ -11,6 +12,7 @@ use crate::core::types::responses::ChatResponse;
 use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason, Usage};
 use bytes::Bytes;
 use futures::Stream;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -18,7 +20,8 @@ use std::task::{Context, Poll};
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct OllamaStreamChunk {
     /// Model name
-    pub model: String,
+    #[serde(default)]
+    pub model: Option<String>,
 
     /// Message content
     #[serde(default)]
@@ -43,6 +46,10 @@ pub struct OllamaStreamChunk {
     /// Error message (if any)
     #[serde(default)]
     pub error: Option<String>,
+
+    /// HTTP status associated with an error record
+    #[serde(default)]
+    pub status: Option<serde_json::Value>,
 }
 
 /// Ollama message in streaming response
@@ -76,6 +83,9 @@ pub struct OllamaToolCall {
 /// Ollama tool function format
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct OllamaToolFunction {
+    #[serde(default)]
+    pub index: Option<u32>,
+
     pub name: String,
 
     #[serde(default)]
@@ -87,6 +97,13 @@ pub struct OllamaStream<S> {
     inner: S,
     buffer: Vec<u8>,
     chunk_id: String,
+    saw_tool_calls: bool,
+    next_tool_index: u32,
+    tool_calls: HashMap<u32, (String, String)>,
+    tool_call_indices_by_id: HashMap<String, u32>,
+    tool_call_arguments: HashMap<u32, serde_json::Value>,
+    implicit_tool_indices: Vec<u32>,
+    pending_error: Option<ProviderError>,
     finished: bool,
 }
 
@@ -99,12 +116,19 @@ where
             inner: stream,
             buffer: Vec::new(),
             chunk_id: format!("ollama-{}", uuid::Uuid::new_v4()),
+            saw_tool_calls: false,
+            next_tool_index: 0,
+            tool_calls: HashMap::new(),
+            tool_call_indices_by_id: HashMap::new(),
+            tool_call_arguments: HashMap::new(),
+            implicit_tool_indices: Vec::new(),
+            pending_error: None,
             finished: false,
         }
     }
 
     /// Parse a single line as an Ollama chunk
-    fn parse_line(&self, line: &str) -> Result<Option<ChatChunk>, ProviderError> {
+    fn parse_line(&mut self, line: &str) -> Result<Option<ChatChunk>, ProviderError> {
         let line = line.trim();
         if line.is_empty() {
             return Ok(None);
@@ -115,8 +139,15 @@ where
         })?;
 
         // Check for error
-        if let Some(error) = chunk.error {
-            return Err(ProviderError::api_error("ollama", 500, error));
+        if let Some(error) = chunk.error.as_deref() {
+            let status = chunk
+                .status
+                .as_ref()
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|status| u16::try_from(status).ok())
+                .filter(|status| (100..=599).contains(status))
+                .unwrap_or(500);
+            return Err(HttpErrorMapper::map_status_code("ollama", status, error).redacted());
         }
 
         // Convert to ChatChunk
@@ -124,7 +155,7 @@ where
         Ok(Some(chat_chunk))
     }
 
-    fn parse_bytes(&self, line: &[u8]) -> Result<Option<ChatChunk>, ProviderError> {
+    fn parse_bytes(&mut self, line: &[u8]) -> Result<Option<ChatChunk>, ProviderError> {
         let line = std::str::from_utf8(line).map_err(|error| {
             ProviderError::streaming_error("ollama", "chat", None, None, error.to_string())
         })?;
@@ -132,7 +163,17 @@ where
     }
 
     /// Convert Ollama chunk to standard ChatChunk
-    fn convert_chunk(&self, chunk: OllamaStreamChunk) -> Result<ChatChunk, ProviderError> {
+    fn convert_chunk(&mut self, chunk: OllamaStreamChunk) -> Result<ChatChunk, ProviderError> {
+        let model = chunk
+            .model
+            .as_deref()
+            .filter(|model| !model.trim().is_empty())
+            .ok_or_else(|| {
+                ProviderError::response_parsing(
+                    "ollama",
+                    "Ollama streaming success record is missing a model",
+                )
+            })?;
         let mut delta = ChatDelta::default();
 
         // Extract message content
@@ -159,22 +200,128 @@ where
 
             // Convert tool calls if present
             if let Some(tool_calls) = &message.tool_calls {
-                let converted: Vec<_> = tool_calls
-                    .iter()
-                    .enumerate()
-                    .map(|(i, tc)| crate::core::types::responses::ToolCallDelta {
-                        index: i as u32,
-                        id: tc
-                            .id
-                            .clone()
-                            .or_else(|| Some(format!("call_{}_{i}", self.chunk_id))),
+                let mut converted = Vec::with_capacity(tool_calls.len());
+                for (position, tc) in tool_calls.iter().enumerate() {
+                    let index = match tc.function.index {
+                        Some(index) => index,
+                        None => {
+                            tc.id
+                                .as_ref()
+                                .and_then(|id| self.tool_call_indices_by_id.get(id).copied())
+                                .or_else(|| {
+                                    self.implicit_tool_indices.get(position).copied().filter(
+                                        |index| {
+                                            self.tool_calls
+                                                .get(index)
+                                                .is_some_and(|(name, _)| name == &tc.function.name)
+                                        },
+                                    )
+                                })
+                                .unwrap_or(self.next_tool_index)
+                        }
+                    };
+                    if tc.id.as_ref().is_some_and(|id| {
+                        self.tool_call_indices_by_id
+                            .get(id)
+                            .is_some_and(|mapped_index| *mapped_index != index)
+                    }) {
+                        return Err(ProviderError::response_parsing(
+                            "ollama",
+                            "Ollama tool call ID changed index within the stream",
+                        ));
+                    }
+                    if index < self.next_tool_index && !self.tool_calls.contains_key(&index) {
+                        return Err(ProviderError::response_parsing(
+                            "ollama",
+                            format!(
+                                "Ollama tool call index {index} precedes the next expected index {}",
+                                self.next_tool_index
+                            ),
+                        ));
+                    }
+                    let id = match self.tool_calls.get(&index) {
+                        Some((name, id)) => {
+                            if name != &tc.function.name
+                                || tc.id.as_ref().is_some_and(|upstream_id| upstream_id != id)
+                            {
+                                return Err(ProviderError::response_parsing(
+                                    "ollama",
+                                    format!(
+                                        "Ollama tool call index {index} changed identity within the stream"
+                                    ),
+                                ));
+                            }
+                            id.clone()
+                        }
+                        None => {
+                            let next_index = index.checked_add(1).ok_or_else(|| {
+                                ProviderError::response_parsing(
+                                    "ollama",
+                                    "Ollama tool call index exceeds the supported range",
+                                )
+                            })?;
+                            self.next_tool_index = self.next_tool_index.max(next_index);
+                            let id = tc
+                                .id
+                                .clone()
+                                .unwrap_or_else(|| format!("call_{}_{index}", self.chunk_id));
+                            self.tool_calls
+                                .insert(index, (tc.function.name.clone(), id.clone()));
+                            if let Some(upstream_id) = &tc.id {
+                                self.tool_call_indices_by_id
+                                    .insert(upstream_id.clone(), index);
+                            }
+                            id
+                        }
+                    };
+                    if position == self.implicit_tool_indices.len() {
+                        self.implicit_tool_indices.push(index);
+                    } else if let Some(mapped_index) = self.implicit_tool_indices.get_mut(position)
+                    {
+                        *mapped_index = index;
+                    }
+                    let arguments = match self.tool_call_arguments.get(&index) {
+                        None if tc.function.arguments.is_null() => None,
+                        None => {
+                            self.tool_call_arguments
+                                .insert(index, tc.function.arguments.clone());
+                            Some(tc.function.arguments.to_string())
+                        }
+                        Some(previous)
+                            if !tc.function.arguments.is_string()
+                                && previous == &tc.function.arguments =>
+                        {
+                            None
+                        }
+                        Some(previous)
+                            if !tc.function.arguments.is_string()
+                                && !tc.function.arguments.is_null()
+                                && !previous.is_string() =>
+                        {
+                            return Err(ProviderError::response_parsing(
+                                "ollama",
+                                format!(
+                                    "Ollama tool call index {index} changed complete arguments within the stream"
+                                ),
+                            ));
+                        }
+                        Some(_) if tc.function.arguments.is_null() => None,
+                        Some(_) => {
+                            self.tool_call_arguments
+                                .insert(index, tc.function.arguments.clone());
+                            Some(tc.function.arguments.to_string())
+                        }
+                    };
+                    converted.push(crate::core::types::responses::ToolCallDelta {
+                        index,
+                        id: Some(id),
                         tool_type: Some("function".to_string()),
                         function: Some(crate::core::types::responses::FunctionCallDelta {
                             name: Some(tc.function.name.clone()),
-                            arguments: Some(tc.function.arguments.to_string()),
+                            arguments,
                         }),
-                    })
-                    .collect();
+                    });
+                }
 
                 if !converted.is_empty() {
                     delta.tool_calls = Some(converted);
@@ -182,33 +329,45 @@ where
             }
         }
 
+        if delta
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
+        {
+            self.saw_tool_calls = true;
+        }
+
         // Determine finish reason
         let finish_reason = if chunk.done {
-            Some(
-                if delta
-                    .tool_calls
-                    .as_ref()
-                    .is_some_and(|calls| !calls.is_empty())
-                {
-                    FinishReason::ToolCalls
-                } else {
-                    chunk
-                        .done_reason
-                        .as_deref()
-                        .and_then(MessageTransformer::parse_finish_reason)
-                        .unwrap_or(FinishReason::Stop)
-                },
-            )
+            let upstream_reason = chunk
+                .done_reason
+                .as_deref()
+                .and_then(MessageTransformer::parse_finish_reason);
+            Some(match upstream_reason {
+                None | Some(FinishReason::Stop) if self.saw_tool_calls => FinishReason::ToolCalls,
+                Some(reason) => reason,
+                None => FinishReason::Stop,
+            })
         } else {
             None
         };
 
         // Build usage info (only on final chunk)
         let usage = if chunk.done {
+            let prompt_tokens = chunk.prompt_eval_count.unwrap_or(0);
+            let completion_tokens = chunk.eval_count.unwrap_or(0);
+            let total_tokens = prompt_tokens
+                .checked_add(completion_tokens)
+                .ok_or_else(|| {
+                    ProviderError::response_parsing(
+                        "ollama",
+                        "Ollama streaming token usage overflow",
+                    )
+                })?;
             Some(Usage {
-                prompt_tokens: chunk.prompt_eval_count.unwrap_or(0),
-                completion_tokens: chunk.eval_count.unwrap_or(0),
-                total_tokens: chunk.prompt_eval_count.unwrap_or(0) + chunk.eval_count.unwrap_or(0),
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
                 thinking_usage: None,
@@ -221,7 +380,7 @@ where
             id: self.chunk_id.clone(),
             object: "chat.completion.chunk".to_string(),
             created: chrono::Utc::now().timestamp(),
-            model: format!("ollama/{}", chunk.model),
+            model: format!("ollama/{model}"),
             system_fingerprint: None,
             choices: vec![ChatStreamChoice {
                 index: 0,
@@ -244,6 +403,10 @@ where
         if self.finished {
             return Poll::Ready(None);
         }
+        if let Some(error) = self.pending_error.take() {
+            self.finished = true;
+            return Poll::Ready(Some(Err(error)));
+        }
 
         loop {
             // Check if we have a complete line in the buffer
@@ -264,7 +427,11 @@ where
                         return Poll::Ready(Some(Ok(chunk)));
                     }
                     Ok(None) => continue, // Empty line, try next
-                    Err(e) => return Poll::Ready(Some(Err(e))),
+                    Err(e) => {
+                        self.finished = true;
+                        self.buffer.clear();
+                        return Poll::Ready(Some(Err(e)));
+                    }
                 }
             }
 
@@ -275,6 +442,8 @@ where
                     // Continue loop to check for complete lines
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.finished = true;
+                    self.buffer.clear();
                     return Poll::Ready(Some(Err(ProviderError::streaming_error(
                         "ollama",
                         "chat",
@@ -289,18 +458,38 @@ where
                         let line = std::mem::take(&mut self.buffer);
                         match self.parse_bytes(&line) {
                             Ok(Some(chunk)) => {
-                                self.finished = true;
+                                if chunk
+                                    .choices
+                                    .first()
+                                    .is_some_and(|choice| choice.finish_reason.is_some())
+                                {
+                                    self.finished = true;
+                                    return Poll::Ready(Some(Ok(chunk)));
+                                }
+                                self.pending_error = Some(ProviderError::streaming_error(
+                                    "ollama",
+                                    "chat",
+                                    None,
+                                    None,
+                                    "Ollama stream ended before a done record",
+                                ));
                                 return Poll::Ready(Some(Ok(chunk)));
                             }
-                            Ok(None) => {
+                            Ok(None) => {}
+                            Err(e) => {
                                 self.finished = true;
-                                return Poll::Ready(None);
+                                return Poll::Ready(Some(Err(e)));
                             }
-                            Err(e) => return Poll::Ready(Some(Err(e))),
                         }
                     }
                     self.finished = true;
-                    return Poll::Ready(None);
+                    return Poll::Ready(Some(Err(ProviderError::streaming_error(
+                        "ollama",
+                        "chat",
+                        None,
+                        None,
+                        "Ollama stream ended before a done record",
+                    ))));
                 }
                 Poll::Pending => return Poll::Pending,
             }
@@ -405,7 +594,7 @@ mod tests {
         }"#;
 
         let chunk: OllamaStreamChunk = serde_json::from_str(json).unwrap();
-        assert_eq!(chunk.model, "llama3:8b");
+        assert_eq!(chunk.model.as_deref(), Some("llama3:8b"));
         assert!(!chunk.done);
         assert!(chunk.message.is_some());
         assert_eq!(chunk.message.unwrap().content, Some("Hello".to_string()));
@@ -514,7 +703,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streamed_tool_ids_are_stable_and_override_stop_reason() {
+    async fn streamed_tool_calls_before_terminal_chunk_override_stop_reason() {
         let first = concat!(
             "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",",
             "\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":{}}}]},",
@@ -522,7 +711,7 @@ mod tests {
         );
         let last = concat!(
             "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",",
-            "\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":{}}}]},",
+            "\"content\":\"\"},",
             "\"done\":true,\"done_reason\":\"stop\"}\n"
         );
         let chunks = vec![
@@ -536,12 +725,25 @@ mod tests {
         let first_id = first.choices[0].delta.tool_calls.as_ref().unwrap()[0]
             .id
             .as_deref();
-        let last_id = last.choices[0].delta.tool_calls.as_ref().unwrap()[0]
-            .id
-            .as_deref();
-        assert_eq!(first_id, last_id);
         assert!(first_id.is_some_and(|id| id.starts_with("call_ollama-")));
+        assert!(last.choices[0].delta.tool_calls.is_none());
         assert_eq!(last.choices[0].finish_reason, Some(FinishReason::ToolCalls));
+    }
+
+    #[tokio::test]
+    async fn error_only_stream_chunk_preserves_upstream_message() {
+        let chunks = vec![Ok::<Bytes, reqwest::Error>(Bytes::from_static(
+            b"{\"error\":\"runner crashed\"}\n",
+        ))];
+        let mut stream = OllamaStream::new(futures::stream::iter(chunks));
+
+        let error = stream
+            .next()
+            .await
+            .expect("error record should emit one result")
+            .expect_err("error record should fail the stream");
+
+        assert!(error.to_string().contains("runner crashed"));
     }
 
     #[test]
