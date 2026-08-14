@@ -453,6 +453,16 @@ mod tests {
         for model in models {
             assert!(provider.supports_model(&model.id));
         }
+        let priced_cost = provider
+            .calculate_cost("llama4-scout", 1_000, 1_000)
+            .await
+            .expect("priced Meta catalog model");
+        assert!((priced_cost - 0.00038).abs() < 1e-12);
+        assert!(matches!(
+            provider.calculate_cost("llama3.2-1b", 1_000, 1_000).await,
+            Err(ProviderError::InvalidRequest { provider, message })
+                if provider == "meta_llama" && message.contains("pricing is unavailable")
+        ));
         let request = ChatRequest {
             model: "llama4-scout".to_string(),
             service_tier: Some("flex".to_string()),
@@ -611,5 +621,39 @@ mod tests {
                 .expect("V0 alias route");
             assert_eq!(canonical.deployment_id(), alias.deployment_id());
         }
+    }
+
+    #[tokio::test]
+    async fn v0_provider_name_alias_does_not_shadow_a_canonical_model() {
+        let router = Router::from_gateway_config(
+            &[
+                ProviderConfig {
+                    name: "frontend".to_string(),
+                    provider_type: "v0".to_string(),
+                    api_key: "test-key".to_string(),
+                    ..ProviderConfig::default()
+                },
+                ProviderConfig {
+                    name: "primary".to_string(),
+                    provider_type: "openai".to_string(),
+                    api_key: "sk-test".to_string(),
+                    models: vec!["frontend".to_string()],
+                    ..ProviderConfig::default()
+                },
+            ],
+            None,
+        )
+        .await
+        .expect("canonical model should take priority over an implicit V0 alias");
+
+        assert_eq!(router.resolve_model_name("frontend"), "frontend");
+        assert_eq!(
+            router
+                .select_deployment_lease("frontend")
+                .expect("canonical frontend route")
+                .deployment_id(),
+            "primary-frontend"
+        );
+        assert!(router.select_deployment_lease("v0-default").is_ok());
     }
 }

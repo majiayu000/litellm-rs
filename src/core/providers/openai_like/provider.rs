@@ -709,6 +709,20 @@ impl LLMProvider for OpenAILikeProvider {
         }
 
         let model_info = self.get_model_info(model);
+        if self.config.provider_name == "meta_llama"
+            && crate::core::providers::registry::catalog_policy::catalog_model_info(
+                &self.provider_name,
+                model,
+            )
+            .is_some()
+            && (model_info.input_cost_per_1k_tokens.is_none()
+                || model_info.output_cost_per_1k_tokens.is_none())
+        {
+            return Err(ProviderError::invalid_request(
+                "meta_llama",
+                format!("pricing is unavailable for model '{model}'"),
+            ));
+        }
 
         let input_cost = model_info
             .input_cost_per_1k_tokens

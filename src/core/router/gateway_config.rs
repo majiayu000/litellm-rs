@@ -196,6 +196,7 @@ impl Router {
         let mut canonical_models = HashSet::new();
         let mut generated_deployment_ids = HashSet::new();
         let mut effective_model_aliases = model_aliases.clone();
+        let mut catalog_model_aliases = HashMap::new();
 
         for provider_config in providers {
             provider_config
@@ -244,7 +245,7 @@ impl Router {
                 &provider_name,
                 uses_configured_models,
                 &models,
-                &mut effective_model_aliases,
+                &mut catalog_model_aliases,
             );
             let preserves_configured_name_route = !uses_configured_models
                 && crate::core::providers::registry::catalog_policy::preserves_configured_name_route(
@@ -282,6 +283,12 @@ impl Router {
                     ),
                     legacy_metadata.clone(),
                 ));
+            }
+        }
+
+        for (alias, target) in catalog_model_aliases {
+            if !canonical_models.contains(&alias) {
+                effective_model_aliases.entry(alias).or_insert(target);
             }
         }
 
