@@ -478,7 +478,9 @@ async fn test_provider_supported_params() {
     assert!(params.contains(&"stop"));
     assert!(params.contains(&"tools"));
     assert!(params.contains(&"num_ctx"));
-    assert!(params.contains(&"mirostat"));
+    assert!(params.contains(&"num_predict"));
+    assert!(params.contains(&"repeat_penalty"));
+    assert!(!params.contains(&"mirostat"));
 }
 
 #[tokio::test]

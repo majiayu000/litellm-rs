@@ -85,7 +85,15 @@ pub(super) fn response_format_value(
             let schema = match schema.as_object() {
                 Some(wrapper)
                     if wrapper.get("name").is_some_and(|name| name.is_string())
-                        && wrapper.contains_key("schema")
+                        && wrapper
+                            .get("schema")
+                            .is_some_and(|schema| schema.is_object())
+                        && wrapper
+                            .get("description")
+                            .is_none_or(serde_json::Value::is_string)
+                        && wrapper
+                            .get("strict")
+                            .is_none_or(serde_json::Value::is_boolean)
                         && wrapper.keys().all(|key| {
                             matches!(key.as_str(), "name" | "description" | "strict" | "schema")
                         }) =>

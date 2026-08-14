@@ -140,7 +140,7 @@ async fn transform_request_preserves_generation_and_tool_selection_contract() {
 #[tokio::test]
 async fn transform_request_preserves_raw_schema_annotation_keywords() {
     let provider = OllamaProvider::new(OllamaConfig::default()).await.unwrap();
-    let request = ChatRequest {
+    let mut request = ChatRequest {
         model: "ollama/llama3:8b".to_string(),
         response_format: Some(ResponseFormat {
             format_type: "json_schema".to_string(),
@@ -155,12 +155,24 @@ async fn transform_request_preserves_raw_schema_annotation_keywords() {
         ..Default::default()
     };
 
-    let body = LLMProvider::transform_request(&provider, request, RequestContext::default())
-        .await
-        .expect("raw JSON Schema annotation keywords must not imply an OpenAI envelope");
+    let body =
+        LLMProvider::transform_request(&provider, request.clone(), RequestContext::default())
+            .await
+            .expect("raw JSON Schema annotation keywords must not imply an OpenAI envelope");
     assert_eq!(body["format"]["name"], "answer");
     assert_eq!(body["format"]["strict"], true);
     assert_eq!(body["format"]["schema"]["custom"], "annotation");
+
+    let raw_schema = serde_json::json!({
+        "name": "answer",
+        "strict": "custom annotation",
+        "schema": "custom annotation"
+    });
+    request.response_format.as_mut().unwrap().json_schema = Some(raw_schema.clone());
+    let body = LLMProvider::transform_request(&provider, request, RequestContext::default())
+        .await
+        .expect("invalid envelope metadata types must remain valid raw schema annotations");
+    assert_eq!(body["format"], raw_schema);
 }
 
 #[tokio::test]
@@ -177,7 +189,7 @@ async fn transform_request_forwards_validated_request_options_with_typed_precede
         max_completion_tokens: Some(32),
         extra_params: std::collections::HashMap::from([
             ("num_ctx".to_string(), serde_json::json!(8_192.0)),
-            ("num_predict".to_string(), serde_json::json!(64.0)),
+            ("num_predict".to_string(), serde_json::json!("shadowed")),
             ("repeat_penalty".to_string(), serde_json::json!(1.25)),
         ]),
         ..Default::default()
@@ -221,6 +233,10 @@ async fn transform_request_rejects_invalid_request_scoped_option_types() {
     let invalid = [
         ("num_ctx", serde_json::json!(-1)),
         ("num_predict", serde_json::json!(1.5)),
+        (
+            "num_predict",
+            serde_json::json!(9_223_372_036_854_775_808.0),
+        ),
         ("repeat_penalty", serde_json::json!("high")),
     ];
 
@@ -237,6 +253,19 @@ async fn transform_request_rejects_invalid_request_scoped_option_types() {
             matches!(error, ProviderError::InvalidRequest { .. }),
             "unexpected error for {name}: {error}"
         );
+    }
+}
+
+#[tokio::test]
+async fn supported_request_options_match_the_runtime_surface() {
+    let provider = OllamaProvider::new(OllamaConfig::default()).await.unwrap();
+    let params = provider.get_supported_openai_params("llama3:8b");
+
+    for supported in ["num_ctx", "num_predict", "repeat_penalty"] {
+        assert!(params.contains(&supported));
+    }
+    for unsupported in ["mirostat", "mirostat_eta", "mirostat_tau"] {
+        assert!(!params.contains(&unsupported));
     }
 }
 
@@ -397,6 +426,64 @@ async fn stream_preserves_tool_indices_and_non_stop_terminal_reason() {
 }
 
 #[tokio::test]
+async fn stream_reuses_tool_identity_across_repeated_and_fragmented_chunks() {
+    let records = [
+        "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\"}}}]},\"done\":false}\n",
+        "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\"}}}]},\"done\":true,\"done_reason\":\"stop\"}",
+    ];
+    let mut stream = stream_from_records(
+        records
+            .map(|record| Bytes::from_static(record.as_bytes()))
+            .to_vec(),
+    );
+
+    let first = stream.next().await.unwrap().unwrap();
+    let terminal = stream.next().await.unwrap().unwrap();
+    let first_call = &first.choices[0].delta.tool_calls.as_ref().unwrap()[0];
+    let terminal_call = &terminal.choices[0].delta.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(first_call.index, terminal_call.index);
+    assert_eq!(first_call.id, terminal_call.id);
+    assert_eq!(
+        terminal.choices[0].finish_reason,
+        Some(FinishReason::ToolCalls)
+    );
+    assert!(stream.next().await.is_none());
+
+    let records = [
+        "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"upstream-call\",\"function\":{\"index\":5,\"name\":\"weather\",\"arguments\":\"{\\\"city\\\":\"}}]},\"done\":false}\n",
+        "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"upstream-call\",\"function\":{\"name\":\"weather\",\"arguments\":\"\\\"Paris\\\"}\"}}]},\"done\":true,\"done_reason\":\"stop\"}",
+    ];
+    let mut stream = stream_from_records(
+        records
+            .map(|record| Bytes::from_static(record.as_bytes()))
+            .to_vec(),
+    );
+    let first = stream.next().await.unwrap().unwrap();
+    let terminal = stream.next().await.unwrap().unwrap();
+    for chunk in [&first, &terminal] {
+        let call = &chunk.choices[0].delta.tool_calls.as_ref().unwrap()[0];
+        assert_eq!(call.index, 5);
+        assert_eq!(call.id.as_deref(), Some("upstream-call"));
+    }
+
+    let records = [
+        "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"first\",\"function\":{\"name\":\"lookup\",\"arguments\":{}}},{\"id\":\"second\",\"function\":{\"name\":\"lookup\",\"arguments\":{}}}]},\"done\":false}\n",
+        "{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"second\",\"function\":{\"name\":\"lookup\",\"arguments\":{}}},{\"id\":\"first\",\"function\":{\"name\":\"lookup\",\"arguments\":{}}}]},\"done\":true,\"done_reason\":\"stop\"}",
+    ];
+    let mut stream = stream_from_records(
+        records
+            .map(|record| Bytes::from_static(record.as_bytes()))
+            .to_vec(),
+    );
+    let first = stream.next().await.unwrap().unwrap();
+    let terminal = stream.next().await.unwrap().unwrap();
+    let first_calls = first.choices[0].delta.tool_calls.as_ref().unwrap();
+    let terminal_calls = terminal.choices[0].delta.tool_calls.as_ref().unwrap();
+    assert_eq!(first_calls[0].index, terminal_calls[1].index);
+    assert_eq!(first_calls[1].index, terminal_calls[0].index);
+}
+
+#[tokio::test]
 async fn premature_eof_and_missing_model_fail_terminally() {
     for bytes in [
         Bytes::new(),
@@ -410,7 +497,7 @@ async fn premature_eof_and_missing_model_fail_terminally() {
     }
 
     let mut partial = stream_from_records(vec![Bytes::from_static(
-        b"{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",\"content\":\"partial\"},\"done\":false}\n",
+        b"{\"model\":\"llama3:8b\",\"message\":{\"role\":\"assistant\",\"content\":\"partial\"},\"done\":false}",
     )]);
     assert_eq!(
         partial.next().await.unwrap().unwrap().choices[0]
@@ -613,6 +700,18 @@ async fn embeddings_reject_malformed_vectors_and_count_mismatches() {
         (
             r#"{"embeddings":[[0.1,0.2]]}"#,
             EmbeddingInput::Array(vec!["a".to_string(), "b".to_string()]),
+        ),
+        (
+            r#"{"embeddings":[[0.1]],"prompt_eval_count":-1}"#,
+            EmbeddingInput::Text("a".to_string()),
+        ),
+        (
+            r#"{"embeddings":[[0.1]],"prompt_eval_count":"many"}"#,
+            EmbeddingInput::Text("a".to_string()),
+        ),
+        (
+            r#"{"embeddings":[[0.1]],"prompt_eval_count":4294967296}"#,
+            EmbeddingInput::Text("a".to_string()),
         ),
     ];
 

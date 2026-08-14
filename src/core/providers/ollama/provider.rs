@@ -9,11 +9,13 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::config::OllamaConfig;
+use super::embedding::parse_embedding_response;
 use super::error::{
     inline_image_data, parse_http_json_response, parse_tool_arguments, response_format_value,
     should_send_tools,
 };
 use super::model_info::{OllamaModelInfo, OllamaShowResponse, OllamaTagsResponse, get_model_info};
+use super::request_options::merge_request_options;
 use super::streaming::OllamaStream;
 use crate::core::providers::base::{
     BaseConfig, GlobalPoolManager, HttpErrorMapper, HttpMethod, header,
@@ -35,9 +37,7 @@ use crate::core::types::{
     message::MessageRole,
     model::ModelInfo,
     model::ProviderCapability,
-    responses::{
-        ChatChoice, ChatChunk, ChatResponse, EmbeddingData, EmbeddingResponse, FinishReason, Usage,
-    },
+    responses::{ChatChoice, ChatChunk, ChatResponse, EmbeddingResponse, FinishReason, Usage},
     tools::FunctionCall,
     tools::ToolCall,
 };
@@ -59,78 +59,6 @@ pub struct OllamaProvider {
 }
 
 impl OllamaProvider {
-    const REQUEST_INTEGER_OPTIONS: [&'static str; 2] = ["num_ctx", "num_predict"];
-    const REQUEST_FLOAT_OPTIONS: [&'static str; 1] = ["repeat_penalty"];
-
-    fn merge_request_options(
-        &self,
-        options: &mut serde_json::Map<String, serde_json::Value>,
-        request: &ChatRequest,
-    ) -> Result<(), ProviderError> {
-        for name in Self::REQUEST_INTEGER_OPTIONS {
-            let Some(value) = request.extra_params.get(name) else {
-                continue;
-            };
-            let integer = value
-                .as_i64()
-                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-                .or_else(|| {
-                    value.as_f64().and_then(|value| {
-                        (value.is_finite()
-                            && value.fract() == 0.0
-                            && value >= i64::MIN as f64
-                            && value <= i64::MAX as f64)
-                            .then_some(value as i64)
-                    })
-                });
-            let valid = match (name, integer) {
-                ("num_ctx", Some(value)) => value > 0 && u32::try_from(value).is_ok(),
-                (_, Some(_)) => true,
-                (_, None) => false,
-            };
-            if !valid {
-                return Err(ProviderError::invalid_request(
-                    "ollama",
-                    format!("native Ollama option {name} must be a valid integer"),
-                ));
-            }
-            let integer = integer.expect("validated integer option");
-            if name == "num_ctx"
-                && self
-                    .config
-                    .num_ctx
-                    .is_some_and(|configured_max| integer as u64 > u64::from(configured_max))
-            {
-                return Err(ProviderError::invalid_request(
-                    "ollama",
-                    format!(
-                        "native Ollama option num_ctx exceeds the configured maximum of {}",
-                        self.config.num_ctx.expect("checked configured num_ctx")
-                    ),
-                ));
-            }
-            options.insert(name.to_string(), serde_json::json!(integer));
-        }
-
-        for name in Self::REQUEST_FLOAT_OPTIONS {
-            let Some(value) = request.extra_params.get(name) else {
-                continue;
-            };
-            let valid = value
-                .as_f64()
-                .is_some_and(|value| value.is_finite() && (value as f32).is_finite());
-            if !valid {
-                return Err(ProviderError::invalid_request(
-                    "ollama",
-                    format!("native Ollama option {name} must be a finite number"),
-                ));
-            }
-            options.insert(name.to_string(), value.clone());
-        }
-
-        Ok(())
-    }
-
     /// Create a new Ollama provider instance
     pub async fn new(config: OllamaConfig) -> Result<Self, ProviderError> {
         // Validate configuration
@@ -389,7 +317,7 @@ impl OllamaProvider {
         // Add options from request parameters
         let mut options = self.config.build_options();
         if let serde_json::Value::Object(ref mut opts) = options {
-            self.merge_request_options(opts, request)?;
+            merge_request_options(&self.config, opts, request)?;
             if let Some(temp) = request.temperature {
                 opts.insert("temperature".to_string(), serde_json::json!(temp));
             }
@@ -743,97 +671,7 @@ impl LLMProvider for OllamaProvider {
             .execute_request(&url, HttpMethod::POST, Some(body))
             .await?;
 
-        // Parse Ollama embeddings response
-        // Ollama returns: { "embeddings": [[...], [...]] }
-        let embeddings = response
-            .get("embeddings")
-            .and_then(|e| e.as_array())
-            .ok_or_else(|| {
-                ProviderError::response_parsing("ollama", "Missing embeddings in response")
-            })?;
-
-        if embeddings.len() != expected_embedding_count {
-            return Err(ProviderError::response_parsing(
-                "ollama",
-                format!(
-                    "Ollama returned {} embeddings for {expected_embedding_count} inputs",
-                    embeddings.len()
-                ),
-            ));
-        }
-
-        let mut expected_dimension = None;
-        let data: Vec<EmbeddingData> = embeddings
-            .iter()
-            .enumerate()
-            .map(|(i, emb)| -> Result<EmbeddingData, ProviderError> {
-                let values = emb
-                    .as_array()
-                    .ok_or_else(|| {
-                        ProviderError::response_parsing(
-                            "ollama",
-                            format!("Ollama embedding at index {i} is not an array"),
-                        )
-                    })?;
-                if values.is_empty() {
-                    return Err(ProviderError::response_parsing(
-                        "ollama",
-                        format!("Ollama embedding at index {i} is empty"),
-                    ));
-                }
-                if expected_dimension.is_some_and(|dimension| dimension != values.len()) {
-                    return Err(ProviderError::response_parsing(
-                        "ollama",
-                        format!("Ollama embedding at index {i} has an inconsistent dimension"),
-                    ));
-                }
-                expected_dimension.get_or_insert(values.len());
-                let embedding = values
-                    .iter()
-                    .enumerate()
-                    .map(|(coordinate, value)| {
-                        value
-                            .as_f64()
-                            .filter(|value| value.is_finite() && (*value as f32).is_finite())
-                            .map(|value| value as f32)
-                            .ok_or_else(|| {
-                                ProviderError::response_parsing(
-                                    "ollama",
-                                    format!(
-                                        "Ollama embedding at index {i} has an invalid coordinate at {coordinate}"
-                                    ),
-                                )
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                Ok(EmbeddingData {
-                    object: "embedding".to_string(),
-                    embedding,
-                    index: i as u32,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let prompt_tokens = response
-            .get("prompt_eval_count")
-            .and_then(serde_json::Value::as_u64)
-            .map(|count| u32::try_from(count).unwrap_or(u32::MAX))
-            .unwrap_or(0);
-
-        Ok(EmbeddingResponse {
-            object: "list".to_string(),
-            data,
-            model: format!("ollama/{}", model),
-            usage: Some(Usage {
-                prompt_tokens,
-                completion_tokens: 0,
-                total_tokens: prompt_tokens,
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-                thinking_usage: None,
-            }),
-            embeddings: None,
-        })
+        parse_embedding_response(&response, expected_embedding_count, model)
     }
 
     async fn health_check(&self) -> HealthStatus {

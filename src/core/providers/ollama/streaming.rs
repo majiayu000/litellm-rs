@@ -12,6 +12,7 @@ use crate::core::types::responses::ChatResponse;
 use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, FinishReason, Usage};
 use bytes::Bytes;
 use futures::Stream;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -98,6 +99,10 @@ pub struct OllamaStream<S> {
     chunk_id: String,
     saw_tool_calls: bool,
     next_tool_index: u32,
+    tool_calls: HashMap<u32, (String, String)>,
+    tool_call_indices_by_id: HashMap<String, u32>,
+    implicit_tool_indices: Vec<u32>,
+    pending_error: Option<ProviderError>,
     finished: bool,
 }
 
@@ -112,6 +117,10 @@ where
             chunk_id: format!("ollama-{}", uuid::Uuid::new_v4()),
             saw_tool_calls: false,
             next_tool_index: 0,
+            tool_calls: HashMap::new(),
+            tool_call_indices_by_id: HashMap::new(),
+            implicit_tool_indices: Vec::new(),
+            pending_error: None,
             finished: false,
         }
     }
@@ -190,29 +199,88 @@ where
             // Convert tool calls if present
             if let Some(tool_calls) = &message.tool_calls {
                 let mut converted = Vec::with_capacity(tool_calls.len());
-                for tc in tool_calls {
-                    let index = tc.function.index.unwrap_or(self.next_tool_index);
-                    if index < self.next_tool_index {
+                for (position, tc) in tool_calls.iter().enumerate() {
+                    let index = match tc.function.index {
+                        Some(index) => index,
+                        None => {
+                            tc.id
+                                .as_ref()
+                                .and_then(|id| self.tool_call_indices_by_id.get(id).copied())
+                                .or_else(|| {
+                                    self.implicit_tool_indices.get(position).copied().filter(
+                                        |index| {
+                                            self.tool_calls
+                                                .get(index)
+                                                .is_some_and(|(name, _)| name == &tc.function.name)
+                                        },
+                                    )
+                                })
+                                .unwrap_or(self.next_tool_index)
+                        }
+                    };
+                    if tc.id.as_ref().is_some_and(|id| {
+                        self.tool_call_indices_by_id
+                            .get(id)
+                            .is_some_and(|mapped_index| *mapped_index != index)
+                    }) {
+                        return Err(ProviderError::response_parsing(
+                            "ollama",
+                            "Ollama tool call ID changed index within the stream",
+                        ));
+                    }
+                    if index < self.next_tool_index && !self.tool_calls.contains_key(&index) {
                         return Err(ProviderError::response_parsing(
                             "ollama",
                             format!(
-                                "Ollama tool call index {index} duplicates or precedes the next expected index {}",
+                                "Ollama tool call index {index} precedes the next expected index {}",
                                 self.next_tool_index
                             ),
                         ));
                     }
-                    self.next_tool_index = index.checked_add(1).ok_or_else(|| {
-                        ProviderError::response_parsing(
-                            "ollama",
-                            "Ollama tool call index exceeds the supported range",
-                        )
-                    })?;
+                    let id = match self.tool_calls.get(&index) {
+                        Some((name, id)) => {
+                            if name != &tc.function.name
+                                || tc.id.as_ref().is_some_and(|upstream_id| upstream_id != id)
+                            {
+                                return Err(ProviderError::response_parsing(
+                                    "ollama",
+                                    format!(
+                                        "Ollama tool call index {index} changed identity within the stream"
+                                    ),
+                                ));
+                            }
+                            id.clone()
+                        }
+                        None => {
+                            let next_index = index.checked_add(1).ok_or_else(|| {
+                                ProviderError::response_parsing(
+                                    "ollama",
+                                    "Ollama tool call index exceeds the supported range",
+                                )
+                            })?;
+                            self.next_tool_index = self.next_tool_index.max(next_index);
+                            let id = tc
+                                .id
+                                .clone()
+                                .unwrap_or_else(|| format!("call_{}_{index}", self.chunk_id));
+                            self.tool_calls
+                                .insert(index, (tc.function.name.clone(), id.clone()));
+                            if let Some(upstream_id) = &tc.id {
+                                self.tool_call_indices_by_id
+                                    .insert(upstream_id.clone(), index);
+                            }
+                            id
+                        }
+                    };
+                    if position == self.implicit_tool_indices.len() {
+                        self.implicit_tool_indices.push(index);
+                    } else if let Some(mapped_index) = self.implicit_tool_indices.get_mut(position)
+                    {
+                        *mapped_index = index;
+                    }
                     converted.push(crate::core::types::responses::ToolCallDelta {
                         index,
-                        id: tc
-                            .id
-                            .clone()
-                            .or_else(|| Some(format!("call_{}_{index}", self.chunk_id))),
+                        id: Some(id),
                         tool_type: Some("function".to_string()),
                         function: Some(crate::core::types::responses::FunctionCallDelta {
                             name: Some(tc.function.name.clone()),
@@ -301,6 +369,10 @@ where
         if self.finished {
             return Poll::Ready(None);
         }
+        if let Some(error) = self.pending_error.take() {
+            self.finished = true;
+            return Poll::Ready(Some(Err(error)));
+        }
 
         loop {
             // Check if we have a complete line in the buffer
@@ -360,6 +432,14 @@ where
                                     self.finished = true;
                                     return Poll::Ready(Some(Ok(chunk)));
                                 }
+                                self.pending_error = Some(ProviderError::streaming_error(
+                                    "ollama",
+                                    "chat",
+                                    None,
+                                    None,
+                                    "Ollama stream ended before a done record",
+                                ));
+                                return Poll::Ready(Some(Ok(chunk)));
                             }
                             Ok(None) => {}
                             Err(e) => {
