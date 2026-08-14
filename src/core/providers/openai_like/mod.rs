@@ -11,6 +11,7 @@ pub mod config;
 pub mod error;
 pub mod models;
 pub mod provider;
+mod request_headers;
 pub mod streaming;
 
 // Re-exports for easy access
