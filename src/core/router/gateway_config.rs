@@ -236,6 +236,7 @@ impl Router {
                     .map(|m| m.id.clone())
                     .collect()
             };
+            catalog_policy::canonicalize_models(provider.name(), &mut models);
 
             let uses_provider_name_fallback = models.is_empty();
             catalog_policy::extend_model_aliases(

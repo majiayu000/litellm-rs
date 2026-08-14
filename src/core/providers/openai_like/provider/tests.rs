@@ -658,19 +658,50 @@ async fn test_meta_llama_uses_native_organization_header() {
         .with_provider_name("meta_llama")
         .with_skip_api_key(true);
     config.base.organization = Some("org-123".to_string());
+    config
+        .base
+        .headers
+        .insert("x-organization-id".to_string(), "org-base".to_string());
+    config
+        .custom_headers
+        .insert("X-ORGANIZATION-ID".to_string(), "org-custom".to_string());
     let provider = OpenAILikeProvider::new(config).await.unwrap();
 
     let headers = provider.get_request_headers();
-    assert!(
-        headers
-            .iter()
-            .any(|(name, value)| name == "X-Organization-ID" && value == "org-123")
-    );
+    let organization_headers = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("X-Organization-ID"))
+        .collect::<Vec<_>>();
+    assert_eq!(organization_headers.len(), 1);
+    assert_eq!(organization_headers[0].1, "org-custom");
     assert!(
         headers
             .iter()
             .all(|(name, _)| name != "OpenAI-Organization")
     );
+}
+
+#[tokio::test]
+async fn test_meta_llama_deduplicates_configured_organization_headers() {
+    let mut config = OpenAILikeConfig::new("https://api.llama.com/compat/v1")
+        .with_provider_name("meta_llama")
+        .with_skip_api_key(true);
+    config
+        .base
+        .headers
+        .insert("x-organization-id".to_string(), "org-base".to_string());
+    config
+        .custom_headers
+        .insert("X-ORGANIZATION-ID".to_string(), "org-custom".to_string());
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    let organization_headers = provider
+        .get_request_headers()
+        .into_iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("X-Organization-ID"))
+        .collect::<Vec<_>>();
+    assert_eq!(organization_headers.len(), 1);
+    assert_eq!(organization_headers[0].1, "org-custom");
 }
 
 #[tokio::test]

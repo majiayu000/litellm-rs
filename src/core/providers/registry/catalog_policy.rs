@@ -367,6 +367,20 @@ pub(crate) fn extend_model_aliases(
     }
 }
 
+pub(crate) fn canonicalize_models(provider: &str, models: &mut Vec<String>) {
+    if provider != "v0" {
+        return;
+    }
+
+    for model in models.iter_mut() {
+        if model == "v0" {
+            *model = "v0-default".to_string();
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    models.retain(|model| seen.insert(model.clone()));
+}
+
 pub(crate) fn organization_header(provider: &str) -> &'static str {
     match provider {
         "meta_llama" => "X-Organization-ID",
@@ -564,6 +578,38 @@ mod tests {
                 "default Meta router should resolve {}",
                 model.id
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn v0_configured_spellings_share_one_canonical_deployment() {
+        for models in [
+            vec!["v0".to_string()],
+            vec!["v0-default".to_string()],
+            vec!["v0".to_string(), "v0-default".to_string()],
+        ] {
+            let router = Router::from_gateway_config(
+                &[ProviderConfig {
+                    name: "frontend".to_string(),
+                    provider_type: "v0".to_string(),
+                    api_key: "test-key".to_string(),
+                    models,
+                    ..ProviderConfig::default()
+                }],
+                None,
+            )
+            .await
+            .expect("configured V0 spellings should canonicalize without alias collisions");
+
+            assert_eq!(router.list_models(), vec!["v0-default".to_string()]);
+            assert_eq!(router.resolve_model_name("v0"), "v0-default");
+            let canonical = router
+                .select_deployment_lease("v0-default")
+                .expect("canonical V0 route");
+            let alias = router
+                .select_deployment_lease("v0")
+                .expect("V0 alias route");
+            assert_eq!(canonical.deployment_id(), alias.deployment_id());
         }
     }
 }

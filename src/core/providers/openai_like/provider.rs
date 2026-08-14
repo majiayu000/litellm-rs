@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::providers::base::{
-    GlobalPoolManager, HeaderPair, HttpMethod, header, header_owned, read_streaming_error_body,
+    GlobalPoolManager, HeaderPair, HttpMethod, header_owned, read_streaming_error_body,
 };
 use crate::core::providers::openai::{OpenAIResponseTransformer, models::OpenAIChatResponse};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
@@ -27,6 +27,7 @@ use super::{
     config::OpenAILikeConfig,
     error::{OpenAILikeError, PROVIDER_NAME},
     models::{OpenAILikeModelRegistry, get_openai_like_registry},
+    request_headers::build_request_headers,
 };
 use crate::core::providers::{GeminiNativeRequest, ProviderError, gemini_transport_error};
 
@@ -229,37 +230,7 @@ impl OpenAILikeProvider {
 
     /// Generate headers for API requests
     fn get_request_headers(&self) -> Vec<HeaderPair> {
-        let mut headers = Vec::with_capacity(4 + self.config.custom_headers.len());
-
-        if let Some(api_key) = &self.config.base.api_key {
-            headers.push(header("Authorization", format!("Bearer {}", api_key)));
-        }
-
-        if let Some(org) = &self.config.base.organization {
-            let name = crate::core::providers::registry::catalog_policy::organization_header(
-                &self.config.provider_name,
-            );
-            headers.push(header(name, org.clone()));
-        }
-
-        for (key, value) in &self.config.base.headers {
-            headers.push(header_owned(key.clone(), value.clone()));
-        }
-
-        for (key, value) in &self.config.custom_headers {
-            headers.push(header_owned(key.clone(), value.clone()));
-        }
-
-        if self.config.provider_name == "openrouter" {
-            if let Ok(site_url) = std::env::var("OR_SITE_URL") {
-                headers.push(header_owned("HTTP-Referer".to_string(), site_url));
-            }
-            if let Ok(app_name) = std::env::var("OR_APP_NAME") {
-                headers.push(header_owned("X-Title".to_string(), app_name));
-            }
-        }
-
-        headers
+        build_request_headers(&self.config)
     }
 
     /// Execute chat completion request
