@@ -101,6 +101,7 @@ pub struct OllamaStream<S> {
     next_tool_index: u32,
     tool_calls: HashMap<u32, (String, String)>,
     tool_call_indices_by_id: HashMap<String, u32>,
+    tool_call_arguments: HashMap<u32, serde_json::Value>,
     implicit_tool_indices: Vec<u32>,
     pending_error: Option<ProviderError>,
     finished: bool,
@@ -119,6 +120,7 @@ where
             next_tool_index: 0,
             tool_calls: HashMap::new(),
             tool_call_indices_by_id: HashMap::new(),
+            tool_call_arguments: HashMap::new(),
             implicit_tool_indices: Vec::new(),
             pending_error: None,
             finished: false,
@@ -278,13 +280,45 @@ where
                     {
                         *mapped_index = index;
                     }
+                    let arguments = match self.tool_call_arguments.get(&index) {
+                        None if tc.function.arguments.is_null() => None,
+                        None => {
+                            self.tool_call_arguments
+                                .insert(index, tc.function.arguments.clone());
+                            Some(tc.function.arguments.to_string())
+                        }
+                        Some(previous)
+                            if !tc.function.arguments.is_string()
+                                && previous == &tc.function.arguments =>
+                        {
+                            None
+                        }
+                        Some(previous)
+                            if !tc.function.arguments.is_string()
+                                && !tc.function.arguments.is_null()
+                                && !previous.is_string() =>
+                        {
+                            return Err(ProviderError::response_parsing(
+                                "ollama",
+                                format!(
+                                    "Ollama tool call index {index} changed complete arguments within the stream"
+                                ),
+                            ));
+                        }
+                        Some(_) if tc.function.arguments.is_null() => None,
+                        Some(_) => {
+                            self.tool_call_arguments
+                                .insert(index, tc.function.arguments.clone());
+                            Some(tc.function.arguments.to_string())
+                        }
+                    };
                     converted.push(crate::core::types::responses::ToolCallDelta {
                         index,
                         id: Some(id),
                         tool_type: Some("function".to_string()),
                         function: Some(crate::core::types::responses::FunctionCallDelta {
                             name: Some(tc.function.name.clone()),
-                            arguments: Some(tc.function.arguments.to_string()),
+                            arguments,
                         }),
                     });
                 }

@@ -443,6 +443,12 @@ async fn stream_reuses_tool_identity_across_repeated_and_fragmented_chunks() {
     let terminal_call = &terminal.choices[0].delta.tool_calls.as_ref().unwrap()[0];
     assert_eq!(first_call.index, terminal_call.index);
     assert_eq!(first_call.id, terminal_call.id);
+    assert!(
+        terminal_call
+            .function
+            .as_ref()
+            .is_some_and(|function| function.arguments.is_none())
+    );
     assert_eq!(
         terminal.choices[0].finish_reason,
         Some(FinishReason::ToolCalls)
