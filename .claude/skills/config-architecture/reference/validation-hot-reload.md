@@ -1,3 +1,8 @@
+## Contents
+
+- Configuration Validation
+- Hot Reloading
+
 ---
 
 ## Configuration Validation

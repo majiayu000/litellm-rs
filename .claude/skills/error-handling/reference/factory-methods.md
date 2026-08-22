@@ -1,3 +1,7 @@
+## Contents
+
+- Factory Methods
+
 ## Factory Methods
 
 ### Basic Factory Methods

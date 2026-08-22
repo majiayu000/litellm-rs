@@ -1,3 +1,7 @@
+## Contents
+
+- Semantic Cache (L3)
+
 ## Semantic Cache (L3)
 
 ### Vector Database Interface

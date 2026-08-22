@@ -1,3 +1,8 @@
+## Contents
+
+- Tracing (OpenTelemetry)
+- Structured Logging
+
 ## Tracing (OpenTelemetry)
 
 ### Tracing Setup

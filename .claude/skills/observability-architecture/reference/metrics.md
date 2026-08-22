@@ -1,3 +1,7 @@
+## Contents
+
+- Metrics (Prometheus)
+
 ## Metrics (Prometheus)
 
 ### Metric Types

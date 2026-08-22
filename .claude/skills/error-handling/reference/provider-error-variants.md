@@ -1,3 +1,7 @@
+## Contents
+
+- ProviderError (24 Variants)
+
 ## ProviderError (24 Variants)
 
 ```rust

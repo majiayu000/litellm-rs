@@ -1,3 +1,7 @@
+## Contents
+
+- Unified Cache Manager
+
 ## Unified Cache Manager
 
 ```rust

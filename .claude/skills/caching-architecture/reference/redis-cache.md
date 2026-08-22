@@ -1,3 +1,7 @@
+## Contents
+
+- Redis Cache (L2)
+
 ## Redis Cache (L2)
 
 ### Redis Cache Manager
