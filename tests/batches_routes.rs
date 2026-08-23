@@ -276,11 +276,12 @@ mod tests {
     #[tokio::test]
     async fn route_without_batch_provider_fails_closed() {
         let state = build_test_app_state(Vec::new()).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let create_req = test::TestRequest::post()
@@ -312,11 +313,12 @@ mod tests {
             &mock_server.base_url,
         )])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let create_req = test::TestRequest::post()
@@ -379,11 +381,12 @@ mod tests {
         ])
         .await;
         configure_exhausted_primary_budget(&state, "primary-batch");
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let create_resp = test::call_service(
@@ -424,11 +427,12 @@ mod tests {
             batch_route_provider("fallback-batch", &fallback.base_url),
         ])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let scenarios = [
@@ -492,11 +496,12 @@ mod tests {
             &mock_server.base_url,
         )])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let response = test::call_service(
@@ -534,11 +539,12 @@ mod tests {
             broken_fallback,
         ])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let create_resp = test::call_service(
@@ -571,11 +577,12 @@ mod tests {
         let mut provider = batch_route_provider("public-batch", &format!("http://{address}/v1"));
         provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
         let state = build_test_app_state(vec![provider]).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let response = test::call_service(

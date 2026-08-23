@@ -60,11 +60,12 @@ async fn gemini_invalid_terminal_usage_is_not_serialized_or_settled_as_valid() {
         ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
     let budget_limits = state.budget_limits.clone();
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
     let response = test::call_service(
         &app,
@@ -179,11 +180,12 @@ async fn gemini_invalid_terminal_usage_is_not_serialized_by_chat_or_settled_as_v
         ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
     let budget_limits = state.budget_limits.clone();
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
     let response = test::call_service(
         &app,
@@ -247,11 +249,12 @@ async fn test_completions_provider_failure_maps_to_rate_limit() {
         .await
         .with_callbacks(runtime.dispatcher());
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let req = test::TestRequest::post()
@@ -301,11 +304,12 @@ async fn test_completions_streaming_echo_prefixes_prompt_once() {
     let mock_server = MockOpenAIServer::start(MockScenario::StreamingSuccess).await;
     let state = build_test_app_state(&mock_server.base_url).await;
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let mut body = completion_request(Some(true));
@@ -348,11 +352,12 @@ async fn test_completions_stream_timeout_before_output_does_not_record_spend() {
         .set_model_limit("gpt-4o", ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
     let budget_limits = state.budget_limits.clone();
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let resp = test::call_service(
@@ -409,11 +414,12 @@ async fn assert_zero_idle_timeout_observes_client_disconnect(uri: &str, request:
         .await
         .with_callbacks(runtime.dispatcher());
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
     let response = test::call_service(
         &app,
@@ -480,11 +486,12 @@ async fn test_completions_streaming_response_sends_sse_and_done() {
         .await
         .with_callbacks(runtime.dispatcher());
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let req = test::TestRequest::post()
@@ -541,11 +548,12 @@ async fn test_completions_success_records_budget_spend() {
         .set_model_limit("gpt-4o", ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
     let budget_limits = state.budget_limits.clone();
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let req = test::TestRequest::post()
@@ -594,11 +602,12 @@ async fn test_completions_budget_rejection_emits_no_callback_lifecycle() {
         .providers
         .record_provider_spend("openai", 2.0);
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
     let response = test::call_service(
         &app,

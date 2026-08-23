@@ -10,7 +10,12 @@ async fn test_openai_missing_auth_uses_openai_error_shape() {
             .app_data(web::Data::new(state))
             .wrap(AuthMiddleware)
             .wrap(RequestIdMiddleware)
-            .configure(routes::ai::configure_routes),
+            .configure(|cfg| {
+                litellm_rs::server::routes::ai::configure_routes(
+                    cfg,
+                    litellm_rs::config::models::default_max_body_size(),
+                )
+            }),
     )
     .await;
 
@@ -52,7 +57,12 @@ async fn test_openai_rate_limit_middleware_uses_openai_error_shape() {
             .app_data(web::Data::new(state))
             .wrap(RateLimitMiddleware::new(1))
             .wrap(RequestIdMiddleware)
-            .configure(routes::ai::configure_routes),
+            .configure(|cfg| {
+                litellm_rs::server::routes::ai::configure_routes(
+                    cfg,
+                    litellm_rs::config::models::default_max_body_size(),
+                )
+            }),
     )
     .await;
 
@@ -101,7 +111,12 @@ async fn test_legacy_openai_alias_json_errors_use_openai_shape() {
         App::new()
             .app_data(web::Data::new(state))
             .wrap(RequestIdMiddleware)
-            .configure(routes::ai::configure_routes),
+            .configure(|cfg| {
+                litellm_rs::server::routes::ai::configure_routes(
+                    cfg,
+                    litellm_rs::config::models::default_max_body_size(),
+                )
+            }),
     )
     .await;
 
@@ -243,7 +258,12 @@ async fn gh1130_malformed_api_key_policy_is_generic_500_not_detailed_403() {
         App::new()
             .app_data(web::Data::new(state))
             .wrap(AuthMiddleware)
-            .configure(routes::ai::configure_routes),
+            .configure(|cfg| {
+                litellm_rs::server::routes::ai::configure_routes(
+                    cfg,
+                    litellm_rs::config::models::default_max_body_size(),
+                )
+            }),
     )
     .await;
 

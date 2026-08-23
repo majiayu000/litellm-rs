@@ -19,10 +19,13 @@ pub struct ServerConfig {
     /// Maximum connections
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_connections: Option<usize>,
-    /// Request timeout in seconds
+    /// Request head timeout in seconds. Bounds how long a client may take to
+    /// send the complete set of request headers (408 afterwards); it does not
+    /// bound handler execution or streaming response duration.
     #[serde(default = "default_timeout")]
     pub timeout: u64,
-    /// Maximum request body size in bytes
+    /// Maximum JSON/form request body size in bytes. File and audio uploads
+    /// enforce their own multipart limits instead.
     #[serde(default = "default_max_body_size")]
     pub max_body_size: usize,
     /// Enable development mode

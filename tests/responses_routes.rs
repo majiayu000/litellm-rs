@@ -269,11 +269,12 @@ mod tests {
     async fn create_retrieve_input_items_and_delete_response() {
         let mock = MockOpenAiServer::start(MockScenario::NonStreaming).await;
         let state = app_state(&mock.base_url).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let create_req = with_user!(
@@ -369,11 +370,12 @@ mod tests {
     async fn streamed_response_is_stored_after_completion_event() {
         let mock = MockOpenAiServer::start(MockScenario::Streaming).await;
         let state = app_state(&mock.base_url).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let stream_req = with_user!(
@@ -470,11 +472,12 @@ mod tests {
             ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let request = with_user!(
@@ -546,11 +549,12 @@ mod tests {
         let state = app_state_with_idle_timeout(&mock.base_url, Some(0))
             .await
             .with_callbacks(runtime.dispatcher());
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let request = with_user!(

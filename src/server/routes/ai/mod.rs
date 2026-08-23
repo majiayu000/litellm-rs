@@ -64,45 +64,48 @@ use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, error::InternalError, web};
 
 /// Configure AI API routes
-pub fn configure_routes(cfg: &mut web::ServiceConfig) {
+///
+/// `max_body_size` (bytes) bounds JSON bodies on AI routes; it comes from
+/// `server.max_body_size` so the documented knob actually applies here.
+pub fn configure_routes(cfg: &mut web::ServiceConfig, max_body_size: usize) {
     cfg.service(
         web::resource("/completions")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(completions)),
     )
     .service(
         web::resource("/moderations")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(create_moderation)),
     )
     .service(
         web::resource("/rerank")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(rerank)),
     )
     .service(
         web::resource("/engines/{model_id}/completions")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(engine_completions)),
     )
     .service(
         web::resource("/openai/deployments/{model_id}/completions")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(engine_completions)),
     );
     cfg.service(
         web::scope("/v1")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             // Legacy text completions
@@ -201,7 +204,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
     cfg.service(
         web::scope("/v1beta")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(
@@ -215,7 +218,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
     cfg.service(
         web::scope("/gemini/v1beta")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(
@@ -229,7 +232,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
     cfg.service(
         web::scope("/gemini/v1")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(
@@ -323,12 +326,14 @@ pub(crate) fn openai_internal_error_response(message: impl Into<String>) -> Http
     openai_errors::internal_error(message)
 }
 
-fn openai_json_error_config() -> web::JsonConfig {
-    web::JsonConfig::default().error_handler(|error, _req| {
-        let response =
-            openai_errors::validation_error(format!("Invalid JSON request body: {error}"));
-        InternalError::from_response(error, response).into()
-    })
+fn openai_json_error_config(max_body_size: usize) -> web::JsonConfig {
+    web::JsonConfig::default()
+        .limit(max_body_size)
+        .error_handler(|error, _req| {
+            let response =
+                openai_errors::validation_error(format!("Invalid JSON request body: {error}"));
+            InternalError::from_response(error, response).into()
+        })
 }
 
 fn openai_query_error_config() -> web::QueryConfig {
@@ -391,11 +396,9 @@ mod tests {
     #[actix_web::test]
     async fn test_batch_routes_mounted_with_expected_methods() {
         let state = build_no_provider_state().await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(super::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            super::configure_routes(cfg, crate::config::models::default_max_body_size())
+        }))
         .await;
 
         let create_req = test::TestRequest::post()
@@ -438,11 +441,9 @@ mod tests {
     #[actix_web::test]
     async fn test_response_lifecycle_routes_mounted_with_expected_methods() {
         let state = build_no_provider_state().await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(super::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            super::configure_routes(cfg, crate::config::models::default_max_body_size())
+        }))
         .await;
 
         let create_req = test::TestRequest::post()
@@ -490,11 +491,9 @@ mod tests {
     #[actix_web::test]
     async fn test_engine_alias_routes_are_mounted_with_expected_methods() {
         let state = build_no_provider_state().await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(super::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            super::configure_routes(cfg, crate::config::models::default_max_body_size())
+        }))
         .await;
 
         let list_req = test::TestRequest::get().uri("/v1/engines").to_request();
@@ -530,11 +529,9 @@ mod tests {
     #[actix_web::test]
     async fn test_root_engine_aliases_remain_unmounted() {
         let state = build_no_provider_state().await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(super::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            super::configure_routes(cfg, crate::config::models::default_max_body_size())
+        }))
         .await;
 
         let req = test::TestRequest::get().uri("/engines").to_request();
@@ -549,7 +546,9 @@ mod tests {
             App::new()
                 .wrap(RequestIdMiddleware)
                 .app_data(web::Data::new(state))
-                .configure(super::configure_routes),
+                .configure(|cfg| {
+                    super::configure_routes(cfg, crate::config::models::default_max_body_size())
+                }),
         )
         .await;
 
@@ -582,7 +581,9 @@ mod tests {
             App::new()
                 .wrap(RequestIdMiddleware)
                 .app_data(web::Data::new(state))
-                .configure(super::configure_routes),
+                .configure(|cfg| {
+                    super::configure_routes(cfg, crate::config::models::default_max_body_size())
+                }),
         )
         .await;
 
@@ -651,7 +652,9 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state))
-                .configure(super::configure_routes)
+                .configure(|cfg| {
+                    super::configure_routes(cfg, crate::config::models::default_max_body_size())
+                })
                 .route("/non-ai-json", web::post().to(non_ai_json_route)),
         )
         .await;

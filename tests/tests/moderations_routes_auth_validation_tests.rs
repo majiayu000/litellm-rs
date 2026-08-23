@@ -6,11 +6,12 @@ async fn moderation_route_requires_auth_when_anonymous_is_disabled() {
     let state =
         build_test_app_state_with_auth(vec![moderation_provider(&mock.base_url)], true, false)
             .await;
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let resp = test::call_service(
@@ -47,7 +48,12 @@ async fn moderation_route_allows_authenticated_api_key() {
                 srv.call(req)
             })
             .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
+            .configure(|cfg| {
+                litellm_rs::server::routes::ai::configure_routes(
+                    cfg,
+                    litellm_rs::config::models::default_max_body_size(),
+                )
+            }),
     )
     .await;
 
@@ -70,11 +76,12 @@ async fn moderation_route_allows_authenticated_api_key() {
 async fn moderation_route_rejects_invalid_request_before_upstream() {
     let mock = MockModerationServer::start_moderation_mock().await;
     let state = build_test_app_state(vec![moderation_provider(&mock.base_url)]).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let cases = [
@@ -119,11 +126,12 @@ async fn moderation_route_rejects_unconfigured_model_before_upstream() {
         vec!["omni-moderation-latest".to_string()],
     )])
     .await;
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let resp = test::call_service(

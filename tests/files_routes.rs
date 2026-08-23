@@ -100,11 +100,12 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("temp dir should be created");
         let local_path = tempdir.path().join("files").to_string_lossy().into_owned();
         let state = build_files_state(local_path).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
         let boundary = "litellm-rs-files-boundary";
         let content = br#"{"custom_id":"1"}"#;
@@ -177,11 +178,12 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("temp dir should be created");
         let local_path = tempdir.path().join("files").to_string_lossy().into_owned();
         let state = build_files_state(local_path).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
         let boundary = "litellm-rs-files-boundary";
 
@@ -226,11 +228,12 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("temp dir should be created");
         let local_path = tempdir.path().join("files").to_string_lossy().into_owned();
         let state = build_files_state(local_path).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let req = test::TestRequest::delete()
@@ -260,11 +263,12 @@ mod tests {
             .await
             .expect("orphan content should be written");
 
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
         let response =
             test::call_service(&app, test::TestRequest::get().uri("/v1/files").to_request()).await;
@@ -365,7 +369,12 @@ mod tests {
             App::new()
                 .app_data(web::Data::new(state))
                 .wrap(AuthMiddleware)
-                .configure(litellm_rs::server::routes::ai::configure_routes),
+                .configure(|cfg| {
+                    litellm_rs::server::routes::ai::configure_routes(
+                        cfg,
+                        litellm_rs::config::models::default_max_body_size(),
+                    )
+                }),
         )
         .await;
 
@@ -472,7 +481,12 @@ mod tests {
             App::new()
                 .app_data(web::Data::new(state))
                 .wrap(AuthMiddleware)
-                .configure(litellm_rs::server::routes::ai::configure_routes),
+                .configure(|cfg| {
+                    litellm_rs::server::routes::ai::configure_routes(
+                        cfg,
+                        litellm_rs::config::models::default_max_body_size(),
+                    )
+                }),
         )
         .await;
 

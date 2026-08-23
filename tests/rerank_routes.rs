@@ -258,11 +258,12 @@ mod tests {
     #[tokio::test]
     async fn rerank_route_without_provider_fails_closed() {
         let state = build_test_app_state(Vec::new()).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let resp = test::call_service(
@@ -289,11 +290,12 @@ mod tests {
     async fn rerank_route_proxies_cohere_provider() {
         let mock = MockRerankServer::start_rerank_mock().await;
         let state = build_test_app_state(vec![cohere_rerank_provider(&mock.base_url)]).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let resp = test::call_service(
@@ -341,11 +343,12 @@ mod tests {
             vec!["rerank-v4.0-pro".to_string()],
         )])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
         let mut body = rerank_body();
         body["model"] = json!("rerank-v4.0-pro");
@@ -375,11 +378,12 @@ mod tests {
             vec!["jina-reranker-v3".to_string()],
         )])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
         let mut body = rerank_body();
         body["model"] = json!("jina-reranker-v3");
@@ -407,11 +411,12 @@ mod tests {
     async fn root_rerank_alias_proxies_request() {
         let mock = MockRerankServer::start_rerank_mock().await;
         let state = build_test_app_state(vec![cohere_rerank_provider(&mock.base_url)]).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let resp = test::call_service(
@@ -438,11 +443,12 @@ mod tests {
             false,
         )
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let resp = test::call_service(
@@ -480,7 +486,12 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
+                .configure(|cfg| {
+                    litellm_rs::server::routes::ai::configure_routes(
+                        cfg,
+                        litellm_rs::config::models::default_max_body_size(),
+                    )
+                }),
         )
         .await;
 
@@ -531,12 +542,14 @@ mod tests {
         for (query, expected_status, expected_type, expected_code) in cases {
             let mock = MockRerankServer::start_rerank_mock().await;
             let state = build_test_app_state(vec![cohere_rerank_provider(&mock.base_url)]).await;
-            let app = test::init_service(
-                App::new()
-                    .app_data(web::Data::new(state))
-                    .configure(litellm_rs::server::routes::ai::configure_routes),
-            )
-            .await;
+            let app =
+                test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+                    litellm_rs::server::routes::ai::configure_routes(
+                        cfg,
+                        litellm_rs::config::models::default_max_body_size(),
+                    )
+                }))
+                .await;
             let mut body = rerank_body();
             body["query"] = json!(query);
 
@@ -576,11 +589,12 @@ mod tests {
             vec!["rerank-multilingual-v3.0".to_string()],
         )])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let resp = test::call_service(
@@ -613,11 +627,12 @@ mod tests {
             .budget_limits
             .providers
             .record_provider_spend("mock-cohere", 2.0);
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let resp = test::call_service(
@@ -671,11 +686,12 @@ mod tests {
             "fallback-cohere",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let mut request = rerank_body();
@@ -732,11 +748,12 @@ mod tests {
             "wild-secondary-cohere",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let resp = test::call_service(
@@ -774,11 +791,12 @@ mod tests {
             .budget_limits
             .models
             .record_model_spend("rerank-english-v3.0", 2.0);
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let resp = test::call_service(

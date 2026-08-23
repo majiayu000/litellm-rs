@@ -18,11 +18,12 @@ async fn image_edit_records_flat_output_image_spend_after_success() {
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
     let budget_limits = state.budget_limits.clone();
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
     let boundary = "litellm-rs-flat-image-boundary";
 
@@ -85,11 +86,12 @@ async fn native_openai_image_edit_uses_selected_provider_config_after_budget_fal
         "openai-secondary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let boundary = "litellm-rs-image-boundary";
@@ -150,11 +152,12 @@ async fn wildcard_openai_compatible_image_edit_tries_next_provider_name_key() {
         "wild-secondary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
 
     let boundary = "litellm-rs-image-boundary";
@@ -215,11 +218,12 @@ async fn explicit_image_provider_falls_back_to_wildcard_provider() {
         "wild-secondary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+        litellm_rs::server::routes::ai::configure_routes(
+            cfg,
+            litellm_rs::config::models::default_max_body_size(),
+        )
+    }))
     .await;
     let boundary = "litellm-rs-image-boundary";
 

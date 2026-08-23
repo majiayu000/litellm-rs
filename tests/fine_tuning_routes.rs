@@ -336,11 +336,12 @@ mod tests {
     #[tokio::test]
     async fn fine_tuning_route_without_provider_fails_closed() {
         let state = build_test_state(Vec::new()).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let req = test::TestRequest::post()
@@ -367,11 +368,12 @@ mod tests {
     async fn fine_tuning_routes_proxy_provider_lifecycle() {
         let mock = MockFineTuningServer::start().await;
         let state = build_test_state(vec![fine_tuning_provider(&mock.base_url)]).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let create_req = test::TestRequest::post()
@@ -500,11 +502,12 @@ mod tests {
             .budget_limits
             .providers
             .record_provider_spend("mock-openai-compatible", 2.0);
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let create_req = test::TestRequest::post()
@@ -558,11 +561,12 @@ mod tests {
             .budget_limits
             .providers
             .record_provider_spend("primary-fine-tuning", 2.0);
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let response = test::call_service(
@@ -601,11 +605,12 @@ mod tests {
             named_fine_tuning_provider("fallback-fine-tuning", &fallback.base_url),
         ])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let scenarios = [
@@ -692,11 +697,12 @@ mod tests {
             broken_fallback,
         ])
         .await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
-        )
+        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
+            litellm_rs::server::routes::ai::configure_routes(
+                cfg,
+                litellm_rs::config::models::default_max_body_size(),
+            )
+        }))
         .await;
 
         let response = test::call_service(
