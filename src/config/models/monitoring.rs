@@ -3,7 +3,9 @@
 //! Unified configuration for metrics, tracing, health checks, and logging.
 
 use super::*;
-use crate::core::integrations::{DataDogConfig, LangfuseConfig, OpenTelemetryConfig};
+use crate::core::integrations::{
+    DataDogConfig, LangfuseConfig, OpenTelemetryConfig, PrometheusConfig,
+};
 use serde::{Deserialize, Serialize};
 
 /// Monitoring configuration
@@ -93,6 +95,9 @@ pub enum CallbackBackendConfig {
     Datadog(DataDogConfig),
     /// Langfuse LLM observability exporter.
     Langfuse(LangfuseConfig),
+    /// Prometheus metrics exporter.
+    #[serde(rename = "prometheus")]
+    Prometheus(PrometheusConfig),
 }
 
 impl CallbackBackendConfig {
@@ -101,6 +106,7 @@ impl CallbackBackendConfig {
             Self::OpenTelemetry(_) => "opentelemetry",
             Self::Datadog(_) => "datadog",
             Self::Langfuse(_) => "langfuse",
+            Self::Prometheus(_) => "prometheus",
         }
     }
 }

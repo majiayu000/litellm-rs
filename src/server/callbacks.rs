@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use crate::config::models::monitoring::{CallbackBackendConfig, CallbackConfig};
 use crate::core::integrations::{
     CallbackRuntime, DataDogIntegration, IntegrationManager, IntegrationManagerConfig,
-    LangfuseIntegration, OpenTelemetryIntegration,
+    LangfuseIntegration, OpenTelemetryIntegration, PrometheusIntegration,
 };
 use crate::core::traits::integration::BoxedIntegration;
 
@@ -74,12 +74,15 @@ fn build_backend(
                     "Langfuse initialization failed: {error}"
                 ))
             }),
+        CallbackBackendConfig::Prometheus(config) => {
+            Ok(Arc::new(PrometheusIntegration::new(config.clone())) as BoxedIntegration)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::core::integrations::{LangfuseConfig, OpenTelemetryConfig};
+    use crate::core::integrations::{LangfuseConfig, OpenTelemetryConfig, PrometheusConfig};
 
     use super::*;
 
@@ -107,6 +110,26 @@ mod tests {
         assert_eq!(
             dispatcher.registered_integrations().await,
             vec!["opentelemetry"]
+        );
+        assert!(runtime.shutdown().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn startup_wires_prometheus_backend() {
+        let config = CallbackConfig {
+            queue_capacity: 16,
+            backends: vec![CallbackBackendConfig::Prometheus(
+                PrometheusConfig::default(),
+            )],
+            ..CallbackConfig::default()
+        };
+
+        let runtime = build_callback_runtime(&config).await;
+        let dispatcher = runtime.dispatcher();
+        assert!(dispatcher.is_enabled());
+        assert_eq!(
+            dispatcher.registered_integrations().await,
+            vec!["prometheus"]
         );
         assert!(runtime.shutdown().await.is_ok());
     }

@@ -190,6 +190,12 @@ monitoring:
   callbacks:
     queue_capacity: 1024
     timeout_ms: 5000
+    # Available backends: opentelemetry, datadog, langfuse, prometheus.
+    # Example:
+    # backends:
+    #   - prometheus:
+    #       enabled: true
+    #       prefix: litellm
     backends: []
 
 cache:
