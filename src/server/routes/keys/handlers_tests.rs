@@ -446,3 +446,62 @@ fn test_filter_and_paginate_keys_applies_limit_without_status_filter() {
         vec![second, third]
     );
 }
+
+#[test]
+fn test_verify_key_access_allows_presenting_own_key_secret() {
+    let key_id = Uuid::new_v4();
+    let key_info = make_key_info(key_id, KeyStatus::Active);
+    let mut context = RequestContext::new();
+    context.set_api_key_id(key_id);
+    let auth = AuthResult {
+        success: true,
+        user: None,
+        api_key: None,
+        session: None,
+        error: None,
+        context,
+    };
+
+    assert!(verify_key_access_allowed(&auth, &key_info));
+}
+
+#[test]
+fn test_verify_key_access_rejects_api_key_caller_for_foreign_key() {
+    let auth = make_team_auth(Uuid::new_v4());
+    let mut key_info = make_key_info(Uuid::new_v4(), KeyStatus::Active);
+    key_info.user_id = Some(Uuid::new_v4());
+
+    assert!(!verify_key_access_allowed(&auth, &key_info));
+}
+
+#[test]
+fn test_verify_key_access_allows_api_key_caller_in_same_team() {
+    let team_id = Uuid::new_v4();
+    let auth = make_team_auth(team_id);
+    let mut key_info = make_key_info(Uuid::new_v4(), KeyStatus::Active);
+    key_info.team_id = Some(team_id);
+
+    assert!(verify_key_access_allowed(&auth, &key_info));
+}
+
+#[test]
+fn test_verify_key_access_rejects_unrelated_authenticated_user() {
+    let auth = make_user_auth(make_user(UserRole::User, vec![]));
+    let mut key_info = make_key_info(Uuid::new_v4(), KeyStatus::Active);
+    key_info.user_id = Some(Uuid::new_v4());
+
+    assert!(!verify_key_access_allowed(&auth, &key_info));
+}
+
+#[test]
+fn test_verify_key_access_allows_owner_and_admin() {
+    let owner = make_user(UserRole::User, vec![]);
+    let mut owned = make_key_info(Uuid::new_v4(), KeyStatus::Active);
+    owned.user_id = Some(owner.id());
+    assert!(verify_key_access_allowed(&make_user_auth(owner), &owned));
+
+    let admin = make_user_auth(make_user(UserRole::Admin, vec![]));
+    let mut foreign = make_key_info(Uuid::new_v4(), KeyStatus::Active);
+    foreign.user_id = Some(Uuid::new_v4());
+    assert!(verify_key_access_allowed(&admin, &foreign));
+}

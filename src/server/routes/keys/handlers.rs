@@ -4,7 +4,7 @@ use super::access::{
     authenticate_request, check_auth_result_ownership, check_ownership, filter_and_paginate_keys,
     invalidate_api_key_auth_cache, is_auth_enabled, resolve_create_key_scope,
     validate_create_key_rate_limits, validate_update_key_permissions,
-    validate_update_key_rate_limits,
+    validate_update_key_rate_limits, verify_key_access_allowed,
 };
 use super::types::{
     CreateKeyRequest, CreateKeyResponse, KeyErrorResponse, KeyResponse, KeyUsageResponse,
@@ -684,15 +684,50 @@ pub async fn get_key_usage(
 
 /// POST /v1/keys/verify - Verify an API key
 pub async fn verify_key(
+    req: HttpRequest,
     state: web::Data<AppState>,
     request: web::Json<VerifyKeyRequest>,
 ) -> ActixResult<HttpResponse> {
     info!("Verifying API key");
 
+    // Authenticate the caller first so verify cannot be used as an
+    // unauthenticated oracle for arbitrary key metadata.
+    let auth_opt = if is_auth_enabled(&state) {
+        match authenticate_request(&req, &state).await {
+            Err(resp) => return Ok(resp),
+            Ok(None) => {
+                let error_response =
+                    KeyErrorResponse::unauthorized("Authentication required to verify a key");
+                return Ok(HttpResponse::Unauthorized()
+                    .json(ApiResponse::<()>::error(error_response.error)));
+            }
+            Ok(auth) => auth,
+        }
+    } else {
+        None
+    };
+
     let key_manager = get_key_manager(&state);
 
     match key_manager.validate_key(&request.key).await {
         Ok(result) => {
+            // Ownership check (skipped when auth is disabled): metadata for a
+            // valid key may only be seen by the key's own caller, its owner,
+            // or management access. Verifying your own key by presenting its
+            // secret is always allowed.
+            if let (Some(auth), Some(key_info)) = (auth_opt.as_ref(), result.key.as_ref())
+                && !verify_key_access_allowed(auth, key_info)
+            {
+                warn!(
+                    "Caller attempted to verify a foreign key owned by user={:?} team={:?}",
+                    key_info.user_id, key_info.team_id
+                );
+                let error_response =
+                    KeyErrorResponse::forbidden("Not authorized to verify this key");
+                return Ok(
+                    HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error))
+                );
+            }
             let response = VerifyKeyResponse { result };
             Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
         }

@@ -67,6 +67,16 @@ pub(super) fn check_auth_result_ownership(
     }
 }
 
+/// Whether a caller may see the metadata returned by `/v1/keys/verify` for a
+/// valid key. Presenting the key's own secret is always sufficient; anything
+/// else falls back to standard ownership rules.
+pub(super) fn verify_key_access_allowed(auth: &AuthResult, key_info: &KeyInfo) -> bool {
+    if auth.context.api_key_id() == Some(key_info.id) {
+        return true;
+    }
+    check_auth_result_ownership(auth, key_info.user_id, key_info.team_id)
+}
+
 pub(super) fn is_auth_enabled(state: &web::Data<AppState>) -> bool {
     let cfg = state.config.load();
     cfg.auth().enable_jwt || cfg.auth().enable_api_key
