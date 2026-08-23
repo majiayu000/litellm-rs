@@ -28,7 +28,7 @@
 //! |------------------|---------------------------------------------------------|
 //! | `healthy`        | Live probe succeeded.                                   |
 //! | `unhealthy`      | Live probe failed.                                      |
-//! | `unknown`        | Provider is enabled but no successful probe yet wired.  |
+//! | `unknown`        | Enabled, but the router has no deployments registered for it. |
 //! | `disabled`       | `enabled = false` in config; excluded from readiness.   |
 //!
 //! When zero providers are configured the aggregate reports `not_configured`
@@ -47,6 +47,9 @@ use std::sync::LazyLock;
 use sysinfo::System;
 
 use tracing::{debug, error};
+
+#[path = "health_provider_status.rs"]
+mod health_provider_status;
 
 #[cfg(feature = "metrics")]
 static HEALTH_SYSTEM: LazyLock<parking_lot::Mutex<System>> =
@@ -497,9 +500,10 @@ async fn check_provider_health(
             if !provider_config.enabled {
                 (Cow::Borrowed("disabled"), None)
             } else {
-                (
-                    Cow::Borrowed("unknown"),
-                    Some("Provider health check not implemented".to_string()),
+                health_provider_status::derive_status_for_provider(
+                    &state.unified_router,
+                    &provider_config.name,
+                    provider_config.enabled,
                 )
             };
 

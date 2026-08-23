@@ -85,6 +85,12 @@ fn get_header_value(headers: &HeaderMap, header_name: &str) -> Option<String> {
 
 /// Check if a route is public (doesn't require authentication)
 pub fn is_public_route(path: &str) -> bool {
+    // Health endpoints are probed by load balancers and Kubernetes without
+    // credentials; everything under /health is public.
+    if path == "/health" || path.starts_with("/health/") {
+        return true;
+    }
+
     const PUBLIC_ROUTES: &[&str] = &[
         "/health",
         "/auth/login",
