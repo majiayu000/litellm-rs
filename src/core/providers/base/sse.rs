@@ -121,6 +121,9 @@ pub trait SSETransformer: Send + Sync {
 pub struct UnifiedSSEParser<T: SSETransformer> {
     transformer: T,
     buffer: String,
+    /// Trailing bytes of an incomplete UTF-8 sequence carried over from the
+    /// previous network chunk so split multi-byte characters decode intact.
+    pending_utf8: Vec<u8>,
     current_event: Option<SSEEvent>,
 }
 
@@ -129,6 +132,7 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         Self {
             transformer,
             buffer: String::new(),
+            pending_utf8: Vec::new(),
             current_event: None,
         }
     }
@@ -146,7 +150,19 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         bytes: &[u8],
         stream_mode: bool,
     ) -> Result<Vec<ChatChunk>, ProviderError> {
-        let text = String::from_utf8_lossy(bytes);
+        // Reassemble UTF-8 sequences split across chunks: decode only the
+        // complete prefix; carry a trailing partial sequence for next time.
+        let mut input = std::mem::take(&mut self.pending_utf8);
+        input.extend_from_slice(bytes);
+        let keep_from = match std::str::from_utf8(&input) {
+            Ok(_) => input.len(),
+            Err(err) => match err.error_len() {
+                Some(_) => input.len(),
+                None => err.valid_up_to(),
+            },
+        };
+        self.pending_utf8 = input.split_off(keep_from);
+        let text = String::from_utf8_lossy(&input);
         self.buffer.push_str(&text);
 
         let mut chunks = Vec::new();
