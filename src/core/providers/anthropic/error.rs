@@ -18,8 +18,10 @@ impl AnthropicErrorMapper {
         match status {
             400 => ProviderError::invalid_request("anthropic", format!("Bad request: {}", body)),
             401 => ProviderError::authentication("anthropic", "Invalid or missing API key"),
+            // Upstream 403 is a permission failure; keep the status so clients
+            // see 403 permission_error instead of 401.
             403 => {
-                ProviderError::authentication("anthropic", "Forbidden: insufficient permissions")
+                ProviderError::api_error("anthropic", status, "Forbidden: insufficient permissions")
             }
             404 => ProviderError::model_not_found("anthropic", "Model or endpoint not found"),
             429 => {
@@ -48,7 +50,8 @@ impl AnthropicErrorMapper {
 
             return match error_type {
                 "authentication_error" => ProviderError::authentication("anthropic", message),
-                "permission_error" => ProviderError::authentication("anthropic", message),
+                // Anthropic's own permission_error type keeps HTTP 403.
+                "permission_error" => ProviderError::api_error("anthropic", 403, message),
                 "invalid_request_error" => ProviderError::invalid_request("anthropic", message),
                 "not_found_error" => ProviderError::model_not_found("anthropic", message),
                 "rate_limit_error" => {

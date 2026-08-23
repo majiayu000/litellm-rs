@@ -21,7 +21,8 @@ impl ErrorMapper<OpenAIError> for OpenAIErrorMapper {
         // Preserves response_body for structured error information
         match status_code {
             401 => OpenAIError::authentication("openai", response_body),
-            403 => OpenAIError::authentication("openai", response_body),
+            // Upstream 403 is a permission failure; keep the status.
+            403 => OpenAIError::api_error("openai", status_code, response_body),
             429 => OpenAIError::rate_limit_simple("openai", response_body),
             404 => OpenAIError::model_not_found("openai", response_body),
             400 => OpenAIError::invalid_request("openai", response_body),

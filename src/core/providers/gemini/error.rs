@@ -25,7 +25,10 @@ impl GeminiErrorMapper {
         match status {
             400 => ProviderError::invalid_request("gemini", format!("Bad request: {}", body)),
             401 => ProviderError::authentication("gemini", "Invalid or missing API key"),
-            403 => ProviderError::authentication("gemini", "Forbidden: insufficient permissions"),
+            // Upstream 403 is a permission failure; keep the status.
+            403 => {
+                ProviderError::api_error("gemini", status, "Forbidden: insufficient permissions")
+            }
             404 => ProviderError::model_not_found("gemini", "Model or endpoint not found"),
             429 => {
                 let retry_after = parse_retry_after_from_body(body);
@@ -54,7 +57,12 @@ impl GeminiErrorMapper {
                     ProviderError::authentication("gemini", message)
                 }
                 (403, _) | (_, "PERMISSION_DENIED") => {
-                    ProviderError::authentication("gemini", message)
+                    let status = if (400..600).contains(&code) {
+                        code
+                    } else {
+                        403
+                    };
+                    ProviderError::api_error("gemini", status, message)
                 }
                 (400, _) | (_, "INVALID_ARGUMENT") => {
                     ProviderError::invalid_request("gemini", message)

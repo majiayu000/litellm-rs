@@ -187,7 +187,13 @@ pub fn default_http_error_mapper(
             ProviderError::invalid_request(provider, message)
         }
         401 => ProviderError::authentication(provider, "Invalid API key"),
-        403 => ProviderError::authentication(provider, "Permission denied"),
+        // 403 means the credential was accepted but lacks permission; keep the
+        // upstream status so clients see 403 permission_error, not 401.
+        403 => {
+            let message = parse_error_message_from_body(response_body)
+                .unwrap_or_else(|| response_body.to_string());
+            ProviderError::api_error(provider, status_code, message)
+        }
         404 => ProviderError::model_not_found(provider, "Model not found"),
         429 => {
             let retry_after =
@@ -222,7 +228,9 @@ pub fn extended_http_error_mapper(
 ) -> ProviderError {
     match status_code {
         400 => ProviderError::invalid_request(provider, response_body),
-        401 | 403 => ProviderError::authentication(provider, response_body),
+        401 => ProviderError::authentication(provider, response_body),
+        // Preserve upstream 403 as a permission failure, not an auth failure.
+        403 => ProviderError::api_error(provider, status_code, response_body),
         402 => ProviderError::quota_exceeded(provider, response_body),
         404 => ProviderError::model_not_found(provider, response_body),
         408 | 504 => ProviderError::timeout(provider, response_body),
@@ -307,4 +315,42 @@ const fn valid_status_or_bad_gateway(status: u16) -> u16 {
 
 fn is_model_not_priced_message(message: &str) -> bool {
     message.starts_with("model_not_priced:")
+}
+
+#[cfg(test)]
+mod http_403_classification_tests {
+    use super::*;
+
+    #[test]
+    fn default_mapper_keeps_upstream_403_as_permission_error() {
+        let error = default_http_error_mapper("openai", 403, "insufficient permissions");
+        assert!(matches!(error, ProviderError::ApiError { status: 403, .. }));
+
+        let facts = provider_http_error_facts(&error);
+        assert_eq!(facts.status, 403);
+        assert_eq!(facts.openai_error_type, "permission_error");
+        assert_eq!(facts.openai_code, "permission_denied");
+    }
+
+    #[test]
+    fn extended_mapper_splits_401_from_403() {
+        let auth = extended_http_error_mapper("openai", 401, "bad key");
+        assert!(matches!(auth, ProviderError::Authentication { .. }));
+
+        let permission = extended_http_error_mapper("openai", 403, "forbidden region");
+        assert!(matches!(
+            permission,
+            ProviderError::ApiError { status: 403, .. }
+        ));
+    }
+
+    #[test]
+    fn quota_shaped_403_bodies_stay_quota_errors() {
+        let quota = crate::core::providers::base::HttpErrorMapper::map_status_code(
+            "openai",
+            403,
+            "billing: insufficient_quota",
+        );
+        assert!(matches!(quota, ProviderError::QuotaExceeded { .. }));
+    }
 }

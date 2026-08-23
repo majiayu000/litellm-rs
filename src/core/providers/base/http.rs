@@ -185,13 +185,10 @@ impl HttpErrorMapper {
             }
             401 => ProviderError::authentication(provider, message),
             402 => ProviderError::quota_exceeded(provider, message),
-            403 => {
-                if is_quota_error(body) {
-                    ProviderError::quota_exceeded(provider, message)
-                } else {
-                    ProviderError::authentication(provider, message)
-                }
-            }
+            // Keep upstream 403 as an api_error so clients see permission
+            // failure (403), not an authentication failure (401).
+            403 if is_quota_error(body) => ProviderError::quota_exceeded(provider, message),
+            403 => ProviderError::api_error(provider, status, message),
             404 => ProviderError::model_not_found(provider, message),
             408 | 504 => ProviderError::timeout(provider, message),
             413 => ProviderError::context_length_exceeded(provider, 0, 0),
