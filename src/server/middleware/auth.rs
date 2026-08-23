@@ -422,33 +422,25 @@ fn insert_request_context(req: &mut ServiceRequest, context: RequestContext) {
         .insert::<SharedRequestContext>(Arc::new(context));
 }
 
-/// Extract a client identifier for rate limiting
-fn get_client_identifier(req: &ServiceRequest, auth_method: &AuthMethod) -> String {
+/// Extract a client identifier for the brute-force lockout limiter.
+///
+/// The bucket must be keyed by network identity only. Mixing the presented
+/// credential into the key gives every guessed secret its own bucket, so an
+/// attacker rotating random credentials never accumulates failures in any
+/// one bucket and is never locked out — which defeats the limiter entirely.
+fn get_client_identifier(req: &ServiceRequest, _auth_method: &AuthMethod) -> String {
     let ip = req
         .connection_info()
         .peer_addr()
         .map(parse_peer_ip)
         .unwrap_or_else(|| "unknown".to_string());
-
-    match auth_method {
-        AuthMethod::ApiKey(key) => format!("{}:api_key:{}", ip, hash_credential(key)),
-        AuthMethod::Jwt(token) => format!("{}:jwt:{}", ip, hash_credential(token)),
-        // Session cookies are untrusted until authentication succeeds, so keep
-        // failed session attempts in one stable per-IP lockout bucket.
-        AuthMethod::Session(_) => format!("ip:{}", ip),
-        AuthMethod::None => format!("ip:{}", ip),
-    }
+    format!("ip:{}", ip)
 }
 
 fn parse_peer_ip(peer: &str) -> String {
     peer.parse::<SocketAddr>()
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|_| peer.to_string())
-}
-
-fn hash_credential(credential: &str) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(credential.as_bytes()))
 }
 
 fn build_request_context(req: &mut ServiceRequest) -> RequestContext {
@@ -523,11 +515,24 @@ mod tests {
     }
 
     #[test]
-    fn client_identifier_distinguishes_different_credentials() {
+    fn client_identifier_groups_rotated_credentials_into_one_bucket() {
+        // The previous behavior asserted distinct buckets per credential,
+        // which let an attacker rotating random secrets dodge the lockout
+        // entirely. Failures must accumulate in one per-IP bucket.
         let first = client_id_for_header("x-api-key", "gw-first-key", "x-api-key");
         let second = client_id_for_header("x-api-key", "gw-second-key", "x-api-key");
 
-        assert_ne!(first, second);
+        assert_eq!(first, second);
+        assert_eq!(first, "ip:203.0.113.55");
+    }
+
+    #[test]
+    fn client_identifier_groups_jwt_and_api_key_guesses_from_same_ip() {
+        let api_key = client_id_for_header("x-api-key", "gw-some-key", "x-api-key");
+        let jwt = client_id_for_header("authorization", "Bearer some.jwt.token", "x-api-key");
+
+        assert_eq!(api_key, jwt);
+        assert_eq!(jwt, "ip:203.0.113.55");
     }
 
     #[test]
