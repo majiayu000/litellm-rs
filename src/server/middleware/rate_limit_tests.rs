@@ -84,13 +84,28 @@ fn test_extract_client_key_ignores_rotating_api_key_headers() {
 }
 
 #[test]
-fn test_extract_client_key_uses_trusted_forwarded_ip() {
+fn test_extract_client_key_uses_rightmost_untrusted_forwarded_ip() {
+    // Only enumerated proxies are skipped when walking X-Forwarded-For from
+    // the right. 10.0.0.2 is not listed, so its own address is used instead
+    // of the attacker-controllable leftmost entry.
     let req = TestRequest::default()
         .peer_addr("10.0.0.1:1000".parse().unwrap())
         .insert_header(("X-Forwarded-For", "198.51.100.7, 10.0.0.2"))
         .to_srv_request();
 
     let key = extract_client_key(&req, &["10.0.0.1".to_string()]);
+
+    assert_eq!(key, "ip:10.0.0.2");
+}
+
+#[test]
+fn test_extract_client_key_sees_through_enumerated_proxy_chain() {
+    let req = TestRequest::default()
+        .peer_addr("10.0.0.1:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "198.51.100.7, 10.0.0.2"))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1".to_string(), "10.0.0.2".to_string()]);
 
     assert_eq!(key, "ip:198.51.100.7");
 }
@@ -233,4 +248,41 @@ fn test_enforce_fallback_capacity_evicts_oldest_when_all_fresh() {
     assert!(store.len() <= MAX_FALLBACK_ENTRIES);
     assert!(!store.contains_key("k-0"));
     assert!(store.contains_key(&format!("k-{}", MAX_FALLBACK_ENTRIES + 4)));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_ignores_attacker_seeded_prefix() {
+    // Client seeds "1.2.3.4"; the trusted proxy appends the client's real
+    // address. The seeded entry must be ignored (old code picked it).
+    let trusted = vec!["10.0.0.1".to_string()];
+    let got = last_untrusted_xff_ip("1.2.3.4, 203.0.113.50", &trusted);
+    assert_eq!(got.as_deref(), Some("203.0.113.50"));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_walks_past_trusted_chain() {
+    let trusted = vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()];
+    let got = last_untrusted_xff_ip("9.9.9.9, 1.2.3.4, 10.0.0.2, 10.0.0.1", &trusted);
+    assert_eq!(got.as_deref(), Some("1.2.3.4"));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_all_trusted_falls_back_to_rightmost() {
+    let trusted = vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()];
+    let got = last_untrusted_xff_ip("10.0.0.2, 10.0.0.1", &trusted);
+    assert_eq!(got.as_deref(), Some("10.0.0.1"));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_single_entry() {
+    let trusted = vec![];
+    let got = last_untrusted_xff_ip("203.0.113.7", &trusted);
+    assert_eq!(got.as_deref(), Some("203.0.113.7"));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_ignores_empty_entries() {
+    let trusted = vec!["10.0.0.1".to_string()];
+    let got = last_untrusted_xff_ip("  ,  , 10.0.0.1", &trusted);
+    assert_eq!(got.as_deref(), Some("10.0.0.1"));
 }

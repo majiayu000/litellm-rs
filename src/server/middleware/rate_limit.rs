@@ -432,7 +432,8 @@ fn parse_peer_ip(peer: &str) -> String {
 ///
 /// Priority:
 /// 1. Authenticated API key ID / user ID from `RequestContext`, when present
-/// 2. `X-Forwarded-For` first address — only when peer IP is in `trusted_proxies`
+/// 2. `X-Forwarded-For` rightmost non-trusted address — only when peer IP is
+///    in `trusted_proxies` (leftmost entries are attacker-controlled)
 /// 3. Direct peer address from connection info
 fn extract_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
     if let Some(identity) = authenticated_client_key(req) {
@@ -470,16 +471,36 @@ fn network_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> Strin
     let peer = conn.peer_addr().unwrap_or("unknown");
     let peer_ip = parse_peer_ip(peer);
 
+    // Only honor X-Forwarded-For when the direct peer is a trusted proxy.
     if trusted_proxies.iter().any(|p| p == &peer_ip)
-        && let Some(forwarded) = req.headers().get("X-Forwarded-For")
-        && let Ok(val) = forwarded.to_str()
-        && let first = val.split(',').next().unwrap_or("").trim()
-        && !first.is_empty()
+        && let Some(client_ip) = req
+            .headers()
+            .get("X-Forwarded-For")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|val| last_untrusted_xff_ip(val, trusted_proxies))
     {
-        return format!("ip:{}", first);
+        return format!("ip:{}", client_ip);
     }
 
     format!("ip:{}", peer_ip)
+}
+
+/// Pick the client IP from an `X-Forwarded-For` header by walking from the
+/// right and skipping entries that match `trusted_proxies`.
+///
+/// Everything left of the rightmost non-trusted entry is attacker-controlled:
+/// a client can seed `X-Forwarded-For` with arbitrary addresses before the
+/// request reaches the trusted proxy. Using the leftmost entry therefore lets
+/// clients rotate identities to dodge per-IP limits.
+fn last_untrusted_xff_ip(val: &str, trusted_proxies: &[String]) -> Option<String> {
+    let mut fallback = None;
+    for entry in val.rsplit(',').map(str::trim).filter(|e| !e.is_empty()) {
+        fallback.get_or_insert(entry);
+        if !trusted_proxies.iter().any(|p| p == entry) {
+            return Some(entry.to_string());
+        }
+    }
+    fallback.map(str::to_string)
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimitMiddlewareService<S>
