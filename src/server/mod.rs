@@ -12,6 +12,7 @@ mod callbacks;
 mod guardrails;
 pub mod http;
 pub mod state;
+mod tls;
 pub mod types;
 mod utils;
 

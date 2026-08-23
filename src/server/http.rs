@@ -359,10 +359,17 @@ impl HttpServer {
         let storage = Arc::clone(&state.storage);
         let audit_logger = Arc::clone(&state.audit_logger);
 
-        let server = ActixHttpServer::new(move || Self::create_app(state.clone()))
-            .bind(&bind_addr)
-            .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?
-            .run();
+        // Honor server.tls when configured; otherwise serve plain HTTP.
+        let server = match self.config.tls.as_ref() {
+            Some(tls) => ActixHttpServer::new(move || Self::create_app(state.clone()))
+                .bind_rustls_0_23(&bind_addr, crate::server::tls::load_rustls_config(tls)?)
+                .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?
+                .run(),
+            None => ActixHttpServer::new(move || Self::create_app(state.clone()))
+                .bind(&bind_addr)
+                .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?
+                .run(),
+        };
 
         info!("HTTP server listening on {}", bind_addr);
 

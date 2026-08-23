@@ -43,6 +43,8 @@ required-features = ["gateway"]
 # Web framework and async runtime
 actix-web = { version = "4.9", features = ["rustls-0_23"], optional = true }
 actix-cors = { version = "0.7", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+rustls-pemfile = { version = "2", optional = true }
 actix-multipart = { version = "0.7", optional = true }
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "signal"] }
 tokio-stream = "0.1"
@@ -166,6 +168,7 @@ default = ["sqlite", "redis", "metrics", "tracing"]
 # Gateway mode: HTTP server with full middleware stack
 gateway = [
     "dep:actix-web", "dep:actix-cors", "dep:actix-multipart",
+    "dep:rustls", "dep:rustls-pemfile",
     "dep:argon2", "dep:aes-gcm", "dep:clap"
 ]
 
