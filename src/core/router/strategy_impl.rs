@@ -35,6 +35,7 @@ pub fn build_routing_contexts<'id>(
 
     for id in candidate_ids {
         if let Some(deployment) = deployments.get(id.as_str()) {
+            deployment.state.roll_minute_window();
             contexts.push(RoutingContext {
                 deployment_id: id,
                 weight: deployment.config.weight,

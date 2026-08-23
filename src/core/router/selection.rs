@@ -317,6 +317,10 @@ impl Router {
                 continue;
             }
 
+            // Roll the per-minute window before reading windowed counters so
+            // stale usage from earlier minutes cannot exclude a healthy
+            // deployment.
+            deployment.state.roll_minute_window();
             let rpm_current = deployment.state.rpm_current.load(Relaxed);
             if let Some(limit) = deployment.config.rpm_limit
                 && rpm_current >= limit

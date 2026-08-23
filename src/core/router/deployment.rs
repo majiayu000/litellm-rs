@@ -187,8 +187,10 @@ impl Default for DeploymentConfig {
 ///
 /// ## State Reset
 ///
-/// TPM/RPM counters are reset every minute by a background task.
-/// The `minute_reset_at` timestamp tracks when the last reset occurred.
+/// Per-minute counters roll lazily: readers and writers call
+/// [`DeploymentStateInner::roll_minute_window`], which resets them once the
+/// window tracked by `minute_reset_at` has elapsed. No background task is
+/// required for correct per-minute semantics.
 #[derive(Debug, Clone)]
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
@@ -295,6 +297,35 @@ impl DeploymentState {
 impl Default for DeploymentState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Length of the rolling per-minute window in seconds.
+const MINUTE_WINDOW_SECS: u64 = 60;
+
+impl DeploymentStateInner {
+    /// Lazily roll the per-minute window once it has elapsed.
+    ///
+    /// Production never starts a background reset task; instead, every reader
+    /// and writer of the per-minute counters calls this first so TPM/RPM
+    /// limits and cooldown windows keep their per-minute semantics over the
+    /// whole process lifetime. A single concurrent caller wins the CAS on
+    /// `minute_reset_at` and performs the reset.
+    pub(crate) fn roll_minute_window(&self) {
+        let now = current_timestamp();
+        let last = self.minute_reset_at.load(Ordering::Relaxed);
+        if now.saturating_sub(last) < MINUTE_WINDOW_SECS {
+            return;
+        }
+        if self
+            .minute_reset_at
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.tpm_current.store(0, Ordering::Relaxed);
+            self.rpm_current.store(0, Ordering::Relaxed);
+            self.fails_this_minute.store(0, Ordering::Relaxed);
+        }
     }
 }
 
@@ -676,6 +707,25 @@ mod tests {
     }
 
     #[test]
+    fn test_roll_minute_window_resets_after_elapsed_window() {
+        let state = DeploymentState::new();
+        state.tpm_current.store(1000, Ordering::Relaxed);
+        state.rpm_current.store(50, Ordering::Relaxed);
+        state.fails_this_minute.store(5, Ordering::Relaxed);
+
+        // Simulate a window that ended 61 seconds ago.
+        let stale = current_timestamp().saturating_sub(61);
+        state.minute_reset_at.store(stale, Ordering::Relaxed);
+
+        state.roll_minute_window();
+
+        assert_eq!(state.tpm_current.load(Ordering::Relaxed), 0);
+        assert_eq!(state.rpm_current.load(Ordering::Relaxed), 0);
+        assert_eq!(state.fails_this_minute.load(Ordering::Relaxed), 0);
+        assert!(state.minute_reset_at.load(Ordering::Relaxed) > stale);
+    }
+
+    #[test]
     fn test_deployment_state_health_status() {
         let state = DeploymentState::new();
         state
@@ -740,3 +790,7 @@ mod tests {
         assert!(ts2 >= ts1);
     }
 }
+
+#[cfg(test)]
+#[path = "deployment_window_tests.rs"]
+mod deployment_window_tests;
