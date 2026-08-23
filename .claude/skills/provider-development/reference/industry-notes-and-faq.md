@@ -8,7 +8,7 @@
 | **SeaORM** | Trait Object + 统一错误 | 数据库抽象 |
 | **Diesel** | 泛型单态化 | 编译时类型安全 |
 | **GreptimeDB** | SNAFU 堆栈错误 | 复杂系统调试 |
-| **本项目** | Trait Object + 统一错误 | 66+ provider、API 网关 |
+| **本项目** | Trait Object + 统一错误 | 大量 provider、API 网关 |
 
 ### 性能基准来源
 
@@ -21,7 +21,7 @@
 ## 常见问题
 
 ### Q: 为什么不用 enum dispatch？
-A: 66 个 provider 会导致：
+A: 数十个 provider 会带来：
 - 二进制体积 ~50MB（vs ~10MB）
 - 编译时间 ~10 分钟（vs ~2 分钟）
 - 每次添加 provider 需要重新编译整个枚举

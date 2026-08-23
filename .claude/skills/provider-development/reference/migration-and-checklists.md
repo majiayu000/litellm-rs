@@ -2,13 +2,6 @@
 
 - 迁移现有 Provider
 - 检查清单
-- 配置
-- Provider 实现
-- 模型信息
-- 质量
-- 注册
-- 错误迁移
-- 测试
 
 ## 迁移现有 Provider
 
@@ -18,31 +11,31 @@
 2. **修改 provider.rs**：
 
 ```rust
-// 修改前
-use super::error::FireworksError;
+// 修改前（XxxError 为 provider 专属错误枚举）
+use super::error::XxxError;
 
-impl LLMProvider for FireworksProvider {
-    type Error = FireworksError;
+impl LLMProvider for XxxProvider {
+    type Error = XxxError;
     // ...
 }
 
 // 创建错误
-Err(FireworksError::AuthenticationError("Invalid key".into()))
-Err(FireworksError::NetworkError(e.to_string()))
+Err(XxxError::AuthenticationError("Invalid key".into()))
+Err(XxxError::NetworkError(e.to_string()))
 ```
 
 ```rust
 // 修改后
 use crate::core::providers::unified_provider::ProviderError;
 
-impl LLMProvider for FireworksProvider {
-    type Error = ProviderError;
+impl LLMProvider for XxxProvider {
+    type Error = ProviderError;  // 无关联类型，方法签名直接用 ProviderError
     // ...
 }
 
 // 创建错误
-Err(ProviderError::authentication("fireworks", "Invalid key"))
-Err(ProviderError::network("fireworks", e.to_string()))
+Err(ProviderError::authentication("xxx", "Invalid key"))
+Err(ProviderError::network("xxx", e.to_string()))
 ```
 
 ### 错误映射对照表
@@ -67,6 +60,8 @@ Err(ProviderError::network("fireworks", e.to_string()))
 | ProviderErrorTrait 实现 | 50 | 0 | **50 实现** |
 | From<XxxError> 实现 | 50 | 0 | **50 实现** |
 | 编译时间 | ~5 分钟 | ~2 分钟 | **~60%** |
+
+注：上表为统一错误迁移完成时的累计统计。当前残留的 `src/core/providers/*/error.rs` 均不再是独立枚举——它们是 `pub type XxxError = ProviderError;` 别名（如 ollama、cohere、gemini）或基于 `ProviderError` 的 HTTP 错误映射器（如 bedrock、azure）。
 
 ---
 
