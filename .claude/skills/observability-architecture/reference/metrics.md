@@ -1,140 +1,112 @@
 ## Contents
 
-- Metrics (Prometheus)
+- Metric Inventory
+- How Metrics Are Recorded
+- Rendering the /metrics Endpoint
+- Unpriced-Model Metrics
+- Deprecated Library Surfaces
 
-## Metrics (Prometheus)
+## Metric Inventory
 
-### Metric Types
+Every series exposed on `GET /metrics` in the current code. All names are rendered by hand —
+there is no `prometheus` crate dependency.
+
+| Series | Kind | Labels | Source |
+|---|---|---|---|
+| `gateway_uptime_seconds` | counter | — | `src/server/routes/health.rs` |
+| `gateway_memory_usage_bytes` | gauge | — (0 without the `metrics` feature) | `src/server/routes/health.rs` |
+| `gateway_cpu_usage_percent` | gauge | — (0.0 without the `metrics` feature) | `src/server/routes/health.rs` |
+| `gateway_providers_total` | gauge | — (configured provider count) | `src/server/routes/health.rs` |
+| `gateway_http_requests_total` | counter | — (`/metrics` scrapes excluded) | `src/server/middleware/metrics.rs` |
+| `gateway_http_request_errors_total` | counter | — (status code >= 400) | `src/server/middleware/metrics.rs` |
+| `gateway_http_responses_total` | counter | `class="1xx".."5xx"` | `src/server/middleware/metrics.rs` |
+| `gateway_http_request_duration_ms_sum` | counter | — (sum of durations, milliseconds) | `src/server/middleware/metrics.rs` |
+| `gateway_http_request_duration_ms_count` | counter | — | `src/server/middleware/metrics.rs` |
+| `gateway_unpriced_events_total` | counter | `provider`, `model_bucket`, `policy`, `outcome` | `src/server/middleware/metrics.rs` |
+| `gateway_unpriced_spend_total` | counter | same as events (USD) | `src/server/middleware/metrics.rs` |
+| `rate_limiter_degraded_total` | counter | `operation`, `mode` | `src/core/rate_limiter/limiter.rs` |
+
+Notes:
+
+- Latency is exposed only as `_sum`/`_count` over millisecond values — there are **no**
+  histogram buckets and therefore no `_bucket` series or `histogram_quantile()` support.
+  Average latency is `gateway_http_request_duration_ms_sum / gateway_http_request_duration_ms_count`.
+- The only series without the `gateway_` prefix is `rate_limiter_degraded_total`.
+- There are no per-provider request/token/cost/health series on `/metrics`. Provider-level
+  telemetry goes through the callback integrations instead.
+
+## How Metrics Are Recorded
+
+`MetricsMiddleware` keeps process-local atomics in a `static HTTP_METRICS: HttpMetricsRegistry`
+(`AtomicU64` per value). Each request's recorder runs when the response body completes or drops
+(`MetricsResponseBody` with `PinnedDrop`), so streaming responses are counted after the stream
+finishes. Requests to `/metrics` are never recorded (`should_record_request_path`).
 
 ```rust
-use prometheus::{Counter, Gauge, Histogram, IntCounter, IntGauge, Registry};
-use lazy_static::lazy_static;
+// src/server/middleware/metrics.rs (abridged)
+static HTTP_METRICS: HttpMetricsRegistry = HttpMetricsRegistry {
+    requests_total: AtomicU64::new(0),
+    errors_total: AtomicU64::new(0),
+    // status_1xx_total .. status_5xx_total, latency_micros_sum, latency_ms_count ...
+};
 
-lazy_static! {
-    pub static ref REGISTRY: Registry = Registry::new();
-
-    // Request counters
-    pub static ref HTTP_REQUESTS_TOTAL: IntCounter = IntCounter::new(
-        "litellm_http_requests_total",
-        "Total number of HTTP requests"
-    ).unwrap();
-
-    pub static ref PROVIDER_REQUESTS_TOTAL: IntCounterVec = IntCounterVec::new(
-        Opts::new("litellm_provider_requests_total", "Total provider requests"),
-        &["provider", "model", "status"]
-    ).unwrap();
-
-    // Latency histograms
-    pub static ref REQUEST_LATENCY_SECONDS: HistogramVec = HistogramVec::new(
-        HistogramOpts::new(
-            "litellm_request_latency_seconds",
-            "Request latency in seconds"
-        ).buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
-        &["provider", "model", "endpoint"]
-    ).unwrap();
-
-    pub static ref PROVIDER_LATENCY_SECONDS: HistogramVec = HistogramVec::new(
-        HistogramOpts::new(
-            "litellm_provider_latency_seconds",
-            "Provider API latency in seconds"
-        ).buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]),
-        &["provider", "model"]
-    ).unwrap();
-
-    // Token counters
-    pub static ref TOKENS_TOTAL: IntCounterVec = IntCounterVec::new(
-        Opts::new("litellm_tokens_total", "Total tokens processed"),
-        &["provider", "model", "type"]  // type: prompt, completion
-    ).unwrap();
-
-    // Cost tracking
-    pub static ref COST_TOTAL: CounterVec = CounterVec::new(
-        Opts::new("litellm_cost_usd_total", "Total cost in USD"),
-        &["provider", "model"]
-    ).unwrap();
-
-    // Active connections
-    pub static ref ACTIVE_CONNECTIONS: IntGauge = IntGauge::new(
-        "litellm_active_connections",
-        "Number of active connections"
-    ).unwrap();
-
-    pub static ref ACTIVE_STREAMS: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("litellm_active_streams", "Number of active streaming connections"),
-        &["provider"]
-    ).unwrap();
-
-    // Cache metrics
-    pub static ref CACHE_HITS_TOTAL: IntCounterVec = IntCounterVec::new(
-        Opts::new("litellm_cache_hits_total", "Total cache hits"),
-        &["cache_tier"]  // l1, l2, l3
-    ).unwrap();
-
-    pub static ref CACHE_MISSES_TOTAL: IntCounter = IntCounter::new(
-        "litellm_cache_misses_total",
-        "Total cache misses"
-    ).unwrap();
-
-    // Health metrics
-    pub static ref PROVIDER_HEALTH: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("litellm_provider_health", "Provider health status (1=healthy, 0=unhealthy)"),
-        &["provider"]
-    ).unwrap();
-
-    // Error metrics
-    pub static ref ERRORS_TOTAL: IntCounterVec = IntCounterVec::new(
-        Opts::new("litellm_errors_total", "Total errors"),
-        &["provider", "error_type"]
-    ).unwrap();
-
-    // Rate limiting
-    pub static ref RATE_LIMIT_HITS: IntCounterVec = IntCounterVec::new(
-        Opts::new("litellm_rate_limit_hits_total", "Rate limit hits"),
-        &["provider", "limit_type"]  // rpm, tpm
-    ).unwrap();
+fn record_http_metrics(status_code: u16, latency: Duration) {
+    HTTP_METRICS.requests_total.fetch_add(1, Ordering::Relaxed);
+    if status_code >= 400 {
+        HTTP_METRICS.errors_total.fetch_add(1, Ordering::Relaxed);
+    }
+    // ... classify into status_1xx..5xx buckets
 }
 ```
 
-### Metrics Registration
+The middleware is attached conditionally on config:
 
 ```rust
-pub fn register_metrics() {
-    REGISTRY.register(Box::new(HTTP_REQUESTS_TOTAL.clone())).unwrap();
-    REGISTRY.register(Box::new(PROVIDER_REQUESTS_TOTAL.clone())).unwrap();
-    REGISTRY.register(Box::new(REQUEST_LATENCY_SECONDS.clone())).unwrap();
-    REGISTRY.register(Box::new(PROVIDER_LATENCY_SECONDS.clone())).unwrap();
-    REGISTRY.register(Box::new(TOKENS_TOTAL.clone())).unwrap();
-    REGISTRY.register(Box::new(COST_TOTAL.clone())).unwrap();
-    REGISTRY.register(Box::new(ACTIVE_CONNECTIONS.clone())).unwrap();
-    REGISTRY.register(Box::new(ACTIVE_STREAMS.clone())).unwrap();
-    REGISTRY.register(Box::new(CACHE_HITS_TOTAL.clone())).unwrap();
-    REGISTRY.register(Box::new(CACHE_MISSES_TOTAL.clone())).unwrap();
-    REGISTRY.register(Box::new(PROVIDER_HEALTH.clone())).unwrap();
-    REGISTRY.register(Box::new(ERRORS_TOTAL.clone())).unwrap();
-    REGISTRY.register(Box::new(RATE_LIMIT_HITS.clone())).unwrap();
+// src/server/http.rs
+let metrics_enabled = cfg.gateway.monitoring.metrics.enabled;
+// ...
+App::new()
+    // ...
+    .wrap(Condition::new(metrics_enabled, MetricsMiddleware))
+```
+
+## Rendering the /metrics Endpoint
+
+`GET /metrics` is mounted by `routes::health::configure_routes` on the main HTTP server and
+returns `text/plain; version=0.0.4; charset=utf-8`. The body concatenates three renderers:
+
+```rust
+// src/server/routes/health.rs
+async fn metrics(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
+    let metrics = render_prometheus_metrics(
+        state.config.load().providers().len(),
+        &MetricsMiddleware::render_prometheus(),
+        &crate::core::rate_limiter::render_degraded_metrics(),
+    );
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; version=0.0.4; charset=utf-8")
+        .body(metrics))
 }
 ```
 
-### Metrics Endpoint
+`render_prometheus_metrics` emits uptime/memory/CPU/providers, then embeds the middleware block
+and the rate-limiter block verbatim.
 
-```rust
-use actix_web::{HttpResponse, web};
-use prometheus::Encoder;
+## Unpriced-Model Metrics
 
-pub async fn metrics_handler() -> HttpResponse {
-    let encoder = prometheus::TextEncoder::new();
-    let metric_families = REGISTRY.gather();
+Unpriced-model policy events are recorded via `record_unpriced_event` /
+`record_unpriced_spend` into a `BTreeMap<UnpricedMetricLabels, UnpricedMetricValue>`.
+Cardinality is bounded by design: `model_bucket` comes from `unpriced_model_bucket`
+(fixed set such as `embedding`, `image`, `audio`, `rerank`, `claude`, `gemini`, `llama`,
+`mistral`, `openai_text`, `other`), while `policy` is limited to `reject` / `allow_unpriced` /
+`unknown` and `outcome` to `reject_preflight` / `candidate_excluded` / `fallback_settled` /
+`unknown`. Only the free-form `provider` label is escaped at render time.
 
-    let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
+## Deprecated Library Surfaces
 
-    HttpResponse::Ok()
-        .content_type("text/plain; charset=utf-8")
-        .body(buffer)
-}
-
-// Register in routes
-pub fn configure_metrics(cfg: &mut web::ServiceConfig) {
-    cfg.route("/metrics", web::get().to(metrics_handler));
-}
-```
+`core::observability::MetricsCollector` (which renders legacy `litellm_requests_total`,
+`litellm_errors_total`, `litellm_cache_hits_total`, `litellm_cache_misses_total`,
+`litellm_provider_health`) is a deprecated library-only compatibility surface scheduled for
+removal in 0.7 — it does not feed `/metrics`. The wired observability handle is
+`RuntimeObservability = core::integrations::CallbackDispatcher`
+(`src/core/subsystem_registry.rs`). Do not build new alerts on `litellm_*` series.

@@ -1,32 +1,31 @@
 ---
 name: observability-architecture
-description: LiteLLM-RS Observability Architecture. Covers Prometheus metrics, OpenTelemetry tracing, structured logging, health checks, and alerting integration. Use when adding or changing metrics, tracing, or logging instrumentation, implementing or debugging health checks, wiring Prometheus alert rules, or configuring the observability stack.
+description: LiteLLM-RS Observability Architecture. Covers the gateway_* Prometheus-format metrics rendered by the metrics middleware and /metrics endpoint, health/readiness endpoints, request logging, and the OpenTelemetry/Datadog/Langfuse callback exporters. Use when adding or changing metrics or log instrumentation, implementing or debugging health checks, wiring Prometheus alert rules, or configuring the monitoring stack.
 ---
 
 # Observability Architecture Guide
 
 ## Overview
 
-LiteLLM-RS implements comprehensive observability through three pillars: metrics (Prometheus), tracing (OpenTelemetry), and logging (structured JSON). This enables complete visibility into gateway operations.
+Observability in LiteLLM-RS is built from three runtime pieces:
 
-### Observability Stack
+1. **HTTP metrics** — `MetricsMiddleware` (`src/server/middleware/metrics.rs`) counts requests with process-local atomics and renders Prometheus text format on demand. No `prometheus` crate is used; every series is hand-rendered with the `gateway_` prefix.
+2. **Health/status routes** — `src/server/routes/health.rs` mounts `/health`, `/health/ready`, `/health/detailed`, `/status`, `/version`, and `/metrics` on the main HTTP server.
+3. **Callback exporters** — configured under `monitoring.callbacks`, the `OpenTelemetryIntegration` (OTLP/HTTP JSON), `DataDogIntegration`, and `LangfuseIntegration` receive real LLM lifecycle events through the `CallbackDispatcher` stored in `AppState` (exposed as `RuntimeObservability`).
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    LiteLLM Gateway                              │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐      │
-│  │    Metrics    │  │    Tracing    │  │    Logging    │      │
-│  │  (Prometheus) │  │ (OpenTelemetry)│  │   (tracing)   │      │
-│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘      │
-│          │                  │                  │                │
-└──────────┼──────────────────┼──────────────────┼────────────────┘
-           │                  │                  │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐       │
+│  │  Metrics      │  │ Health/status │  │  Callback     │       │
+│  │  middleware   │  │ routes        │  │  dispatcher   │       │
+│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘       │
+└──────────┼──────────────────┼──────────────────┼───────────────┘
            ▼                  ▼                  ▼
 ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│    Prometheus    │ │      Jaeger/     │ │    ELK Stack/    │
-│    + Grafana     │ │      Tempo       │ │      Loki        │
+│ Prometheus       │ │ LB / K8s probes  │ │ OTLP / Datadog / │
+│ scrapes /metrics │ │ + JSON status    │ │ Langfuse backends│
 └──────────────────┘ └──────────────────┘ └──────────────────┘
 ```
 
@@ -34,50 +33,51 @@ LiteLLM-RS implements comprehensive observability through three pillars: metrics
 
 ## Configuration
 
+The section is `monitoring:` at the top level of `config/gateway.yaml` (deserialized as
+`GatewayConfig.monitoring`, `src/config/models/gateway.rs`). Every struct uses
+`#[serde(deny_unknown_fields)]` — unknown keys fail config parsing.
+
 ```yaml
-observability:
+monitoring:
   metrics:
-    enabled: true
-    endpoint: "/metrics"
-    include_labels:
-      - provider
-      - model
-      - status
-      - error_type
-    histogram_buckets:
-      latency: [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
-      tokens: [10, 50, 100, 500, 1000, 5000, 10000]
-
+    enabled: true          # gates MetricsMiddleware (src/server/http.rs)
+    port: 9090             # default 9090; validated > 0 when enabled
+    path: "/metrics"       # validated non-empty, starts with '/'
+    interval_seconds: 15
   tracing:
-    enabled: true
-    exporter: "otlp"
-    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
-    sample_rate: 0.1
-    propagation: "tracecontext,baggage"
-
-  logging:
-    level: "info"
-    format: "json"
-    include_timestamp: true
-    include_target: true
-    include_file: false
-    include_line: false
-
+    enabled: false
+    endpoint: null         # REQUIRED when enabled: true (config validation)
+    service_name: "litellm-rs"
+    sampling_rate: 0.1
+    jaeger: null           # or {agent_endpoint, service_name}
   health:
-    enabled: true
-    endpoints:
-      health: "/health"
-      live: "/health/live"
-      ready: "/health/ready"
-    check_interval_seconds: 30
+    path: "/health"
+    detailed: true
+  logging: null            # or {level, format: text|json|structured, outputs}
+  callbacks:
+    queue_capacity: 1024
+    timeout_ms: 5000
+    backends: []           # {type: opentelemetry|datadog|langfuse, config: {...}}
 ```
+
+Wiring notes (verified against current code):
+
+- `metrics.enabled` is the only metrics key with runtime effect: it wraps the app in
+  `Condition::new(metrics_enabled, MetricsMiddleware)` (`src/server/http.rs`). The
+  `/metrics` route itself is hardcoded in `routes::health::configure_routes`; `port`,
+  `path`, and `interval_seconds` are parsed and validated but not consumed by runtime
+  wiring today.
+- `tracing.enabled` only appears in the startup summary log (`src/lib.rs`); OTLP trace
+  export is configured through `callbacks.backends`, not the `tracing:` section.
+- `logging` is parsed/validated but the log subscriber is initialized in `src/main.rs`
+  `init_logging` from the CLI/env level, not from this section.
 
 ---
 
 ## References
 
-- [reference/metrics.md](reference/metrics.md) — Prometheus metric definitions, registration, and the /metrics endpoint handler.
-- [reference/tracing-and-logging.md](reference/tracing-and-logging.md) — OpenTelemetry tracer init, span creation, request tracing middleware, and structured log events.
-- [reference/health-checks.md](reference/health-checks.md) — Health response model, component checks, and liveness/readiness/detailed endpoints.
-- [reference/alerting.md](reference/alerting.md) — Prometheus alert rules for error rate, provider health, latency, rate limits, and traffic stalls.
-- [reference/best-practices.md](reference/best-practices.md) — Metric type selection, log context, label cardinality, and graceful telemetry degradation.
+- [reference/metrics.md](reference/metrics.md) — the full `gateway_*` metric inventory, how the middleware records, and the /metrics renderer.
+- [reference/tracing-and-logging.md](reference/tracing-and-logging.md) — log subscriber init, request IDs, access-log events, and the OTLP/Datadog/Langfuse callback exporters.
+- [reference/health-checks.md](reference/health-checks.md) — health/readiness/detailed endpoints, response models, and the aggregate readiness rule.
+- [reference/alerting.md](reference/alerting.md) — Prometheus alert rules built on real `gateway_*` series.
+- [reference/best-practices.md](reference/best-practices.md) — metric type selection, log context, label cardinality, and graceful telemetry degradation.
