@@ -1,0 +1,88 @@
+## Contents
+
+- Composition
+- Startup Wiring
+- Read Path
+- Write Path
+- Failure and Fallback Behavior
+- Batch Operations and Cache Warming
+- Invalidation and Administration
+
+## Composition
+
+There is no unified `CacheManager`. The runtime cache is `LLMCache` wrapping two type-specialized `DualCache<T>` instances (src/core/cache/llm_cache.rs:25):
+
+```rust
+pub struct LLMCache {
+    chat_cache: DualCache<CachedChatResponse>,
+    embedding_cache: DualCache<CachedEmbeddingResponse>,
+    config: LLMCacheConfig,
+}
+
+pub struct DualCache<T> {                 // src/core/cache/dual.rs:30
+    memory: Arc<InMemoryCache<T>>,        // L1, always present
+    redis: Option<RedisCache<T>>,         // L2, optional (needs a RedisPool)
+    config: DualCacheConfig,
+    stats: Arc<AtomicCacheStats>,         // shared by both layers
+}
+```
+
+`LLMCache` owns key generation (`generate_chat_key`, `generate_embedding_key`, with `_with_user` variants when `config.user_specific` is set) and response wrappers (`CachedChatResponse`, `CachedEmbeddingResponse` — an `Arc<ChatCompletionResponse>`/`Arc<EmbeddingResponse>` plus model, `cached` flag, and `cached_at`). Main methods:
+
+- `get_chat_response_with_user(request, user_id)` — returns `Option<Arc<ChatCompletionResponse>>`; skips streaming requests.
+- `cache_chat_response_with_user(request, response, user_id)` — stores under the chat TTL.
+- `get_embedding_response` / `cache_embedding_response` / `invalidate_embedding`.
+- `invalidate_chat_with_user` — deletes by the same user-scoped key used for lookup; using plain `invalidate_chat` while `user_specific` is enabled would leak stale per-user entries (llm_cache.rs:352).
+- `chat_stats()`, `embedding_stats()`, `combined_stats()`.
+
+The generic `LLMCache::get::<T>` / `set::<T>` methods are placeholders that do nothing (return `Ok(None)` / `Ok(())`) — do not use them.
+
+## Startup Wiring
+
+`build_response_cache(config, redis)` in src/server/state.rs:143 constructs `AppState.response_cache: Option<Arc<LLMCache>>`:
+
+- Requires `gateway.cache.enabled == true` and `ttl > 0`; otherwise no cache is built (ttl 0 logs an error first).
+- With a live Redis pool: `DualCacheConfig::default()` → mode `Dual`. Without one: `DualCacheConfig::memory_only()`.
+- `max_size` and TTL come from `cache.max_size` / `cache.ttl`; both chat and embedding TTLs are set to the same value.
+- `user_specific` is hard-coded `true`; `semantic_cache_enabled` is hard-coded `false`.
+- `cache.start_cleanup_tasks()` spawns background expiry sweeps for both layers.
+
+## Read Path
+
+`DualCache::get` dispatches on `CacheMode` (src/core/cache/types.rs:250): `MemoryOnly`, `RedisOnly`, or `Dual` (default).
+
+In `Dual` mode (`get_dual`, dual.rs:116):
+
+1. Check L1 memory — sub-millisecond DashMap hit.
+2. On L1 miss, check L2 Redis. A Redis hit repopulates L1 before returning (read-through).
+3. Both miss → `Ok(None)`.
+
+`get_entry(key)` behaves identically but returns the full `CacheEntry<T>` (value, ttl, size_bytes, access metadata) and preserves the entry's original TTL when repopulating L1.
+
+## Write Path
+
+- `set(key, value)` uses `config.default_ttl`; `set_with_ttl(key, value, ttl)` overrides it.
+- In `Dual` mode, writes go to memory first, then Redis. A Redis write failure logs `warn!("Failed to write to Redis cache")` and the operation still succeeds (dual.rs:209).
+- `set_with_size(key, value, ttl, size_bytes)` tracks byte size for stats across both layers.
+
+## Failure and Fallback Behavior
+
+- `RedisOnly` requested without a pool degrades to memory-only with a warning; `Dual` without a pool silently uses memory-only (dual.rs:60).
+- Every `RedisPool` method is guarded by `pool.is_noop()` (no Redis configured) — reads miss, writes no-op.
+- Corrupted Redis entries are deleted on read and counted as misses (redis_cache.rs:81).
+- `is_redis_available()` probes the actual connection; exposed via the admin status endpoint.
+
+## Batch Operations and Cache Warming
+
+On `DualCache<T>` (src/core/cache/dual.rs:400-486):
+
+- `get_many(keys)` / `set_many(&[(key, value, ttl)])` / `delete_many(keys)` — sequential loops over the single-key operations.
+- `warm_from_redis(keys)` — loads Redis entries into L1 for keys not already resident (skipped entirely in `MemoryOnly` mode).
+- `warm_with_entries(&[(key, value, ttl)])` — pre-seeds L1, skipping existing keys.
+
+## Invalidation and Administration
+
+- Per-entry: `delete(key)` removes from both tiers and reports whether anything existed; `clear()` empties memory and deletes every Redis key under the `litellm:cache:` prefix.
+- HTTP admin API (src/server/routes/admin.rs:124, requires an admin-role user or rejects with 403):
+  - `GET /admin/cache` and `GET /admin/cache/status` — returns `CacheAdminResponse`: enabled flags, `CombinedCacheStats`, Redis availability; HTTP 501 when the cache is unwired.
+  - `POST /admin/cache/clear` — calls `LLMCache::clear()` (both chat and embedding caches).

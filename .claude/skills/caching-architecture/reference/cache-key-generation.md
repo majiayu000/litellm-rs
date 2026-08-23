@@ -1,63 +1,60 @@
-## Cache Key Generation
+## Contents
 
-### Request Hashing
+- Key Functions
+- Key Format and Schema Version
+- Canonicalization Policy
+- CacheKeyBuilder
+
+## Key Functions
+
+Key generation uses free functions in src/core/cache/key_generator.rs — there is no `CacheKeyGenerator` struct. All return `CacheKey` (src/core/cache/types.rs:14, a string plus a pre-computed u64 hash):
 
 ```rust
-use sha2::{Sha256, Digest};
-use serde::Serialize;
+pub fn generate_chat_key(request: &ChatCompletionRequest) -> CacheKey;
+pub fn generate_chat_key_with_user(request: &ChatCompletionRequest, user_id: Option<&str>) -> CacheKey;
+pub fn generate_embedding_key(request: &EmbeddingRequest) -> CacheKey;
+pub fn generate_embedding_key_with_user(request: &EmbeddingRequest, user_id: Option<&str>) -> CacheKey;
 
-pub struct CacheKeyGenerator;
+// Generic helpers for other payloads
+pub fn generate_key_from_json<T: Serialize>(prefix: &str, request: &T) -> CacheKey;
+pub fn generate_key_from_content(prefix: &str, content: &str) -> CacheKey;
+pub fn generate_key_from_parts(prefix: &str, parts: &[&str]) -> CacheKey;
+```
 
-impl CacheKeyGenerator {
-    /// Generate a deterministic cache key from a chat request
-    pub fn generate_key(request: &ChatRequest) -> String {
-        let mut hasher = Sha256::new();
+The chat key hashes a JSON payload containing every response-affecting request field: `model`, `messages`, `temperature`, `max_tokens`, `max_completion_tokens`, `top_p`, `n`, `stop`, penalties, `logit_bias`, `functions`/`function_call`, `tools`/`tool_choice`, `parallel_tool_calls`, `response_format`, `seed`, logprobs, `modalities`, `audio`, `reasoning_effort`, `service_tier`, `prediction`, `safety_settings`, `cache_control`, `extra_body`, and `user_id` (key_generator.rs:33). The embedding key hashes `model` + `input` + optional `user_id`.
 
-        // Include model
-        hasher.update(request.model.as_bytes());
+Prefix constants (key_generator.rs:14): `CHAT_KEY_PREFIX = "chat"`, `EMBEDDING_KEY_PREFIX = "embed"`, `COMPLETION_KEY_PREFIX = "completion"`.
 
-        // Include messages (normalized)
-        for message in &request.messages {
-            hasher.update(message.role.to_string().as_bytes());
-            if let Some(content) = &message.content {
-                hasher.update(content.to_string().as_bytes());
-            }
-        }
+## Key Format and Schema Version
 
-        // Include relevant parameters
-        if let Some(temp) = request.temperature {
-            hasher.update(temp.to_le_bytes());
-        }
-        if let Some(top_p) = request.top_p {
-            hasher.update(top_p.to_le_bytes());
-        }
-        if let Some(max_tokens) = request.max_tokens {
-            hasher.update(max_tokens.to_le_bytes());
-        }
+`versioned_key(prefix, namespace, digest)` in src/core/cache/key_policy.rs:58 produces:
 
-        // Include tools if present
-        if let Some(tools) = &request.tools {
-            let tools_json = serde_json::to_string(tools).unwrap_or_default();
-            hasher.update(tools_json.as_bytes());
-        }
+```
+{prefix}:{namespace}:{CACHE_KEY_SCHEMA_VERSION}:{sha256-hex}
+chat:gpt-4:v4:9f2c...        # namespace = model when present
+embed:v4:ab13...             # generic helpers omit the model namespace
+```
 
-        let result = hasher.finalize();
-        format!("chat:{}", hex::encode(result))
-    }
+`CACHE_KEY_SCHEMA_VERSION` is `"v4"` (key_policy.rs:11). Bumping it cold-starts all existing entries so responses cached under an older key policy are never reused.
 
-    /// Generate a semantic cache key (for vector lookup)
-    pub fn generate_semantic_key(request: &ChatRequest) -> String {
-        // Extract the last user message for semantic matching
-        let user_message = request
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::User)
-            .and_then(|m| m.content.as_ref())
-            .map(|c| c.to_string())
-            .unwrap_or_default();
+## Canonicalization Policy
 
-        format!("semantic:{}:{}", request.model, user_message)
-    }
-}
+`stable_digest_value(value)` (key_policy.rs:20) digests `canonical_json_string(value)` with SHA-256. Canonicalization (`canonicalize_json_value`, key_policy.rs:73):
+
+- Sorts object keys recursively so field order never changes the digest.
+- Drops non-deterministic fields listed by `is_non_deterministic_field`: `timestamp`, `request_id`, `trace_id`, `span_id`, `created_at`, `updated_at`, `id`, `stream`, `stream_options`.
+- The drop applies only at the top level or directly inside `extra_body` (`should_exclude_field`) — an `id` nested inside a tool's JSON-schema properties is preserved, keeping distinct schemas distinct.
+
+## CacheKeyBuilder
+
+For custom keys without hand-rolled string concatenation (key_generator.rs:154):
+
+```rust
+let key = CacheKeyBuilder::new("test")   // prefix
+    .with_part("part1")                  // required string part
+    .add_optional(Some("part2"))         // included only if Some
+    .add_num(123)                        // any Display value
+    .build();                            // hashed like the free functions
+
+CacheKeyBuilder::new("p").with_part("a").build_explicit() // "p:a", no hashing
 ```
