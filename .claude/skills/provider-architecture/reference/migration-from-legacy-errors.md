@@ -1,24 +1,24 @@
-## Migration from Legacy Errors
+## Migration from Legacy Error Types
 
-If migrating from provider-specific error types:
+Per-provider error enums have been removed from the codebase. `LLMProvider` has no
+`Error` associated type — every trait method returns the unified
+`crate::core::providers::unified_provider::ProviderError` directly.
+
+Historical type names survive as plain aliases, so existing call sites keep compiling:
 
 ```rust
-// Before
-use super::error::FireworksError;
-impl LLMProvider for FireworksProvider {
-    type Error = FireworksError;
-}
-Err(FireworksError::AuthenticationError("Invalid key".into()))
+// src/core/providers/anthropic/error.rs
+pub type AnthropicError = ProviderError;
 
-// After
-use crate::core::providers::unified_provider::ProviderError;
-impl LLMProvider for FireworksProvider {
-    type Error = ProviderError;
-}
-Err(ProviderError::authentication("fireworks", "Invalid key"))
+// Same pattern elsewhere:
+// GeminiError, CohereError, OllamaError, MistralError, VertexAIError,
+// GitHubError, GitHubCopilotError, LlamaError
 ```
 
-### Error Mapping Reference
+### Old Variant Shapes -> Unified Factory Methods
+
+Legacy enums are gone, so the left column below describes their historical shapes
+(illustrative), and the right column is what to write today:
 
 | Legacy Pattern | Unified Pattern |
 |----------------|-----------------|
@@ -29,3 +29,16 @@ Err(ProviderError::authentication("fireworks", "Invalid key"))
 | `XxxError::NetworkError(msg)` | `ProviderError::network("xxx", msg)` |
 | `XxxError::TimeoutError(msg)` | `ProviderError::timeout("xxx", msg)` |
 | `XxxError::ApiError(status, msg)` | `ProviderError::api_error("xxx", status, msg)` |
+
+All factory methods take the static provider name first (`&'static str`; return
+`error_provider_name()` from the provider for it).
+
+### Where Provider-Specific Behavior Lives Now
+
+Response/error-body parsing moved into error mappers rather than error enums:
+
+- `OpenAIErrorMapper`, `AnthropicErrorMapper` — `core::traits::error_mapper::implementations`
+  (e.g. `AnthropicErrorMapper::from_http_status(status, body)`,
+  `from_api_response(&serde_json::Value)`)
+- `GenericErrorMapper` (aliased `DefaultErrorMapper`) — `core::traits::error_mapper::types`,
+  the generic HTTP-status fallback most providers return from `get_error_mapper()`
