@@ -709,7 +709,10 @@ pub async fn verify_key(
 
     let key_manager = get_key_manager(&state);
 
-    match key_manager.validate_key(&request.key).await {
+    match key_manager
+        .validate_key_without_usage_update(&request.key)
+        .await
+    {
         Ok(result) => {
             // Ownership check (skipped when auth is disabled): metadata for a
             // valid key may only be seen by the key's own caller, its owner,
@@ -729,6 +732,7 @@ pub async fn verify_key(
                         .json(ApiResponse::<()>::error(error_response.error)));
                 }
             }
+            key_manager.record_validated_key_usage(&result);
             let response = VerifyKeyResponse { result };
             Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
         }

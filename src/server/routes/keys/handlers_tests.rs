@@ -683,7 +683,7 @@ fn test_auth_result_reuses_middleware_extensions() {
 #[actix_web::test]
 async fn verify_handler_reuses_middleware_auth_without_reauthenticating() {
     let state = auth_enabled_test_state().await;
-    let (_, raw_key) = state
+    let (key_id, raw_key) = state
         .key_manager
         .generate_key(CreateKeyConfig {
             name: "target".to_string(),
@@ -693,17 +693,25 @@ async fn verify_handler_reuses_middleware_auth_without_reauthenticating() {
         .expect("target key should be generated");
     let request = request_with_auth_extensions(&make_user_auth(make_user(UserRole::Admin, vec![])));
 
-    let response = verify_key(request, state, web::Json(VerifyKeyRequest { key: raw_key }))
-        .await
-        .expect("verification handler should respond");
+    let response = verify_key(
+        request,
+        state.clone(),
+        web::Json(VerifyKeyRequest { key: raw_key }),
+    )
+    .await
+    .expect("verification handler should respond");
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        state.key_manager.has_recorded_key_usage(key_id),
+        "allowed verification should schedule a last_used update"
+    );
 }
 
 #[actix_web::test]
 async fn verify_handler_hides_foreign_key_existence() {
     let state = auth_enabled_test_state().await;
-    let (_, active_raw_key) = state
+    let (active_id, active_raw_key) = state
         .key_manager
         .generate_key(CreateKeyConfig {
             name: "active foreign target".to_string(),
@@ -775,4 +783,9 @@ async fn verify_handler_hides_foreign_key_existence() {
             expected_body = Some(body);
         }
     }
+
+    assert!(
+        !state.key_manager.has_recorded_key_usage(active_id),
+        "unauthorized verification must not schedule a last_used update"
+    );
 }
