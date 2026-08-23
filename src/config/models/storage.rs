@@ -200,7 +200,8 @@ pub struct RedisConfig {
     /// Connection timeout in seconds
     #[serde(default = "default_connection_timeout")]
     pub connection_timeout: u64,
-    /// Enable cluster mode
+    /// Enable cluster mode. Not implemented: startup validation rejects
+    /// `cluster=true` instead of silently using a standalone connection.
     #[serde(default)]
     pub cluster: bool,
     /// When `enabled` is true and Redis init fails, allow the gateway to keep
