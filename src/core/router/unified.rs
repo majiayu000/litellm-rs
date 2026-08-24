@@ -111,7 +111,7 @@ impl RoutingSnapshot {
 
         for mut deployment in deployments {
             if let Some(old) = previous.deployments.get(&deployment.id) {
-                deployment.state = old.state.clone();
+                deployment.state = old.state.for_replacement();
             }
             snapshot.insert_deployment(deployment);
         }

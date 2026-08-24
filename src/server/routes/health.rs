@@ -103,9 +103,14 @@ async fn readiness_check(
 
     let is_authenticated = crate::server::middleware::get_request_context(&request)
         .is_ok_and(|context| context.user_id.is_some() || context.api_key_id().is_some());
+    let reason = if verdict.ready || is_authenticated {
+        verdict.reason
+    } else {
+        Cow::Borrowed("not ready")
+    };
     let body = ReadinessStatus {
         ready: verdict.ready,
-        reason: verdict.reason,
+        reason,
         timestamp: chrono::Utc::now(),
         version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
         storage: is_authenticated.then_some(storage_health),

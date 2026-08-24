@@ -301,6 +301,14 @@ impl DeploymentState {
     pub(crate) fn set_probe_health_status(&self, status: HealthStatus) {
         self.probe_health.store(status as u8, Ordering::Release);
     }
+
+    /// Share request-routing state while requiring fresh probe evidence.
+    pub(crate) fn for_replacement(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
+        }
+    }
 }
 
 impl Default for DeploymentState {

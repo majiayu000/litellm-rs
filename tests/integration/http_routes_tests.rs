@@ -293,6 +293,7 @@ mod tests {
         let body: Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], true);
         assert_eq!(body["data"]["ready"], false);
+        assert_eq!(body["data"]["reason"], "not ready");
         assert!(body["data"].get("storage").is_none());
         assert!(body["data"].get("providers").is_none());
     }
@@ -311,6 +312,7 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["data"]["reason"], "no providers configured");
         assert!(body["data"]["storage"].is_object());
         assert!(body["data"]["providers"].is_object());
     }

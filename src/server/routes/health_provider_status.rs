@@ -129,25 +129,47 @@ mod tests {
         let (status, _) = derive_status_for_provider(&router, "primary", true);
         assert_eq!(status, "unknown");
 
-        router
+        let old_deployment = router
             .get_deployment("primary-readiness-model")
-            .expect("configured-name deployment")
+            .expect("configured-name deployment");
+        old_deployment
             .state
             .set_probe_health_status(HealthStatus::Healthy);
         let (status, error) = derive_status_for_provider(&router, "primary", true);
         assert_eq!(status, "healthy");
         assert!(error.is_none());
 
-        let replacement = router
-            .get_deployment("primary-readiness-model")
-            .expect("replacement deployment")
-            .as_ref()
-            .clone();
+        let total_requests = old_deployment
+            .state
+            .total_requests
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let replacement = old_deployment.as_ref().clone();
         router.set_model_list(vec![replacement]);
         let (status, _) = derive_status_for_provider(&router, "primary", true);
-        assert_eq!(status, "healthy");
+        assert_eq!(status, "unknown");
         let (canonical_status, _) = derive_status_for_provider(&router, "anthropic", true);
         assert_eq!(canonical_status, "unknown");
+
+        let replacement = router
+            .get_deployment("primary-readiness-model")
+            .expect("replacement deployment");
+        assert_eq!(
+            replacement
+                .state
+                .total_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            total_requests
+        );
+        old_deployment
+            .state
+            .set_probe_health_status(HealthStatus::Unknown);
+        old_deployment
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
+        assert_eq!(
+            replacement.state.probe_health_status(),
+            HealthStatus::Unknown
+        );
     }
 
     #[tokio::test]
