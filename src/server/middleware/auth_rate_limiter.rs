@@ -107,6 +107,20 @@ impl AuthRateLimiter {
             });
 
         let tracker = entry.value_mut();
+
+        // Requests admitted immediately before another request establishes a
+        // lockout may finish authentication after that lockout is active. Do
+        // not let those late failures count toward a new cycle or replace the
+        // current deadline with an exponentially longer one.
+        if tracker
+            .lockout_until
+            .is_some_and(|lockout_until| now < lockout_until)
+        {
+            drop(entry);
+            self.enforce_capacity(now);
+            return None;
+        }
+
         tracker.failure_count += 1;
 
         if tracker.failure_count >= self.max_attempts {
@@ -335,6 +349,27 @@ mod tests {
     }
 
     #[test]
+    fn test_record_failure_does_not_escalate_active_lockout() {
+        let limiter = AuthRateLimiter::new(1, 300, 60);
+        let client = "active_lockout_client";
+
+        assert_eq!(limiter.record_failure(client), Some(60));
+        let (original_deadline, original_lockout_count) = {
+            let entry = limiter.attempts.get(client).unwrap();
+            (entry.lockout_until.unwrap(), entry.lockout_count)
+        };
+
+        for _ in 0..10 {
+            assert_eq!(limiter.record_failure(client), None);
+        }
+
+        let entry = limiter.attempts.get(client).unwrap();
+        assert_eq!(entry.lockout_until, Some(original_deadline));
+        assert_eq!(entry.lockout_count, original_lockout_count);
+        assert_eq!(entry.failure_count, 0);
+    }
+
+    #[test]
     fn test_record_failure_exponential_backoff() {
         let limiter = AuthRateLimiter::new(2, 300, 60);
         let client = "backoff_client";
@@ -344,14 +379,11 @@ mod tests {
         let first = limiter.record_failure(client);
         assert_eq!(first, Some(60));
 
-        // Wait a tiny bit to allow check to pass after lockout logic
-        // In real code, we'd need to wait for lockout to expire
-
-        // Reset by simulating lockout expiry via direct entry manipulation
-        // For this test, just trigger another failure cycle
+        // Simulate expiry without sleeping. Expired lockouts must still allow
+        // the next failure cycle to apply exponential backoff.
         // The lockout_count should now be 1, so next lockout = 60 * 2^1 = 120
         if let Some(mut entry) = limiter.attempts.get_mut(client) {
-            entry.lockout_until = None;
+            entry.lockout_until = Some(Instant::now() - Duration::from_secs(1));
         }
 
         limiter.record_failure(client);
@@ -360,7 +392,7 @@ mod tests {
 
         // Third lockout: 60 * 2^2 = 240
         if let Some(mut entry) = limiter.attempts.get_mut(client) {
-            entry.lockout_until = None;
+            entry.lockout_until = Some(Instant::now() - Duration::from_secs(1));
         }
 
         limiter.record_failure(client);
@@ -607,5 +639,41 @@ mod tests {
 
         // Should have exactly one entry for the shared client
         assert_eq!(limiter.attempts.len(), 1);
+    }
+
+    #[test]
+    fn test_concurrent_late_failures_do_not_escalate_active_lockout() {
+        const THREADS: usize = 8;
+        let limiter = Arc::new(AuthRateLimiter::new(1, 300, 60));
+        let client = "concurrent_active_lockout_client";
+        assert_eq!(limiter.record_failure(client), Some(60));
+        let original_deadline = limiter
+            .attempts
+            .get(client)
+            .and_then(|entry| entry.lockout_until)
+            .unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(THREADS + 1));
+        let mut handles = Vec::with_capacity(THREADS);
+
+        for _ in 0..THREADS {
+            let limiter = Arc::clone(&limiter);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..10 {
+                    assert_eq!(limiter.record_failure(client), None);
+                }
+            }));
+        }
+
+        barrier.wait();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let entry = limiter.attempts.get(client).unwrap();
+        assert_eq!(entry.lockout_until, Some(original_deadline));
+        assert_eq!(entry.lockout_count, 1);
+        assert_eq!(entry.failure_count, 0);
     }
 }
