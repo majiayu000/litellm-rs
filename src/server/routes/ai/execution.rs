@@ -70,6 +70,7 @@ where
     let max_attempts = router.config().num_retries + 1;
     let mut attempt = 1;
     let mut last_error = None;
+    let mut last_hard_exclusion_error = None;
     // Hard exclusions (budget/unpriced policy): never retried in this request.
     let mut excluded_budget_deployments = HashSet::new();
     // Soft exclusions (already tried): avoided while untried candidates remain.
@@ -107,8 +108,7 @@ where
                     }
                     Err(router_err) => {
                         if matches!(&router_err, RouterError::UnsupportedCapability { .. })
-                            && !excluded_budget_deployments.is_empty()
-                            && let Some(err) = last_error.clone()
+                            && let Some(err) = last_hard_exclusion_error.clone()
                         {
                             return Err(GatewayError::Provider(err));
                         }
@@ -128,14 +128,15 @@ where
                             continue;
                         }
 
-                        return Err(GatewayError::Provider(provider_err));
+                        return Err(GatewayError::Provider(
+                            last_hard_exclusion_error.unwrap_or(provider_err),
+                        ));
                     }
                 }
             }
             Err(router_err) => {
                 if matches!(&router_err, RouterError::UnsupportedCapability { .. })
-                    && !excluded_budget_deployments.is_empty()
-                    && let Some(err) = last_error.clone()
+                    && let Some(err) = last_hard_exclusion_error.clone()
                 {
                     return Err(GatewayError::Provider(err));
                 }
@@ -156,7 +157,9 @@ where
                     continue;
                 }
 
-                return Err(GatewayError::Provider(provider_err));
+                return Err(GatewayError::Provider(
+                    last_hard_exclusion_error.unwrap_or(provider_err),
+                ));
             }
         };
 
@@ -183,6 +186,7 @@ where
                 ) {
                     excluded_budget_deployments.insert(deployment_lease.clone_deployment_id());
                     drop(deployment_lease);
+                    last_hard_exclusion_error = Some(err.clone());
                     last_error = Some(err);
                     continue;
                 }
@@ -221,12 +225,14 @@ where
         }
     }
 
-    Err(GatewayError::Provider(last_error.unwrap_or_else(|| {
-        ProviderError::Other {
-            provider: "router",
-            message: "Unknown error during selected deployment retry".to_string(),
-        }
-    })))
+    Err(GatewayError::Provider(
+        last_hard_exclusion_error
+            .or(last_error)
+            .unwrap_or_else(|| ProviderError::Other {
+                provider: "router",
+                message: "Unknown error during selected deployment retry".to_string(),
+            }),
+    ))
 }
 
 #[cfg(test)]
@@ -266,6 +272,7 @@ where
     let max_attempts = router.config().num_retries + 1;
     let mut attempt = 1;
     let mut last_error = None;
+    let mut last_hard_exclusion_error = None;
     // Hard exclusions (budget/unpriced policy): never retried in this request.
     let mut excluded_budget_deployments = HashSet::new();
     // Soft exclusions (already tried): avoided while untried candidates remain.
@@ -302,8 +309,7 @@ where
                     }
                     Err(router_err) => {
                         if matches!(&router_err, RouterError::UnsupportedCapability { .. })
-                            && !excluded_budget_deployments.is_empty()
-                            && let Some(err) = last_error.clone()
+                            && let Some(err) = last_hard_exclusion_error.clone()
                         {
                             return Err(GatewayError::Provider(err));
                         }
@@ -323,14 +329,15 @@ where
                             continue;
                         }
 
-                        return Err(GatewayError::Provider(provider_err));
+                        return Err(GatewayError::Provider(
+                            last_hard_exclusion_error.unwrap_or(provider_err),
+                        ));
                     }
                 }
             }
             Err(router_err) => {
                 if matches!(&router_err, RouterError::UnsupportedCapability { .. })
-                    && !excluded_budget_deployments.is_empty()
-                    && let Some(err) = last_error.clone()
+                    && let Some(err) = last_hard_exclusion_error.clone()
                 {
                     return Err(GatewayError::Provider(err));
                 }
@@ -351,7 +358,9 @@ where
                     continue;
                 }
 
-                return Err(GatewayError::Provider(provider_err));
+                return Err(GatewayError::Provider(
+                    last_hard_exclusion_error.unwrap_or(provider_err),
+                ));
             }
         };
         let deployment = deployment_lease.clone_deployment();
@@ -373,6 +382,7 @@ where
                 ) {
                     excluded_budget_deployments.insert(deployment_lease.clone_deployment_id());
                     drop(deployment_lease);
+                    last_hard_exclusion_error = Some(err.clone());
                     last_error = Some(err);
                     continue;
                 }
@@ -411,12 +421,14 @@ where
         }
     }
 
-    Err(GatewayError::Provider(last_error.unwrap_or_else(|| {
-        ProviderError::Other {
-            provider: "router",
-            message: "Unknown error during streaming retry".to_string(),
-        }
-    })))
+    Err(GatewayError::Provider(
+        last_hard_exclusion_error
+            .or(last_error)
+            .unwrap_or_else(|| ProviderError::Other {
+                provider: "router",
+                message: "Unknown error during streaming retry".to_string(),
+            }),
+    ))
 }
 
 #[cfg(test)]

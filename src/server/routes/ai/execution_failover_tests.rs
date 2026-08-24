@@ -364,7 +364,10 @@ async fn test_execute_with_selected_deployment_waits_for_temporarily_unavailable
     fallback.state.active_requests.store(1, Ordering::Relaxed);
     let release_fallback = fallback.clone();
     let release_task = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Attempt 2 uses a two-second router backoff. Releasing after one
+        // second makes an incorrect attempt-1 delay consume the final retry
+        // while the slot is still unavailable.
+        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
         release_fallback
             .state
             .active_requests
@@ -404,8 +407,8 @@ async fn test_execute_with_selected_deployment_waits_for_temporarily_unavailable
         ["primary-retry-target", "fallback-retry-target"]
     );
     assert!(
-        started_at.elapsed() >= std::time::Duration::from_millis(900),
-        "selection retry must honor the router retry delay"
+        started_at.elapsed() >= std::time::Duration::from_millis(1_900),
+        "selection retry must honor the attempt-2 router delay"
     );
 }
 
@@ -432,7 +435,10 @@ async fn test_execute_stream_waits_for_temporarily_unavailable_untried_target() 
     fallback.state.active_requests.store(1, Ordering::Relaxed);
     let release_fallback = fallback.clone();
     let release_task = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Attempt 2 uses a two-second router backoff. Releasing after one
+        // second makes an incorrect attempt-1 delay consume the final retry
+        // while the slot is still unavailable.
+        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
         release_fallback
             .state
             .active_requests
@@ -472,8 +478,8 @@ async fn test_execute_stream_waits_for_temporarily_unavailable_untried_target() 
         ["primary-retry-target", "fallback-retry-target"]
     );
     assert!(
-        started_at.elapsed() >= std::time::Duration::from_millis(900),
-        "streaming selection retry must honor the router retry delay"
+        started_at.elapsed() >= std::time::Duration::from_millis(1_900),
+        "streaming selection retry must honor the attempt-2 router delay"
     );
     lease.finish_success(0);
 }
@@ -584,10 +590,55 @@ async fn test_execute_stream_stops_on_final_selection_attempt() {
     );
 }
 
+fn assert_mixed_exclusion_result(
+    router: &UnifiedRouter,
+    attempts: &Mutex<Vec<String>>,
+    error: GatewayError,
+    expected_message: &str,
+) {
+    assert!(matches!(
+        error,
+        GatewayError::Provider(ProviderError::QuotaExceeded {
+            provider: "budget",
+            ref message,
+        }) if message == expected_message
+    ));
+    assert_eq!(
+        attempts.lock().unwrap().as_slice(),
+        ["primary-retry-target", "fallback-retry-target"]
+    );
+    for deployment_id in ["primary-retry-target", "fallback-retry-target"] {
+        let deployment = router
+            .get_deployment(deployment_id)
+            .expect("deployment should exist");
+        assert_eq!(
+            deployment.state.active_requests.load(Ordering::Relaxed),
+            0,
+            "{deployment_id} lease should be released"
+        );
+    }
+}
+
+async fn build_mixed_exclusion_router() -> Arc<UnifiedRouter> {
+    Arc::new(
+        build_retry_failover_router_with_config(
+            RouterConfig {
+                routing_strategy: UnifiedRoutingStrategy::PriorityBased,
+                num_retries: 2,
+                allowed_fails: 100,
+                ..Default::default()
+            },
+            None,
+        )
+        .await,
+    )
+}
+
 #[tokio::test]
-async fn test_full_pool_structural_exhaustion_preserves_last_budget_error() {
-    let router = Arc::new(build_retry_failover_router().await);
+async fn test_unary_temporary_full_pool_exhaustion_preserves_last_budget_error() {
+    let router = build_mixed_exclusion_router().await;
     let attempts = Arc::new(Mutex::new(Vec::new()));
+    let expected_message = "provider 'openai' mixed budget exhausted";
 
     let error = execute_with_selected_deployment(
         router.as_ref(),
@@ -608,31 +659,69 @@ async fn test_full_pool_structural_exhaustion_preserves_last_budget_error() {
                         ));
                     }
 
-                    // Simulate a concurrent routing snapshot update after the
-                    // only untried deployment becomes a hard exclusion. The
-                    // stale soft exclusion must not let the synthetic
-                    // UnsupportedCapability replace this provider error.
-                    router.remove_deployment("primary-retry-target");
+                    router
+                        .get_deployment("primary-retry-target")
+                        .expect("primary deployment should exist")
+                        .enter_cooldown(30);
                     Err::<(String, u64), _>(ProviderError::quota_exceeded(
                         "budget",
-                        "provider 'openai' budget exhausted",
+                        "provider 'openai' mixed budget exhausted",
                     ))
                 }
             }
         },
     )
     .await
-    .expect_err("structural exhaustion should preserve the last budget error");
+    .expect_err("temporary full-pool exhaustion should preserve the last budget error");
 
-    assert!(matches!(
-        error,
-        GatewayError::Provider(ProviderError::QuotaExceeded {
-            provider: "budget",
-            ref message,
-        }) if message == "provider 'openai' budget exhausted"
-    ));
-    assert_eq!(
-        attempts.lock().unwrap().as_slice(),
-        ["primary-retry-target", "fallback-retry-target"]
-    );
+    assert_mixed_exclusion_result(router.as_ref(), attempts.as_ref(), error, expected_message);
+}
+
+#[tokio::test]
+async fn test_stream_temporary_full_pool_exhaustion_preserves_last_budget_error() {
+    let router = build_mixed_exclusion_router().await;
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let expected_message = "provider 'openai' streaming mixed budget exhausted";
+
+    let result = execute_stream_with_selected_deployment(
+        router.clone(),
+        "shared-model",
+        ProviderCapability::ChatCompletionStream,
+        {
+            let router = router.clone();
+            let attempts = attempts.clone();
+            move |_provider, _model, deployment_id| {
+                let router = router.clone();
+                let attempts = attempts.clone();
+                async move {
+                    attempts.lock().unwrap().push(deployment_id.clone());
+                    if deployment_id == "primary-retry-target" {
+                        return Err::<String, _>(ProviderError::timeout(
+                            "test",
+                            "primary timed out",
+                        ));
+                    }
+
+                    router
+                        .get_deployment("primary-retry-target")
+                        .expect("primary deployment should exist")
+                        .enter_cooldown(30);
+                    Err::<String, _>(ProviderError::quota_exceeded(
+                        "budget",
+                        "provider 'openai' streaming mixed budget exhausted",
+                    ))
+                }
+            }
+        },
+    )
+    .await;
+    let error = match result {
+        Err(error) => error,
+        Ok((_stream, lease)) => {
+            drop(lease);
+            panic!("temporary full-pool exhaustion should not start a stream");
+        }
+    };
+
+    assert_mixed_exclusion_result(router.as_ref(), attempts.as_ref(), error, expected_message);
 }
