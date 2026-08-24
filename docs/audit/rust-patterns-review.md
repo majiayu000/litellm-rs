@@ -439,11 +439,16 @@ fn test_env_var() {
 
 ```rust
 pub fn start_minute_reset_task(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+    let router = Arc::downgrade(&self);
+    drop(self);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
-            self.reset_minute_counters();
+            let Some(router) = router.upgrade() else { break };
+            for deployment in router.routing_snapshot.load().deployments.values() {
+                deployment.state.reset_minute_if_elapsed();
+            }
         }
     })
 }
@@ -452,7 +457,8 @@ pub fn start_minute_reset_task(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
 **Analysis**: ✅ Correct pattern
 - Returns JoinHandle for graceful shutdown
 - Uses `interval` instead of `sleep` loop
-- Moves Arc into task (no lifetime issues)
+- Uses `Weak` so the maintenance task cannot retain the router indefinitely
+- Request-path lazy rollover owns correctness; maintenance covers inactive deployments
 
 ### Shutdown Pattern
 

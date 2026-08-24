@@ -31,7 +31,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
 const MINUTE_WINDOW_SECS: u64 = 60;
-const MINUTE_RESET_IN_PROGRESS: u64 = u64::MAX;
+
+struct MinuteResetGuard<'a>(&'a AtomicBool);
+
+impl Drop for MinuteResetGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 /// Deployment identifier (unique within router)
 pub type DeploymentId = String;
@@ -197,6 +204,7 @@ impl Default for DeploymentConfig {
 #[derive(Debug, Clone)]
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
+    reset_in_progress: Arc<AtomicBool>,
 }
 
 impl Deref for DeploymentState {
@@ -277,50 +285,37 @@ impl DeploymentState {
                 consecutive_successes: AtomicU32::new(0),
                 minute_reset_at: AtomicU64::new(now),
             }),
+            reset_in_progress: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Reset per-minute counters
     pub fn reset_minute(&self) {
-        self.begin_minute_reset();
+        let _guard = self.acquire_minute_reset();
         self.finish_minute_reset(current_timestamp());
     }
 
     pub(super) fn reset_minute_if_elapsed(&self) -> u64 {
         let now = current_timestamp();
-        loop {
-            let last_reset = self.minute_reset_at.load(Ordering::Acquire);
-            if last_reset == MINUTE_RESET_IN_PROGRESS {
-                std::hint::spin_loop();
-                continue;
-            }
-            if now.saturating_sub(last_reset) < MINUTE_WINDOW_SECS {
-                return now;
-            }
-            if self
-                .minute_reset_at
-                .compare_exchange(
-                    last_reset,
-                    MINUTE_RESET_IN_PROGRESS,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                self.finish_minute_reset(now);
-                return now;
-            }
+        if now.saturating_sub(self.minute_reset_at.load(Ordering::Acquire)) < MINUTE_WINDOW_SECS {
+            return now;
         }
+        let _guard = self.acquire_minute_reset();
+        if now.saturating_sub(self.minute_reset_at.load(Ordering::Acquire)) >= MINUTE_WINDOW_SECS {
+            self.finish_minute_reset(now);
+        }
+        now
     }
 
-    fn begin_minute_reset(&self) {
+    fn acquire_minute_reset(&self) -> MinuteResetGuard<'_> {
         while self
-            .minute_reset_at
-            .swap(MINUTE_RESET_IN_PROGRESS, Ordering::AcqRel)
-            == MINUTE_RESET_IN_PROGRESS
+            .reset_in_progress
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
         {
             std::hint::spin_loop();
         }
+        MinuteResetGuard(&self.reset_in_progress)
     }
 
     fn finish_minute_reset(&self, now: u64) {

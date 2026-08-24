@@ -191,7 +191,8 @@ pub struct DeploymentState {
 ```
 
 - Local atomic counters per deployment
-- Background task resets counters every minute
+- Request recording lazily rolls expired minute counters forward
+- Optional `Weak`-owned maintenance retires inactive windows without retaining the router
 - No external dependencies for rate tracking
 
 ---

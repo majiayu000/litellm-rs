@@ -252,10 +252,16 @@ async fn test_request_recording_lazily_resets_expired_minute_window() {
         1
     );
     assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 2);
+
+    deployment.state.reset_minute_if_elapsed();
+    assert_eq!(
+        deployment.state.fails_this_minute.load(Ordering::Relaxed),
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_concurrent_requests_share_one_lazy_minute_rollover() {
+async fn test_concurrent_requests_stress_lazy_minute_rollover() {
     const REQUESTS: usize = 32;
     let provider = create_test_provider().await;
     let deployment = std::sync::Arc::new(Deployment::new(
