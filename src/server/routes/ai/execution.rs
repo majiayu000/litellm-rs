@@ -1,8 +1,8 @@
 use crate::core::providers::{Provider, ProviderError};
-use crate::core::router::UnifiedRouter;
 use crate::core::router::deployment::Deployment;
 use crate::core::router::execution::{infer_cooldown_reason, router_error_to_provider_error};
 use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
+use crate::core::router::{RouterError, UnifiedRouter};
 use crate::core::types::model::ProviderCapability;
 use crate::utils::error::gateway_error::GatewayError;
 use std::collections::HashSet;
@@ -91,25 +91,50 @@ where
             },
         ) {
             Ok(lease) => lease,
-            Err(_) if !tried_deployments.is_empty() => {
+            Err(RouterError::UnsupportedCapability { .. }) if !tried_deployments.is_empty() => {
                 match router.select_deployment_lease_for_capability_matching(
                     requested_model,
                     &capability,
                     |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
                 ) {
-                    Ok(lease) => lease,
+                    Ok(lease) => {
+                        // Opening the full pool starts a new sweep. Forget the
+                        // previous sweep so a failure here advances to the
+                        // other deployments instead of repeatedly selecting
+                        // the highest-priority target.
+                        tried_deployments.clear();
+                        lease
+                    }
                     Err(router_err) => {
-                        if let Some(err) = last_error.clone() {
+                        if matches!(&router_err, RouterError::UnsupportedCapability { .. })
+                            && !excluded_budget_deployments.is_empty()
+                            && let Some(err) = last_error.clone()
+                        {
                             return Err(GatewayError::Provider(err));
                         }
-                        return Err(GatewayError::Provider(router_error_to_provider_error(
-                            router_err,
-                        )));
+
+                        let provider_err = router_error_to_provider_error(router_err);
+                        let retry_decision = RetryPolicy.decide(
+                            router.config(),
+                            &provider_err,
+                            RetryContext::unary(attempt, max_attempts),
+                        );
+                        if retry_decision.should_retry {
+                            last_error = Some(provider_err);
+                            attempt += 1;
+                            if let Some(delay) = retry_decision.delay {
+                                tokio::time::sleep(delay).await;
+                            }
+                            continue;
+                        }
+
+                        return Err(GatewayError::Provider(provider_err));
                     }
                 }
             }
             Err(router_err) => {
-                if !excluded_budget_deployments.is_empty()
+                if matches!(&router_err, RouterError::UnsupportedCapability { .. })
+                    && !excluded_budget_deployments.is_empty()
                     && let Some(err) = last_error.clone()
                 {
                     return Err(GatewayError::Provider(err));
@@ -261,24 +286,55 @@ where
             },
         ) {
             Ok(lease) => lease,
-            Err(_) if !tried_deployments.is_empty() => {
+            Err(RouterError::UnsupportedCapability { .. }) if !tried_deployments.is_empty() => {
                 match router.select_deployment_lease_for_capability_matching(
                     requested_model,
                     &capability,
                     |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
                 ) {
-                    Ok(lease) => lease,
+                    Ok(lease) => {
+                        // Opening the full pool starts a new sweep. Forget the
+                        // previous sweep so a failure here advances to the
+                        // other deployments instead of repeatedly selecting
+                        // the highest-priority target.
+                        tried_deployments.clear();
+                        lease
+                    }
                     Err(router_err) => {
-                        if let Some(err) = last_error.clone() {
+                        if matches!(&router_err, RouterError::UnsupportedCapability { .. })
+                            && !excluded_budget_deployments.is_empty()
+                            && let Some(err) = last_error.clone()
+                        {
                             return Err(GatewayError::Provider(err));
                         }
-                        return Err(GatewayError::Provider(router_error_to_provider_error(
-                            router_err,
-                        )));
+
+                        let provider_err = router_error_to_provider_error(router_err);
+                        let retry_decision = RetryPolicy.decide(
+                            router.config(),
+                            &provider_err,
+                            RetryContext::stream_pre_output(attempt, max_attempts),
+                        );
+                        if retry_decision.should_retry {
+                            last_error = Some(provider_err);
+                            attempt += 1;
+                            if let Some(delay) = retry_decision.delay {
+                                tokio::time::sleep(delay).await;
+                            }
+                            continue;
+                        }
+
+                        return Err(GatewayError::Provider(provider_err));
                     }
                 }
             }
             Err(router_err) => {
+                if matches!(&router_err, RouterError::UnsupportedCapability { .. })
+                    && !excluded_budget_deployments.is_empty()
+                    && let Some(err) = last_error.clone()
+                {
+                    return Err(GatewayError::Provider(err));
+                }
+
                 let provider_err = router_error_to_provider_error(router_err);
 
                 let retry_decision = RetryPolicy.decide(
