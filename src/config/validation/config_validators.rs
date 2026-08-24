@@ -182,12 +182,7 @@ impl Validate for ServerConfig {
 
         // Validate TLS configuration if present
         if let Some(tls) = &self.tls {
-            if tls.cert_file.is_empty() {
-                return Err("TLS cert file path cannot be empty".to_string());
-            }
-            if tls.key_file.is_empty() {
-                return Err("TLS key file path cannot be empty".to_string());
-            }
+            tls.validate()?;
         }
 
         Ok(())

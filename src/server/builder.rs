@@ -148,7 +148,8 @@ async fn run_server_with_loaded_config(
     // Create and start server
     let server = HttpServer::new(&config).await?;
     info!(
-        "🌐 Server starting at: http://{}:{}",
+        "🌐 Server starting at: {}://{}:{}",
+        server_scheme(config.server()),
         config.server().host,
         config.server().port
     );
@@ -159,4 +160,32 @@ async fn run_server_with_loaded_config(
     info!("   POST /v1/embeddings - Text embeddings");
 
     server.start().await
+}
+
+fn server_scheme(config: &crate::config::models::server::ServerConfig) -> &'static str {
+    if config.is_tls_enabled() {
+        "https"
+    } else {
+        "http"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::models::server::TlsConfig;
+
+    #[test]
+    fn startup_scheme_tracks_tls_listener() {
+        let mut config = crate::config::models::server::ServerConfig::default();
+        assert_eq!(server_scheme(&config), "http");
+        config.tls = Some(TlsConfig {
+            cert_file: "cert.pem".into(),
+            key_file: "key.pem".into(),
+            ca_file: None,
+            require_client_cert: false,
+            http2: false,
+        });
+        assert_eq!(server_scheme(&config), "https");
+    }
 }

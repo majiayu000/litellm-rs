@@ -20,7 +20,7 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_cors::Cors;
 use actix_web::{
-    App, HttpServer as ActixHttpServer,
+    App,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
     http::{Method, header},
@@ -37,6 +37,7 @@ pub struct HttpServer {
     config: ServerConfig,
     /// Application state
     state: AppState,
+    tls: Option<crate::server::tls::ListenerTls>,
     /// Background worker that drains budget persistence events on shutdown.
     budget_persistence_task: Option<JoinHandle<()>>,
     /// Background worker that delivers configured callback events.
@@ -47,6 +48,8 @@ impl HttpServer {
     /// Create a new HTTP server
     pub async fn new(config: &Config) -> Result<Self> {
         info!("Creating HTTP server");
+
+        let tls = crate::server::tls::load_listener_tls(&config.gateway.server)?;
 
         crate::config::models::gateway::GatewayConfig::validate_model_alias_map(
             &config.gateway.model_aliases,
@@ -192,13 +195,14 @@ impl HttpServer {
         Ok(Self {
             config: config.gateway.server.clone(),
             state,
+            tls,
             budget_persistence_task,
             callback_runtime,
         })
     }
 
     /// Create the Actix-web application
-    fn create_app(
+    pub(super) fn create_app(
         state: web::Data<AppState>,
     ) -> App<
         impl actix_web::dev::ServiceFactory<
@@ -348,7 +352,6 @@ impl HttpServer {
     /// Gracefully stops requests, drains workers, then closes storage.
     pub async fn start(mut self) -> Result<()> {
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
-        let port = self.config.port;
         let budget_persistence_task = self.budget_persistence_task.take();
         let callback_runtime =
             std::mem::replace(&mut self.callback_runtime, CallbackRuntime::disabled());
@@ -359,17 +362,8 @@ impl HttpServer {
         let storage = Arc::clone(&state.storage);
         let audit_logger = Arc::clone(&state.audit_logger);
 
-        // Honor server.tls when configured; otherwise serve plain HTTP.
-        let server = match self.config.tls.as_ref() {
-            Some(tls) => ActixHttpServer::new(move || Self::create_app(state.clone()))
-                .bind_rustls_0_23(&bind_addr, crate::server::tls::load_rustls_config(tls)?)
-                .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?
-                .run(),
-            None => ActixHttpServer::new(move || Self::create_app(state.clone()))
-                .bind(&bind_addr)
-                .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?
-                .run(),
-        };
+        let server =
+            crate::server::tls::bind_server(&bind_addr, &self.config, state, self.tls.take())?;
 
         info!("HTTP server listening on {}", bind_addr);
 

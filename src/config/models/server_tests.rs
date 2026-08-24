@@ -264,6 +264,35 @@ fn test_tls_config_validate_empty_key() {
 }
 
 #[test]
+fn test_tls_config_rejects_unsupported_ca_file() {
+    let config = TlsConfig {
+        cert_file: "cert.pem".to_string(),
+        key_file: "key.pem".to_string(),
+        ca_file: Some("ca.pem".to_string()),
+        require_client_cert: false,
+        http2: false,
+    };
+    assert!(config.validate().unwrap_err().contains("tls.ca_file"));
+}
+
+#[test]
+fn test_tls_config_rejects_unsupported_client_cert_auth() {
+    let config = TlsConfig {
+        cert_file: "cert.pem".to_string(),
+        key_file: "key.pem".to_string(),
+        ca_file: None,
+        require_client_cert: true,
+        http2: false,
+    };
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .contains("require_client_cert")
+    );
+}
+
+#[test]
 fn test_tls_config_serialization() {
     let config = TlsConfig {
         cert_file: "cert.pem".to_string(),

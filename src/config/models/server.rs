@@ -177,6 +177,19 @@ impl TlsConfig {
             return Err("TLS private key file path is required".to_string());
         }
 
+        if self.ca_file.is_some() {
+            return Err(
+                "tls.ca_file is unsupported until client certificate auth is implemented"
+                    .to_string(),
+            );
+        }
+
+        if self.require_client_cert {
+            return Err(
+                "tls.require_client_cert is not implemented yet; set it to false".to_string(),
+            );
+        }
+
         // Check if files exist
         if !std::path::Path::new(&self.cert_file).exists() {
             return Err(format!(
@@ -189,11 +202,8 @@ impl TlsConfig {
             return Err(format!("TLS private key file not found: {}", self.key_file));
         }
 
-        if let Some(ca_file) = &self.ca_file
-            && !std::path::Path::new(ca_file).exists()
-        {
-            return Err(format!("TLS CA file not found: {}", ca_file));
-        }
+        #[cfg(feature = "gateway")]
+        crate::server::tls::validate_rustls_config(self)?;
 
         Ok(())
     }
