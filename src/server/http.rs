@@ -43,9 +43,46 @@ pub struct HttpServer {
     callback_runtime: CallbackRuntime,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ListenerSettings {
+    configured_workers: usize,
+    effective_workers: usize,
+    first_request_head_timeout: std::time::Duration,
+    max_connections_per_worker: Option<usize>,
+}
+
 impl HttpServer {
+    fn validated_listener_settings(config: &ServerConfig) -> Result<ListenerSettings> {
+        Validate::validate(config).map_err(|error| {
+            GatewayError::Config(format!("Invalid server configuration: {error}"))
+        })?;
+
+        let configured_workers = config.worker_count();
+        let first_request_head_timeout = std::time::Duration::from_secs(config.timeout);
+        let Some(total_connections) = config.max_connections else {
+            return Ok(ListenerSettings {
+                configured_workers,
+                effective_workers: configured_workers,
+                first_request_head_timeout,
+                max_connections_per_worker: None,
+            });
+        };
+
+        // Actix's max_connections setting is per worker. Reduce the worker
+        // count when needed, then round down so the effective server-wide
+        // capacity never exceeds the configured total.
+        let workers = configured_workers.min(total_connections);
+        Ok(ListenerSettings {
+            configured_workers,
+            effective_workers: workers,
+            first_request_head_timeout,
+            max_connections_per_worker: Some(total_connections / workers),
+        })
+    }
+
     /// Create a new HTTP server
     pub async fn new(config: &Config) -> Result<Self> {
+        Self::validated_listener_settings(&config.gateway.server)?;
         info!("Creating HTTP server");
 
         crate::config::models::gateway::GatewayConfig::validate_model_alias_map(
@@ -282,7 +319,7 @@ impl HttpServer {
             .configure(routes::budget::configure_budget_routes)
             .configure(routes::admin::configure_routes)
             .configure(routes::admin_dashboard::configure_routes)
-            .configure(|cfg| routes::ai::configure_routes(cfg, max_body_size))
+            .configure(|cfg| routes::ai::configure_routes_with_body_limit(cfg, max_body_size))
             .configure(routes::pricing::configure_pricing_routes)
     }
 
@@ -352,6 +389,7 @@ impl HttpServer {
     ///
     /// Gracefully stops requests, drains workers, then closes storage.
     pub async fn start(mut self) -> Result<()> {
+        let listener_settings = Self::validated_listener_settings(&self.config)?;
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
         let port = self.config.port;
         let budget_persistence_task = self.budget_persistence_task.take();
@@ -359,25 +397,40 @@ impl HttpServer {
             std::mem::replace(&mut self.callback_runtime, CallbackRuntime::disabled());
 
         // server.timeout bounds only how long a client may take to deliver
-        // the request head (408 afterwards); it never bounds handler or
+        // the first request head (408 afterwards); it never bounds handler or
         // streaming duration — those follow the outbound-client policy.
-        let workers = self.config.worker_count();
-        let head_timeout = std::time::Duration::from_secs(self.config.timeout);
-        let max_connections = self.config.max_connections;
         info!(
-            "Starting HTTP server on {} (workers={}, request_head_timeout={}s)",
-            bind_addr, workers, self.config.timeout
+            "Starting HTTP server on {} (workers={}, first_request_head_timeout={}s)",
+            bind_addr, listener_settings.effective_workers, self.config.timeout
         );
+        if let Some(configured_total) = self.config.max_connections {
+            if listener_settings.effective_workers != listener_settings.configured_workers {
+                info!(
+                    "Reducing HTTP workers from {} to {} because server.max_connections={} is lower than the configured worker count",
+                    listener_settings.configured_workers,
+                    listener_settings.effective_workers,
+                    configured_total
+                );
+            }
+            if let Some(per_worker) = listener_settings.max_connections_per_worker {
+                info!(
+                    "Connection limit: {} per worker, {} server-wide effective (configured total={})",
+                    per_worker,
+                    per_worker * listener_settings.effective_workers,
+                    configured_total
+                );
+            }
+        }
 
         let state = web::Data::new(self.state);
         let storage = Arc::clone(&state.storage);
         let audit_logger = Arc::clone(&state.audit_logger);
 
         let mut builder = ActixHttpServer::new(move || Self::create_app(state.clone()))
-            .workers(workers)
-            .client_request_timeout(head_timeout);
-        if let Some(max_conn) = max_connections {
-            builder = builder.max_connections(max_conn);
+            .workers(listener_settings.effective_workers)
+            .client_request_timeout(listener_settings.first_request_head_timeout);
+        if let Some(per_worker) = listener_settings.max_connections_per_worker {
+            builder = builder.max_connections(per_worker);
         }
         let server = builder
             .bind(&bind_addr)

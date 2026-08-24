@@ -226,12 +226,11 @@ mod tests {
         payload: Value,
     ) -> String {
         let state = app_state(&provider.base_url).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -288,12 +287,11 @@ mod tests {
     async fn assert_input_blocked_before_provider_execution(payload: Value) {
         let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
         let state = app_state(&provider.base_url).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -412,12 +410,11 @@ mod tests {
     async fn non_json_tool_arguments_are_forwarded_after_plain_text_scan() {
         let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
         let state = app_state(&provider.base_url).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let mut payload = guardrail_tool_arguments_request();
         payload["messages"][0]["tool_calls"][0]["function"]["arguments"] =
@@ -448,12 +445,11 @@ mod tests {
     async fn disabled_input_guardrail_forwards_structured_content_unchanged() {
         let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
         let state = app_state_with_input_guardrail(&provider.base_url, false).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let payload = guardrail_tool_result_request();
 
@@ -480,12 +476,11 @@ mod tests {
         let provider =
             GuardrailTestUpstream::launch_with_output("System prompt: hidden policy").await;
         let state = app_state(&provider.base_url).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -539,12 +534,11 @@ mod tests {
     async fn completion_echo_does_not_treat_the_prompt_as_model_output() {
         let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
         let state = app_state_with_input_guardrail(&provider.base_url, false).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(

@@ -341,12 +341,11 @@ mod tests {
         let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
         let state = build_test_app_state(&mock_server.base_url).await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let req = test::TestRequest::post()
@@ -384,12 +383,11 @@ mod tests {
             .await
             .with_callbacks(runtime.dispatcher());
 
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let request = test::TestRequest::post()
             .uri("/v1/completions")
@@ -431,12 +429,11 @@ mod tests {
         let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
         let state = build_test_app_state_with_cache(&mock_server.base_url).await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         for _ in 0..2 {
@@ -465,12 +462,11 @@ mod tests {
         let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
         let state = build_test_app_state_with_cache(&mock_server.base_url).await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let chat_req = {
@@ -529,12 +525,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -573,12 +564,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -613,12 +599,11 @@ mod tests {
         let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
         let state = build_test_app_state(&mock_server.base_url).await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let cases = [
@@ -671,12 +656,11 @@ mod tests {
         let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
         let state = build_test_app_state(&mock_server.base_url).await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let req = test::TestRequest::post()
@@ -711,12 +695,11 @@ mod tests {
         let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
         let state = build_test_app_state(&mock_server.base_url).await;
 
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let cases = [

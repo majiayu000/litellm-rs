@@ -67,12 +67,11 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
         "replacement-header",
     )];
     state.config.store(replaced_config);
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let response = test::call_service(
         &app,
@@ -157,12 +156,11 @@ async fn gemini_sdk_route_executes_selected_runtime_provider_snapshot() {
     let mut replaced_config = state.config().as_ref().clone();
     replaced_config.gateway.providers = vec![replacement];
     state.config.store(replaced_config);
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let started = Instant::now();
     let response = test::call_service(
@@ -186,12 +184,11 @@ async fn gemini_sdk_route_accepts_only_closed_runtime_alias_set() {
         .enumerate()
     {
         let state = build_test_state(vec![gemini_provider(name, &mock.base_url, Vec::new())]).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let response = test::call_service(
             &app,
@@ -210,12 +207,11 @@ async fn gemini_sdk_route_accepts_only_closed_runtime_alias_set() {
         .map(|name| gemini_provider(name, &mock.base_url, Vec::new()))
         .collect();
     let state = build_test_state(rejected).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let response = test::call_service(
         &app,
@@ -241,12 +237,11 @@ async fn gemini_sdk_route_accepts_native_gemini_runtime() {
     );
     provider.provider_type = "gemini".to_string();
     let state = build_test_state(vec![provider]).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let response = test::call_service(
         &app,
@@ -266,12 +261,11 @@ async fn gemini_sdk_route_accepts_native_gemini_runtime() {
     );
     unrelated.provider_type = "gemini".to_string();
     let state = build_test_state(vec![unrelated]).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let response = test::call_service(
         &app,
@@ -401,12 +395,11 @@ async fn gemini_sdk_stream_client_cancel_is_health_neutral_and_settles_observed_
         .expect("runtime deployment");
     let successes = deployment.state.success_requests.load(Ordering::Relaxed);
     let failures = deployment.state.fail_requests.load(Ordering::Relaxed);
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let response = test::call_service(
         &app,
@@ -470,12 +463,11 @@ async fn gemini_sdk_route_network_error_does_not_leak_provider_key() {
         vec!["gemini-3.1-flash-lite".to_string()],
     )])
     .await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let response = test::call_service(
@@ -503,12 +495,11 @@ async fn gemini_sdk_route_redacts_key_from_upstream_error_body() {
         vec!["gemini-3.1-flash-lite".to_string()],
     )])
     .await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let response = test::call_service(
@@ -548,12 +539,11 @@ async fn gemini_sdk_stream_route_does_not_charge_upstream_error_body() {
         ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
     let budget_limits = state.budget_limits.clone();
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let response = test::call_service(
@@ -616,12 +606,11 @@ async fn gemini_sdk_stream_route_settles_reserved_spend_after_output_then_read_e
         .expect("runtime deployment");
     let successes = deployment.state.success_requests.load(Ordering::Relaxed);
     let failures = deployment.state.fail_requests.load(Ordering::Relaxed);
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let request = test::TestRequest::post()
@@ -702,12 +691,11 @@ async fn gemini_sdk_stream_heartbeat_before_read_error_does_not_charge_reservati
     let (key_scope, key_context) = route_key_budget_context(&state).await;
     let budget_manager = state.budget_manager.clone();
     let budget_limits = state.budget_limits.clone();
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let request = test::TestRequest::post()
         .uri("/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent")
@@ -747,12 +735,11 @@ async fn gemini_sdk_stream_body_is_not_cut_off_by_ordinary_timeout() {
     );
     provider.timeout = 1;
     let state = build_test_state(vec![provider]).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let started = Instant::now();
 

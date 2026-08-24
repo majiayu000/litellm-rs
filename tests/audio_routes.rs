@@ -316,12 +316,11 @@ mod tests {
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-audio-boundary";
         let audio_content = vec![b'a'; 32_000];
@@ -382,12 +381,11 @@ mod tests {
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-audio-boundary";
         let audio_content = vec![b'a'; 32_000];
@@ -439,12 +437,11 @@ mod tests {
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let req = test::TestRequest::post()
@@ -500,12 +497,11 @@ mod tests {
         state
             .budget_limits
             .record_spend("mock-openai-audio", "tts-1", 0.01);
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let req = test::TestRequest::post()
@@ -536,12 +532,11 @@ mod tests {
         state
             .budget_limits
             .record_spend("mock-openai-audio", "whisper-1", 0.01);
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-audio-boundary";
 
@@ -572,12 +567,11 @@ mod tests {
     async fn audio_speech_rejects_non_tts_openai_model_before_provider_call() {
         let mock = MockAudioServer::start().await;
         let state = build_audio_state_with_models(&mock.base_url, vec!["gpt-4".to_string()]).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let req = test::TestRequest::post()
@@ -607,12 +601,11 @@ mod tests {
     async fn assert_invalid_temperature_rejected(uri: &str) {
         let mock = MockAudioServer::start().await;
         let state = build_audio_state(&mock.base_url).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-audio-boundary";
 

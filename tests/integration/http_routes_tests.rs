@@ -214,12 +214,7 @@ mod tests {
             .app_data(budget_limits)
             .wrap(AuthMiddleware)
             .configure(routes::health::configure_routes)
-            .configure(|cfg| {
-                litellm_rs::server::routes::ai::configure_routes(
-                    cfg,
-                    litellm_rs::config::models::default_max_body_size(),
-                )
-            })
+            .configure(routes::ai::configure_routes)
     }
 
     // ---------------------------------------------------------------

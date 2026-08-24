@@ -3,12 +3,11 @@ use super::*;
 #[tokio::test]
 async fn moderation_route_without_provider_fails_closed() {
     let state = build_test_app_state(Vec::new()).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -35,12 +34,11 @@ async fn moderation_route_without_provider_fails_closed() {
 async fn moderation_route_proxies_request_with_provider_headers() {
     let mock = MockModerationServer::start_moderation_mock().await;
     let state = build_test_app_state(vec![moderation_provider(&mock.base_url)]).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -83,12 +81,11 @@ async fn moderation_route_resolves_alias_to_provider_fallback_model() {
         .unified_router
         .add_model_alias("public-moderation", "mock-openai-compatible")
         .expect("provider fallback alias should install");
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -115,12 +112,11 @@ async fn moderation_route_resolves_alias_to_provider_fallback_model() {
 async fn root_moderation_alias_proxies_request() {
     let mock = MockModerationServer::start_moderation_mock().await;
     let state = build_test_app_state(vec![moderation_provider(&mock.base_url)]).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -155,12 +151,11 @@ async fn moderation_route_uses_default_model_for_provider_selection_when_omitted
         moderation_provider_with_models(&mock.base_url, vec!["omni-moderation-latest".to_string()]),
     ])
     .await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(

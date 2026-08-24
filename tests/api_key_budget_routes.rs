@@ -331,12 +331,7 @@ mod tests {
             .app_data(web::Data::new(state))
             .app_data(budget_limits)
             .wrap(AuthMiddleware)
-            .configure(|cfg| {
-                litellm_rs::server::routes::ai::configure_routes(
-                    cfg,
-                    litellm_rs::config::models::default_max_body_size(),
-                )
-            })
+            .configure(litellm_rs::server::routes::ai::configure_routes)
     }
 
     #[tokio::test]

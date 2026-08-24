@@ -329,12 +329,11 @@ mod tests {
     #[tokio::test]
     async fn image_edit_and_variation_routes_without_provider_fail_closed() {
         let state = build_test_state(Vec::new()).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-image-boundary";
 
@@ -394,12 +393,11 @@ mod tests {
             vec!["other-image-model".to_string()],
         )])
         .await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-image-boundary";
 
@@ -477,12 +475,11 @@ mod tests {
                 .expect("variation image pricing should be available")
                 .total_cost;
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-image-boundary";
 
@@ -588,12 +585,11 @@ mod tests {
             vec!["gpt-image-1-mini".to_string()],
         )])
         .await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-padded-boundary";
         let payload = image_edit_multipart_body_with_transport_padding(boundary);
@@ -649,12 +645,11 @@ mod tests {
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-image-boundary";
 
@@ -701,12 +696,11 @@ mod tests {
     async fn image_edit_rejects_unauthenticated_request_when_auth_is_enabled() {
         let mock = MockImageServer::start_image_mock().await;
         let state = build_auth_required_state(vec![image_route_provider(&mock.base_url)]).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-image-boundary";
 
@@ -743,12 +737,11 @@ mod tests {
         let mut provider = image_route_provider(&format!("http://{address}/v1"));
         provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
         let state = build_test_state(vec![provider]).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
         let boundary = "litellm-rs-image-boundary";
 

@@ -163,6 +163,10 @@ impl Validate for ServerConfig {
             }
         }
 
+        if self.max_connections == Some(0) {
+            return Err("server.max_connections must be greater than 0".to_string());
+        }
+
         if self.timeout == 0 {
             return Err("Server timeout must be greater than 0".to_string());
         }

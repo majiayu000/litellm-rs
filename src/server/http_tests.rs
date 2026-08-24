@@ -10,6 +10,115 @@ use actix_web::{
 };
 
 #[test]
+fn listener_settings_preserve_uncapped_workers_and_head_timeout() {
+    let config = ServerConfig {
+        workers: Some(4),
+        max_connections: None,
+        timeout: 17,
+        ..ServerConfig::default()
+    };
+
+    let settings = HttpServer::validated_listener_settings(&config)
+        .expect("valid listener settings should be derived");
+    assert_eq!(settings.configured_workers, 4);
+    assert_eq!(settings.effective_workers, 4);
+    assert_eq!(
+        settings.first_request_head_timeout,
+        std::time::Duration::from_secs(17)
+    );
+    assert_eq!(settings.max_connections_per_worker, None);
+}
+
+#[test]
+fn listener_settings_keep_server_wide_cap_when_workers_exceed_it() {
+    let config = ServerConfig {
+        workers: Some(8),
+        max_connections: Some(3),
+        ..ServerConfig::default()
+    };
+
+    let settings = HttpServer::validated_listener_settings(&config)
+        .expect("valid listener settings should be derived");
+    assert_eq!(settings.configured_workers, 8);
+    assert_eq!(settings.effective_workers, 3);
+    assert_eq!(settings.max_connections_per_worker, Some(1));
+}
+
+#[test]
+fn listener_settings_round_down_without_exceeding_server_wide_cap() {
+    let config = ServerConfig {
+        workers: Some(4),
+        max_connections: Some(10),
+        ..ServerConfig::default()
+    };
+
+    let settings = HttpServer::validated_listener_settings(&config)
+        .expect("valid listener settings should be derived");
+    let per_worker = settings
+        .max_connections_per_worker
+        .expect("configured cap should produce a per-worker cap");
+    assert_eq!(settings.configured_workers, 4);
+    assert_eq!(settings.effective_workers, 4);
+    assert_eq!(per_worker, 2);
+    assert_eq!(per_worker * settings.effective_workers, 8);
+    assert!(per_worker * settings.effective_workers <= config.max_connections.unwrap_or_default());
+}
+
+#[test]
+fn listener_settings_reject_invalid_custom_server_configs() {
+    let invalid_configs = [
+        ServerConfig {
+            workers: Some(0),
+            ..ServerConfig::default()
+        },
+        ServerConfig {
+            max_connections: Some(0),
+            ..ServerConfig::default()
+        },
+        ServerConfig {
+            timeout: 0,
+            ..ServerConfig::default()
+        },
+        ServerConfig {
+            max_body_size: 0,
+            ..ServerConfig::default()
+        },
+    ];
+
+    for config in invalid_configs {
+        let error = HttpServer::validated_listener_settings(&config)
+            .expect_err("invalid custom config must fail before listener construction");
+        assert!(matches!(error, GatewayError::Config(_)));
+    }
+
+    let zero_connection_error = HttpServer::validated_listener_settings(&ServerConfig {
+        max_connections: Some(0),
+        ..ServerConfig::default()
+    })
+    .expect_err("zero connection cap must fail before listener construction");
+    assert!(
+        zero_connection_error
+            .to_string()
+            .contains("server.max_connections")
+    );
+}
+
+#[tokio::test]
+async fn new_rejects_invalid_server_config_before_initializing_dependencies() {
+    let mut config = Config::default();
+    config.gateway.server.workers = Some(0);
+
+    let error = match HttpServer::new(&config).await {
+        Ok(_) => panic!("invalid server config must fail at the start of construction"),
+        Err(error) => error,
+    };
+    match error {
+        GatewayError::Config(message) => assert!(message.contains("Worker count")),
+        other => panic!("expected config error, got: {other:?}"),
+    }
+}
+
+#[test]
 fn build_cors_rejects_wildcard_with_credentials() {
     let cors_config = CorsConfig {
         allowed_origins: vec!["*".to_string()],
@@ -393,4 +502,48 @@ async fn app_factory_enforces_configured_max_body_size_on_json_bodies() {
         !body.contains("Invalid JSON request body"),
         "small body should pass extraction, got: {body}"
     );
+}
+
+#[tokio::test]
+async fn app_factory_enforces_max_body_size_on_non_ai_json_routes() {
+    let _metrics_guard = MetricsMiddleware::test_lock().await;
+
+    let mut config = Config::default();
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.pricing.source = None;
+    config.gateway.server.max_body_size = 1024;
+    config.gateway.monitoring.metrics.enabled = false;
+
+    let server = HttpServer::new(&config)
+        .await
+        .expect("server should initialize for app-level body-limit test");
+    let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+        server.state().clone(),
+    )))
+    .await;
+
+    let oversized = serde_json::json!({
+        "username": "body-limit-user",
+        "password": "x".repeat(4096),
+    });
+    let request = actix_test::TestRequest::post()
+        .uri("/auth/login")
+        .set_json(oversized)
+        .to_request();
+    let response = actix_test::call_service(&app, request).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let request = actix_test::TestRequest::post()
+        .uri("/auth/login")
+        .set_json(serde_json::json!({
+            "username": "body-limit-user",
+            "password": "invalid-password",
+        }))
+        .to_request();
+    let response = actix_test::call_service(&app, request).await;
+    assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }

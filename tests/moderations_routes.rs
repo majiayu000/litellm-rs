@@ -244,12 +244,11 @@ mod tests {
         let mut provider = moderation_provider(&format!("http://{address}/v1"));
         provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
         let state = build_test_app_state(vec![provider]).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(

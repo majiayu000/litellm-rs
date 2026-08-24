@@ -32,12 +32,11 @@ mod tests {
     #[tokio::test]
     async fn gemini_sdk_routes_without_provider_fail_closed() {
         let state = build_test_state(Vec::new()).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -84,12 +83,11 @@ mod tests {
             ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -155,12 +153,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -197,12 +190,11 @@ mod tests {
             .unified_router
             .add_model_alias("public-gemini", "gemini@prod")
             .expect("runtime alias should install");
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -245,12 +237,11 @@ mod tests {
             ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -301,12 +292,11 @@ mod tests {
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
         .await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -337,12 +327,11 @@ mod tests {
             vec!["gemini-3.1-flash-lite".to_string()],
         )])
         .await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -376,12 +365,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -423,12 +407,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -460,12 +439,11 @@ mod tests {
         let mock = MockGeminiServer::launch().await;
         let state =
             build_test_state(vec![gemini_provider("gemini", &mock.base_url, Vec::new())]).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -498,12 +476,11 @@ mod tests {
         state
             .budget_limits
             .record_spend("gemini", "gemini-3.1-flash-lite", 0.01);
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(
@@ -537,12 +514,11 @@ mod tests {
             "gemini-3.1-flash-lite",
             ModelLimitConfig::new(0.000001, ResetPeriod::Monthly),
         );
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let response = test::call_service(

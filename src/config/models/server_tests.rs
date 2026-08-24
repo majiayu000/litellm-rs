@@ -137,6 +137,28 @@ fn test_server_config_validate_max_body_size_zero() {
     assert!(result.unwrap_err().contains("body size"));
 }
 
+#[test]
+fn test_server_config_validate_max_connections_zero() {
+    let config = ServerConfig {
+        max_connections: Some(0),
+        ..ServerConfig::default()
+    };
+    let result = config.validate();
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("server.max_connections"));
+}
+
+#[test]
+fn test_server_config_trait_validation_rejects_max_connections_zero() {
+    let config = ServerConfig {
+        max_connections: Some(0),
+        ..ServerConfig::default()
+    };
+    let result = crate::config::Validate::validate(&config);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("server.max_connections"));
+}
+
 // ==================== ServerConfig Merge Tests ====================
 
 #[test]

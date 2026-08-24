@@ -12,12 +12,11 @@ async fn moderation_route_rejects_exhausted_provider_budget_before_upstream() {
         .budget_limits
         .providers
         .record_provider_spend("mock-openai-compatible", 2.0);
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -75,12 +74,11 @@ async fn moderation_route_uses_router_budget_fallback_provider() {
         "fallback-moderation-provider",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -119,12 +117,11 @@ async fn native_openai_moderation_route_uses_default_model_with_empty_config_mod
         Vec::new(),
     )])
     .await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -155,12 +152,11 @@ async fn openai_compatible_named_openai_uses_provider_name_wildcard_fallback() {
         Vec::new(),
     )])
     .await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -210,12 +206,11 @@ async fn moderation_route_uses_wildcard_provider_name_fallback() {
         "wildcard-moderation-secondary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(
@@ -253,12 +248,11 @@ async fn moderation_route_rejects_exhausted_default_model_budget_before_upstream
         .budget_limits
         .models
         .record_model_spend("omni-moderation-latest", 2.0);
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
 
     let resp = test::call_service(

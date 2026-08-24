@@ -4,12 +4,11 @@ use super::*;
 async fn image_variation_rejects_missing_model_before_upstream() {
     let mock = MockImageServer::start_image_mock().await;
     let state = build_test_state(vec![image_route_provider(&mock.base_url)]).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let boundary = "litellm-rs-image-boundary";
 
@@ -45,12 +44,11 @@ async fn image_variation_rejects_missing_model_before_upstream() {
 async fn image_edit_rejects_unpriced_model_before_upstream() {
     let mock = MockImageServer::start_image_mock().await;
     let state = build_test_state(vec![image_route_provider(&mock.base_url)]).await;
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let boundary = "litellm-rs-image-boundary";
 
@@ -97,12 +95,11 @@ async fn image_edit_rejects_exhausted_provider_budget_before_upstream() {
         .budget_limits
         .providers
         .record_provider_spend("mock-openai-compatible", 2.0);
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let boundary = "litellm-rs-image-boundary";
 
@@ -152,12 +149,11 @@ async fn image_edit_rejects_provider_budget_that_cannot_cover_estimated_cost_bef
         "mock-openai-compatible",
         ProviderLimitConfig::new(estimated_cost / 2.0, ResetPeriod::Monthly),
     );
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let boundary = "litellm-rs-image-boundary";
 
@@ -203,12 +199,11 @@ async fn image_edit_rejects_exhausted_model_budget_before_upstream() {
         .budget_limits
         .models
         .record_model_spend("gpt-image-1-mini", 2.0);
-    let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-        litellm_rs::server::routes::ai::configure_routes(
-            cfg,
-            litellm_rs::config::models::default_max_body_size(),
-        )
-    }))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
     .await;
     let boundary = "litellm-rs-image-boundary";
 

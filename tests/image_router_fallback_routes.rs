@@ -320,12 +320,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -365,12 +360,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -410,12 +400,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -458,12 +443,7 @@ mod tests {
                     srv.call(req)
                 })
                 .app_data(web::Data::new(state))
-                .configure(|cfg| {
-                    litellm_rs::server::routes::ai::configure_routes(
-                        cfg,
-                        litellm_rs::config::models::default_max_body_size(),
-                    )
-                }),
+                .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
 
@@ -504,12 +484,11 @@ mod tests {
         state
             .budget_limits
             .record_spend("openai-primary", "image-alias", 0.01);
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let resp = test::call_service(
@@ -555,12 +534,11 @@ mod tests {
             .calculate_loaded_usage_cost_for_provider("openai", "gpt-image-1-mini", &expected_usage)
             .expect("image generation pricing should be available")
             .total_cost;
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let resp = test::call_service(
@@ -608,12 +586,11 @@ mod tests {
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let resp = test::call_service(
@@ -660,12 +637,11 @@ mod tests {
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let resp = test::call_service(
@@ -715,12 +691,11 @@ mod tests {
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
         let budget_limits = state.budget_limits.clone();
-        let app = test::init_service(App::new().app_data(web::Data::new(state)).configure(|cfg| {
-            litellm_rs::server::routes::ai::configure_routes(
-                cfg,
-                litellm_rs::config::models::default_max_body_size(),
-            )
-        }))
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
         .await;
 
         let resp = test::call_service(

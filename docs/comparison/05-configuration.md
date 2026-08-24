@@ -36,7 +36,8 @@ server:           # Server configuration
   host: "0.0.0.0"
   port: 8000
   workers: 4
-  timeout: 30
+  max_connections: 1000 # server-wide; may round down or reduce workers
+  timeout: 30 # seconds to receive the first request head
   max_body_size: 10485760
   tls:            # Optional TLS
     cert_file: "/path/to/cert.pem"
