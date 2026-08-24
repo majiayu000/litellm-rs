@@ -36,7 +36,7 @@ server:           # Server configuration
   host: "0.0.0.0"
   port: 8000
   workers: 4
-  max_connections: 1000 # server-wide; may round down or reduce workers
+  max_connections: 1000 # server-wide, minimum 2; may round down/reduce workers
   timeout: 30 # seconds to receive the first request head
   max_body_size: 10485760
   tls:            # Optional TLS
@@ -547,7 +547,7 @@ config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 | Host | `server.host` | CLI `--host` / `HOST` env |
 | Port | `server.port` | CLI `--port` / `PORT` env |
 | Workers | `server.workers` | CLI `--num_workers` / `NUM_WORKERS` env |
-| Timeout | `server.timeout` | `general_settings.request_timeout` |
+| First request head timeout | `server.timeout` | No direct equivalent |
 | Max body size | `server.max_body_size` | Not configurable |
 | TLS cert | `server.tls.cert_file` | CLI `--ssl_certfile_path` |
 | TLS key | `server.tls.key_file` | CLI `--ssl_keyfile_path` |

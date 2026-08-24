@@ -8,6 +8,130 @@ use actix_web::{
     http::{StatusCode, header},
     test as actix_test,
 };
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+struct RunningProductionServer {
+    address: std::net::SocketAddr,
+    handle: actix_web::dev::ServerHandle,
+    task: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+}
+
+impl RunningProductionServer {
+    async fn start(server_config: ServerConfig) -> Self {
+        let mut config = Config::default();
+        config.gateway.server = server_config;
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+        config.gateway.monitoring.metrics.enabled = false;
+
+        let gateway = HttpServer::new(&config)
+            .await
+            .expect("production server state should initialize");
+        let settings = HttpServer::validated_listener_settings(gateway.config())
+            .expect("listener settings should validate");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("production-path test listener should bind");
+        let (server, addresses) = HttpServer::build_actix_server(
+            web::Data::new(gateway.state().clone()),
+            &settings,
+            ServerBind::Listener(listener),
+        )
+        .expect("production Actix builder should accept the test listener");
+        let address = *addresses
+            .first()
+            .expect("production Actix builder should report its listener address");
+        let handle = server.handle();
+        let task = tokio::spawn(server);
+        wait_until_production_server_is_ready(address).await;
+        Self {
+            address,
+            handle,
+            task: Some(task),
+        }
+    }
+
+    async fn stop(mut self) {
+        self.handle.stop(true).await;
+        let result = self
+            .task
+            .take()
+            .expect("server task should be present")
+            .await
+            .expect("server task should join");
+        result.expect("server should stop cleanly");
+    }
+}
+
+async fn wait_until_production_server_is_ready(address: std::net::SocketAddr) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await
+            && stream
+                .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .await
+                .is_ok()
+        {
+            let mut response = Vec::new();
+            if let Ok(Ok(_)) =
+                tokio::time::timeout(Duration::from_secs(1), stream.read_to_end(&mut response))
+                    .await
+                && String::from_utf8_lossy(&response).contains(" 200 ")
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                return;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "production-path test server did not become ready at {address}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+impl Drop for RunningProductionServer {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+async fn open_incomplete_request(address: std::net::SocketAddr) -> tokio::net::TcpStream {
+    let mut stream = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("test client should connect");
+    stream
+        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n")
+        .await
+        .expect("test client should write partial request head");
+    stream
+}
+
+async fn open_keep_alive_request(address: std::net::SocketAddr) -> tokio::net::TcpStream {
+    let mut stream = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("keep-alive client should connect");
+    stream
+        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .expect("keep-alive client should write a complete request");
+    let mut response = vec![0_u8; 2048];
+    let bytes_read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut response))
+        .await
+        .expect("keep-alive health request should receive a response")
+        .expect("keep-alive health response should be readable");
+    assert!(
+        String::from_utf8_lossy(&response[..bytes_read]).contains(" 200 "),
+        "keep-alive health request should succeed"
+    );
+    stream
+}
 
 #[test]
 fn listener_settings_preserve_uncapped_workers_and_head_timeout() {
@@ -30,18 +154,18 @@ fn listener_settings_preserve_uncapped_workers_and_head_timeout() {
 }
 
 #[test]
-fn listener_settings_keep_server_wide_cap_when_workers_exceed_it() {
+fn listener_settings_keep_safe_per_worker_limit_when_workers_exceed_capacity() {
     let config = ServerConfig {
-        workers: Some(8),
-        max_connections: Some(3),
+        workers: Some(4),
+        max_connections: Some(2),
         ..ServerConfig::default()
     };
 
     let settings = HttpServer::validated_listener_settings(&config)
         .expect("valid listener settings should be derived");
-    assert_eq!(settings.configured_workers, 8);
-    assert_eq!(settings.effective_workers, 3);
-    assert_eq!(settings.max_connections_per_worker, Some(1));
+    assert_eq!(settings.configured_workers, 4);
+    assert_eq!(settings.effective_workers, 1);
+    assert_eq!(settings.max_connections_per_worker, Some(2));
 }
 
 #[test]
@@ -76,6 +200,10 @@ fn listener_settings_reject_invalid_custom_server_configs() {
             ..ServerConfig::default()
         },
         ServerConfig {
+            max_connections: Some(1),
+            ..ServerConfig::default()
+        },
+        ServerConfig {
             timeout: 0,
             ..ServerConfig::default()
         },
@@ -91,16 +219,82 @@ fn listener_settings_reject_invalid_custom_server_configs() {
         assert!(matches!(error, GatewayError::Config(_)));
     }
 
-    let zero_connection_error = HttpServer::validated_listener_settings(&ServerConfig {
-        max_connections: Some(0),
+    let unsafe_connection_error = HttpServer::validated_listener_settings(&ServerConfig {
+        max_connections: Some(1),
         ..ServerConfig::default()
     })
-    .expect_err("zero connection cap must fail before listener construction");
+    .expect_err("an Actix per-worker limit below 2 must fail before listener construction");
     assert!(
-        zero_connection_error
+        unsafe_connection_error
             .to_string()
-            .contains("server.max_connections")
+            .contains("must be at least 2")
     );
+}
+
+#[tokio::test]
+async fn production_builder_applies_first_request_head_timeout() {
+    let running = RunningProductionServer::start(ServerConfig {
+        workers: Some(1),
+        timeout: 1,
+        ..ServerConfig::default()
+    })
+    .await;
+    let mut stream = open_incomplete_request(running.address).await;
+    let mut response = vec![0_u8; 1024];
+    let bytes_read = tokio::time::timeout(Duration::from_secs(3), stream.read(&mut response))
+        .await
+        .expect("production first-request-head timeout should fire")
+        .expect("timed-out connection should remain readable long enough for its response");
+    let response = String::from_utf8_lossy(&response[..bytes_read]);
+    assert!(
+        response.contains(" 408 "),
+        "expected a 408 from the production Actix builder, got: {response:?}"
+    );
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn production_builder_enforces_server_wide_connection_cap_across_workers() {
+    let running = RunningProductionServer::start(ServerConfig {
+        workers: Some(2),
+        max_connections: Some(4),
+        timeout: 10,
+        ..ServerConfig::default()
+    })
+    .await;
+
+    let mut occupied = Vec::new();
+    for _ in 0..4 {
+        occupied.push(open_keep_alive_request(running.address).await);
+    }
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let mut queued = tokio::net::TcpStream::connect(running.address)
+        .await
+        .expect("queued client should reach the TCP backlog");
+    queued
+        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("queued client should write a complete request");
+    let mut response = vec![0_u8; 2048];
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), queued.read(&mut response))
+            .await
+            .is_err(),
+        "a fifth request must not be served while the server-wide cap of four is occupied"
+    );
+
+    drop(occupied);
+    let bytes_read = tokio::time::timeout(Duration::from_secs(3), queued.read(&mut response))
+        .await
+        .expect("queued request should resume after capacity is released")
+        .expect("queued request should receive a response");
+    let response = String::from_utf8_lossy(&response[..bytes_read]);
+    assert!(
+        response.contains(" 200 "),
+        "expected queued health request to succeed, got: {response:?}"
+    );
+    running.stop().await;
 }
 
 #[tokio::test]

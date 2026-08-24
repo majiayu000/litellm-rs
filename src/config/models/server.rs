@@ -18,8 +18,8 @@ pub struct ServerConfig {
     pub workers: Option<usize>,
     /// Maximum concurrent connections across the whole server. Actix applies
     /// connection limits per worker, so startup derives a per-worker limit
-    /// that never exceeds this total (and may round down slightly). If this
-    /// cap is lower than `workers`, startup reduces the effective worker count.
+    /// of at least 2 that never exceeds this total (and may conservatively
+    /// round down). Small caps can reduce the effective worker count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_connections: Option<usize>,
     /// First request head timeout in seconds. Bounds how long a client may
@@ -146,8 +146,8 @@ impl ServerConfig {
             return Err("Max body size cannot be 0".to_string());
         }
 
-        if self.max_connections == Some(0) {
-            return Err("server.max_connections must be greater than 0".to_string());
+        if self.max_connections.is_some_and(|limit| limit < 2) {
+            return Err("server.max_connections must be at least 2".to_string());
         }
 
         if let Some(tls) = &self.tls {

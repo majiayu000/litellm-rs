@@ -138,25 +138,28 @@ fn test_server_config_validate_max_body_size_zero() {
 }
 
 #[test]
-fn test_server_config_validate_max_connections_zero() {
-    let config = ServerConfig {
-        max_connections: Some(0),
-        ..ServerConfig::default()
-    };
-    let result = config.validate();
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("server.max_connections"));
+fn test_server_config_validate_max_connections_below_minimum() {
+    for max_connections in [0, 1] {
+        let config = ServerConfig {
+            max_connections: Some(max_connections),
+            ..ServerConfig::default()
+        };
+        let error = config.validate().expect_err("limit below 2 must fail");
+        assert!(error.contains("must be at least 2"));
+    }
 }
 
 #[test]
-fn test_server_config_trait_validation_rejects_max_connections_zero() {
-    let config = ServerConfig {
-        max_connections: Some(0),
-        ..ServerConfig::default()
-    };
-    let result = crate::config::Validate::validate(&config);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("server.max_connections"));
+fn test_server_config_trait_validation_rejects_max_connections_below_minimum() {
+    for max_connections in [0, 1] {
+        let config = ServerConfig {
+            max_connections: Some(max_connections),
+            ..ServerConfig::default()
+        };
+        let error = crate::config::Validate::validate(&config)
+            .expect_err("limit below 2 must fail trait validation");
+        assert!(error.contains("must be at least 2"));
+    }
 }
 
 // ==================== ServerConfig Merge Tests ====================

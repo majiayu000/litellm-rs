@@ -395,20 +395,34 @@ mod tests {
                 .configure(super::configure_routes),
         )
         .await;
-        let payload = format!(
-            r#"{{"model":"test-model","messages":[{{"role":"user","content":"{}"}}]}}"#,
-            "x".repeat(3 * 1024 * 1024)
-        );
+        fn payload_with_size(target_size: usize) -> String {
+            const PREFIX: &str =
+                "{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"";
+            const SUFFIX: &str = "\"}]}";
+            format!(
+                "{PREFIX}{}{SUFFIX}",
+                "x".repeat(target_size - PREFIX.len() - SUFFIX.len())
+            )
+        }
 
-        let request = test::TestRequest::post()
+        let accepted_request = test::TestRequest::post()
             .uri("/v1/chat/completions")
             .insert_header(("content-type", "application/json"))
-            .set_payload(payload)
+            .set_payload(payload_with_size(2 * 1024 * 1024 - 1024))
             .to_request();
-        let response = test::call_service(&app, request).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = test::read_body(response).await;
-        assert!(String::from_utf8_lossy(&body).contains("Invalid JSON request body"));
+        let accepted_response = test::call_service(&app, accepted_request).await;
+        let accepted_body = test::read_body(accepted_response).await;
+        assert!(!String::from_utf8_lossy(&accepted_body).contains("Invalid JSON request body"));
+
+        let rejected_request = test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("content-type", "application/json"))
+            .set_payload(payload_with_size(2 * 1024 * 1024 + 1024))
+            .to_request();
+        let rejected_response = test::call_service(&app, rejected_request).await;
+        assert_eq!(rejected_response.status(), StatusCode::BAD_REQUEST);
+        let rejected_body = test::read_body(rejected_response).await;
+        assert!(String::from_utf8_lossy(&rejected_body).contains("Invalid JSON request body"));
     }
 
     async fn build_no_provider_state() -> crate::server::state::AppState {

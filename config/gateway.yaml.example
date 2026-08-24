@@ -9,8 +9,8 @@ server:
   port: 8000
   workers: 4
   # Server-wide concurrent connection cap. The runtime derives a per-worker
-  # limit without exceeding this value, so the effective cap may round down;
-  # when this is lower than workers, the effective worker count is reduced.
+  # limit of at least 2 without exceeding this value. The effective cap may
+  # round down, and small caps reduce the effective worker count. Minimum: 2.
   max_connections: 1000
   timeout: 30 # seconds to receive the first request head
   max_body_size: 10485760

@@ -27,6 +27,8 @@ use actix_web::{
     middleware::{Condition, DefaultHeaders, Logger, Next, from_fn},
     web,
 };
+#[cfg(test)]
+use std::net::TcpListener;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -51,6 +53,12 @@ struct ListenerSettings {
     max_connections_per_worker: Option<usize>,
 }
 
+enum ServerBind {
+    Address(String),
+    #[cfg(test)]
+    Listener(TcpListener),
+}
+
 impl HttpServer {
     fn validated_listener_settings(config: &ServerConfig) -> Result<ListenerSettings> {
         Validate::validate(config).map_err(|error| {
@@ -68,16 +76,37 @@ impl HttpServer {
             });
         };
 
-        // Actix's max_connections setting is per worker. Reduce the worker
-        // count when needed, then round down so the effective server-wide
-        // capacity never exceeds the configured total.
-        let workers = configured_workers.min(total_connections);
+        // Actix's max_connections setting is per worker, and actix-server
+        // 2.6 cannot re-enable a worker after a limit of 1 is released. Keep
+        // each worker at 2 or more connections and round down so the effective
+        // server-wide capacity never exceeds the configured total.
+        let workers = configured_workers.min(total_connections / 2).max(1);
         Ok(ListenerSettings {
             configured_workers,
             effective_workers: workers,
             first_request_head_timeout,
             max_connections_per_worker: Some(total_connections / workers),
         })
+    }
+
+    fn build_actix_server(
+        state: web::Data<AppState>,
+        settings: &ListenerSettings,
+        bind: ServerBind,
+    ) -> std::io::Result<(actix_web::dev::Server, Vec<std::net::SocketAddr>)> {
+        let mut builder = ActixHttpServer::new(move || Self::create_app(state.clone()))
+            .workers(settings.effective_workers)
+            .client_request_timeout(settings.first_request_head_timeout);
+        if let Some(per_worker) = settings.max_connections_per_worker {
+            builder = builder.max_connections(per_worker);
+        }
+        builder = match bind {
+            ServerBind::Address(address) => builder.bind(address)?,
+            #[cfg(test)]
+            ServerBind::Listener(listener) => builder.listen(listener)?,
+        };
+        let addresses = builder.addrs().to_vec();
+        Ok((builder.run(), addresses))
     }
 
     /// Create a new HTTP server
@@ -406,7 +435,7 @@ impl HttpServer {
         if let Some(configured_total) = self.config.max_connections {
             if listener_settings.effective_workers != listener_settings.configured_workers {
                 info!(
-                    "Reducing HTTP workers from {} to {} because server.max_connections={} is lower than the configured worker count",
+                    "Reducing HTTP workers from {} to {} so server.max_connections={} can use Actix's minimum safe per-worker limit of 2",
                     listener_settings.configured_workers,
                     listener_settings.effective_workers,
                     configured_total
@@ -426,16 +455,12 @@ impl HttpServer {
         let storage = Arc::clone(&state.storage);
         let audit_logger = Arc::clone(&state.audit_logger);
 
-        let mut builder = ActixHttpServer::new(move || Self::create_app(state.clone()))
-            .workers(listener_settings.effective_workers)
-            .client_request_timeout(listener_settings.first_request_head_timeout);
-        if let Some(per_worker) = listener_settings.max_connections_per_worker {
-            builder = builder.max_connections(per_worker);
-        }
-        let server = builder
-            .bind(&bind_addr)
-            .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?
-            .run();
+        let (server, _) = Self::build_actix_server(
+            state,
+            &listener_settings,
+            ServerBind::Address(bind_addr.clone()),
+        )
+        .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?;
 
         info!("HTTP server listening on {}", bind_addr);
 
