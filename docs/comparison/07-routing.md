@@ -19,7 +19,7 @@ This document provides an in-depth analysis of the routing strategies between th
 
 | Aspect | Python LiteLLM | Rust LiteLLM-RS |
 |--------|---------------|-----------------|
-| **Architecture** | Plugin-based with external caching (Redis) | Lock-free atomic operations, in-memory |
+| **Architecture** | Plugin-based with external caching (Redis) | Atomic counters with synchronized rollover, in-memory |
 | **Strategy Count** | 6 strategies + custom | 7 strategies built-in |
 | **Concurrency Model** | asyncio + external state | DashMap + Atomic operations |
 | **State Management** | Distributed (Redis/DualCache) | Local (Atomic counters) |
@@ -629,7 +629,7 @@ impl Router {
 |--------|--------|------|
 | **Async Runtime** | asyncio | Tokio |
 | **State Storage** | Redis/DualCache | DashMap + Atomics |
-| **Lock Strategy** | Distributed locks | Lock-free |
+| **Lock Strategy** | Distributed locks | Low-contention per-deployment rollover gate |
 | **Memory Model** | GIL-protected | Atomic ordering |
 
 ### 7.2 State Tracking

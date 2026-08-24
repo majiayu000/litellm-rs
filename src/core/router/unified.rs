@@ -761,7 +761,7 @@ impl Router {
         }
     }
 
-    /// Start optional maintenance that resets inactive minute counters.
+    /// Start optional maintenance that periodically resets minute counters.
     ///
     /// Request readers and writers roll elapsed windows themselves, so this
     /// task is not required for correct rate-limit or circuit-breaker state.
