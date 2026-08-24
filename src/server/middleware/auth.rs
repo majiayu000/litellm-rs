@@ -10,7 +10,7 @@ use crate::server::middleware::helpers::{
 };
 use crate::server::middleware::rate_limit::{
     AuthRateLimitReservation, RateLimitError, enforce_rate_limit_for_rejected_auth,
-    reserve_rate_limit_for_auth_attempt,
+    network_client_key, reserve_rate_limit_for_auth_attempt,
 };
 use crate::server::routes::ai::{self, api_key_allows_endpoint, check_permission};
 use crate::server::state::AppState;
@@ -21,7 +21,6 @@ use actix_web::{HttpMessage, HttpRequest, web};
 use futures::future::{Ready, ready};
 use std::collections::HashMap;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -97,7 +96,7 @@ where
             let context = build_request_context(&mut req);
             let auth_method =
                 extract_auth_method_with_api_key_header(req.headers(), api_key_header.as_str());
-            let client_id = get_client_identifier(&req, &auth_method);
+            let client_id = get_client_identifier(&req, &trusted_proxies);
             let rate_limiter = get_auth_rate_limiter();
 
             if is_public {
@@ -218,7 +217,11 @@ where
                     if let Some(reservation) = auth_rate_limit_reservation.take() {
                         reservation.release().await;
                     }
-                    rate_limiter.record_success(&client_id);
+                    // This is an IP-wide failure bucket, so a valid credential
+                    // cannot prove that earlier failures came from the same
+                    // principal. Preserve the failures to prevent an attacker
+                    // with one valid credential from resetting brute-force
+                    // attempts against another credential.
                     debug!("Authentication succeeded");
 
                     // Attach the authenticated principal before authorization
@@ -428,19 +431,8 @@ fn insert_request_context(req: &mut ServiceRequest, context: RequestContext) {
 /// credential into the key gives every guessed secret its own bucket, so an
 /// attacker rotating random credentials never accumulates failures in any
 /// one bucket and is never locked out — which defeats the limiter entirely.
-fn get_client_identifier(req: &ServiceRequest, _auth_method: &AuthMethod) -> String {
-    let ip = req
-        .connection_info()
-        .peer_addr()
-        .map(parse_peer_ip)
-        .unwrap_or_else(|| "unknown".to_string());
-    format!("ip:{}", ip)
-}
-
-fn parse_peer_ip(peer: &str) -> String {
-    peer.parse::<SocketAddr>()
-        .map(|addr| addr.ip().to_string())
-        .unwrap_or_else(|_| peer.to_string())
+fn get_client_identifier(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
+    network_client_key(req, trusted_proxies)
 }
 
 fn build_request_context(req: &mut ServiceRequest) -> RequestContext {
@@ -484,30 +476,22 @@ fn build_request_context(req: &mut ServiceRequest) -> RequestContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::middleware::helpers::extract_auth_method_with_api_key_header;
     use actix_web::test::TestRequest;
 
-    fn client_id_for_header(
-        header_name: &'static str,
-        header_value: &'static str,
-        api_key_header: &str,
-    ) -> String {
+    fn client_id_for_header(header_name: &'static str, header_value: &'static str) -> String {
         let req = TestRequest::default()
             .peer_addr("203.0.113.55:1000".parse().unwrap())
             .insert_header((header_name, header_value))
             .to_srv_request();
-        let auth_method = extract_auth_method_with_api_key_header(req.headers(), api_key_header);
-        get_client_identifier(&req, &auth_method)
+        get_client_identifier(&req, &[])
     }
 
     #[test]
-    fn client_identifier_normalizes_api_key_transports() {
-        let configured = client_id_for_header("x-litellm-key", "gw-same-key", "x-litellm-key");
-        let fallback = client_id_for_header("x-api-key", "gw-same-key", "x-litellm-key");
-        let authorization_scheme =
-            client_id_for_header("authorization", "ApiKey gw-same-key", "x-litellm-key");
-        let authorization_raw =
-            client_id_for_header("authorization", "gw-same-key", "x-litellm-key");
+    fn client_identifier_groups_api_key_transports() {
+        let configured = client_id_for_header("x-litellm-key", "gw-same-key");
+        let fallback = client_id_for_header("x-api-key", "gw-same-key");
+        let authorization_scheme = client_id_for_header("authorization", "ApiKey gw-same-key");
+        let authorization_raw = client_id_for_header("authorization", "gw-same-key");
 
         assert_eq!(configured, fallback);
         assert_eq!(configured, authorization_scheme);
@@ -519,8 +503,8 @@ mod tests {
         // The previous behavior asserted distinct buckets per credential,
         // which let an attacker rotating random secrets dodge the lockout
         // entirely. Failures must accumulate in one per-IP bucket.
-        let first = client_id_for_header("x-api-key", "gw-first-key", "x-api-key");
-        let second = client_id_for_header("x-api-key", "gw-second-key", "x-api-key");
+        let first = client_id_for_header("x-api-key", "gw-first-key");
+        let second = client_id_for_header("x-api-key", "gw-second-key");
 
         assert_eq!(first, second);
         assert_eq!(first, "ip:203.0.113.55");
@@ -528,8 +512,8 @@ mod tests {
 
     #[test]
     fn client_identifier_groups_jwt_and_api_key_guesses_from_same_ip() {
-        let api_key = client_id_for_header("x-api-key", "gw-some-key", "x-api-key");
-        let jwt = client_id_for_header("authorization", "Bearer some.jwt.token", "x-api-key");
+        let api_key = client_id_for_header("x-api-key", "gw-some-key");
+        let jwt = client_id_for_header("authorization", "Bearer some.jwt.token");
 
         assert_eq!(api_key, jwt);
         assert_eq!(jwt, "ip:203.0.113.55");
@@ -545,12 +529,9 @@ mod tests {
             .peer_addr("203.0.113.60:2000".parse().unwrap())
             .insert_header(("x-api-key", "gw-same-key"))
             .to_srv_request();
-        let auth_a = extract_auth_method_with_api_key_header(req_a.headers(), "x-api-key");
-        let auth_b = extract_auth_method_with_api_key_header(req_b.headers(), "x-api-key");
-
         assert_eq!(
-            get_client_identifier(&req_a, &auth_a),
-            get_client_identifier(&req_b, &auth_b)
+            get_client_identifier(&req_a, &[]),
+            get_client_identifier(&req_b, &[])
         );
     }
 
@@ -560,10 +541,7 @@ mod tests {
             .peer_addr("203.0.113.70:1000".parse().unwrap())
             .to_srv_request();
 
-        assert_eq!(
-            get_client_identifier(&req, &AuthMethod::None),
-            "ip:203.0.113.70"
-        );
+        assert_eq!(get_client_identifier(&req, &[]), "ip:203.0.113.70");
     }
 
     #[test]
@@ -576,14 +554,42 @@ mod tests {
             .peer_addr("203.0.113.80:1000".parse().unwrap())
             .insert_header(("cookie", "session=session-b"))
             .to_srv_request();
-        let auth_a = extract_auth_method_with_api_key_header(req_a.headers(), "x-api-key");
-        let auth_b = extract_auth_method_with_api_key_header(req_b.headers(), "x-api-key");
+        assert_eq!(
+            get_client_identifier(&req_a, &[]),
+            get_client_identifier(&req_b, &[])
+        );
+        assert_eq!(get_client_identifier(&req_a, &[]), "ip:203.0.113.80");
+    }
+
+    #[test]
+    fn client_identifier_uses_forwarded_client_only_for_trusted_peer() {
+        let trusted = vec!["192.0.2.10".to_string()];
+        let trusted_req = TestRequest::default()
+            .peer_addr("192.0.2.10:443".parse().unwrap())
+            .insert_header(("x-forwarded-for", "198.51.100.20, 192.0.2.10"))
+            .to_srv_request();
+        let untrusted_req = TestRequest::default()
+            .peer_addr("192.0.2.11:443".parse().unwrap())
+            .insert_header(("x-forwarded-for", "198.51.100.20"))
+            .to_srv_request();
 
         assert_eq!(
-            get_client_identifier(&req_a, &auth_a),
-            get_client_identifier(&req_b, &auth_b)
+            get_client_identifier(&trusted_req, &trusted),
+            "ip:198.51.100.20"
         );
-        assert_eq!(get_client_identifier(&req_a, &auth_a), "ip:203.0.113.80");
+        assert_eq!(
+            get_client_identifier(&untrusted_req, &trusted),
+            "ip:192.0.2.11"
+        );
+    }
+
+    #[test]
+    fn client_identifier_without_transport_peer_is_unknown() {
+        let req = TestRequest::default()
+            .insert_header(("x-forwarded-for", "198.51.100.20"))
+            .to_srv_request();
+
+        assert_eq!(get_client_identifier(&req, &[]), "ip:unknown");
     }
 
     #[test]

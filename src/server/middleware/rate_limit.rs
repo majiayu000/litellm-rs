@@ -477,7 +477,7 @@ fn client_key_from_context(context: &RequestContext) -> Option<String> {
         .map(|user_id| format!("user:{}", user_id))
 }
 
-fn network_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
+pub(super) fn network_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
     let Some(peer_ip) = req.peer_addr().map(|addr| addr.ip().to_canonical()) else {
         // Without a transport peer there is no trusted hop from which a
         // forwarded header could have arrived.

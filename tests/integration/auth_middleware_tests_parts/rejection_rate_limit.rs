@@ -426,6 +426,69 @@ async fn test_valid_auth_releases_gateway_auth_attempt_reservation() {
 }
 
 #[tokio::test]
+async fn test_valid_credential_does_not_clear_ip_wide_auth_failures() {
+    let state = build_test_state(true, true).await;
+    let principal = seed_valid_principal(&state).await;
+    let hit_counter = Arc::new(AtomicUsize::new(0));
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .app_data(web::Data::new(hit_counter.clone()))
+            .wrap(AuthMiddleware)
+            .route(AUTH_PROBE_PATH, web::get().to(auth_probe)),
+    )
+    .await;
+    let peer_ip = "198.51.100.252";
+
+    for port in 1000..1004 {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(AUTH_PROBE_PATH)
+                .peer_addr(format!("{peer_ip}:{port}").parse().unwrap())
+                .insert_header(("x-api-key", format!("gw-invalid-{port}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let valid = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .peer_addr(format!("{peer_ip}:1004").parse().unwrap())
+            .insert_header(("x-api-key", principal.raw_api_key))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(valid.status(), StatusCode::OK);
+
+    let fifth_failure = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .peer_addr(format!("{peer_ip}:1005").parse().unwrap())
+            .insert_header(("x-api-key", "gw-invalid-fifth"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(fifth_failure.status(), StatusCode::UNAUTHORIZED);
+
+    let blocked = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(AUTH_PROBE_PATH)
+            .peer_addr(format!("{peer_ip}:1006").parse().unwrap())
+            .insert_header(("x-api-key", "gw-invalid-after-lockout"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(hit_counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn test_api_key_rpm_is_enforced_without_gateway_default_rate_limit() {
     let state = build_test_state(true, true).await;
     let principal = seed_valid_principal(&state).await;
