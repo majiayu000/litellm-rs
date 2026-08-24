@@ -422,3 +422,7 @@ where
 #[cfg(test)]
 #[path = "execution_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "execution_failover_tests.rs"]
+mod failover_tests;
