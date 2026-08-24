@@ -353,6 +353,24 @@ async fn test_minute_reset_task_integration() {
 }
 
 #[tokio::test]
+async fn test_minute_reset_task_releases_router_between_ticks() {
+    let router = Arc::new(Router::default());
+    let weak_router = Arc::downgrade(&router);
+    let task = router.clone().start_minute_reset_task();
+
+    drop(router);
+
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while weak_router.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reset task must not retain the router across interval waits");
+    task.abort();
+}
+
+#[tokio::test]
 async fn test_min_requests_prevents_premature_cooldown() {
     // With min_requests=10, 3 failures out of only 3 total should NOT trip
     let config = RouterConfig {

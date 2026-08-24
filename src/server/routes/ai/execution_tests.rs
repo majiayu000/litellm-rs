@@ -561,39 +561,49 @@ async fn stream_finalization_failures_trip_cooldown_after_allowed_fails() {
 }
 
 #[tokio::test]
-async fn stream_finalization_auth_error_trips_immediate_cooldown() {
-    let router = Arc::new(UnifiedRouter::new(RouterConfig {
-        allowed_fails: 3,
-        cooldown_time_secs: 60,
-        min_requests: 1,
-        ..Default::default()
-    }));
-    let provider = Provider::OpenAI(
-        OpenAIProvider::with_api_key("sk-test-key")
-            .await
-            .expect("test provider should build"),
-    );
-    router.add_deployment(Deployment::new(
-        "deployment-1".to_string(),
-        provider,
-        "gpt-4o-mini".to_string(),
-        "gpt-4".to_string(),
-    ));
+async fn stream_finalization_fail_fast_errors_trip_immediate_cooldown() {
+    let errors = [
+        ProviderError::rate_limit("openai", Some(30)),
+        ProviderError::api_error("openai", 429, "rate limited"),
+        ProviderError::authentication("openai", "revoked key"),
+        ProviderError::model_not_found("openai", "missing-model"),
+    ];
 
-    let (_stream, lease) = execute_stream_with_selected_deployment(
-        router.clone(),
-        "gpt-4",
-        ProviderCapability::ChatCompletionStream,
-        |_provider, model, _selected_deployment_id| async move { Ok(model) },
-    )
-    .await
-    .expect("stream creation should succeed");
+    for error in errors {
+        let router = Arc::new(UnifiedRouter::new(RouterConfig {
+            allowed_fails: 3,
+            cooldown_time_secs: 60,
+            min_requests: 1,
+            ..Default::default()
+        }));
+        let provider = Provider::OpenAI(
+            OpenAIProvider::with_api_key("sk-test-key")
+                .await
+                .expect("test provider should build"),
+        );
+        router.add_deployment(Deployment::new(
+            "deployment-1".to_string(),
+            provider,
+            "gpt-4o-mini".to_string(),
+            "gpt-4".to_string(),
+        ));
 
-    // Deterministic misconfiguration keeps its fail-fast semantics.
-    lease.finish_failure(&ProviderError::authentication("openai", "revoked key"));
+        let (_stream, lease) = execute_stream_with_selected_deployment(
+            router.clone(),
+            "gpt-4",
+            ProviderCapability::ChatCompletionStream,
+            |_provider, model, _selected_deployment_id| async move { Ok(model) },
+        )
+        .await
+        .expect("stream creation should succeed");
+        lease.finish_failure(&error);
 
-    let deployment = router
-        .get_deployment("deployment-1")
-        .expect("deployment should exist");
-    assert!(deployment.is_in_cooldown());
+        let deployment = router
+            .get_deployment("deployment-1")
+            .expect("deployment should exist");
+        assert!(
+            deployment.is_in_cooldown(),
+            "{error:?} should bypass transient failure thresholds"
+        );
+    }
 }

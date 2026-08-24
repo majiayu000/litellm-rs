@@ -8,10 +8,10 @@
 //!
 //! ## Design Philosophy
 //!
-//! All state tracking uses atomic operations with `Relaxed` ordering for maximum performance.
+//! State tracking uses atomics to avoid contention on the request path.
 //! This is safe because:
 //! - State values are eventually consistent (exact precision not required for routing decisions)
-//! - No cross-field invariants need to be maintained atomically
+//! - Minute-window rollover uses acquire/release ordering while it clears related counters
 //! - Routing can tolerate slightly stale state for massive performance gains
 //!
 //! ## Performance Characteristics
@@ -29,6 +29,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
+
+const MINUTE_WINDOW_SECS: u64 = 60;
+const MINUTE_RESET_IN_PROGRESS: u64 = u64::MAX;
 
 /// Deployment identifier (unique within router)
 pub type DeploymentId = String;
@@ -182,12 +185,14 @@ impl Default for DeploymentConfig {
 
 /// Deployment runtime state
 ///
-/// All fields use atomics for lock-free updates with `Relaxed` ordering.
-/// This is safe because routing decisions can tolerate eventual consistency.
+/// Counters use relaxed atomics; minute rollover coordinates clearing with
+/// acquire/release ordering. Routing tolerates boundary requests being
+/// attributed to either adjacent minute.
 ///
 /// ## State Reset
 ///
-/// TPM/RPM counters are reset every minute by a background task.
+/// Request recording lazily rolls expired counters forward. An optional
+/// background task also retires inactive windows without owning correctness.
 /// The `minute_reset_at` timestamp tracks when the last reset occurred.
 #[derive(Debug, Clone)]
 pub struct DeploymentState {
@@ -276,14 +281,53 @@ impl DeploymentState {
     }
 
     /// Reset per-minute counters
-    ///
-    /// Should be called by a background task every minute.
     pub fn reset_minute(&self) {
+        self.begin_minute_reset();
+        self.finish_minute_reset(current_timestamp());
+    }
+
+    pub(super) fn reset_minute_if_elapsed(&self) -> u64 {
+        let now = current_timestamp();
+        loop {
+            let last_reset = self.minute_reset_at.load(Ordering::Acquire);
+            if last_reset == MINUTE_RESET_IN_PROGRESS {
+                std::hint::spin_loop();
+                continue;
+            }
+            if now.saturating_sub(last_reset) < MINUTE_WINDOW_SECS {
+                return now;
+            }
+            if self
+                .minute_reset_at
+                .compare_exchange(
+                    last_reset,
+                    MINUTE_RESET_IN_PROGRESS,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                self.finish_minute_reset(now);
+                return now;
+            }
+        }
+    }
+
+    fn begin_minute_reset(&self) {
+        while self
+            .minute_reset_at
+            .swap(MINUTE_RESET_IN_PROGRESS, Ordering::AcqRel)
+            == MINUTE_RESET_IN_PROGRESS
+        {
+            std::hint::spin_loop();
+        }
+    }
+
+    fn finish_minute_reset(&self, now: u64) {
         self.tpm_current.store(0, Ordering::Relaxed);
         self.rpm_current.store(0, Ordering::Relaxed);
         self.fails_this_minute.store(0, Ordering::Relaxed);
-        self.minute_reset_at
-            .store(current_timestamp(), Ordering::Relaxed);
+        self.minute_reset_at.store(now, Ordering::Release);
     }
 
     /// Get current health status
@@ -436,14 +480,13 @@ impl Deployment {
     /// * `tokens` - Number of tokens consumed
     /// * `latency_us` - Request latency in microseconds
     pub fn record_success(&self, tokens: u64, latency_us: u64) {
+        let now = self.state.reset_minute_if_elapsed();
         // Update counters
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.success_requests.fetch_add(1, Ordering::Relaxed);
         self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
         self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
-        self.state
-            .last_request_at
-            .store(current_timestamp(), Ordering::Relaxed);
+        self.state.last_request_at.store(now, Ordering::Relaxed);
 
         // Update average latency using exponential moving average (alpha = 0.2)
         let current_avg = self.state.avg_latency_us.load(Ordering::Relaxed);
@@ -469,12 +512,11 @@ impl Deployment {
     /// Increments failure counters. The caller is responsible for deciding
     /// whether to enter cooldown based on failure rate.
     pub fn record_failure(&self) {
+        let now = self.state.reset_minute_if_elapsed();
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.fail_requests.fetch_add(1, Ordering::Relaxed);
         self.state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
-        self.state
-            .last_request_at
-            .store(current_timestamp(), Ordering::Relaxed);
+        self.state.last_request_at.store(now, Ordering::Relaxed);
 
         // Reset consecutive success counter on failure
         self.state.consecutive_successes.store(0, Ordering::Relaxed);

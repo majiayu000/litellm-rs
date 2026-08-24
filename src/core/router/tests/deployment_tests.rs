@@ -230,6 +230,81 @@ async fn test_reset_minute() {
 }
 
 #[tokio::test]
+async fn test_request_recording_lazily_resets_expired_minute_window() {
+    let provider = create_test_provider().await;
+    let deployment = Deployment::new(
+        "test-deployment".to_string(),
+        provider,
+        "gpt-4-turbo".to_string(),
+        "gpt-4".to_string(),
+    );
+
+    deployment.record_success(100, 5000);
+    deployment.record_failure();
+    deployment.state.minute_reset_at.store(0, Ordering::Release);
+
+    deployment.record_failure();
+
+    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        deployment.state.fails_this_minute.load(Ordering::Relaxed),
+        1
+    );
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_concurrent_requests_share_one_lazy_minute_rollover() {
+    const REQUESTS: usize = 32;
+    let provider = create_test_provider().await;
+    let deployment = std::sync::Arc::new(Deployment::new(
+        "test-deployment".to_string(),
+        provider,
+        "gpt-4-turbo".to_string(),
+        "gpt-4".to_string(),
+    ));
+    deployment.state.tpm_current.store(999, Ordering::Relaxed);
+    deployment.state.rpm_current.store(999, Ordering::Relaxed);
+    deployment
+        .state
+        .fails_this_minute
+        .store(999, Ordering::Relaxed);
+    deployment.state.minute_reset_at.store(0, Ordering::Release);
+
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(REQUESTS));
+    let mut tasks = Vec::with_capacity(REQUESTS);
+    for index in 0..REQUESTS {
+        let deployment = deployment.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            if index % 2 == 0 {
+                deployment.record_success(10, 100);
+            } else {
+                deployment.record_failure();
+            }
+        }));
+    }
+    for task in tasks {
+        task.await.expect("recording task should complete");
+    }
+
+    assert_eq!(
+        deployment.state.rpm_current.load(Ordering::Relaxed),
+        (REQUESTS / 2) as u64
+    );
+    assert_eq!(
+        deployment.state.fails_this_minute.load(Ordering::Relaxed),
+        (REQUESTS / 2) as u32
+    );
+    assert_eq!(
+        deployment.state.tpm_current.load(Ordering::Relaxed),
+        (REQUESTS / 2 * 10) as u64
+    );
+}
+
+#[tokio::test]
 async fn test_exponential_moving_average() {
     let provider = create_test_provider().await;
     let deployment = Deployment::new(

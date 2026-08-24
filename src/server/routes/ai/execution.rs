@@ -38,14 +38,14 @@ impl StreamingDeploymentLease {
     }
 
     pub(super) fn finish_failure(mut self, error: &ProviderError) {
-        // Mid-stream failures cannot be retried, so unlike the unary path a
-        // single occurrence reaches the breaker directly. Route transient
-        // reasons through the counted path so allowed_fails/min_requests gate
-        // the cooldown; only deterministic misconfigurations (bad credentials,
-        // missing model) trip immediately.
+        // Mid-stream failures cannot be retried. Preserve fail-fast cooldowns
+        // for rate limits and deterministic misconfiguration, while routing
+        // ordinary transient failures through the counted breaker path.
         let inferred = infer_cooldown_reason(error);
         let cooldown_reason = match inferred {
-            CooldownReason::AuthError | CooldownReason::NotFound => inferred,
+            CooldownReason::RateLimit | CooldownReason::AuthError | CooldownReason::NotFound => {
+                inferred
+            }
             _ => CooldownReason::ConsecutiveFailures,
         };
         self.router

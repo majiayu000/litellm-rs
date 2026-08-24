@@ -760,13 +760,23 @@ impl Router {
         }
     }
 
-    /// Start background task to reset minute counters
+    /// Start optional background maintenance for minute counters.
+    ///
+    /// Request recording also rolls stale windows forward, so correctness does
+    /// not depend on callers starting or retaining this task.
     pub fn start_minute_reset_task(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let router = Arc::downgrade(&self);
+        drop(self);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                self.reset_minute_counters();
+                let Some(router) = router.upgrade() else {
+                    break;
+                };
+                for deployment in router.routing_snapshot.load().deployments.values() {
+                    deployment.state.reset_minute_if_elapsed();
+                }
             }
         })
     }
