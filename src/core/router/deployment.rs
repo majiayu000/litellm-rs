@@ -297,14 +297,17 @@ impl DeploymentState {
 
     pub(super) fn reset_minute_if_elapsed(&self) -> u64 {
         let now = current_timestamp();
-        if now.saturating_sub(self.minute_reset_at.load(Ordering::Acquire)) < MINUTE_WINDOW_SECS {
-            return now;
+        if now.saturating_sub(self.minute_reset_at.load(Ordering::Acquire)) >= MINUTE_WINDOW_SECS {
+            self.reset_elapsed_minute(now);
         }
+        now
+    }
+
+    fn reset_elapsed_minute(&self, now: u64) {
         let _guard = self.acquire_minute_reset();
         if now.saturating_sub(self.minute_reset_at.load(Ordering::Acquire)) >= MINUTE_WINDOW_SECS {
             self.finish_minute_reset(now);
         }
-        now
     }
 
     fn acquire_minute_reset(&self) -> MinuteResetGuard<'_> {
@@ -710,6 +713,21 @@ mod tests {
         assert_eq!(state.tpm_current.load(Ordering::Relaxed), 0);
         assert_eq!(state.rpm_current.load(Ordering::Relaxed), 0);
         assert_eq!(state.fails_this_minute.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_stale_reset_observer_rechecks_timestamp_under_gate() {
+        let state = DeploymentState::new();
+        let now = current_timestamp();
+        state
+            .minute_reset_at
+            .store(now - MINUTE_WINDOW_SECS, Ordering::Relaxed);
+        state.reset_elapsed_minute(now);
+        state.fails_this_minute.store(1, Ordering::Relaxed);
+
+        state.reset_elapsed_minute(now);
+
+        assert_eq!(state.fails_this_minute.load(Ordering::Relaxed), 1);
     }
 
     #[test]
