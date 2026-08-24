@@ -187,7 +187,6 @@ impl HttpErrorMapper {
             402 => ProviderError::quota_exceeded(provider, message),
             // Keep upstream 403 as an api_error so clients see permission
             // failure (403), not an authentication failure (401).
-            403 if is_quota_error(body) => ProviderError::quota_exceeded(provider, message),
             403 => ProviderError::api_error(provider, status, message),
             404 => ProviderError::model_not_found(provider, message),
             408 | 504 => ProviderError::timeout(provider, message),
@@ -288,14 +287,6 @@ fn is_content_filter_error(body: &str) -> bool {
         || lower.contains("content filter")
         || lower.contains("safety")
         || lower.contains("policy")
-}
-
-fn is_quota_error(body: &str) -> bool {
-    let lower = body.to_ascii_lowercase();
-    lower.contains("insufficient_quota")
-        || lower.contains("quota")
-        || lower.contains("billing")
-        || lower.contains("credits")
 }
 
 /// Common URL builder.

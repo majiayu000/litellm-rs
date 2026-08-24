@@ -345,12 +345,15 @@ mod http_403_classification_tests {
     }
 
     #[test]
-    fn quota_shaped_403_bodies_stay_quota_errors() {
-        let quota = crate::core::providers::base::HttpErrorMapper::map_status_code(
+    fn quota_shaped_403_bodies_keep_authoritative_transport_status() {
+        let permission = crate::core::providers::base::HttpErrorMapper::map_status_code(
             "openai",
             403,
             "billing: insufficient_quota",
         );
-        assert!(matches!(quota, ProviderError::QuotaExceeded { .. }));
+        assert!(matches!(
+            permission,
+            ProviderError::ApiError { status: 403, .. }
+        ));
     }
 }
