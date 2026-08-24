@@ -150,17 +150,17 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         bytes: &[u8],
         stream_mode: bool,
     ) -> Result<Vec<ChatChunk>, ProviderError> {
-        // Reassemble UTF-8 sequences split across chunks: decode only the
-        // complete prefix; carry a trailing partial sequence for next time.
         let mut input = std::mem::take(&mut self.pending_utf8);
         input.extend_from_slice(bytes);
-        let keep_from = match std::str::from_utf8(&input) {
-            Ok(_) => input.len(),
-            Err(err) => match err.error_len() {
-                Some(_) => input.len(),
-                None => err.valid_up_to(),
-            },
-        };
+        let scan_start = input.len().saturating_sub(4);
+        let keep_from = input[scan_start..]
+            .iter()
+            .rposition(|byte| byte & 0xc0 != 0x80)
+            .map(|offset| scan_start + offset)
+            .filter(|&start| {
+                matches!(std::str::from_utf8(&input[start..]), Err(error) if error.valid_up_to() == 0 && error.error_len().is_none())
+            })
+            .unwrap_or(input.len());
         self.pending_utf8 = input.split_off(keep_from);
         let text = String::from_utf8_lossy(&input);
         self.buffer.push_str(&text);
@@ -249,6 +249,8 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
 
     fn finish_stream(&mut self) -> Result<Vec<ChatChunk>, ProviderError> {
         let mut chunks = Vec::new();
+        let pending = std::mem::take(&mut self.pending_utf8);
+        self.buffer.push_str(&String::from_utf8_lossy(&pending));
         if !self.buffer.is_empty() {
             let line = std::mem::take(&mut self.buffer);
             chunks.extend(self.process_line(&line, true)?);
