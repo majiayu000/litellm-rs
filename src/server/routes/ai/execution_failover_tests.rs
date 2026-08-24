@@ -28,7 +28,7 @@ async fn build_retry_failover_router() -> UnifiedRouter {
     .await
 }
 
-async fn build_retry_failover_router_with_config(
+pub(super) async fn build_retry_failover_router_with_config(
     config: RouterConfig,
     fallback_max_parallel_requests: Option<u32>,
 ) -> UnifiedRouter {
@@ -342,86 +342,41 @@ async fn test_execute_stream_rotates_soft_exclusions_each_sweep() {
     lease.finish_success(0);
 }
 
-#[tokio::test]
-async fn test_execute_with_selected_deployment_waits_for_temporarily_unavailable_untried_target() {
-    let router = build_retry_failover_router_with_config(
-        RouterConfig {
-            routing_strategy: UnifiedRoutingStrategy::PriorityBased,
-            num_retries: 2,
-            retry_after_secs: 0,
-            // The primary remains selectable. The retry must nevertheless
-            // wait for the untried fallback instead of reopening the pool and
-            // selecting the primary again.
-            allowed_fails: 100,
-            ..Default::default()
-        },
-        Some(1),
-    )
-    .await;
-    let fallback = router
-        .get_deployment("fallback-retry-target")
-        .expect("fallback deployment should exist");
-    fallback.state.active_requests.store(1, Ordering::Relaxed);
-    let release_fallback = fallback.clone();
-    let release_task = tokio::spawn(async move {
-        // Attempt 2 uses a two-second router backoff. Releasing after one
-        // second makes an incorrect attempt-1 delay consume the final retry
-        // while the slot is still unavailable.
-        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
-        release_fallback
-            .state
-            .active_requests
-            .store(0, Ordering::Relaxed);
-    });
-    let attempts = Arc::new(Mutex::new(Vec::new()));
-    let started_at = std::time::Instant::now();
+async fn release_fallback_at_attempt_two_deadline<T>(
+    handle: &tokio::task::JoinHandle<T>,
+    fallback: &Deployment,
+) {
+    // The first provider retry uses its one-millisecond deployment schedule.
+    tokio::time::advance(std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
 
-    let result = execute_with_selected_deployment(
-        &router,
-        "shared-model",
-        ProviderCapability::ChatCompletion,
-        {
-            let attempts = attempts.clone();
-            move |_provider, _model, deployment_id| {
-                let attempts = attempts.clone();
-                async move {
-                    attempts.lock().unwrap().push(deployment_id.clone());
-                    if deployment_id == "primary-retry-target" {
-                        Err(ProviderError::timeout("test", "primary timed out"))
-                    } else {
-                        Ok((String::from("fallback recovered"), 0))
-                    }
-                }
-            }
-        },
-    )
-    .await
-    .expect("a temporarily unavailable untried target should be retried");
-
-    release_task
-        .await
-        .expect("fallback release task should finish");
-    assert_eq!(result, "fallback recovered");
-    assert_eq!(
-        attempts.lock().unwrap().as_slice(),
-        ["primary-retry-target", "fallback-retry-target"]
-    );
+    // Attempt 2 must use the router's exact two-second exponential delay.
+    // Keep the untried fallback busy until one millisecond before that
+    // deadline. A wrong one-second delay consumes the final attempt here.
+    tokio::time::advance(std::time::Duration::from_millis(1_999)).await;
+    tokio::task::yield_now().await;
     assert!(
-        started_at.elapsed() >= std::time::Duration::from_millis(1_900),
-        "selection retry must honor the attempt-2 router delay"
+        !handle.is_finished(),
+        "execution must remain pending before the attempt-2 deadline"
+    );
+
+    fallback.state.active_requests.store(0, Ordering::Relaxed);
+    tokio::time::advance(std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        handle.is_finished(),
+        "execution must resume at the exact attempt-2 deadline"
     );
 }
 
-#[tokio::test]
-async fn test_execute_stream_waits_for_temporarily_unavailable_untried_target() {
+#[tokio::test(start_paused = true)]
+async fn test_execute_with_selected_deployment_waits_for_temporarily_unavailable_untried_target() {
     let router = Arc::new(
         build_retry_failover_router_with_config(
             RouterConfig {
                 routing_strategy: UnifiedRoutingStrategy::PriorityBased,
                 num_retries: 2,
                 retry_after_secs: 0,
-                // The primary remains selectable. Streaming retry must still
-                // wait for the untried fallback before opening a new sweep.
                 allowed_fails: 100,
                 ..Default::default()
             },
@@ -433,59 +388,114 @@ async fn test_execute_stream_waits_for_temporarily_unavailable_untried_target() 
         .get_deployment("fallback-retry-target")
         .expect("fallback deployment should exist");
     fallback.state.active_requests.store(1, Ordering::Relaxed);
-    let release_fallback = fallback.clone();
-    let release_task = tokio::spawn(async move {
-        // Attempt 2 uses a two-second router backoff. Releasing after one
-        // second makes an incorrect attempt-1 delay consume the final retry
-        // while the slot is still unavailable.
-        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
-        release_fallback
-            .state
-            .active_requests
-            .store(0, Ordering::Relaxed);
-    });
     let attempts = Arc::new(Mutex::new(Vec::new()));
-    let started_at = std::time::Instant::now();
-
-    let (result, lease) = execute_stream_with_selected_deployment(
-        router.clone(),
-        "shared-model",
-        ProviderCapability::ChatCompletionStream,
-        {
-            let attempts = attempts.clone();
-            move |_provider, _model, deployment_id| {
-                let attempts = attempts.clone();
-                async move {
-                    attempts.lock().unwrap().push(deployment_id.clone());
-                    if deployment_id == "primary-retry-target" {
-                        Err(ProviderError::timeout("test", "primary timed out"))
-                    } else {
-                        Ok(String::from("fallback recovered"))
+    let primary_entered = Arc::new(tokio::sync::Notify::new());
+    let handle = {
+        let router = router.clone();
+        let attempts = attempts.clone();
+        let primary_entered = primary_entered.clone();
+        tokio::spawn(async move {
+            execute_with_selected_deployment(
+                router.as_ref(),
+                "shared-model",
+                ProviderCapability::ChatCompletion,
+                move |_provider, _model, deployment_id| {
+                    let attempts = attempts.clone();
+                    let primary_entered = primary_entered.clone();
+                    async move {
+                        attempts.lock().unwrap().push(deployment_id.clone());
+                        if deployment_id == "primary-retry-target" {
+                            primary_entered.notify_one();
+                            Err(ProviderError::timeout("test", "primary timed out"))
+                        } else {
+                            Ok((String::from("fallback recovered"), 0))
+                        }
                     }
-                }
-            }
-        },
-    )
-    .await
-    .expect("a temporarily unavailable streaming target should be retried");
+                },
+            )
+            .await
+        })
+    };
 
-    release_task
+    primary_entered.notified().await;
+    release_fallback_at_attempt_two_deadline(&handle, fallback.as_ref()).await;
+    let result = handle
         .await
-        .expect("fallback release task should finish");
+        .expect("unary execution task should finish")
+        .expect("a temporarily unavailable untried target should be retried");
+
     assert_eq!(result, "fallback recovered");
     assert_eq!(
         attempts.lock().unwrap().as_slice(),
         ["primary-retry-target", "fallback-retry-target"]
     );
-    assert!(
-        started_at.elapsed() >= std::time::Duration::from_millis(1_900),
-        "streaming selection retry must honor the attempt-2 router delay"
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_execute_stream_waits_for_temporarily_unavailable_untried_target() {
+    let router = Arc::new(
+        build_retry_failover_router_with_config(
+            RouterConfig {
+                routing_strategy: UnifiedRoutingStrategy::PriorityBased,
+                num_retries: 2,
+                retry_after_secs: 0,
+                allowed_fails: 100,
+                ..Default::default()
+            },
+            Some(1),
+        )
+        .await,
+    );
+    let fallback = router
+        .get_deployment("fallback-retry-target")
+        .expect("fallback deployment should exist");
+    fallback.state.active_requests.store(1, Ordering::Relaxed);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let primary_entered = Arc::new(tokio::sync::Notify::new());
+    let handle = {
+        let router = router.clone();
+        let attempts = attempts.clone();
+        let primary_entered = primary_entered.clone();
+        tokio::spawn(async move {
+            execute_stream_with_selected_deployment(
+                router,
+                "shared-model",
+                ProviderCapability::ChatCompletionStream,
+                move |_provider, _model, deployment_id| {
+                    let attempts = attempts.clone();
+                    let primary_entered = primary_entered.clone();
+                    async move {
+                        attempts.lock().unwrap().push(deployment_id.clone());
+                        if deployment_id == "primary-retry-target" {
+                            primary_entered.notify_one();
+                            Err(ProviderError::timeout("test", "primary timed out"))
+                        } else {
+                            Ok(String::from("fallback recovered"))
+                        }
+                    }
+                },
+            )
+            .await
+        })
+    };
+
+    primary_entered.notified().await;
+    release_fallback_at_attempt_two_deadline(&handle, fallback.as_ref()).await;
+    let (result, lease) = handle
+        .await
+        .expect("stream execution task should finish")
+        .expect("a temporarily unavailable streaming target should be retried");
+
+    assert_eq!(result, "fallback recovered");
+    assert_eq!(
+        attempts.lock().unwrap().as_slice(),
+        ["primary-retry-target", "fallback-retry-target"]
     );
     lease.finish_success(0);
 }
 
 #[tokio::test]
-async fn test_execute_with_selected_deployment_stops_on_final_selection_attempt() {
+async fn test_execute_with_selected_deployment_preserves_last_operation_error_at_attempt_limit() {
     let router = build_retry_failover_router_with_config(
         RouterConfig {
             routing_strategy: UnifiedRoutingStrategy::PriorityBased,
@@ -522,10 +532,10 @@ async fn test_execute_with_selected_deployment_stops_on_final_selection_attempt(
 
     assert!(matches!(
         error,
-        GatewayError::Provider(ProviderError::ProviderUnavailable {
-            provider: "router",
-            ..
-        })
+        GatewayError::Provider(ProviderError::Timeout {
+            provider: "test",
+            ref message,
+        }) if message == "primary timed out"
     ));
     assert_eq!(
         attempts.lock().unwrap().as_slice(),
@@ -534,7 +544,7 @@ async fn test_execute_with_selected_deployment_stops_on_final_selection_attempt(
 }
 
 #[tokio::test]
-async fn test_execute_stream_stops_on_final_selection_attempt() {
+async fn test_execute_stream_preserves_last_operation_error_at_attempt_limit() {
     let router = Arc::new(
         build_retry_failover_router_with_config(
             RouterConfig {
@@ -579,149 +589,13 @@ async fn test_execute_stream_stops_on_final_selection_attempt() {
 
     assert!(matches!(
         error,
-        GatewayError::Provider(ProviderError::ProviderUnavailable {
-            provider: "router",
-            ..
-        })
+        GatewayError::Provider(ProviderError::Timeout {
+            provider: "test",
+            ref message,
+        }) if message == "primary timed out"
     ));
     assert_eq!(
         attempts.lock().unwrap().as_slice(),
         ["primary-retry-target"]
     );
-}
-
-fn assert_mixed_exclusion_result(
-    router: &UnifiedRouter,
-    attempts: &Mutex<Vec<String>>,
-    error: GatewayError,
-    expected_message: &str,
-) {
-    assert!(matches!(
-        error,
-        GatewayError::Provider(ProviderError::QuotaExceeded {
-            provider: "budget",
-            ref message,
-        }) if message == expected_message
-    ));
-    assert_eq!(
-        attempts.lock().unwrap().as_slice(),
-        ["primary-retry-target", "fallback-retry-target"]
-    );
-    for deployment_id in ["primary-retry-target", "fallback-retry-target"] {
-        let deployment = router
-            .get_deployment(deployment_id)
-            .expect("deployment should exist");
-        assert_eq!(
-            deployment.state.active_requests.load(Ordering::Relaxed),
-            0,
-            "{deployment_id} lease should be released"
-        );
-    }
-}
-
-async fn build_mixed_exclusion_router() -> Arc<UnifiedRouter> {
-    Arc::new(
-        build_retry_failover_router_with_config(
-            RouterConfig {
-                routing_strategy: UnifiedRoutingStrategy::PriorityBased,
-                num_retries: 2,
-                allowed_fails: 100,
-                ..Default::default()
-            },
-            None,
-        )
-        .await,
-    )
-}
-
-#[tokio::test]
-async fn test_unary_temporary_full_pool_exhaustion_preserves_last_budget_error() {
-    let router = build_mixed_exclusion_router().await;
-    let attempts = Arc::new(Mutex::new(Vec::new()));
-    let expected_message = "provider 'openai' mixed budget exhausted";
-
-    let error = execute_with_selected_deployment(
-        router.as_ref(),
-        "shared-model",
-        ProviderCapability::ChatCompletion,
-        {
-            let router = router.clone();
-            let attempts = attempts.clone();
-            move |_provider, _model, deployment_id| {
-                let router = router.clone();
-                let attempts = attempts.clone();
-                async move {
-                    attempts.lock().unwrap().push(deployment_id.clone());
-                    if deployment_id == "primary-retry-target" {
-                        return Err::<(String, u64), _>(ProviderError::timeout(
-                            "test",
-                            "primary timed out",
-                        ));
-                    }
-
-                    router
-                        .get_deployment("primary-retry-target")
-                        .expect("primary deployment should exist")
-                        .enter_cooldown(30);
-                    Err::<(String, u64), _>(ProviderError::quota_exceeded(
-                        "budget",
-                        "provider 'openai' mixed budget exhausted",
-                    ))
-                }
-            }
-        },
-    )
-    .await
-    .expect_err("temporary full-pool exhaustion should preserve the last budget error");
-
-    assert_mixed_exclusion_result(router.as_ref(), attempts.as_ref(), error, expected_message);
-}
-
-#[tokio::test]
-async fn test_stream_temporary_full_pool_exhaustion_preserves_last_budget_error() {
-    let router = build_mixed_exclusion_router().await;
-    let attempts = Arc::new(Mutex::new(Vec::new()));
-    let expected_message = "provider 'openai' streaming mixed budget exhausted";
-
-    let result = execute_stream_with_selected_deployment(
-        router.clone(),
-        "shared-model",
-        ProviderCapability::ChatCompletionStream,
-        {
-            let router = router.clone();
-            let attempts = attempts.clone();
-            move |_provider, _model, deployment_id| {
-                let router = router.clone();
-                let attempts = attempts.clone();
-                async move {
-                    attempts.lock().unwrap().push(deployment_id.clone());
-                    if deployment_id == "primary-retry-target" {
-                        return Err::<String, _>(ProviderError::timeout(
-                            "test",
-                            "primary timed out",
-                        ));
-                    }
-
-                    router
-                        .get_deployment("primary-retry-target")
-                        .expect("primary deployment should exist")
-                        .enter_cooldown(30);
-                    Err::<String, _>(ProviderError::quota_exceeded(
-                        "budget",
-                        "provider 'openai' streaming mixed budget exhausted",
-                    ))
-                }
-            }
-        },
-    )
-    .await;
-    let error = match result {
-        Err(error) => error,
-        Ok((_stream, lease)) => {
-            drop(lease);
-            panic!("temporary full-pool exhaustion should not start a stream");
-        }
-    };
-
-    assert_mixed_exclusion_result(router.as_ref(), attempts.as_ref(), error, expected_message);
 }
