@@ -1,13 +1,15 @@
 ---
 name: provider-development
-description: LiteLLM-RS Provider 开发与架构指南。用于添加新 provider（Tier 1 catalog 条目或 Tier 2 代码实现）、统一错误处理与架构选型对比分析。适用于新增 provider 实现、把旧错误枚举迁移到统一 ProviderError、或做架构方案评估时使用。
+description: LiteLLM-RS Provider 开发指南。用于添加新 provider（Tier 1 catalog 条目或 Tier 2 代码实现）、统一错误处理，或把旧错误枚举迁移到 ProviderError。
 ---
 
 # LiteLLM-RS Provider 开发指南
 
 ## 架构概述
 
-本项目采用**统一错误 + Trait Object**架构，这是经过对比分析后的最佳选择。
+本项目采用**统一错误 + 闭集 `Provider` 枚举派发**。`LLMProvider`
+统一各实现的方法签名，但路由部署存放的是具体 `Provider` 枚举，而不是
+`dyn LLMProvider` trait object。
 
 ### 当前架构层次
 
@@ -34,139 +36,36 @@ description: LiteLLM-RS Provider 开发与架构指南。用于添加新 provide
 │  - Tier 1: registry/catalog.rs 目录条目（def_chat 等），│
 │    经 OpenAILikeProvider 路由，无专属代码               │
 │  - Tier 2: 代码型 provider 目录，                       │
-│    type Error = ProviderError                          │
+│    实现 LLMProvider 并注册到闭集 Provider 枚举          │
 └────────────────────────────────────────────────────────┘
 ```
 
 Provider 数量随版本演进，不在此硬编码。枚举方法：
 
 ```bash
-grep -c 'def_chat(\|def_local_chat(' src/core/providers/registry/catalog.rs  # Tier 1 catalog 条目数
-ls -d src/core/providers/*/                                                  # Tier 2 代码型目录
+# 两个计数都会包含各自的 helper 定义，因此分别减 1
+grep -c 'def_chat(' src/core/providers/registry/catalog.rs
+grep -c 'def_local_chat(' src/core/providers/registry/catalog.rs
+
+# 排除基础设施目录后再人工确认代码型 provider
+ls -d src/core/providers/*/ | grep -vE '/(base|factory|macros|registry)/'
 ```
 
 ---
 
-## 架构方案对比
+## 当前派发契约
 
-### 方案一：Enum Dispatch（编译时多态）
+`Provider` 定义在 `src/core/providers/mod.rs`，使用 `enum_dispatch` 把闭集枚举的
+方法转发给具体实现。Router 的 deployment 持有这个枚举，因此 Tier 2 provider
+仅实现 `LLMProvider` 还不够；还必须添加枚举变体、dispatch/factory 分支及模块
+注册。Tier 1 catalog provider 复用现有的 `Provider::OpenAILike` 变体，所以无需
+为每个兼容端点增加枚举成员。
 
-```rust
-#[enum_dispatch]
-pub enum Provider {
-    OpenAI(OpenAIProvider),
-    Anthropic(AnthropicProvider),
-    // ... 数十个变体
-}
-```
-
-| 指标 | 评估 |
-|------|------|
-| 方法调用延迟 | ~480ns（最快） |
-| 二进制体积 | 大（每个变体单态化一份代码） |
-| 编译时间 | 慢 |
-| 运行时扩展 | 不支持 |
-| 适用场景 | 封闭类型集、高频调用 |
-
-**结论**：不适合大量 provider 场景，二进制膨胀严重
-
-### 方案二：Trait Object + 统一错误（动态派发）✅ 当前采用
-
-```rust
-// src/core/traits/provider/llm_provider/trait_definition.rs
-pub trait LLMProvider: Send + Sync + Debug + 'static {
-    // 无关联 Error 类型：方法签名直接返回统一错误 ProviderError
-    async fn chat_completion(
-        &self,
-        request: ChatRequest,
-        context: RequestContext,
-    ) -> Result<ChatResponse, ProviderError>;
-
-    fn get_error_mapper(&self) -> Box<dyn ErrorMapper<ProviderError>>;
-}
-```
-
-| 指标 | 评估 |
-|------|------|
-| 方法调用延迟 | ~5,900ns |
-| 二进制体积 | 小（~10MB） |
-| 编译时间 | 快（~2分钟） |
-| 运行时扩展 | 支持 |
-| 适用场景 | 多后端系统、API 网关 |
-
-**结论**：最适合本项目，5μs 延迟在 10ms+ 网络延迟中可忽略（0.05%）
-
-### 方案三：混合模式（分层派发）
-
-```rust
-// 热路径：高频 provider 用 enum dispatch
-enum FastProvider { OpenAI, Anthropic, Azure, ... }
-// 冷路径：其余走 trait object
-type ExtendedProvider = Box<dyn LLMProvider>;
-```
-
-| 指标 | 评估 |
-|------|------|
-| 加权延迟 | ~1,500ns（80/20 分布） |
-| 复杂度 | 高（两条代码路径） |
-| 适用场景 | 极致性能要求 |
-
-**结论**：备选方案，增加复杂度但性能更好
-
-### 方案四：完全单态化
-
-```rust
-pub async fn completion<P: LLMProvider>(provider: &P, ...) { ... }
-```
-
-| 指标 | 评估 |
-|------|------|
-| 方法调用延迟 | ~0ns（内联） |
-| 二进制体积 | 巨大（泛型代码逐 provider 拷贝） |
-| 编译时间 | 非常慢 |
-
-**结论**：不实用，provider 数量增长会导致二进制爆炸
-
-### 方案五：SNAFU 堆栈错误（GreptimeDB 模式）
-
-```rust
-#[derive(Debug, Snafu)]
-pub enum ProviderError {
-    #[snafu(display("Auth failed: {source}"))]
-    Authentication { source: Box<dyn Error>, backtrace: Backtrace },
-}
-```
-
-| 指标 | 评估 |
-|------|------|
-| 错误上下文 | 丰富（堆栈、回溯） |
-| 性能开销 | 堆分配 + 回溯收集 |
-| 适用场景 | 复杂系统调试 |
-
-**结论**：可选增强，但当前 `ProviderError` 已足够
-
----
-
-## 性能对比总结
-
-| 方案 | 调用延迟 | 二进制体积 | 编译时间 | 扩展性 | 推荐度 |
-|------|----------|------------|----------|--------|--------|
-| Enum Dispatch | ~480ns | 大 | 慢 | 无 | ⭐⭐ |
-| **Trait Object** | ~5,900ns | **小** | **快** | **有** | ⭐⭐⭐⭐⭐ |
-| 混合模式 | ~1,500ns | 中 | 中 | 有 | ⭐⭐⭐⭐ |
-| 完全单态化 | ~0ns | 巨大 | 极慢 | 编译时 | ⭐ |
-| SNAFU | ~5,900ns | 小 | 快 | 有 | ⭐⭐⭐⭐ |
-
-### 为什么 5μs 差异不重要
-
-```
-典型 LLM API 请求延迟分解：
-├── 网络往返：         50-200ms
-├── Provider API 处理： 500-5000ms
-├── 序列化/反序列化：   0.1-1ms
-├── 路由决策：          0.01-0.1ms
-└── 派发开销：          0.005ms (5μs)  ← 占比 0.001%-0.01%
-```
+`LLMProvider` 使用原生 `async fn` 且没有关联错误类型；所有可失败的方法直接
+返回 `ProviderError`。当前 trait 不是路由层的动态插件边界。真实的 trait object
+仅出现在局部边界，例如 `Box<dyn ErrorMapper<ProviderError>>` 和 boxed streaming
+`Stream`。仓库没有可支持具体纳秒、二进制大小或编译耗时对比的基准，因此本文
+不提供这些数字。
 
 ---
 
