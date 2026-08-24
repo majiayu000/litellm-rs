@@ -337,8 +337,9 @@ Tier 2 provider 接入闭合枚举（无法运行时注册，需以下 crate 内
 1. 在 `src/core/providers/mod.rs` 声明模块并给 `Provider` 增加带相同 feature gate 的变体。
 2. 把该变体加入 `dispatch_provider!` 的 `sync`、`async_err`、`value`、`async_direct` 四个 `@expand` 臂，并补齐 `Provider::name()` 和 `provider_type()` 分支。
 3. 在 `provider_type.rs` 增加 `ProviderType` 变体，并加入 `all_non_custom_provider_types()`；字符串转换由 registry 元数据派生，不要另写一套别名表。
-4. 在 `registry/types.rs` 的 `PROVIDER_TYPE_REGISTRY` 增加 canonical name、aliases、feature gate 和正确的 `ProviderDispatchKind`（代码型实现通常为 `Native`）。
-5. 在 `factory/builder.rs` 增加配置构造器，在 `factory/registry.rs` 增加工厂 match 分支，并保持相同 feature gate。
+4. 在 `registry/types.rs` 的 `PROVIDER_TYPE_REGISTRY` 增加 canonical name、aliases、`catalog_backed` 和正确的 `ProviderDispatchKind`。
+   feature-gated 原生实现应复用或新增 cfg-sensitive dispatch-kind helper，分别表达启用与禁用时的模式；registry entry 本身没有 feature 字段。
+5. 在 `factory/builder.rs` 增加配置构造器，在 `factory/registry.rs` 增加工厂 match 分支；module、`Provider`、dispatch 与 factory wiring 使用同步的 cfg gate。
 6. 更新 provider-type/registry lifecycle、factory support 与 feature-on/off 测试，确认别名解析、支持状态和构造路径一致。
 
 ---

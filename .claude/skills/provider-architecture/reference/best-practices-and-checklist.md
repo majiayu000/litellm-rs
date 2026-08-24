@@ -118,7 +118,8 @@ async fn transform_request(
 - [ ] Variant added to all four `dispatch_provider!` `@expand` arms: `sync`, `async_err`, `value`, and `async_direct`
 - [ ] `Provider::name()` and `Provider::provider_type()` match arms added
 - [ ] `ProviderType` variant added to `provider_type.rs` and `all_non_custom_provider_types()`
-- [ ] `PROVIDER_TYPE_REGISTRY` entry includes canonical name, aliases, feature, and correct `ProviderDispatchKind`
+- [ ] `PROVIDER_TYPE_REGISTRY` entry includes canonical name, aliases, `catalog_backed`, and correct `ProviderDispatchKind`
+- [ ] Feature-gated native implementations use or add the appropriate cfg-sensitive dispatch-kind helper for enabled/disabled modes; registry entries remain present and have no feature field
 - [ ] Config builder in `factory/builder.rs` and factory match arm in `factory/registry.rs`
-- [ ] Matching feature gates cover module, enum, dispatch, registry, and factory wiring
+- [ ] Matching cfg gates synchronize module, `Provider` enum, dispatch, and factory wiring (not the registry entry)
 - [ ] Provider-type/registry lifecycle, factory support, and feature-on/off tests updated

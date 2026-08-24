@@ -305,10 +305,14 @@ Adding a Tier 2 provider means crate-level wiring, in this order of authority:
    `provider_type()`.
 3. Add a `ProviderType` variant and `all_non_custom_provider_types()` entry in
    `provider_type.rs`.
-4. Add canonical name, aliases, feature and correct `ProviderDispatchKind` to
-   `PROVIDER_TYPE_REGISTRY` in `registry/types.rs`.
+4. Add canonical name, aliases, `catalog_backed` and the correct
+   `ProviderDispatchKind` to `PROVIDER_TYPE_REGISTRY` in `registry/types.rs`.
+   For a feature-gated native implementation, use or add a cfg-sensitive
+   dispatch-kind helper that reports the correct enabled and disabled modes;
+   registry entries themselves do not have a feature field.
 5. Add the config builder in `factory/builder.rs` and match branch in
-   `factory/registry.rs`, with matching feature gates.
+   `factory/registry.rs`, with matching feature gates. Keep cfg gates synchronized
+   across module, `Provider`, dispatch and factory wiring.
 6. Update provider-type/registry lifecycle, factory support and feature-on/off
    tests so aliases, support state and construction stay in sync.
 
