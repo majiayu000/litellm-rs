@@ -5,6 +5,13 @@ use super::unified::{Router, RoutingSnapshot};
 use std::sync::Arc;
 
 impl RoutingSnapshot {
+    pub(super) fn retained_provider_name(&self, id: &str, fallback: &str) -> String {
+        self.provider_names
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
     pub(super) fn restore_provider_names(
         &mut self,
         previous: std::collections::HashMap<String, String>,

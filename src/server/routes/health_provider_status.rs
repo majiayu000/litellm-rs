@@ -120,10 +120,19 @@ mod tests {
             .await
             .expect("gateway provider should construct");
 
-        let (status, _) = derive_status_for_provider(&router, "primary", true);
+        let (status, error) = derive_status_for_provider(&router, "primary", true);
         assert_eq!(status, "unknown");
-        let (canonical_status, _) = derive_status_for_provider(&router, "anthropic", true);
+        assert_eq!(
+            error.as_deref(),
+            Some("upstream health has not been established yet")
+        );
+        let (canonical_status, canonical_error) =
+            derive_status_for_provider(&router, "anthropic", true);
         assert_eq!(canonical_status, "unknown");
+        assert_eq!(
+            canonical_error.as_deref(),
+            Some("no deployments registered for this provider")
+        );
 
         router.record_success("primary-readiness-model", 1, 10);
         let (status, _) = derive_status_for_provider(&router, "primary", true);
@@ -145,10 +154,19 @@ mod tests {
             .load(std::sync::atomic::Ordering::Relaxed);
         let replacement = old_deployment.as_ref().clone();
         router.set_model_list(vec![replacement]);
-        let (status, _) = derive_status_for_provider(&router, "primary", true);
+        let (status, error) = derive_status_for_provider(&router, "primary", true);
         assert_eq!(status, "unknown");
-        let (canonical_status, _) = derive_status_for_provider(&router, "anthropic", true);
+        assert_eq!(
+            error.as_deref(),
+            Some("upstream health has not been established yet")
+        );
+        let (canonical_status, canonical_error) =
+            derive_status_for_provider(&router, "anthropic", true);
         assert_eq!(canonical_status, "unknown");
+        assert_eq!(
+            canonical_error.as_deref(),
+            Some("no deployments registered for this provider")
+        );
 
         let replacement = router
             .get_deployment("primary-readiness-model")
@@ -170,6 +188,57 @@ mod tests {
             replacement.state.probe_health_status(),
             HealthStatus::Unknown
         );
+        let (status, _) = derive_status_for_provider(&router, "primary", true);
+        assert_eq!(status, "unknown");
+    }
+
+    #[tokio::test]
+    async fn add_deployment_preserves_name_but_invalidates_probe_evidence() {
+        let mut provider = provider_config("primary");
+        provider.provider_type = "anthropic".to_string();
+        provider.api_key = "sk-ant-test1234567890123".to_string();
+        let router = UnifiedRouter::from_gateway_config(&[provider], None)
+            .await
+            .expect("gateway provider should construct");
+        let old_deployment = router
+            .get_deployment("primary-readiness-model")
+            .expect("configured-name deployment");
+        old_deployment
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
+        let (status, _) = derive_status_for_provider(&router, "primary", true);
+        assert_eq!(status, "healthy");
+
+        router.add_deployment(old_deployment.as_ref().clone());
+        let replacement = router
+            .get_deployment("primary-readiness-model")
+            .expect("replacement deployment");
+        let (status, error) = derive_status_for_provider(&router, "primary", true);
+        assert_eq!(status, "unknown");
+        assert_eq!(
+            error.as_deref(),
+            Some("upstream health has not been established yet")
+        );
+        let (canonical_status, canonical_error) =
+            derive_status_for_provider(&router, "anthropic", true);
+        assert_eq!(canonical_status, "unknown");
+        assert_eq!(
+            canonical_error.as_deref(),
+            Some("no deployments registered for this provider")
+        );
+
+        old_deployment
+            .state
+            .set_probe_health_status(HealthStatus::Unknown);
+        old_deployment
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
+        assert_eq!(
+            replacement.state.probe_health_status(),
+            HealthStatus::Unknown
+        );
+        let (status, _) = derive_status_for_provider(&router, "primary", true);
+        assert_eq!(status, "unknown");
     }
 
     #[tokio::test]
