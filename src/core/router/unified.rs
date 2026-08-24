@@ -64,6 +64,7 @@ pub struct RoutingSnapshot {
     pub(crate) model_index: HashMap<String, Vec<DeploymentId>>,
     pub(crate) model_order: Vec<String>,
     pub(crate) model_aliases: HashMap<String, String>,
+    pub(super) provider_names: HashMap<DeploymentId, String>,
     legacy_selector_metadata: HashMap<DeploymentId, LegacySelectorMetadata>,
 }
 
@@ -75,6 +76,7 @@ impl RoutingSnapshot {
             model_index: HashMap::new(),
             model_order: Vec::new(),
             model_aliases: HashMap::new(),
+            provider_names: HashMap::new(),
             legacy_selector_metadata: HashMap::new(),
         }
     }
@@ -100,6 +102,7 @@ impl RoutingSnapshot {
             model_index: HashMap::new(),
             model_order: Vec::new(),
             model_aliases: previous.model_aliases.clone(),
+            provider_names: HashMap::new(),
             // A bulk replacement carries no fresh credential provenance. Runtime
             // state may follow a stable deployment ID, but selector metadata may
             // not: retaining it would accept an old credential after rotation.
@@ -126,6 +129,7 @@ impl RoutingSnapshot {
     pub(super) fn insert_deployment(&mut self, mut deployment: Deployment) {
         let model_name = deployment.model_name.clone();
         let deployment_id = deployment.id.clone();
+        let provider_name = deployment.provider.name().to_string();
         if let Some(old) = self.deployments.get(&deployment_id) {
             deployment.state = old.state.clone();
         }
@@ -137,6 +141,8 @@ impl RoutingSnapshot {
         {
             self.remove_from_model_index(&old.model_name, &deployment_id);
         }
+        self.provider_names
+            .insert(deployment_id.clone(), provider_name);
 
         if !self.model_index.contains_key(&model_name) {
             self.model_order.push(model_name.clone());
@@ -161,6 +167,7 @@ impl RoutingSnapshot {
 
     fn remove_deployment(&mut self, id: &str) -> Option<Deployment> {
         let removed = self.deployments.remove(id);
+        self.provider_names.remove(id);
         self.legacy_selector_metadata.remove(id);
 
         if let Some(ref deployment) = removed {

@@ -220,6 +220,10 @@ fn apply_probe_result(
 fn update_probe_health(deployment: &Deployment, target: HealthStatus) {
     deployment
         .state
+        .probe_health
+        .store(target as u8, Ordering::Release);
+    deployment
+        .state
         .probe_unhealthy
         .store(target == HealthStatus::Unhealthy, Ordering::Relaxed);
     if deployment.is_in_cooldown() {
@@ -627,11 +631,19 @@ mod tests {
         assert_eq!(deployment.state.health_status(), HealthStatus::Degraded);
         assert_eq!(second.state.health_status(), HealthStatus::Degraded);
         assert_eq!(
+            deployment.state.probe_health_status(),
+            HealthStatus::Degraded
+        );
+        assert_eq!(
             apply_probe_result(&group, false, &mut failures),
             Duration::from_secs(60)
         );
         assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
         assert_eq!(second.state.health_status(), HealthStatus::Unhealthy);
+        assert_eq!(
+            deployment.state.probe_health_status(),
+            HealthStatus::Unhealthy
+        );
 
         deployment.record_failure();
         assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
@@ -642,6 +654,11 @@ mod tests {
         assert_eq!(failures, 0);
         assert_eq!(deployment.state.health_status(), HealthStatus::Healthy);
         assert_eq!(second.state.health_status(), HealthStatus::Healthy);
+        assert_eq!(
+            deployment.state.probe_health_status(),
+            HealthStatus::Healthy
+        );
+        assert_eq!(second.state.probe_health_status(), HealthStatus::Healthy);
 
         deployment.enter_cooldown(60);
         apply_probe_result(&group, false, &mut failures);

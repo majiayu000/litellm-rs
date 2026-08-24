@@ -26,9 +26,9 @@
 //!
 //! | Value            | Meaning                                                 |
 //! |------------------|---------------------------------------------------------|
-//! | `healthy`        | Live probe succeeded.                                   |
-//! | `unhealthy`      | Live probe failed.                                      |
-//! | `unknown`        | Enabled, but the router has no deployments registered for it. |
+//! | `healthy`        | The latest live probe succeeded.                         |
+//! | `unhealthy`      | The latest live probe failed.                            |
+//! | `unknown`        | No deployment or no successful probe evidence yet.      |
 //! | `disabled`       | `enabled = false` in config; excluded from readiness.   |
 //!
 //! When zero providers are configured the aggregate reports `not_configured`
@@ -485,10 +485,10 @@ fn aggregate_readiness(
 
 /// Check provider health.
 ///
-/// Per-provider live probes are not yet wired (see issue #555). Enabled
-/// providers therefore report `unknown` until a real probe is implemented;
-/// `unknown` is treated as not-ready by [`aggregate_readiness`] so an
-/// unprobed deployment cannot present a green readiness signal.
+/// Enabled providers report `unknown` until a configured active probe succeeds.
+/// `unknown` is treated as not-ready by
+/// [`aggregate_readiness`] so an unverified deployment cannot present a green
+/// readiness signal.
 async fn check_provider_health(
     state: &AppState,
 ) -> Result<ProviderHealthStatus, crate::utils::error::gateway_error::GatewayError> {

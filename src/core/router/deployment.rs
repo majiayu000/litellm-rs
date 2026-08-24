@@ -211,6 +211,9 @@ pub struct DeploymentStateInner {
     /// Health status (0=unknown, 1=healthy, 2=degraded, 3=unhealthy, 4=cooldown)
     pub health: AtomicU8,
 
+    /// Last active-probe status, separate from optimistic request-routing health.
+    pub probe_health: AtomicU8,
+
     /// Whether the active probe remains unhealthy while request cooldown owns `health`.
     pub probe_unhealthy: AtomicBool,
 
@@ -258,6 +261,7 @@ impl DeploymentState {
         Self {
             inner: Arc::new(DeploymentStateInner {
                 health: AtomicU8::new(HealthStatus::Healthy as u8),
+                probe_health: AtomicU8::new(HealthStatus::Unknown as u8),
                 probe_unhealthy: AtomicBool::new(false),
                 tpm_current: AtomicU64::new(0),
                 rpm_current: AtomicU64::new(0),
@@ -289,6 +293,11 @@ impl DeploymentState {
     /// Get current health status
     pub fn health_status(&self) -> HealthStatus {
         self.health.load(Ordering::Relaxed).into()
+    }
+
+    /// Get the last result published by the active readiness probe.
+    pub fn probe_health_status(&self) -> HealthStatus {
+        self.probe_health.load(Ordering::Acquire).into()
     }
 }
 

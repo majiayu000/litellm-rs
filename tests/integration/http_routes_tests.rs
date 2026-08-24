@@ -255,6 +255,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_readiness_accessible_even_with_auth_enabled() {
+        let state = build_auth_enabled_state().await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::get().uri("/health/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["data"]["ready"], false);
+    }
+
+    #[tokio::test]
+    async fn test_detailed_health_requires_auth() {
+        let state = build_auth_enabled_state().await;
+        let app = test::init_service(build_test_app(state)).await;
+        let req = test::TestRequest::get()
+            .uri("/health/detailed")
+            .to_request();
+
+        match test::try_call_service(&app, req).await {
+            Err(err) => {
+                assert_eq!(
+                    err.as_response_error().status_code(),
+                    StatusCode::UNAUTHORIZED,
+                );
+            }
+            Ok(resp) => assert_eq!(resp.status(), StatusCode::UNAUTHORIZED),
+        }
+    }
+
+    #[tokio::test]
     async fn test_readiness_reports_storage_failure_from_storage_layer() {
         let tempdir = match tempfile::tempdir() {
             Ok(tempdir) => tempdir,

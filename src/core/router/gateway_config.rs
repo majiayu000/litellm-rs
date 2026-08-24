@@ -282,6 +282,7 @@ impl Router {
                         tags.clone(),
                     ),
                     legacy_metadata.clone(),
+                    provider_name.clone(),
                 ));
             }
         }
@@ -297,13 +298,12 @@ impl Router {
         let mut aliases = normalized_aliases.iter().collect::<Vec<_>>();
         aliases.sort_unstable_by_key(|(alias, _)| *alias);
         router.try_update_routing_snapshot(move |snapshot| {
-            for (deployment, legacy_metadata) in staged {
-                match legacy_metadata {
-                    Some(metadata) => {
-                        snapshot.insert_deployment_with_legacy_metadata(deployment, metadata);
-                    }
-                    None => snapshot.insert_deployment(deployment),
-                }
+            for (deployment, legacy_metadata, provider_name) in staged {
+                snapshot.insert_gateway_deployment(
+                    deployment,
+                    legacy_metadata,
+                    provider_name.as_str(),
+                );
             }
             for (alias, target) in aliases {
                 snapshot.add_model_alias(alias, target)?;

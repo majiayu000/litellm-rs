@@ -85,14 +85,9 @@ fn get_header_value(headers: &HeaderMap, header_name: &str) -> Option<String> {
 
 /// Check if a route is public (doesn't require authentication)
 pub fn is_public_route(path: &str) -> bool {
-    // Health endpoints are probed by load balancers and Kubernetes without
-    // credentials; everything under /health is public.
-    if path == "/health" || path.starts_with("/health/") {
-        return true;
-    }
-
     const PUBLIC_ROUTES: &[&str] = &[
         "/health",
+        "/health/ready",
         "/auth/login",
         "/auth/login/callback",
         "/auth/register",
@@ -176,5 +171,13 @@ mod tests {
         assert!(!is_admin_route("/health"));
         assert!(!is_admin_route("/v1/chat/completions"));
         assert!(!is_admin_route("/auth/login"));
+    }
+
+    #[test]
+    fn readiness_probe_is_public_but_diagnostics_are_not() {
+        assert!(is_public_route("/health"));
+        assert!(is_public_route("/health/ready"));
+        assert!(!is_public_route("/health/detailed"));
+        assert!(!is_public_route("/health/private"));
     }
 }
