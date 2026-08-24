@@ -2,13 +2,6 @@
 
 - 迁移现有 Provider
 - 检查清单
-- 配置
-- Provider 实现
-- 模型信息
-- 质量
-- 注册
-- 错误迁移
-- 测试
 
 ## 迁移现有 Provider
 
@@ -121,4 +114,3 @@ Err(ProviderError::network("fireworks", e.to_string()))
 ```
 
 ---
-

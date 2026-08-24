@@ -50,4 +50,3 @@ pub fn create_router(config: &RoutingConfig, providers: Vec<Arc<dyn LLMProvider>
 ```
 
 ---
-

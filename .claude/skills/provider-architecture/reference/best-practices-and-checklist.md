@@ -2,11 +2,6 @@
 
 - Best Practices
 - Checklist for New Providers
-- Configuration
-- Provider Implementation
-- Model Information
-- Quality
-- Registration
 
 ## Best Practices
 
@@ -110,4 +105,3 @@ async fn transform_request(
 ```
 
 ---
-
