@@ -138,7 +138,8 @@ pub fn infer_cooldown_reason(error: &ProviderError) -> CooldownReason {
         ProviderError::Timeout { .. } => CooldownReason::Timeout,
 
         // API errors - map based on status code. Upstream 403 is a permission
-        // failure on that deployment, so cool it down like an auth error.
+        // failure on that deployment, so preserve the immediate cooldown that
+        // Authentication-backed 403 mappings used before status normalization.
         ProviderError::ApiError { status, .. } => match *status {
             401 | 403 => CooldownReason::AuthError,
             404 => CooldownReason::NotFound,

@@ -546,9 +546,8 @@ fn image_proxy_gateway_error_to_provider_error(error: GatewayError) -> ProviderE
             ProviderError::invalid_request("image_proxy", message)
         }
         GatewayError::Config(message) => ProviderError::configuration("image_proxy", message),
-        GatewayError::Auth(message) | GatewayError::Forbidden(message) => {
-            ProviderError::authentication("image_proxy", message)
-        }
+        GatewayError::Auth(message) => ProviderError::authentication("image_proxy", message),
+        GatewayError::Forbidden(message) => ProviderError::api_error("image_proxy", 403, message),
         GatewayError::Timeout(message) => ProviderError::timeout("image_proxy", message),
         GatewayError::RateLimit {
             message,
@@ -573,7 +572,8 @@ async fn image_proxy_upstream_error(response: reqwest::Response) -> ProviderErro
 
     match status {
         400 => ProviderError::invalid_request("image_proxy", message),
-        401 | 403 => ProviderError::authentication("image_proxy", message),
+        401 => ProviderError::authentication("image_proxy", message),
+        403 => ProviderError::api_error("image_proxy", status, message),
         402 => ProviderError::quota_exceeded("image_proxy", message),
         404 => ProviderError::model_not_found("image_proxy", message),
         408 | 504 => ProviderError::timeout("image_proxy", message),

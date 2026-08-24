@@ -20,9 +20,12 @@ impl AnthropicErrorMapper {
             401 => ProviderError::authentication("anthropic", "Invalid or missing API key"),
             // Upstream 403 is a permission failure; keep the status so clients
             // see 403 permission_error instead of 401.
-            403 => {
-                ProviderError::api_error("anthropic", status, "Forbidden: insufficient permissions")
-            }
+            403 => ProviderError::api_error(
+                "anthropic",
+                status,
+                crate::core::providers::unified_provider::parse_error_message_from_body(body)
+                    .unwrap_or_else(|| body.to_string()),
+            ),
             404 => ProviderError::model_not_found("anthropic", "Model or endpoint not found"),
             429 => {
                 let retry_after = parse_retry_after_from_body(body);

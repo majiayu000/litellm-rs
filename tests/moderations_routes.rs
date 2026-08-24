@@ -30,6 +30,7 @@ mod tests {
     #[derive(Clone)]
     struct MockModerationState {
         captured_requests: Arc<Mutex<Vec<CapturedModerationRequest>>>,
+        status: StatusCode,
     }
 
     struct MockModerationServer {
@@ -41,9 +42,14 @@ mod tests {
 
     impl MockModerationServer {
         async fn start_moderation_mock() -> Self {
+            Self::start_moderation_mock_with_status(StatusCode::OK).await
+        }
+
+        async fn start_moderation_mock_with_status(status: StatusCode) -> Self {
             let captured_requests = Arc::new(Mutex::new(Vec::new()));
             let state = MockModerationState {
                 captured_requests: Arc::clone(&captured_requests),
+                status,
             };
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
@@ -99,6 +105,15 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
+        if state.status != StatusCode::OK {
+            return HttpResponse::build(state.status).json(json!({
+                "error": {
+                    "message": "moderation access denied",
+                    "type": "permission_error",
+                    "code": "permission_denied"
+                }
+            }));
+        }
         HttpResponse::Ok().json(json!({
             "id": "modr_mock",
             "model": "omni-moderation-latest",

@@ -53,9 +53,7 @@ impl ErrorMapper<VertexAIError> for VertexAIErrorMapper {
                     ProviderError::authentication("vertex_ai", "Authentication failed")
                 }
                 // Vertex permission failures keep HTTP 403.
-                "PERMISSION_DENIED" => {
-                    ProviderError::api_error("vertex_ai", 403, "Permission denied")
-                }
+                "PERMISSION_DENIED" => ProviderError::api_error("vertex_ai", 403, error_message),
                 "NOT_FOUND" => ProviderError::model_not_found("vertex_ai", error_message),
                 "RESOURCE_EXHAUSTED" => ProviderError::rate_limit("vertex_ai", None),
                 "INTERNAL" | "UNAVAILABLE" => ProviderError::network("vertex_ai", error_message),

@@ -304,8 +304,6 @@ async fn test_infer_cooldown_reason_api_error_401() {
 
 #[tokio::test]
 async fn test_infer_cooldown_reason_upstream_403_is_auth_error_for_all_providers() {
-    // Upstream 403 is a permission failure on that deployment regardless of
-    // provider, so it cools down like an auth error (previously only Bedrock).
     let bedrock = ProviderError::api_error("bedrock", 403, "Access denied");
     let other = ProviderError::api_error("custom_httpx", 403, "Forbidden");
 
