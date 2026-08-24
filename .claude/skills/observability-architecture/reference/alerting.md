@@ -48,12 +48,12 @@ groups:
       # Redis distributed rate limiter degraded operations
       - alert: RateLimiterDegraded
         expr: |
-          sum(rate(rate_limiter_degraded_total[5m])) > 0
+          sum by (operation, mode) (rate(rate_limiter_degraded_total[5m])) > 0
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Rate limiter falling back on Redis errors ({{ $labels.operation }}/{{ $labels.mode }})"
+          summary: "Redis rate limiter degraded ({{ $labels.operation }}/{{ $labels.mode }})"
 
       # Unpriced-model fallback spend accumulating in USD
       - alert: UnpricedSpendGrowing
@@ -82,7 +82,9 @@ What cannot be expressed today — do not write rules against these:
   `gateway_http_request_duration_ms_sum`/`_count`), so `histogram_quantile()` has no input.
 - **Provider health gauges**: no per-provider metric exists. Probe readiness out-of-band by
   alerting on `GET /health/ready` returning 503 (blackbox exporter), which fails when storage
-  is down, providers are unhealthy/unknown, or audit logging is unavailable.
+  is down, providers are unhealthy/unknown, or audit logging is unavailable. When auth is
+  enabled, give the probe valid credentials; otherwise it receives 401 before readiness is
+  evaluated.
 - **Token/cost/cache/provider-request counters**: none are exported; that telemetry flows
   through callback integrations instead.
 - Any `litellm_*` series: those names appear only in deprecated library-only code paths and

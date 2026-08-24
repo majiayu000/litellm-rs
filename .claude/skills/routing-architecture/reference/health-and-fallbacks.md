@@ -87,16 +87,17 @@ fallback_config.validate()?; // DFS over all four maps, Err(Vec<String>) lists c
   `RateLimit`.
 - `infer_fallback_type` (`execution.rs:105-119`): `ContextLengthExceeded` ->
   ContextWindow, `ContentFiltered` -> ContentPolicy, `RateLimit` -> RateLimit, everything
-  else -> General.
+  else -> General. This helper is available to callers but is not invoked by the built-in
+  execution method below.
 - `Router::get_fallbacks` (`unified.rs:702-716`) resolves aliases first, reads the
   type-specific list, and falls back to the `General` list when that is empty.
 
 ### Execution Flow
 
 `Router::execute_with_selected_deployment` (`src/core/router/execute_impl.rs:339-428`)
-implements the full chain:
+implements the automatic **General-fallback** chain:
 
-1. Build `models_to_try` = resolved model + its fallbacks
+1. Build `models_to_try` = resolved model + its `FallbackType::General` fallbacks
    (`get_models_with_fallbacks_for_snapshot`), deduplicated to prevent cycles, capped at
    `1 + max_fallbacks` entries — with the default `max_fallbacks = 5`, the original model
    plus up to 5 fallback models.
@@ -110,3 +111,9 @@ implements the full chain:
 4. Success returns `ExecutionResult<T>` (`fallback.rs:43-56`) with `result`,
    `deployment_id`, `attempts` (total across retries+fallbacks), `model_used`,
    `used_fallback`, and `latency_us`.
+
+The method builds this list before the first attempt and never calls
+`infer_fallback_type`. Configuring only `context_window`, `content_policy`, or
+`rate_limit` maps therefore does not make automatic execution select them; a caller must
+perform the typed lookup (`get_fallbacks` / `get_models_with_fallbacks`) and wire that
+result into its own execution flow.

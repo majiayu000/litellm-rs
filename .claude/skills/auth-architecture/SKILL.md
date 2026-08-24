@@ -145,6 +145,12 @@ impl JwtHandler {
 }
 ```
 
+For both public creation methods, `team_id` must currently be `None`; passing `Some(...)`
+returns `BadRequest("Active team selection requires verified membership")`.
+Team-scoped access tokens and token pairs are created only through the crate-private
+`create_access_token_for_verified_team` / `create_token_pair_for_verified_team` paths
+after active membership has been verified.
+
 `verify_access_token` enforces `aud == "api"` and rejects unknown team-scope
 versions; `verify_refresh_token` enforces `aud == "refresh"` plus
 `token_type == Refresh`. JWT decode failures map to

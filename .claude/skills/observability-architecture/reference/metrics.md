@@ -73,7 +73,9 @@ App::new()
 ## Rendering the /metrics Endpoint
 
 `GET /metrics` is mounted by `routes::health::configure_routes` on the main HTTP server and
-returns `text/plain; version=0.0.4; charset=utf-8`. The body concatenates three renderers:
+returns `text/plain; version=0.0.4; charset=utf-8` when the handler is reached. It is not a
+public route when auth is enabled, so an unauthenticated scrape receives 401 before this
+handler. The body concatenates three renderers:
 
 ```rust
 // src/server/routes/health.rs

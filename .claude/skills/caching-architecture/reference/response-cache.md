@@ -27,7 +27,7 @@ pub struct DualCache<T> {                 // src/core/cache/dual.rs:30
 }
 ```
 
-`LLMCache` owns key generation (`generate_chat_key`, `generate_embedding_key`, with `_with_user` variants when `config.user_specific` is set) and response wrappers (`CachedChatResponse`, `CachedEmbeddingResponse` — an `Arc<ChatCompletionResponse>`/`Arc<EmbeddingResponse>` plus model, `cached` flag, and `cached_at`). Main methods:
+`LLMCache` owns key generation and response wrappers (`CachedChatResponse`, `CachedEmbeddingResponse` — an `Arc<ChatCompletionResponse>`/`Arc<EmbeddingResponse>` plus model, `cached` flag, and `cached_at`). Chat methods select `generate_chat_key_with_user` when `config.user_specific` is set. Wired embedding methods always call `generate_embedding_key`; they do not use the `_with_user` variant. Main methods:
 
 - `get_chat_response_with_user(request, user_id)` — returns `Option<Arc<ChatCompletionResponse>>`; skips streaming requests.
 - `cache_chat_response_with_user(request, response, user_id)` — stores under the chat TTL.
@@ -44,7 +44,10 @@ The generic `LLMCache::get::<T>` / `set::<T>` methods are placeholders that do n
 - Requires `gateway.cache.enabled == true` and `ttl > 0`; otherwise no cache is built (ttl 0 logs an error first).
 - With a live Redis pool: `DualCacheConfig::default()` → mode `Dual`. Without one: `DualCacheConfig::memory_only()`.
 - `max_size` and TTL come from `cache.max_size` / `cache.ttl`; both chat and embedding TTLs are set to the same value.
-- `user_specific` is hard-coded `true`; `semantic_cache_enabled` is hard-coded `false`.
+- `user_specific` is hard-coded `true` for chat key selection;
+  `semantic_cache_enabled` is hard-coded `false`. Embedding lookup/store still pass no
+  separate user ID, and `generate_embedding_key` ignores `EmbeddingRequest.user`, so
+  identical model/input requests share an embedding entry across callers.
 - `cache.start_cleanup_tasks()` spawns background expiry sweeps for both layers.
 
 ## Read Path

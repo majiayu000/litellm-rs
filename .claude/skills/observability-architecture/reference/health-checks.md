@@ -28,7 +28,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 }
 ```
 
-| Route | Purpose | Status codes |
+| Route | Purpose | Handler status codes |
 |---|---|---|
 | `GET /health` | Liveness. Always 200 while the process serves HTTP; probes nothing (`status: "alive"`). | 200 |
 | `GET /health/ready` | Readiness for traffic gating. Applies the aggregate rule below plus audit-log availability. | 200 or 503 |
@@ -37,7 +37,14 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 | `GET /version` | Version, build time, git hash, rustc version, enabled features. | 200 |
 | `GET /metrics` | Prometheus text format (see [metrics.md](metrics.md)). | 200 |
 
-JSON bodies are wrapped in the common envelope `ApiResponse<T>`:
+Those are handler status codes. When authentication is enabled,
+`AuthMiddleware` exempts only the exact `/health` path. `/health/ready`,
+`/health/detailed`, `/status`, `/version`, and `/metrics` require credentials and may
+return 401 before their handlers run; configure readiness probes and scrapers with valid
+credentials. `/health` remains public.
+
+JSON health/status/version bodies (not the Prometheus `/metrics` response) are wrapped in
+the common envelope `ApiResponse<T>`:
 `{ "success": bool, "data": T?, "error": string?, "meta": any? }`
 (`src/server/routes/mod.rs`).
 

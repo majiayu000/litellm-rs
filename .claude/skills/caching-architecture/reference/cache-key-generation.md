@@ -21,7 +21,7 @@ pub fn generate_key_from_content(prefix: &str, content: &str) -> CacheKey;
 pub fn generate_key_from_parts(prefix: &str, parts: &[&str]) -> CacheKey;
 ```
 
-The chat key hashes a JSON payload containing every response-affecting request field: `model`, `messages`, `temperature`, `max_tokens`, `max_completion_tokens`, `top_p`, `n`, `stop`, penalties, `logit_bias`, `functions`/`function_call`, `tools`/`tool_choice`, `parallel_tool_calls`, `response_format`, `seed`, logprobs, `modalities`, `audio`, `reasoning_effort`, `service_tier`, `prediction`, `safety_settings`, `cache_control`, `extra_body`, and `user_id` (key_generator.rs:33). The embedding key hashes `model` + `input` + optional `user_id`.
+The chat key hashes a JSON payload containing every response-affecting request field: `model`, `messages`, `temperature`, `max_tokens`, `max_completion_tokens`, `top_p`, `n`, `stop`, penalties, `logit_bias`, `functions`/`function_call`, `tools`/`tool_choice`, `parallel_tool_calls`, `response_format`, `seed`, logprobs, `modalities`, `audio`, `reasoning_effort`, `service_tier`, `prediction`, `safety_settings`, `cache_control`, `extra_body`, and `user_id` (key_generator.rs:33). The embedding key hashes `model` + `input` + the separate optional `user_id` argument; it does not hash `EmbeddingRequest.user`. The wired `LLMCache` embedding methods call `generate_embedding_key`, so that argument is currently `None`.
 
 Prefix constants (key_generator.rs:14): `CHAT_KEY_PREFIX = "chat"`, `EMBEDDING_KEY_PREFIX = "embed"`, `COMPLETION_KEY_PREFIX = "completion"`.
 
@@ -32,7 +32,7 @@ Prefix constants (key_generator.rs:14): `CHAT_KEY_PREFIX = "chat"`, `EMBEDDING_K
 ```
 {prefix}:{namespace}:{CACHE_KEY_SCHEMA_VERSION}:{sha256-hex}
 chat:gpt-4:v4:9f2c...        # namespace = model when present
-embed:v4:ab13...             # generic helpers omit the model namespace
+embed:text-embedding-ada-002:v4:ab13...  # embedding namespace = model
 ```
 
 `CACHE_KEY_SCHEMA_VERSION` is `"v4"` (key_policy.rs:11). Bumping it cold-starts all existing entries so responses cached under an older key policy are never reused.

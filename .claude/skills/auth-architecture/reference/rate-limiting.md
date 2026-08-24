@@ -16,7 +16,10 @@ pub struct RateLimiter {
 
 Three strategies (`RateLimitStrategy`, `src/config/models/rate_limit.rs`),
 selected by `rate_limit.strategy`: `token_bucket` (default), `fixed_window`,
-`sliding_window`. The atomic `check_and_record(key)` is the preferred entry
+`sliding_window`. This setting selects the process-local algorithm, including a
+`fail_open_local` fallback. With a live Redis backend, `check()` and
+`check_and_record()` use Redis's distributed fixed-window operations regardless of this
+setting. The atomic `check_and_record(key)` is the preferred entry
 point; separate `check()` + `record()` has a documented TOCTOU race and
 `record()` is deprecated. Results are `RateLimitResult { allowed,
 current_count, limit, remaining, reset_after_secs, retry_after_secs }`.
@@ -24,7 +27,9 @@ current_count, limit, remaining, reset_after_secs, retry_after_secs }`.
 ### Distributed backend
 
 `RateLimiter::with_redis(config, redis_pool)` adds Redis-backed enforcement for
-multi-instance deployments. On Redis failure the limiter records a degraded-
+multi-instance deployments. The live backend calls `RedisPool::rate_limit_status` /
+`rate_limit_check_and_record`, both distributed fixed-window operations. On Redis
+failure the limiter records a degraded-
 operation metric and applies `redis_failure_mode`:
 
 - `fail_closed` (default) — reject while Redis is unavailable.
@@ -44,7 +49,7 @@ Top-level `rate_limit:` section (not under `auth:`):
 ```yaml
 rate_limit:
   enabled: true
-  strategy: token_bucket        # alias: algorithm
+  strategy: token_bucket        # alias: algorithm; local/fail_open_local path only
   default_rpm: 1000             # gateway-level RPM
   requests_per_minute: null     # LiteLLM alias; overrides default_rpm when set
   default_tpm: 100000           # parsed but NOT enforced yet

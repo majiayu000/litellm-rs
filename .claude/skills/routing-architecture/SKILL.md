@@ -24,8 +24,9 @@ calling free functions in `src/core/router/strategy_impl.rs`.
   `DashMap<String, AtomicUsize>` of per-model counters (`unified.rs:321`).
 - **Health-aware**: candidates are filtered by cooldown, health status, parallel limits,
   and RPM/TPM limits before a strategy picks among them.
-- **Fallback chains**: model-keyed fallback lists (`FallbackConfig`) are tried after
-  retries on the original model are exhausted.
+- **Fallback chains**: the built-in execution path tries the model-keyed `General`
+  fallback list after retries are exhausted. Typed context-window, content-policy, and
+  rate-limit lists require explicit caller lookup/wiring today.
 
 ---
 

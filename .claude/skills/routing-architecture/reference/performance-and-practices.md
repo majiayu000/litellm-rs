@@ -54,10 +54,12 @@ providers (YAML) when these strategies should compare like-for-like capacity; se
 
 ### 4. Register Fallbacks Explicitly and Validate
 
-Fallbacks only trigger if configured on `FallbackConfig`; build with
-`add_general` / `add_context_window` / `add_content_policy` / `add_rate_limit` and call
-`validate()` to catch cycles before startup. Tune chain depth with `max_fallbacks`
-(default 5) and retry behavior with `num_retries`.
+The full fallback executor `execute_with_selected_deployment` automatically consumes only
+`add_general` entries.
+`add_context_window` / `add_content_policy` / `add_rate_limit` populate typed lookup maps;
+using them requires the caller to resolve the appropriate `FallbackType` and wire that
+list into execution. Call `validate()` to catch cycles before startup. Tune the automatic
+General chain with `max_fallbacks` (default 5) and retries with `num_retries`.
 
 ### 5. Keep Cooldown Tuning Consistent With Retries
 
