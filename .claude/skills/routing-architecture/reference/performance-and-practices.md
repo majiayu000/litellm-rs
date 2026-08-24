@@ -47,9 +47,10 @@ select + call.
 ### 3. Give Data-Driven Strategies Data
 
 UsageBased and RateLimitAware treat unlimited deployments as 0% used / max distance, so
-they ignore deployments without limits. Set `tpm` / `rpm` / `max_concurrent_requests` on
-providers (YAML) for these strategies to differentiate; set `weight` for SimpleShuffle
-and `priority` for PriorityBased tiering.
+an unlimited deployment can be preferred over a limited one (or join a best-score tie);
+it is not ignored. Set `tpm` / `rpm` / `max_concurrent_requests` consistently on
+providers (YAML) when these strategies should compare like-for-like capacity; set
+`weight` for SimpleShuffle and `priority` for PriorityBased tiering.
 
 ### 4. Register Fallbacks Explicitly and Validate
 

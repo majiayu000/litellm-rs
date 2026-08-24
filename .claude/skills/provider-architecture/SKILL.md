@@ -220,10 +220,12 @@ Modeled on `src/core/providers/cloudflare/provider.rs`:
 
 ```rust
 use std::sync::Arc;
-use crate::core::providers::base::{GlobalPoolManager, HttpMethod, header};
+use crate::core::providers::base::{header, BaseConfig, GlobalPoolManager, HttpMethod};
 use crate::core::providers::ProviderError;
+use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::error_mapper::DefaultErrorMapper;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+use crate::core::traits::provider::ProviderConfig;
 
 pub struct MyProvider {
     config: MyProviderConfig,
@@ -235,9 +237,20 @@ impl MyProvider {
     pub fn new(config: MyProviderConfig) -> Result<Self, ProviderError> {
         config.validate()
             .map_err(|e| ProviderError::configuration(PROVIDER_NAME, e))?;
+        let http_config = BaseConfig {
+            api_key: config.api_key().map(str::to_owned),
+            api_base: config.api_base().map(str::to_owned),
+            endpoint_access: config.endpoint_access(),
+            timeout: config.timeout().as_secs(),
+            max_retries: config.max_retries(),
+            ..BaseConfig::default()
+        };
         Ok(Self {
             config,
-            pool_manager: Arc::new(GlobalPoolManager::new()?),
+            pool_manager: Arc::new(GlobalPoolManager::new_for_provider(
+                PROVIDER_NAME,
+                http_config,
+            )?),
             models: load_models(),
         })
     }
@@ -263,12 +276,14 @@ impl LLMProvider for MyProvider {
             .execute_request(&url, HttpMethod::POST, headers, Some(body))
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let body_text = response.text().await.unwrap_or_default();
-            return Err(self.get_error_mapper().map_http_error(status, &body_text));
+        let status = response.status();
+        if !status.is_success() {
+            let body_text = response.text().await
+                .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
+            return Err(self.get_error_mapper().map_http_error(status.as_u16(), &body_text));
         }
-        let raw = response.bytes().await?;
+        let raw = response.bytes().await
+            .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
         self.transform_response(&raw, &model, &request_id).await
     }
 
@@ -283,12 +298,19 @@ impl LLMProvider for MyProvider {
 
 Adding a Tier 2 provider means crate-level wiring, in this order of authority:
 
-1. `src/core/providers/<name>/` directory + `pub mod <name>;` in
-   `src/core/providers/mod.rs` (feature-gate as needed, e.g. `providers-extra`).
-2. A variant in the closed `Provider` enum (`src/core/providers/mod.rs`).
-3. Dispatch arms in the `dispatch_provider!` expansions in the same file.
-4. Factory support: a builder branch under `src/core/providers/factory/`
-   (`builder.rs`, `registry.rs` dispatch table).
+1. Add `src/core/providers/<name>/`, its module declaration, and a closed `Provider`
+   enum variant under the same feature gate in `src/core/providers/mod.rs`.
+2. Add the variant to all four `dispatch_provider!` `@expand` arms (`sync`,
+   `async_err`, `value`, `async_direct`) and to `Provider::name()` and
+   `provider_type()`.
+3. Add a `ProviderType` variant and `all_non_custom_provider_types()` entry in
+   `provider_type.rs`.
+4. Add canonical name, aliases, feature and correct `ProviderDispatchKind` to
+   `PROVIDER_TYPE_REGISTRY` in `registry/types.rs`.
+5. Add the config builder in `factory/builder.rs` and match branch in
+   `factory/registry.rs`, with matching feature gates.
+6. Update provider-type/registry lifecycle, factory support and feature-on/off
+   tests so aliases, support state and construction stay in sync.
 
 ---
 
@@ -307,7 +329,8 @@ impl PoolConfig {
 ```
 
 ```rust
-// GlobalPoolManager: new() / new_for_provider(provider, BaseConfig) / shared()
+// Provider implementations use new_for_provider(provider, BaseConfig) so
+// endpoint-access and timeout policy are installed. new()/shared() omit that policy.
 pub async fn execute_request(
     &self,
     url: &str,

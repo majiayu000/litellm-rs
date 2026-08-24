@@ -24,12 +24,15 @@ Related fields: `cooldown_until` (unix secs), `consecutive_successes`,
 BOTH thresholds hold:
 
 ```rust
-if fails >= self.config.allowed_fails            // default 3 (YAML: circuit_breaker.failure_threshold)
+if fails >= self.config.allowed_fails            // programmatic default 3; gateway default 5
     && total_this_minute >= self.config.min_requests  // default 10
 {
-    deployment.enter_cooldown(self.config.cooldown_time_secs);  // YAML: recovery_timeout
+    deployment.enter_cooldown(self.config.cooldown_time_secs);  // programmatic 5s; gateway 60s
 }
 ```
+
+Those gateway values come from `GatewayRouterConfig` defaults and overwrite the
+corresponding `RouterConfig::default()` values during runtime mapping.
 
 `record_failure_with_reason` (`unified.rs:646-692`) refines this by `CooldownReason`:
 `RateLimit | AuthError | NotFound | Timeout | Manual` cool down immediately;

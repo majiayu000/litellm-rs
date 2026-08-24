@@ -63,7 +63,7 @@ error!(
   inserts it into the request headers.
 - Echoes `x-request-id` on every successful response and on gateway error responses, and
   threads it through error rendering via `with_error_response_request_id`
-  (`src/utils/error/gateway_error.rs`), so client-reported IDs match server log lines.
+  (`src/utils/error/gateway_error/response.rs`), so client-reported IDs match server log lines.
 
 ```rust
 // src/server/middleware/request_id.rs (abridged)

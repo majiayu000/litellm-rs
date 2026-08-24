@@ -40,8 +40,7 @@ Field semantics (`src/config/models/auth.rs`, defaults in
 `AuthConfig::validate()` rejects:
 
 - both auth methods disabled without explicit `allow_anonymous: true`;
-- empty `jwt_secret` or secrets shorter than 32 bytes (256-bit) when JWT is on
-  (unresolved `${ENV}` references usually fail here);
+- empty `jwt_secret` or secrets shorter than 32 bytes (256-bit) when JWT is on;
 - placeholder secrets: `your-secret-key`, `change-me`, or values containing
   `yoursecretkey`, `changeme`, `replacewith`, or `placeholder` (case/space
   insensitive);
@@ -52,6 +51,10 @@ Field semantics (`src/config/models/auth.rs`, defaults in
 `is_production_ready()` is true iff at least one method is enabled.
 `warn_insecure_config()` logs warnings for disabled auth and for API-key auth
 without `api_key_hmac_secret`.
+
+Before these rules run, config loading substitutes environment references.
+An unresolved braced `${ENV}` reference returns a config-substitution error,
+so it never reaches serde deserialization or `AuthConfig::validate()`.
 
 ### Rate limiting
 

@@ -9,7 +9,8 @@ present, and no placeholder values (`your-secret-key`, `change-me`, or values
 containing `yoursecretkey` / `changeme` / `replacewith` / `placeholder`).
 Secrets are loaded from environment variables via `${LITELLM_JWT_SECRET}`
 interpolation in `config/gateway.yaml` — never committed in plaintext; an
-unresolved reference fails validation by length.
+unresolved braced reference fails environment substitution before config
+deserialization or auth validation.
 
 ### 2. API key hashing
 

@@ -1,11 +1,11 @@
+# Cache Metrics
+
 ## Contents
 
 - AtomicCacheStats (lock-free counters)
 - CacheStatsSnapshot (point-in-time view)
 - CombinedCacheStats and Admin Endpoint
 - Collector Hooks
-
-## Cache Metrics
 
 There is no `CacheStats` struct with a `report_metrics` method in the deterministic cache path. Statistics come in three shapes.
 

@@ -1,6 +1,6 @@
 ---
 name: observability-architecture
-description: LiteLLM-RS Observability Architecture. Covers the gateway_* Prometheus-format metrics rendered by the metrics middleware and /metrics endpoint, health/readiness endpoints, request logging, and the OpenTelemetry/Datadog/Langfuse callback exporters. Use when adding or changing metrics or log instrumentation, implementing or debugging health checks, wiring Prometheus alert rules, or configuring the monitoring stack.
+description: LiteLLM-RS Observability Architecture. Covers the Prometheus-format metrics rendered by the metrics middleware and /metrics endpoint, health/readiness endpoints, request logging, and the OpenTelemetry/Datadog/Langfuse callback exporters. Use when adding or changing metrics or log instrumentation, implementing or debugging health checks, wiring Prometheus alert rules, or configuring the monitoring stack.
 ---
 
 # Observability Architecture Guide
@@ -9,7 +9,7 @@ description: LiteLLM-RS Observability Architecture. Covers the gateway_* Prometh
 
 Observability in LiteLLM-RS is built from three runtime pieces:
 
-1. **HTTP metrics** — `MetricsMiddleware` (`src/server/middleware/metrics.rs`) counts requests with process-local atomics and renders Prometheus text format on demand. No `prometheus` crate is used; every series is hand-rendered with the `gateway_` prefix.
+1. **HTTP metrics** — `MetricsMiddleware` (`src/server/middleware/metrics.rs`) counts requests with process-local atomics and renders Prometheus text format on demand. No `prometheus` crate is used; series are hand-rendered and use the `gateway_` prefix except the standalone `rate_limiter_degraded_total` counter.
 2. **Health/status routes** — `src/server/routes/health.rs` mounts `/health`, `/health/ready`, `/health/detailed`, `/status`, `/version`, and `/metrics` on the main HTTP server.
 3. **Callback exporters** — configured under `monitoring.callbacks`, the `OpenTelemetryIntegration` (OTLP/HTTP JSON), `DataDogIntegration`, and `LangfuseIntegration` receive real LLM lifecycle events through the `CallbackDispatcher` stored in `AppState` (exposed as `RuntimeObservability`).
 

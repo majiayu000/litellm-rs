@@ -23,22 +23,23 @@ router:
 
 `runtime_router_config_from_gateway` (`src/core/router/gateway_config.rs:156-170`) maps:
 
-| YAML key | `RouterConfig` field | Runtime default |
-|----------|----------------------|-----------------|
-| `router.strategy` | `routing_strategy` | `SimpleShuffle` |
-| `circuit_breaker.failure_threshold` | `allowed_fails` | 3 |
-| `circuit_breaker.recovery_timeout` | `cooldown_time_secs` | 5 |
-| `circuit_breaker.min_requests` | `min_requests` | 10 |
-| `circuit_breaker.success_threshold` | `success_threshold` | 3 |
-| `load_balancer.health_check_enabled` | `enable_pre_call_checks` | true |
+| YAML key | `RouterConfig` field | `RouterConfig::default()` | Gateway effective default |
+|----------|----------------------|---------------------------|---------------------------|
+| `router.strategy` | `routing_strategy` | `SimpleShuffle` | `RoundRobin` |
+| `circuit_breaker.failure_threshold` | `allowed_fails` | 3 | 5 |
+| `circuit_breaker.recovery_timeout` | `cooldown_time_secs` | 5 | 60 |
+| `circuit_breaker.min_requests` | `min_requests` | 10 | 10 |
+| `circuit_breaker.success_threshold` | `success_threshold` | 3 | 3 |
+| `load_balancer.health_check_enabled` | `enable_pre_call_checks` | true | true |
 
 Not exposed via YAML — `num_retries` (3), `retry_after_secs` (0), `timeout_secs` (60),
 and `max_fallbacks` (5) keep their `RouterConfig::default()` values unless the router is
 built programmatically (`src/core/router/config.rs:97-112`).
 
-Default divergence: `GatewayRouterConfig::default()` uses strategy `round_robin`
-(`config/models/router.rs:48-50`); the runtime `RouterConfig::default()` uses
-`simple_shuffle`. A gateway config that omits `strategy` therefore runs RoundRobin.
+The gateway deserializes its own defaults before mapping them into `RouterConfig`, so
+omitting values does not preserve every programmatic default. In particular it runs
+RoundRobin with failure threshold 5 and 60-second recovery, while a directly constructed
+`RouterConfig::default()` uses SimpleShuffle, 3, and 5 seconds.
 
 `load_balancer.sticky_sessions` / `session_timeout` exist on the struct but validation
 rejects any non-default value ("not implemented by runtime router yet",

@@ -114,5 +114,11 @@ async fn transform_request(
 
 **Registration**
 - [ ] `pub mod <name>;` in `src/core/providers/mod.rs` (feature-gated as needed)
-- [ ] Variant in the closed `Provider` enum plus dispatch arms (`dispatch_provider!` expansions)
-- [ ] Factory builder branch under `src/core/providers/factory/`
+- [ ] Variant in the closed `Provider` enum under the same feature gate
+- [ ] Variant added to all four `dispatch_provider!` `@expand` arms: `sync`, `async_err`, `value`, and `async_direct`
+- [ ] `Provider::name()` and `Provider::provider_type()` match arms added
+- [ ] `ProviderType` variant added to `provider_type.rs` and `all_non_custom_provider_types()`
+- [ ] `PROVIDER_TYPE_REGISTRY` entry includes canonical name, aliases, feature, and correct `ProviderDispatchKind`
+- [ ] Config builder in `factory/builder.rs` and factory match arm in `factory/registry.rs`
+- [ ] Matching feature gates cover module, enum, dispatch, registry, and factory wiring
+- [ ] Provider-type/registry lifecycle, factory support, and feature-on/off tests updated

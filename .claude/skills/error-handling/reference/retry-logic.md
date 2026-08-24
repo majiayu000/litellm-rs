@@ -56,37 +56,22 @@ budget via `RetryContext` (`attempt`, `max_attempts`,
 
 ### Retry Implementation
 
+Two similarly named APIs serve different layers:
+
 ```rust
-pub async fn execute_with_retry<F, T, E>(
-    operation: F,
-    max_retries: u32,
-    base_delay: Duration,
-) -> Result<T, E>
-where
-    F: Fn() -> Pin<Box<dyn Future<Output = Result<T, E>> + Send>>,
-    E: std::fmt::Debug,
-{
-    let mut attempts = 0;
-    let mut last_error;
-
-    loop {
-        match operation().await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                attempts += 1;
-                last_error = e;
-
-                if attempts >= max_retries {
-                    break;
-                }
-
-                // Exponential backoff
-                let delay = base_delay * 2u32.pow(attempts - 1);
-                tokio::time::sleep(delay).await;
-            }
-        }
-    }
-
-    Err(last_error)
-}
+// src/utils/net/client/utils.rs: a low-level helper for synchronous closures.
+let result = ClientUtils::execute_with_retry(operation, &retry_config).await?;
 ```
+
+`ClientUtils` runs the closure over `0..=config.max_retries` (one initial
+attempt plus the configured retries) and sleeps between failures using the
+`RetryConfig` backoff calculation. Its closure is `Fn() -> Result<T, E>` where
+`E: Into<ProviderError> + Clone`; it is not an async-operation executor.
+
+Router traffic instead uses
+`Router::execute_with_selected_deployment_retry(model_name, callback)`. Its
+callback receives the selected `Arc<Deployment>`, and the router applies
+`RetryPolicy`, retry budgets, snapshot-safe reselection and cooldown behavior.
+The older `Router::execute_with_retry` callback receives only a
+`DeploymentId` and is deprecated; do not confuse either Router method with
+the `ClientUtils` helper.

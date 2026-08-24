@@ -55,8 +55,9 @@ ls -d src/core/providers/*/ | grep -vE '/(base|factory|macros|registry)/'
 
 ## 当前派发契约
 
-`Provider` 定义在 `src/core/providers/mod.rs`，使用 `enum_dispatch` 把闭集枚举的
-方法转发给具体实现。Router 的 deployment 持有这个枚举，因此 Tier 2 provider
+`Provider` 定义在 `src/core/providers/mod.rs`，由本地 `dispatch_provider!` 宏把
+方法转发给具体实现。宏分别维护 `sync`、`async_err`、`value` 和
+`async_direct` 四类展开臂；Router 的 deployment 持有这个枚举，因此 Tier 2 provider
 仅实现 `LLMProvider` 还不够；还必须添加枚举变体、dispatch/factory 分支及模块
 注册。Tier 1 catalog provider 复用现有的 `Provider::OpenAILike` 变体，所以无需
 为每个兼容端点增加枚举成员。
@@ -199,24 +200,21 @@ impl ProviderConfig for MyProviderConfig {
 }
 ```
 
-### Provider 实现（使用统一错误）
+### Provider 传输实现（使用统一错误）
 
-`LLMProvider` trait（`src/core/traits/provider/llm_provider/trait_definition.rs`）没有关联类型：方法签名直接使用 `ProviderError`，错误映射通过 `get_error_mapper()` 提供；trait 方法是原生 `async fn`，实现时无需 `#[async_trait]` 宏。
+`LLMProvider` trait（`src/core/traits/provider/llm_provider/trait_definition.rs`）没有关联类型：方法签名直接使用 `ProviderError`，错误映射通过 `get_error_mapper()` 提供；trait 方法是原生 `async fn`，实现时无需 `#[async_trait]` 宏。下面是完整的传输 helper；`chat_completion` 还需要把成功 JSON 转成 `ChatResponse`，可参考 `cloudflare/provider.rs`。
 
 ```rust
 // provider.rs
-use crate::core::providers::base::{GlobalPoolManager, HttpMethod, header};
+use super::{get_models, MyProviderConfig};
+use crate::core::providers::base::{header, BaseConfig, GlobalPoolManager, HttpMethod};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::traits::error_mapper::trait_def::ErrorMapper;
-use crate::core::traits::provider::{LLMProvider, ProviderConfig};
-use crate::core::types::{
-    chat::ChatRequest, context::RequestContext, model::{ModelInfo, ProviderCapability},
-    responses::ChatResponse,
-};
+use crate::core::traits::provider::ProviderConfig;
+use crate::core::types::{chat::ChatRequest, model::ModelInfo};
+use serde_json::Value;
+use std::sync::Arc;
 
 const PROVIDER_NAME: &str = "my_provider";
-
-const MY_CAPABILITIES: &[ProviderCapability] = &[ProviderCapability::ChatCompletion];
 
 #[derive(Debug, Clone)]
 pub struct MyProvider {
@@ -230,39 +228,29 @@ impl MyProvider {
         config.validate()
             .map_err(|e| ProviderError::configuration(PROVIDER_NAME, e))?;
 
-        let pool_manager = Arc::new(
-            GlobalPoolManager::new()
-                .map_err(|e| ProviderError::configuration(PROVIDER_NAME, e.to_string()))?
-        );
+        let http_config = BaseConfig {
+            api_key: config.api_key.clone(),
+            api_base: config.api_base.clone(),
+            timeout: config.timeout,
+            max_retries: config.max_retries,
+            ..BaseConfig::default()
+        };
+        let pool_manager = Arc::new(GlobalPoolManager::new_for_provider(
+            PROVIDER_NAME,
+            http_config,
+        )?);
 
         Ok(Self { config, pool_manager, models: get_models() })
     }
-}
 
-impl LLMProvider for MyProvider {
-    fn name(&self) -> &'static str {
-        PROVIDER_NAME
-    }
-
-    fn capabilities(&self) -> &'static [ProviderCapability] {
-        MY_CAPABILITIES
-    }
-
-    fn models(&self) -> &[ModelInfo] {
-        &self.models
-    }
-
-    fn get_error_mapper(&self) -> Box<dyn ErrorMapper<ProviderError>> {
-        Box::new(crate::core::traits::error_mapper::DefaultErrorMapper)
-    }
-
-    async fn chat_completion(
-        &self,
-        request: ChatRequest,
-        _context: RequestContext,
-    ) -> Result<ChatResponse, ProviderError> {
+    async fn execute_chat_json(&self, request: &ChatRequest) -> Result<Value, ProviderError> {
         let api_key = self.config.api_key()
             .ok_or_else(|| ProviderError::authentication(PROVIDER_NAME, "API key required"))?;
+        let api_base = self.config.api_base()
+            .ok_or_else(|| ProviderError::configuration(PROVIDER_NAME, "API base required"))?;
+        let url = format!("{}/chat/completions", api_base.trim_end_matches('/'));
+        let body = serde_json::to_value(request)
+            .map_err(|e| ProviderError::serialization(PROVIDER_NAME, e.to_string()))?;
 
         let headers = vec![
             header("Authorization", format!("Bearer {}", api_key)),
@@ -271,18 +259,21 @@ impl LLMProvider for MyProvider {
 
         let response = self.pool_manager
             .execute_request(&url, HttpMethod::POST, headers, Some(body))
-            .await
-            .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
+            .await?;
 
-        if !response.status().is_success() {
-            return Err(self.map_http_error(response.status().as_u16(), &body));
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = response.text().await
+                .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
+            return Err(self.map_http_error(status.as_u16(), &response_body));
         }
 
-        // ...
+        let response_body = response.bytes().await
+            .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
+        serde_json::from_slice(&response_body)
+            .map_err(|e| ProviderError::response_parsing(PROVIDER_NAME, e.to_string()))
     }
-}
 
-impl MyProvider {
     fn map_http_error(&self, status: u16, body: &str) -> ProviderError {
         use crate::core::providers::shared::parse_retry_after_from_body;
         match status {
@@ -343,13 +334,16 @@ pub use model_info::get_models;
 
 Tier 2 provider 接入闭合枚举（无法运行时注册，需以下 crate 内改动，参考 `cloudflare` 的接线方式）：
 
-1. `src/core/providers/mod.rs`：`pub mod my_provider;` + `Provider` 枚举加变体 `MyProvider(my_provider::MyProvider)` + `name()` 映射分支
-2. `src/core/providers/provider_type.rs`：`ProviderType` 枚举加变体并支持 `From<&str>` 解析
-3. `src/core/providers/factory/registry.rs`：`ProviderType::MyProvider => ...` 工厂分支
+1. 在 `src/core/providers/mod.rs` 声明模块并给 `Provider` 增加带相同 feature gate 的变体。
+2. 把该变体加入 `dispatch_provider!` 的 `sync`、`async_err`、`value`、`async_direct` 四个 `@expand` 臂，并补齐 `Provider::name()` 和 `provider_type()` 分支。
+3. 在 `provider_type.rs` 增加 `ProviderType` 变体，并加入 `all_non_custom_provider_types()`；字符串转换由 registry 元数据派生，不要另写一套别名表。
+4. 在 `registry/types.rs` 的 `PROVIDER_TYPE_REGISTRY` 增加 canonical name、aliases、feature gate 和正确的 `ProviderDispatchKind`（代码型实现通常为 `Native`）。
+5. 在 `factory/builder.rs` 增加配置构造器，在 `factory/registry.rs` 增加工厂 match 分支，并保持相同 feature gate。
+6. 更新 provider-type/registry lifecycle、factory support 与 feature-on/off 测试，确认别名解析、支持状态和构造路径一致。
 
 ---
 
 ## References
 
 - [reference/migration-and-checklists.md](reference/migration-and-checklists.md) — 迁移现有 provider 到统一错误的步骤、错误映射对照表与迁移检查清单
-- [reference/industry-notes-and-faq.md](reference/industry-notes-and-faq.md) — 行业架构选择参考、性能基准来源与常见问题解答
+- [reference/industry-notes-and-faq.md](reference/industry-notes-and-faq.md) — 行业架构选择参考与常见问题解答

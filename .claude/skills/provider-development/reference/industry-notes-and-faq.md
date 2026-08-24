@@ -2,8 +2,9 @@
 
 本项目使用闭集 `Provider` 枚举派发和统一 `ProviderError`：
 
-- Router deployment 保存 `src/core/providers/mod.rs` 中的 `Provider` 枚举；
-  `enum_dispatch` 将调用转发给具体 provider。
+- Router deployment 保存 `src/core/providers/mod.rs` 中的 `Provider` 枚举；本地
+  `dispatch_provider!` 宏通过 `sync`、`async_err`、`value` 和 `async_direct`
+  四类展开臂将调用转发给具体 provider。
 - `LLMProvider` 是各具体实现共享的接口，不是路由层的 trait-object 插件边界。
 - Tier 1 OpenAI 兼容端点通过 catalog 复用 `Provider::OpenAILike`；Tier 2
   provider 需要增加模块、枚举/dispatch 和 factory wiring。

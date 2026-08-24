@@ -145,15 +145,15 @@ ProviderError::network("unknown", "Connection refused")
 ### 3. Preserve Error Context
 
 ```rust
-// Good - preserves original error
+// Good - execute_request already returns a classified ProviderError
+let response = self.pool_manager
+    .execute_request(&url, method, headers, body)
+    .await?;
+
+// Bad - erases an existing typed error by reclassifying it as Network
 self.pool_manager.execute_request(&url, method, headers, body)
     .await
     .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?
-
-// Bad - loses original error
-self.pool_manager.execute_request(&url, method, headers, body)
-    .await
-    .map_err(|_| ProviderError::network(PROVIDER_NAME, "Request failed"))?
 ```
 
 ### 4. Use Specific Error Types
