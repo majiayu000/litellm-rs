@@ -192,6 +192,7 @@ impl Default for DeploymentConfig {
 #[derive(Debug, Clone)]
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
+    probe_health: Arc<AtomicU8>,
 }
 
 impl Deref for DeploymentState {
@@ -210,9 +211,6 @@ impl Deref for DeploymentState {
 pub struct DeploymentStateInner {
     /// Health status (0=unknown, 1=healthy, 2=degraded, 3=unhealthy, 4=cooldown)
     pub health: AtomicU8,
-
-    /// Last active-probe status, separate from optimistic request-routing health.
-    pub probe_health: AtomicU8,
 
     /// Whether the active probe remains unhealthy while request cooldown owns `health`.
     pub probe_unhealthy: AtomicBool,
@@ -261,7 +259,6 @@ impl DeploymentState {
         Self {
             inner: Arc::new(DeploymentStateInner {
                 health: AtomicU8::new(HealthStatus::Healthy as u8),
-                probe_health: AtomicU8::new(HealthStatus::Unknown as u8),
                 probe_unhealthy: AtomicBool::new(false),
                 tpm_current: AtomicU64::new(0),
                 rpm_current: AtomicU64::new(0),
@@ -276,6 +273,7 @@ impl DeploymentState {
                 consecutive_successes: AtomicU32::new(0),
                 minute_reset_at: AtomicU64::new(now),
             }),
+            probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
         }
     }
 
@@ -298,6 +296,10 @@ impl DeploymentState {
     /// Get the last result published by the active readiness probe.
     pub fn probe_health_status(&self) -> HealthStatus {
         self.probe_health.load(Ordering::Acquire).into()
+    }
+
+    pub(crate) fn set_probe_health_status(&self, status: HealthStatus) {
+        self.probe_health.store(status as u8, Ordering::Release);
     }
 }
 

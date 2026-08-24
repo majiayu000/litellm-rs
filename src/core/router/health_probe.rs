@@ -218,10 +218,7 @@ fn apply_probe_result(
 }
 
 fn update_probe_health(deployment: &Deployment, target: HealthStatus) {
-    deployment
-        .state
-        .probe_health
-        .store(target as u8, Ordering::Release);
+    deployment.state.set_probe_health_status(target);
     deployment
         .state
         .probe_unhealthy

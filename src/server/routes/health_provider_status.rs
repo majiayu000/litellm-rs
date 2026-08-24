@@ -22,10 +22,10 @@ fn classify(
             Cow::Borrowed("unknown"),
             Some("no deployments registered for this provider".to_string()),
         ),
-        (_, 0, true) => (
+        (_, _, true) => (
             Cow::Borrowed("unhealthy"),
             Some(format!(
-                "{total} deployment(s), none currently probe-healthy"
+                "{total} deployment(s), at least one probe is unhealthy"
             )),
         ),
         (_, 0, false) => (
@@ -92,6 +92,12 @@ mod tests {
     }
 
     #[test]
+    fn classify_failed_probe_takes_priority_over_healthy_probe() {
+        let (status, _) = classify(2, 1, true);
+        assert_eq!(status, "unhealthy");
+    }
+
+    #[test]
     fn classify_without_upstream_evidence_reports_unknown() {
         let (status, msg) = classify(2, 0, false);
         assert_eq!(status, "unknown");
@@ -127,14 +133,21 @@ mod tests {
             .get_deployment("primary-readiness-model")
             .expect("configured-name deployment")
             .state
-            .probe_health
-            .store(
-                HealthStatus::Healthy as u8,
-                std::sync::atomic::Ordering::Release,
-            );
+            .set_probe_health_status(HealthStatus::Healthy);
         let (status, error) = derive_status_for_provider(&router, "primary", true);
         assert_eq!(status, "healthy");
         assert!(error.is_none());
+
+        let replacement = router
+            .get_deployment("primary-readiness-model")
+            .expect("replacement deployment")
+            .as_ref()
+            .clone();
+        router.set_model_list(vec![replacement]);
+        let (status, _) = derive_status_for_provider(&router, "primary", true);
+        assert_eq!(status, "healthy");
+        let (canonical_status, _) = derive_status_for_provider(&router, "anthropic", true);
+        assert_eq!(canonical_status, "unknown");
     }
 
     #[tokio::test]
@@ -149,10 +162,9 @@ mod tests {
         let deployment = router
             .get_deployment("capacity-readiness-model")
             .expect("capacity deployment");
-        deployment.state.probe_health.store(
-            HealthStatus::Healthy as u8,
-            std::sync::atomic::Ordering::Release,
-        );
+        deployment
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
         deployment
             .state
             .active_requests
@@ -179,24 +191,21 @@ mod tests {
             .get_deployment("failed-readiness-model")
             .expect("failed deployment");
 
-        deployment.state.probe_health.store(
-            HealthStatus::Degraded as u8,
-            std::sync::atomic::Ordering::Release,
-        );
+        deployment
+            .state
+            .set_probe_health_status(HealthStatus::Degraded);
         let (status, _) = derive_status_for_provider(&router, "failed", true);
         assert_eq!(status, "unhealthy");
 
-        deployment.state.probe_health.store(
-            HealthStatus::Unhealthy as u8,
-            std::sync::atomic::Ordering::Release,
-        );
+        deployment
+            .state
+            .set_probe_health_status(HealthStatus::Unhealthy);
         let (status, _) = derive_status_for_provider(&router, "failed", true);
         assert_eq!(status, "unhealthy");
 
-        deployment.state.probe_health.store(
-            HealthStatus::Healthy as u8,
-            std::sync::atomic::Ordering::Release,
-        );
+        deployment
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
         let (status, _) = derive_status_for_provider(&router, "failed", true);
         assert_eq!(status, "healthy");
     }

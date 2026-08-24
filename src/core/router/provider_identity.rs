@@ -5,6 +5,17 @@ use super::unified::{Router, RoutingSnapshot};
 use std::sync::Arc;
 
 impl RoutingSnapshot {
+    pub(super) fn restore_provider_names(
+        &mut self,
+        previous: std::collections::HashMap<String, String>,
+    ) {
+        self.provider_names.extend(
+            previous
+                .into_iter()
+                .filter(|(id, _)| self.deployments.contains_key(id)),
+        );
+    }
+
     pub(super) fn insert_gateway_deployment(
         &mut self,
         deployment: Deployment,

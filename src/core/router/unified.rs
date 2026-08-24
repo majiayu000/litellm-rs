@@ -436,7 +436,9 @@ impl Router {
     /// ArcSwap store so readers never observe mixed deployment/index state.
     pub fn set_model_list(&self, deployments: Vec<Deployment>) {
         self.update_routing_snapshot(|snapshot| {
+            let provider_names = snapshot.provider_names.clone();
             *snapshot = RoutingSnapshot::from_deployments_preserving_state(deployments, snapshot);
+            snapshot.restore_provider_names(provider_names);
         });
     }
 

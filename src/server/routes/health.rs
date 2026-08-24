@@ -39,7 +39,7 @@
 use crate::server::middleware::MetricsMiddleware;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
-use actix_web::{HttpResponse, Result as ActixResult, web};
+use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use std::borrow::Cow;
 #[cfg(feature = "metrics")]
 use std::sync::LazyLock;
@@ -89,7 +89,10 @@ pub async fn health_check(_state: web::Data<AppState>) -> ActixResult<HttpRespon
 /// Returns 200 with `ready: true` only when the gateway can serve traffic
 /// per the aggregate rule documented at the module top. Returns 503 with
 /// `ready: false` and a short reason otherwise.
-async fn readiness_check(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
+async fn readiness_check(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+) -> ActixResult<HttpResponse> {
     debug!("Readiness check requested");
 
     let (storage_health, provider_health) = collect_component_health(&state).await;
@@ -98,15 +101,16 @@ async fn readiness_check(state: web::Data<AppState>) -> ActixResult<HttpResponse
         state.audit_logger.is_available(),
     );
 
+    let is_authenticated = crate::server::middleware::get_request_context(&request)
+        .is_ok_and(|context| context.user_id.is_some() || context.api_key_id().is_some());
     let body = ReadinessStatus {
         ready: verdict.ready,
         reason: verdict.reason,
         timestamp: chrono::Utc::now(),
         version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
-        storage: storage_health,
-        providers: provider_health,
+        storage: is_authenticated.then_some(storage_health),
+        providers: is_authenticated.then_some(provider_health),
     };
-
     let response = ApiResponse::success(body);
     if verdict.ready {
         Ok(HttpResponse::Ok().json(response))
@@ -268,8 +272,10 @@ struct ReadinessStatus {
     reason: Cow<'static, str>,
     timestamp: chrono::DateTime<chrono::Utc>,
     version: Cow<'static, str>,
-    storage: crate::storage::StorageHealthStatus,
-    providers: ProviderHealthStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage: Option<crate::storage::StorageHealthStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    providers: Option<ProviderHealthStatus>,
 }
 
 /// Detailed health status
