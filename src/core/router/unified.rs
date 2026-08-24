@@ -4,7 +4,7 @@
 //! routing strategies, and intelligent request routing across multiple providers.
 
 use super::config::RouterConfig;
-use super::deployment::{Deployment, DeploymentId, LegacySelectorMetadata};
+use super::deployment::{Deployment, DeploymentId, LegacySelectorMetadata, current_timestamp};
 use super::error::CooldownReason;
 use super::execution::infer_cooldown_reason;
 use super::fallback::{FallbackConfig, FallbackType};
@@ -503,6 +503,7 @@ impl Router {
         let resolved_name = snapshot.resolve_model_name(model_name);
 
         let deployment_ids = snapshot.model_index.get(&resolved_name)?;
+        let now = current_timestamp();
 
         for id in deployment_ids.iter() {
             let Some(deployment) = snapshot.deployments.get(id.as_str()) else {
@@ -524,14 +525,15 @@ impl Router {
                 continue;
             }
 
-            let rpm_current = deployment.state.rpm_current.load(Relaxed);
+            let minute = deployment.state.minute_counters(now);
+            let rpm_current = minute.rpm;
             if let Some(limit) = deployment.config.rpm_limit
                 && rpm_current >= limit
             {
                 continue;
             }
 
-            let tpm_current = deployment.state.tpm_current.load(Relaxed);
+            let tpm_current = minute.tpm;
             if let Some(limit) = deployment.config.tpm_limit
                 && tpm_current >= limit
             {
@@ -622,10 +624,9 @@ impl Router {
     }
 
     pub(crate) fn record_failure_for_deployment(&self, deployment: &Deployment) {
-        deployment.record_failure();
-
-        let fails = deployment.state.fails_this_minute.load(Relaxed);
-        let successes_this_minute = deployment.state.rpm_current.load(Relaxed);
+        let minute = deployment.record_failure_with_minute_counters();
+        let fails = minute.failures;
+        let successes_this_minute = minute.rpm;
         let total_this_minute = successes_this_minute + fails as u64;
         if fails >= self.config.allowed_fails
             && total_this_minute >= self.config.min_requests as u64
@@ -655,7 +656,7 @@ impl Router {
         deployment: &Deployment,
         reason: CooldownReason,
     ) {
-        deployment.record_failure();
+        let minute = deployment.record_failure_with_minute_counters();
 
         let should_cooldown = match reason {
             CooldownReason::RateLimit
@@ -665,8 +666,8 @@ impl Router {
             | CooldownReason::Manual => true,
 
             CooldownReason::ConsecutiveFailures => {
-                let fails = deployment.state.fails_this_minute.load(Relaxed);
-                let successes_this_minute = deployment.state.rpm_current.load(Relaxed);
+                let fails = minute.failures;
+                let successes_this_minute = minute.rpm;
                 let total_this_minute = successes_this_minute + fails as u64;
                 fails >= self.config.allowed_fails
                     && total_this_minute >= self.config.min_requests as u64
@@ -760,7 +761,10 @@ impl Router {
         }
     }
 
-    /// Start background task to reset minute counters
+    /// Start optional maintenance that resets inactive minute counters.
+    ///
+    /// Request readers and writers roll elapsed windows themselves, so this
+    /// task is not required for correct rate-limit or circuit-breaker state.
     pub fn start_minute_reset_task(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));

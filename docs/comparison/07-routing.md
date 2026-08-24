@@ -82,10 +82,10 @@ pub enum RoutingStrategy {
 ```
 
 **Key Characteristics**:
-- Lock-free atomic operations (`AtomicU64`, `AtomicU32`)
+- Atomic counters with synchronized per-minute rollover
 - State stored directly on `DeploymentState` struct
 - Uses `DashMap` for concurrent access
-- All state operations use `Ordering::Relaxed` for performance
+- Counter updates use `Ordering::Relaxed`; rollover publication uses acquire/release ordering
 
 ---
 
@@ -190,8 +190,8 @@ pub struct DeploymentState {
 }
 ```
 
-- Local atomic counters per deployment
-- Background task resets counters every minute
+- Local atomic counters per deployment with a shared rollover gate
+- Readers and writers lazily roll expired windows; a background reset is optional
 - No external dependencies for rate tracking
 
 ---

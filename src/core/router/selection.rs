@@ -4,7 +4,7 @@
 //! the best deployment for a given model.
 
 use super::config::RoutingStrategy;
-use super::deployment::{Deployment, DeploymentId};
+use super::deployment::{Deployment, DeploymentId, current_timestamp};
 use super::error::RouterError;
 use super::execution::router_error_to_provider_error;
 use super::strategy_impl::{self, RoutingContext};
@@ -253,6 +253,7 @@ impl Router {
         let mut existing_deployments = 0;
         let mut matching_deployments = 0;
         let mut routing_contexts = Vec::with_capacity(total_deployments);
+        let now = current_timestamp();
 
         for id in deployment_ids_ref.iter() {
             let Some(deployment) = snapshot.deployments.get(id.as_str()) else {
@@ -317,11 +318,8 @@ impl Router {
                 continue;
             }
 
-            // Roll the per-minute window before reading windowed counters so
-            // stale usage from earlier minutes cannot exclude a healthy
-            // deployment.
-            deployment.state.roll_minute_window();
-            let rpm_current = deployment.state.rpm_current.load(Relaxed);
+            let minute = deployment.state.minute_counters(now);
+            let rpm_current = minute.rpm;
             if let Some(limit) = deployment.config.rpm_limit
                 && rpm_current >= limit
             {
@@ -334,7 +332,7 @@ impl Router {
                 continue;
             }
 
-            let tpm_current = deployment.state.tpm_current.load(Relaxed);
+            let tpm_current = minute.tpm;
             if let Some(limit) = deployment.config.tpm_limit
                 && tpm_current >= limit
             {
