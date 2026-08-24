@@ -19,6 +19,13 @@ struct RunningProductionServer {
 
 impl RunningProductionServer {
     async fn start(server_config: ServerConfig) -> Self {
+        Self::start_with_addresses(server_config, "127.0.0.1:0").await
+    }
+
+    async fn start_with_addresses(
+        server_config: ServerConfig,
+        addresses: impl std::net::ToSocketAddrs,
+    ) -> Self {
         let mut config = Config::default();
         config.gateway.server = server_config;
         config.gateway.auth.enable_jwt = false;
@@ -34,17 +41,12 @@ impl RunningProductionServer {
             .expect("production server state should initialize");
         let settings = HttpServer::validated_listener_settings(gateway.config())
             .expect("listener settings should validate");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("production-path test listener should bind");
-        let (server, addresses) = HttpServer::build_actix_server(
+        let (server, address) = HttpServer::build_actix_server(
             web::Data::new(gateway.state().clone()),
             &settings,
-            ServerBind::Listener(listener),
+            addresses,
         )
-        .expect("production Actix builder should accept the test listener");
-        let address = *addresses
-            .first()
-            .expect("production Actix builder should report its listener address");
+        .expect("production Actix builder should select one address");
         let handle = server.handle();
         let task = tokio::spawn(server);
         wait_until_production_server_is_ready(address).await;
@@ -65,6 +67,28 @@ impl RunningProductionServer {
             .expect("server task should join");
         result.expect("server should stop cleanly");
     }
+}
+
+#[tokio::test]
+async fn production_builder_tries_candidates_but_binds_exactly_one() {
+    let occupied =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("first candidate should be reserved");
+    let occupied_address = occupied
+        .local_addr()
+        .expect("reserved address should exist");
+    let candidates = [
+        occupied_address,
+        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().unwrap(),
+    ];
+
+    let running = RunningProductionServer::start_with_addresses(
+        ServerConfig::default(),
+        candidates.as_slice(),
+    )
+    .await;
+    assert_ne!(running.address, occupied_address);
+    running.stop().await;
 }
 
 async fn wait_until_production_server_is_ready(address: std::net::SocketAddr) {

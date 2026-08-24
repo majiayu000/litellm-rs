@@ -8,7 +8,8 @@ use tracing::warn;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
-    /// Server host
+    /// Server host. When a hostname resolves to multiple addresses, startup
+    /// binds the first address that succeeds and does not listen on the rest.
     #[serde(default = "default_host")]
     pub host: String,
     /// Server port

@@ -27,8 +27,7 @@ use actix_web::{
     middleware::{Condition, DefaultHeaders, Logger, Next, from_fn},
     web,
 };
-#[cfg(test)]
-use std::net::TcpListener;
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -51,12 +50,6 @@ struct ListenerSettings {
     effective_workers: usize,
     first_request_head_timeout: std::time::Duration,
     max_connections_per_worker: Option<usize>,
-}
-
-enum ServerBind {
-    Address(String),
-    #[cfg(test)]
-    Listener(TcpListener),
 }
 
 impl HttpServer {
@@ -92,21 +85,31 @@ impl HttpServer {
     fn build_actix_server(
         state: web::Data<AppState>,
         settings: &ListenerSettings,
-        bind: ServerBind,
-    ) -> std::io::Result<(actix_web::dev::Server, Vec<std::net::SocketAddr>)> {
-        let mut builder = ActixHttpServer::new(move || Self::create_app(state.clone()))
-            .workers(settings.effective_workers)
-            .client_request_timeout(settings.first_request_head_timeout);
-        if let Some(per_worker) = settings.max_connections_per_worker {
-            builder = builder.max_connections(per_worker);
+        addresses: impl ToSocketAddrs,
+    ) -> std::io::Result<(actix_web::dev::Server, std::net::SocketAddr)> {
+        let mut last_error = None;
+        for address in addresses.to_socket_addrs()? {
+            let app_state = state.clone();
+            let mut builder = ActixHttpServer::new(move || Self::create_app(app_state.clone()))
+                .workers(settings.effective_workers)
+                .client_request_timeout(settings.first_request_head_timeout);
+            if let Some(per_worker) = settings.max_connections_per_worker {
+                builder = builder.max_connections(per_worker);
+            }
+            match builder.bind(address) {
+                Ok(builder) => {
+                    let bound_addresses = builder.addrs();
+                    let [selected_address] = bound_addresses.as_slice() else {
+                        return Err(std::io::Error::other(
+                            "Actix must bind exactly one resolved address",
+                        ));
+                    };
+                    return Ok((builder.run(), *selected_address));
+                }
+                Err(error) => last_error = Some(error),
+            }
         }
-        builder = match bind {
-            ServerBind::Address(address) => builder.bind(address)?,
-            #[cfg(test)]
-            ServerBind::Listener(listener) => builder.listen(listener)?,
-        };
-        let addresses = builder.addrs().to_vec();
-        Ok((builder.run(), addresses))
+        Err(last_error.unwrap_or_else(|| std::io::Error::other("Could not bind to address")))
     }
 
     /// Create a new HTTP server
@@ -455,14 +458,17 @@ impl HttpServer {
         let storage = Arc::clone(&state.storage);
         let audit_logger = Arc::clone(&state.audit_logger);
 
-        let (server, _) = Self::build_actix_server(
-            state,
-            &listener_settings,
-            ServerBind::Address(bind_addr.clone()),
-        )
-        .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?;
+        // Try resolved addresses one at a time. Passing the hostname directly
+        // to Actix would create one full worker set per successful address,
+        // multiplying the configured server-wide connection cap.
+        let (server, selected_address) =
+            Self::build_actix_server(state, &listener_settings, bind_addr.as_str())
+                .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?;
 
-        info!("HTTP server listening on {}", bind_addr);
+        info!(
+            "HTTP server listening on {} (selected from {})",
+            selected_address, bind_addr
+        );
 
         let server_handle = server.handle();
         let mut server_task = tokio::spawn(server);
