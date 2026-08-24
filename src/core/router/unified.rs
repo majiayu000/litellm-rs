@@ -111,7 +111,7 @@ impl RoutingSnapshot {
 
         for mut deployment in deployments {
             if let Some(old) = previous.deployments.get(&deployment.id) {
-                deployment.state = old.state.for_replacement();
+                deployment.state = old.state.for_snapshot_insertion();
             }
             snapshot.insert_deployment(deployment);
         }
@@ -130,9 +130,7 @@ impl RoutingSnapshot {
         let model_name = deployment.model_name.clone();
         let deployment_id = deployment.id.clone();
         let provider_name = self.retained_provider_name(&deployment_id, deployment.provider.name());
-        if let Some(old) = self.deployments.get(&deployment_id) {
-            deployment.state = old.state.for_replacement();
-        }
+        deployment.state = self.state_for_insertion(&deployment);
 
         if let Some(old) = self
             .deployments
@@ -413,8 +411,8 @@ impl Router {
     }
 
     /// Add a deployment to the router
-    /// Same-ID replacement invalidates active-probe evidence. Rebuild gateway
-    /// router/probes to re-establish it; dynamic rebinding is unsupported.
+    /// Every insertion resets probe evidence; remove/re-add does not restore aliases.
+    /// Restore identity/probes from gateway config; dynamic rebinding is unsupported.
     pub fn add_deployment(&self, deployment: Deployment) {
         self.update_routing_snapshot(|snapshot| {
             snapshot.legacy_selector_metadata.remove(&deployment.id);
@@ -436,8 +434,8 @@ impl Router {
     ///
     /// Builds the new generation locally first, then installs it with a single
     /// ArcSwap store so readers never observe mixed deployment/index state.
-    /// Same-ID replacement invalidates active-probe evidence. Rebuild gateway
-    /// router/probes to re-establish it; dynamic rebinding is unsupported.
+    /// Every input resets probe evidence; remove/re-add does not restore aliases.
+    /// Restore identity/probes from gateway config; dynamic rebinding is unsupported.
     pub fn set_model_list(&self, deployments: Vec<Deployment>) {
         self.update_routing_snapshot(|snapshot| {
             let provider_names = snapshot.provider_names.clone();

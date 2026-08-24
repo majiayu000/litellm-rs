@@ -1,10 +1,17 @@
 //! Configured provider identity retained alongside immutable routing snapshots.
 
-use super::deployment::{Deployment, LegacySelectorMetadata};
+use super::deployment::{Deployment, DeploymentState, LegacySelectorMetadata};
 use super::unified::{Router, RoutingSnapshot};
 use std::sync::Arc;
 
 impl RoutingSnapshot {
+    pub(super) fn state_for_insertion(&self, deployment: &Deployment) -> DeploymentState {
+        match self.deployments.get(&deployment.id) {
+            Some(existing) => existing.state.for_snapshot_insertion(),
+            None => deployment.state.for_snapshot_insertion(),
+        }
+    }
+
     pub(super) fn retained_provider_name(&self, id: &str, fallback: &str) -> String {
         self.provider_names
             .get(id)

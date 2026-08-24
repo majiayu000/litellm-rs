@@ -242,6 +242,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removed_deployments_reenter_with_fresh_probe_evidence() {
+        let mut provider = provider_config("primary");
+        provider.provider_type = "anthropic".to_string();
+        provider.api_key = "sk-ant-test1234567890123".to_string();
+        let router = UnifiedRouter::from_gateway_config(&[provider], None)
+            .await
+            .expect("gateway provider should construct");
+        let old_deployment = router
+            .get_deployment("primary-readiness-model")
+            .expect("configured-name deployment");
+        old_deployment
+            .state
+            .active_requests
+            .store(7, std::sync::atomic::Ordering::Relaxed);
+        old_deployment
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
+        let removed = router
+            .remove_deployment("primary-readiness-model")
+            .expect("deployment should be removed");
+
+        router.add_deployment(removed);
+        let readded = router
+            .get_deployment("primary-readiness-model")
+            .expect("deployment should be re-added");
+        assert_eq!(
+            readded
+                .state
+                .active_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            7
+        );
+        assert_eq!(readded.state.probe_health_status(), HealthStatus::Unknown);
+        old_deployment
+            .state
+            .set_probe_health_status(HealthStatus::Unknown);
+        old_deployment
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
+        assert_eq!(readded.state.probe_health_status(), HealthStatus::Unknown);
+        let (configured_status, configured_error) =
+            derive_status_for_provider(&router, "primary", true);
+        assert_eq!(configured_status, "unknown");
+        assert_eq!(
+            configured_error.as_deref(),
+            Some("no deployments registered for this provider")
+        );
+        let (canonical_status, canonical_error) =
+            derive_status_for_provider(&router, "anthropic", true);
+        assert_eq!(canonical_status, "unknown");
+        assert_eq!(
+            canonical_error.as_deref(),
+            Some("upstream health has not been established yet")
+        );
+
+        readded
+            .state
+            .active_requests
+            .store(9, std::sync::atomic::Ordering::Relaxed);
+        readded.state.set_probe_health_status(HealthStatus::Healthy);
+        let removed = router
+            .remove_deployment("primary-readiness-model")
+            .expect("re-added deployment should be removed");
+        router.set_model_list(vec![removed]);
+        let bulk_readded = router
+            .get_deployment("primary-readiness-model")
+            .expect("deployment should be bulk re-added");
+        assert_eq!(
+            bulk_readded
+                .state
+                .active_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            9
+        );
+        assert_eq!(
+            bulk_readded.state.probe_health_status(),
+            HealthStatus::Unknown
+        );
+        readded.state.set_probe_health_status(HealthStatus::Unknown);
+        readded.state.set_probe_health_status(HealthStatus::Healthy);
+        assert_eq!(
+            bulk_readded.state.probe_health_status(),
+            HealthStatus::Unknown
+        );
+        let (configured_status, configured_error) =
+            derive_status_for_provider(&router, "primary", true);
+        assert_eq!(configured_status, "unknown");
+        assert_eq!(
+            configured_error.as_deref(),
+            Some("no deployments registered for this provider")
+        );
+        let (canonical_status, canonical_error) =
+            derive_status_for_provider(&router, "anthropic", true);
+        assert_eq!(canonical_status, "unknown");
+        assert_eq!(
+            canonical_error.as_deref(),
+            Some("upstream health has not been established yet")
+        );
+    }
+
+    #[tokio::test]
     async fn transient_capacity_does_not_change_probe_readiness() {
         let mut provider = provider_config("capacity");
         provider.max_concurrent_requests = 1;

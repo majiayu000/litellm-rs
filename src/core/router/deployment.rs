@@ -303,7 +303,7 @@ impl DeploymentState {
     }
 
     /// Share request-routing state while requiring fresh probe evidence.
-    pub(crate) fn for_replacement(&self) -> Self {
+    pub(crate) fn for_snapshot_insertion(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
