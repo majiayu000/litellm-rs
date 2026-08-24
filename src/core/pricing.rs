@@ -552,6 +552,31 @@ fn builtin_model(
     }
 }
 
+fn builtin_deepseek_v4_model(
+    input_cost_per_token: f64,
+    output_cost_per_token: f64,
+    cache_read_input_token_cost: f64,
+) -> ModelPricing {
+    let mut model = builtin_model(
+        "deepseek",
+        input_cost_per_token,
+        output_cost_per_token,
+        1_048_576,
+        393_216,
+        true,
+        false,
+    );
+    model.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::Value::from(cache_read_input_token_cost),
+    );
+    model.extra.insert(
+        "pricing_status".to_string(),
+        serde_json::Value::from("official_off_peak_rate_checked_2026_08_24"),
+    );
+    model
+}
+
 fn builtin_gpt55_model(snapshot: bool) -> ModelPricing {
     let mut model = builtin_model("openai", 0.000005, 0.00003, 1_048_576, 128_000, true, true);
     model.extra.insert(
@@ -636,23 +661,13 @@ impl Default for PricingDatabase {
         for model in ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"] {
             models.insert(
                 model.to_string(),
-                builtin_model(
-                    "deepseek", 0.00000014, 0.00000028, 1048576, 393216, true, false,
-                ),
+                builtin_deepseek_v4_model(0.00000022, 0.00000066, 0.000000007),
             );
         }
 
         models.insert(
             "deepseek-v4-pro".to_string(),
-            builtin_model(
-                "deepseek",
-                0.000000435,
-                0.00000087,
-                1048576,
-                393216,
-                true,
-                false,
-            ),
+            builtin_deepseek_v4_model(0.00000066, 0.00000198, 0.000000022),
         );
 
         Self { models }
