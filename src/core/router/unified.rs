@@ -761,7 +761,7 @@ impl Router {
         }
     }
 
-    /// Start optional maintenance that periodically resets minute counters.
+    /// Start optional maintenance that periodically rolls expired minute windows.
     ///
     /// Request readers and writers roll elapsed windows themselves, so this
     /// task is not required for correct rate-limit or circuit-breaker state.
@@ -770,7 +770,11 @@ impl Router {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                self.reset_minute_counters();
+                let now = current_timestamp();
+                let snapshot = self.routing_snapshot.load();
+                for deployment in snapshot.deployments.values() {
+                    deployment.state.roll_minute_window(now);
+                }
             }
         })
     }
