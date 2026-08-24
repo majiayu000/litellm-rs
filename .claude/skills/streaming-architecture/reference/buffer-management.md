@@ -13,11 +13,13 @@ pub struct UnifiedSSEParser<T: SSETransformer> {
 }
 ```
 
-- `process_bytes_with_mode` lossily decodes incoming bytes into the buffer,
-  splits at `rfind('\n')`, processes the complete prefix line by line, and
-  keeps the incomplete tail buffered for the next call. Events split across
-  any number of network reads assemble correctly (see
-  `test_sse_parser_multiline`).
+- `process_bytes_with_mode` lossily decodes each incoming read into the
+  buffer, splits at `rfind('\n')`, processes the complete prefix line by line,
+  and keeps the incomplete text tail for the next call. SSE line/event splits
+  assemble correctly (see `test_sse_parser_multiline`), but a network boundary
+  inside a multibyte UTF-8 code point does not: per-read
+  `String::from_utf8_lossy` replaces the partial byte sequence before it can be
+  joined with the next read.
 - There is no size cap on this buffer; a provider emitting an unterminated
   line would grow it.
 - No public reset API exists. The private `finish_stream` drains leftovers via

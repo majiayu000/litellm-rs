@@ -34,8 +34,10 @@ Observability in LiteLLM-RS is built from three runtime pieces:
 ## Configuration
 
 The section is `monitoring:` at the top level of `config/gateway.yaml` (deserialized as
-`GatewayConfig.monitoring`, `src/config/models/gateway.rs`). Every struct uses
-`#[serde(deny_unknown_fields)]` — unknown keys fail config parsing.
+`GatewayConfig.monitoring`, `src/config/models/gateway.rs`). The outer monitoring models
+use `#[serde(deny_unknown_fields)]`, but callback backend payloads such as
+`OpenTelemetryConfig` do not all make that guarantee; strictness follows the concrete
+deserialized struct.
 
 ```yaml
 monitoring:
@@ -71,6 +73,9 @@ Wiring notes (verified against current code):
   export is configured through `callbacks.backends`, not the `tracing:` section.
 - `logging` is parsed/validated but the log subscriber is initialized in `src/main.rs`
   `init_logging` from the CLI/env level, not from this section.
+- `health.path` and `health.detailed` are parsed and validated, but route registration is
+  hardcoded to `/health`, `/health/ready`, and `/health/detailed`; neither field changes
+  the runtime health surface today.
 
 ---
 

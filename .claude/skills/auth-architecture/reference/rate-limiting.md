@@ -30,8 +30,12 @@ operation metric and applies `redis_failure_mode`:
 - `fail_closed` (default) — reject while Redis is unavailable.
 - `fail_open_local` — fall back to process-local limits.
 
-`RateLimitReservation` records which backend consumed the slot so failed auth
-attempts can release it again.
+`RateLimitReservation` records which backend consumed the pre-auth slot. A
+successful authentication releases that network-key reservation before the
+inner, identity-keyed limiter runs; an authentication infrastructure `Err`
+also releases it. A semantic authentication failure (`Ok` with
+`success == false`) deliberately retains the reservation so rejected
+credentials consume gateway rate-limit capacity.
 
 ### Configuration surface
 
@@ -50,8 +54,10 @@ rate_limit:
   redis_failure_mode: fail_closed
 ```
 
-`effective_rpm()` = `requests_per_minute.unwrap_or(default_rpm)`. Setting any
-unenforced field makes startup log an error listing it (no silent degradation).
+`effective_rpm()` = `requests_per_minute.unwrap_or(default_rpm)`. When rate
+limiting is enabled, setting any unsupported nondefault field makes validation
+return an error listing it; `validate-config` and normal startup therefore
+fail rather than merely logging and continuing.
 
 ### Key policy and middleware
 

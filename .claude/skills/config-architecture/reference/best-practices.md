@@ -47,7 +47,11 @@ Exports are redacted: `Config::to_json` / `to_yaml` replace provider API keys, `
 
 ### 4. Type Safety
 
-Every config model is a typed struct with `deny_unknown_fields`; keep it that way.
+Use typed structs and add `deny_unknown_fields` when the configuration surface
+is intended to be strict. Most gateway-facing models do this, but not every
+deserialized payload does: `providers[].settings` is deliberately open-ended,
+and several provider/callback backend config structs currently accept unknown
+fields. Do not promise strict rejection without checking the concrete struct.
 
 ```rust
 // Good - typed, unknown YAML keys rejected at parse time

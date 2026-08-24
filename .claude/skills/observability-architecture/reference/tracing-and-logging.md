@@ -108,7 +108,7 @@ monitoring:
           environment: null
           resource_attributes: {}
           export_traces: true
-          export_metrics: true
+          export_metrics: true            # parsed, but not consumed by runtime today
           batch_interval_ms: 5000
           max_batch_size: 512
           timeout_ms: 10000
@@ -117,7 +117,9 @@ monitoring:
 ```
 
 Spans are modeled locally (`span.rs`: `Span`, `SpanKind`, `SpanStatus`, `AttributeValue`)
-and exported as OTLP JSON by `export_spans` / `build_otlp_payload` (`exporter.rs`). Export
+and exported as OTLP JSON by `export_spans` / `build_otlp_payload` (`exporter.rs`).
+`export_traces` gates lifecycle export in `integration_impl.rs`; `export_metrics` is
+deserialized and defaulted but has no runtime read or metrics-export path yet. Export
 failures are sampled and reported without panicking — telemetry problems never take down
 request handling.
 

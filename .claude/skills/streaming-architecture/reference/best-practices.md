@@ -1,10 +1,14 @@
 ## Best Practices
 
-### 1. Feed arbitrary byte boundaries
+### 1. Expect arbitrary SSE line/event boundaries, with a UTF-8 caveat
 
 The parser retains the incomplete tail after the last `\n` across
 `process_bytes` calls. Never assume reads are event-aligned, and never
-pre-split SSE frames yourself outside the parser.
+pre-split SSE frames yourself outside the parser. However, each read is
+decoded independently with `String::from_utf8_lossy`; a network boundary that
+splits one multibyte UTF-8 code point is replaced rather than reconstructed.
+The current implementation therefore handles arbitrary ASCII/line/event
+boundaries, but does not faithfully handle every possible raw byte boundary.
 
 ```rust
 // src/core/providers/base/sse.rs, test_sse_parser_multiline

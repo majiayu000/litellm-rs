@@ -33,6 +33,7 @@ Per `ProviderFailureFacts::from_error` in `src/core/providers/failure.rs`:
 | `ApiError` status 500-599 | Yes | 3s |
 | `ApiError` Bedrock-modeled 424 | Yes | 3s |
 | `DeploymentError` | Yes | 5s |
+| `Streaming` | Yes | 2s |
 | All other variants | No | - |
 
 ### Canonical Decision Path: RetryPolicy

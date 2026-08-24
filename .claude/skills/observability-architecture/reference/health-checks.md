@@ -9,6 +9,9 @@
 
 All routes live in `src/server/routes/health.rs` and are mounted on the main HTTP server.
 There is **no** `/health/live` route.
+`monitoring.health.path` and `monitoring.health.detailed` are parsed and validated but are
+not read by route wiring: changing them neither relocates `/health` nor disables
+`/health/detailed` today.
 
 ```rust
 // src/server/routes/health.rs

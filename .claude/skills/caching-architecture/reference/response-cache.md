@@ -67,7 +67,10 @@ In `Dual` mode (`get_dual`, dual.rs:116):
 
 ## Failure and Fallback Behavior
 
-- `RedisOnly` requested without a pool degrades to memory-only with a warning; `Dual` without a pool silently uses memory-only (dual.rs:60).
+- `RedisOnly` requested without a pool logs a warning, but it does **not** fall
+  back to memory: reads miss and writes/deletes are no-ops. `Dual` without a
+  pool uses its memory tier only (`dual.rs:60`, plus the mode dispatch in
+  `get`/`set_with_ttl`/`delete`).
 - Every `RedisPool` method is guarded by `pool.is_noop()` (no Redis configured) — reads miss, writes no-op.
 - Corrupted Redis entries are deleted on read and counted as misses (redis_cache.rs:81).
 - `is_redis_available()` probes the actual connection; exposed via the admin status endpoint.

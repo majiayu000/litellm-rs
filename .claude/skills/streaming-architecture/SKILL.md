@@ -139,9 +139,12 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
 }
 ```
 
-- The buffer is a `String`, not a byte deque. Bytes are lossily decoded and
-  appended; only text up to the last `\n` is processed and the incomplete tail
-  stays buffered for the next call.
+- The buffer is a `String`, not a byte deque. Each incoming read is decoded
+  independently with `String::from_utf8_lossy` and appended; only text up to
+  the last `\n` is processed and the incomplete tail stays buffered for the
+  next call. Line/event splits are retained, but a read boundary inside a
+  multibyte UTF-8 code point is lossy because the undecoded bytes are not
+  retained.
 - `process_bytes` runs non-stream mode: an end marker produces nothing and
   events go through `transform_chunk`.
 - `UnifiedSSEStream` drives the private `process_stream_bytes` path (stream

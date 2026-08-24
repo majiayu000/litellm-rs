@@ -80,3 +80,6 @@ Additional `From` conversions are implemented manually in the same file:
 `serde_json::Error` and `serde_yml::Error` become `Serialization`;
 `jsonwebtoken::errors::Error` becomes `Auth`; `redis::RedisError` (feature
 `redis`) and `sea_orm::DbErr` (feature `storage`) become `Storage`.
+These manual conversions stringify their input and therefore do not retain it
+as `std::error::Error::source()`. That differs from the `HttpClient` and `Io`
+payload variants, whose `#[from]` fields preserve the underlying error.

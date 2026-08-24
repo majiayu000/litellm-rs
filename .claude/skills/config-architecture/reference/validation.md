@@ -89,4 +89,11 @@ Note: `Config::default()` intentionally fails validation (no providers), so an a
 
 ### Strict Deserialization
 
-`GatewayConfig` and its nested models carry `#[serde(deny_unknown_fields)]`. Unknown keys fail at parse time — before validation ever runs — so typos surface as parse errors naming the field. Keep `config/gateway.yaml.example` in sync when adding fields; tests assert the example parses against the current schema.
+`GatewayConfig` and many nested gateway-facing models carry
+`#[serde(deny_unknown_fields)]`. Unknown keys on those concrete structs fail at
+parse time — before validation ever runs — so typos surface as parse errors
+naming the field. The guarantee is per struct, not recursive by definition:
+`providers[].settings` accepts arbitrary keys, and some provider/callback
+backend payload structs omit `deny_unknown_fields` and may ignore unknown keys.
+Keep `config/gateway.yaml.example` in sync when adding fields; tests assert the
+example parses against the current schema.

@@ -28,7 +28,7 @@ There is **no hot reload**. Configuration is read once at startup; `src/utils/co
 ┌─────────────────────────────────────────────────────────────────┐
 │  3. serde parse + defaults                                      │
 │     #[serde(default ...)] fills omitted fields;                 │
-│     deny_unknown_fields rejects unrecognized keys               │
+│     deny_unknown_fields rejects keys on structs that opt in     │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -77,7 +77,13 @@ enterprise:                  # sso, audit_logging
 pricing:                     # source, unpriced_model_policy
 ```
 
-Unknown top-level fields are rejected at parse time (`#[serde(deny_unknown_fields)]` on `GatewayConfig`, enforced for nested models too). There are no top-level `logging`, `routing`, or `observability` sections — logging lives under `monitoring.logging`, routing under `router`.
+Unknown top-level fields are rejected at parse time
+(`#[serde(deny_unknown_fields)]` on `GatewayConfig`), as are unknown keys in
+the nested YAML models that carry the same attribute. This is not a universal
+serde guarantee: `providers[].settings` is intentionally open-ended, and some
+provider/callback backend payload structs do not deny unknown fields. There are
+no top-level `logging`, `routing`, or `observability` sections — logging lives
+under `monitoring.logging`, routing under `router`.
 
 ---
 
