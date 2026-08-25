@@ -293,6 +293,18 @@ fn test_tls_config_rejects_unsupported_client_cert_auth() {
 }
 
 #[test]
+fn test_tls_config_rejects_unsupported_http2() {
+    let config = TlsConfig {
+        cert_file: "cert.pem".to_string(),
+        key_file: "key.pem".to_string(),
+        ca_file: None,
+        require_client_cert: false,
+        http2: true,
+    };
+    assert!(config.validate().unwrap_err().contains("tls.http2"));
+}
+
+#[test]
 fn test_tls_config_validation_does_not_read_runtime_material() {
     let config = TlsConfig {
         cert_file: "/definitely/not/mounted/cert.pem".to_string(),

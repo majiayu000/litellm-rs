@@ -11,11 +11,11 @@ use actix_tls::accept::{
     rustls_0_23::{Acceptor as RustlsAcceptor, TlsStream},
 };
 use actix_web::{HttpServer as ActixHttpServer, dev::AppConfig, web};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 use std::{
     convert::Infallible,
-    io::{self, BufReader},
+    io,
     net::{SocketAddr, TcpListener, ToSocketAddrs},
     time::Duration,
 };
@@ -26,19 +26,13 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Validated TLS state cached before gateway dependencies are initialized.
 pub(crate) struct ListenerTls {
     config: rustls::ServerConfig,
-    http2: bool,
 }
 
 pub(crate) fn load_listener_tls(server: &ServerConfig) -> Result<Option<ListenerTls>> {
     server
         .tls
         .as_ref()
-        .map(|tls| {
-            Ok(ListenerTls {
-                config: load_rustls_config(tls)?,
-                http2: tls.http2,
-            })
-        })
+        .map(|tls| load_rustls_config(tls).map(|config| ListenerTls { config }))
         .transpose()
 }
 
@@ -57,11 +51,7 @@ pub(crate) fn bind_server(
             .map_err(map_bind_error);
     };
 
-    if tls.http2 {
-        bind_http1_and2(bind_addr, state, tls.config).map_err(map_bind_error)
-    } else {
-        bind_http1_only(bind_addr, state, tls.config).map_err(map_bind_error)
-    }
+    bind_http1_only(bind_addr, state, tls.config).map_err(map_bind_error)
 }
 
 /// Build a rustls configuration without relying on a process-global provider.
@@ -70,6 +60,9 @@ pub(crate) fn load_rustls_config(tls: &TlsConfig) -> Result<rustls::ServerConfig
 }
 
 fn build_rustls_config(tls: &TlsConfig) -> std::result::Result<rustls::ServerConfig, String> {
+    if tls.http2 {
+        return Err("tls.http2 is unsupported; set it to false to use HTTP/1 TLS".into());
+    }
     if tls.ca_file.is_some() {
         return Err(
             "tls.ca_file is unsupported until client certificate auth is implemented".into(),
@@ -88,7 +81,7 @@ fn build_rustls_config(tls: &TlsConfig) -> std::result::Result<rustls::ServerCon
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|error| format!("invalid TLS certificate/key pair: {error}"))?;
-    config.alpn_protocols = configured_alpn(tls.http2);
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(config)
 }
 
@@ -97,29 +90,18 @@ fn validate_rustls_config(tls: &TlsConfig) -> std::result::Result<(), String> {
     build_rustls_config(tls).map(drop)
 }
 
-fn configured_alpn(http2: bool) -> Vec<Vec<u8>> {
-    if http2 {
-        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
-    } else {
-        vec![b"http/1.1".to_vec()]
-    }
-}
-
 fn load_certs(path: &str) -> std::result::Result<Vec<CertificateDer<'static>>, String> {
     let contents = read_pem(path, "cert", &["CERTIFICATE"])?;
-    let mut certs = Vec::new();
-    for item in rustls_pemfile::read_all(&mut BufReader::new(contents.as_slice())) {
-        match item.map_err(|error| format!("invalid TLS certificates in {path}: {error}"))? {
-            rustls_pemfile::Item::X509Certificate(cert) => {
-                let index = certs.len();
-                rustls::server::ParsedCertificate::try_from(&cert).map_err(|error| {
-                    format!("invalid TLS certificate {index} in {path}: {error}")
-                })?;
-                certs.push(cert);
-            }
-            _ => return Err(format!("unexpected non-certificate PEM item in {path}")),
-        }
-    }
+    let certs = CertificateDer::pem_slice_iter(&contents)
+        .enumerate()
+        .map(|(index, cert)| {
+            let cert =
+                cert.map_err(|error| format!("invalid TLS certificates in {path}: {error}"))?;
+            rustls::server::ParsedCertificate::try_from(&cert)
+                .map_err(|error| format!("invalid TLS certificate {index} in {path}: {error}"))?;
+            Ok(cert)
+        })
+        .collect::<std::result::Result<Vec<_>, String>>()?;
     if certs.is_empty() {
         return Err(format!("no TLS certificates found in {path}"));
     }
@@ -132,19 +114,10 @@ fn load_key(path: &str) -> std::result::Result<PrivateKeyDer<'static>, String> {
         "key",
         &["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"],
     )?;
-    let items = rustls_pemfile::read_all(&mut BufReader::new(contents.as_slice()))
+    let mut keys = PrivateKeyDer::pem_slice_iter(&contents)
         .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|error| format!("invalid TLS key in {path}: {error}"))?;
-    let mut keys = Vec::new();
-    for item in items {
-        match item {
-            rustls_pemfile::Item::Pkcs1Key(key) => keys.push(PrivateKeyDer::Pkcs1(key)),
-            rustls_pemfile::Item::Pkcs8Key(key) => keys.push(PrivateKeyDer::Pkcs8(key)),
-            rustls_pemfile::Item::Sec1Key(key) => keys.push(PrivateKeyDer::Sec1(key)),
-            _ => return Err(format!("unexpected non-key PEM item in {path}")),
-        }
-    }
-    let mut keys = keys.into_iter();
+        .map_err(|error| format!("invalid TLS key in {path}: {error}"))?
+        .into_iter();
     let key = keys
         .next()
         .ok_or_else(|| format!("no unencrypted private key found in {path}"))?;
@@ -177,19 +150,6 @@ fn read_pem(
         }
     }
     Ok(contents)
-}
-
-fn bind_http1_and2(
-    bind_addr: &str,
-    state: web::Data<AppState>,
-    config: rustls::ServerConfig,
-) -> std::io::Result<Server> {
-    let listeners = bind_resolved_listeners(bind_addr, TLS_BACKLOG)?;
-    let mut builder = ActixHttpServer::new(move || HttpServer::create_app(state.clone()));
-    for listener in listeners {
-        builder = builder.listen_rustls_0_23(listener, config.clone())?;
-    }
-    Ok(builder.run())
 }
 
 fn bind_http1_only(
@@ -445,13 +405,14 @@ mod tests {
     }
 
     #[test]
-    fn http2_controls_configured_alpn() {
+    fn rejects_http2_before_loading_runtime_material() {
         let (_directory, mut tls) = material();
         tls.http2 = true;
-        let config = load_rustls_config(&tls).expect("valid TLS material");
-        assert_eq!(
-            config.alpn_protocols,
-            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        assert!(
+            load_rustls_config(&tls)
+                .unwrap_err()
+                .to_string()
+                .contains("tls.http2")
         );
     }
 

@@ -161,7 +161,7 @@ pub struct TlsConfig {
     /// Require client certificates
     #[serde(default)]
     pub require_client_cert: bool,
-    /// Enable HTTP/2
+    /// Request HTTP/2 TLS (currently unsupported)
     #[serde(default)]
     pub http2: bool,
 }
@@ -188,6 +188,10 @@ impl TlsConfig {
             return Err(
                 "tls.require_client_cert is not implemented yet; set it to false".to_string(),
             );
+        }
+
+        if self.http2 {
+            return Err("tls.http2 is unsupported; set it to false to use HTTP/1 TLS".to_string());
         }
 
         Ok(())

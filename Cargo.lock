@@ -55,7 +55,6 @@ dependencies = [
  "flate2",
  "foldhash 0.1.5",
  "futures-core",
- "h2 0.3.27",
  "http 0.2.12",
  "httparse",
  "httpdate",
@@ -216,7 +215,6 @@ dependencies = [
  "actix-rt",
  "actix-server",
  "actix-service",
- "actix-tls",
  "actix-utils",
  "actix-web-codegen",
  "bytes",
@@ -844,7 +842,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "h2 0.4.13",
+ "h2",
  "http 1.4.0",
  "hyper",
  "hyper-rustls",
@@ -2584,28 +2582,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.27"
+version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0beca50380b1fc32983fc1cb4587bfa4bb9e78fc259aad4a0032d2080309222d"
-dependencies = [
- "bytes",
- "fnv",
- "futures-core",
- "futures-sink",
- "futures-util",
- "http 0.2.12",
- "indexmap 2.14.0",
- "slab",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "h2"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f44da3a8150a6703ed5d34e164b875fd14c2cdab9af1252a9a1020bde2bdc54"
+checksum = "ef8e5e5a340588f4452631496976cf8636d4a7ecf600239fdc27615d2530bc16"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -2826,7 +2805,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
- "h2 0.4.13",
+ "h2",
  "http 1.4.0",
  "http-body 1.0.1",
  "httparse",
@@ -3315,7 +3294,6 @@ dependencies = [
  "reqwest",
  "rmp-serde",
  "rustls",
- "rustls-pemfile",
  "sea-orm",
  "sea-orm-migration",
  "serde",
@@ -4445,7 +4423,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.4.13",
+ "h2",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
@@ -4655,15 +4633,6 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
-dependencies = [
- "rustls-pki-types",
 ]
 
 [[package]]
