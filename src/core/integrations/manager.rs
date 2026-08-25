@@ -7,8 +7,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, warn};
 
 use crate::core::traits::integration::{
-    BoxedIntegration, CacheHitEvent, EmbeddingEndEvent, EmbeddingStartEvent, IntegrationError,
-    IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    BoxedIntegration, CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent,
+    IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 
 /// Configuration for the integration manager
@@ -225,6 +225,28 @@ impl IntegrationManager {
                 if self.config.log_errors {
                     warn!(
                         "Integration {} embedding end error: {}",
+                        integration.name(),
+                        e
+                    );
+                }
+                if self.config.fail_fast {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Notify all integrations of an embedding error
+    pub async fn on_embedding_error(&self, event: &EmbeddingErrorEvent) -> IntegrationResult<()> {
+        let integrations = self.integrations.read().await;
+        for integration in integrations.iter() {
+            if integration.is_enabled()
+                && let Err(e) = integration.on_embedding_error(event).await
+            {
+                if self.config.log_errors {
+                    warn!(
+                        "Integration {} embedding error callback failed: {}",
                         integration.name(),
                         e
                     );

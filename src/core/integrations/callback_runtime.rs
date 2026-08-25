@@ -8,8 +8,8 @@ use tracing::{error, warn};
 
 use super::IntegrationManager;
 use crate::core::traits::integration::{
-    EmbeddingEndEvent, EmbeddingStartEvent, IntegrationError, IntegrationResult, LlmEndEvent,
-    LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, IntegrationError,
+    IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 
 pub(crate) trait CallbackMetrics: Send + Sync {
@@ -32,6 +32,7 @@ enum CallbackEvent {
     Stream(LlmStreamEvent),
     EmbeddingStart(EmbeddingStartEvent),
     EmbeddingEnd(EmbeddingEndEvent),
+    EmbeddingError(EmbeddingErrorEvent),
 }
 
 /// Error returned when an event cannot enter the non-blocking callback queue.
@@ -79,6 +80,13 @@ impl CallbackTerminalPermit {
             permit.send(CallbackEvent::EmbeddingEnd(event));
         }
     }
+
+    /// Enqueue an embedding error using its reserved capacity.
+    pub fn emit_embedding_error(self, event: EmbeddingErrorEvent) {
+        if let Some(permit) = self.permit {
+            permit.send(CallbackEvent::EmbeddingError(event));
+        }
+    }
 }
 
 enum CallbackMetricsKind {
@@ -99,18 +107,31 @@ pub(crate) struct CallbackMetricsPermit {
 }
 
 impl CallbackMetricsPermit {
+    pub(crate) fn update_llm_target(&mut self, model: &str, provider: &str) {
+        if let CallbackMetricsKind::Llm(event) = &mut self.kind {
+            event.model = model.to_string();
+            event.provider = Some(provider.to_string());
+        }
+    }
+
     pub(crate) fn emit_end(mut self, event: &LlmEndEvent) {
         self.recorder.finish_llm_lifecycle(event);
         self.completed = true;
     }
 
     pub(crate) fn emit_error(mut self, event: &LlmErrorEvent) {
-        self.recorder.fail_llm_lifecycle(event);
+        if matches!(self.kind, CallbackMetricsKind::Llm(_)) {
+            self.recorder.fail_llm_lifecycle(event);
+        }
         self.completed = true;
     }
 
     pub(crate) fn emit_embedding_end(mut self, event: &EmbeddingEndEvent) {
         self.recorder.record_embedding_end(event);
+        self.completed = true;
+    }
+
+    pub(crate) fn emit_embedding_error(mut self) {
         self.completed = true;
     }
 }
@@ -369,6 +390,7 @@ async fn dispatch_event(manager: &IntegrationManager, event: CallbackEvent) {
         CallbackEvent::Stream(event) => manager.on_llm_stream(&event).await,
         CallbackEvent::EmbeddingStart(event) => manager.on_embedding_start(&event).await,
         CallbackEvent::EmbeddingEnd(event) => manager.on_embedding_end(&event).await,
+        CallbackEvent::EmbeddingError(event) => manager.on_embedding_error(&event).await,
     };
     if let Err(error) = result {
         error!("Callback event dispatch failed: {}", error);
