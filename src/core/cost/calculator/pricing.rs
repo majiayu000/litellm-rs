@@ -513,19 +513,28 @@ pub(super) fn get_vertex_ai_pricing(model: &str) -> Result<ModelPricing, CostErr
 }
 
 pub(super) fn get_deepseek_pricing(model: &str) -> Result<ModelPricing, CostError> {
-    use chrono::Utc;
+    get_deepseek_pricing_at(model, chrono::Utc::now())
+}
 
-    // DeepSeek publishes peak and off-peak V4 rates. This scalar compatibility
-    // surface uses the official off-peak card checked on 2026-08-24; peak-hour
-    // selection requires a separate time-of-use pricing model.
+pub(super) fn get_deepseek_pricing_at(
+    model: &str,
+    pricing_time: chrono::DateTime<chrono::Utc>,
+) -> Result<ModelPricing, CostError> {
+    let multiplier = if crate::core::pricing::time_of_use::is_deepseek_v4_peak_at(pricing_time) {
+        2.0
+    } else {
+        1.0
+    };
+
+    // DeepSeek's published V4 peak card is exactly twice its off-peak card.
     let pricing = match model.to_lowercase().as_str() {
         m if m.contains("deepseek-v4-pro") => ModelPricing {
             model: model.to_string(),
-            input_cost_per_1k_tokens: 0.00066,
-            output_cost_per_1k_tokens: 0.00198,
-            cache_read_input_token_cost: Some(0.000022),
+            input_cost_per_1k_tokens: 0.00066 * multiplier,
+            output_cost_per_1k_tokens: 0.00198 * multiplier,
+            cache_read_input_token_cost: Some(0.000022 * multiplier),
             currency: "USD".to_string(),
-            updated_at: Utc::now(),
+            updated_at: pricing_time,
             ..Default::default()
         },
         m if m.contains("deepseek-v4-flash")
@@ -534,11 +543,11 @@ pub(super) fn get_deepseek_pricing(model: &str) -> Result<ModelPricing, CostErro
         {
             ModelPricing {
                 model: model.to_string(),
-                input_cost_per_1k_tokens: 0.00022,
-                output_cost_per_1k_tokens: 0.00066,
-                cache_read_input_token_cost: Some(0.000007),
+                input_cost_per_1k_tokens: 0.00022 * multiplier,
+                output_cost_per_1k_tokens: 0.00066 * multiplier,
+                cache_read_input_token_cost: Some(0.000007 * multiplier),
                 currency: "USD".to_string(),
-                updated_at: Utc::now(),
+                updated_at: pricing_time,
                 ..Default::default()
             }
         }
@@ -634,4 +643,35 @@ pub(super) fn get_moonshot_pricing(model: &str) -> Result<ModelPricing, CostErro
     };
 
     Ok(pricing)
+}
+
+#[cfg(test)]
+mod deepseek_time_of_use_tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn hardcoded_fallback_uses_the_documented_utc_schedule() {
+        let off_peak = Utc.with_ymd_and_hms(2026, 8, 29, 2, 0, 0).unwrap();
+        let peak = Utc.with_ymd_and_hms(2026, 8, 24, 2, 0, 0).unwrap();
+
+        for model in ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat"] {
+            let off_peak_pricing = get_deepseek_pricing_at(model, off_peak).unwrap();
+            let peak_pricing = get_deepseek_pricing_at(model, peak).unwrap();
+            assert_eq!(
+                peak_pricing.input_cost_per_1k_tokens,
+                off_peak_pricing.input_cost_per_1k_tokens * 2.0
+            );
+            assert_eq!(
+                peak_pricing.output_cost_per_1k_tokens,
+                off_peak_pricing.output_cost_per_1k_tokens * 2.0
+            );
+            assert_eq!(
+                peak_pricing.cache_read_input_token_cost,
+                off_peak_pricing
+                    .cache_read_input_token_cost
+                    .map(|rate| rate * 2.0)
+            );
+        }
+    }
 }

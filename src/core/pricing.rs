@@ -1,11 +1,14 @@
 //! Shared pricing data types.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
-use tracing::warn;
+use tracing::{error, warn};
+
+pub(crate) mod time_of_use;
 
 const EMBEDDED_MODEL_PRICES: &str = include_str!("../../config/model_prices_extended.json");
 
@@ -191,15 +194,20 @@ impl PricingDatabase {
 
     /// Calculate cost for a model and token usage.
     pub fn calculate(&self, model: &str, usage: &Usage) -> f64 {
+        self.calculate_at(model, usage, Utc::now())
+    }
+
+    /// Calculate cost for a model and token usage at a specific UTC instant.
+    pub fn calculate_at(&self, model: &str, usage: &Usage, at: DateTime<Utc>) -> f64 {
         if let Some(pricing) = self.models.get(model) {
-            return self.calculate_with_pricing(pricing, usage);
+            return self.calculate_with_pricing_at(pricing, usage, at);
         }
 
         let normalized_model = normalize_model_key(model);
         if normalized_model != model
             && let Some(pricing) = self.models.get(normalized_model)
         {
-            return self.calculate_with_pricing(pricing, usage);
+            return self.calculate_with_pricing_at(pricing, usage, at);
         }
 
         if let Some((_, pricing)) = self
@@ -208,7 +216,7 @@ impl PricingDatabase {
             .filter(|(key, _)| model_matches_key(normalized_model, key))
             .max_by_key(|(key, _)| key.len())
         {
-            return self.calculate_with_pricing(pricing, usage);
+            return self.calculate_with_pricing_at(pricing, usage, at);
         }
 
         0.0
@@ -219,10 +227,21 @@ impl PricingDatabase {
     /// Provider dispatch should use this method instead of `calculate` so a
     /// same-named model on another provider does not accidentally supply prices.
     pub fn calculate_for_provider(&self, provider: &str, model: &str, usage: &Usage) -> f64 {
+        self.calculate_for_provider_at(provider, model, usage, Utc::now())
+    }
+
+    /// Calculate cost for a provider/model pair at a specific UTC instant.
+    pub fn calculate_for_provider_at(
+        &self,
+        provider: &str,
+        model: &str,
+        usage: &Usage,
+        at: DateTime<Utc>,
+    ) -> f64 {
         if let Some(pricing) = self.models.get(model)
             && pricing_matches_provider(model, pricing, provider)
         {
-            return self.calculate_with_pricing(pricing, usage);
+            return self.calculate_with_pricing_at(pricing, usage, at);
         }
 
         let normalized_model = normalize_model_key(model);
@@ -230,7 +249,7 @@ impl PricingDatabase {
             && let Some(pricing) = self.models.get(normalized_model)
             && pricing_matches_provider(normalized_model, pricing, provider)
         {
-            return self.calculate_with_pricing(pricing, usage);
+            return self.calculate_with_pricing_at(pricing, usage, at);
         }
 
         if let Some((_, pricing)) = self
@@ -242,13 +261,18 @@ impl PricingDatabase {
             })
             .max_by_key(|(key, _)| key.len())
         {
-            return self.calculate_with_pricing(pricing, usage);
+            return self.calculate_with_pricing_at(pricing, usage, at);
         }
 
         0.0
     }
 
-    fn calculate_with_pricing(&self, pricing: &ModelPricing, usage: &Usage) -> f64 {
+    fn calculate_with_pricing_at(
+        &self,
+        pricing: &ModelPricing,
+        usage: &Usage,
+        at: DateTime<Utc>,
+    ) -> f64 {
         let mut cost = 0.0;
 
         if requires_bidirectional_database_token_pricing(pricing)
@@ -261,15 +285,35 @@ impl PricingDatabase {
             return 0.0;
         }
 
+        let peak_rates = match time_of_use::peak_token_rates_at(pricing, at) {
+            Ok(rates) => rates,
+            Err(message) => {
+                error!(
+                    provider = %pricing.litellm_provider,
+                    mode = %pricing.mode,
+                    error = %message,
+                    "invalid time-of-use pricing; refusing to calculate a partial cost"
+                );
+                return 0.0;
+            }
+        };
+        let base_input_cost = peak_rates
+            .map(|rates| rates.input_cost_per_token)
+            .or(pricing.input_cost_per_token)
+            .unwrap_or(0.0);
+        let base_output_cost = peak_rates
+            .map(|rates| rates.output_cost_per_token)
+            .or(pricing.output_cost_per_token)
+            .unwrap_or(0.0);
         let input_cost_per_token = tiered_cost_per_token(
             pricing,
-            pricing.input_cost_per_token.unwrap_or(0.0),
+            base_input_cost,
             "input_cost_per_token_above_",
             usage.prompt_tokens,
         );
         let output_cost_per_token = tiered_cost_per_token(
             pricing,
-            pricing.output_cost_per_token.unwrap_or(0.0),
+            base_output_cost,
             "output_cost_per_token_above_",
             usage.prompt_tokens,
         );
@@ -571,6 +615,21 @@ fn builtin_deepseek_v4_model(
         serde_json::Value::from(cache_read_input_token_cost),
     );
     model.extra.insert(
+        time_of_use::TIME_OF_USE_PRICING_KEY.to_string(),
+        serde_json::json!({
+            "timezone": "UTC",
+            "peak_windows": [
+                {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+                {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+            ],
+            "peak_rates": {
+                "input_cost_per_token": input_cost_per_token * 2.0,
+                "output_cost_per_token": output_cost_per_token * 2.0,
+                "cache_read_input_token_cost": cache_read_input_token_cost * 2.0
+            }
+        }),
+    );
+    model.extra.insert(
         "pricing_status".to_string(),
         serde_json::Value::from("official_off_peak_rate_checked_2026_08_24"),
     );
@@ -709,11 +768,19 @@ pub fn parse_litellm_pricing_json(
     content: &str,
 ) -> Result<HashMap<String, LiteLLMModelInfo>, serde_json::Error> {
     let all_data: HashMap<String, serde_json::Value> = serde_json::from_str(content)?;
-    all_data
+    let models: HashMap<String, LiteLLMModelInfo> = all_data
         .into_iter()
         .filter(|(key, _)| !is_litellm_pricing_metadata_key(key))
         .map(|(key, value)| serde_json::from_value(value).map(|pricing| (key, pricing)))
-        .collect()
+        .collect::<Result<_, _>>()?;
+    for (model, info) in &models {
+        time_of_use::validate_time_of_use_pricing(info).map_err(|message| {
+            <serde_json::Error as serde::de::Error>::custom(format!(
+                "invalid pricing for model {model}: {message}"
+            ))
+        })?;
+    }
+    Ok(models)
 }
 
 pub(crate) fn embedded_default_pricing_models() -> serde_json::Result<PricingModelMap> {

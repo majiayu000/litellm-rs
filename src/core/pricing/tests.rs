@@ -74,6 +74,64 @@ fn parse_litellm_pricing_json_rejects_malformed_model_entries() {
 }
 
 #[test]
+fn parse_litellm_pricing_json_rejects_malformed_time_of_use_pricing() {
+    let cases = [
+        (
+            "timezone",
+            serde_json::json!({
+                "timezone": "Asia/Shanghai",
+                "peak_windows": [{"weekdays": [1], "start_hour": 1, "end_hour": 4}],
+                "peak_rates": {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0, "cache_read_input_token_cost": 0.5}
+            }),
+        ),
+        (
+            "weekday",
+            serde_json::json!({
+                "timezone": "UTC",
+                "peak_windows": [{"weekdays": [0], "start_hour": 1, "end_hour": 4}],
+                "peak_rates": {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0, "cache_read_input_token_cost": 0.5}
+            }),
+        ),
+        (
+            "window",
+            serde_json::json!({
+                "timezone": "UTC",
+                "peak_windows": [{"weekdays": [1], "start_hour": 4, "end_hour": 4}],
+                "peak_rates": {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0, "cache_read_input_token_cost": 0.5}
+            }),
+        ),
+        (
+            "rate",
+            serde_json::json!({
+                "timezone": "UTC",
+                "peak_windows": [{"weekdays": [1], "start_hour": 1, "end_hour": 4}],
+                "peak_rates": {"input_cost_per_token": -1.0, "output_cost_per_token": 2.0, "cache_read_input_token_cost": 0.5}
+            }),
+        ),
+    ];
+
+    for (case, schedule) in cases {
+        let content = serde_json::json!({
+            "bad-time-priced-model": {
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002,
+                "litellm_provider": "test",
+                "mode": "chat",
+                "time_of_use_pricing": schedule
+            }
+        })
+        .to_string();
+        let error = parse_litellm_pricing_json(&content).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("bad-time-priced-model"),
+            "{case}: {message}"
+        );
+        assert!(message.contains("time_of_use_pricing"), "{case}: {message}");
+    }
+}
+
+#[test]
 fn parse_litellm_pricing_json_accepts_integral_float_token_limits_and_missing_mode() {
     let content = r#"{
             "float-token-model": {
@@ -717,6 +775,43 @@ fn test_default_source_loads_shared_pricing_file() {
 
     assert!(db.get_model_info("gpt-4o").is_some());
     assert!(db.calculate("gpt-4o", &Usage::new(1000, 500)) > 0.0);
+}
+
+#[test]
+fn deepseek_v4_catalog_rows_select_peak_rates_at_utc_boundaries() {
+    use chrono::{TimeZone, Utc};
+
+    let db = PricingDatabase::from_default_source().unwrap();
+    let usage = Usage::new(1_000, 1_000);
+    let off_peak = Utc.with_ymd_and_hms(2026, 8, 24, 4, 0, 0).unwrap();
+    let peak = Utc.with_ymd_and_hms(2026, 8, 24, 6, 0, 0).unwrap();
+    let models = [
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4-pro",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-reasoner",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-flash-vision-exp",
+        "deepseek/deepseek-v4-pro",
+    ];
+
+    for model in models {
+        let info = db.get_model_info(model).unwrap();
+        assert!(
+            info.extra
+                .contains_key(time_of_use::TIME_OF_USE_PRICING_KEY)
+        );
+        let off_peak_cost = db.calculate_for_provider_at("deepseek", model, &usage, off_peak);
+        let peak_cost = db.calculate_for_provider_at("deepseek", model, &usage, peak);
+        assert!(off_peak_cost > 0.0, "{model} should have an off-peak cost");
+        assert!(
+            (peak_cost - off_peak_cost * 2.0).abs() < 1e-12,
+            "{model} peak cost {peak_cost} should be twice off-peak {off_peak_cost}"
+        );
+    }
 }
 
 #[test]

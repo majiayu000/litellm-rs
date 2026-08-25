@@ -319,28 +319,31 @@ fn test_runtime_pricing_keeps_unprefixed_openai_like_models_strict() {
 
 #[test]
 fn test_get_deepseek_pricing() {
-    let Ok(flash) = get_model_pricing("deepseek-v4-flash", "deepseek") else {
+    use chrono::{TimeZone, Utc};
+    let off_peak = Utc.with_ymd_and_hms(2026, 8, 29, 2, 0, 0).unwrap();
+
+    let Ok(flash) = get_model_pricing_at("deepseek-v4-flash", "deepseek", off_peak) else {
         panic!("deepseek-v4-flash pricing should be available");
     };
     assert_cost_eq(flash.input_cost_per_1k_tokens, 0.00022);
     assert_cost_eq(flash.output_cost_per_1k_tokens, 0.00066);
     assert_eq!(flash.cache_read_input_token_cost, Some(0.000007));
 
-    let Ok(pro) = get_model_pricing("deepseek-v4-pro", "deepseek") else {
+    let Ok(pro) = get_model_pricing_at("deepseek-v4-pro", "deepseek", off_peak) else {
         panic!("deepseek-v4-pro pricing should be available");
     };
     assert_cost_eq(pro.input_cost_per_1k_tokens, 0.00066);
     assert_cost_eq(pro.output_cost_per_1k_tokens, 0.00198);
     assert_eq!(pro.cache_read_input_token_cost, Some(0.000022));
 
-    let Ok(chat_alias) = get_model_pricing("deepseek-chat", "deepseek") else {
+    let Ok(chat_alias) = get_model_pricing_at("deepseek-chat", "deepseek", off_peak) else {
         panic!("deepseek-chat alias pricing should be available");
     };
     assert_cost_eq(chat_alias.input_cost_per_1k_tokens, 0.00022);
     assert_cost_eq(chat_alias.output_cost_per_1k_tokens, 0.00066);
     assert_eq!(chat_alias.cache_read_input_token_cost, Some(0.000007));
 
-    let Ok(reasoner_alias) = get_model_pricing("deepseek-reasoner", "deepseek") else {
+    let Ok(reasoner_alias) = get_model_pricing_at("deepseek-reasoner", "deepseek", off_peak) else {
         panic!("deepseek-reasoner alias pricing should be available");
     };
     assert_cost_eq(reasoner_alias.input_cost_per_1k_tokens, 0.00022);
@@ -351,7 +354,7 @@ fn test_get_deepseek_pricing() {
         "deepseek-v4-flash-vision-exp",
         "deepseek/deepseek-v4-flash-vision-exp",
     ] {
-        let Ok(vision) = get_model_pricing(model, "deepseek") else {
+        let Ok(vision) = get_model_pricing_at(model, "deepseek", off_peak) else {
             panic!("deepseek vision model '{model}' pricing should be available");
         };
         assert_cost_eq(vision.input_cost_per_1k_tokens, 0.00022);
@@ -362,21 +365,27 @@ fn test_get_deepseek_pricing() {
 
 #[test]
 fn test_deepseek_fallback_pricing() {
-    let Ok(flash) = super::super::pricing::get_deepseek_pricing("deepseek-v4-flash") else {
+    use chrono::{TimeZone, Utc};
+    let off_peak = Utc.with_ymd_and_hms(2026, 8, 29, 2, 0, 0).unwrap();
+
+    let Ok(flash) = super::super::pricing::get_deepseek_pricing_at("deepseek-v4-flash", off_peak)
+    else {
         panic!("deepseek-v4-flash fallback pricing should be available");
     };
     assert_cost_eq(flash.input_cost_per_1k_tokens, 0.00022);
     assert_cost_eq(flash.output_cost_per_1k_tokens, 0.00066);
     assert_eq!(flash.cache_read_input_token_cost, Some(0.000007));
 
-    let Ok(pro) = super::super::pricing::get_deepseek_pricing("deepseek-v4-pro") else {
+    let Ok(pro) = super::super::pricing::get_deepseek_pricing_at("deepseek-v4-pro", off_peak)
+    else {
         panic!("deepseek-v4-pro fallback pricing should be available");
     };
     assert_cost_eq(pro.input_cost_per_1k_tokens, 0.00066);
     assert_cost_eq(pro.output_cost_per_1k_tokens, 0.00198);
     assert_eq!(pro.cache_read_input_token_cost, Some(0.000022));
 
-    let Ok(vision) = super::super::pricing::get_deepseek_pricing("deepseek-v4-flash-vision-exp")
+    let Ok(vision) =
+        super::super::pricing::get_deepseek_pricing_at("deepseek-v4-flash-vision-exp", off_peak)
     else {
         panic!("deepseek-v4-flash-vision-exp fallback pricing should be available");
     };
@@ -384,9 +393,11 @@ fn test_deepseek_fallback_pricing() {
     assert_cost_eq(vision.output_cost_per_1k_tokens, 0.00066);
     assert_eq!(vision.cache_read_input_token_cost, Some(0.000007));
 
-    let Ok(unlisted_vision_alias) =
-        get_model_pricing("deepseek-v4-flash-vision-exp-unlisted", "deepseek")
-    else {
+    let Ok(unlisted_vision_alias) = get_model_pricing_at(
+        "deepseek-v4-flash-vision-exp-unlisted",
+        "deepseek",
+        off_peak,
+    ) else {
         panic!("an unlisted DeepSeek V4 Flash alias should use fallback pricing");
     };
     assert_cost_eq(unlisted_vision_alias.input_cost_per_1k_tokens, 0.00022);
