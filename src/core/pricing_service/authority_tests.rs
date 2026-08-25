@@ -89,6 +89,36 @@ fn google_authority_uses_specialized_character_pricing() {
 }
 
 #[test]
+fn provider_aware_completion_cost_uses_supplied_pricing_time() {
+    use chrono::{TimeZone, Utc};
+
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+    let off_peak = Utc.with_ymd_and_hms(2026, 8, 24, 4, 0, 0).unwrap();
+    let peak = Utc.with_ymd_and_hms(2026, 8, 24, 6, 0, 0).unwrap();
+
+    let calculate_at = |pricing_time| {
+        service
+            .calculate_loaded_completion_cost_for_provider_at(
+                "deepseek",
+                "deepseek-v4-flash",
+                1_000,
+                1_000,
+                None,
+                None,
+                None,
+                pricing_time,
+            )
+            .unwrap_or_else(|error| panic!("loaded pricing should calculate cost: {error}"))
+    };
+
+    let off_peak_cost = calculate_at(off_peak);
+    let peak_cost = calculate_at(peak);
+
+    assert!((peak_cost.total_cost - off_peak_cost.total_cost * 2.0).abs() < 1e-12);
+}
+
+#[test]
 fn google_authority_is_case_insensitive_but_not_suffix_fuzzy() {
     let service = PricingService::with_embedded_default()
         .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));

@@ -4,6 +4,7 @@
 //! This eliminates code duplication and ensures consistent behavior.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use std::sync::LazyLock;
 
 use crate::core::cost::types::{
@@ -13,11 +14,18 @@ use crate::core::cost::utils::select_tiered_pricing;
 use crate::core::pricing_service::{PricingCostBreakdown, PricingService, PricingUsage};
 use crate::utils::error::gateway_error::GatewayError;
 
+mod catalog;
 pub(crate) mod pricing;
 
+use self::catalog::{
+    get_pricing_with_shared_source, get_pricing_with_shared_source_at, litellm_to_cost_pricing_at,
+};
+#[cfg(test)]
+use self::catalog::{get_shared_model_pricing, litellm_to_cost_pricing};
 use self::pricing::{
-    get_anthropic_pricing, get_azure_pricing, get_deepseek_pricing, get_minimax_pricing,
-    get_moonshot_pricing, get_openai_pricing, get_vertex_ai_pricing, get_zhipu_pricing,
+    get_anthropic_pricing, get_azure_pricing, get_deepseek_pricing, get_deepseek_pricing_at,
+    get_minimax_pricing, get_moonshot_pricing, get_openai_pricing, get_vertex_ai_pricing,
+    get_zhipu_pricing,
 };
 
 /// Unified Cost Calculator Trait
@@ -57,11 +65,22 @@ pub fn generic_cost_per_token(
     usage: &UsageTokens,
     provider: &str,
 ) -> Result<CostBreakdown, CostError> {
+    generic_cost_per_token_at(model, usage, provider, Utc::now())
+}
+
+/// Calculate cost using prices effective at a specific UTC instant.
+pub fn generic_cost_per_token_at(
+    model: &str,
+    usage: &UsageTokens,
+    provider: &str,
+    pricing_time: DateTime<Utc>,
+) -> Result<CostBreakdown, CostError> {
     let pricing_usage = pricing_usage_from_cost_usage(usage);
-    match default_pricing_authority().calculate_loaded_usage_cost_for_provider(
+    match default_pricing_authority().calculate_loaded_usage_cost_for_provider_at(
         provider,
         model,
         &pricing_usage,
+        pricing_time,
     ) {
         Ok(breakdown) => {
             return Ok(pricing_breakdown_to_cost_breakdown(
@@ -77,19 +96,28 @@ pub fn generic_cost_per_token(
         }
     }
 
-    let pricing = get_fallback_model_pricing(model, provider)?;
+    let pricing = get_fallback_model_pricing_at(model, provider, pricing_time)?;
     calculate_with_model_pricing(model, provider, usage, pricing)
 }
 
 /// Get model pricing information
 pub fn get_model_pricing(model: &str, provider: &str) -> Result<ModelPricing, CostError> {
+    get_model_pricing_at(model, provider, Utc::now())
+}
+
+/// Get model pricing effective at a specific UTC instant.
+pub fn get_model_pricing_at(
+    model: &str,
+    provider: &str,
+    pricing_time: DateTime<Utc>,
+) -> Result<ModelPricing, CostError> {
     if let Some((resolved_model, info)) =
         default_pricing_authority().get_model_info_for_provider(provider, model)
     {
-        return litellm_to_cost_pricing(&resolved_model, &info);
+        return litellm_to_cost_pricing_at(&resolved_model, &info, pricing_time);
     }
 
-    get_fallback_model_pricing(model, provider)
+    get_fallback_model_pricing_at(model, provider, pricing_time)
 }
 
 fn default_pricing_authority() -> &'static PricingService {
@@ -179,6 +207,36 @@ fn get_fallback_model_pricing(model: &str, provider: &str) -> Result<ModelPricin
             provider: provider.to_string(),
         }),
     }
+}
+
+fn get_fallback_model_pricing_at(
+    model: &str,
+    provider: &str,
+    pricing_time: DateTime<Utc>,
+) -> Result<ModelPricing, CostError> {
+    let normalized_provider = crate::core::pricing::normalize_pricing_provider(provider);
+    if normalized_provider == "deepseek" {
+        return get_pricing_with_shared_source_at(
+            model,
+            &["deepseek"],
+            |model| get_deepseek_pricing_at(model, pricing_time),
+            pricing_time,
+        );
+    }
+    if normalized_provider == "openai_like" {
+        if let Some((prefixed_provider, stripped_model)) = provider_prefixed_model(model) {
+            let prefixed_provider =
+                crate::core::pricing::normalize_pricing_provider(prefixed_provider);
+            if prefixed_provider != "openai_like" {
+                return get_model_pricing_at(stripped_model, &prefixed_provider, pricing_time);
+            }
+        }
+        return Err(CostError::ModelNotSupported {
+            model: model.to_string(),
+            provider: "openai_like".to_string(),
+        });
+    }
+    get_fallback_model_pricing(model, provider)
 }
 
 #[cfg(test)]
@@ -394,258 +452,6 @@ fn provider_prefixed_model(model: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((provider, stripped_model))
-}
-
-fn get_pricing_with_shared_source<F>(
-    model: &str,
-    provider_aliases: &[&str],
-    fallback: F,
-) -> Result<ModelPricing, CostError>
-where
-    F: FnOnce(&str) -> Result<ModelPricing, CostError>,
-{
-    // Some(..) means the shared catalog matched this model; an inner Err means
-    // it matched but carried no usable pricing — that must not fall through to
-    // hardcoded defaults, or an unpriced catalog entry would bill at $0.
-    if let Some(pricing) = get_shared_model_pricing(model, provider_aliases) {
-        return pricing;
-    }
-
-    fallback(model)
-}
-
-fn get_shared_model_pricing(
-    model: &str,
-    provider_aliases: &[&str],
-) -> Option<Result<ModelPricing, CostError>> {
-    let db = crate::core::pricing::get_pricing_db();
-
-    if let Some(info) = db.get_model_info(model)
-        && litellm_provider_matches(&info.litellm_provider, provider_aliases)
-    {
-        return Some(litellm_to_cost_pricing(model, info));
-    }
-
-    let normalized_model = crate::core::pricing::normalize_model_key(model);
-    if normalized_model != model
-        && let Some(info) = db.get_model_info(normalized_model)
-        && litellm_provider_matches(&info.litellm_provider, provider_aliases)
-    {
-        return Some(litellm_to_cost_pricing(normalized_model, info));
-    }
-
-    let model_lower = normalized_model.to_lowercase();
-    for provider in provider_aliases {
-        let mut candidates = db.get_provider_models(provider);
-        candidates.sort();
-
-        for model_id in candidates {
-            let model_id_lower = model_id.to_lowercase();
-            if is_shared_model_match(&model_id_lower, &model_lower)
-                && let Some(info) = db.get_model_info(&model_id)
-                && litellm_provider_matches(&info.litellm_provider, provider_aliases)
-            {
-                return Some(litellm_to_cost_pricing(&model_id, info));
-            }
-        }
-    }
-
-    None
-}
-
-fn is_shared_model_match(candidate: &str, requested: &str) -> bool {
-    fn model_id_matches(candidate: &str, requested: &str) -> bool {
-        if candidate == requested {
-            return true;
-        }
-
-        candidate
-            .strip_prefix(requested)
-            .and_then(|suffix| suffix.strip_prefix('-'))
-            .is_some_and(alias_suffix_matches)
-    }
-
-    if candidate == requested {
-        return true;
-    }
-
-    model_id_matches(candidate, requested)
-        || model_id_matches(requested, candidate)
-        || candidate
-            .rsplit_once('/')
-            .map(|(_, model_id)| {
-                model_id_matches(model_id, requested) || model_id_matches(requested, model_id)
-            })
-            .unwrap_or(false)
-}
-
-fn alias_suffix_matches(suffix: &str) -> bool {
-    if suffix == "latest" {
-        return true;
-    }
-
-    let digit_prefix_len = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
-    digit_prefix_len >= 4
-        && suffix
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-}
-
-fn litellm_provider_matches(provider: &str, aliases: &[&str]) -> bool {
-    let provider = crate::core::pricing::normalize_pricing_provider(provider);
-    aliases
-        .iter()
-        .any(|alias| crate::core::pricing::normalize_pricing_provider(alias) == provider)
-}
-
-fn litellm_to_cost_pricing(
-    model: &str,
-    info: &crate::core::pricing::LiteLLMModelInfo,
-) -> Result<ModelPricing, CostError> {
-    use chrono::Utc;
-
-    // A catalog entry with neither token cost is unpriced data, not a free
-    // model: charging $0 would silently under-bill, so surface it instead.
-    if info.input_cost_per_token.is_none()
-        && info.output_cost_per_token.is_none()
-        && !has_non_token_pricing(info)
-    {
-        return Err(CostError::MissingPricing {
-            model: model.to_string(),
-        });
-    }
-    // Chat/completion requests consume both prompt and completion tokens; a
-    // single missing side would under-bill real completions, so fail closed.
-    if requires_bidirectional_token_pricing(info)
-        && (info.input_cost_per_token.is_none() || info.output_cost_per_token.is_none())
-    {
-        return Err(CostError::MissingPricing {
-            model: model.to_string(),
-        });
-    }
-    // Non-chat modes such as embeddings may only price one token direction.
-    // Keep allowing that shape, but flag the gap so catalog data can be fixed.
-    if info.input_cost_per_token.is_none() || info.output_cost_per_token.is_none() {
-        tracing::warn!(
-            "model '{}' is missing {} token cost; billing that side at $0",
-            model,
-            if info.input_cost_per_token.is_none() {
-                "input"
-            } else {
-                "output"
-            }
-        );
-    }
-
-    Ok(ModelPricing {
-        model: model.to_string(),
-        input_cost_per_1k_tokens: price_per_token_to_per_1k(
-            info.input_cost_per_token.unwrap_or(0.0),
-        ),
-        output_cost_per_1k_tokens: price_per_token_to_per_1k(
-            info.output_cost_per_token.unwrap_or(0.0),
-        ),
-        cache_read_input_token_cost: extra_token_cost_per_1k(info, "cache_read_input_token_cost"),
-        cache_creation_input_token_cost: extra_token_cost_per_1k(
-            info,
-            "cache_creation_input_token_cost",
-        ),
-        input_cost_per_audio_token: extra_f64(info, "input_cost_per_audio_token"),
-        output_cost_per_audio_token: extra_f64(info, "output_cost_per_audio_token"),
-        image_cost_per_token: image_cost_per_token(info),
-        reasoning_cost_per_token: extra_f64(info, "output_cost_per_reasoning_token"),
-        cost_per_second: info.cost_per_second,
-        video_cost_per_second: extra_f64(info, "video_cost_per_second"),
-        audio_cost_per_second: extra_f64(info, "audio_cost_per_second"),
-        cost_per_image: extra_cost_per_image(model, info)?,
-        tiered_pricing: extra_tiered_pricing_per_1k(info),
-        batch_discount: extra_f64(info, "batch_discount"),
-        currency: "USD".to_string(),
-        updated_at: Utc::now(),
-    })
-}
-
-fn requires_bidirectional_token_pricing(info: &crate::core::pricing::LiteLLMModelInfo) -> bool {
-    matches!(info.mode.as_str(), "chat" | "completion")
-        || (info.mode.is_empty() && !has_non_token_pricing(info))
-}
-
-fn has_non_token_pricing(info: &crate::core::pricing::LiteLLMModelInfo) -> bool {
-    info.cost_per_second.is_some()
-        || extra_f64(info, "video_cost_per_second").is_some()
-        || extra_f64(info, "audio_cost_per_second").is_some()
-        || image_cost_per_token(info).is_some()
-        || extra_f64(info, "output_cost_per_image").is_some()
-}
-
-fn extra_f64(info: &crate::core::pricing::LiteLLMModelInfo, key: &str) -> Option<f64> {
-    info.extra.get(key).and_then(serde_json::Value::as_f64)
-}
-
-fn extra_token_cost_per_1k(
-    info: &crate::core::pricing::LiteLLMModelInfo,
-    key: &str,
-) -> Option<f64> {
-    extra_f64(info, key).map(price_per_token_to_per_1k)
-}
-
-fn image_cost_per_token(info: &crate::core::pricing::LiteLLMModelInfo) -> Option<f64> {
-    extra_f64(info, "image_cost_per_token")
-        .or_else(|| extra_f64(info, "output_cost_per_image_token"))
-}
-
-fn extra_cost_per_image(
-    model: &str,
-    info: &crate::core::pricing::LiteLLMModelInfo,
-) -> Result<Option<std::collections::HashMap<String, f64>>, CostError> {
-    let Some(price) = extra_f64(info, "output_cost_per_image") else {
-        return Ok(None);
-    };
-    if !price.is_finite() || price < 0.0 {
-        return Err(CostError::InvalidUsage {
-            message: format!(
-                "Invalid image pricing for model {model}: output_cost_per_image ({price})"
-            ),
-        });
-    }
-    Ok(Some(std::collections::HashMap::from([(
-        "base".to_string(),
-        price,
-    )])))
-}
-
-fn extra_tiered_pricing_per_1k(
-    info: &crate::core::pricing::LiteLLMModelInfo,
-) -> Option<std::collections::HashMap<String, f64>> {
-    let tiered = info
-        .extra
-        .iter()
-        .filter_map(|(key, value)| {
-            let is_token_tier = key.starts_with("input_cost_per_token_above_")
-                || key.starts_with("output_cost_per_token_above_")
-                || key.starts_with("cache_creation_input_token_cost_above_")
-                || key.starts_with("cache_read_input_token_cost_above_");
-
-            if is_token_tier {
-                value
-                    .as_f64()
-                    .map(|cost_per_token| (key.clone(), price_per_token_to_per_1k(cost_per_token)))
-            } else {
-                None
-            }
-        })
-        .collect::<std::collections::HashMap<_, _>>();
-
-    if tiered.is_empty() {
-        None
-    } else {
-        Some(tiered)
-    }
-}
-
-fn price_per_token_to_per_1k(cost_per_token: f64) -> f64 {
-    let cost_per_1k = cost_per_token * 1000.0;
-    (cost_per_1k * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
 }
 
 /// Calculate input cost

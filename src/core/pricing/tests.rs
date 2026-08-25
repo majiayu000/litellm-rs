@@ -74,6 +74,64 @@ fn parse_litellm_pricing_json_rejects_malformed_model_entries() {
 }
 
 #[test]
+fn parse_litellm_pricing_json_rejects_malformed_time_of_use_pricing() {
+    let cases = [
+        (
+            "timezone",
+            serde_json::json!({
+                "timezone": "Asia/Shanghai",
+                "peak_windows": [{"weekdays": [1], "start_hour": 1, "end_hour": 4}],
+                "peak_rates": {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0, "cache_read_input_token_cost": 0.5}
+            }),
+        ),
+        (
+            "weekday",
+            serde_json::json!({
+                "timezone": "UTC",
+                "peak_windows": [{"weekdays": [0], "start_hour": 1, "end_hour": 4}],
+                "peak_rates": {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0, "cache_read_input_token_cost": 0.5}
+            }),
+        ),
+        (
+            "window",
+            serde_json::json!({
+                "timezone": "UTC",
+                "peak_windows": [{"weekdays": [1], "start_hour": 4, "end_hour": 4}],
+                "peak_rates": {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0, "cache_read_input_token_cost": 0.5}
+            }),
+        ),
+        (
+            "rate",
+            serde_json::json!({
+                "timezone": "UTC",
+                "peak_windows": [{"weekdays": [1], "start_hour": 1, "end_hour": 4}],
+                "peak_rates": {"input_cost_per_token": -1.0, "output_cost_per_token": 2.0, "cache_read_input_token_cost": 0.5}
+            }),
+        ),
+    ];
+
+    for (case, schedule) in cases {
+        let content = serde_json::json!({
+            "bad-time-priced-model": {
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002,
+                "litellm_provider": "test",
+                "mode": "chat",
+                "time_of_use_pricing": schedule
+            }
+        })
+        .to_string();
+        let error = parse_litellm_pricing_json(&content).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("bad-time-priced-model"),
+            "{case}: {message}"
+        );
+        assert!(message.contains("time_of_use_pricing"), "{case}: {message}");
+    }
+}
+
+#[test]
 fn parse_litellm_pricing_json_accepts_integral_float_token_limits_and_missing_mode() {
     let content = r#"{
             "float-token-model": {
@@ -248,6 +306,126 @@ fn extended_pricing_handles_cohere_command_a_rates() {
     assert!(
         (db.calculate_for_provider("cohere", "command-a-03-2025", &usage) - 0.0075).abs() < 1e-12
     );
+}
+
+#[test]
+fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
+    const PRICING_STATUS: &str = "official_off_peak_rate_checked_2026_08_24";
+    const FLASH_RATES: (f64, f64, f64) = (2.2e-7, 6.6e-7, 7e-9);
+    const PRO_RATES: (f64, f64, f64) = (6.6e-7, 1.98e-6, 2.2e-8);
+
+    let builtin = PricingDatabase::default();
+    for (model, expected) in [
+        ("deepseek-v4-flash", FLASH_RATES),
+        ("deepseek-v4-flash-vision-exp", FLASH_RATES),
+        ("deepseek-chat", FLASH_RATES),
+        ("deepseek-reasoner", FLASH_RATES),
+        ("deepseek-v4-pro", PRO_RATES),
+    ] {
+        let Some(pricing) = builtin.get_model_info(model) else {
+            panic!("built-in pricing is missing {model}");
+        };
+        assert_eq!(pricing.input_cost_per_token, Some(expected.0));
+        assert_eq!(pricing.output_cost_per_token, Some(expected.1));
+        assert_eq!(
+            pricing
+                .extra
+                .get("cache_read_input_token_cost")
+                .and_then(serde_json::Value::as_f64),
+            Some(expected.2)
+        );
+        assert_eq!(
+            pricing
+                .extra
+                .get("pricing_status")
+                .and_then(serde_json::Value::as_str),
+            Some(PRICING_STATUS)
+        );
+    }
+
+    let embedded = match embedded_default_pricing_models() {
+        Ok(models) => models,
+        Err(error) => panic!("embedded pricing catalog should parse: {error}"),
+    };
+    for (model, expected) in [
+        ("deepseek-v4-flash", FLASH_RATES),
+        ("deepseek/deepseek-v4-flash", FLASH_RATES),
+        ("deepseek-v4-flash-vision-exp", FLASH_RATES),
+        ("deepseek/deepseek-v4-flash-vision-exp", FLASH_RATES),
+        ("deepseek-chat", FLASH_RATES),
+        ("deepseek/deepseek-chat", FLASH_RATES),
+        ("deepseek-reasoner", FLASH_RATES),
+        ("deepseek/deepseek-reasoner", FLASH_RATES),
+        ("deepseek-v4-pro", PRO_RATES),
+        ("deepseek/deepseek-v4-pro", PRO_RATES),
+    ] {
+        let Some(pricing) = embedded.get(model) else {
+            panic!("embedded pricing is missing {model}");
+        };
+        assert_eq!(pricing.input_cost_per_token, Some(expected.0));
+        assert_eq!(pricing.output_cost_per_token, Some(expected.1));
+        assert_eq!(
+            pricing
+                .extra
+                .get("cache_read_input_token_cost")
+                .and_then(serde_json::Value::as_f64),
+            Some(expected.2)
+        );
+        assert_eq!(
+            pricing
+                .extra
+                .get("pricing_status")
+                .and_then(serde_json::Value::as_str),
+            Some(PRICING_STATUS)
+        );
+    }
+
+    let assert_vision_limits = |pricing: &LiteLLMModelInfo| {
+        assert_eq!(pricing.supports_vision, Some(true));
+        assert_eq!(pricing.max_tokens, Some(1_048_576));
+        assert_eq!(pricing.max_input_tokens, Some(1_048_576));
+        assert_eq!(pricing.max_output_tokens, Some(393_216));
+    };
+
+    for model in [
+        "deepseek-v4-flash-vision-exp",
+        "deepseek/deepseek-v4-flash-vision-exp",
+    ] {
+        let Some(pricing) = embedded.get(model) else {
+            panic!("embedded pricing is missing {model}");
+        };
+        assert_vision_limits(pricing);
+    }
+
+    let Some(builtin_vision) = builtin.get_model_info("deepseek-v4-flash-vision-exp") else {
+        panic!("built-in pricing is missing deepseek-v4-flash-vision-exp");
+    };
+    assert_vision_limits(builtin_vision);
+
+    let Some(canonical_vision) = embedded.get("deepseek-v4-flash-vision-exp") else {
+        panic!("embedded pricing is missing canonical vision metadata");
+    };
+    let Some(prefixed_vision) = embedded.get("deepseek/deepseek-v4-flash-vision-exp") else {
+        panic!("embedded pricing is missing prefixed vision metadata");
+    };
+    assert_eq!(
+        canonical_vision.supports_streaming,
+        prefixed_vision.supports_streaming
+    );
+    for key in [
+        "supported_endpoints",
+        "supports_assistant_prefill",
+        "supports_native_streaming",
+        "supports_reasoning",
+        "supports_system_messages",
+        "thinking_mode_default",
+    ] {
+        assert_eq!(
+            canonical_vision.extra.get(key),
+            prefixed_vision.extra.get(key),
+            "vision catalog aliases disagree on {key}"
+        );
+    }
 }
 
 #[test]
@@ -597,6 +775,43 @@ fn test_default_source_loads_shared_pricing_file() {
 
     assert!(db.get_model_info("gpt-4o").is_some());
     assert!(db.calculate("gpt-4o", &Usage::new(1000, 500)) > 0.0);
+}
+
+#[test]
+fn deepseek_v4_catalog_rows_select_peak_rates_at_utc_boundaries() {
+    use chrono::{TimeZone, Utc};
+
+    let db = PricingDatabase::from_default_source().unwrap();
+    let usage = Usage::new(1_000, 1_000);
+    let off_peak = Utc.with_ymd_and_hms(2026, 8, 24, 4, 0, 0).unwrap();
+    let peak = Utc.with_ymd_and_hms(2026, 8, 24, 6, 0, 0).unwrap();
+    let models = [
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4-pro",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-reasoner",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-flash-vision-exp",
+        "deepseek/deepseek-v4-pro",
+    ];
+
+    for model in models {
+        let info = db.get_model_info(model).unwrap();
+        assert!(
+            info.extra
+                .contains_key(time_of_use::TIME_OF_USE_PRICING_KEY)
+        );
+        let off_peak_cost = db.calculate_for_provider_at("deepseek", model, &usage, off_peak);
+        let peak_cost = db.calculate_for_provider_at("deepseek", model, &usage, peak);
+        assert!(off_peak_cost > 0.0, "{model} should have an off-peak cost");
+        assert!(
+            (peak_cost - off_peak_cost * 2.0).abs() < 1e-12,
+            "{model} peak cost {peak_cost} should be twice off-peak {off_peak_cost}"
+        );
+    }
 }
 
 #[test]
