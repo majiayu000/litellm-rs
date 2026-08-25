@@ -7,7 +7,9 @@ use std::sync::Arc;
 impl RoutingSnapshot {
     pub(super) fn state_for_insertion(&self, deployment: &Deployment) -> DeploymentState {
         match self.deployments.get(&deployment.id) {
-            Some(existing) => existing.state.for_snapshot_insertion(),
+            Some(existing) => existing.state.for_snapshot_insertion_with_provider(
+                deployment.state.provider_instance_identity(),
+            ),
             None => deployment.state.for_snapshot_insertion(),
         }
     }

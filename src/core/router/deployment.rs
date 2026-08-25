@@ -31,8 +31,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "deployment/probe_state.rs"]
 mod probe_state;
+#[path = "deployment/provider_instance.rs"]
+mod provider_instance;
 use probe_state::ProbeLifecycle;
 pub(crate) use probe_state::publish_probe_group;
+pub(crate) use provider_instance::ProviderInstanceIdentity;
 use url::Url;
 
 /// Deployment identifier (unique within router)
@@ -197,6 +200,7 @@ impl Default for DeploymentConfig {
 #[derive(Debug, Clone)]
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
+    provider_instance_identity: ProviderInstanceIdentity,
     probe_health: Arc<AtomicU8>,
     probe_last_checked_at_millis: Arc<AtomicU64>,
     probe_lifecycle: Arc<ProbeLifecycle>,
@@ -263,6 +267,10 @@ pub struct DeploymentStateInner {
 impl DeploymentState {
     /// Create new deployment state with default values
     pub fn new() -> Self {
+        Self::new_for_provider_instance(ProviderInstanceIdentity::new())
+    }
+
+    fn new_for_provider_instance(provider_instance_identity: ProviderInstanceIdentity) -> Self {
         let now = current_timestamp();
         Self {
             inner: Arc::new(DeploymentStateInner {
@@ -281,6 +289,7 @@ impl DeploymentState {
                 consecutive_successes: AtomicU32::new(0),
                 minute_reset_at: AtomicU64::new(now),
             }),
+            provider_instance_identity,
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
             probe_lifecycle: Arc::new(ProbeLifecycle::new()),
@@ -325,14 +334,26 @@ impl DeploymentState {
 
     /// Share request-routing state while requiring fresh probe evidence.
     pub(crate) fn for_snapshot_insertion(&self) -> Self {
+        self.for_snapshot_insertion_with_provider(self.provider_instance_identity.clone())
+    }
+
+    pub(crate) fn for_snapshot_insertion_with_provider(
+        &self,
+        provider_instance_identity: ProviderInstanceIdentity,
+    ) -> Self {
         let probe_generation = self.probe_lifecycle.next_generation();
         Self {
             inner: Arc::clone(&self.inner),
+            provider_instance_identity,
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
             probe_lifecycle: Arc::clone(&self.probe_lifecycle),
             probe_generation,
         }
+    }
+
+    pub(crate) fn provider_instance_identity(&self) -> ProviderInstanceIdentity {
+        self.provider_instance_identity.clone()
     }
 }
 
@@ -406,13 +427,29 @@ impl Deployment {
     /// * `model` - Actual model name (provider-specific)
     /// * `model_name` - User-facing model name (model group)
     pub fn new(id: DeploymentId, provider: Provider, model: String, model_name: String) -> Self {
+        Self::new_with_provider_instance(
+            id,
+            provider,
+            model,
+            model_name,
+            ProviderInstanceIdentity::new(),
+        )
+    }
+
+    pub(crate) fn new_with_provider_instance(
+        id: DeploymentId,
+        provider: Provider,
+        model: String,
+        model_name: String,
+        provider_instance_identity: ProviderInstanceIdentity,
+    ) -> Self {
         Self {
             id,
             provider,
             model,
             model_name,
             config: DeploymentConfig::default(),
-            state: DeploymentState::new(),
+            state: DeploymentState::new_for_provider_instance(provider_instance_identity),
             tags: Vec::new(),
         }
     }
@@ -606,191 +643,5 @@ fn current_timestamp_duration() -> std::time::Duration {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::Ordering;
-
-    // ==================== HealthStatus Tests ====================
-
-    #[test]
-    fn test_health_status_from_u8_healthy() {
-        assert_eq!(HealthStatus::from(1), HealthStatus::Healthy);
-    }
-
-    #[test]
-    fn test_health_status_from_u8_degraded() {
-        assert_eq!(HealthStatus::from(2), HealthStatus::Degraded);
-    }
-
-    #[test]
-    fn test_health_status_from_u8_unhealthy() {
-        assert_eq!(HealthStatus::from(3), HealthStatus::Unhealthy);
-    }
-
-    #[test]
-    fn test_health_status_from_u8_cooldown() {
-        assert_eq!(HealthStatus::from(4), HealthStatus::Cooldown);
-    }
-
-    #[test]
-    fn test_health_status_from_u8_unknown() {
-        assert_eq!(HealthStatus::from(0), HealthStatus::Unknown);
-        assert_eq!(HealthStatus::from(255), HealthStatus::Unknown);
-    }
-
-    #[test]
-    fn test_health_status_to_u8() {
-        assert_eq!(u8::from(HealthStatus::Unknown), 0);
-        assert_eq!(u8::from(HealthStatus::Healthy), 1);
-        assert_eq!(u8::from(HealthStatus::Degraded), 2);
-        assert_eq!(u8::from(HealthStatus::Unhealthy), 3);
-        assert_eq!(u8::from(HealthStatus::Cooldown), 4);
-    }
-
-    #[test]
-    fn test_health_status_clone() {
-        let status = HealthStatus::Healthy;
-        let cloned = status;
-        assert_eq!(status, cloned);
-    }
-
-    // ==================== DeploymentConfig Tests ====================
-
-    #[test]
-    fn test_deployment_config_default() {
-        let config = DeploymentConfig::default();
-        assert!(config.tpm_limit.is_none());
-        assert!(config.rpm_limit.is_none());
-        assert!(config.max_parallel_requests.is_none());
-        assert_eq!(config.weight, 1);
-        assert_eq!(config.timeout_secs, 60);
-        assert_eq!(config.priority, 0);
-        assert!(config.health_check_policy.is_none());
-    }
-
-    #[test]
-    fn test_deployment_config_custom() {
-        let config = DeploymentConfig {
-            tpm_limit: Some(100_000),
-            rpm_limit: Some(500),
-            max_parallel_requests: Some(10),
-            weight: 2,
-            timeout_secs: 120,
-            priority: 1,
-            retry_schedule: None,
-            health_check_policy: None,
-        };
-        assert_eq!(config.tpm_limit, Some(100_000));
-        assert_eq!(config.rpm_limit, Some(500));
-        assert_eq!(config.max_parallel_requests, Some(10));
-        assert_eq!(config.weight, 2);
-    }
-
-    #[test]
-    fn test_deployment_config_clone() {
-        let config = DeploymentConfig {
-            tpm_limit: Some(50_000),
-            rpm_limit: Some(100),
-            ..DeploymentConfig::default()
-        };
-        let cloned = config.clone();
-        assert_eq!(config.tpm_limit, cloned.tpm_limit);
-        assert_eq!(config.rpm_limit, cloned.rpm_limit);
-    }
-
-    // ==================== DeploymentState Tests ====================
-
-    #[test]
-    fn test_deployment_state_new() {
-        let state = DeploymentState::new();
-        assert_eq!(state.health_status(), HealthStatus::Healthy);
-        assert_eq!(state.tpm_current.load(Ordering::Relaxed), 0);
-        assert_eq!(state.rpm_current.load(Ordering::Relaxed), 0);
-        assert_eq!(state.active_requests.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn test_deployment_state_default() {
-        let state = DeploymentState::default();
-        assert_eq!(state.health_status(), HealthStatus::Healthy);
-    }
-
-    #[test]
-    fn test_deployment_state_reset_minute() {
-        let state = DeploymentState::new();
-        state.tpm_current.store(1000, Ordering::Relaxed);
-        state.rpm_current.store(50, Ordering::Relaxed);
-        state.fails_this_minute.store(5, Ordering::Relaxed);
-
-        state.reset_minute();
-
-        assert_eq!(state.tpm_current.load(Ordering::Relaxed), 0);
-        assert_eq!(state.rpm_current.load(Ordering::Relaxed), 0);
-        assert_eq!(state.fails_this_minute.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn test_deployment_state_health_status() {
-        let state = DeploymentState::new();
-        state
-            .health
-            .store(HealthStatus::Degraded as u8, Ordering::Relaxed);
-        assert_eq!(state.health_status(), HealthStatus::Degraded);
-    }
-
-    #[test]
-    fn test_deployment_state_clone() {
-        let state = DeploymentState::new();
-        state.total_requests.store(100, Ordering::Relaxed);
-        state.success_requests.store(95, Ordering::Relaxed);
-
-        let cloned = state.clone();
-        assert_eq!(cloned.total_requests.load(Ordering::Relaxed), 100);
-        assert_eq!(cloned.success_requests.load(Ordering::Relaxed), 95);
-
-        cloned.total_requests.store(101, Ordering::Relaxed);
-        state.success_requests.store(96, Ordering::Relaxed);
-
-        assert_eq!(state.total_requests.load(Ordering::Relaxed), 101);
-        assert_eq!(cloned.success_requests.load(Ordering::Relaxed), 96);
-    }
-
-    #[tokio::test]
-    async fn test_deployment_clone_shares_runtime_state()
-    -> Result<(), crate::core::providers::unified_provider::ProviderError> {
-        let deployment = Deployment::new(
-            "test-1".to_string(),
-            Provider::OpenAI(
-                crate::core::providers::openai::OpenAIProvider::with_api_key(
-                    "sk-test-key-for-unit-testing-only",
-                )
-                .await?,
-            ),
-            "gpt-4-turbo".to_string(),
-            "gpt-4".to_string(),
-        );
-
-        let cloned = deployment.clone();
-        cloned.state.active_requests.store(7, Ordering::Relaxed);
-
-        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 7);
-        Ok(())
-    }
-
-    // ==================== current_timestamp Tests ====================
-
-    #[test]
-    fn test_current_timestamp() {
-        let ts = current_timestamp();
-        assert!(ts > 0);
-        // Timestamp should be after year 2020
-        assert!(ts > 1577836800); // 2020-01-01
-    }
-
-    #[test]
-    fn test_current_timestamp_monotonic() {
-        let ts1 = current_timestamp();
-        let ts2 = current_timestamp();
-        assert!(ts2 >= ts1);
-    }
-}
+#[path = "deployment/tests.rs"]
+mod tests;

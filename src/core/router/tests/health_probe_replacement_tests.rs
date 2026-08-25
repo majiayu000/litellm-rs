@@ -1,3 +1,4 @@
+use crate::config::models::provider::ProviderConfig;
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
 use crate::core::providers::anthropic::{AnthropicConfig, AnthropicProvider};
@@ -384,6 +385,49 @@ async fn distinct_provider_instances_receive_distinct_native_probes() {
     drop(router);
     first_server.abort();
     second_server.abort();
+}
+
+#[tokio::test]
+async fn default_gateway_health_config_probes_shared_provider_once() {
+    let (endpoint, mut requests, server) = controlled_status_server(204).await;
+    let provider = ProviderConfig {
+        name: "default-probe".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-default-health-probe".to_string(),
+        base_url: Some(endpoint.to_string()),
+        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        models: vec!["model-a".to_string(), "model-b".to_string()],
+        ..ProviderConfig::default()
+    };
+
+    let router = Router::from_gateway_config(&[provider], None)
+        .await
+        .expect("default provider health configuration should start");
+    let release = tokio::time::timeout(Duration::from_secs(1), requests.recv())
+        .await
+        .expect("default native probe should run")
+        .expect("default native probe should be observed");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), requests.recv())
+            .await
+            .is_err(),
+        "models cloned from one provider instance must share one native probe"
+    );
+    release
+        .send(())
+        .expect("default native probe should be released");
+
+    let first = router
+        .get_deployment("default-probe-model-a")
+        .expect("first configured model should exist");
+    let second = router
+        .get_deployment("default-probe-model-b")
+        .expect("second configured model should exist");
+    wait_for_probe_health(&first, HealthStatus::Healthy).await;
+    wait_for_probe_health(&second, HealthStatus::Healthy).await;
+
+    drop(router);
+    server.abort();
 }
 
 #[tokio::test]

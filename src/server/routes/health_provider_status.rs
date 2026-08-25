@@ -95,6 +95,13 @@ mod tests {
         }
     }
 
+    fn manual_probe_router_config() -> crate::core::router::RouterConfig {
+        crate::core::router::RouterConfig {
+            enable_pre_call_checks: false,
+            ..crate::core::router::RouterConfig::default()
+        }
+    }
+
     #[test]
     fn classify_no_deployments_reports_unknown() {
         let (status, _) = classify(0, 3, false);
@@ -140,9 +147,10 @@ mod tests {
         let mut provider = provider_config("primary");
         provider.provider_type = "anthropic".to_string();
         provider.api_key = "sk-ant-test1234567890123".to_string();
-        let router = UnifiedRouter::from_gateway_config(&[provider], None)
-            .await
-            .expect("gateway provider should construct");
+        let router =
+            UnifiedRouter::from_gateway_config(&[provider], Some(manual_probe_router_config()))
+                .await
+                .expect("gateway provider should construct");
 
         let (status, error) = derive_status_for_provider(&router, "primary", true);
         assert_eq!(status, "unknown");
@@ -221,9 +229,10 @@ mod tests {
         let mut provider = provider_config("primary");
         provider.provider_type = "anthropic".to_string();
         provider.api_key = "sk-ant-test1234567890123".to_string();
-        let router = UnifiedRouter::from_gateway_config(&[provider], None)
-            .await
-            .expect("gateway provider should construct");
+        let router =
+            UnifiedRouter::from_gateway_config(&[provider], Some(manual_probe_router_config()))
+                .await
+                .expect("gateway provider should construct");
         let old_deployment = router
             .get_deployment("primary-readiness-model")
             .expect("configured-name deployment");
@@ -269,9 +278,10 @@ mod tests {
     async fn healthy_sibling_does_not_mask_replacement_without_probe_evidence() {
         let mut provider = provider_config("primary");
         provider.models = vec!["one".to_string(), "two".to_string()];
-        let router = UnifiedRouter::from_gateway_config(&[provider], None)
-            .await
-            .expect("gateway provider should construct");
+        let router =
+            UnifiedRouter::from_gateway_config(&[provider], Some(manual_probe_router_config()))
+                .await
+                .expect("gateway provider should construct");
         let first = router
             .get_deployment("primary-one")
             .expect("first deployment");
@@ -314,9 +324,10 @@ mod tests {
         let mut provider = provider_config("primary");
         provider.provider_type = "anthropic".to_string();
         provider.api_key = "sk-ant-test1234567890123".to_string();
-        let router = UnifiedRouter::from_gateway_config(&[provider], None)
-            .await
-            .expect("gateway provider should construct");
+        let router =
+            UnifiedRouter::from_gateway_config(&[provider], Some(manual_probe_router_config()))
+                .await
+                .expect("gateway provider should construct");
         let old_deployment = router
             .get_deployment("primary-readiness-model")
             .expect("configured-name deployment");
@@ -416,9 +427,10 @@ mod tests {
         provider.max_concurrent_requests = 1;
         provider.rpm = 1;
         provider.tpm = 1;
-        let router = UnifiedRouter::from_gateway_config(&[provider], None)
-            .await
-            .expect("gateway provider should construct");
+        let router =
+            UnifiedRouter::from_gateway_config(&[provider], Some(manual_probe_router_config()))
+                .await
+                .expect("gateway provider should construct");
         let deployment = router
             .get_deployment("capacity-readiness-model")
             .expect("capacity deployment");
@@ -444,9 +456,12 @@ mod tests {
 
     #[tokio::test]
     async fn failed_degraded_threshold_and_recovery_are_non_optimistic() {
-        let router = UnifiedRouter::from_gateway_config(&[provider_config("failed")], None)
-            .await
-            .expect("gateway provider should construct");
+        let router = UnifiedRouter::from_gateway_config(
+            &[provider_config("failed")],
+            Some(manual_probe_router_config()),
+        )
+        .await
+        .expect("gateway provider should construct");
         let deployment = router
             .get_deployment("failed-readiness-model")
             .expect("failed deployment");
@@ -472,9 +487,12 @@ mod tests {
 
     #[tokio::test]
     async fn provider_health_retains_actual_probe_time() {
-        let router = UnifiedRouter::from_gateway_config(&[provider_config("timed")], None)
-            .await
-            .expect("gateway provider should construct");
+        let router = UnifiedRouter::from_gateway_config(
+            &[provider_config("timed")],
+            Some(manual_probe_router_config()),
+        )
+        .await
+        .expect("gateway provider should construct");
         let deployment = router
             .get_deployment("timed-readiness-model")
             .expect("timed deployment");

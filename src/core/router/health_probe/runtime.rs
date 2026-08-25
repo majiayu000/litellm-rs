@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::router::deployment::publish_probe_group;
+use crate::core::router::deployment::{ProviderInstanceIdentity, publish_probe_group};
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -9,7 +9,7 @@ use tokio::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DynamicProbeKey {
-    native_deployment_id: Option<String>,
+    native_provider_instance: Option<ProviderInstanceIdentity>,
     provider_name: String,
     provider_kind: String,
     policy: HealthCheckPolicy,
@@ -46,18 +46,25 @@ impl ProbeTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProbeRun {
+    incarnation: u64,
+    epoch: u64,
+}
+
 #[derive(Debug)]
 struct ProbeSchedule {
     consecutive_failures: u32,
     next_run: Instant,
-    running: bool,
+    running: Option<ProbeRun>,
+    incarnation: u64,
     epoch: u64,
     members: Vec<ProbeMember>,
 }
 
 struct ProbeOutcome {
     key: DynamicProbeKey,
-    epoch: u64,
+    run: ProbeRun,
     target: ProbeTarget,
     result: Result<(), ProbeFailure>,
 }
@@ -95,6 +102,7 @@ pub(super) fn validate_probe_snapshot(snapshot: &RoutingSnapshot) -> Result<usiz
 pub(super) async fn run_probe_loop(supervisor: ProbeSupervisor) {
     let mut schedules = HashMap::new();
     let mut pending: FuturesUnordered<PendingProbe> = FuturesUnordered::new();
+    let mut next_incarnation = 0;
 
     loop {
         let snapshot = supervisor.routing_snapshot.load_full();
@@ -102,12 +110,12 @@ pub(super) async fn run_probe_loop(supervisor: ProbeSupervisor) {
             .into_iter()
             .map(|target| (target.key.clone(), target))
             .collect::<HashMap<_, _>>();
-        reconcile_schedules(&targets, &mut schedules);
+        reconcile_schedules(&targets, &mut schedules, &mut next_incarnation);
         launch_due_probes(&targets, &mut schedules, &mut pending);
 
         let next_run = schedules
             .values()
-            .filter(|schedule| !schedule.running)
+            .filter(|schedule| schedule.running.is_none())
             .map(|schedule| schedule.next_run)
             .min();
         let outcome = match (pending.is_empty(), next_run) {
@@ -145,7 +153,10 @@ fn current_probe_groups(snapshot: &RoutingSnapshot) -> Vec<ProbeTarget> {
             continue;
         };
         let key = DynamicProbeKey {
-            native_deployment_id: policy.endpoint.is_none().then(|| deployment.id.clone()),
+            native_provider_instance: policy
+                .endpoint
+                .is_none()
+                .then(|| deployment.state.provider_instance_identity()),
             provider_name: policy.provider_name.clone(),
             provider_kind: deployment.provider.name().to_string(),
             policy,
@@ -172,6 +183,7 @@ fn current_probe_groups(snapshot: &RoutingSnapshot) -> Vec<ProbeTarget> {
 fn reconcile_schedules(
     targets: &HashMap<DynamicProbeKey, ProbeTarget>,
     schedules: &mut HashMap<DynamicProbeKey, ProbeSchedule>,
+    next_incarnation: &mut u64,
 ) {
     schedules.retain(|key, _| targets.contains_key(key));
     let now = Instant::now();
@@ -179,10 +191,13 @@ fn reconcile_schedules(
         let members = target.members();
         match schedules.entry(key.clone()) {
             Entry::Vacant(entry) => {
+                let incarnation = *next_incarnation;
+                *next_incarnation = next_incarnation.wrapping_add(1);
                 entry.insert(ProbeSchedule {
                     consecutive_failures: 0,
                     next_run: now,
-                    running: false,
+                    running: None,
+                    incarnation,
                     epoch: 0,
                     members,
                 });
@@ -192,9 +207,8 @@ fn reconcile_schedules(
                 schedule.members = members;
                 schedule.epoch = schedule.epoch.wrapping_add(1);
                 schedule.consecutive_failures = 0;
-                if !schedule.running {
-                    schedule.next_run = now;
-                }
+                schedule.running = None;
+                schedule.next_run = now;
             }
             Entry::Occupied(_) => {}
         }
@@ -208,19 +222,22 @@ fn launch_due_probes(
 ) {
     let now = Instant::now();
     for (key, schedule) in schedules {
-        if schedule.running || schedule.next_run > now {
+        if schedule.running.is_some() || schedule.next_run > now {
             continue;
         }
         let Some(target) = targets.get(key).cloned() else {
             continue;
         };
-        schedule.running = true;
-        let epoch = schedule.epoch;
+        let run = ProbeRun {
+            incarnation: schedule.incarnation,
+            epoch: schedule.epoch,
+        };
+        schedule.running = Some(run);
         pending.push(Box::pin(async move {
             let result = execute_target_probe(&target).await;
             ProbeOutcome {
                 key: target.key.clone(),
-                epoch,
+                run,
                 target,
                 result,
             }
@@ -236,11 +253,14 @@ fn apply_probe_outcome(
     let Some(schedule) = schedules.get_mut(&outcome.key) else {
         return;
     };
-    schedule.running = false;
-    if schedule.epoch != outcome.epoch || schedule.members != outcome.target.members() {
-        schedule.next_run = Instant::now();
+    if schedule.running != Some(outcome.run)
+        || schedule.incarnation != outcome.run.incarnation
+        || schedule.epoch != outcome.run.epoch
+        || schedule.members != outcome.target.members()
+    {
         return;
     }
+    schedule.running = None;
 
     let snapshot = supervisor.routing_snapshot.load();
     let target_is_current = outcome.target.deployments.iter().all(|observed| {
@@ -428,3 +448,7 @@ fn log_probe_failure(
         );
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

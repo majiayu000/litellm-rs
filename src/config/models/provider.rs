@@ -261,12 +261,6 @@ impl Default for ProviderHealthCheckConfig {
     }
 }
 
-impl ProviderHealthCheckConfig {
-    pub(crate) fn has_runtime_overrides(&self) -> bool {
-        self != &Self::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

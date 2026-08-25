@@ -13,7 +13,8 @@ mod gateway_alias_tests;
 
 use super::config::RouterConfig;
 use super::deployment::{
-    Deployment, DeploymentConfig, HealthCheckPolicy, LegacySelectorMetadata, RetrySchedule,
+    Deployment, DeploymentConfig, HealthCheckPolicy, LegacySelectorMetadata,
+    ProviderInstanceIdentity, RetrySchedule,
 };
 use super::error::RouterError;
 use super::gateway_aliases::normalize_model_aliases;
@@ -224,6 +225,7 @@ impl Router {
                     provider_name, e
                 ))
             })?;
+            let provider_instance_identity = ProviderInstanceIdentity::new();
             let legacy_metadata = construction.legacy_metadata;
 
             // Determine which models this deployment serves.
@@ -280,6 +282,7 @@ impl Router {
                         &model,
                         deployment_config.clone(),
                         tags.clone(),
+                        provider_instance_identity.clone(),
                     ),
                     legacy_metadata.clone(),
                     provider_name.clone(),
@@ -336,12 +339,14 @@ fn create_deployment_from_config(
     model: &str,
     deployment_config: DeploymentConfig,
     tags: Vec<String>,
+    provider_instance_identity: ProviderInstanceIdentity,
 ) -> Deployment {
-    Deployment::new(
+    Deployment::new_with_provider_instance(
         deployment_id.to_string(),
         provider,
         model.to_string(),
         model.to_string(),
+        provider_instance_identity,
     )
     .with_config(deployment_config)
     .with_tags(tags)
@@ -379,16 +384,14 @@ fn deployment_config_from_provider(
             backoff_multiplier: config.retry.backoff_multiplier,
             jitter_ratio: config.retry.jitter,
         }),
-        health_check_policy: config.health_check.has_runtime_overrides().then(|| {
-            HealthCheckPolicy {
-                provider_name: config.name.clone(),
-                interval_secs: config.health_check.interval,
-                failure_threshold: config.health_check.failure_threshold,
-                recovery_timeout_secs: config.health_check.recovery_timeout,
-                endpoint,
-                endpoint_access: config.endpoint_access,
-                expected_codes: config.health_check.expected_codes.clone(),
-            }
+        health_check_policy: Some(HealthCheckPolicy {
+            provider_name: config.name.clone(),
+            interval_secs: config.health_check.interval,
+            failure_threshold: config.health_check.failure_threshold,
+            recovery_timeout_secs: config.health_check.recovery_timeout,
+            endpoint,
+            endpoint_access: config.endpoint_access,
+            expected_codes: config.health_check.expected_codes.clone(),
         }),
     })
 }
@@ -604,10 +607,17 @@ mod tests {
     }
 
     #[test]
-    fn test_default_provider_health_config_preserves_no_probe_behavior() {
+    fn test_default_provider_health_config_maps_native_probe_policy() {
         let deployment = deployment_config_from_provider(&ProviderConfig::default()).unwrap();
+        let policy = deployment
+            .health_check_policy
+            .expect("default health configuration should enable native probes");
 
-        assert!(deployment.health_check_policy.is_none());
+        assert_eq!(policy.interval_secs, 30);
+        assert_eq!(policy.failure_threshold, 5);
+        assert_eq!(policy.recovery_timeout_secs, 60);
+        assert!(policy.endpoint.is_none());
+        assert_eq!(policy.expected_codes, vec![200]);
     }
 
     #[tokio::test]
