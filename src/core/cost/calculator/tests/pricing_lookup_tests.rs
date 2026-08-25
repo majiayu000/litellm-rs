@@ -350,24 +350,17 @@ fn test_get_deepseek_pricing() {
     assert_cost_eq(reasoner_alias.output_cost_per_1k_tokens, 0.00066);
     assert_eq!(reasoner_alias.cache_read_input_token_cost, Some(0.000007));
 
-    let Ok(vision) = get_model_pricing_at("deepseek-v4-flash-vision-exp", "deepseek", off_peak)
-    else {
-        panic!("deepseek-v4-flash-vision-exp pricing should be available");
-    };
-    assert_cost_eq(vision.input_cost_per_1k_tokens, 0.00022);
-    assert_cost_eq(vision.output_cost_per_1k_tokens, 0.00066);
-    assert_eq!(vision.cache_read_input_token_cost, Some(0.000007));
-
-    let Ok(prefixed_vision) = get_model_pricing_at(
+    for model in [
+        "deepseek-v4-flash-vision-exp",
         "deepseek/deepseek-v4-flash-vision-exp",
-        "deepseek",
-        off_peak,
-    ) else {
-        panic!("prefixed deepseek-v4-flash-vision-exp pricing should be available");
-    };
-    assert_cost_eq(prefixed_vision.input_cost_per_1k_tokens, 0.00022);
-    assert_cost_eq(prefixed_vision.output_cost_per_1k_tokens, 0.00066);
-    assert_eq!(prefixed_vision.cache_read_input_token_cost, Some(0.000007));
+    ] {
+        let Ok(vision) = get_model_pricing_at(model, "deepseek", off_peak) else {
+            panic!("deepseek vision model '{model}' pricing should be available");
+        };
+        assert_cost_eq(vision.input_cost_per_1k_tokens, 0.00022);
+        assert_cost_eq(vision.output_cost_per_1k_tokens, 0.00066);
+        assert_eq!(vision.cache_read_input_token_cost, Some(0.000007));
+    }
 }
 
 #[test]
