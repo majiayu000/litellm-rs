@@ -41,7 +41,16 @@ required-features = ["gateway"]
 
 [dependencies]
 # Web framework and async runtime
-actix-web = { version = "4.9", features = ["rustls-0_23"], optional = true }
+actix-web = { version = "4.12", default-features = false, features = [
+    "macros",
+    "compress-brotli",
+    "compress-gzip",
+    "compress-zstd",
+    "cookies",
+    "unicode",
+    "compat",
+    "ws",
+], optional = true }
 actix-cors = { version = "0.7", optional = true }
 actix-multipart = { version = "0.7", optional = true }
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "signal"] }
