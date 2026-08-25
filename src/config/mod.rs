@@ -168,6 +168,7 @@ pub struct Config {
 pub struct ConfigOverlay {
     config: Config,
     redis_cluster: Option<bool>,
+    env_auth: Option<(Option<bool>, Option<bool>)>,
 }
 
 impl ConfigOverlay {
@@ -177,6 +178,7 @@ impl ConfigOverlay {
         Self {
             config,
             redis_cluster,
+            env_auth: None,
         }
     }
 
@@ -241,6 +243,7 @@ impl Config {
         Ok(ConfigOverlay {
             config,
             redis_cluster: presence.storage.redis.cluster,
+            env_auth: None,
         })
     }
 
@@ -255,12 +258,14 @@ impl Config {
     pub fn overlay_from_env() -> Result<ConfigOverlay> {
         info!("Loading configuration from environment variables");
 
-        let (gateway, redis_cluster) = GatewayConfig::from_env_with_redis_cluster_presence()?;
+        let layer = GatewayConfig::from_env_with_redis_cluster_presence()?;
+        let gateway = layer.gateway;
         let config = Self { gateway };
 
         Ok(ConfigOverlay {
             config,
-            redis_cluster,
+            redis_cluster: layer.redis_cluster,
+            env_auth: Some((layer.enable_jwt, layer.enable_api_key)),
         })
     }
 
@@ -322,9 +327,17 @@ impl Config {
     ///
     /// The merged configuration must be validated before runtime use.
     pub fn merge_overlay(mut self, overlay: ConfigOverlay) -> Self {
-        self.gateway = self
-            .gateway
-            .merge_with_redis_cluster_override(overlay.config.gateway, overlay.redis_cluster);
+        self.gateway = match overlay.env_auth {
+            Some((jwt, api_key)) => self.gateway.merge_env_overlay(
+                overlay.config.gateway,
+                overlay.redis_cluster,
+                jwt,
+                api_key,
+            ),
+            None => self
+                .gateway
+                .merge_with_redis_cluster_override(overlay.config.gateway, overlay.redis_cluster),
+        };
         self
     }
 
