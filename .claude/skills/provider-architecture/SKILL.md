@@ -320,8 +320,16 @@ Adding a Tier 2 provider means crate-level wiring, in this order of authority:
 
 ## Connection Pooling
 
-All providers share process-wide reqwest clients defined in
-`src/core/providers/base/connection_pool.rs` (there is no `pool.rs`):
+The recommended `new_for_provider` path runs requests through `BaseHttpClient` and
+`ProviderHttpClient`. `ProviderHttpClient` keeps a process-wide client cache keyed by
+endpoint policy, request timeout, and mode (ordinary, streaming, or no-redirect). Those
+clients use `HttpClientPoolConfig::default()` (`src/utils/net/http.rs`): 100 maximum idle
+connections per host, 90-second idle timeout, 10-second connect timeout, and 60-second
+TCP keepalive.
+
+`PoolConfig` in `src/core/providers/base/connection_pool.rs` (there is no `pool.rs`)
+instead configures the legacy global `ConnectionPool` used by the unbound `new()` /
+`shared()` path. These constants do not tune the policy-bound clients above:
 
 ```rust
 pub struct PoolConfig;

@@ -43,9 +43,11 @@ corresponding `RouterConfig::default()` values during runtime mapping.
 
 Recovery is half-open: expired cooldown demotes to `Degraded`; `record_success` counts
 `consecutive_successes` and promotes Degraded -> Healthy once it reaches
-`success_threshold` (default 3) (`unified.rs:594-610`). A background task
-(`start_minute_reset_task`, `unified.rs:764-772`) resets per-minute counters every 60s so
-failure counts cannot accumulate across minutes.
+`success_threshold` (default 3) (`unified.rs:594-610`). The router exposes
+`start_minute_reset_task` (`unified.rs:764-772`), but gateway startup does not call it;
+the repository's only caller is a cooldown test. In a normal gateway process,
+`fails_this_minute`, `rpm_current`, and `tpm_current` therefore accumulate until an
+explicit caller starts that task or invokes `reset_minute_counters`.
 
 ### Active Probes
 

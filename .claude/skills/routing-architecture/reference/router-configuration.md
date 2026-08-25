@@ -76,8 +76,13 @@ providers:
     models: ["gpt-4o"]
 ```
 
-Each enabled provider becomes one deployment per listed model with ID
-`{provider_name}-{model}` (`gateway_config.rs:259-268`).
+With a non-empty `models` list, each enabled provider becomes one deployment per listed
+model with ID `{provider_name}-{model}`. When `models` is omitted or empty, construction
+instead expands `provider.list_models()`: discovered models use that same deployment-ID
+form. If the provider reports no models, its configured provider name becomes the route
+and deployment ID. Provider compatibility policy can also preserve that provider-name
+route alongside discovered models (currently `meta_llama`); that route likewise uses
+`{provider_name}` as its deployment ID (`gateway_config.rs:228-268`).
 
 ### Gateway Wiring
 
@@ -85,9 +90,13 @@ There is no `create_router` factory. Construction path:
 
 1. `Router::from_gateway_config_with_aliases` (`gateway_config.rs:186`) builds a
    deployment per provider+model via the provider factory, stages model aliases, and
-   installs them in one snapshot update.
-2. The router is wrapped in a `RuntimeBinding`; `install_default_runtime` /
-   `replace_default_runtime` (`mod.rs:130-153`) publish it globally, and
-   `RuntimeHandle::bind()` pins one immutable generation for the duration of a request.
-3. `Router::start_configured_health_checks` (`health_probe.rs:34`) spawns probe tasks
-   when any deployment has a health-check policy.
+   installs them in one snapshot update, then starts configured health checks before
+   returning.
+2. `HttpServer::new` places the router directly in `AppState` as an
+   `Arc<UnifiedRouter>` (`src/server/http.rs:147-183`, `src/server/state.rs:40,69-94`).
+3. Gateway request handlers route through `state.unified_router`; the gateway does not
+   install or replace a process-default `RuntimeBinding`.
+
+`RuntimeBinding`, `install_default_runtime` / `replace_default_runtime`, and
+`RuntimeHandle::bind()` are separate library APIs used by the completion compatibility
+facade. They are not the HTTP gateway's router ownership or request path.

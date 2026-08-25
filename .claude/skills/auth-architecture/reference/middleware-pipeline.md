@@ -31,8 +31,10 @@ actix-web `Transform`/`Service` pair registered in `src/server/http.rs`. It read
 
 Public routes (`is_public_route`): `/health`, `/auth/login`,
 `/auth/login/callback`, `/auth/register`, `/auth/forgot-password`,
-`/auth/reset-password`, `/auth/verify-email`, `/admin/dashboard*`, `/docs`,
-`/openapi.json`. `/auth/refresh` also skips header extraction.
+`/auth/reset-password`, `/auth/verify-email`, `/admin/dashboard`,
+`/admin/dashboard/app.css`, `/admin/dashboard/app.js`, `/docs`, `/openapi.json`.
+Dashboard membership is exact: paths such as `/admin/dashboard/` and
+`/admin/dashboard/private` are not public. `/auth/refresh` also skips header extraction.
 
 ### Route-level permission check
 

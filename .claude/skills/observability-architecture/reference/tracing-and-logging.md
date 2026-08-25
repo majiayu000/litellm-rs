@@ -104,9 +104,9 @@ monitoring:
           enabled: true                  # must be true if listed (validation)
           endpoint: http://localhost:4317   # spans POST to {endpoint}/v1/traces
           service_name: litellm-gateway
-          service_version: null
-          environment: null
-          resource_attributes: {}
+          service_version: null             # parsed, but not added to exported resources
+          environment: null                 # parsed, but not added to exported resources
+          resource_attributes: {}           # parsed, but not added to exported resources
           export_traces: true
           export_metrics: true            # parsed, but not consumed by runtime today
           batch_interval_ms: 5000
@@ -119,9 +119,11 @@ monitoring:
 Spans are modeled locally (`span.rs`: `Span`, `SpanKind`, `SpanStatus`, `AttributeValue`)
 and exported as OTLP JSON by `export_spans` / `build_otlp_payload` (`exporter.rs`).
 `export_traces` gates lifecycle export in `integration_impl.rs`; `export_metrics` is
-deserialized and defaulted but has no runtime read or metrics-export path yet. Export
-failures are sampled and reported without panicking — telemetry problems never take down
-request handling.
+deserialized and defaulted but has no runtime read or metrics-export path yet. Likewise,
+`service_version`, `environment`, and `resource_attributes` are retained in config but
+never passed to `build_otlp_payload`; exported resources currently contain only
+`service.name`. Export failures are sampled and reported without panicking — telemetry
+problems never take down request handling.
 
 The legacy `PerformanceTracer`, `LogAggregator`, and `MetricsCollector` exports under
 `src/core/observability/` are deprecated library-only surfaces scheduled for removal in 0.7;

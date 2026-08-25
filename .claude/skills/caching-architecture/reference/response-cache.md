@@ -60,7 +60,11 @@ In `Dual` mode (`get_dual`, dual.rs:116):
 2. On L1 miss, check L2 Redis. A Redis hit repopulates L1 before returning (read-through).
 3. Both miss → `Ok(None)`.
 
-`get_entry(key)` behaves identically but returns the full `CacheEntry<T>` (value, ttl, size_bytes, access metadata) and preserves the entry's original TTL when repopulating L1.
+`get_entry(key)` follows the same tier order and returns the full `CacheEntry<T>` (value,
+TTL, size, and access metadata). On a Redis hit it reconstructs the entry's original TTL
+and aged creation time, but L1 promotion passes that full TTL to `set_with_size`, which
+creates a fresh in-memory entry. The original TTL is therefore restarted in L1 rather
+than reduced to Redis's remaining TTL, so the promoted entry can outlive L2.
 
 ## Write Path
 
@@ -89,6 +93,9 @@ On `DualCache<T>` (src/core/cache/dual.rs:400-486):
 ## Invalidation and Administration
 
 - Per-entry: `delete(key)` removes from both tiers and reports whether anything existed; `clear()` empties memory and deletes every Redis key under the `litellm:cache:` prefix.
-- HTTP admin API (src/server/routes/admin.rs:124, requires an admin-role user or rejects with 403):
+- HTTP admin API (`src/server/routes/admin.rs:53-120`): when JWT or API-key auth is
+  enabled, an admin-role user is required and other callers receive 403. When both auth
+  methods are disabled (valid only with `allow_anonymous: true`), `require_cache_admin`
+  returns early, so these endpoints are unauthenticated:
   - `GET /admin/cache` and `GET /admin/cache/status` — returns `CacheAdminResponse`: enabled flags, `CombinedCacheStats`, Redis availability; HTTP 501 when the cache is unwired.
   - `POST /admin/cache/clear` — calls `LLMCache::clear()` (both chat and embedding caches).
