@@ -121,6 +121,9 @@ pub trait SSETransformer: Send + Sync {
 pub struct UnifiedSSEParser<T: SSETransformer> {
     transformer: T,
     buffer: String,
+    /// Trailing bytes of an incomplete UTF-8 sequence carried over from the
+    /// previous network chunk so split multi-byte characters decode intact.
+    pending_utf8: Vec<u8>,
     current_event: Option<SSEEvent>,
 }
 
@@ -129,6 +132,7 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         Self {
             transformer,
             buffer: String::new(),
+            pending_utf8: Vec::new(),
             current_event: None,
         }
     }
@@ -146,7 +150,19 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         bytes: &[u8],
         stream_mode: bool,
     ) -> Result<Vec<ChatChunk>, ProviderError> {
-        let text = String::from_utf8_lossy(bytes);
+        let mut input = std::mem::take(&mut self.pending_utf8);
+        input.extend_from_slice(bytes);
+        let scan_start = input.len().saturating_sub(4);
+        let keep_from = input[scan_start..]
+            .iter()
+            .rposition(|byte| byte & 0xc0 != 0x80)
+            .map(|offset| scan_start + offset)
+            .filter(|&start| {
+                matches!(std::str::from_utf8(&input[start..]), Err(error) if error.valid_up_to() == 0 && error.error_len().is_none())
+            })
+            .unwrap_or(input.len());
+        self.pending_utf8 = input.split_off(keep_from);
+        let text = String::from_utf8_lossy(&input);
         self.buffer.push_str(&text);
 
         let mut chunks = Vec::new();
@@ -233,6 +249,8 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
 
     fn finish_stream(&mut self) -> Result<Vec<ChatChunk>, ProviderError> {
         let mut chunks = Vec::new();
+        let pending = std::mem::take(&mut self.pending_utf8);
+        self.buffer.push_str(&String::from_utf8_lossy(&pending));
         if !self.buffer.is_empty() {
             let line = std::mem::take(&mut self.buffer);
             chunks.extend(self.process_line(&line, true)?);
