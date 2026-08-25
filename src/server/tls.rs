@@ -19,8 +19,7 @@ use std::{
     net::{SocketAddr, TcpListener, ToSocketAddrs},
 };
 
-const HTTP1_AND_2_BACKLOG: u32 = 2048;
-const HTTP1_ONLY_BACKLOG: u32 = 1024;
+const TLS_BACKLOG: u32 = 1024;
 
 /// Validated TLS state cached before gateway dependencies are initialized.
 pub(crate) struct ListenerTls {
@@ -183,7 +182,7 @@ fn bind_http1_and2(
     state: web::Data<AppState>,
     config: rustls::ServerConfig,
 ) -> std::io::Result<Server> {
-    let listeners = bind_resolved_listeners(bind_addr, HTTP1_AND_2_BACKLOG)?;
+    let listeners = bind_resolved_listeners(bind_addr, TLS_BACKLOG)?;
     let mut builder = ActixHttpServer::new(move || HttpServer::create_app(state.clone()));
     for listener in listeners {
         builder = builder.listen_rustls_0_23(listener, config.clone())?;
@@ -196,7 +195,7 @@ fn bind_http1_only(
     state: web::Data<AppState>,
     config: rustls::ServerConfig,
 ) -> std::io::Result<Server> {
-    let listeners = bind_resolved_listeners(bind_addr, HTTP1_ONLY_BACKLOG)?;
+    let listeners = bind_resolved_listeners(bind_addr, TLS_BACKLOG)?;
     let mut builder = Server::build();
     for listener in listeners {
         let address = listener.local_addr()?;
@@ -315,7 +314,7 @@ mod tests {
     fn binds_all_available_resolved_addresses_and_skips_failed_ones() {
         let occupied = create_tcp_listener(
             "127.0.0.1:0".parse().expect("loopback address"),
-            HTTP1_ONLY_BACKLOG,
+            TLS_BACKLOG,
         )
         .expect("occupy loopback address");
         let unavailable = occupied.local_addr().expect("occupied address");
@@ -325,7 +324,7 @@ mod tests {
             "127.0.0.1:0".parse().expect("second free address"),
         ];
 
-        let listeners = bind_resolved_listeners(&candidates[..], HTTP1_ONLY_BACKLOG)
+        let listeners = bind_resolved_listeners(&candidates[..], TLS_BACKLOG)
             .expect("available addresses should still bind");
         let addresses = listeners
             .iter()
