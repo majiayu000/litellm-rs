@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
+use super::durable_batch::DurableBatch;
 use crate::core::traits::integration::{
     CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, Integration,
     IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
@@ -198,7 +199,7 @@ enum ArizeValue {
 pub struct ArizeIntegration {
     config: ArizeConfig,
     http_client: Client,
-    buffer: Arc<RwLock<Vec<ArizeRecord>>>,
+    buffer: DurableBatch<ArizeRecord>,
     pending_requests: Arc<RwLock<HashMap<String, PendingRequest>>>,
     enabled: bool,
 }
@@ -247,7 +248,7 @@ impl ArizeIntegration {
         Ok(Self {
             config,
             http_client,
-            buffer: Arc::new(RwLock::new(Vec::new())),
+            buffer: DurableBatch::default(),
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             enabled: true,
         })
@@ -290,7 +291,7 @@ impl ArizeIntegration {
     }
 
     /// Send records to Arize
-    async fn send_records(&self, records: Vec<ArizeRecord>) -> IntegrationResult<()> {
+    async fn send_records(&self, records: &[ArizeRecord]) -> IntegrationResult<()> {
         if records.is_empty() {
             return Ok(());
         }
@@ -315,11 +316,9 @@ impl ArizeIntegration {
         if !response.status().is_success() {
             let status = response.status();
             let response_bytes = response.bytes().await.map(|bytes| bytes.len()).unwrap_or(0);
-            warn!(
-                %status,
-                response_bytes,
-                "Arize API returned non-success status"
-            );
+            return Err(IntegrationError::connection(format!(
+                "Arize API returned {status} ({response_bytes} response bytes)"
+            )));
         }
 
         Ok(())
@@ -413,11 +412,7 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(record);
-
-        if buffer.len() >= self.config.batch_size {
-            drop(buffer);
+        if self.buffer.push(record).await >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -443,6 +438,8 @@ impl Integration for ArizeIntegration {
                 self.build_features(&event.model, &provider),
             ),
         };
+        features.insert("model".to_string(), ArizeValue::String(event.model.clone()));
+        features.insert("provider".to_string(), ArizeValue::String(provider));
 
         features.insert(
             "error_message".to_string(),
@@ -469,11 +466,7 @@ impl Integration for ArizeIntegration {
             latency_ms: None,
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(record);
-
-        if buffer.len() >= self.config.batch_size {
-            drop(buffer);
+        if self.buffer.push(record).await >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -561,8 +554,7 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(record);
+        self.buffer.push(record).await;
 
         Ok(())
     }
@@ -592,6 +584,11 @@ impl Integration for ArizeIntegration {
                 )
             }
         };
+        features.insert("model".to_string(), ArizeValue::String(event.model.clone()));
+        features.insert(
+            "provider".to_string(),
+            ArizeValue::String(provider.to_string()),
+        );
         features.insert(
             "error_message".to_string(),
             ArizeValue::String(event.error_message.clone()),
@@ -616,8 +613,9 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(record);
+        if self.buffer.push(record).await >= self.config.batch_size {
+            self.flush().await?;
+        }
 
         Ok(())
     }
@@ -628,17 +626,16 @@ impl Integration for ArizeIntegration {
     }
 
     async fn flush(&self) -> IntegrationResult<()> {
-        let records = {
-            let mut buffer = self.buffer.write().await;
-            std::mem::take(&mut *buffer)
-        };
-
-        if records.is_empty() {
-            return Ok(());
+        let _flush = self.buffer.serialize_flush().await;
+        loop {
+            let records = self.buffer.batch_for_export().await;
+            if records.is_empty() {
+                return Ok(());
+            }
+            debug!("Arize: Flushing {} records", records.len());
+            self.send_records(&records).await?;
+            self.buffer.acknowledge().await;
         }
-
-        debug!("Arize: Flushing {} records", records.len());
-        self.send_records(records).await
     }
 
     async fn shutdown(&self) -> IntegrationResult<()> {
@@ -734,12 +731,16 @@ mod tests {
 
     #[tokio::test]
     async fn embedding_error_clears_pending_request_and_buffers_error_record() {
-        let integration = ArizeIntegration::new(ArizeConfig::new("test-key", "test-space"))
-            .expect("test integration");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = ArizeConfig::new("test-key", "test-space");
+        config.base_url = format!("http://{}", listener.local_addr().unwrap());
+        config.batch_size = 1;
+        drop(listener);
+        let integration = ArizeIntegration::new(config).expect("test integration");
         let start = EmbeddingStartEvent {
             request_id: "embedding-error".to_string(),
-            model: "embedding-model".to_string(),
-            provider: Some("provider".to_string()),
+            model: "initial-model".to_string(),
+            provider: Some("initial-provider".to_string()),
             input_count: 1,
             user_id: None,
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
@@ -750,20 +751,26 @@ mod tests {
         integration
             .on_embedding_error(&EmbeddingErrorEvent {
                 request_id: start.request_id,
-                model: start.model,
-                provider: start.provider,
+                model: "final-model".to_string(),
+                provider: None,
                 error_message: "embedding failed".to_string(),
                 error_type: Some("provider_error".to_string()),
                 latency_ms: 25,
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
             })
             .await
-            .unwrap();
+            .expect_err("batch threshold must attempt export");
 
         assert!(integration.pending_requests.read().await.is_empty());
-        let buffer = integration.buffer.read().await;
+        let buffer = integration.buffer.snapshot().await;
         assert_eq!(buffer.len(), 1);
         assert_eq!(buffer[0].tags.get("status"), Some(&"error".to_string()));
         assert_eq!(buffer[0].tags.get("type"), Some(&"embedding".to_string()));
+        assert!(
+            matches!(buffer[0].features.get("model"), Some(ArizeValue::String(value)) if value == "final-model")
+        );
+        assert!(
+            matches!(buffer[0].features.get("provider"), Some(ArizeValue::String(value)) if value == "unknown")
+        );
     }
 }

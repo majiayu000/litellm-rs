@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
+use super::durable_batch::DurableBatch;
 use crate::core::traits::integration::{
     CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, Integration,
     IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
@@ -178,7 +179,7 @@ struct HeliconeLogEntry {
 pub struct HeliconeIntegration {
     config: HeliconeConfig,
     http_client: Client,
-    buffer: Arc<RwLock<Vec<HeliconeLogEntry>>>,
+    buffer: DurableBatch<HeliconeLogEntry>,
     pending_requests: Arc<RwLock<HashMap<String, PendingRequest>>>,
     enabled: bool,
 }
@@ -217,7 +218,7 @@ impl HeliconeIntegration {
         Ok(Self {
             config,
             http_client,
-            buffer: Arc::new(RwLock::new(Vec::new())),
+            buffer: DurableBatch::default(),
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             enabled: true,
         })
@@ -254,7 +255,7 @@ impl HeliconeIntegration {
     }
 
     /// Send logs to Helicone
-    async fn send_logs(&self, logs: Vec<HeliconeLogEntry>) -> IntegrationResult<()> {
+    async fn send_logs(&self, logs: &[HeliconeLogEntry]) -> IntegrationResult<()> {
         if logs.is_empty() {
             return Ok(());
         }
@@ -274,11 +275,9 @@ impl HeliconeIntegration {
         if !response.status().is_success() {
             let status = response.status();
             let response_bytes = response.bytes().await.map(|bytes| bytes.len()).unwrap_or(0);
-            warn!(
-                %status,
-                response_bytes,
-                "Helicone API returned non-success status"
-            );
+            return Err(IntegrationError::connection(format!(
+                "Helicone API returned {status} ({response_bytes} response bytes)"
+            )));
         }
 
         Ok(())
@@ -346,11 +345,7 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(log_entry);
-
-        if buffer.len() >= self.config.batch_size {
-            drop(buffer);
+        if self.buffer.push(log_entry).await >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -388,11 +383,7 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(log_entry);
-
-        if buffer.len() >= self.config.batch_size {
-            drop(buffer);
+        if self.buffer.push(log_entry).await >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -448,8 +439,7 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(log_entry);
+        self.buffer.push(log_entry).await;
 
         Ok(())
     }
@@ -486,8 +476,9 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        let mut buffer = self.buffer.write().await;
-        buffer.push(log_entry);
+        if self.buffer.push(log_entry).await >= self.config.batch_size {
+            self.flush().await?;
+        }
 
         Ok(())
     }
@@ -498,17 +489,16 @@ impl Integration for HeliconeIntegration {
     }
 
     async fn flush(&self) -> IntegrationResult<()> {
-        let logs = {
-            let mut buffer = self.buffer.write().await;
-            std::mem::take(&mut *buffer)
-        };
-
-        if logs.is_empty() {
-            return Ok(());
+        let _flush = self.buffer.serialize_flush().await;
+        loop {
+            let logs = self.buffer.batch_for_export().await;
+            if logs.is_empty() {
+                return Ok(());
+            }
+            debug!("Helicone: Flushing {} log entries", logs.len());
+            self.send_logs(&logs).await?;
+            self.buffer.acknowledge().await;
         }
-
-        debug!("Helicone: Flushing {} log entries", logs.len());
-        self.send_logs(logs).await
     }
 
     async fn shutdown(&self) -> IntegrationResult<()> {
@@ -587,8 +577,12 @@ mod tests {
 
     #[tokio::test]
     async fn embedding_error_clears_pending_request_and_buffers_error_log() {
-        let integration =
-            HeliconeIntegration::new(HeliconeConfig::new("test-key")).expect("test integration");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = HeliconeConfig::new("test-key");
+        config.base_url = format!("http://{}", listener.local_addr().unwrap());
+        config.batch_size = 1;
+        drop(listener);
+        let integration = HeliconeIntegration::new(config).expect("test integration");
         let start = EmbeddingStartEvent {
             request_id: "embedding-error".to_string(),
             model: "embedding-model".to_string(),
@@ -611,10 +605,10 @@ mod tests {
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
             })
             .await
-            .unwrap();
+            .expect_err("batch threshold must attempt export");
 
         assert!(integration.pending_requests.read().await.is_empty());
-        let buffer = integration.buffer.read().await;
+        let buffer = integration.buffer.snapshot().await;
         assert_eq!(buffer.len(), 1);
         assert_eq!(buffer[0].status, "error");
         assert_eq!(buffer[0].error.as_deref(), Some("embedding failed"));

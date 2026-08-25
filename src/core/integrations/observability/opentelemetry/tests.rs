@@ -135,16 +135,22 @@ async fn test_on_llm_end() {
 async fn test_on_llm_error() {
     let integration = OpenTelemetryIntegration::with_defaults();
 
-    let start_event = LlmStartEvent::new("req-1", "gpt-4");
+    let start_event = LlmStartEvent::new("req-1", "initial-model").provider("initial-provider");
     integration.on_llm_start(&start_event).await.unwrap();
 
-    let error_event = LlmErrorEvent::new("req-1", "gpt-4", "Rate limited")
+    let error_event = LlmErrorEvent::new("req-1", "final-model", "Rate limited")
         .error_type("RateLimitError")
         .status_code(429);
     integration.on_llm_error(&error_event).await.unwrap();
 
     assert_eq!(integration.active_span_count(), 0);
     assert_eq!(integration.pending_span_count(), 1);
+    assert!(
+        matches!(integration.pending_span_attribute("llm.model"), Some(AttributeValue::String(value)) if value == "final-model")
+    );
+    assert!(
+        matches!(integration.pending_span_attribute("llm.provider"), Some(AttributeValue::String(value)) if value == "unknown")
+    );
 }
 
 #[tokio::test]
@@ -152,8 +158,8 @@ async fn test_on_embedding_error_closes_and_exports_error_span() {
     let integration = OpenTelemetryIntegration::with_defaults();
     let start = EmbeddingStartEvent {
         request_id: "embedding-error".to_string(),
-        model: "embedding-model".to_string(),
-        provider: Some("provider".to_string()),
+        model: "initial-model".to_string(),
+        provider: Some("initial-provider".to_string()),
         input_count: 1,
         user_id: None,
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
@@ -164,8 +170,8 @@ async fn test_on_embedding_error_closes_and_exports_error_span() {
     integration
         .on_embedding_error(&EmbeddingErrorEvent {
             request_id: start.request_id,
-            model: start.model,
-            provider: start.provider,
+            model: "final-model".to_string(),
+            provider: None,
             error_message: "embedding failed".to_string(),
             error_type: Some("provider_error".to_string()),
             latency_ms: 25,
@@ -177,6 +183,12 @@ async fn test_on_embedding_error_closes_and_exports_error_span() {
     assert_eq!(integration.active_span_count(), 0);
     assert_eq!(integration.pending_span_count(), 1);
     assert_eq!(integration.pending_error_span_count(), 1);
+    assert!(
+        matches!(integration.pending_span_attribute("llm.model"), Some(AttributeValue::String(value)) if value == "final-model")
+    );
+    assert!(
+        matches!(integration.pending_span_attribute("llm.provider"), Some(AttributeValue::String(value)) if value == "unknown")
+    );
 }
 
 #[tokio::test]

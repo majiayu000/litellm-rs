@@ -217,6 +217,17 @@ impl OpenTelemetryIntegration {
     }
 
     #[cfg(test)]
+    pub(super) fn pending_span_attribute(&self, key: &str) -> Option<super::AttributeValue> {
+        self.pending_spans
+            .read()
+            .spans
+            .last()?
+            .attributes
+            .get(key)
+            .cloned()
+    }
+
+    #[cfg(test)]
     pub(super) fn export_task_count(&self) -> usize {
         self.export_state.lock().tasks.len()
     }
@@ -326,6 +337,11 @@ impl Integration for OpenTelemetryIntegration {
 
         let mut span = active
             .span
+            .attribute("llm.model", event.model.clone())
+            .attribute(
+                "llm.provider",
+                event.provider.as_deref().unwrap_or("unknown"),
+            )
             .attribute("error.message", event.error_message.clone())
             .end_error(&event.error_message);
 
@@ -413,6 +429,11 @@ impl Integration for OpenTelemetryIntegration {
 
         let mut span = active
             .span
+            .attribute("llm.model", event.model.clone())
+            .attribute(
+                "llm.provider",
+                event.provider.as_deref().unwrap_or("unknown"),
+            )
             .attribute("llm.latency_ms", event.latency_ms as i64)
             .attribute("error.message", event.error_message.clone())
             .end_error(&event.error_message);
