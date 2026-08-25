@@ -203,7 +203,7 @@ impl TlsConfig {
         }
 
         #[cfg(feature = "gateway")]
-        crate::server::tls::validate_rustls_config(self)?;
+        crate::config::tls::validate_rustls_config(self)?;
 
         Ok(())
     }

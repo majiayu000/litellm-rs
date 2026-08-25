@@ -11,10 +11,9 @@ use actix_tls::accept::{
     rustls_0_23::{Acceptor as RustlsAcceptor, TlsStream},
 };
 use actix_web::{HttpServer as ActixHttpServer, dev::AppConfig, web};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::{
     convert::Infallible,
-    io::{self, BufReader},
+    io,
     net::{SocketAddr, ToSocketAddrs},
 };
 
@@ -61,117 +60,7 @@ pub(crate) fn bind_server(
 
 /// Build a rustls configuration without relying on a process-global provider.
 pub(crate) fn load_rustls_config(tls: &TlsConfig) -> Result<rustls::ServerConfig> {
-    build_rustls_config(tls).map_err(GatewayError::validation)
-}
-
-/// Perform the same TLS material checks used when the listener starts.
-pub(crate) fn validate_rustls_config(tls: &TlsConfig) -> std::result::Result<(), String> {
-    build_rustls_config(tls).map(drop)
-}
-
-fn build_rustls_config(tls: &TlsConfig) -> std::result::Result<rustls::ServerConfig, String> {
-    if tls.ca_file.is_some() {
-        return Err(
-            "tls.ca_file is unsupported until client certificate auth is implemented".into(),
-        );
-    }
-    if tls.require_client_cert {
-        return Err("tls.require_client_cert is not implemented yet; set it to false".into());
-    }
-
-    let certs = load_certs(&tls.cert_file)?;
-    let key = load_key(&tls.key_file)?;
-    let provider = rustls::crypto::ring::default_provider();
-    let mut config = rustls::ServerConfig::builder_with_provider(provider.into())
-        .with_safe_default_protocol_versions()
-        .map_err(|error| format!("cannot select safe TLS protocol versions: {error}"))?
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|error| format!("invalid TLS certificate/key pair: {error}"))?;
-    config.alpn_protocols = configured_alpn(tls.http2);
-    Ok(config)
-}
-
-fn configured_alpn(http2: bool) -> Vec<Vec<u8>> {
-    if http2 {
-        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
-    } else {
-        vec![b"http/1.1".to_vec()]
-    }
-}
-
-fn load_certs(path: &str) -> std::result::Result<Vec<CertificateDer<'static>>, String> {
-    let contents = read_pem(path, "cert", &["CERTIFICATE"])?;
-    let mut certs = Vec::new();
-    for item in rustls_pemfile::read_all(&mut BufReader::new(contents.as_slice())) {
-        match item.map_err(|error| format!("invalid TLS certificates in {path}: {error}"))? {
-            rustls_pemfile::Item::X509Certificate(cert) => {
-                let index = certs.len();
-                rustls::server::ParsedCertificate::try_from(&cert).map_err(|error| {
-                    format!("invalid TLS certificate {index} in {path}: {error}")
-                })?;
-                certs.push(cert);
-            }
-            _ => return Err(format!("unexpected non-certificate PEM item in {path}")),
-        }
-    }
-    if certs.is_empty() {
-        return Err(format!("no TLS certificates found in {path}"));
-    }
-    Ok(certs)
-}
-
-fn load_key(path: &str) -> std::result::Result<PrivateKeyDer<'static>, String> {
-    let contents = read_pem(
-        path,
-        "key",
-        &["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"],
-    )?;
-    let items = rustls_pemfile::read_all(&mut BufReader::new(contents.as_slice()))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|error| format!("invalid TLS key in {path}: {error}"))?;
-    let mut keys = Vec::new();
-    for item in items {
-        match item {
-            rustls_pemfile::Item::Pkcs1Key(key) => keys.push(PrivateKeyDer::Pkcs1(key)),
-            rustls_pemfile::Item::Pkcs8Key(key) => keys.push(PrivateKeyDer::Pkcs8(key)),
-            rustls_pemfile::Item::Sec1Key(key) => keys.push(PrivateKeyDer::Sec1(key)),
-            _ => return Err(format!("unexpected non-key PEM item in {path}")),
-        }
-    }
-    let mut keys = keys.into_iter();
-    let key = keys
-        .next()
-        .ok_or_else(|| format!("no unencrypted private key found in {path}"))?;
-    if keys.next().is_some() {
-        return Err(format!(
-            "multiple private keys found in {path}; expected exactly one"
-        ));
-    }
-    Ok(key)
-}
-
-fn read_pem(
-    path: &str,
-    kind: &str,
-    allowed_labels: &[&str],
-) -> std::result::Result<Vec<u8>, String> {
-    let contents = std::fs::read(path)
-        .map_err(|error| format!("cannot open TLS {kind} file {path}: {error}"))?;
-    let text = std::str::from_utf8(&contents)
-        .map_err(|error| format!("TLS {kind} file {path} is not UTF-8 PEM: {error}"))?;
-    for line in text.lines().map(str::trim) {
-        if let Some(label) = line
-            .strip_prefix("-----BEGIN ")
-            .and_then(|line| line.strip_suffix("-----"))
-            && !allowed_labels.contains(&label)
-        {
-            return Err(format!(
-                "unsupported PEM block '{label}' in TLS {kind} file {path}"
-            ));
-        }
-    }
-    Ok(contents)
+    crate::config::tls::build_rustls_config(tls).map_err(GatewayError::validation)
 }
 
 fn bind_http1_and2(
@@ -254,6 +143,7 @@ fn secure_app_config(address: SocketAddr) -> AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::tls::validate_rustls_config;
     use actix_service::fn_service;
     use rcgen::generate_simple_self_signed;
     use std::{
@@ -448,7 +338,9 @@ mod tests {
     #[actix_web::test]
     async fn http1_only_transport_negotiates_http1_and_stops_cleanly() {
         let (_directory, tls) = material();
-        let trust_anchor = load_certs(&tls.cert_file).expect("certificate").remove(0);
+        let trust_anchor = crate::config::tls::load_certs(&tls.cert_file)
+            .expect("certificate")
+            .remove(0);
         let config = load_rustls_config(&tls).expect("server config");
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let address = listener.local_addr().expect("listener address");

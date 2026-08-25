@@ -5,6 +5,8 @@
 
 pub mod builder;
 pub mod models;
+#[cfg(feature = "gateway")]
+pub(crate) mod tls;
 pub mod validation;
 
 pub use validation::Validate;
