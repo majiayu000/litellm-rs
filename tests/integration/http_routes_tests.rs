@@ -386,6 +386,9 @@ mod tests {
         config.gateway.storage.database.url.clear();
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        // This case exercises the fail-closed pre-evidence state. Prevent the
+        // default active probe from replacing Unknown with a live outcome.
+        config.gateway.router.load_balancer.health_check_enabled = false;
         config.gateway.providers.push(ProviderConfig {
             name: "openai".to_string(),
             provider_type: "openai".to_string(),

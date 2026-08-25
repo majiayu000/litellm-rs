@@ -554,7 +554,13 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn global_switch_disables_probe_tasks() {
-        let provider = test_provider(None).await;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("disabled probe listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("disabled probe address should exist");
+        let provider = test_provider(Some(format!("http://{address}/v1"))).await;
         let config = RouterConfig {
             enable_pre_call_checks: false,
             ..RouterConfig::default()
@@ -564,6 +570,12 @@ pub(crate) mod tests {
 
         assert_eq!(router.start_configured_health_checks().unwrap(), 0);
         assert_eq!(router.health_probe_task_count(), 0);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "disabled health checks must not create background upstream traffic"
+        );
     }
 
     #[test]
