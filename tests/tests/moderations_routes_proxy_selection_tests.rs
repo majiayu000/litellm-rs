@@ -144,11 +144,16 @@ async fn root_moderation_alias_proxies_request() {
 async fn moderation_route_uses_default_model_for_provider_selection_when_omitted() {
     let mock = MockModerationServer::start_moderation_mock().await;
     let state = build_test_app_state(vec![
-        moderation_provider_with_models(
+        named_moderation_provider(
+            "unrelated-provider",
             "http://127.0.0.1:9/v1",
             vec!["unrelated-moderation-model".to_string()],
         ),
-        moderation_provider_with_models(&mock.base_url, vec!["omni-moderation-latest".to_string()]),
+        named_moderation_provider(
+            "default-provider",
+            &mock.base_url,
+            vec!["omni-moderation-latest".to_string()],
+        ),
     ])
     .await;
     let app = test::init_service(

@@ -1,5 +1,5 @@
 fn cors_auth_test_config() -> Config {
-    let mut config = Config::default();
+    let mut config = valid_http_test_config();
     config.gateway.auth.enable_jwt = true;
     config.gateway.auth.enable_api_key = true;
     config.gateway.auth.allow_anonymous = false;

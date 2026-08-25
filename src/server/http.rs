@@ -46,24 +46,12 @@ pub struct HttpServer {
 impl HttpServer {
     /// Create a new HTTP server
     pub async fn new(config: &Config) -> Result<Self> {
-        info!("Creating HTTP server");
+        config.gateway.storage.redis.validate().map_err(|error| {
+            GatewayError::Config(format!("Invalid Redis configuration: {error}"))
+        })?;
+        config.validate()?;
 
-        crate::config::models::gateway::GatewayConfig::validate_model_alias_map(
-            &config.gateway.model_aliases,
-        )
-        .map_err(|error| GatewayError::Config(format!("Invalid model aliases: {error}")))?;
-        Self::validate_cors_config(&config.gateway.server.cors)?;
-        config
-            .gateway
-            .cache
-            .validate()
-            .map_err(|e| GatewayError::Config(format!("Invalid cache configuration: {}", e)))?;
-        config
-            .gateway
-            .monitoring
-            .callbacks
-            .validate()
-            .map_err(|e| GatewayError::Config(format!("Invalid callback configuration: {}", e)))?;
+        info!("Creating HTTP server");
         start_auth_rate_limiter_cleanup_task();
 
         let storage = crate::storage::StorageLayer::new(&config.gateway.storage).await?;
@@ -501,7 +489,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_rejects_invalid_cors_config_before_startup() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.server.cors.allowed_origins = vec!["*".to_string()];
         config.gateway.server.cors.allow_credentials = true;
 
@@ -512,7 +500,8 @@ mod tests {
 
         match error {
             GatewayError::Config(message) => {
-                assert!(message.contains("Invalid CORS configuration"));
+                assert!(message.contains("Gateway config error"));
+                assert!(message.contains("CORS"));
                 assert!(message.contains("credentials"));
             }
             other => panic!("expected config error, got: {other:?}"),
@@ -523,7 +512,7 @@ mod tests {
     /// the pricing source, which points at a non-existent file so the initial
     /// load fails deterministically.
     fn config_with_broken_pricing(allow_degraded: bool) -> Config {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         // Disable enterprise/storage subsystems that would require real I/O.
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
@@ -557,7 +546,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_wires_enabled_cache_config() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = None;
@@ -573,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_wires_configured_callback_backend() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = None;
@@ -602,7 +591,7 @@ mod tests {
     /// returns an empty snapshot set, exercising the "Ok(snapshots)" arm.
     #[tokio::test]
     async fn new_succeeds_with_in_memory_budgets_when_db_disabled() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         // Disable pricing so we don't conflate with the broken-pricing tests.
@@ -628,7 +617,7 @@ mod tests {
             "reject_preflight",
         );
 
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
         config.gateway.auth.allow_anonymous = true;
@@ -677,7 +666,7 @@ mod tests {
         let _metrics_guard = MetricsMiddleware::test_lock().await;
         MetricsMiddleware::reset_for_tests();
 
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = true;
         config.gateway.auth.enable_api_key = true;
         config.gateway.auth.allow_anonymous = false;
@@ -718,13 +707,14 @@ mod tests {
     }
 
     include!("http_cors_tests.rs");
+    include!("http_validation_tests.rs");
 
     #[tokio::test]
     async fn app_factory_does_not_collect_http_metrics_when_metrics_disabled() {
         let _metrics_guard = MetricsMiddleware::test_lock().await;
         MetricsMiddleware::reset_for_tests();
 
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
         config.gateway.auth.allow_anonymous = true;
@@ -755,7 +745,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_factory_mounts_explicit_cache_admin_surface() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
         config.gateway.auth.allow_anonymous = true;

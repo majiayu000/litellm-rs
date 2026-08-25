@@ -12,9 +12,7 @@ impl Validate for StorageConfig {
     fn validate(&self) -> Result<(), String> {
         debug!("Validating storage configuration");
 
-        if self.database.enabled {
-            self.database.validate()?;
-        }
+        self.database.validate()?;
         if self.redis.enabled {
             self.redis.validate()?;
         }
@@ -68,6 +66,12 @@ impl Validate for FileStorageConfig {
 impl Validate for DatabaseConfig {
     fn validate(&self) -> Result<(), String> {
         if !self.enabled {
+            if cfg!(feature = "storage") && !cfg!(feature = "sqlite") {
+                return Err(
+                    "storage.database.enabled=false requires the `sqlite` feature because the runtime uses an in-memory SQLite backend"
+                        .to_string(),
+                );
+            }
             return Ok(());
         }
 
@@ -75,8 +79,23 @@ impl Validate for DatabaseConfig {
             return Err("Database URL cannot be empty".to_string());
         }
 
-        if !self.url.starts_with("postgresql://") && !self.url.starts_with("postgres://") {
-            return Err("Only PostgreSQL databases are supported".to_string());
+        if self.fallback_to_sqlite && !cfg!(feature = "sqlite") {
+            return Err(
+                "storage.database.fallback_to_sqlite=true requires the `sqlite` feature"
+                    .to_string(),
+            );
+        }
+
+        if self.url.starts_with("postgresql://") || self.url.starts_with("postgres://") {
+            if !cfg!(feature = "postgres") {
+                return Err("PostgreSQL database URLs require the `postgres` feature".to_string());
+            }
+        } else if self.url.starts_with("sqlite:") {
+            if !cfg!(feature = "sqlite") {
+                return Err("SQLite database URLs require the `sqlite` feature".to_string());
+            }
+        } else {
+            return Err("Database URL must use PostgreSQL or SQLite".to_string());
         }
 
         if self.max_connections == 0 {
@@ -99,6 +118,17 @@ impl Validate for RedisConfig {
     fn validate(&self) -> Result<(), String> {
         if !self.enabled {
             return Ok(());
+        }
+
+        if self.cluster {
+            return Err(
+                "storage.redis.cluster=true is declared but not implemented yet. \
+                 A standalone client against a cluster node only fails later \
+                 with MOVED errors, so cluster mode is rejected at startup. \
+                 Set storage.redis.cluster=false and point storage.redis.url \
+                 at a standalone or primary endpoint."
+                    .to_string(),
+            );
         }
 
         if self.url.is_empty() {
