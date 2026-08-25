@@ -240,23 +240,18 @@ impl IntegrationManager {
     /// Notify all integrations of an embedding error
     pub async fn on_embedding_error(&self, event: &EmbeddingErrorEvent) -> IntegrationResult<()> {
         let integrations = self.integrations.read().await;
-        for integration in integrations.iter() {
-            if integration.is_enabled()
-                && let Err(e) = integration.on_embedding_error(event).await
-            {
-                if self.config.log_errors {
-                    warn!(
-                        "Integration {} embedding error callback failed: {}",
-                        integration.name(),
-                        e
-                    );
-                }
-                if self.config.fail_fast {
-                    return Err(e);
-                }
-            }
+        if integrations.is_empty() {
+            return Ok(());
         }
-        Ok(())
+
+        let event = event.clone();
+        if self.config.parallel {
+            self.dispatch_parallel_embedding_error(&integrations, event)
+                .await
+        } else {
+            self.dispatch_sequential_embedding_error(&integrations, event)
+                .await
+        }
     }
 
     /// Notify all integrations of cache hit
@@ -485,6 +480,56 @@ impl IntegrationManager {
             self.handle_sequential_result(integration.name(), result)?;
         }
 
+        Ok(())
+    }
+
+    /// Dispatch embedding error events in parallel
+    async fn dispatch_parallel_embedding_error(
+        &self,
+        integrations: &[BoxedIntegration],
+        event: EmbeddingErrorEvent,
+    ) -> IntegrationResult<()> {
+        let timeout = std::time::Duration::from_millis(self.config.timeout_ms);
+        let mut handles = Vec::with_capacity(integrations.len());
+
+        for integration in integrations.iter() {
+            if !integration.is_enabled() {
+                continue;
+            }
+            let integration = Arc::clone(integration);
+            let event = event.clone();
+            let name = integration.name();
+            handles.push(tokio::spawn(async move {
+                match tokio::time::timeout(timeout, integration.on_embedding_error(&event)).await {
+                    Ok(result) => (name, result),
+                    Err(_) => (
+                        name,
+                        Err(IntegrationError::Timeout {
+                            timeout_ms: timeout.as_millis() as u64,
+                        }),
+                    ),
+                }
+            }));
+        }
+
+        self.collect_results(handles).await
+    }
+
+    /// Dispatch embedding error events sequentially
+    async fn dispatch_sequential_embedding_error(
+        &self,
+        integrations: &[BoxedIntegration],
+        event: EmbeddingErrorEvent,
+    ) -> IntegrationResult<()> {
+        let timeout = std::time::Duration::from_millis(self.config.timeout_ms);
+        for integration in integrations.iter() {
+            if !integration.is_enabled() {
+                continue;
+            }
+            let result =
+                tokio::time::timeout(timeout, integration.on_embedding_error(&event)).await;
+            self.handle_sequential_result(integration.name(), result)?;
+        }
         Ok(())
     }
 
