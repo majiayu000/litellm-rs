@@ -322,6 +322,13 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
         );
     }
 
+    let assert_vision_limits = |pricing: &LiteLLMModelInfo| {
+        assert_eq!(pricing.supports_vision, Some(true));
+        assert_eq!(pricing.max_tokens, Some(1_048_576));
+        assert_eq!(pricing.max_input_tokens, Some(1_048_576));
+        assert_eq!(pricing.max_output_tokens, Some(393_216));
+    };
+
     for model in [
         "deepseek-v4-flash-vision-exp",
         "deepseek/deepseek-v4-flash-vision-exp",
@@ -329,19 +336,13 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
         let Some(pricing) = embedded.get(model) else {
             panic!("embedded pricing is missing {model}");
         };
-        assert_eq!(pricing.supports_vision, Some(true));
-        assert_eq!(pricing.max_tokens, Some(393_216));
-        assert_eq!(pricing.max_input_tokens, Some(1_048_576));
-        assert_eq!(pricing.max_output_tokens, Some(393_216));
+        assert_vision_limits(pricing);
     }
 
     let Some(builtin_vision) = builtin.get_model_info("deepseek-v4-flash-vision-exp") else {
         panic!("built-in pricing is missing deepseek-v4-flash-vision-exp");
     };
-    assert_eq!(builtin_vision.supports_vision, Some(true));
-    assert_eq!(builtin_vision.max_tokens, Some(393_216));
-    assert_eq!(builtin_vision.max_input_tokens, Some(1_048_576));
-    assert_eq!(builtin_vision.max_output_tokens, Some(393_216));
+    assert_vision_limits(builtin_vision);
 
     let Some(canonical_vision) = embedded.get("deepseek-v4-flash-vision-exp") else {
         panic!("embedded pricing is missing canonical vision metadata");

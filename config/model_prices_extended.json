@@ -42764,7 +42764,7 @@
     "source": "https://api-docs.deepseek.com/quick_start/pricing/"
   },
   "deepseek-v4-flash-vision-exp": {
-    "max_tokens": 393216,
+    "max_tokens": 1048576,
     "max_input_tokens": 1048576,
     "max_output_tokens": 393216,
     "input_cost_per_token": 2.2e-07,
@@ -42843,7 +42843,7 @@
     "litellm_provider": "deepseek",
     "max_input_tokens": 1048576,
     "max_output_tokens": 393216,
-    "max_tokens": 393216,
+    "max_tokens": 1048576,
     "mode": "chat",
     "output_cost_per_token": 6.6e-07,
     "pricing_status": "official_off_peak_rate_checked_2026_08_24",
