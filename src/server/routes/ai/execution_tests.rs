@@ -607,3 +607,47 @@ async fn stream_finalization_fail_fast_errors_trip_immediate_cooldown() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_execute_stream_returns_last_error_when_budget_excludes_every_deployment() {
+    let router = Arc::new(build_provider_budget_fallback_router().await);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+
+    let result = execute_stream_with_selected_deployment(
+        router,
+        "shared-model",
+        ProviderCapability::ChatCompletionStream,
+        {
+            let attempts = attempts.clone();
+            move |_provider, _model, deployment_id| {
+                let attempts = attempts.clone();
+                async move {
+                    attempts.lock().unwrap().push(deployment_id.clone());
+                    Err::<String, _>(ProviderError::quota_exceeded(
+                        "budget",
+                        format!("provider budget exhausted for {deployment_id}"),
+                    ))
+                }
+            }
+        },
+    )
+    .await;
+    let error = match result {
+        Err(error) => error,
+        Ok((_stream, lease)) => {
+            drop(lease);
+            panic!("hard-excluded stream candidates should preserve the last budget error");
+        }
+    };
+
+    match error {
+        GatewayError::Provider(ProviderError::QuotaExceeded { message, .. }) => {
+            assert_eq!(message, "provider budget exhausted for fallback-provider");
+        }
+        other => panic!("expected the last budget error, got {other:?}"),
+    }
+    assert_eq!(
+        attempts.lock().unwrap().as_slice(),
+        ["primary-budget-exhausted", "fallback-provider"]
+    );
+}
