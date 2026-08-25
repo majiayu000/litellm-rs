@@ -7,6 +7,7 @@ use std::time::Instant;
 use parking_lot::Mutex;
 use tracing::{error, warn};
 
+use crate::core::integrations::callback_runtime::CallbackMetricsPermit;
 use crate::core::integrations::{CallbackDispatcher, CallbackTerminalPermit};
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::traits::integration::{
@@ -29,6 +30,7 @@ struct CallbackLifecycleInner {
     started_at: Mutex<Option<Instant>>,
     target: Mutex<Option<CallbackTarget>>,
     terminal_permit: Mutex<Option<CallbackTerminalPermit>>,
+    metrics_permit: Mutex<Option<CallbackMetricsPermit>>,
     begin_attempted: AtomicBool,
     terminal_emitted: AtomicBool,
 }
@@ -98,6 +100,7 @@ impl CallbackLifecycle {
                 started_at: Mutex::new(None),
                 target: Mutex::new(None),
                 terminal_permit: Mutex::new(None),
+                metrics_permit: Mutex::new(None),
                 begin_attempted: AtomicBool::new(false),
                 terminal_emitted: AtomicBool::new(false),
             }),
@@ -128,28 +131,36 @@ impl CallbackLifecycle {
             return;
         }
 
-        let admission = match self.inner.kind {
+        let (metrics_permit, admission) = match self.inner.kind {
             CallbackKind::Llm => {
                 let mut event = LlmStartEvent::new(&self.inner.request_id, &target.model)
                     .provider(target.provider);
                 event.user_id.clone_from(&self.inner.user_id);
-                self.inner.dispatcher.begin_llm(event)
+                (
+                    self.inner.dispatcher.begin_llm_metrics(&event),
+                    self.inner.dispatcher.begin_llm(event),
+                )
             }
             CallbackKind::Embedding { input_count } => {
-                self.inner.dispatcher.begin_embedding(EmbeddingStartEvent {
+                let event = EmbeddingStartEvent {
                     request_id: self.inner.request_id.clone(),
                     model: target.model,
                     provider: Some(target.provider),
                     input_count,
                     user_id: self.inner.user_id.clone(),
                     timestamp_ms: chrono::Utc::now().timestamp_millis(),
-                })
+                };
+                (
+                    self.inner.dispatcher.begin_embedding_metrics(&event),
+                    self.inner.dispatcher.begin_embedding(event),
+                )
             }
         };
+        *self.inner.metrics_permit.lock() = metrics_permit;
+        *self.inner.started_at.lock() = Some(Instant::now());
         match admission {
             Ok(permit) => {
                 *self.inner.terminal_permit.lock() = Some(permit);
-                *self.inner.started_at.lock() = Some(Instant::now());
             }
             Err(dispatch_error) => {
                 error!(
@@ -181,9 +192,8 @@ impl CallbackLifecycle {
         if !self.claim_terminal() {
             return;
         }
-        let Some(terminal_permit) = self.inner.terminal_permit.lock().take() else {
-            return;
-        };
+        let terminal_permit = self.inner.terminal_permit.lock().take();
+        let metrics_permit = self.inner.metrics_permit.lock().take();
 
         let target = self.inner.target.lock().clone();
         let model = target
@@ -200,7 +210,12 @@ impl CallbackLifecycle {
         if let Some(target) = target {
             event = event.provider(target.provider);
         }
-        terminal_permit.emit_error(event);
+        if let Some(metrics_permit) = metrics_permit {
+            metrics_permit.emit_error(&event);
+        }
+        if let Some(terminal_permit) = terminal_permit {
+            terminal_permit.emit_error(event);
+        }
     }
 
     fn complete(
@@ -215,9 +230,8 @@ impl CallbackLifecycle {
         if !self.claim_terminal() {
             return;
         }
-        let Some(terminal_permit) = self.inner.terminal_permit.lock().take() else {
-            return;
-        };
+        let terminal_permit = self.inner.terminal_permit.lock().take();
+        let metrics_permit = self.inner.metrics_permit.lock().take();
 
         let target = self.inner.target.lock().clone();
         let model = target
@@ -264,10 +278,15 @@ impl CallbackLifecycle {
                 if let Some(cost) = cost {
                     event = event.cost(cost);
                 }
-                terminal_permit.emit_end(event);
+                if let Some(metrics_permit) = metrics_permit {
+                    metrics_permit.emit_end(&event);
+                }
+                if let Some(terminal_permit) = terminal_permit {
+                    terminal_permit.emit_end(event);
+                }
             }
             CallbackKind::Embedding { .. } => {
-                terminal_permit.emit_embedding_end(EmbeddingEndEvent {
+                let event = EmbeddingEndEvent {
                     request_id: self.inner.request_id.clone(),
                     model: model.to_string(),
                     provider,
@@ -275,7 +294,13 @@ impl CallbackLifecycle {
                     cost_usd: cost,
                     latency_ms: self.elapsed_ms(),
                     timestamp_ms: chrono::Utc::now().timestamp_millis(),
-                });
+                };
+                if let Some(metrics_permit) = metrics_permit {
+                    metrics_permit.emit_embedding_end(&event);
+                }
+                if let Some(terminal_permit) = terminal_permit {
+                    terminal_permit.emit_embedding_end(event);
+                }
             }
         }
     }
@@ -288,7 +313,7 @@ impl CallbackLifecycle {
     }
 
     fn has_started(&self) -> bool {
-        self.inner.terminal_permit.lock().is_some()
+        self.inner.started_at.lock().is_some()
     }
 
     fn elapsed_ms(&self) -> u64 {
@@ -320,7 +345,7 @@ mod tests {
 
     use super::*;
     use crate::core::integrations::{
-        CallbackRuntime, IntegrationManager, IntegrationManagerConfig,
+        CallbackRuntime, IntegrationManager, IntegrationManagerConfig, PrometheusIntegration,
     };
     use crate::core::traits::integration::{Integration, IntegrationResult};
 
@@ -387,20 +412,70 @@ mod tests {
                 errors,
             }))
             .await;
+        let prometheus = Arc::new(PrometheusIntegration::with_defaults());
         let runtime = match CallbackRuntime::new(manager, 8) {
             Ok(runtime) => runtime,
             Err(error) => panic!("callback runtime should start: {error}"),
-        };
+        }
+        .with_callback_metrics(Some(prometheus));
+        let dispatcher = runtime.dispatcher();
         let pricing = Arc::new(PricingService::new(None));
         let context = RequestContext::default();
-        let lifecycle = CallbackLifecycle::new(&runtime.dispatcher(), pricing, "model", &context);
-        lifecycle.begin_provider_execution("provider", "model", "provider", "model");
+        let lifecycle = CallbackLifecycle::new(&dispatcher, pricing, "model", &context);
+        lifecycle.begin_provider_execution(
+            "first-provider",
+            "first-model",
+            "first-provider",
+            "first-model",
+        );
+        lifecycle.begin_provider_execution(
+            "final-provider",
+            "final-model",
+            "final-provider",
+            "final-model",
+        );
         lifecycle.complete_usage(None, "success");
         lifecycle.fail("late error", "provider_error");
+        let rendered = dispatcher
+            .render_prometheus_metrics()
+            .expect("configured metrics should render");
         assert!(runtime.shutdown().await.is_ok());
         assert_eq!(start_count.load(Ordering::SeqCst), 1);
         assert_eq!(end_count.load(Ordering::SeqCst), 1);
         assert_eq!(error_count.load(Ordering::SeqCst), 0);
+        assert!(rendered.contains(
+            "litellm_requests_total{model=\"final-model\",provider=\"final-provider\"} 1"
+        ));
+        assert!(rendered.contains(
+            "litellm_requests_success_total{model=\"final-model\",provider=\"final-provider\"} 1"
+        ));
+        assert!(!rendered.contains("litellm_requests_total{model=\"first-model\""));
+        assert!(rendered.contains("litellm_active_requests 0"));
+    }
+
+    #[test]
+    fn dropping_started_lifecycle_releases_active_metric() {
+        let runtime = CallbackRuntime::disabled()
+            .with_callback_metrics(Some(Arc::new(PrometheusIntegration::with_defaults())));
+        let dispatcher = runtime.dispatcher();
+        {
+            let lifecycle = CallbackLifecycle::new(
+                &dispatcher,
+                Arc::new(PricingService::new(None)),
+                "model",
+                &RequestContext::default(),
+            );
+            lifecycle.begin_provider_execution("provider", "model", "provider", "model");
+            let active = dispatcher
+                .render_prometheus_metrics()
+                .expect("configured metrics should render");
+            assert!(active.contains("litellm_active_requests 1"));
+        }
+
+        let released = dispatcher
+            .render_prometheus_metrics()
+            .expect("configured metrics should render");
+        assert!(released.contains("litellm_active_requests 0"));
     }
 
     #[tokio::test]

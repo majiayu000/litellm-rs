@@ -3,7 +3,7 @@ use std::time::Duration;
 use actix_web::{http::StatusCode, test as actix_test, web};
 
 use super::*;
-use crate::core::traits::integration::LlmStartEvent;
+use crate::core::traits::integration::{LlmEndEvent, LlmStartEvent};
 
 #[tokio::test]
 async fn metrics_endpoint_exposes_live_callback_sample_from_same_runtime() {
@@ -38,11 +38,13 @@ async fn metrics_endpoint_exposes_live_callback_sample_from_same_runtime() {
     assert_eq!(health_resp.status(), StatusCode::OK);
     drop(actix_test::read_body(health_resp).await);
 
-    server
+    let start = LlmStartEvent::new("live-request", "gpt-live").provider("openai-live");
+    let metrics = server
         .state()
         .callbacks
-        .emit_start(LlmStartEvent::new("live-request", "gpt-live").provider("openai-live"))
-        .expect("Prometheus lifecycle event should enter the live callback queue");
+        .begin_llm_metrics(&start)
+        .expect("live Prometheus metrics lifecycle should start");
+    metrics.emit_end(&LlmEndEvent::new("live-request", "gpt-live").provider("openai-live"));
 
     let expected = "litellm_requests_total{model=\"gpt-live\",provider=\"openai-live\"} 1";
     let body = tokio::time::timeout(Duration::from_secs(1), async {

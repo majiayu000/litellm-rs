@@ -8,7 +8,7 @@ use crate::config::models::monitoring::{CallbackBackendConfig, CallbackConfig, M
 use crate::core::integrations::{
     CallbackRuntime, DataDogIntegration, IntegrationManager, IntegrationManagerConfig,
     LangfuseIntegration, OpenTelemetryIntegration, PrometheusIntegration,
-    callback_runtime::PrometheusMetricsRenderer,
+    callback_runtime::CallbackMetricsRecorder,
 };
 use crate::core::traits::integration::BoxedIntegration;
 
@@ -43,30 +43,31 @@ pub(crate) async fn build_callback_runtime(
         }
     }
 
-    let prometheus_metrics = if metrics.enabled {
+    let prometheus_metrics: Option<CallbackMetricsRecorder> = if metrics.enabled {
         let integration = Arc::new(PrometheusIntegration::with_defaults());
-        let render = Arc::clone(&integration);
-        let renderer: PrometheusMetricsRenderer = Arc::new(move || render.render_metrics());
-        manager.register(integration as BoxedIntegration).await;
         info!("Callback backend initialized: prometheus");
-        Some(renderer)
+        Some(integration)
     } else {
         None
     };
 
-    if manager.count().await == 0 {
+    if manager.count().await == 0 && prometheus_metrics.is_none() {
         warn!("No configured callback backend initialized successfully");
         return CallbackRuntime::disabled();
     }
 
+    if manager.count().await == 0 {
+        return CallbackRuntime::disabled().with_callback_metrics(prometheus_metrics);
+    }
+
     match CallbackRuntime::new(manager, config.queue_capacity) {
-        Ok(runtime) => runtime.with_prometheus_metrics(prometheus_metrics),
+        Ok(runtime) => runtime.with_callback_metrics(prometheus_metrics),
         Err(error) => {
             warn!(
                 "Callback runtime initialization failed; continuing without callbacks: {}",
                 error
             );
-            CallbackRuntime::disabled()
+            CallbackRuntime::disabled().with_callback_metrics(prometheus_metrics)
         }
     }
 }
@@ -94,7 +95,7 @@ fn build_backend(
 #[cfg(test)]
 mod tests {
     use crate::core::integrations::{LangfuseConfig, OpenTelemetryConfig};
-    use crate::core::traits::integration::LlmStartEvent;
+    use crate::core::traits::integration::{LlmEndEvent, LlmStartEvent};
 
     use super::*;
 
@@ -144,9 +145,11 @@ mod tests {
             dispatcher.registered_integrations().await,
             vec!["prometheus"]
         );
-        dispatcher
-            .emit_start(LlmStartEvent::new("request-1", "gpt-4").provider("openai"))
-            .expect("Prometheus lifecycle event should enqueue");
+        let start = LlmStartEvent::new("request-1", "gpt-4").provider("openai");
+        let metrics = dispatcher
+            .begin_llm_metrics(&start)
+            .expect("Prometheus metrics lifecycle should start");
+        metrics.emit_end(&LlmEndEvent::new("request-1", "gpt-4").provider("openai"));
         assert!(runtime.shutdown().await.is_ok());
         assert!(
             dispatcher

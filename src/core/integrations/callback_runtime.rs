@@ -12,7 +12,17 @@ use crate::core::traits::integration::{
     LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 
-pub(crate) type PrometheusMetricsRenderer = Arc<dyn Fn() -> String + Send + Sync>;
+pub(crate) trait CallbackMetrics: Send + Sync {
+    fn begin_llm_lifecycle(&self, event: &LlmStartEvent);
+    fn finish_llm_lifecycle(&self, event: &LlmEndEvent);
+    fn fail_llm_lifecycle(&self, event: &LlmErrorEvent);
+    fn cancel_llm_lifecycle(&self, event: &LlmStartEvent);
+    fn record_embedding_start(&self, event: &EmbeddingStartEvent);
+    fn record_embedding_end(&self, event: &EmbeddingEndEvent);
+    fn render(&self) -> String;
+}
+
+pub(crate) type CallbackMetricsRecorder = Arc<dyn CallbackMetrics>;
 
 #[derive(Debug)]
 enum CallbackEvent {
@@ -40,7 +50,7 @@ pub enum CallbackDispatchError {
 pub struct CallbackDispatcher {
     sender: Option<mpsc::Sender<CallbackEvent>>,
     manager: Option<Arc<IntegrationManager>>,
-    prometheus_metrics: Option<PrometheusMetricsRenderer>,
+    callback_metrics: Option<CallbackMetricsRecorder>,
 }
 
 /// Capacity reserved for the terminal event of an admitted lifecycle.
@@ -71,28 +81,78 @@ impl CallbackTerminalPermit {
     }
 }
 
+enum CallbackMetricsKind {
+    Llm(Box<LlmStartEvent>),
+    Embedding,
+}
+
+/// Request lifecycle guard for synchronous in-process callback metrics.
+///
+/// This is deliberately separate from [`CallbackTerminalPermit`]: exporter
+/// queue admission keeps its public failure semantics, while metrics never
+/// enter that queue. Dropping an unfinished LLM guard releases the active
+/// request gauge during cancellation, task abortion, or panic unwinding.
+pub(crate) struct CallbackMetricsPermit {
+    recorder: CallbackMetricsRecorder,
+    kind: CallbackMetricsKind,
+    completed: bool,
+}
+
+impl CallbackMetricsPermit {
+    pub(crate) fn emit_end(mut self, event: &LlmEndEvent) {
+        self.recorder.finish_llm_lifecycle(event);
+        self.completed = true;
+    }
+
+    pub(crate) fn emit_error(mut self, event: &LlmErrorEvent) {
+        self.recorder.fail_llm_lifecycle(event);
+        self.completed = true;
+    }
+
+    pub(crate) fn emit_embedding_end(mut self, event: &EmbeddingEndEvent) {
+        self.recorder.record_embedding_end(event);
+        self.completed = true;
+    }
+}
+
+impl Drop for CallbackMetricsPermit {
+    fn drop(&mut self) {
+        if !self.completed
+            && let CallbackMetricsKind::Llm(event) = &self.kind
+        {
+            self.recorder.cancel_llm_lifecycle(event);
+        }
+    }
+}
+
 impl CallbackDispatcher {
     /// Create a dispatcher that performs no external callback work.
     pub fn disabled() -> Self {
         Self::default()
     }
 
-    /// Whether this dispatcher has an active callback worker.
+    /// Whether this dispatcher has exporter delivery or in-process metrics enabled.
     pub fn is_enabled(&self) -> bool {
-        self.sender.is_some()
+        self.sender.is_some() || self.callback_metrics.is_some()
     }
 
     /// List the callback integrations registered with this dispatcher.
     pub async fn registered_integrations(&self) -> Vec<&'static str> {
-        match &self.manager {
+        let mut integrations = match &self.manager {
             Some(manager) => manager.list_integrations().await,
             None => Vec::new(),
+        };
+        if self.callback_metrics.is_some() {
+            integrations.push("prometheus");
         }
+        integrations
     }
 
     /// Render metrics from the configured Prometheus callback backend.
     pub fn render_prometheus_metrics(&self) -> Option<String> {
-        self.prometheus_metrics.as_ref().map(|render| render())
+        self.callback_metrics
+            .as_ref()
+            .map(|metrics| metrics.render())
     }
 
     /// Atomically admit an LLM start and reserve capacity for its terminal event.
@@ -129,6 +189,29 @@ impl CallbackDispatcher {
     /// Enqueue an LLM stream event without waiting for exporter I/O.
     pub fn emit_stream(&self, event: LlmStreamEvent) -> Result<(), CallbackDispatchError> {
         self.try_send(CallbackEvent::Stream(event))
+    }
+
+    pub(crate) fn begin_llm_metrics(&self, event: &LlmStartEvent) -> Option<CallbackMetricsPermit> {
+        let recorder = self.callback_metrics.clone()?;
+        recorder.begin_llm_lifecycle(event);
+        Some(CallbackMetricsPermit {
+            recorder,
+            kind: CallbackMetricsKind::Llm(Box::new(event.clone())),
+            completed: false,
+        })
+    }
+
+    pub(crate) fn begin_embedding_metrics(
+        &self,
+        event: &EmbeddingStartEvent,
+    ) -> Option<CallbackMetricsPermit> {
+        let recorder = self.callback_metrics.clone()?;
+        recorder.record_embedding_start(event);
+        Some(CallbackMetricsPermit {
+            recorder,
+            kind: CallbackMetricsKind::Embedding,
+            completed: false,
+        })
     }
 
     fn try_send(&self, event: CallbackEvent) -> Result<(), CallbackDispatchError> {
@@ -197,7 +280,7 @@ impl CallbackRuntime {
             dispatcher: CallbackDispatcher {
                 sender: Some(sender),
                 manager: Some(manager),
-                prometheus_metrics: None,
+                callback_metrics: None,
             },
             shutdown_tx: Some(shutdown_tx),
             worker: Some(worker),
@@ -218,11 +301,11 @@ impl CallbackRuntime {
         self.dispatcher.clone()
     }
 
-    pub(crate) fn with_prometheus_metrics(
+    pub(crate) fn with_callback_metrics(
         mut self,
-        renderer: Option<PrometheusMetricsRenderer>,
+        metrics: Option<CallbackMetricsRecorder>,
     ) -> Self {
-        self.dispatcher.prometheus_metrics = renderer;
+        self.dispatcher.callback_metrics = metrics;
         self
     }
 
@@ -301,7 +384,7 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::*;
-    use crate::core::integrations::IntegrationManagerConfig;
+    use crate::core::integrations::{IntegrationManagerConfig, PrometheusIntegration};
     use crate::core::traits::integration::{Integration, LlmErrorEvent};
 
     struct RecordingIntegration {
@@ -544,6 +627,67 @@ mod tests {
         runtime.shutdown().await.unwrap();
 
         assert_eq!(*events.lock(), vec!["start", "end"]);
+    }
+
+    #[tokio::test]
+    async fn metrics_lifecycle_is_independent_without_hiding_queue_errors() {
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let manager = Arc::new(IntegrationManager::new(
+            IntegrationManagerConfig::default().parallel(false),
+        ));
+        manager
+            .register(Arc::new(BlockingIntegration {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+                events: Arc::new(Mutex::new(Vec::new())),
+            }))
+            .await;
+        let prometheus = Arc::new(PrometheusIntegration::with_defaults());
+        let runtime = CallbackRuntime::new(manager, 2)
+            .unwrap()
+            .with_callback_metrics(Some(prometheus));
+        let dispatcher = runtime.dispatcher();
+        let entered_wait = entered.notified();
+
+        let first = dispatcher
+            .begin_llm(LlmStartEvent::new("req-1", "model"))
+            .unwrap();
+        entered_wait.await;
+
+        let second_start = LlmStartEvent::new("req-2", "model");
+        let second_metrics = dispatcher
+            .begin_llm_metrics(&second_start)
+            .expect("configured metrics should admit independently");
+        assert!(matches!(
+            dispatcher.begin_llm(second_start),
+            Err(CallbackDispatchError::QueueFull)
+        ));
+        second_metrics.emit_end(&LlmEndEvent::new("req-2", "model").latency(25));
+        assert_eq!(
+            dispatcher.emit_end(LlmEndEvent::new("queued", "model")),
+            Ok(())
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                dispatcher.emit_end(LlmEndEvent::new("retry", "model")),
+                Err(CallbackDispatchError::QueueFull)
+            );
+        }
+
+        let cancelled = dispatcher
+            .begin_llm_metrics(&LlmStartEvent::new("req-3", "model"))
+            .expect("configured metrics should admit independently");
+        drop(cancelled);
+
+        let rendered = dispatcher.render_prometheus_metrics().unwrap();
+        assert!(rendered.contains("litellm_requests_total{model=\"model\"} 2"));
+        assert!(rendered.contains("litellm_requests_success_total{model=\"model\"} 1"));
+        assert!(rendered.contains("litellm_active_requests 0"));
+
+        first.emit_end(LlmEndEvent::new("req-1", "model"));
+        release.notify_one();
+        runtime.shutdown().await.unwrap();
     }
 
     #[tokio::test]
