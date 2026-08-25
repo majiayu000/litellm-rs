@@ -17,7 +17,7 @@ use std::time::Duration;
 struct ProbeGroup {
     policy: HealthCheckPolicy,
     provider: Provider,
-    deployment_ids: Vec<DeploymentId>,
+    deployments: HashMap<DeploymentId, Arc<Deployment>>,
     routing_snapshot: Arc<ArcSwap<RoutingSnapshot>>,
     timeout_secs: u64,
     custom_client: Option<Arc<BaseHttpClient>>,
@@ -73,7 +73,10 @@ impl Router {
                     entry.insert(ProbeGroup {
                         policy,
                         provider: deployment.provider.clone(),
-                        deployment_ids: vec![deployment.id.clone()],
+                        deployments: HashMap::from([(
+                            deployment.id.clone(),
+                            Arc::clone(deployment),
+                        )]),
                         routing_snapshot: Arc::clone(&self.routing_snapshot),
                         timeout_secs: deployment.config.timeout_secs,
                         custom_client,
@@ -89,7 +92,9 @@ impl Router {
                             policy.provider_name
                         )));
                     }
-                    group.deployment_ids.push(deployment.id.clone());
+                    group
+                        .deployments
+                        .insert(deployment.id.clone(), Arc::clone(deployment));
                 }
             }
         }
@@ -122,167 +127,11 @@ impl Router {
     }
 }
 
-async fn run_probe_loop(group: ProbeGroup) {
-    let mut consecutive_failures = 0_u32;
-
-    loop {
-        let result = match tokio::time::timeout(
-            Duration::from_secs(group.timeout_secs),
-            execute_probe(
-                &group.provider,
-                &group.policy,
-                group.custom_client.as_deref(),
-            ),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(ProbeFailure::Timeout),
-        };
-
-        let delay = match result {
-            Ok(()) => {
-                if consecutive_failures > 0 {
-                    tracing::info!(
-                        provider = %group.policy.provider_name,
-                        "provider health probe recovered"
-                    );
-                }
-                apply_probe_result(&group, true, &mut consecutive_failures)
-            }
-            Err(failure) => {
-                let delay = apply_probe_result(&group, false, &mut consecutive_failures);
-                log_probe_failure(&group.policy, consecutive_failures, &failure);
-                delay
-            }
-        };
-
-        tokio::time::sleep(delay).await;
-    }
-}
-
-async fn execute_probe(
-    provider: &Provider,
-    policy: &HealthCheckPolicy,
-    custom_client: Option<&BaseHttpClient>,
-) -> Result<(), ProbeFailure> {
-    if let Some(endpoint) = &policy.endpoint {
-        let client = custom_client.ok_or(ProbeFailure::ClientUnavailable)?;
-        let response = client
-            .get(endpoint.clone())
-            .map_err(|error| ProbeFailure::Request(error.to_string()))?
-            .send()
-            .await
-            .map_err(|error| ProbeFailure::Request(error.to_string()))?;
-        let status = response.status().as_u16();
-        if policy.expected_codes.contains(&status) {
-            Ok(())
-        } else {
-            Err(ProbeFailure::UnexpectedStatus(status))
-        }
-    } else {
-        match provider.health_check().await {
-            ProviderHealthStatus::Healthy => Ok(()),
-            status => Err(ProbeFailure::ProviderStatus(status)),
-        }
-    }
-}
-
-fn apply_probe_result(
-    group: &ProbeGroup,
-    succeeded: bool,
-    consecutive_failures: &mut u32,
-) -> Duration {
-    let snapshot = group.routing_snapshot.load();
-    let deployments = group
-        .deployment_ids
-        .iter()
-        .filter_map(|id| snapshot.deployments.get(id));
-    if succeeded {
-        *consecutive_failures = 0;
-        for deployment in deployments {
-            update_probe_health(deployment, HealthStatus::Healthy);
-        }
-        return Duration::from_secs(group.policy.interval_secs);
-    }
-
-    *consecutive_failures = consecutive_failures.saturating_add(1);
-    let threshold_reached = *consecutive_failures >= group.policy.failure_threshold;
-    let target = if threshold_reached {
-        HealthStatus::Unhealthy
-    } else {
-        HealthStatus::Degraded
-    };
-    for deployment in deployments {
-        update_probe_health(deployment, target);
-    }
-
-    let delay_secs = if threshold_reached {
-        group.policy.recovery_timeout_secs
-    } else {
-        group.policy.interval_secs
-    };
-    Duration::from_secs(delay_secs)
-}
-
-fn update_probe_health(deployment: &Deployment, target: HealthStatus) {
-    deployment.state.set_probe_health_status(target);
-    deployment
-        .state
-        .probe_unhealthy
-        .store(target == HealthStatus::Unhealthy, Ordering::Relaxed);
-    if deployment.is_in_cooldown() {
-        return;
-    }
-
-    let mut current = deployment.state.health.load(Ordering::Relaxed);
-    loop {
-        let current_status = HealthStatus::from(current);
-        let next = match (target, current_status) {
-            (_, HealthStatus::Cooldown) => return,
-            (HealthStatus::Degraded, HealthStatus::Unhealthy) => return,
-            (HealthStatus::Healthy, _)
-            | (HealthStatus::Degraded, _)
-            | (HealthStatus::Unhealthy, _) => target,
-            (HealthStatus::Unknown | HealthStatus::Cooldown, _) => return,
-        };
-        if current_status == next {
-            return;
-        }
-
-        match deployment.state.health.compare_exchange_weak(
-            current,
-            next as u8,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return,
-            Err(observed) => current = observed,
-        }
-    }
-}
-
-fn log_probe_failure(
-    policy: &HealthCheckPolicy,
-    consecutive_failures: u32,
-    failure: &ProbeFailure,
-) {
-    if consecutive_failures >= policy.failure_threshold {
-        tracing::error!(
-            provider = %policy.provider_name,
-            consecutive_failures,
-            failure = ?failure,
-            "provider health probe marked deployments unhealthy"
-        );
-    } else {
-        tracing::warn!(
-            provider = %policy.provider_name,
-            consecutive_failures,
-            failure = ?failure,
-            "provider health probe failed"
-        );
-    }
-}
+#[path = "health_probe/runtime.rs"]
+mod runtime;
+use runtime::run_probe_loop;
+#[cfg(test)]
+use runtime::{apply_probe_result, execute_probe, update_probe_health};
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -625,7 +474,10 @@ pub(crate) mod tests {
         let group = ProbeGroup {
             policy: test_policy(None),
             provider,
-            deployment_ids: vec![deployment.id.clone(), second.id.clone()],
+            deployments: HashMap::from([
+                (deployment.id.clone(), Arc::clone(&deployment)),
+                (second.id.clone(), Arc::clone(&second)),
+            ]),
             routing_snapshot: Arc::clone(&router.routing_snapshot),
             timeout_secs: 2,
             custom_client: None,
@@ -730,7 +582,7 @@ pub(crate) mod tests {
         let group = ProbeGroup {
             policy,
             provider,
-            deployment_ids: vec![deployment.id.clone()],
+            deployments: HashMap::from([(deployment.id.clone(), Arc::clone(&deployment))]),
             routing_snapshot: Arc::clone(&router.routing_snapshot),
             timeout_secs: 2,
             custom_client: Some(custom_client),
