@@ -74,6 +74,13 @@ impl StorageLayer {
     ///   the error is logged at `error!` level and the dependency status is
     ///   set to `Degraded` while the gateway keeps running.
     pub async fn new(config: &StorageConfig) -> Result<Self> {
+        crate::config::Validate::validate(&config.redis).map_err(|error| {
+            GatewayError::Config(format!("Invalid Redis configuration: {error}"))
+        })?;
+        crate::config::Validate::validate(config).map_err(|error| {
+            GatewayError::Config(format!("Invalid storage configuration: {error}"))
+        })?;
+
         info!("Initializing storage layer");
 
         // Initialize database
@@ -728,64 +735,6 @@ mod tests {
         assert_eq!(storage.redis_status, DependencyStatus::Disabled);
     }
 
-    fn unreachable_vector_config(
-        allow_degraded: bool,
-    ) -> crate::config::models::file_storage::VectorDbConfig {
-        crate::config::models::file_storage::VectorDbConfig {
-            // Unsupported db_type forces VectorStoreBackend::new to return Err
-            // synchronously, which keeps the test fast and offline-friendly.
-            db_type: "weaviate".to_string(),
-            url: "http://127.0.0.1:1".to_string(),
-            api_key: "test".to_string(),
-            index_name: "test".to_string(),
-            allow_degraded,
-        }
-    }
-
-    #[tokio::test]
-    async fn vector_db_failing_without_allow_degraded_fails_startup() {
-        let config = StorageConfig {
-            database: sqlite_db_config(),
-            redis: RedisConfig::default(),
-            files: FileStorageConfig::default(),
-            vector_db: Some(unreachable_vector_config(false)),
-        };
-
-        let result = StorageLayer::new(&config).await;
-        assert!(
-            result.is_err(),
-            "configured vector DB that cannot init must fail startup when allow_degraded=false"
-        );
-    }
-
-    #[tokio::test]
-    async fn vector_db_failing_with_allow_degraded_continues_without_vector() {
-        let config = StorageConfig {
-            database: sqlite_db_config(),
-            redis: RedisConfig::default(),
-            files: FileStorageConfig::default(),
-            vector_db: Some(unreachable_vector_config(true)),
-        };
-
-        let storage = StorageLayer::new(&config)
-            .await
-            .expect("allow_degraded=true must allow startup without a vector backend");
-        assert!(storage.vector.is_none());
-        assert_eq!(storage.vector_status, DependencyStatus::Degraded);
-    }
-
-    #[tokio::test]
-    async fn vector_db_disabled_is_status_disabled() {
-        let config = StorageConfig {
-            database: sqlite_db_config(),
-            redis: RedisConfig::default(),
-            files: FileStorageConfig::default(),
-            vector_db: None,
-        };
-
-        let storage = StorageLayer::new(&config)
-            .await
-            .expect("storage layer must init without vector DB");
-        assert_eq!(storage.vector_status, DependencyStatus::Disabled);
-    }
+    #[cfg(feature = "sqlite")]
+    include!("vector_startup_tests.rs");
 }

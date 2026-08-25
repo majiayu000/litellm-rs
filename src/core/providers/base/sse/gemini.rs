@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use super::SSETransformer;
+use crate::core::providers::google_error;
 use crate::core::providers::google_tool_loop::{
     candidate_index, finish_reason, parse_function_call_parts,
 };
@@ -204,15 +205,10 @@ impl SSETransformer for GeminiTransformer {
         })?;
 
         // Error response
-        if let Some(error) = json.get("error") {
-            let msg = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown Gemini error");
-            return Err(ProviderError::api_error(
-                "gemini",
-                error.get("code").and_then(|c| c.as_u64()).unwrap_or(500) as u16,
-                msg.to_string(),
+        if json.get("error").is_some() {
+            return Err(google_error::map_google_error_envelope(
+                self.provider,
+                &json,
             ));
         }
 
@@ -353,6 +349,24 @@ mod tests {
     use crate::core::providers::base::sse::UnifiedSSEStream;
     use bytes::Bytes;
     use futures::StreamExt;
+
+    #[test]
+    fn status_only_permission_error_defaults_to_403_for_direct_and_vertex_streams() {
+        let data = r#"{"error":{"message":"stream access denied","status":"PERMISSION_DENIED"}}"#;
+        for transformer in [
+            GeminiTransformer::new("gemini-test"),
+            GeminiTransformer::new_vertex("vertex-test"),
+        ] {
+            assert!(matches!(
+                transformer.transform_chunk(data),
+                Err(ProviderError::ApiError {
+                    status: 403,
+                    message,
+                    ..
+                }) if message == "stream access denied"
+            ));
+        }
+    }
 
     #[test]
     fn strict_usage_metadata_applies_to_candidate_and_usage_only_chunks() {

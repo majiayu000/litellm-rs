@@ -137,16 +137,11 @@ pub fn infer_cooldown_reason(error: &ProviderError) -> CooldownReason {
         // Timeout errors
         ProviderError::Timeout { .. } => CooldownReason::Timeout,
 
-        // Bedrock permission failures retain HTTP 403 while cooling down the deployment.
-        ProviderError::ApiError {
-            provider: "bedrock",
-            status: 403,
-            ..
-        } => CooldownReason::AuthError,
-
-        // API errors - map based on status code
+        // API errors - map based on status code. Upstream 403 is a permission
+        // failure on that deployment, so preserve the immediate cooldown that
+        // Authentication-backed 403 mappings used before status normalization.
         ProviderError::ApiError { status, .. } => match *status {
-            401 => CooldownReason::AuthError,
+            401 | 403 => CooldownReason::AuthError,
             404 => CooldownReason::NotFound,
             408 => CooldownReason::Timeout,
             429 => CooldownReason::RateLimit,
