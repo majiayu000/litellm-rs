@@ -161,7 +161,8 @@ pub struct Config {
 ///
 /// Runtime configuration structs remain source-compatible and contain only
 /// their established public fields. This overlay carries the otherwise-lost
-/// distinction between an omitted boolean and an explicit `false`.
+/// distinction between an omitted `storage.redis.cluster` value and an
+/// explicit `false`.
 #[derive(Debug, Clone)]
 pub struct ConfigOverlay {
     config: Config,
@@ -316,7 +317,7 @@ impl Config {
         self
     }
 
-    /// Merge a presence-aware overlay, with explicit default values winning.
+    /// Merge an overlay while preserving explicit `storage.redis.cluster` values.
     pub fn merge_overlay(mut self, overlay: ConfigOverlay) -> Self {
         self.gateway = self
             .gateway

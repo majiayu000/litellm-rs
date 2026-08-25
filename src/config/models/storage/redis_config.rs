@@ -54,8 +54,8 @@ impl Default for RedisConfig {
 impl RedisConfig {
     /// Merge Redis configurations.
     ///
-    /// For source compatibility, a programmatic `false` in `other` retains
-    /// the historical meaning of "not specified". Call
+    /// For source compatibility, `cluster=false` in `other` retains the
+    /// historical meaning of "not specified". Call
     /// [`Self::merge_with_cluster_override`] when an explicit `false` must
     /// clear an inherited `true` value.
     pub fn merge(self, other: Self) -> Self {
