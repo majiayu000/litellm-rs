@@ -92,7 +92,11 @@ On `DualCache<T>` (src/core/cache/dual.rs:400-486):
 
 ## Invalidation and Administration
 
-- Per-entry: `delete(key)` removes from both tiers and reports whether anything existed; `clear()` empties memory and deletes every Redis key under the `litellm:cache:` prefix.
+- Per-entry invalidation is mode-dependent. `RedisOnly` propagates Redis delete errors;
+  `Dual` removes L1 first but treats Redis deletion as best-effort (`unwrap_or(false)`). A
+  failed L2 deletion still returns `Ok`, and that stale Redis value can repopulate L1 on
+  the next lookup. `clear()` empties memory and deletes every Redis key under the
+  `litellm:cache:` prefix, propagating a Redis clear error.
 - HTTP admin API (`src/server/routes/admin.rs:53-120`): when JWT or API-key auth is
   enabled, an admin-role user is required and other callers receive 403. When both auth
   methods are disabled (valid only with `allow_anonymous: true`), `require_cache_admin`

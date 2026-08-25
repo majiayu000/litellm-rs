@@ -85,7 +85,10 @@ What cannot be expressed today — do not write rules against these:
   is down, providers are unhealthy/unknown, or audit logging is unavailable. When auth is
   enabled, give the probe valid credentials; otherwise it receives 401 before readiness is
   evaluated.
-- **Token/cost/cache/provider-request counters**: none are exported; that telemetry flows
-  through callback integrations instead.
+- **Token/cost/provider-request counters**: none are exported by `/metrics`; provider
+  request lifecycle telemetry flows through callback integrations instead.
+- **Cache counters**: callbacks receive no cache-hit/miss lifecycle events or cache fields.
+  Use `LLMCache::combined_stats()` programmatically or the `GET /admin/cache` status
+  surface for chat and embedding cache statistics.
 - Any `litellm_*` series: those names appear only in deprecated library-only code paths and
   are never served by `/metrics`.

@@ -17,7 +17,11 @@ Know the real defaults before writing docs or examples: port `8000`, timeout `30
 
 ### 2. Validate Early
 
-`Config::from_file` and `Config::from_env` already run the full `Validate` tree at the end of loading — callers never validate manually.
+`Config::from_file` and `Config::from_env` already run the full `Validate` tree at the end
+of loading, so an unmodified returned config does not need duplicate validation. Any
+post-load mutation or override must call `config.validate()` again; for example,
+`load_config_with_overrides` in `src/main.rs` revalidates after applying CLI host/port
+overrides.
 
 ```rust
 // Good - from_file validates; a bad config aborts startup here

@@ -34,7 +34,11 @@ Public routes (`is_public_route`): `/health`, `/auth/login`,
 `/auth/reset-password`, `/auth/verify-email`, `/admin/dashboard`,
 `/admin/dashboard/app.css`, `/admin/dashboard/app.js`, `/docs`, `/openapi.json`.
 Dashboard membership is exact: paths such as `/admin/dashboard/` and
-`/admin/dashboard/private` are not public. `/auth/refresh` also skips header extraction.
+`/admin/dashboard/private` are not public. `/auth/refresh` is a separate full
+`AuthMiddleware` bypass: the middleware still builds request context and extracts any
+header credential before the public-route branch, but then skips the fail-closed gate,
+brute-force lockout, authentication, and authorization. The refresh handler instead
+validates the refresh token supplied in its request body.
 
 ### Route-level permission check
 

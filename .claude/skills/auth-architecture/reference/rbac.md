@@ -63,8 +63,13 @@ Default roles: `super_admin` (all 14 permissions), `admin`, `manager`, `user`
 Note the two parallel permission vocabularies: RBAC role permissions use dotted
 `resource.action` names, while legacy per-role grants in
 `AuthSystem::get_user_permissions` use colon forms (`read:all`, `use:api`).
-Route enforcement accepts both — `permission_matches_operation` maps `api.chat`
-to operation `chat` and `use:api` to any non-management operation.
+Normal HTTP login and refresh flows write dotted `RbacSystem` grants into JWT
+`Claims.permissions`; the colon grants are written only by the legacy programmatic login
+path. In both cases, `authenticate_jwt` reloads only the `User` and does not carry the
+claims permissions into HTTP authorization. Gateway route enforcement therefore checks
+the user's role plus API-key permissions; `permission_matches_operation` accepts values
+such as `api.chat` and `use:api` only when they come from an API key's permission
+metadata, not from JWT claims.
 
 ### Enforcement points
 
