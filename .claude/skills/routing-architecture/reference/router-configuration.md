@@ -61,20 +61,33 @@ providers:
     tpm: 100000           # tpm_limit, same
     max_concurrent_requests: 100   # max_parallel_requests cap during selection
     timeout: 30
-    max_retries: 3
+    max_retries: 3       # provider transport config; not the router retry count
     retry:                # RetrySchedule: base_delay_ms/max_delay_ms/backoff/jitter
       base_delay: 100
       max_delay: 5000
       backoff_multiplier: 2.0
       jitter: 0.1
     health_check:         # ProviderHealthCheckConfig -> active probe policy
-      interval: 30
+      interval: 60       # non-default value opts this provider into active probes
       failure_threshold: 5
       recovery_timeout: 60
       endpoint: null      # null = native provider health_check()
       expected_codes: [200]
     models: ["gpt-4o"]
 ```
+
+`providers[].max_retries` is copied into provider-specific transport configuration and
+may be consumed by individual provider implementations. It does not set the automatic
+router retry count: `deployment_config_from_provider` maps the `retry:` delay schedule
+but not `max_retries`, while the execution loop uses the YAML-unexposed
+`RouterConfig.num_retries` (default 3). Thus `retry:` controls router backoff timing, not
+the number of router retries.
+
+Active probes also require at least one non-default `health_check` value. An omitted block
+or a block containing exactly the defaults (`interval: 30`, `failure_threshold: 5`,
+`recovery_timeout: 60`, `endpoint: null`, `expected_codes: [200]`) is treated as no
+runtime override and produces no `HealthCheckPolicy`, even when
+`load_balancer.health_check_enabled` is true.
 
 With a non-empty `models` list, each enabled provider becomes one deployment per listed
 model with ID `{provider_name}-{model}`. When `models` is omitted or empty, construction

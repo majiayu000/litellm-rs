@@ -83,6 +83,12 @@ let fallback_config = FallbackConfig::new()
 fallback_config.validate()?; // DFS over all four maps, Err(Vec<String>) lists cycles
 ```
 
+The validator currently uses one visited set for each traversal rather than a separate
+active-recursion set. A converging acyclic graph such as `A -> [B, C]`, `B -> D`,
+`C -> D` is therefore reported as a cycle when `D` is reached through the second branch.
+Until that implementation is corrected, shared descendants can produce false-positive
+validation errors even though the runtime execution path deduplicates model names.
+
 ### Type Selection and Resolution
 
 - `FallbackType` (`fallback.rs:22-31`): `General`, `ContextWindow`, `ContentPolicy`,

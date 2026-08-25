@@ -88,7 +88,7 @@ the cumulative weight covers it; uniform random when total weight is 0
 Per-model counter in `round_robin_counters: DashMap<String, AtomicUsize>` cycles through
 candidate order (`round_robin_from_context`, `strategy_impl.rs:247-274`). Note the
 defaults diverge: `GatewayRouterConfig` defaults to `round_robin`
-(`config/models/router.rs:48-50`) while runtime `RouterConfig` defaults to `SimpleShuffle`.
+(`src/config/models/router.rs:48-50`) while runtime `RouterConfig` defaults to `SimpleShuffle`.
 
 **Use when**: predictable distribution needed, debugging provider issues.
 

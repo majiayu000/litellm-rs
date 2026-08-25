@@ -21,7 +21,18 @@ pub fn generate_key_from_content(prefix: &str, content: &str) -> CacheKey;
 pub fn generate_key_from_parts(prefix: &str, parts: &[&str]) -> CacheKey;
 ```
 
-The chat key hashes a JSON payload containing every response-affecting request field: `model`, `messages`, `temperature`, `max_tokens`, `max_completion_tokens`, `top_p`, `n`, `stop`, penalties, `logit_bias`, `functions`/`function_call`, `tools`/`tool_choice`, `parallel_tool_calls`, `response_format`, `seed`, logprobs, `modalities`, `audio`, `reasoning_effort`, `service_tier`, `prediction`, `safety_settings`, `cache_control`, `extra_body`, and `user_id` (key_generator.rs:33). The embedding key hashes `model` + `input` + the separate optional `user_id` argument; it does not hash `EmbeddingRequest.user`. The wired `LLMCache` embedding methods call `generate_embedding_key`, so that argument is currently `None`.
+The chat key hashes a JSON payload containing `model`, `messages`, `temperature`,
+`max_tokens`, `max_completion_tokens`, `top_p`, `n`, `stop`, penalties, `logit_bias`,
+`functions`/`function_call`, `tools`/`tool_choice`, `parallel_tool_calls`,
+`response_format`, `seed`, logprobs, `modalities`, `audio`, `reasoning_effort`,
+`service_tier`, `prediction`, `safety_settings`, `cache_control`, `extra_body`, and the
+separate authenticated-caller `user_id` argument (`key_generator.rs:33`). It does **not**
+hash `ChatCompletionRequest.user`, even though that field is forwarded to providers (for
+example, as Anthropic `metadata.user_id`). Requests from the same authenticated caller
+that differ only in the client-supplied `user` therefore share a cache key. The embedding
+key likewise hashes `model` + `input` + its separate optional `user_id` argument, not
+`EmbeddingRequest.user`; the wired `LLMCache` embedding methods call
+`generate_embedding_key`, so that argument is currently `None`.
 
 Prefix constants (key_generator.rs:14): `CHAT_KEY_PREFIX = "chat"`, `EMBEDDING_KEY_PREFIX = "embed"`, `COMPLETION_KEY_PREFIX = "completion"`.
 

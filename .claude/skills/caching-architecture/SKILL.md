@@ -67,8 +67,12 @@ These are the only five fields (`src/config/models/cache.rs:9`, `deny_unknown_fi
 1. `POST /v1/chat/completions` calls `lookup_chat` before routing (src/server/routes/ai/chat.rs:112). A hit passes `ensure_chat_cache_pricing_gate` and returns immediately.
 2. On a miss, the provider executes and `store_chat` writes the response (chat.rs:261). Embeddings do the same via `lookup_embedding` / `store_embedding` (src/server/routes/ai/embeddings.rs:98,283).
 3. Chat lookups and stores are skipped when the request carries a per-key budget, sets `store: true`, or was marked bypassed by an upstream handler (`should_bypass_chat_cache`, src/server/routes/ai/response_cache.rs:25). Embeddings have no such bypass conditions.
-4. Chat entries are scoped per caller: identity is `api_key:{id}` or `user:{id}`, optionally suffixed `:max_tokens_per_request:{limit}` (`cache_identity`, response_cache.rs:46). Embedding entries are currently shared across callers: the route copies the identity into `EmbeddingRequest.user`, but `LLMCache` calls `generate_embedding_key` with no `user_id`, and that key does not hash `request.user`. Identical model/input embeddings therefore reuse one entry. Streaming chat requests are never cached (`LLMCache::get_chat_response_with_user`, src/core/cache/llm_cache.rs:280).
-5. Cache lookup/store errors degrade to misses with a warning; they never fail the request.
+4. Chat entries are scoped per caller: identity is `api_key:{id}` or `user:{id}`, optionally suffixed `:max_tokens_per_request:{limit}` (`cache_identity`, response_cache.rs:46). The key does not hash the separate client-supplied `ChatCompletionRequest.user`, so two requests from the same caller that differ only in that provider-facing field collide. Embedding entries are currently shared across callers: the route copies the identity into `EmbeddingRequest.user`, but `LLMCache` calls `generate_embedding_key` with no `user_id`, and that key does not hash `request.user`. Identical model/input embeddings therefore reuse one entry. Streaming chat requests are never cached (`LLMCache::get_chat_response_with_user`, src/core/cache/llm_cache.rs:280).
+5. Cache lookup errors are logged and treated as misses. Gateway startup constructs only
+   `Dual` or `MemoryOnly` caches, and `Dual` suppresses Redis L2 write failures. A
+   programmatically installed `RedisOnly` `LLMCache` differs: Redis store errors propagate
+   through `store_chat` / `store_embedding`, so the route returns an error after the
+   provider call succeeded.
 
 ---
 

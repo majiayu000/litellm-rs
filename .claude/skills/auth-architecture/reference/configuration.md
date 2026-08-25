@@ -17,9 +17,9 @@ auth:
   # api_key_hmac_secret: "..."         # enables HMAC-SHA256 key hashing
   allow_anonymous: false      # dev-only escape hatch
   rbac:
-    enabled: false            # default false
-    default_role: "user"
-    admin_roles: ["admin", "superuser"]
+    enabled: false            # parsed/validated, but not a runtime enable switch
+    default_role: "user"      # parsed/validated, but not assigned to new users
+    admin_roles: ["admin", "superuser"]  # used by RbacSystem::is_admin
 ```
 
 Field semantics (`src/config/models/auth.rs`, defaults in
@@ -34,6 +34,12 @@ Field semantics (`src/config/models/auth.rs`, defaults in
   plain SHA-256; strongly recommended in production.
 - `allow_anonymous` — only meaningful when both methods are disabled;
   validation and middleware otherwise reject that combination (fail closed).
+- `rbac.enabled` / `rbac.default_role` — parsed and validated but currently unwired:
+  `AuthSystem` constructs `RbacSystem` regardless of `enabled`, and production gateway
+  authorization does not read `default_role`. HTTP route checks use the authenticated
+  `UserRole` and API-key permission metadata instead.
+- `rbac.admin_roles` — consumed by the programmatic `RbacSystem::is_admin` API; it does
+  not replace the gateway route checks above.
 
 ### Validation rules
 
