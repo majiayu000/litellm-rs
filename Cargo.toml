@@ -49,6 +49,7 @@ actix-service = { version = "=2.0.3", optional = true }
 actix-tls = { version = "=3.5.0", features = ["accept", "rustls-0_23"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 rustls-pemfile = { version = "2", optional = true }
+socket2 = { version = "0.6", optional = true }
 actix-multipart = { version = "0.7", optional = true }
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "signal"] }
 tokio-stream = "0.1"
@@ -174,7 +175,7 @@ default = ["sqlite", "redis", "metrics", "tracing"]
 gateway = [
     "dep:actix-web", "dep:actix-cors", "dep:actix-multipart",
     "dep:actix-http", "dep:actix-server", "dep:actix-service", "dep:actix-tls",
-    "dep:rustls", "dep:rustls-pemfile",
+    "dep:rustls", "dep:rustls-pemfile", "dep:socket2",
     "dep:argon2", "dep:aes-gcm", "dep:clap"
 ]
 

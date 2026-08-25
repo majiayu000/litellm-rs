@@ -190,21 +190,6 @@ impl TlsConfig {
             );
         }
 
-        // Check if files exist
-        if !std::path::Path::new(&self.cert_file).exists() {
-            return Err(format!(
-                "TLS certificate file not found: {}",
-                self.cert_file
-            ));
-        }
-
-        if !std::path::Path::new(&self.key_file).exists() {
-            return Err(format!("TLS private key file not found: {}", self.key_file));
-        }
-
-        #[cfg(feature = "gateway")]
-        crate::config::tls::validate_rustls_config(self)?;
-
         Ok(())
     }
 }

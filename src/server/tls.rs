@@ -11,11 +11,16 @@ use actix_tls::accept::{
     rustls_0_23::{Acceptor as RustlsAcceptor, TlsStream},
 };
 use actix_web::{HttpServer as ActixHttpServer, dev::AppConfig, web};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 use std::{
     convert::Infallible,
-    io,
-    net::{SocketAddr, ToSocketAddrs},
+    io::{self, BufReader},
+    net::{SocketAddr, TcpListener, ToSocketAddrs},
 };
+
+const HTTP1_AND_2_BACKLOG: u32 = 2048;
+const HTTP1_ONLY_BACKLOG: u32 = 1024;
 
 /// Validated TLS state cached before gateway dependencies are initialized.
 pub(crate) struct ListenerTls {
@@ -60,7 +65,117 @@ pub(crate) fn bind_server(
 
 /// Build a rustls configuration without relying on a process-global provider.
 pub(crate) fn load_rustls_config(tls: &TlsConfig) -> Result<rustls::ServerConfig> {
-    crate::config::tls::build_rustls_config(tls).map_err(GatewayError::validation)
+    build_rustls_config(tls).map_err(GatewayError::validation)
+}
+
+fn build_rustls_config(tls: &TlsConfig) -> std::result::Result<rustls::ServerConfig, String> {
+    if tls.ca_file.is_some() {
+        return Err(
+            "tls.ca_file is unsupported until client certificate auth is implemented".into(),
+        );
+    }
+    if tls.require_client_cert {
+        return Err("tls.require_client_cert is not implemented yet; set it to false".into());
+    }
+
+    let certs = load_certs(&tls.cert_file)?;
+    let key = load_key(&tls.key_file)?;
+    let provider = rustls::crypto::ring::default_provider();
+    let mut config = rustls::ServerConfig::builder_with_provider(provider.into())
+        .with_safe_default_protocol_versions()
+        .map_err(|error| format!("cannot select safe TLS protocol versions: {error}"))?
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|error| format!("invalid TLS certificate/key pair: {error}"))?;
+    config.alpn_protocols = configured_alpn(tls.http2);
+    Ok(config)
+}
+
+#[cfg(test)]
+fn validate_rustls_config(tls: &TlsConfig) -> std::result::Result<(), String> {
+    build_rustls_config(tls).map(drop)
+}
+
+fn configured_alpn(http2: bool) -> Vec<Vec<u8>> {
+    if http2 {
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    } else {
+        vec![b"http/1.1".to_vec()]
+    }
+}
+
+fn load_certs(path: &str) -> std::result::Result<Vec<CertificateDer<'static>>, String> {
+    let contents = read_pem(path, "cert", &["CERTIFICATE"])?;
+    let mut certs = Vec::new();
+    for item in rustls_pemfile::read_all(&mut BufReader::new(contents.as_slice())) {
+        match item.map_err(|error| format!("invalid TLS certificates in {path}: {error}"))? {
+            rustls_pemfile::Item::X509Certificate(cert) => {
+                let index = certs.len();
+                rustls::server::ParsedCertificate::try_from(&cert).map_err(|error| {
+                    format!("invalid TLS certificate {index} in {path}: {error}")
+                })?;
+                certs.push(cert);
+            }
+            _ => return Err(format!("unexpected non-certificate PEM item in {path}")),
+        }
+    }
+    if certs.is_empty() {
+        return Err(format!("no TLS certificates found in {path}"));
+    }
+    Ok(certs)
+}
+
+fn load_key(path: &str) -> std::result::Result<PrivateKeyDer<'static>, String> {
+    let contents = read_pem(
+        path,
+        "key",
+        &["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"],
+    )?;
+    let items = rustls_pemfile::read_all(&mut BufReader::new(contents.as_slice()))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| format!("invalid TLS key in {path}: {error}"))?;
+    let mut keys = Vec::new();
+    for item in items {
+        match item {
+            rustls_pemfile::Item::Pkcs1Key(key) => keys.push(PrivateKeyDer::Pkcs1(key)),
+            rustls_pemfile::Item::Pkcs8Key(key) => keys.push(PrivateKeyDer::Pkcs8(key)),
+            rustls_pemfile::Item::Sec1Key(key) => keys.push(PrivateKeyDer::Sec1(key)),
+            _ => return Err(format!("unexpected non-key PEM item in {path}")),
+        }
+    }
+    let mut keys = keys.into_iter();
+    let key = keys
+        .next()
+        .ok_or_else(|| format!("no unencrypted private key found in {path}"))?;
+    if keys.next().is_some() {
+        return Err(format!(
+            "multiple private keys found in {path}; expected exactly one"
+        ));
+    }
+    Ok(key)
+}
+
+fn read_pem(
+    path: &str,
+    kind: &str,
+    allowed_labels: &[&str],
+) -> std::result::Result<Vec<u8>, String> {
+    let contents = std::fs::read(path)
+        .map_err(|error| format!("cannot open TLS {kind} file {path}: {error}"))?;
+    let text = std::str::from_utf8(&contents)
+        .map_err(|error| format!("TLS {kind} file {path} is not UTF-8 PEM: {error}"))?;
+    for line in text.lines().map(str::trim) {
+        if let Some(label) = line
+            .strip_prefix("-----BEGIN ")
+            .and_then(|line| line.strip_suffix("-----"))
+            && !allowed_labels.contains(&label)
+        {
+            return Err(format!(
+                "unsupported PEM block '{label}' in TLS {kind} file {path}"
+            ));
+        }
+    }
+    Ok(contents)
 }
 
 fn bind_http1_and2(
@@ -68,17 +183,12 @@ fn bind_http1_and2(
     state: web::Data<AppState>,
     config: rustls::ServerConfig,
 ) -> std::io::Result<Server> {
-    let mut last_error = None;
-    for address in bind_addr.to_socket_addrs()? {
-        let state = state.clone();
-        match ActixHttpServer::new(move || HttpServer::create_app(state.clone()))
-            .bind_rustls_0_23(address, config.clone())
-        {
-            Ok(builder) => return Ok(builder.run()),
-            Err(error) => last_error = Some(error),
-        }
+    let listeners = bind_resolved_listeners(bind_addr, HTTP1_AND_2_BACKLOG)?;
+    let mut builder = ActixHttpServer::new(move || HttpServer::create_app(state.clone()));
+    for listener in listeners {
+        builder = builder.listen_rustls_0_23(listener, config.clone())?;
     }
-    Err(last_error.unwrap_or_else(|| io::Error::other("Could not bind to address")))
+    Ok(builder.run())
 }
 
 fn bind_http1_only(
@@ -86,33 +196,61 @@ fn bind_http1_only(
     state: web::Data<AppState>,
     config: rustls::ServerConfig,
 ) -> std::io::Result<Server> {
-    let mut last_error = None;
-    for address in bind_addr.to_socket_addrs()? {
+    let listeners = bind_resolved_listeners(bind_addr, HTTP1_ONLY_BACKLOG)?;
+    let mut builder = Server::build();
+    for listener in listeners {
+        let address = listener.local_addr()?;
         let app_config = secure_app_config(address);
         let state = state.clone();
         let config = config.clone();
-        let builder =
-            Server::build()
-                .backlog(1024)
-                .bind("actix-web-https-http1", address, move || {
-                    let factory = HttpServer::create_app(state.clone())
-                        .into_factory()
-                        .map_err(|error: actix_web::Error| error.error_response());
-                    let app_config = app_config.clone();
-                    let http = HttpService::build()
-                        .client_disconnect_timeout(std::time::Duration::from_secs(1))
-                        .finish(map_config(factory, move |_| app_config.clone()));
+        builder = builder.listen("actix-web-https-http1", listener, move || {
+            let factory = HttpServer::create_app(state.clone())
+                .into_factory()
+                .map_err(|error: actix_web::Error| error.error_response());
+            let app_config = app_config.clone();
+            let http = HttpService::build()
+                .client_disconnect_timeout(std::time::Duration::from_secs(1))
+                .finish(map_config(factory, move |_| app_config.clone()));
 
-                    http1_tls_transport(config.clone())
-                        .map_err(TlsError::into_service_error)
-                        .and_then(http.map_err(TlsError::Service))
-                });
-        match builder {
-            Ok(builder) => return Ok(builder.run()),
+            http1_tls_transport(config.clone())
+                .map_err(TlsError::into_service_error)
+                .and_then(http.map_err(TlsError::Service))
+        })?;
+    }
+    Ok(builder.run())
+}
+
+fn bind_resolved_listeners(
+    addrs: impl ToSocketAddrs,
+    backlog: u32,
+) -> io::Result<Vec<TcpListener>> {
+    let mut listeners = Vec::new();
+    let mut last_error = None;
+    for address in addrs.to_socket_addrs()? {
+        match create_tcp_listener(address, backlog) {
+            Ok(listener) => listeners.push(listener),
             Err(error) => last_error = Some(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| io::Error::other("Could not bind to address")))
+
+    if listeners.is_empty() {
+        Err(last_error.unwrap_or_else(|| io::Error::other("Could not bind to address")))
+    } else {
+        Ok(listeners)
+    }
+}
+
+fn create_tcp_listener(address: SocketAddr, backlog: u32) -> io::Result<TcpListener> {
+    let socket = Socket::new(
+        Domain::for_address(address),
+        Type::STREAM,
+        Some(SocketProtocol::TCP),
+    )?;
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(backlog.min(i32::MAX as u32) as i32)?;
+    Ok(socket.into())
 }
 
 fn http1_tls_transport(
@@ -143,7 +281,6 @@ fn secure_app_config(address: SocketAddr) -> AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::tls::validate_rustls_config;
     use actix_service::fn_service;
     use rcgen::generate_simple_self_signed;
     use std::{
@@ -172,6 +309,33 @@ mod tests {
             http2: false,
         };
         (directory, tls)
+    }
+
+    #[test]
+    fn binds_all_available_resolved_addresses_and_skips_failed_ones() {
+        let occupied = create_tcp_listener(
+            "127.0.0.1:0".parse().expect("loopback address"),
+            HTTP1_ONLY_BACKLOG,
+        )
+        .expect("occupy loopback address");
+        let unavailable = occupied.local_addr().expect("occupied address");
+        let candidates = [
+            unavailable,
+            "127.0.0.1:0".parse().expect("first free address"),
+            "127.0.0.1:0".parse().expect("second free address"),
+        ];
+
+        let listeners = bind_resolved_listeners(&candidates[..], HTTP1_ONLY_BACKLOG)
+            .expect("available addresses should still bind");
+        let addresses = listeners
+            .iter()
+            .map(TcpListener::local_addr)
+            .collect::<io::Result<std::collections::HashSet<_>>>()
+            .expect("bound addresses");
+
+        assert_eq!(listeners.len(), 2);
+        assert_eq!(addresses.len(), 2);
+        assert!(!addresses.contains(&unavailable));
     }
 
     #[test]
@@ -226,7 +390,7 @@ mod tests {
         let key = fs::read_to_string(&tls.key_file).expect("read key");
         fs::write(&tls.cert_file, key).expect("write key into cert file");
         assert!(
-            tls.validate()
+            validate_rustls_config(&tls)
                 .unwrap_err()
                 .contains("unsupported PEM block")
         );
@@ -242,7 +406,7 @@ mod tests {
         )
         .expect("write invalid intermediate");
         assert!(
-            tls.validate()
+            validate_rustls_config(&tls)
                 .unwrap_err()
                 .contains("invalid TLS certificate 1")
         );
@@ -286,7 +450,7 @@ mod tests {
 
         fs::write(&tls.key_file, []).expect("empty key");
         assert!(
-            tls.validate()
+            validate_rustls_config(&tls)
                 .unwrap_err()
                 .contains("no unencrypted private key")
         );
@@ -296,11 +460,11 @@ mod tests {
             "-----BEGIN PRIVATE KEY-----\nbad\n-----END PRIVATE KEY-----",
         )
         .expect("malformed key");
-        assert!(tls.validate().is_err());
+        assert!(validate_rustls_config(&tls).is_err());
 
         fs::write(&tls.key_file, format!("{key}\n{key}")).expect("multiple keys");
         assert!(
-            tls.validate()
+            validate_rustls_config(&tls)
                 .unwrap_err()
                 .contains("multiple private keys")
         );
@@ -310,7 +474,11 @@ mod tests {
             format!("{key}\n-----BEGIN PRIVATE KEY-----\nbad"),
         )
         .expect("trailing malformed key");
-        assert!(tls.validate().unwrap_err().contains("invalid TLS key"));
+        assert!(
+            validate_rustls_config(&tls)
+                .unwrap_err()
+                .contains("invalid TLS key")
+        );
     }
 
     #[test]
@@ -322,14 +490,14 @@ mod tests {
 
         fs::write(&tls.key_file, encrypted).expect("encrypted key");
         assert!(
-            tls.validate()
+            validate_rustls_config(&tls)
                 .unwrap_err()
                 .contains("ENCRYPTED PRIVATE KEY")
         );
 
         fs::write(&tls.key_file, format!("{encrypted}\n{key}")).expect("mixed keys");
         assert!(
-            tls.validate()
+            validate_rustls_config(&tls)
                 .unwrap_err()
                 .contains("ENCRYPTED PRIVATE KEY")
         );
@@ -338,9 +506,7 @@ mod tests {
     #[actix_web::test]
     async fn http1_only_transport_negotiates_http1_and_stops_cleanly() {
         let (_directory, tls) = material();
-        let trust_anchor = crate::config::tls::load_certs(&tls.cert_file)
-            .expect("certificate")
-            .remove(0);
+        let trust_anchor = load_certs(&tls.cert_file).expect("certificate").remove(0);
         let config = load_rustls_config(&tls).expect("server config");
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let address = listener.local_addr().expect("listener address");

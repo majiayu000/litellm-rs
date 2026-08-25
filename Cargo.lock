@@ -3322,6 +3322,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "sha2 0.10.9",
+ "socket2 0.6.3",
  "syn 2.0.117",
  "sysinfo",
  "tempfile",
