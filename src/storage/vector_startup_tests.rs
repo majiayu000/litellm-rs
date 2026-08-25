@@ -44,6 +44,18 @@ async fn failing_qdrant_config(
     )
 }
 
+async fn wait_for_mock_task(mut task: tokio::task::JoinHandle<()>) {
+    match tokio::time::timeout(std::time::Duration::from_secs(2), &mut task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("mock Qdrant task failed: {error}"),
+        Err(_) => {
+            task.abort();
+            let _ = task.await;
+            panic!("mock Qdrant task timed out");
+        }
+    }
+}
+
 fn storage_with_vector(
     vector_db: Option<crate::config::models::file_storage::VectorDbConfig>,
 ) -> StorageConfig {
@@ -62,7 +74,7 @@ async fn vector_db_runtime_failure_without_allow_degraded_fails_startup() {
     let error = StorageLayer::new(&config)
         .await
         .expect_err("reachable validation followed by a failed Qdrant init must fail startup");
-    server_task.await.expect("mock Qdrant task should finish");
+    wait_for_mock_task(server_task).await;
     assert!(error.to_string().contains("503 Service Unavailable"));
 }
 
@@ -73,7 +85,7 @@ async fn vector_db_runtime_failure_with_allow_degraded_continues_without_vector(
     let storage = StorageLayer::new(&config)
         .await
         .expect("allow_degraded=true must tolerate a failed Qdrant init");
-    server_task.await.expect("mock Qdrant task should finish");
+    wait_for_mock_task(server_task).await;
     assert!(storage.vector.is_none());
     assert_eq!(storage.vector_status, DependencyStatus::Degraded);
 }

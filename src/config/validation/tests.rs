@@ -364,8 +364,16 @@ fn test_gateway_validation_rejects_unwired_semantic_cache() {
         }],
         ..Default::default()
     };
-    config.storage.database.enabled = true;
-    config.storage.database.url = "postgres://localhost/test".to_string();
+    #[cfg(feature = "sqlite")]
+    {
+        config.storage.database.enabled = true;
+        config.storage.database.url = "sqlite::memory:".to_string();
+    }
+    #[cfg(all(not(feature = "sqlite"), feature = "postgres"))]
+    {
+        config.storage.database.enabled = true;
+        config.storage.database.url = "postgres://localhost/test".to_string();
+    }
     config.auth.jwt_secret = "StrongJwtSecretWithMixedCaseAndNumbers1234!".to_string();
     config.cache.semantic_cache = true;
 

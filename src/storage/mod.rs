@@ -735,5 +735,6 @@ mod tests {
         assert_eq!(storage.redis_status, DependencyStatus::Disabled);
     }
 
+    #[cfg(feature = "sqlite")]
     include!("vector_startup_tests.rs");
 }

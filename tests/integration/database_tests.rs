@@ -20,19 +20,19 @@ mod tests {
         seaql_migrations,
     };
     use tempfile::TempDir;
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", feature = "sqlite"))]
     use tokio::sync::Mutex;
     use uuid::Uuid;
 
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", feature = "sqlite"))]
     static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", feature = "sqlite"))]
     struct EnvRestore {
         sqlite_path: Option<String>,
     }
 
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", feature = "sqlite"))]
     impl EnvRestore {
         fn capture() -> Self {
             Self {
@@ -41,7 +41,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", feature = "sqlite"))]
     impl Drop for EnvRestore {
         fn drop(&mut self) {
             unsafe {
@@ -324,7 +324,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", feature = "sqlite"))]
     #[tokio::test(flavor = "current_thread")]
     async fn test_storage_layer_sqlite_fallback_runs_startup_migrations() {
         let _guard = ENV_LOCK.lock().await;
