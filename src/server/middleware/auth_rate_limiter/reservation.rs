@@ -196,6 +196,37 @@ mod tests {
     }
 
     #[test]
+    fn first_failure_after_success_starts_a_fresh_window() {
+        let limiter = Arc::new(AuthRateLimiter::new(3, 300, 60));
+        let success = limiter.reserve_attempt("window-client").unwrap();
+        {
+            let mut tracker = limiter.attempts.get_mut("window-client").unwrap();
+            tracker.window_start = Instant::now() - Duration::from_secs(120);
+        }
+        success.release();
+
+        let first_failure_started = Instant::now();
+        limiter
+            .reserve_attempt("window-client")
+            .unwrap()
+            .record_failure();
+        let first_window = {
+            let tracker = limiter.attempts.get("window-client").unwrap();
+            assert_eq!(tracker.failure_count, 1);
+            assert!(tracker.window_start >= first_failure_started);
+            tracker.window_start
+        };
+
+        limiter
+            .reserve_attempt("window-client")
+            .unwrap()
+            .record_failure();
+        let tracker = limiter.attempts.get("window-client").unwrap();
+        assert_eq!(tracker.failure_count, 2);
+        assert_eq!(tracker.window_start, first_window);
+    }
+
+    #[test]
     fn capacity_cleanup_retains_in_flight_trackers_until_release() {
         let limiter = Arc::new(AuthRateLimiter::with_max_entries(5, 300, 60, 1));
         let first = limiter.reserve_attempt("first-client").unwrap();

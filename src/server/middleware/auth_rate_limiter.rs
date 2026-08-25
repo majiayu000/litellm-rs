@@ -171,6 +171,9 @@ impl AuthRateLimiter {
             return None;
         }
 
+        if tracker.failure_count == 0 {
+            tracker.window_start = now;
+        }
         tracker.failure_count = tracker.failure_count.saturating_add(1);
         if tracker.failure_count < self.max_attempts {
             return None;
