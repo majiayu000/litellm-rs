@@ -259,6 +259,7 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
     let builtin = PricingDatabase::default();
     for (model, expected) in [
         ("deepseek-v4-flash", FLASH_RATES),
+        ("deepseek-v4-flash-vision-exp", FLASH_RATES),
         ("deepseek-chat", FLASH_RATES),
         ("deepseek-reasoner", FLASH_RATES),
         ("deepseek-v4-pro", PRO_RATES),
@@ -291,6 +292,8 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
     for (model, expected) in [
         ("deepseek-v4-flash", FLASH_RATES),
         ("deepseek/deepseek-v4-flash", FLASH_RATES),
+        ("deepseek-v4-flash-vision-exp", FLASH_RATES),
+        ("deepseek/deepseek-v4-flash-vision-exp", FLASH_RATES),
         ("deepseek-chat", FLASH_RATES),
         ("deepseek/deepseek-chat", FLASH_RATES),
         ("deepseek-reasoner", FLASH_RATES),
@@ -316,6 +319,53 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
                 .get("pricing_status")
                 .and_then(serde_json::Value::as_str),
             Some(PRICING_STATUS)
+        );
+    }
+
+    let assert_vision_limits = |pricing: &LiteLLMModelInfo| {
+        assert_eq!(pricing.supports_vision, Some(true));
+        assert_eq!(pricing.max_tokens, Some(1_048_576));
+        assert_eq!(pricing.max_input_tokens, Some(1_048_576));
+        assert_eq!(pricing.max_output_tokens, Some(393_216));
+    };
+
+    for model in [
+        "deepseek-v4-flash-vision-exp",
+        "deepseek/deepseek-v4-flash-vision-exp",
+    ] {
+        let Some(pricing) = embedded.get(model) else {
+            panic!("embedded pricing is missing {model}");
+        };
+        assert_vision_limits(pricing);
+    }
+
+    let Some(builtin_vision) = builtin.get_model_info("deepseek-v4-flash-vision-exp") else {
+        panic!("built-in pricing is missing deepseek-v4-flash-vision-exp");
+    };
+    assert_vision_limits(builtin_vision);
+
+    let Some(canonical_vision) = embedded.get("deepseek-v4-flash-vision-exp") else {
+        panic!("embedded pricing is missing canonical vision metadata");
+    };
+    let Some(prefixed_vision) = embedded.get("deepseek/deepseek-v4-flash-vision-exp") else {
+        panic!("embedded pricing is missing prefixed vision metadata");
+    };
+    assert_eq!(
+        canonical_vision.supports_streaming,
+        prefixed_vision.supports_streaming
+    );
+    for key in [
+        "supported_endpoints",
+        "supports_assistant_prefill",
+        "supports_native_streaming",
+        "supports_reasoning",
+        "supports_system_messages",
+        "thinking_mode_default",
+    ] {
+        assert_eq!(
+            canonical_vision.extra.get(key),
+            prefixed_vision.extra.get(key),
+            "vision catalog aliases disagree on {key}"
         );
     }
 }

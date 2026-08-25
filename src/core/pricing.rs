@@ -670,6 +670,10 @@ impl Default for PricingDatabase {
             builtin_deepseek_v4_model(0.00000066, 0.00000198, 0.000000022),
         );
 
+        let mut deepseek_vision = builtin_deepseek_v4_model(0.00000022, 0.00000066, 0.000000007);
+        deepseek_vision.supports_vision = Some(true);
+        models.insert("deepseek-v4-flash-vision-exp".to_string(), deepseek_vision);
+
         Self { models }
     }
 }

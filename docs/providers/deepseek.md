@@ -10,6 +10,7 @@ official DeepSeek API base is `https://api.deepseek.com`.
 | Model | Context | Max Output | Pricing per 1M tokens | Notes |
 |-------|---------|------------|------------------------|-------|
 | `deepseek-v4-flash` | 1M | 384K | Off-peak: $0.22 cache-miss input, $0.007 cache-hit input, $0.66 output | Fast V4 model; thinking is enabled by default and non-thinking mode is supported |
+| `deepseek-v4-flash-vision-exp` | 1M | 384K | Off-peak: $0.22 cache-miss input, $0.007 cache-hit input, $0.66 output | Experimental vision model; images are converted to input tokens and thinking is enabled by default |
 | `deepseek-v4-pro` | 1M | 384K | Off-peak: $0.66 cache-miss input, $0.022 cache-hit input, $1.98 output | Higher quality V4 model; thinking is enabled by default and non-thinking mode is supported |
 
 ### Legacy Aliases
@@ -32,16 +33,18 @@ Use the canonical `deepseek-v4-flash` or `deepseek-v4-pro` IDs for new code.
 
 ## Capabilities
 
-| Feature | `deepseek-v4-flash` | `deepseek-v4-pro` |
-|---------|---------------------|-------------------|
-| Chat completion | Yes | Yes |
-| Streaming | Yes | Yes |
-| Tool calls | Yes | Yes |
-| JSON output | Yes | Yes |
-| Chat prefix completion | Beta | Beta |
-| FIM completion | Non-thinking mode only | Non-thinking mode only |
-| Vision | No | No |
-| Embeddings | No | No |
+| Feature | `deepseek-v4-flash` | `deepseek-v4-pro` | `deepseek-v4-flash-vision-exp` |
+|---------|---------------------|-------------------|----------------------------------|
+| Chat completion | Yes | Yes | Yes |
+| Responses API | Yes | Yes | Yes |
+| Anthropic API | Yes | Yes | Yes |
+| Streaming | Yes | Yes | Yes |
+| Tool calls | Yes | Yes | Yes |
+| JSON output | Yes | Yes | Yes |
+| Chat prefix completion | Beta | Beta | Beta |
+| FIM completion | Non-thinking mode only | Non-thinking mode only | No |
+| Vision | No | No | Yes |
+| Embeddings | No | No | No |
 
 ## Setup
 
@@ -108,6 +111,7 @@ official pricing page on 2026-08-24.
 For current V4 pricing:
 
 - `deepseek-v4-flash`: off-peak $0.22 cache-miss input, $0.007 cache-hit input, $0.66 output per 1M tokens; peak $0.44, $0.014, and $1.32 respectively.
+- `deepseek-v4-flash-vision-exp`: uses the same rates as Flash; image tokens are billed as input tokens after dimension-based conversion.
 - `deepseek-v4-pro`: off-peak $0.66 cache-miss input, $0.022 cache-hit input, $1.98 output per 1M tokens; peak $1.32, $0.044, and $3.96 respectively.
 - `deepseek-chat` and `deepseek-reasoner` continue to use `deepseek-v4-flash` pricing as deprecated compatibility aliases.
 

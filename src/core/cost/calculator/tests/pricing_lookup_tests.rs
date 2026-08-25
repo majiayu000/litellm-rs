@@ -346,6 +346,18 @@ fn test_get_deepseek_pricing() {
     assert_cost_eq(reasoner_alias.input_cost_per_1k_tokens, 0.00022);
     assert_cost_eq(reasoner_alias.output_cost_per_1k_tokens, 0.00066);
     assert_eq!(reasoner_alias.cache_read_input_token_cost, Some(0.000007));
+
+    for model in [
+        "deepseek-v4-flash-vision-exp",
+        "deepseek/deepseek-v4-flash-vision-exp",
+    ] {
+        let Ok(vision) = get_model_pricing(model, "deepseek") else {
+            panic!("deepseek vision model '{model}' pricing should be available");
+        };
+        assert_cost_eq(vision.input_cost_per_1k_tokens, 0.00022);
+        assert_cost_eq(vision.output_cost_per_1k_tokens, 0.00066);
+        assert_eq!(vision.cache_read_input_token_cost, Some(0.000007));
+    }
 }
 
 #[test]
@@ -363,6 +375,26 @@ fn test_deepseek_fallback_pricing() {
     assert_cost_eq(pro.input_cost_per_1k_tokens, 0.00066);
     assert_cost_eq(pro.output_cost_per_1k_tokens, 0.00198);
     assert_eq!(pro.cache_read_input_token_cost, Some(0.000022));
+
+    let Ok(vision) = super::super::pricing::get_deepseek_pricing("deepseek-v4-flash-vision-exp")
+    else {
+        panic!("deepseek-v4-flash-vision-exp fallback pricing should be available");
+    };
+    assert_cost_eq(vision.input_cost_per_1k_tokens, 0.00022);
+    assert_cost_eq(vision.output_cost_per_1k_tokens, 0.00066);
+    assert_eq!(vision.cache_read_input_token_cost, Some(0.000007));
+
+    let Ok(unlisted_vision_alias) =
+        get_model_pricing("deepseek-v4-flash-vision-exp-unlisted", "deepseek")
+    else {
+        panic!("an unlisted DeepSeek V4 Flash alias should use fallback pricing");
+    };
+    assert_cost_eq(unlisted_vision_alias.input_cost_per_1k_tokens, 0.00022);
+    assert_cost_eq(unlisted_vision_alias.output_cost_per_1k_tokens, 0.00066);
+    assert_eq!(
+        unlisted_vision_alias.cache_read_input_token_cost,
+        Some(0.000007)
+    );
 }
 
 #[test]
