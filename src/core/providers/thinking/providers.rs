@@ -570,6 +570,9 @@ mod deepseek_v4_tests {
     #[test]
     fn supports_deepseek_v4_thinking_models() {
         assert!(deepseek_thinking::supports_thinking("deepseek-v4-flash"));
+        assert!(deepseek_thinking::supports_thinking(
+            "deepseek-v4-flash-vision-exp"
+        ));
         assert!(deepseek_thinking::supports_thinking("deepseek-v4-pro"));
 
         let caps = deepseek_thinking::capabilities("deepseek-v4-flash");
