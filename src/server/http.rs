@@ -157,9 +157,11 @@ impl HttpServer {
             ))
         })?;
 
-        let callback_runtime =
-            crate::server::callbacks::build_callback_runtime(&config.gateway.monitoring.callbacks)
-                .await;
+        let callback_runtime = crate::server::callbacks::build_callback_runtime(
+            &config.gateway.monitoring.callbacks,
+            &config.gateway.monitoring.metrics,
+        )
+        .await;
         let audit_logger = if config.gateway.enterprise.audit_logging {
             AuditLogger::shared(AuditConfig::default().enable())
                 .await
@@ -458,6 +460,10 @@ async fn normalize_non_cors_options_before_cors(
 }
 
 #[cfg(test)]
+#[path = "http_metrics_tests.rs"]
+mod metrics_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
@@ -577,6 +583,7 @@ mod tests {
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = None;
+        config.gateway.monitoring.metrics.enabled = false;
         config.gateway.monitoring.callbacks.backends = vec![
             crate::config::models::monitoring::CallbackBackendConfig::OpenTelemetry(
                 crate::core::integrations::OpenTelemetryConfig::default(),
@@ -614,62 +621,6 @@ mod tests {
             "disabled DB must keep startup running with in-memory budgets, got: {:?}",
             result.err()
         );
-    }
-
-    #[tokio::test]
-    async fn app_factory_metrics_endpoint_includes_recorded_http_requests() {
-        let _metrics_guard = MetricsMiddleware::test_lock().await;
-        MetricsMiddleware::reset_for_tests();
-        crate::server::middleware::reset_unpriced_metrics_for_tests();
-        crate::server::middleware::record_unpriced_event(
-            "metrics-http-provider",
-            "tenant-http-private-model",
-            "reject",
-            "reject_preflight",
-        );
-
-        let mut config = Config::default();
-        config.gateway.auth.enable_jwt = false;
-        config.gateway.auth.enable_api_key = false;
-        config.gateway.auth.allow_anonymous = true;
-        config.gateway.storage.database.enabled = false;
-        config.gateway.storage.redis.enabled = false;
-        config.gateway.pricing.source = None;
-
-        let server = match HttpServer::new(&config).await {
-            Ok(server) => server,
-            Err(error) => panic!("server startup failed: {error}"),
-        };
-
-        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
-            server.state().clone(),
-        )))
-        .await;
-
-        let health_req = actix_test::TestRequest::get().uri("/health").to_request();
-        let health_resp = actix_test::call_service(&app, health_req).await;
-        assert_eq!(health_resp.status(), StatusCode::OK);
-        drop(actix_test::read_body(health_resp).await);
-
-        let metrics_req = actix_test::TestRequest::get().uri("/metrics").to_request();
-        let metrics_resp = actix_test::call_service(&app, metrics_req).await;
-        assert_eq!(metrics_resp.status(), StatusCode::OK);
-
-        let body = actix_test::read_body(metrics_resp).await;
-        let body = match std::str::from_utf8(&body) {
-            Ok(body) => body,
-            Err(error) => panic!("metrics response was not utf-8: {error}"),
-        };
-
-        assert!(body.contains("gateway_http_requests_total 1"));
-        assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 1"));
-        assert!(body.contains(
-            "gateway_unpriced_events_total{provider=\"metrics-http-provider\",model_bucket=\"other\",policy=\"reject\",outcome=\"reject_preflight\"} 1"
-        ));
-        assert!(!body.contains("tenant-http-private-model"));
-
-        let rendered_after_scrape = MetricsMiddleware::render_prometheus();
-        assert!(rendered_after_scrape.contains("gateway_http_requests_total 1"));
     }
 
     #[tokio::test]

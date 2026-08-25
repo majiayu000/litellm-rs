@@ -186,15 +186,21 @@ impl Labels {
         let mut parts = Vec::new();
 
         for (k, v) in base_labels {
-            parts.push(format!("{}=\"{}\"", k, v));
+            parts.push(format!("{}=\"{}\"", k, escape_prometheus_label_value(v)));
         }
 
         if let Some(ref model) = self.model {
-            parts.push(format!("model=\"{}\"", model));
+            parts.push(format!(
+                "model=\"{}\"",
+                escape_prometheus_label_value(model)
+            ));
         }
 
         if let Some(ref provider) = self.provider {
-            parts.push(format!("provider=\"{}\"", provider));
+            parts.push(format!(
+                "provider=\"{}\"",
+                escape_prometheus_label_value(provider)
+            ));
         }
 
         if parts.is_empty() {
@@ -203,6 +209,19 @@ impl Labels {
             format!("{{{}}}", parts.join(","))
         }
     }
+}
+
+fn escape_prometheus_label_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 /// Metrics storage
@@ -699,5 +718,27 @@ mod tests {
 
         let metrics = integration.render_metrics();
         assert!(metrics.contains("myapp_requests_total"));
+    }
+
+    #[tokio::test]
+    async fn label_values_are_escaped_in_rendered_metrics() {
+        let mut config = PrometheusConfig::default();
+        config.labels.insert(
+            "tenant".to_string(),
+            "team\\\"\nforged_config_metric 1".to_string(),
+        );
+        let integration = PrometheusIntegration::new(config);
+        let event = LlmStartEvent::new("req-1", "model\\\"\nforged_model_metric 1")
+            .provider("provider\\\"\nforged_provider_metric 1");
+
+        integration.on_llm_start(&event).await.unwrap();
+        let metrics = integration.render_metrics();
+
+        assert!(metrics.contains(r#"tenant="team\\\"\nforged_config_metric 1""#));
+        assert!(metrics.contains(r#"model="model\\\"\nforged_model_metric 1""#));
+        assert!(metrics.contains(r#"provider="provider\\\"\nforged_provider_metric 1""#));
+        assert!(!metrics.contains("\nforged_config_metric 1"));
+        assert!(!metrics.contains("\nforged_model_metric 1"));
+        assert!(!metrics.contains("\nforged_provider_metric 1"));
     }
 }

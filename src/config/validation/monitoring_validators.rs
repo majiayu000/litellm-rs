@@ -97,14 +97,6 @@ fn validate_callback_backend(backend: &CallbackBackendConfig) -> Result<(), Stri
                 );
             }
         }
-        CallbackBackendConfig::Prometheus(config) => {
-            if !config.enabled {
-                return Err("Configured Prometheus callback backend must be enabled".to_string());
-            }
-            if config.prefix.trim().is_empty() {
-                return Err("Prometheus callback prefix cannot be empty".to_string());
-            }
-        }
     }
     Ok(())
 }

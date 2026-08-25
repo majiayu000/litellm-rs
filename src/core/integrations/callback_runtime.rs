@@ -12,6 +12,8 @@ use crate::core::traits::integration::{
     LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 
+pub(crate) type PrometheusMetricsRenderer = Arc<dyn Fn() -> String + Send + Sync>;
+
 #[derive(Debug)]
 enum CallbackEvent {
     Start(LlmStartEvent),
@@ -38,6 +40,7 @@ pub enum CallbackDispatchError {
 pub struct CallbackDispatcher {
     sender: Option<mpsc::Sender<CallbackEvent>>,
     manager: Option<Arc<IntegrationManager>>,
+    prometheus_metrics: Option<PrometheusMetricsRenderer>,
 }
 
 /// Capacity reserved for the terminal event of an admitted lifecycle.
@@ -85,6 +88,11 @@ impl CallbackDispatcher {
             Some(manager) => manager.list_integrations().await,
             None => Vec::new(),
         }
+    }
+
+    /// Render metrics from the configured Prometheus callback backend.
+    pub fn render_prometheus_metrics(&self) -> Option<String> {
+        self.prometheus_metrics.as_ref().map(|render| render())
     }
 
     /// Atomically admit an LLM start and reserve capacity for its terminal event.
@@ -189,6 +197,7 @@ impl CallbackRuntime {
             dispatcher: CallbackDispatcher {
                 sender: Some(sender),
                 manager: Some(manager),
+                prometheus_metrics: None,
             },
             shutdown_tx: Some(shutdown_tx),
             worker: Some(worker),
@@ -207,6 +216,14 @@ impl CallbackRuntime {
     /// Obtain the request-path dispatcher.
     pub fn dispatcher(&self) -> CallbackDispatcher {
         self.dispatcher.clone()
+    }
+
+    pub(crate) fn with_prometheus_metrics(
+        mut self,
+        renderer: Option<PrometheusMetricsRenderer>,
+    ) -> Self {
+        self.dispatcher.prometheus_metrics = renderer;
+        self
     }
 
     /// Drain pending events, flush integrations, and stop the worker.

@@ -4,15 +4,19 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use crate::config::models::monitoring::{CallbackBackendConfig, CallbackConfig};
+use crate::config::models::monitoring::{CallbackBackendConfig, CallbackConfig, MetricsConfig};
 use crate::core::integrations::{
     CallbackRuntime, DataDogIntegration, IntegrationManager, IntegrationManagerConfig,
     LangfuseIntegration, OpenTelemetryIntegration, PrometheusIntegration,
+    callback_runtime::PrometheusMetricsRenderer,
 };
 use crate::core::traits::integration::BoxedIntegration;
 
-pub(crate) async fn build_callback_runtime(config: &CallbackConfig) -> CallbackRuntime {
-    if config.backends.is_empty() {
+pub(crate) async fn build_callback_runtime(
+    config: &CallbackConfig,
+    metrics: &MetricsConfig,
+) -> CallbackRuntime {
+    if config.backends.is_empty() && !metrics.enabled {
         return CallbackRuntime::disabled();
     }
 
@@ -23,7 +27,6 @@ pub(crate) async fn build_callback_runtime(config: &CallbackConfig) -> CallbackR
             .timeout_ms(config.timeout_ms)
             .log_errors(true),
     ));
-
     for backend in &config.backends {
         match build_backend(backend) {
             Ok(integration) => {
@@ -40,13 +43,24 @@ pub(crate) async fn build_callback_runtime(config: &CallbackConfig) -> CallbackR
         }
     }
 
+    let prometheus_metrics = if metrics.enabled {
+        let integration = Arc::new(PrometheusIntegration::with_defaults());
+        let render = Arc::clone(&integration);
+        let renderer: PrometheusMetricsRenderer = Arc::new(move || render.render_metrics());
+        manager.register(integration as BoxedIntegration).await;
+        info!("Callback backend initialized: prometheus");
+        Some(renderer)
+    } else {
+        None
+    };
+
     if manager.count().await == 0 {
         warn!("No configured callback backend initialized successfully");
         return CallbackRuntime::disabled();
     }
 
     match CallbackRuntime::new(manager, config.queue_capacity) {
-        Ok(runtime) => runtime,
+        Ok(runtime) => runtime.with_prometheus_metrics(prometheus_metrics),
         Err(error) => {
             warn!(
                 "Callback runtime initialization failed; continuing without callbacks: {}",
@@ -74,15 +88,13 @@ fn build_backend(
                     "Langfuse initialization failed: {error}"
                 ))
             }),
-        CallbackBackendConfig::Prometheus(config) => {
-            Ok(Arc::new(PrometheusIntegration::new(config.clone())) as BoxedIntegration)
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::core::integrations::{LangfuseConfig, OpenTelemetryConfig, PrometheusConfig};
+    use crate::core::integrations::{LangfuseConfig, OpenTelemetryConfig};
+    use crate::core::traits::integration::LlmStartEvent;
 
     use super::*;
 
@@ -104,7 +116,11 @@ mod tests {
             ..CallbackConfig::default()
         };
 
-        let runtime = build_callback_runtime(&config).await;
+        let metrics = MetricsConfig {
+            enabled: false,
+            ..MetricsConfig::default()
+        };
+        let runtime = build_callback_runtime(&config, &metrics).await;
         let dispatcher = runtime.dispatcher();
         assert!(dispatcher.is_enabled());
         assert_eq!(
@@ -115,22 +131,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_wires_prometheus_backend() {
+    async fn startup_wires_prometheus_when_metrics_are_enabled() {
         let config = CallbackConfig {
             queue_capacity: 16,
-            backends: vec![CallbackBackendConfig::Prometheus(
-                PrometheusConfig::default(),
-            )],
             ..CallbackConfig::default()
         };
 
-        let runtime = build_callback_runtime(&config).await;
+        let runtime = build_callback_runtime(&config, &MetricsConfig::default()).await;
         let dispatcher = runtime.dispatcher();
         assert!(dispatcher.is_enabled());
         assert_eq!(
             dispatcher.registered_integrations().await,
             vec!["prometheus"]
         );
+        dispatcher
+            .emit_start(LlmStartEvent::new("request-1", "gpt-4").provider("openai"))
+            .expect("Prometheus lifecycle event should enqueue");
+        assert!(runtime.shutdown().await.is_ok());
+        assert!(
+            dispatcher
+                .render_prometheus_metrics()
+                .is_some_and(|metrics| metrics
+                    .contains("litellm_requests_total{model=\"gpt-4\",provider=\"openai\"} 1"))
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_metrics_without_callback_backends_stays_disabled() {
+        let metrics = MetricsConfig {
+            enabled: false,
+            ..MetricsConfig::default()
+        };
+        let runtime = build_callback_runtime(&CallbackConfig::default(), &metrics).await;
+        let dispatcher = runtime.dispatcher();
+
+        assert!(!dispatcher.is_enabled());
+        assert!(dispatcher.render_prometheus_metrics().is_none());
         assert!(runtime.shutdown().await.is_ok());
     }
 }
