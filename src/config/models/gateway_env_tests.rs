@@ -6,6 +6,7 @@ fn clear_env() {
     for key in [
         ENV_ENABLE_JWT,
         ENV_PROVIDERS,
+        ENV_REDIS_ENABLED,
         ENV_REDIS_CLUSTER,
         "LITELLM_PROVIDER_OPENAI_TYPE",
         "LITELLM_PROVIDER_OPENAI_API_KEY",
@@ -60,5 +61,32 @@ fn redis_cluster_env_false_overrides_true_base() {
     let merged = base.merge_with_redis_cluster_override(overlay, redis_cluster);
 
     assert!(!merged.storage.redis.cluster);
+    clear_env();
+}
+
+#[test]
+fn config_environment_overlay_defers_final_cluster_validation() {
+    let _guard = GATEWAY_ENV_LOCK.blocking_lock();
+    clear_env();
+    unsafe {
+        env::set_var(ENV_ENABLE_JWT, "false");
+        env::set_var(ENV_PROVIDERS, "openai");
+        env::set_var("LITELLM_PROVIDER_OPENAI_TYPE", "openai");
+        env::set_var("LITELLM_PROVIDER_OPENAI_API_KEY", "sk-test");
+        env::set_var(ENV_REDIS_ENABLED, "true");
+        env::set_var(ENV_REDIS_CLUSTER, "true");
+    }
+
+    assert!(crate::config::Config::from_env().is_err());
+    let layer = crate::config::Config::overlay_from_env()
+        .expect("environment overlay should parse before final validation")
+        .into_config();
+    assert!(
+        layer
+            .validate()
+            .expect_err("materialized cluster layer must remain invalid before merge")
+            .to_string()
+            .contains("storage.redis.cluster=false")
+    );
     clear_env();
 }

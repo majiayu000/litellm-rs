@@ -162,7 +162,8 @@ pub struct Config {
 /// Runtime configuration structs remain source-compatible and contain only
 /// their established public fields. This overlay carries the otherwise-lost
 /// distinction between an omitted `storage.redis.cluster` value and an
-/// explicit `false`.
+/// explicit `false`. It is an intermediate layer and is not finally validated
+/// until callers merge it into a runtime [`Config`] and validate that result.
 #[derive(Debug, Clone)]
 pub struct ConfigOverlay {
     config: Config,
@@ -186,7 +187,7 @@ impl ConfigOverlay {
         self
     }
 
-    /// Discard overlay metadata and return the runtime configuration.
+    /// Discard overlay metadata without performing final configuration validation.
     pub fn into_config(self) -> Config {
         self.config
     }
@@ -213,10 +214,13 @@ struct RedisConfigPresence {
 impl Config {
     /// Load configuration from file
     pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        Ok(Self::overlay_from_file(path).await?.into_config())
+        let config = Self::overlay_from_file(path).await?.into_config();
+        config.validate()?;
+        debug!("Configuration loaded successfully");
+        Ok(config)
     }
 
-    /// Load a presence-aware configuration overlay from a file.
+    /// Parse a presence-aware, not-yet-finally-validated overlay from a file.
     pub async fn overlay_from_file<P: AsRef<Path>>(path: P) -> Result<ConfigOverlay> {
         let path = path.as_ref();
         info!("Loading configuration from: {:?}", path);
@@ -234,10 +238,6 @@ impl Config {
 
         let config = Self { gateway };
 
-        // Configuration
-        config.validate()?;
-
-        debug!("Configuration loaded successfully");
         Ok(ConfigOverlay {
             config,
             redis_cluster: presence.storage.redis.cluster,
@@ -246,17 +246,18 @@ impl Config {
 
     /// Load configuration from environment variables
     pub fn from_env() -> Result<Self> {
-        Ok(Self::overlay_from_env()?.into_config())
+        let config = Self::overlay_from_env()?.into_config();
+        config.validate()?;
+        Ok(config)
     }
 
-    /// Load a presence-aware configuration overlay from environment variables.
+    /// Parse a presence-aware, not-yet-finally-validated environment overlay.
     pub fn overlay_from_env() -> Result<ConfigOverlay> {
         info!("Loading configuration from environment variables");
 
         let (gateway, redis_cluster) = GatewayConfig::from_env_with_redis_cluster_presence()?;
         let config = Self { gateway };
 
-        config.validate()?;
         Ok(ConfigOverlay {
             config,
             redis_cluster,
@@ -318,6 +319,8 @@ impl Config {
     }
 
     /// Merge an overlay while preserving explicit `storage.redis.cluster` values.
+    ///
+    /// The merged configuration must be validated before runtime use.
     pub fn merge_overlay(mut self, overlay: ConfigOverlay) -> Self {
         self.gateway = self
             .gateway

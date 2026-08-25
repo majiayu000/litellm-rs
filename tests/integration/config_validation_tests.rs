@@ -458,7 +458,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn redis_cluster_false_from_file_overrides_true_base() {
+    async fn enabled_redis_cluster_true_base_is_cleared_before_final_validation() {
         let temp_dir = tempfile::tempdir().expect("temporary config directory should exist");
         let base_path = temp_dir.path().join("base.yaml");
         let overlay_path = temp_dir.path().join("overlay.yaml");
@@ -466,6 +466,7 @@ mod tests {
         let mut base = Config {
             gateway: create_valid_gateway_config(),
         };
+        base.gateway.storage.redis.enabled = true;
         base.gateway.storage.redis.cluster = true;
         let overlay = Config {
             gateway: create_valid_gateway_config(),
@@ -484,14 +485,28 @@ mod tests {
         .await
         .expect("overlay config should be written");
 
-        let base = Config::from_file(base_path)
+        let standalone_error = Config::from_file(&base_path)
             .await
-            .expect("base config should load");
+            .expect_err("standalone cluster config must still fail final validation");
+        assert!(
+            standalone_error
+                .to_string()
+                .contains("storage.redis.cluster=false")
+        );
+
+        let base = Config::overlay_from_file(base_path)
+            .await
+            .expect("invalid intermediate base layer should parse")
+            .into_config();
         let overlay = Config::overlay_from_file(overlay_path)
             .await
             .expect("overlay config should load");
         let merged = base.merge_overlay(overlay);
 
+        merged
+            .validate()
+            .expect("merged cluster=false configuration should finally validate");
+        assert!(merged.gateway.storage.redis.enabled);
         assert!(!merged.gateway.storage.redis.cluster);
     }
 
