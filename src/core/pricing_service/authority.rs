@@ -68,7 +68,32 @@ impl PricingService {
         completion: Option<&str>,
         total_time_seconds: Option<f64>,
     ) -> Result<CostResult> {
-        let pricing_time = Utc::now();
+        self.calculate_loaded_completion_cost_for_provider_at(
+            provider,
+            model,
+            input_tokens,
+            output_tokens,
+            prompt,
+            completion,
+            total_time_seconds,
+            Utc::now(),
+        )
+    }
+
+    /// Calculate a completion cost from already-loaded pricing data at a
+    /// specific UTC pricing instant.
+    #[allow(clippy::too_many_arguments)]
+    pub fn calculate_loaded_completion_cost_for_provider_at(
+        &self,
+        provider: &str,
+        model: &str,
+        input_tokens: u32,
+        output_tokens: u32,
+        prompt: Option<&str>,
+        completion: Option<&str>,
+        total_time_seconds: Option<f64>,
+        pricing_time: DateTime<Utc>,
+    ) -> Result<CostResult> {
         let (resolved_model, model_info) = self
             .get_model_info_for_provider(provider, model)
             .ok_or_else(|| model_not_found(provider, model))?;
