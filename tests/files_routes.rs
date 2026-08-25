@@ -3,6 +3,7 @@ mod tests {
     use actix_web::http::{StatusCode, header};
     use actix_web::{App, test, web};
     use litellm_rs::Config;
+    use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::models::user::types::{User, UserRole, UserStatus};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::server::http::HttpServer;
@@ -28,6 +29,13 @@ mod tests {
         config.gateway.storage.redis.enabled = false;
         config.gateway.storage.files.local_path = Some(local_path);
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.providers.push(ProviderConfig {
+            name: "disabled-test-bootstrap".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            enabled: false,
+            ..ProviderConfig::default()
+        });
 
         let server = HttpServer::new(&config)
             .await

@@ -40,7 +40,7 @@ fn endpoint_access_env_preserves_presence_and_rejects_invalid_values() {
 }
 
 #[test]
-fn redis_cluster_env_false_overrides_true_base() {
+fn public_env_overlay_tracks_explicit_false_and_omission() {
     let _guard = GATEWAY_ENV_LOCK.blocking_lock();
     clear_env();
     unsafe {
@@ -51,16 +51,29 @@ fn redis_cluster_env_false_overrides_true_base() {
         env::set_var(ENV_REDIS_CLUSTER, "false");
     }
 
-    let (overlay, redis_cluster) = GatewayConfig::from_env_with_redis_cluster_presence()
-        .expect("Redis cluster env should parse");
-    assert!(!overlay.storage.redis.cluster);
-    assert_eq!(redis_cluster, Some(false));
+    let mut base = crate::config::Config::default();
+    base.gateway.providers.push(ProviderConfig {
+        name: "openai".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-test".to_string(),
+        ..ProviderConfig::default()
+    });
+    base.gateway.storage.redis.enabled = true;
+    base.gateway.storage.redis.cluster = true;
 
-    let mut base = GatewayConfig::default();
-    base.storage.redis.cluster = true;
-    let merged = base.merge_with_redis_cluster_override(overlay, redis_cluster);
+    let explicit_false = crate::config::Config::overlay_from_env()
+        .expect("public Redis environment overlay should parse");
+    let merged = base.clone().merge_overlay(explicit_false);
+    merged
+        .validate()
+        .expect("explicit false must produce a valid merged configuration");
+    assert!(merged.gateway.storage.redis.enabled);
+    assert!(!merged.gateway.storage.redis.cluster);
 
-    assert!(!merged.storage.redis.cluster);
+    unsafe { env::remove_var(ENV_REDIS_CLUSTER) };
+    let omitted = crate::config::Config::overlay_from_env()
+        .expect("omitted Redis environment overlay should parse");
+    assert!(base.merge_overlay(omitted).gateway.storage.redis.cluster);
     clear_env();
 }
 

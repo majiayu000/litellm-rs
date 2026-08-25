@@ -57,6 +57,20 @@ struct EnvGuard {
     saved: Vec<(&'static str, Option<String>)>,
 }
 
+fn valid_programmatic_config() -> crate::config::Config {
+    let mut config = crate::config::Config::default();
+    config
+        .gateway
+        .providers
+        .push(crate::config::models::provider::ProviderConfig {
+            name: "test-openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            ..Default::default()
+        });
+    config
+}
+
 impl EnvGuard {
     fn with_minimal_gateway_config() -> Self {
         let saved = GATEWAY_ENV_KEYS
@@ -123,6 +137,33 @@ async fn server_builder_rejects_redis_cluster_before_client_initialization() {
         message.contains("storage.redis.cluster=false"),
         "got: {message}"
     );
+}
+
+#[tokio::test]
+async fn server_builder_rejects_invalid_programmatic_config() {
+    let mut config = valid_programmatic_config();
+    config.gateway.auth.enable_jwt = true;
+    config.gateway.auth.jwt_secret = "short".to_string();
+
+    let error = match ServerBuilder::new().with_config(config).build().await {
+        Err(error) => error,
+        Ok(_) => panic!("builder must reject invalid auth before initialization"),
+    };
+    assert!(error.to_string().contains("JWT secret"));
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn gateway_rejects_invalid_programmatic_config() {
+    let mut config = valid_programmatic_config();
+    config.gateway.auth.enable_jwt = true;
+    config.gateway.auth.jwt_secret = "short".to_string();
+
+    let error = match crate::Gateway::new(config).await {
+        Err(error) => error,
+        Ok(_) => panic!("gateway must reject invalid auth before initialization"),
+    };
+    assert!(error.to_string().contains("JWT secret"));
 }
 
 #[tokio::test]
@@ -207,7 +248,7 @@ fn test_request_metrics_creation() {
 
 #[tokio::test]
 async fn enabled_audit_logging_is_constructed_in_gateway_state() {
-    let mut config = crate::config::Config::default();
+    let mut config = valid_programmatic_config();
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     config.gateway.pricing.source = None;

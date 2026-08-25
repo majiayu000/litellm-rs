@@ -95,7 +95,16 @@ mod tests {
         CallbackRuntime::new(manager, 8).expect("embedding callback runtime")
     }
 
-    async fn build_state_with_config(config: Config) -> AppState {
+    async fn build_state_with_config(mut config: Config) -> AppState {
+        if config.gateway.providers.is_empty() {
+            config.gateway.providers.push(ProviderConfig {
+                name: "disabled-test-bootstrap".to_string(),
+                provider_type: "openai".to_string(),
+                api_key: "sk-test".to_string(),
+                enabled: false,
+                ..ProviderConfig::default()
+            });
+        }
         let server = match GatewayHttpServer::new(&config).await {
             Ok(server) => server,
             Err(err) => panic!("failed to build HTTP server for integration test: {err}"),

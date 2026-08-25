@@ -31,6 +31,15 @@ pub fn mock_provider_config(
 
 /// Preserve private test endpoints while staging PublicOnly request-time negative cases.
 pub fn route_policy_bootstrap_providers(providers: &[ProviderConfig]) -> Vec<ProviderConfig> {
+    if providers.is_empty() {
+        return vec![ProviderConfig {
+            name: "disabled-test-bootstrap".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            enabled: false,
+            ..ProviderConfig::default()
+        }];
+    }
     providers
         .iter()
         .cloned()

@@ -234,7 +234,7 @@ mod tests {
 
     #[actix_web::test]
     async fn direct_auth_distinguishes_invalid_credentials_from_storage_failure() {
-        let mut config = crate::config::Config::default();
+        let mut config = crate::server::valid_test_config();
         config.gateway.auth.enable_jwt = true;
         config.gateway.auth.enable_api_key = true;
         config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();

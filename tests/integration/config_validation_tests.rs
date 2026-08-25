@@ -517,6 +517,7 @@ mod tests {
         let mut base = Config {
             gateway: create_valid_gateway_config(),
         };
+        base.gateway.storage.redis.enabled = true;
         base.gateway.storage.redis.cluster = true;
         let serialized = Config {
             gateway: create_valid_gateway_config(),
@@ -545,6 +546,7 @@ mod tests {
         let mut base = Config {
             gateway: create_valid_gateway_config(),
         };
+        base.gateway.storage.redis.enabled = true;
         base.gateway.storage.redis.cluster = true;
         let overlay = ConfigOverlay::from_config(Config {
             gateway: create_valid_gateway_config(),
@@ -553,6 +555,10 @@ mod tests {
 
         let merged = base.merge_overlay(overlay);
 
+        merged
+            .validate()
+            .expect("programmatic explicit false must produce a valid merged configuration");
+        assert!(merged.gateway.storage.redis.enabled);
         assert!(!merged.gateway.storage.redis.cluster);
     }
 
