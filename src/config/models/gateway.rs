@@ -359,25 +359,6 @@ impl GatewayConfig {
         self
     }
 
-    pub(crate) fn merge_env_overlay(
-        self,
-        other: Self,
-        redis_cluster: Option<bool>,
-        enable_jwt: Option<bool>,
-        enable_api_key: Option<bool>,
-    ) -> Self {
-        let jwt = enable_jwt.unwrap_or(self.auth.enable_jwt);
-        let api_key = enable_api_key.unwrap_or(self.auth.enable_api_key);
-        let guardrails = self.guardrails.clone();
-        let ip_access = self.ip_access.clone();
-        let mut merged = self.merge_with_redis_cluster_override(other, redis_cluster);
-        merged.auth.enable_jwt = jwt;
-        merged.auth.enable_api_key = api_key;
-        merged.guardrails = guardrails;
-        merged.ip_access = ip_access;
-        merged
-    }
-
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         crate::config::validation::Validate::validate(self)?;

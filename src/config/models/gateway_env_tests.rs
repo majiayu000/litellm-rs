@@ -158,6 +158,10 @@ fn redis_only_env_overlay_merges_into_valid_base_without_standalone_auth_bypass(
         .allow_ip("127.0.0.1");
     base.gateway.storage.redis.enabled = true;
     base.gateway.storage.redis.cluster = true;
+    base.gateway.cache.enabled = true;
+    base.gateway.rate_limit.enabled = true;
+    base.gateway.enterprise.enabled = true;
+    base.gateway.router.strategy = crate::core::router::config::RoutingStrategy::LatencyBased;
 
     let overlay = crate::config::Config::overlay_from_env()
         .expect("Redis-only environment overlay should parse without standalone requirements");
@@ -170,11 +174,99 @@ fn redis_only_env_overlay_merges_into_valid_base_without_standalone_auth_bypass(
     assert!(!merged.gateway.auth.enable_api_key);
     assert!(merged.gateway.ip_access.enabled);
     assert_eq!(merged.gateway.ip_access.allowlist.len(), 1);
+    assert!(merged.gateway.cache.enabled);
+    assert!(merged.gateway.rate_limit.enabled);
+    assert!(merged.gateway.enterprise.enabled);
+    assert_eq!(
+        merged.gateway.router.strategy,
+        crate::core::router::config::RoutingStrategy::LatencyBased
+    );
 
     let gateway_error = GatewayConfig::from_env()
         .expect_err("standalone GatewayConfig environment loading must require providers");
     assert!(gateway_error.to_string().contains(ENV_PROVIDERS));
     assert!(crate::config::Config::from_env().is_err());
+}
+
+#[test]
+fn env_overlay_applies_only_present_fields_including_explicit_false() {
+    let _guard = GATEWAY_ENV_LOCK.blocking_lock();
+    let _env = EnvGuard::cleared();
+    unsafe {
+        env::set_var(ENV_DATABASE_ENABLED, "false");
+        env::set_var(ENV_DATABASE_SSL, "false");
+        env::set_var(ENV_REDIS_ENABLED, "false");
+        env::set_var(ENV_CACHE_ENABLED, "false");
+        env::set_var(ENV_RATE_LIMIT_ENABLED, "false");
+        env::set_var(ENV_ENTERPRISE_ENABLED, "false");
+        env::set_var(ENV_ENABLE_API_KEY, "false");
+        env::set_var(ENV_PROVIDERS, "openai");
+        env::set_var("LITELLM_PROVIDER_OPENAI_ENABLED", "false");
+        env::set_var("LITELLM_PROVIDER_OPENAI_TAGS", "");
+    }
+
+    let mut base = crate::config::Config::default();
+    base.gateway.storage.database.enabled = true;
+    base.gateway.storage.database.ssl = true;
+    base.gateway.storage.redis.enabled = true;
+    base.gateway.cache.enabled = true;
+    base.gateway.rate_limit.enabled = true;
+    base.gateway.enterprise.enabled = true;
+    base.gateway.auth.enable_api_key = true;
+    base.gateway.providers.push(ProviderConfig {
+        name: "openai".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "old-key".to_string(),
+        base_url: Some("https://example.test/v1".to_string()),
+        models: vec!["preserved-model".to_string()],
+        tags: vec!["clear-me".to_string()],
+        enabled: true,
+        ..ProviderConfig::default()
+    });
+
+    let overlay = crate::config::Config::overlay_from_env()
+        .expect("explicit false environment overlay should parse");
+    let merged = base.merge_overlay(overlay);
+
+    assert!(!merged.gateway.storage.database.enabled);
+    assert!(!merged.gateway.storage.database.ssl);
+    assert!(!merged.gateway.storage.redis.enabled);
+    assert!(!merged.gateway.cache.enabled);
+    assert!(!merged.gateway.rate_limit.enabled);
+    assert!(!merged.gateway.enterprise.enabled);
+    assert!(!merged.gateway.auth.enable_api_key);
+    assert_eq!(merged.gateway.providers[0].api_key, "old-key");
+    assert!(!merged.gateway.providers[0].enabled);
+    assert_eq!(
+        merged.gateway.providers[0].base_url.as_deref(),
+        Some("https://example.test/v1")
+    );
+    assert_eq!(merged.gateway.providers[0].models, ["preserved-model"]);
+    assert!(merged.gateway.providers[0].tags.is_empty());
+}
+
+#[test]
+fn empty_secret_is_present_and_cannot_preserve_a_valid_inherited_secret() {
+    let _guard = GATEWAY_ENV_LOCK.blocking_lock();
+    let _env = EnvGuard::cleared();
+    unsafe { env::set_var(ENV_JWT_SECRET, "") };
+
+    let mut base = crate::config::Config::default();
+    base.gateway.providers.push(ProviderConfig {
+        name: "openai".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-test".to_string(),
+        ..ProviderConfig::default()
+    });
+    base.gateway.auth.enable_jwt = true;
+    base.gateway.auth.jwt_secret = "StrongJwtSecretWithMixedCaseAndNumbers1234!".to_string();
+
+    let overlay = crate::config::Config::overlay_from_env()
+        .expect("empty secret should parse as an explicit overlay value");
+    let merged = base.merge_overlay(overlay);
+    assert!(merged.gateway.auth.jwt_secret.is_empty());
+    assert!(merged.validate().is_err());
+    assert!(GatewayConfig::from_env().is_err());
 }
 
 #[test]

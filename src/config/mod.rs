@@ -168,7 +168,7 @@ pub struct Config {
 pub struct ConfigOverlay {
     config: Config,
     redis_cluster: Option<bool>,
-    env_auth: Option<(Option<bool>, Option<bool>)>,
+    env_presence: Option<models::gateway::env_config::GatewayEnvPresence>,
 }
 
 impl ConfigOverlay {
@@ -178,7 +178,7 @@ impl ConfigOverlay {
         Self {
             config,
             redis_cluster,
-            env_auth: None,
+            env_presence: None,
         }
     }
 
@@ -243,7 +243,7 @@ impl Config {
         Ok(ConfigOverlay {
             config,
             redis_cluster: presence.storage.redis.cluster,
-            env_auth: None,
+            env_presence: None,
         })
     }
 
@@ -265,7 +265,7 @@ impl Config {
         Ok(ConfigOverlay {
             config,
             redis_cluster: layer.redis_cluster,
-            env_auth: Some((layer.enable_jwt, layer.enable_api_key)),
+            env_presence: Some(layer.presence),
         })
     }
 
@@ -327,12 +327,11 @@ impl Config {
     ///
     /// The merged configuration must be validated before runtime use.
     pub fn merge_overlay(mut self, overlay: ConfigOverlay) -> Self {
-        self.gateway = match overlay.env_auth {
-            Some((jwt, api_key)) => self.gateway.merge_env_overlay(
+        self.gateway = match overlay.env_presence {
+            Some(presence) => self.gateway.merge_env_overlay(
                 overlay.config.gateway,
                 overlay.redis_cluster,
-                jwt,
-                api_key,
+                &presence,
             ),
             None => self
                 .gateway
