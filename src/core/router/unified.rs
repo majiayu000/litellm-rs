@@ -524,14 +524,13 @@ impl Router {
                 continue;
             }
 
-            let rpm_current = deployment.state.rpm_current.load(Relaxed);
+            let (tpm_current, rpm_current, _) = deployment.state.minute_counters();
             if let Some(limit) = deployment.config.rpm_limit
                 && rpm_current >= limit
             {
                 continue;
             }
 
-            let tpm_current = deployment.state.tpm_current.load(Relaxed);
             if let Some(limit) = deployment.config.tpm_limit
                 && tpm_current >= limit
             {
@@ -624,8 +623,7 @@ impl Router {
     pub(crate) fn record_failure_for_deployment(&self, deployment: &Deployment) {
         deployment.record_failure();
 
-        let fails = deployment.state.fails_this_minute.load(Relaxed);
-        let successes_this_minute = deployment.state.rpm_current.load(Relaxed);
+        let (_, successes_this_minute, fails) = deployment.state.minute_counters();
         let total_this_minute = successes_this_minute + fails as u64;
         if fails >= self.config.allowed_fails
             && total_this_minute >= self.config.min_requests as u64
@@ -665,8 +663,7 @@ impl Router {
             | CooldownReason::Manual => true,
 
             CooldownReason::ConsecutiveFailures => {
-                let fails = deployment.state.fails_this_minute.load(Relaxed);
-                let successes_this_minute = deployment.state.rpm_current.load(Relaxed);
+                let (_, successes_this_minute, fails) = deployment.state.minute_counters();
                 let total_this_minute = successes_this_minute + fails as u64;
                 fails >= self.config.allowed_fails
                     && total_this_minute >= self.config.min_requests as u64

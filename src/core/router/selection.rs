@@ -317,7 +317,7 @@ impl Router {
                 continue;
             }
 
-            let rpm_current = deployment.state.rpm_current.load(Relaxed);
+            let (tpm_current, rpm_current, _) = deployment.state.minute_counters();
             if let Some(limit) = deployment.config.rpm_limit
                 && rpm_current >= limit
             {
@@ -330,7 +330,6 @@ impl Router {
                 continue;
             }
 
-            let tpm_current = deployment.state.tpm_current.load(Relaxed);
             if let Some(limit) = deployment.config.tpm_limit
                 && tpm_current >= limit
             {

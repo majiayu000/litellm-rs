@@ -30,15 +30,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
-const MINUTE_WINDOW_SECS: u64 = 60;
-
-struct MinuteResetGuard<'a>(&'a AtomicBool);
-
-impl Drop for MinuteResetGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
+#[path = "deployment/minute_window.rs"]
+mod minute_window;
 
 /// Deployment identifier (unique within router)
 pub type DeploymentId = String;
@@ -289,45 +282,6 @@ impl DeploymentState {
         }
     }
 
-    /// Reset per-minute counters
-    pub fn reset_minute(&self) {
-        let _guard = self.acquire_minute_reset();
-        self.finish_minute_reset(current_timestamp());
-    }
-
-    pub(super) fn reset_minute_if_elapsed(&self) -> u64 {
-        let now = current_timestamp();
-        if now.saturating_sub(self.minute_reset_at.load(Ordering::Acquire)) >= MINUTE_WINDOW_SECS {
-            self.reset_elapsed_minute(now);
-        }
-        now
-    }
-
-    fn reset_elapsed_minute(&self, now: u64) {
-        let _guard = self.acquire_minute_reset();
-        if now.saturating_sub(self.minute_reset_at.load(Ordering::Acquire)) >= MINUTE_WINDOW_SECS {
-            self.finish_minute_reset(now);
-        }
-    }
-
-    fn acquire_minute_reset(&self) -> MinuteResetGuard<'_> {
-        while self
-            .reset_in_progress
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            std::hint::spin_loop();
-        }
-        MinuteResetGuard(&self.reset_in_progress)
-    }
-
-    fn finish_minute_reset(&self, now: u64) {
-        self.tpm_current.store(0, Ordering::Relaxed);
-        self.rpm_current.store(0, Ordering::Relaxed);
-        self.fails_this_minute.store(0, Ordering::Relaxed);
-        self.minute_reset_at.store(now, Ordering::Release);
-    }
-
     /// Get current health status
     pub fn health_status(&self) -> HealthStatus {
         self.health.load(Ordering::Relaxed).into()
@@ -478,12 +432,12 @@ impl Deployment {
     /// * `tokens` - Number of tokens consumed
     /// * `latency_us` - Request latency in microseconds
     pub fn record_success(&self, tokens: u64, latency_us: u64) {
-        let now = self.state.reset_minute_if_elapsed();
-        // Update counters
+        let (now, ()) = self.state.with_current_minute(|state| {
+            state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+            state.rpm_current.fetch_add(1, Ordering::Relaxed);
+        });
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.success_requests.fetch_add(1, Ordering::Relaxed);
-        self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
-        self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
         self.state.last_request_at.store(now, Ordering::Relaxed);
 
         // Update average latency using exponential moving average (alpha = 0.2)
@@ -510,10 +464,11 @@ impl Deployment {
     /// Increments failure counters. The caller is responsible for deciding
     /// whether to enter cooldown based on failure rate.
     pub fn record_failure(&self) {
-        let now = self.state.reset_minute_if_elapsed();
+        let (now, ()) = self.state.with_current_minute(|state| {
+            state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
+        });
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.fail_requests.fetch_add(1, Ordering::Relaxed);
-        self.state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
         self.state.last_request_at.store(now, Ordering::Relaxed);
 
         // Reset consecutive success counter on failure
@@ -719,13 +674,11 @@ mod tests {
     fn test_stale_reset_observer_rechecks_timestamp_under_gate() {
         let state = DeploymentState::new();
         let now = current_timestamp();
-        state
-            .minute_reset_at
-            .store(now - MINUTE_WINDOW_SECS, Ordering::Relaxed);
-        state.reset_elapsed_minute(now);
+        state.minute_reset_at.store(now - 60, Ordering::Relaxed);
+        state.reset_minute_if_elapsed();
         state.fails_this_minute.store(1, Ordering::Relaxed);
 
-        state.reset_elapsed_minute(now);
+        state.reset_minute_if_elapsed();
 
         assert_eq!(state.fails_this_minute.load(Ordering::Relaxed), 1);
     }

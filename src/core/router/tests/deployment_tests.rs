@@ -2,7 +2,11 @@
 
 use crate::core::providers::Provider;
 use crate::core::providers::openai::OpenAIProvider;
-use crate::core::router::deployment::{Deployment, DeploymentConfig, HealthStatus};
+use crate::core::router::deployment::{
+    Deployment, DeploymentConfig, DeploymentState, HealthStatus,
+};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 async fn create_test_provider() -> Provider {
@@ -307,6 +311,74 @@ async fn test_concurrent_requests_stress_lazy_minute_rollover() {
     assert_eq!(
         deployment.state.tpm_current.load(Ordering::Relaxed),
         (REQUESTS / 2 * 10) as u64
+    );
+}
+
+#[test]
+fn test_future_minute_timestamp_rebases_after_clock_rollback() {
+    let state = DeploymentState::new();
+    state.tpm_current.store(100, Ordering::Relaxed);
+    state.rpm_current.store(1, Ordering::Relaxed);
+    state.fails_this_minute.store(1, Ordering::Relaxed);
+    state.minute_reset_at.store(u64::MAX, Ordering::Release);
+
+    let now = state.reset_minute_if_elapsed();
+
+    assert_eq!(state.minute_reset_at.load(Ordering::Acquire), now);
+    assert_eq!(state.minute_counters(), (0, 0, 0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_concurrent_success_and_reset_preserve_minute_counter_tuple() {
+    const UPDATES: usize = 2_000;
+    let provider = create_test_provider().await;
+    let deployment = Arc::new(Deployment::new(
+        "test-deployment".to_string(),
+        provider,
+        "gpt-4-turbo".to_string(),
+        "gpt-4".to_string(),
+    ));
+    let inconsistent = Arc::new(AtomicBool::new(false));
+
+    let writer = {
+        let deployment = Arc::clone(&deployment);
+        tokio::spawn(async move {
+            for _ in 0..UPDATES {
+                deployment.record_success(10, 100);
+                tokio::task::yield_now().await;
+            }
+        })
+    };
+    let resetter = {
+        let state = deployment.state.clone();
+        tokio::spawn(async move {
+            for _ in 0..UPDATES {
+                state.reset_minute();
+                tokio::task::yield_now().await;
+            }
+        })
+    };
+    let observer = {
+        let state = deployment.state.clone();
+        let inconsistent = Arc::clone(&inconsistent);
+        tokio::spawn(async move {
+            for _ in 0..UPDATES * 2 {
+                let (tpm, rpm, _) = state.minute_counters();
+                if tpm != rpm * 10 {
+                    inconsistent.store(true, Ordering::Relaxed);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+    };
+
+    writer.await.expect("writer should complete");
+    resetter.await.expect("resetter should complete");
+    observer.await.expect("observer should complete");
+    assert!(!inconsistent.load(Ordering::Relaxed));
+    assert_eq!(
+        deployment.state.total_requests.load(Ordering::Relaxed),
+        UPDATES as u64
     );
 }
 

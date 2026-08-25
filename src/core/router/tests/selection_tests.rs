@@ -461,3 +461,37 @@ async fn test_latency_based_skips_rate_limited() {
     );
     router.release_deployment(&id);
 }
+
+#[tokio::test]
+async fn test_stale_capped_deployment_rolls_over_before_selection() {
+    let router = Router::default();
+    let mut deployment = create_test_deployment("stale-capped", "gpt-4").await;
+    deployment.config.rpm_limit = Some(1);
+    deployment.config.tpm_limit = Some(10);
+    deployment.state.rpm_current.store(1, Relaxed);
+    deployment.state.tpm_current.store(10, Relaxed);
+    deployment
+        .state
+        .minute_reset_at
+        .store(0, std::sync::atomic::Ordering::Release);
+    let state = deployment.state.clone();
+    router.add_deployment(deployment);
+
+    let id = router
+        .select_deployment("gpt-4")
+        .expect("expired counters must not keep a deployment capped");
+    assert_eq!(id, "stale-capped");
+    assert_eq!(state.minute_counters(), (0, 0, 0));
+    router.release_deployment(&id);
+
+    state.rpm_current.store(1, Relaxed);
+    state.tpm_current.store(10, Relaxed);
+    state
+        .minute_reset_at
+        .store(0, std::sync::atomic::Ordering::Release);
+    let selected = router
+        .select_capability_deployment("gpt-4", &ProviderCapability::ChatCompletion)
+        .expect("capability selection must also roll expired counters");
+    assert_eq!(selected.deployment_id, "stale-capped");
+    assert_eq!(state.minute_counters(), (0, 0, 0));
+}
