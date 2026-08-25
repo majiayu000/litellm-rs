@@ -26,8 +26,8 @@ impl DeploymentState {
         &self,
         operation: impl FnOnce(&DeploymentStateInner) -> T,
     ) -> (u64, T) {
-        let now = current_timestamp();
         let _guard = self.acquire_minute_reset();
+        let now = current_timestamp();
         let reset_at = self.minute_reset_at.load(Ordering::Acquire);
         if now < reset_at || now - reset_at >= MINUTE_WINDOW_SECS {
             self.finish_minute_reset(now);
