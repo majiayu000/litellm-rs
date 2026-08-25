@@ -17,9 +17,11 @@ use std::{
     convert::Infallible,
     io::{self, BufReader},
     net::{SocketAddr, TcpListener, ToSocketAddrs},
+    time::Duration,
 };
 
 const TLS_BACKLOG: u32 = 1024;
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Validated TLS state cached before gateway dependencies are initialized.
 pub(crate) struct ListenerTls {
@@ -265,10 +267,19 @@ fn http1_tls_transport(
     Error = TlsError<io::Error, Infallible>,
     InitError = (),
 > + Clone {
-    RustlsAcceptor::new(config).map(|io: TlsStream<actix_web::rt::net::TcpStream>| {
+    http1_tls_acceptor(config).map(|io: TlsStream<actix_web::rt::net::TcpStream>| {
         let peer_addr = io.get_ref().0.peer_addr().ok();
         (io, Protocol::Http1, peer_addr)
     })
+}
+
+fn http1_tls_acceptor(config: rustls::ServerConfig) -> RustlsAcceptor {
+    // Actix's acceptor owns the standard per-worker TLS handshake guard. Its counter is shared
+    // across every acceptor service created on that worker, so all resolved listeners contribute
+    // to the same 256-handshake default instead of each listener receiving a separate allowance.
+    let mut acceptor = RustlsAcceptor::new(config);
+    acceptor.set_handshake_timeout(TLS_HANDSHAKE_TIMEOUT);
+    acceptor
 }
 
 // Actix has no public secure AppConfig constructor. Keep its semver-exempt helper isolated; the
@@ -280,14 +291,14 @@ fn secure_app_config(address: SocketAddr) -> AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_service::fn_service;
+    use actix_service::{Service as _, ServiceFactory as _, fn_service};
     use rcgen::generate_simple_self_signed;
     use std::{
         fs,
+        future::poll_fn,
         io::{Read as _, Write as _},
         net::TcpListener,
         sync::Arc,
-        time::Duration,
     };
     use tempfile::TempDir;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -344,6 +355,84 @@ mod tests {
         assert!(config.secure());
         assert_eq!(config.host(), address.to_string());
         assert_eq!(config.local_addr(), address);
+    }
+
+    async fn tcp_pair() -> (actix_web::rt::net::TcpStream, actix_web::rt::net::TcpStream) {
+        let listener = actix_web::rt::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind async loopback listener");
+        let address = listener.local_addr().expect("async listener address");
+        let client = actix_web::rt::net::TcpStream::connect(address);
+        let server = listener.accept();
+        let (client, server) = tokio::join!(client, server);
+        let (server, _) = server.expect("accept loopback connection");
+        (server, client.expect("connect loopback client"))
+    }
+
+    #[actix_web::test]
+    async fn http1_acceptor_times_out_stalled_handshake() {
+        let (_directory, tls) = material();
+        let config = load_rustls_config(&tls).expect("server config");
+        let transport = http1_tls_transport(config)
+            .new_service(())
+            .await
+            .expect("initialize HTTP/1 TLS transport");
+        let (server, _stalled_client) = tcp_pair().await;
+        let started = tokio::time::Instant::now();
+
+        let result = tokio::time::timeout(
+            TLS_HANDSHAKE_TIMEOUT + Duration::from_secs(1),
+            transport.call(server),
+        )
+        .await
+        .expect("Actix handshake timeout should complete the transport future");
+
+        assert!(matches!(result, Err(TlsError::Timeout)));
+        assert!(started.elapsed() >= TLS_HANDSHAKE_TIMEOUT);
+    }
+
+    #[actix_web::test]
+    async fn http1_acceptors_share_actix_handshake_limit() {
+        const ACTIX_DEFAULT_TLS_HANDSHAKE_LIMIT: usize = 256;
+
+        let (_directory, tls) = material();
+        let config = load_rustls_config(&tls).expect("server config");
+        let first = http1_tls_transport(config.clone())
+            .new_service(())
+            .await
+            .expect("initialize first transport");
+        let second = http1_tls_transport(config)
+            .new_service(())
+            .await
+            .expect("initialize second transport");
+        let mut stalled = Vec::with_capacity(ACTIX_DEFAULT_TLS_HANDSHAKE_LIMIT);
+
+        for _ in 0..ACTIX_DEFAULT_TLS_HANDSHAKE_LIMIT {
+            poll_fn(|context| first.poll_ready(context))
+                .await
+                .expect("first transport ready below the Actix limit");
+            let (server, client) = tcp_pair().await;
+            stalled.push((first.call(server), client));
+        }
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                poll_fn(|context| second.poll_ready(context)),
+            )
+            .await
+            .is_err(),
+            "a second listener factory must observe the shared saturated handshake counter"
+        );
+
+        drop(stalled.pop());
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            poll_fn(|context| second.poll_ready(context)),
+        )
+        .await
+        .expect("dropping a stalled handshake should release shared capacity")
+        .expect("second transport becomes ready after capacity is released");
     }
 
     #[test]
