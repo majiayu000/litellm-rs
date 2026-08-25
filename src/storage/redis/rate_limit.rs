@@ -323,6 +323,7 @@ mod tests {
             max_connections: 10,
             connection_timeout: 1,
             cluster: false,
+            cluster_configured: false,
             allow_degraded: false,
         };
 

@@ -104,6 +104,28 @@ async fn test_server_builder_requires_config() {
 }
 
 #[tokio::test]
+async fn server_builder_rejects_redis_cluster_before_client_initialization() {
+    let mut config = crate::config::Config::default();
+    config.gateway.storage.redis.enabled = true;
+    config.gateway.storage.redis.cluster = true;
+
+    let error = match ServerBuilder::new().with_config(config).build().await {
+        Err(error) => error,
+        Ok(_) => panic!("server builder must reject unsupported Redis cluster mode"),
+    };
+
+    let message = error.to_string();
+    assert!(
+        message.contains("storage.redis.cluster=true"),
+        "got: {message}"
+    );
+    assert!(
+        message.contains("storage.redis.cluster=false"),
+        "got: {message}"
+    );
+}
+
+#[tokio::test]
 async fn explicit_config_path_missing_file_fails_without_env_fallback() {
     let temp_dir = match tempfile::tempdir() {
         Ok(temp_dir) => temp_dir,

@@ -106,7 +106,8 @@ impl Validate for RedisConfig {
                 "storage.redis.cluster=true is declared but not implemented yet. \
                  A standalone client against a cluster node only fails later \
                  with MOVED errors, so cluster mode is rejected at startup. \
-                 Point storage.redis.url at a standalone or primary endpoint."
+                 Set storage.redis.cluster=false and point storage.redis.url \
+                 at a standalone or primary endpoint."
                     .to_string(),
             );
         }

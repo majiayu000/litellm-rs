@@ -74,6 +74,10 @@ impl StorageLayer {
     ///   the error is logged at `error!` level and the dependency status is
     ///   set to `Degraded` while the gateway keeps running.
     pub async fn new(config: &StorageConfig) -> Result<Self> {
+        crate::config::Validate::validate(&config.redis).map_err(|error| {
+            GatewayError::Config(format!("Invalid Redis configuration: {error}"))
+        })?;
+
         info!("Initializing storage layer");
 
         // Initialize database
@@ -510,6 +514,7 @@ mod tests {
                 max_connections: 10,
                 connection_timeout: 5,
                 cluster: false,
+                cluster_configured: false,
                 allow_degraded: false,
             },
             files: FileStorageConfig::default(),
@@ -655,6 +660,7 @@ mod tests {
             max_connections: 1,
             connection_timeout: 1,
             cluster: false,
+            cluster_configured: false,
             allow_degraded,
         }
     }

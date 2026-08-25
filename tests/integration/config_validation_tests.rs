@@ -455,6 +455,45 @@ mod tests {
         assert_eq!(provider.api_key, "new-api-key");
     }
 
+    #[tokio::test]
+    async fn redis_cluster_false_from_file_overrides_true_base() {
+        let temp_dir = tempfile::tempdir().expect("temporary config directory should exist");
+        let base_path = temp_dir.path().join("base.yaml");
+        let overlay_path = temp_dir.path().join("overlay.yaml");
+
+        let mut base = Config {
+            gateway: create_valid_gateway_config(),
+        };
+        base.gateway.storage.redis.cluster = true;
+        let overlay = Config {
+            gateway: create_valid_gateway_config(),
+        };
+
+        tokio::fs::write(
+            &base_path,
+            base.to_yaml().expect("base config should serialize"),
+        )
+        .await
+        .expect("base config should be written");
+        tokio::fs::write(
+            &overlay_path,
+            overlay.to_yaml().expect("overlay config should serialize"),
+        )
+        .await
+        .expect("overlay config should be written");
+
+        let base = Config::from_file(base_path)
+            .await
+            .expect("base config should load");
+        let overlay = Config::from_file(overlay_path)
+            .await
+            .expect("overlay config should load");
+        let merged = base.merge(overlay);
+
+        assert!(!merged.gateway.storage.redis.cluster);
+        assert!(merged.gateway.storage.redis.cluster_configured);
+    }
+
     // ==================== Default Config Tests ====================
 
     /// Test GatewayConfig default values

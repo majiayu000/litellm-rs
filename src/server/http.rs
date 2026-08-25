@@ -46,6 +46,10 @@ pub struct HttpServer {
 impl HttpServer {
     /// Create a new HTTP server
     pub async fn new(config: &Config) -> Result<Self> {
+        config.gateway.storage.redis.validate().map_err(|error| {
+            GatewayError::Config(format!("Invalid Redis configuration: {error}"))
+        })?;
+
         info!("Creating HTTP server");
 
         crate::config::models::gateway::GatewayConfig::validate_model_alias_map(
