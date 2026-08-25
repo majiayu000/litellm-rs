@@ -316,7 +316,7 @@ struct ProviderHealth {
     /// One of `healthy`, `unhealthy`, `unknown`, `disabled`.
     status: Cow<'static, str>,
     response_time_ms: Option<u64>,
-    last_check: chrono::DateTime<chrono::Utc>,
+    last_check: Option<chrono::DateTime<chrono::Utc>>,
     error_message: Option<String>,
 }
 
@@ -507,22 +507,21 @@ async fn check_provider_health(
     let mut provider_details = Vec::new();
 
     for provider_config in cfg.providers() {
-        let (status, error_message): (Cow<'static, str>, Option<String>) =
-            if !provider_config.enabled {
-                (Cow::Borrowed("disabled"), None)
-            } else {
-                health_provider_status::derive_status_for_provider(
-                    &state.unified_router,
-                    &provider_config.name,
-                    provider_config.enabled,
-                )
-            };
+        let (status, error_message, last_check) = if !provider_config.enabled {
+            (Cow::Borrowed("disabled"), None, None)
+        } else {
+            health_provider_status::derive_health_for_provider(
+                &state.unified_router,
+                &provider_config.name,
+                provider_config.enabled,
+            )
+        };
 
         provider_details.push(ProviderHealth {
             name: provider_config.name.clone(),
             status,
             response_time_ms: None,
-            last_check: chrono::Utc::now(),
+            last_check,
             error_message,
         });
     }
@@ -616,7 +615,7 @@ mod tests {
             name: name.to_string(),
             status: Cow::Borrowed(status),
             response_time_ms: None,
-            last_check: chrono::Utc::now(),
+            last_check: Some(chrono::Utc::now()),
             error_message: None,
         }
     }

@@ -5,7 +5,10 @@
 //! intentionally a separate, faster-changing signal.
 
 use crate::core::router::{HealthStatus, UnifiedRouter};
+use chrono::{DateTime, TimeZone, Utc};
 use std::borrow::Cow;
+
+type ProviderHealthObservation = (Cow<'static, str>, Option<String>, Option<DateTime<Utc>>);
 
 /// Classify a provider from its deployment counts.
 ///
@@ -42,15 +45,25 @@ pub(super) fn derive_status_for_provider(
     name: &str,
     enabled: bool,
 ) -> (Cow<'static, str>, Option<String>) {
+    let (status, error, _) = derive_health_for_provider(router, name, enabled);
+    (status, error)
+}
+
+pub(super) fn derive_health_for_provider(
+    router: &UnifiedRouter,
+    name: &str,
+    enabled: bool,
+) -> ProviderHealthObservation {
     if !enabled {
-        return (Cow::Borrowed("disabled"), None);
+        return (Cow::Borrowed("disabled"), None, None);
     }
 
     let deployments = router.deployments_for_provider(name);
     let total = deployments.len();
     let mut probe_healthy = 0usize;
     let mut has_failed_health = false;
-    for deployment in deployments {
+    let mut last_check_millis = None;
+    for deployment in &deployments {
         match deployment.state.probe_health_status() {
             HealthStatus::Healthy => probe_healthy += 1,
             HealthStatus::Unknown => {}
@@ -58,9 +71,14 @@ pub(super) fn derive_status_for_provider(
                 has_failed_health = true;
             }
         }
+        last_check_millis = last_check_millis.max(deployment.state.probe_last_checked_at_millis());
     }
 
-    classify(total, probe_healthy, has_failed_health)
+    let (status, error) = classify(total, probe_healthy, has_failed_health);
+    let last_check = last_check_millis
+        .and_then(|timestamp| i64::try_from(timestamp).ok())
+        .and_then(|timestamp| Utc.timestamp_millis_opt(timestamp).single());
+    (status, error, last_check)
 }
 
 #[cfg(test)]
@@ -400,5 +418,35 @@ mod tests {
             .set_probe_health_status(HealthStatus::Healthy);
         let (status, _) = derive_status_for_provider(&router, "failed", true);
         assert_eq!(status, "healthy");
+    }
+
+    #[tokio::test]
+    async fn provider_health_retains_actual_probe_time() {
+        let router = UnifiedRouter::from_gateway_config(&[provider_config("timed")], None)
+            .await
+            .expect("gateway provider should construct");
+        let deployment = router
+            .get_deployment("timed-readiness-model")
+            .expect("timed deployment");
+        assert!(deployment.state.probe_last_checked_at_millis().is_none());
+
+        deployment
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
+        let recorded_millis = deployment
+            .state
+            .probe_last_checked_at_millis()
+            .expect("probe should record its completion time");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let (status, error, last_check) = derive_health_for_provider(&router, "timed", true);
+        assert_eq!(status, "healthy");
+        assert!(error.is_none());
+        assert_eq!(
+            last_check
+                .expect("probe time should be reported")
+                .timestamp_millis(),
+            i64::try_from(recorded_millis).expect("current timestamp should fit in i64")
+        );
     }
 }

@@ -193,6 +193,7 @@ impl Default for DeploymentConfig {
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
     probe_health: Arc<AtomicU8>,
+    probe_last_checked_at_millis: Arc<AtomicU64>,
 }
 
 impl Deref for DeploymentState {
@@ -274,6 +275,7 @@ impl DeploymentState {
                 minute_reset_at: AtomicU64::new(now),
             }),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
+            probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -299,7 +301,17 @@ impl DeploymentState {
     }
 
     pub(crate) fn set_probe_health_status(&self, status: HealthStatus) {
+        self.probe_last_checked_at_millis
+            .store(current_timestamp_millis(), Ordering::Relaxed);
         self.probe_health.store(status as u8, Ordering::Release);
+    }
+
+    /// Get the completion time of the last active probe, in Unix milliseconds.
+    pub fn probe_last_checked_at_millis(&self) -> Option<u64> {
+        match self.probe_last_checked_at_millis.load(Ordering::Relaxed) {
+            0 => None,
+            timestamp => Some(timestamp),
+        }
     }
 
     /// Share request-routing state while requiring fresh probe evidence.
@@ -307,6 +319,7 @@ impl DeploymentState {
         Self {
             inner: Arc::clone(&self.inner),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
+            probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -564,10 +577,20 @@ impl Deployment {
 ///
 /// Returns the number of seconds since UNIX_EPOCH.
 fn current_timestamp() -> u64 {
+    current_timestamp_duration().as_secs()
+}
+
+fn current_timestamp_millis() -> u64 {
+    current_timestamp_duration()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn current_timestamp_duration() -> std::time::Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| std::time::Duration::from_secs(0))
-        .as_secs()
 }
 
 #[cfg(test)]

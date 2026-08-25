@@ -310,7 +310,7 @@ impl RoutingSnapshot {
 #[derive(Debug)]
 pub struct Router {
     /// Atomically installed routing metadata generation.
-    pub(crate) routing_snapshot: ArcSwap<RoutingSnapshot>,
+    pub(crate) routing_snapshot: Arc<ArcSwap<RoutingSnapshot>>,
 
     /// Serializes snapshot writers so concurrent updates cannot overwrite one
     /// another while readers keep using lock-free ArcSwap loads.
@@ -342,7 +342,7 @@ impl Router {
     /// Create a new router with the given configuration
     pub fn new(config: RouterConfig) -> Self {
         Self {
-            routing_snapshot: ArcSwap::from_pointee(RoutingSnapshot::empty()),
+            routing_snapshot: Arc::new(ArcSwap::from_pointee(RoutingSnapshot::empty())),
             routing_snapshot_write_lock: Mutex::new(()),
             config,
             fallback_config: FallbackConfig::default(),
