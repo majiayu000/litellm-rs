@@ -28,9 +28,20 @@ pub struct StorageConfig {
 
 impl StorageConfig {
     /// Merge storage configurations
-    pub fn merge(mut self, other: Self) -> Self {
+    pub fn merge(self, other: Self) -> Self {
+        self.merge_with_redis_cluster_override(other, None)
+    }
+
+    /// Merge storage configurations with presence-aware Redis cluster semantics.
+    pub(crate) fn merge_with_redis_cluster_override(
+        mut self,
+        other: Self,
+        redis_cluster: Option<bool>,
+    ) -> Self {
         self.database = self.database.merge(other.database);
-        self.redis = self.redis.merge(other.redis);
+        self.redis = self
+            .redis
+            .merge_with_cluster_override(other.redis, redis_cluster);
         self.files = self.files.merge(other.files);
         if other.vector_db.is_some() {
             self.vector_db = other.vector_db;
@@ -450,7 +461,6 @@ mod tests {
             max_connections: 200,
             connection_timeout: 60,
             cluster: true,
-            cluster_configured: false,
             allow_degraded: false,
         };
         assert!(config.cluster);
@@ -465,7 +475,6 @@ mod tests {
             max_connections: 50,
             connection_timeout: 15,
             cluster: false,
-            cluster_configured: false,
             allow_degraded: false,
         };
         let json = serde_json::to_value(&config).unwrap();
@@ -490,7 +499,6 @@ mod tests {
             max_connections: 100,
             connection_timeout: 30,
             cluster: false,
-            cluster_configured: false,
             allow_degraded: false,
         };
         let merged = base.merge(other);
@@ -506,7 +514,6 @@ mod tests {
             max_connections: 100,
             connection_timeout: 30,
             cluster: true,
-            cluster_configured: false,
             allow_degraded: false,
         };
         let merged = base.merge(other);
@@ -522,7 +529,6 @@ mod tests {
             max_connections: default_redis_max_connections(),
             connection_timeout: default_connection_timeout(),
             cluster: false,
-            cluster_configured: false,
             allow_degraded: false,
         };
         let merged = base.merge(other);

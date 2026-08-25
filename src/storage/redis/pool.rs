@@ -94,7 +94,6 @@ impl RedisPool {
                 max_connections: 0,
                 connection_timeout: 0,
                 cluster: false,
-                cluster_configured: false,
                 allow_degraded: false,
             },
             noop_mode: true,

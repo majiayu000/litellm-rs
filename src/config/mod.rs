@@ -18,6 +18,7 @@ use crate::config::models::server::ServerConfig;
 use crate::config::models::storage::StorageConfig;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use regex::Regex;
+use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 use tracing::{debug, info};
@@ -156,9 +157,66 @@ pub struct Config {
     pub gateway: GatewayConfig,
 }
 
+/// A configuration value plus presence metadata for layered merges.
+///
+/// Runtime configuration structs remain source-compatible and contain only
+/// their established public fields. This overlay carries the otherwise-lost
+/// distinction between an omitted boolean and an explicit `false`.
+#[derive(Debug, Clone)]
+pub struct ConfigOverlay {
+    config: Config,
+    redis_cluster: Option<bool>,
+}
+
+impl ConfigOverlay {
+    /// Create a programmatic overlay from an existing configuration.
+    pub fn from_config(config: Config) -> Self {
+        let redis_cluster = config.gateway.storage.redis.cluster.then_some(true);
+        Self {
+            config,
+            redis_cluster,
+        }
+    }
+
+    /// Explicitly override Redis cluster mode in this overlay.
+    pub fn with_redis_cluster(mut self, cluster: bool) -> Self {
+        self.config.gateway.storage.redis.cluster = cluster;
+        self.redis_cluster = Some(cluster);
+        self
+    }
+
+    /// Discard overlay metadata and return the runtime configuration.
+    pub fn into_config(self) -> Config {
+        self.config
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct GatewayConfigPresence {
+    #[serde(default)]
+    storage: StorageConfigPresence,
+}
+
+#[derive(Default, Deserialize)]
+struct StorageConfigPresence {
+    #[serde(default)]
+    redis: RedisConfigPresence,
+}
+
+#[derive(Default, Deserialize)]
+struct RedisConfigPresence {
+    #[serde(default)]
+    cluster: Option<bool>,
+}
+
 impl Config {
     /// Load configuration from file
     pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Ok(Self::overlay_from_file(path).await?.into_config())
+    }
+
+    /// Load a presence-aware configuration overlay from a file.
+    pub async fn overlay_from_file<P: AsRef<Path>>(path: P) -> Result<ConfigOverlay> {
         let path = path.as_ref();
         info!("Loading configuration from: {:?}", path);
 
@@ -170,6 +228,8 @@ impl Config {
 
         let gateway: GatewayConfig = serde_yml::from_str(&content)
             .map_err(|e| GatewayError::Config(format!("Failed to parse config: {}", e)))?;
+        let presence: GatewayConfigPresence = serde_yml::from_str(&content)
+            .map_err(|e| GatewayError::Config(format!("Failed to parse config: {}", e)))?;
 
         let config = Self { gateway };
 
@@ -177,18 +237,29 @@ impl Config {
         config.validate()?;
 
         debug!("Configuration loaded successfully");
-        Ok(config)
+        Ok(ConfigOverlay {
+            config,
+            redis_cluster: presence.storage.redis.cluster,
+        })
     }
 
     /// Load configuration from environment variables
     pub fn from_env() -> Result<Self> {
+        Ok(Self::overlay_from_env()?.into_config())
+    }
+
+    /// Load a presence-aware configuration overlay from environment variables.
+    pub fn overlay_from_env() -> Result<ConfigOverlay> {
         info!("Loading configuration from environment variables");
 
-        let gateway = GatewayConfig::from_env()?;
+        let (gateway, redis_cluster) = GatewayConfig::from_env_with_redis_cluster_presence()?;
         let config = Self { gateway };
 
         config.validate()?;
-        Ok(config)
+        Ok(ConfigOverlay {
+            config,
+            redis_cluster,
+        })
     }
 
     /// Get server configuration
@@ -236,9 +307,20 @@ impl Config {
         Ok(())
     }
 
-    /// Merge with another configuration (other takes precedence)
+    /// Merge another materialized configuration using legacy default-aware semantics.
+    ///
+    /// Use [`Self::merge_overlay`] when an explicit value equal to its default
+    /// (for example `storage.redis.cluster=false`) must take precedence.
     pub fn merge(mut self, other: Self) -> Self {
         self.gateway = self.gateway.merge(other.gateway);
+        self
+    }
+
+    /// Merge a presence-aware overlay, with explicit default values winning.
+    pub fn merge_overlay(mut self, overlay: ConfigOverlay) -> Self {
+        self.gateway = self
+            .gateway
+            .merge_with_redis_cluster_override(overlay.config.gateway, overlay.redis_cluster);
         self
     }
 

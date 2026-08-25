@@ -678,7 +678,6 @@ async fn live_redis_pool() -> Option<(RedisPool, String)> {
         max_connections: 2,
         connection_timeout: 1,
         cluster: false,
-        cluster_configured: false,
         allow_degraded: false,
     };
 
@@ -716,7 +715,6 @@ fn restricted_redis_config(redis_url: &str, username: &str, password: &str) -> R
         max_connections: 2,
         connection_timeout: 1,
         cluster: false,
-        cluster_configured: false,
         allow_degraded: false,
     }
 }

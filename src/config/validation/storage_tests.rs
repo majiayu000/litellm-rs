@@ -25,7 +25,6 @@ fn redis_validation_skips_when_disabled() {
         max_connections: 0,
         connection_timeout: 0,
         cluster: false,
-        cluster_configured: false,
         allow_degraded: false,
     };
     assert!(Validate::validate(&config).is_ok());
@@ -39,7 +38,6 @@ fn redis_validation_rejects_unimplemented_cluster_mode_with_actionable_remedy() 
         max_connections: 10,
         connection_timeout: 5,
         cluster: true,
-        cluster_configured: false,
         allow_degraded: false,
     };
 
@@ -61,7 +59,6 @@ fn redis_validation_accepts_standalone_when_enabled() {
         max_connections: 10,
         connection_timeout: 5,
         cluster: false,
-        cluster_configured: false,
         allow_degraded: false,
     };
     assert!(Validate::validate(&config).is_ok());

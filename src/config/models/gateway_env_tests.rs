@@ -50,13 +50,14 @@ fn redis_cluster_env_false_overrides_true_base() {
         env::set_var(ENV_REDIS_CLUSTER, "false");
     }
 
-    let overlay = GatewayConfig::from_env().expect("Redis cluster env should parse");
+    let (overlay, redis_cluster) = GatewayConfig::from_env_with_redis_cluster_presence()
+        .expect("Redis cluster env should parse");
     assert!(!overlay.storage.redis.cluster);
-    assert!(overlay.storage.redis.cluster_configured);
+    assert_eq!(redis_cluster, Some(false));
 
     let mut base = GatewayConfig::default();
     base.storage.redis.cluster = true;
-    let merged = base.merge(overlay);
+    let merged = base.merge_with_redis_cluster_override(overlay, redis_cluster);
 
     assert!(!merged.storage.redis.cluster);
     clear_env();

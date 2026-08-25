@@ -525,6 +525,11 @@ impl Default for GatewayConfig {
 
 impl GatewayConfig {
     pub fn from_env() -> crate::utils::error::gateway_error::Result<Self> {
+        Self::from_env_with_redis_cluster_presence().map(|(config, _)| config)
+    }
+
+    pub(crate) fn from_env_with_redis_cluster_presence()
+    -> crate::utils::error::gateway_error::Result<(Self, Option<bool>)> {
         let mut config = Self::default();
 
         if let Some(host) = env_var(ENV_HOST) {
@@ -572,9 +577,9 @@ impl GatewayConfig {
         if let Some(connection_timeout) = parse_env::<u64>(ENV_REDIS_CONNECTION_TIMEOUT)? {
             config.storage.redis.connection_timeout = connection_timeout;
         }
-        if let Some(cluster) = parse_env_bool(ENV_REDIS_CLUSTER)? {
+        let redis_cluster = parse_env_bool(ENV_REDIS_CLUSTER)?;
+        if let Some(cluster) = redis_cluster {
             config.storage.redis.cluster = cluster;
-            config.storage.redis.cluster_configured = true;
         }
 
         if let Some(enable_jwt) = parse_env_bool(ENV_ENABLE_JWT)? {
@@ -627,13 +632,21 @@ impl GatewayConfig {
             config.enterprise.enabled = enabled;
         }
 
-        Ok(config)
+        Ok((config, redis_cluster))
     }
 }
 
 impl GatewayConfig {
     /// Merge two configurations, with other taking precedence
-    pub fn merge(mut self, other: Self) -> Self {
+    pub fn merge(self, other: Self) -> Self {
+        self.merge_with_redis_cluster_override(other, None)
+    }
+
+    pub(crate) fn merge_with_redis_cluster_override(
+        mut self,
+        other: Self,
+        redis_cluster: Option<bool>,
+    ) -> Self {
         self.server = self.server.merge(other.server);
 
         // Merge providers (other takes precedence for same names)
@@ -650,7 +663,9 @@ impl GatewayConfig {
         self.providers = provider_map.into_values().collect();
         self.model_aliases.extend(other.model_aliases);
         self.router = self.router.merge(other.router);
-        self.storage = self.storage.merge(other.storage);
+        self.storage = self
+            .storage
+            .merge_with_redis_cluster_override(other.storage, redis_cluster);
         self.auth = self.auth.merge(other.auth);
         self.monitoring = self.monitoring.merge(other.monitoring);
         self.cache = self.cache.merge(other.cache);

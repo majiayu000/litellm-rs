@@ -2,7 +2,7 @@ use super::super::{default_connection_timeout, default_redis_max_connections};
 use serde::{Deserialize, Serialize};
 
 /// Redis configuration.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RedisConfig {
     /// Redis URL.
@@ -20,13 +20,6 @@ pub struct RedisConfig {
     /// `cluster=true` instead of silently using a standalone connection.
     #[serde(default)]
     pub cluster: bool,
-    /// Tracks whether `cluster` was present in deserialized config.
-    ///
-    /// This preserves merge semantics for layered configuration: an omitted
-    /// field must not be treated as an explicit `false` override.
-    #[doc(hidden)]
-    #[serde(skip)]
-    pub cluster_configured: bool,
     /// When `enabled` is true and Redis init fails, allow the gateway to keep
     /// running with an in-process/no-op fallback instead of failing startup.
     ///
@@ -35,49 +28,6 @@ pub struct RedisConfig {
     /// where caching is best-effort and silent degradation is acceptable.
     #[serde(default)]
     pub allow_degraded: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RedisConfigFields {
-    url: String,
-    #[serde(default = "default_redis_enabled")]
-    enabled: bool,
-    #[serde(default = "default_redis_max_connections")]
-    max_connections: u32,
-    #[serde(default = "default_connection_timeout")]
-    connection_timeout: u64,
-    #[serde(default, deserialize_with = "deserialize_cluster")]
-    cluster: Option<bool>,
-    #[serde(default)]
-    allow_degraded: bool,
-}
-
-impl<'de> Deserialize<'de> for RedisConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let fields = RedisConfigFields::deserialize(deserializer)?;
-        let cluster_configured = fields.cluster.is_some();
-
-        Ok(Self {
-            url: fields.url,
-            enabled: fields.enabled,
-            max_connections: fields.max_connections,
-            connection_timeout: fields.connection_timeout,
-            cluster: fields.cluster.unwrap_or(false),
-            cluster_configured,
-            allow_degraded: fields.allow_degraded,
-        })
-    }
-}
-
-fn deserialize_cluster<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    bool::deserialize(deserializer).map(Some)
 }
 
 fn default_redis_url() -> String {
@@ -96,22 +46,33 @@ impl Default for RedisConfig {
             max_connections: default_redis_max_connections(),
             connection_timeout: default_connection_timeout(),
             cluster: false,
-            cluster_configured: false,
             allow_degraded: false,
         }
     }
 }
 
 impl RedisConfig {
-    /// Set cluster mode while preserving explicit presence for later merges.
-    pub fn with_cluster(mut self, cluster: bool) -> Self {
-        self.cluster = cluster;
-        self.cluster_configured = true;
-        self
+    /// Merge Redis configurations.
+    ///
+    /// For source compatibility, a programmatic `false` in `other` retains
+    /// the historical meaning of "not specified". Call
+    /// [`Self::merge_with_cluster_override`] when an explicit `false` must
+    /// clear an inherited `true` value.
+    pub fn merge(self, other: Self) -> Self {
+        self.merge_with_cluster_override(other, None)
     }
 
-    /// Merge Redis configurations.
-    pub fn merge(mut self, other: Self) -> Self {
+    /// Merge Redis configurations with presence-aware cluster semantics.
+    ///
+    /// `cluster_override` distinguishes an omitted value (`None`) from an
+    /// explicit `true` or `false`. Configuration overlay loaders use this
+    /// method so default-valued fields can override inherited settings without
+    /// adding state to the public [`RedisConfig`] struct.
+    pub fn merge_with_cluster_override(
+        mut self,
+        other: Self,
+        cluster_override: Option<bool>,
+    ) -> Self {
         let default = Self::default();
         if !other.url.is_empty() && other.url != default.url {
             self.url = other.url;
@@ -122,9 +83,8 @@ impl RedisConfig {
         if other.connection_timeout != default_connection_timeout() {
             self.connection_timeout = other.connection_timeout;
         }
-        if other.cluster_configured || other.cluster {
-            self.cluster = other.cluster;
-            self.cluster_configured = other.cluster_configured;
+        if let Some(cluster) = cluster_override.or(other.cluster.then_some(true)) {
+            self.cluster = cluster;
         }
         // Redis defaults to enabled=false; propagate if other differs from default.
         if other.enabled != default_redis_enabled() {
@@ -147,27 +107,24 @@ mod tests {
     }
 
     #[test]
-    fn yaml_tracks_cluster_presence() {
+    fn yaml_keeps_existing_cluster_wire_shape() {
         let omitted = from_yaml("");
         let explicit_false = from_yaml("cluster: false");
         let explicit_true = from_yaml("cluster: true");
 
-        assert!(!omitted.cluster_configured);
+        assert!(!omitted.cluster);
         assert!(!explicit_false.cluster);
-        assert!(explicit_false.cluster_configured);
         assert!(explicit_true.cluster);
-        assert!(explicit_true.cluster_configured);
     }
 
     #[test]
-    fn explicit_false_cluster_overlay_overrides_true_base() {
+    fn explicit_false_cluster_override_overrides_true_base() {
         let base = from_yaml("cluster: true");
         let overlay = from_yaml("cluster: false");
 
-        let merged = base.merge(overlay);
+        let merged = base.merge_with_cluster_override(overlay, Some(false));
 
         assert!(!merged.cluster);
-        assert!(merged.cluster_configured);
     }
 
     #[test]
@@ -178,7 +135,6 @@ mod tests {
         let merged = base.merge(overlay);
 
         assert!(merged.cluster);
-        assert!(merged.cluster_configured);
     }
 
     #[test]
@@ -193,15 +149,18 @@ mod tests {
     }
 
     #[test]
-    fn programmatic_explicit_false_overlay_uses_presence_flag() {
+    fn programmatic_explicit_false_overlay_uses_override_api() {
         let base = RedisConfig {
             cluster: true,
             ..RedisConfig::default()
         };
-        let overlay = RedisConfig::default().with_cluster(false);
+        let overlay = RedisConfig::default();
 
-        assert!(overlay.cluster_configured);
-        assert!(!base.merge(overlay).cluster);
+        assert!(
+            !base
+                .merge_with_cluster_override(overlay, Some(false))
+                .cluster
+        );
     }
 
     #[test]
@@ -210,7 +169,6 @@ mod tests {
             .unwrap_or_else(|error| panic!("Redis config should serialize: {error}"));
 
         assert_eq!(value["cluster"], false);
-        assert!(value.get("cluster_configured").is_none());
     }
 
     #[test]

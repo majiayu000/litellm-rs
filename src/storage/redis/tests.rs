@@ -78,7 +78,6 @@ async fn test_redis_pool_creation_returns_error_for_unreachable_endpoint() {
         max_connections: 10,
         connection_timeout: 1,
         cluster: false,
-        cluster_configured: false,
         allow_degraded: false,
     };
 
@@ -94,7 +93,6 @@ async fn test_redis_pool_disabled_is_noop() {
         max_connections: 10,
         connection_timeout: 1,
         cluster: false,
-        cluster_configured: false,
         allow_degraded: false,
     };
 
@@ -112,7 +110,6 @@ async fn cluster_mode_is_rejected_before_standalone_connection_attempt() {
         max_connections: 10,
         connection_timeout: 1,
         cluster: true,
-        cluster_configured: true,
         allow_degraded: true,
     };
 
@@ -165,7 +162,6 @@ async fn live_redis_pool() -> Option<RedisPool> {
         max_connections: 10,
         connection_timeout: 1,
         cluster: false,
-        cluster_configured: false,
         allow_degraded: false,
     };
 
