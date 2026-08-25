@@ -296,6 +296,7 @@ pub(crate) mod tests {
         assert_eq!(
             execute_probe(
                 &provider,
+                "gpt-test",
                 &test_policy(Some(healthy_endpoint)),
                 Some(&client),
             )
@@ -311,6 +312,7 @@ pub(crate) mod tests {
         assert_eq!(
             execute_probe(
                 &provider,
+                "gpt-test",
                 &test_policy(Some(failed_endpoint)),
                 Some(&client),
             )
@@ -328,7 +330,7 @@ pub(crate) mod tests {
         let mut policy = test_policy(Some(endpoint));
         policy.expected_codes = vec![302];
 
-        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        let result = execute_probe(&provider, "gpt-test", &policy, Some(&client)).await;
         redirect_task.await.expect("redirect server should stop");
         let target_was_requested = redirect_target.await.expect("redirect target should stop");
 
@@ -340,7 +342,7 @@ pub(crate) mod tests {
         policy.endpoint = Some(endpoint);
         policy.expected_codes = vec![200];
 
-        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        let result = execute_probe(&provider, "gpt-test", &policy, Some(&client)).await;
         redirect_task.await.expect("redirect server should stop");
         let target_was_requested = redirect_target.await.expect("redirect target should stop");
 
@@ -380,7 +382,7 @@ pub(crate) mod tests {
         let client = local_probe_client(&client_endpoint);
         let policy = test_policy(Some(Url::parse("http://127.0.0.1:18081/health").unwrap()));
 
-        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        let result = execute_probe(&provider, "gpt-test", &policy, Some(&client)).await;
         assert!(matches!(
             result,
             Err(ProbeFailure::Request(message)) if message.contains("authority")
@@ -398,7 +400,10 @@ pub(crate) mod tests {
         let mut policy = test_policy(None);
         policy.expected_codes = vec![200];
 
-        assert_eq!(execute_probe(&provider, &policy, None).await, Ok(()));
+        assert_eq!(
+            execute_probe(&provider, "gpt-test", &policy, None).await,
+            Ok(())
+        );
         server.await.expect("test server should stop");
     }
 

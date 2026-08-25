@@ -273,6 +273,14 @@ fn apply_probe_outcome(
         schedule.next_run = Instant::now();
         return;
     }
+    if matches!(
+        &outcome.result,
+        Err(ProbeFailure::ProviderStatus(ProviderHealthStatus::Unknown))
+    ) {
+        schedule.next_run =
+            Instant::now() + Duration::from_secs(outcome.target.key.policy.interval_secs);
+        return;
+    }
 
     let had_failures = schedule.consecutive_failures > 0;
     let delay = match outcome.result {
@@ -314,10 +322,16 @@ fn apply_probe_outcome(
 
 async fn execute_target_probe(target: &ProbeTarget) -> Result<(), ProbeFailure> {
     let custom_client = build_custom_client(&target.key.policy, target.key.timeout_secs)?;
+    let model = target
+        .deployments
+        .first()
+        .map(|deployment| deployment.model.as_str())
+        .ok_or(ProbeFailure::ClientUnavailable)?;
     match tokio::time::timeout(
         Duration::from_secs(target.key.timeout_secs),
         execute_probe(
             &target.provider,
+            model,
             &target.key.policy,
             custom_client.as_deref(),
         ),
@@ -354,6 +368,7 @@ fn build_custom_client(
 
 pub(super) async fn execute_probe(
     provider: &Provider,
+    model: &str,
     policy: &HealthCheckPolicy,
     custom_client: Option<&BaseHttpClient>,
 ) -> Result<(), ProbeFailure> {
@@ -372,7 +387,7 @@ pub(super) async fn execute_probe(
             Err(ProbeFailure::UnexpectedStatus(status))
         }
     } else {
-        match provider.health_check().await {
+        match provider.health_check_for_model(model).await {
             ProviderHealthStatus::Healthy => Ok(()),
             status => Err(ProbeFailure::ProviderStatus(status)),
         }
