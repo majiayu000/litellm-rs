@@ -312,8 +312,8 @@ fn tls_config_model_keeps_runtime_dependencies_out_of_config_validation() {
     for forbidden in [
         "rustls",
         "rustls_pemfile",
-        "crate::server::tls",
-        "crate::config::tls",
+        concat!("crate::", "server::tls"),
+        concat!("crate::", "config::tls"),
         "std::fs",
     ] {
         assert!(
