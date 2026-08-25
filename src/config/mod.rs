@@ -310,8 +310,8 @@ impl Config {
 
     /// Merge another materialized configuration using legacy default-aware semantics.
     ///
-    /// Use [`Self::merge_overlay`] when an explicit value equal to its default
-    /// (for example `storage.redis.cluster=false`) must take precedence.
+    /// Use [`Self::merge_overlay`] when an explicit
+    /// `storage.redis.cluster=false` must take precedence.
     pub fn merge(mut self, other: Self) -> Self {
         self.gateway = self.gateway.merge(other.gateway);
         self

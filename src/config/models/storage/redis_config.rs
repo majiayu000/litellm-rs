@@ -66,8 +66,8 @@ impl RedisConfig {
     ///
     /// `cluster_override` distinguishes an omitted value (`None`) from an
     /// explicit `true` or `false`. Configuration overlay loaders use this
-    /// method so default-valued fields can override inherited settings without
-    /// adding state to the public [`RedisConfig`] struct.
+    /// method so a default-valued cluster setting can override an inherited
+    /// value without adding state to the public [`RedisConfig`] struct.
     pub fn merge_with_cluster_override(
         mut self,
         other: Self,
