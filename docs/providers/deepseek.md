@@ -9,13 +9,13 @@ official DeepSeek API base is `https://api.deepseek.com`.
 
 | Model | Context | Max Output | Pricing per 1M tokens | Notes |
 |-------|---------|------------|------------------------|-------|
-| `deepseek-v4-flash` | 1M | 384K | $0.14 cache-miss input, $0.0028 cache-hit input, $0.28 output | Fast V4 model; thinking is enabled by default and non-thinking mode is supported |
-| `deepseek-v4-pro` | 1M | 384K | $0.435 cache-miss input, $0.003625 cache-hit input, $0.87 output | Higher quality V4 model; thinking is enabled by default and non-thinking mode is supported |
+| `deepseek-v4-flash` | 1M | 384K | Off-peak: $0.22 cache-miss input, $0.007 cache-hit input, $0.66 output | Fast V4 model; thinking is enabled by default and non-thinking mode is supported |
+| `deepseek-v4-pro` | 1M | 384K | Off-peak: $0.66 cache-miss input, $0.022 cache-hit input, $1.98 output | Higher quality V4 model; thinking is enabled by default and non-thinking mode is supported |
 
 ### Legacy Aliases
 
-DeepSeek's current docs keep these aliases for compatibility and announce that
-they will be deprecated on 2026-07-24 at 15:59 UTC.
+DeepSeek's current docs keep these aliases for compatibility. They were
+deprecated on 2026-07-24 at 15:59 UTC.
 
 | Alias | Current mapping | Thinking behavior |
 |-------|-----------------|-------------------|
@@ -95,16 +95,21 @@ let reasoning = completion("deepseek-reasoner", messages, None).await?;
 
 ## Cost Notes
 
-DeepSeek publishes cache-hit and cache-miss input prices. LiteLLM-RS stores the
-cache-miss price as `input_cost_per_token`, the output price as
+DeepSeek publishes cache-hit and cache-miss input prices with peak and off-peak
+rates. LiteLLM-RS currently stores scalar prices, so it uses the official
+off-peak card: the rate that applies outside 01:00-04:00 and 06:00-10:00 UTC on
+weekdays. During those peak windows, DeepSeek charges twice the stored rates.
+
+The cache-miss price is stored as `input_cost_per_token`, the output price as
 `output_cost_per_token`, and the cache-hit price as
-`cache_read_input_token_cost`.
+`cache_read_input_token_cost`. Rates below were checked against DeepSeek's
+official pricing page on 2026-08-24.
 
 For current V4 pricing:
 
-- `deepseek-v4-flash`: $0.14 cache-miss input, $0.0028 cache-hit input, $0.28 output per 1M tokens.
-- `deepseek-v4-pro`: $0.435 cache-miss input, $0.003625 cache-hit input, $0.87 output per 1M tokens.
-- `deepseek-chat` and `deepseek-reasoner` use `deepseek-v4-flash` pricing until their announced 2026-07-24 deprecation.
+- `deepseek-v4-flash`: off-peak $0.22 cache-miss input, $0.007 cache-hit input, $0.66 output per 1M tokens; peak $0.44, $0.014, and $1.32 respectively.
+- `deepseek-v4-pro`: off-peak $0.66 cache-miss input, $0.022 cache-hit input, $1.98 output per 1M tokens; peak $1.32, $0.044, and $3.96 respectively.
+- `deepseek-chat` and `deepseek-reasoner` continue to use `deepseek-v4-flash` pricing as deprecated compatibility aliases.
 
 ## Integration Testing
 

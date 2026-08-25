@@ -251,6 +251,76 @@ fn extended_pricing_handles_cohere_command_a_rates() {
 }
 
 #[test]
+fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
+    const PRICING_STATUS: &str = "official_off_peak_rate_checked_2026_08_24";
+    const FLASH_RATES: (f64, f64, f64) = (2.2e-7, 6.6e-7, 7e-9);
+    const PRO_RATES: (f64, f64, f64) = (6.6e-7, 1.98e-6, 2.2e-8);
+
+    let builtin = PricingDatabase::default();
+    for (model, expected) in [
+        ("deepseek-v4-flash", FLASH_RATES),
+        ("deepseek-chat", FLASH_RATES),
+        ("deepseek-reasoner", FLASH_RATES),
+        ("deepseek-v4-pro", PRO_RATES),
+    ] {
+        let Some(pricing) = builtin.get_model_info(model) else {
+            panic!("built-in pricing is missing {model}");
+        };
+        assert_eq!(pricing.input_cost_per_token, Some(expected.0));
+        assert_eq!(pricing.output_cost_per_token, Some(expected.1));
+        assert_eq!(
+            pricing
+                .extra
+                .get("cache_read_input_token_cost")
+                .and_then(serde_json::Value::as_f64),
+            Some(expected.2)
+        );
+        assert_eq!(
+            pricing
+                .extra
+                .get("pricing_status")
+                .and_then(serde_json::Value::as_str),
+            Some(PRICING_STATUS)
+        );
+    }
+
+    let embedded = match embedded_default_pricing_models() {
+        Ok(models) => models,
+        Err(error) => panic!("embedded pricing catalog should parse: {error}"),
+    };
+    for (model, expected) in [
+        ("deepseek-v4-flash", FLASH_RATES),
+        ("deepseek/deepseek-v4-flash", FLASH_RATES),
+        ("deepseek-chat", FLASH_RATES),
+        ("deepseek/deepseek-chat", FLASH_RATES),
+        ("deepseek-reasoner", FLASH_RATES),
+        ("deepseek/deepseek-reasoner", FLASH_RATES),
+        ("deepseek-v4-pro", PRO_RATES),
+        ("deepseek/deepseek-v4-pro", PRO_RATES),
+    ] {
+        let Some(pricing) = embedded.get(model) else {
+            panic!("embedded pricing is missing {model}");
+        };
+        assert_eq!(pricing.input_cost_per_token, Some(expected.0));
+        assert_eq!(pricing.output_cost_per_token, Some(expected.1));
+        assert_eq!(
+            pricing
+                .extra
+                .get("cache_read_input_token_cost")
+                .and_then(serde_json::Value::as_f64),
+            Some(expected.2)
+        );
+        assert_eq!(
+            pricing
+                .extra
+                .get("pricing_status")
+                .and_then(serde_json::Value::as_str),
+            Some(PRICING_STATUS)
+        );
+    }
+}
+
+#[test]
 fn xiaomi_mimo_provider_aliases_share_pricing_rows() {
     let Ok(db) = PricingDatabase::from_default_source() else {
         panic!("shared pricing source should load");

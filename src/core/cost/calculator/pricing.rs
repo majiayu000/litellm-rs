@@ -515,12 +515,15 @@ pub(super) fn get_vertex_ai_pricing(model: &str) -> Result<ModelPricing, CostErr
 pub(super) fn get_deepseek_pricing(model: &str) -> Result<ModelPricing, CostError> {
     use chrono::Utc;
 
+    // DeepSeek publishes peak and off-peak V4 rates. This scalar compatibility
+    // surface uses the official off-peak card checked on 2026-08-24; peak-hour
+    // selection requires a separate time-of-use pricing model.
     let pricing = match model.to_lowercase().as_str() {
         m if m.contains("deepseek-v4-pro") => ModelPricing {
             model: model.to_string(),
-            input_cost_per_1k_tokens: 0.000435,
-            output_cost_per_1k_tokens: 0.00087,
-            cache_read_input_token_cost: Some(0.000003625),
+            input_cost_per_1k_tokens: 0.00066,
+            output_cost_per_1k_tokens: 0.00198,
+            cache_read_input_token_cost: Some(0.000022),
             currency: "USD".to_string(),
             updated_at: Utc::now(),
             ..Default::default()
@@ -531,9 +534,9 @@ pub(super) fn get_deepseek_pricing(model: &str) -> Result<ModelPricing, CostErro
         {
             ModelPricing {
                 model: model.to_string(),
-                input_cost_per_1k_tokens: 0.00014,
-                output_cost_per_1k_tokens: 0.00028,
-                cache_read_input_token_cost: Some(0.0000028),
+                input_cost_per_1k_tokens: 0.00022,
+                output_cost_per_1k_tokens: 0.00066,
+                cache_read_input_token_cost: Some(0.000007),
                 currency: "USD".to_string(),
                 updated_at: Utc::now(),
                 ..Default::default()
