@@ -12,9 +12,8 @@ type ProviderHealthObservation = (Cow<'static, str>, Option<String>, Option<Date
 
 /// Classify a provider from its deployment counts.
 ///
-/// `healthy` requires a deployment with a successful probe and no conclusive
-/// health failure. Deployments with no successful or conclusive failed probe
-/// remain `unknown`.
+/// `healthy` requires successful probe evidence for every current deployment.
+/// Deployments with no successful or conclusive failed probe remain `unknown`.
 fn classify(
     total: usize,
     probe_healthy: usize,
@@ -31,7 +30,7 @@ fn classify(
                 "{total} deployment(s), at least one probe is unhealthy"
             )),
         ),
-        (_, 0, false) => (
+        (_, healthy, false) if healthy < total => (
             Cow::Borrowed("unknown"),
             Some("upstream health has not been established yet".to_string()),
         ),
@@ -123,8 +122,15 @@ mod tests {
     }
 
     #[test]
-    fn classify_probe_healthy_reports_healthy() {
+    fn classify_partial_probe_evidence_reports_unknown() {
         let (status, msg) = classify(2, 1, false);
+        assert_eq!(status, "unknown");
+        assert!(msg.unwrap().contains("not been established"));
+    }
+
+    #[test]
+    fn classify_all_probes_healthy_reports_healthy() {
+        let (status, msg) = classify(2, 2, false);
         assert_eq!(status, "healthy");
         assert!(msg.is_none());
     }
@@ -257,6 +263,50 @@ mod tests {
         );
         let (status, _) = derive_status_for_provider(&router, "primary", true);
         assert_eq!(status, "unknown");
+    }
+
+    #[tokio::test]
+    async fn healthy_sibling_does_not_mask_replacement_without_probe_evidence() {
+        let mut provider = provider_config("primary");
+        provider.models = vec!["one".to_string(), "two".to_string()];
+        let router = UnifiedRouter::from_gateway_config(&[provider], None)
+            .await
+            .expect("gateway provider should construct");
+        let first = router
+            .get_deployment("primary-one")
+            .expect("first deployment");
+        let second = router
+            .get_deployment("primary-two")
+            .expect("second deployment");
+        first.state.set_probe_health_status(HealthStatus::Healthy);
+        second.state.set_probe_health_status(HealthStatus::Healthy);
+        assert_eq!(
+            derive_status_for_provider(&router, "primary", true).0,
+            "healthy"
+        );
+
+        router.add_deployment(first.as_ref().clone());
+        let replacement = router
+            .get_deployment("primary-one")
+            .expect("replacement deployment");
+        assert_eq!(
+            replacement.state.probe_health_status(),
+            HealthStatus::Unknown
+        );
+        let (status, error) = derive_status_for_provider(&router, "primary", true);
+        assert_eq!(status, "unknown");
+        assert_eq!(
+            error.as_deref(),
+            Some("upstream health has not been established yet")
+        );
+
+        replacement
+            .state
+            .set_probe_health_status(HealthStatus::Healthy);
+        assert_eq!(
+            derive_status_for_provider(&router, "primary", true).0,
+            "healthy"
+        );
     }
 
     #[tokio::test]
