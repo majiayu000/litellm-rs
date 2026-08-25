@@ -311,17 +311,13 @@ impl RoutingSnapshot {
 pub struct Router {
     /// Atomically installed routing metadata generation.
     pub(crate) routing_snapshot: Arc<ArcSwap<RoutingSnapshot>>,
-
     /// Serializes snapshot writers so concurrent updates cannot overwrite one
     /// another while readers keep using lock-free ArcSwap loads.
     pub(crate) routing_snapshot_write_lock: Mutex<()>,
-
     /// Router configuration
     pub(crate) config: RouterConfig,
-
     /// Fallback configuration
     pub(crate) fallback_config: FallbackConfig,
-
     /// Round-robin counters (per model, for RoundRobin strategy)
     pub(crate) round_robin_counters: DashMap<String, AtomicUsize>,
 
@@ -334,8 +330,9 @@ pub struct Router {
     /// Atomic counter: number of fallback model attempts.
     pub(crate) fallback_triggered_count: AtomicU64,
 
-    /// One active health probe task per gateway provider.
+    /// Single supervisor task coordinating all current health probe groups.
     pub(crate) health_probe_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    pub(crate) health_probe_wakeup: Arc<tokio::sync::Notify>,
 }
 
 impl Router {
@@ -351,6 +348,7 @@ impl Router {
             strategy_used_count: AtomicU64::new(0),
             fallback_triggered_count: AtomicU64::new(0),
             health_probe_tasks: Mutex::new(HashMap::new()),
+            health_probe_wakeup: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -387,6 +385,7 @@ impl Router {
         let result = update(&mut next);
         next.generation = next_routing_generation();
         self.routing_snapshot.store(Arc::new(next));
+        self.health_probe_wakeup.notify_one();
         result
     }
 
@@ -399,6 +398,7 @@ impl Router {
         let result = update(&mut next)?;
         next.generation = next_routing_generation();
         self.routing_snapshot.store(Arc::new(next));
+        self.health_probe_wakeup.notify_one();
         Ok(result)
     }
 

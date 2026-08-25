@@ -1,165 +1,335 @@
 use super::*;
+use crate::core::router::deployment::publish_probe_group;
+use futures::stream::{FuturesUnordered, StreamExt};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::future::Future;
+use std::pin::Pin;
+use tokio::time::Instant;
 
-pub(super) async fn run_probe_loop(group: ProbeGroup) {
-    let mut consecutive_failures = 0_u32;
-    let mut replacement_failures: HashMap<DeploymentId, (Arc<Deployment>, u32)> = HashMap::new();
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DynamicProbeKey {
+    provider_name: String,
+    provider_kind: String,
+    policy: HealthCheckPolicy,
+    timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProbeMember {
+    deployment_id: String,
+    deployment_instance: usize,
+    probe_generation: u64,
+}
+
+#[derive(Clone)]
+struct ProbeTarget {
+    key: DynamicProbeKey,
+    snapshot_generation: u64,
+    provider: Provider,
+    deployments: Vec<Arc<Deployment>>,
+}
+
+impl ProbeTarget {
+    fn members(&self) -> Vec<ProbeMember> {
+        let mut members = self
+            .deployments
+            .iter()
+            .map(|deployment| ProbeMember {
+                deployment_id: deployment.id.clone(),
+                deployment_instance: Arc::as_ptr(deployment) as usize,
+                probe_generation: deployment.probe_generation(),
+            })
+            .collect::<Vec<_>>();
+        members.sort_unstable_by(|left, right| left.deployment_id.cmp(&right.deployment_id));
+        members
+    }
+}
+
+#[derive(Debug)]
+struct ProbeSchedule {
+    consecutive_failures: u32,
+    next_run: Instant,
+    running: bool,
+    epoch: u64,
+    members: Vec<ProbeMember>,
+}
+
+struct ProbeOutcome {
+    key: DynamicProbeKey,
+    epoch: u64,
+    target: ProbeTarget,
+    result: Result<(), ProbeFailure>,
+}
+
+type PendingProbe = Pin<Box<dyn Future<Output = ProbeOutcome> + Send>>;
+
+pub(super) fn validate_probe_snapshot(snapshot: &RoutingSnapshot) -> Result<usize, RouterError> {
+    let mut provider_policies = HashMap::new();
+    let targets = current_probe_groups(snapshot);
+    for target in &targets {
+        match provider_policies.entry(target.key.provider_name.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert((target.key.policy.clone(), target.key.timeout_secs));
+            }
+            Entry::Occupied(entry)
+                if entry.get() != &(target.key.policy.clone(), target.key.timeout_secs) =>
+            {
+                return Err(RouterError::InvalidConfiguration(format!(
+                    "provider '{}' has conflicting health probe policies",
+                    target.key.provider_name
+                )));
+            }
+            Entry::Occupied(_) => {}
+        }
+        build_custom_client(&target.key.policy, target.key.timeout_secs).map_err(|failure| {
+            RouterError::InvalidConfiguration(format!(
+                "provider '{}' health probe client failed to initialize: {failure:?}",
+                target.key.provider_name
+            ))
+        })?;
+    }
+    Ok(targets.len())
+}
+
+pub(super) async fn run_probe_loop(supervisor: ProbeSupervisor) {
+    let mut schedules = HashMap::new();
+    let mut pending: FuturesUnordered<PendingProbe> = FuturesUnordered::new();
 
     loop {
-        let (originals, replacements) = current_probe_targets(&group);
-        let mut delays = Vec::new();
-
-        if !originals.is_empty() {
-            let result = match tokio::time::timeout(
-                Duration::from_secs(group.timeout_secs),
-                execute_probe(
-                    &group.provider,
-                    &group.policy,
-                    group.custom_client.as_deref(),
-                ),
-            )
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => Err(ProbeFailure::Timeout),
-            };
-
-            let delay = match result {
-                Ok(()) => {
-                    if consecutive_failures > 0 {
-                        tracing::info!(
-                            provider = %group.policy.provider_name,
-                            "provider health probe recovered"
-                        );
-                    }
-                    apply_probe_result(&group, true, &mut consecutive_failures)
-                }
-                Err(failure) => {
-                    let delay = apply_probe_result(&group, false, &mut consecutive_failures);
-                    log_probe_failure(&group.policy, consecutive_failures, &failure);
-                    delay
-                }
-            };
-            delays.push(delay);
-        }
-
-        for replacement in replacements {
-            let id = replacement.id.clone();
-            let reset_failures = replacement_failures
-                .get(&id)
-                .is_none_or(|(observed, _)| !Arc::ptr_eq(observed, &replacement));
-            if reset_failures {
-                replacement_failures.insert(id.clone(), (Arc::clone(&replacement), 0));
-            }
-
-            let Some((policy, result)) = execute_current_probe(&replacement).await else {
-                replacement_failures.remove(&id);
-                delays.push(Duration::from_secs(group.policy.interval_secs));
-                continue;
-            };
-            if !is_current_deployment(&group, &replacement) {
-                replacement_failures.remove(&id);
-                continue;
-            }
-
-            let Some((_, failures)) = replacement_failures.get_mut(&id) else {
-                continue;
-            };
-            let delay = match result {
-                Ok(()) => {
-                    if *failures > 0 {
-                        tracing::info!(
-                            provider = %policy.provider_name,
-                            deployment_id = %id,
-                            "replacement deployment health probe recovered"
-                        );
-                    }
-                    apply_probe_result_to(
-                        &policy,
-                        true,
-                        failures,
-                        std::slice::from_ref(&replacement),
-                    )
-                }
-                Err(failure) => {
-                    let delay = apply_probe_result_to(
-                        &policy,
-                        false,
-                        failures,
-                        std::slice::from_ref(&replacement),
-                    );
-                    log_probe_failure(&policy, *failures, &failure);
-                    delay
-                }
-            };
-            delays.push(delay);
-        }
-
-        let delay = delays
+        let snapshot = supervisor.routing_snapshot.load_full();
+        let targets = current_probe_groups(snapshot.as_ref())
             .into_iter()
-            .min()
-            .unwrap_or_else(|| Duration::from_secs(group.policy.interval_secs));
-        tokio::time::sleep(delay).await;
+            .map(|target| (target.key.clone(), target))
+            .collect::<HashMap<_, _>>();
+        reconcile_schedules(&targets, &mut schedules);
+        launch_due_probes(&targets, &mut schedules, &mut pending);
+
+        let next_run = schedules
+            .values()
+            .filter(|schedule| !schedule.running)
+            .map(|schedule| schedule.next_run)
+            .min();
+        let outcome = match (pending.is_empty(), next_run) {
+            (false, Some(deadline)) => tokio::select! {
+                outcome = pending.next() => outcome,
+                () = tokio::time::sleep_until(deadline) => None,
+                () = supervisor.wakeup.notified() => None,
+            },
+            (false, None) => tokio::select! {
+                outcome = pending.next() => outcome,
+                () = supervisor.wakeup.notified() => None,
+            },
+            (true, Some(deadline)) => {
+                tokio::select! {
+                    () = tokio::time::sleep_until(deadline) => {},
+                    () = supervisor.wakeup.notified() => {},
+                }
+                None
+            }
+            (true, None) => {
+                supervisor.wakeup.notified().await;
+                None
+            }
+        };
+        if let Some(outcome) = outcome {
+            apply_probe_outcome(&supervisor, &mut schedules, outcome);
+        }
     }
 }
 
-fn current_probe_targets(group: &ProbeGroup) -> (Vec<Arc<Deployment>>, Vec<Arc<Deployment>>) {
-    let snapshot = group.routing_snapshot.load();
-    let mut originals = Vec::new();
-    let mut replacements = Vec::new();
-
-    for (id, original) in &group.deployments {
-        let Some(current) = snapshot.deployments.get(id) else {
+fn current_probe_groups(snapshot: &RoutingSnapshot) -> Vec<ProbeTarget> {
+    let mut groups = HashMap::<DynamicProbeKey, ProbeTarget>::new();
+    for deployment in snapshot.deployments.values() {
+        let Some(policy) = deployment.config.health_check_policy.clone() else {
             continue;
         };
-        if Arc::ptr_eq(current, original) {
-            originals.push(Arc::clone(current));
-        } else {
-            replacements.push(Arc::clone(current));
+        let key = DynamicProbeKey {
+            provider_name: policy.provider_name.clone(),
+            provider_kind: deployment.provider.name().to_string(),
+            policy,
+            timeout_secs: deployment.config.timeout_secs,
+        };
+        groups
+            .entry(key.clone())
+            .and_modify(|target| target.deployments.push(Arc::clone(deployment)))
+            .or_insert_with(|| ProbeTarget {
+                key,
+                snapshot_generation: snapshot.generation(),
+                provider: deployment.provider.clone(),
+                deployments: vec![Arc::clone(deployment)],
+            });
+    }
+    let mut groups = groups.into_values().collect::<Vec<_>>();
+    for target in &mut groups {
+        target
+            .deployments
+            .sort_unstable_by(|left, right| left.id.cmp(&right.id));
+    }
+    groups
+}
+
+fn reconcile_schedules(
+    targets: &HashMap<DynamicProbeKey, ProbeTarget>,
+    schedules: &mut HashMap<DynamicProbeKey, ProbeSchedule>,
+) {
+    schedules.retain(|key, _| targets.contains_key(key));
+    let now = Instant::now();
+    for (key, target) in targets {
+        let members = target.members();
+        match schedules.entry(key.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(ProbeSchedule {
+                    consecutive_failures: 0,
+                    next_run: now,
+                    running: false,
+                    epoch: 0,
+                    members,
+                });
+            }
+            Entry::Occupied(mut entry) if entry.get().members != members => {
+                let schedule = entry.get_mut();
+                schedule.members = members;
+                schedule.epoch = schedule.epoch.wrapping_add(1);
+                if !schedule.running {
+                    schedule.next_run = now;
+                }
+            }
+            Entry::Occupied(_) => {}
         }
     }
-
-    (originals, replacements)
 }
 
-fn is_current_deployment(group: &ProbeGroup, candidate: &Arc<Deployment>) -> bool {
-    group
-        .routing_snapshot
-        .load()
-        .deployments
-        .get(&candidate.id)
-        .is_some_and(|current| Arc::ptr_eq(current, candidate))
+fn launch_due_probes(
+    targets: &HashMap<DynamicProbeKey, ProbeTarget>,
+    schedules: &mut HashMap<DynamicProbeKey, ProbeSchedule>,
+    pending: &mut FuturesUnordered<PendingProbe>,
+) {
+    let now = Instant::now();
+    for (key, schedule) in schedules {
+        if schedule.running || schedule.next_run > now {
+            continue;
+        }
+        let Some(target) = targets.get(key).cloned() else {
+            continue;
+        };
+        schedule.running = true;
+        let epoch = schedule.epoch;
+        pending.push(Box::pin(async move {
+            let result = execute_target_probe(&target).await;
+            ProbeOutcome {
+                key: target.key.clone(),
+                epoch,
+                target,
+                result,
+            }
+        }));
+    }
 }
 
-async fn execute_current_probe(
-    deployment: &Deployment,
-) -> Option<(HealthCheckPolicy, Result<(), ProbeFailure>)> {
-    let policy = deployment.config.health_check_policy.clone()?;
-    let timeout = Duration::from_secs(deployment.config.timeout_secs);
-    let custom_client = match policy.endpoint.as_ref() {
-        Some(endpoint) => match BaseHttpClient::new_for_provider_no_redirect(
-            "health_probe",
-            BaseConfig {
-                api_base: Some(endpoint.to_string()),
-                endpoint_access: policy.endpoint_access,
-                timeout: timeout.as_secs(),
-                ..Default::default()
-            },
-        ) {
-            Ok(client) => Some(client),
-            Err(error) => return Some((policy, Err(ProbeFailure::Request(error.to_string())))),
-        },
-        None => None,
+fn apply_probe_outcome(
+    supervisor: &ProbeSupervisor,
+    schedules: &mut HashMap<DynamicProbeKey, ProbeSchedule>,
+    outcome: ProbeOutcome,
+) {
+    let Some(schedule) = schedules.get_mut(&outcome.key) else {
+        return;
     };
-    let result = match tokio::time::timeout(
-        timeout,
-        execute_probe(&deployment.provider, &policy, custom_client.as_ref()),
+    schedule.running = false;
+    if schedule.epoch != outcome.epoch || schedule.members != outcome.target.members() {
+        schedule.next_run = Instant::now();
+        return;
+    }
+
+    let snapshot = supervisor.routing_snapshot.load();
+    let target_is_current = snapshot.generation() == outcome.target.snapshot_generation
+        && outcome.target.deployments.iter().all(|observed| {
+            snapshot
+                .deployments
+                .get(&observed.id)
+                .is_some_and(|current| Arc::ptr_eq(current, observed))
+        });
+    if !target_is_current {
+        schedule.next_run = Instant::now();
+        return;
+    }
+
+    let had_failures = schedule.consecutive_failures > 0;
+    let delay = match outcome.result {
+        Ok(()) => apply_probe_result_to(
+            &outcome.target.key.policy,
+            true,
+            &mut schedule.consecutive_failures,
+            &outcome.target.deployments,
+        ),
+        Err(failure) => {
+            let delay = apply_probe_result_to(
+                &outcome.target.key.policy,
+                false,
+                &mut schedule.consecutive_failures,
+                &outcome.target.deployments,
+            );
+            if delay.is_some() {
+                log_probe_failure(
+                    &outcome.target.key.policy,
+                    schedule.consecutive_failures,
+                    &failure,
+                );
+            }
+            delay
+        }
+    };
+    let Some(delay) = delay else {
+        schedule.next_run = Instant::now();
+        return;
+    };
+    if had_failures && schedule.consecutive_failures == 0 {
+        tracing::info!(
+            provider = %outcome.target.key.provider_name,
+            "provider health probe recovered"
+        );
+    }
+    schedule.next_run = Instant::now() + delay;
+}
+
+async fn execute_target_probe(target: &ProbeTarget) -> Result<(), ProbeFailure> {
+    let custom_client = build_custom_client(&target.key.policy, target.key.timeout_secs)?;
+    match tokio::time::timeout(
+        Duration::from_secs(target.key.timeout_secs),
+        execute_probe(
+            &target.provider,
+            &target.key.policy,
+            custom_client.as_deref(),
+        ),
     )
     .await
     {
         Ok(result) => result,
         Err(_) => Err(ProbeFailure::Timeout),
-    };
-    Some((policy, result))
+    }
+}
+
+fn build_custom_client(
+    policy: &HealthCheckPolicy,
+    timeout_secs: u64,
+) -> Result<Option<Arc<BaseHttpClient>>, ProbeFailure> {
+    policy
+        .endpoint
+        .as_ref()
+        .map(|endpoint| {
+            BaseHttpClient::new_for_provider_no_redirect(
+                "health_probe",
+                BaseConfig {
+                    api_base: Some(endpoint.to_string()),
+                    endpoint_access: policy.endpoint_access,
+                    timeout: timeout_secs,
+                    ..Default::default()
+                },
+            )
+            .map(Arc::new)
+            .map_err(|error| ProbeFailure::Request(error.to_string()))
+        })
+        .transpose()
 }
 
 pub(super) async fn execute_probe(
@@ -189,13 +359,15 @@ pub(super) async fn execute_probe(
     }
 }
 
+#[cfg(test)]
 pub(super) fn apply_probe_result(
-    group: &ProbeGroup,
+    policy: &HealthCheckPolicy,
+    deployments: &[Arc<Deployment>],
     succeeded: bool,
     consecutive_failures: &mut u32,
 ) -> Duration {
-    let (deployments, _) = current_probe_targets(group);
-    apply_probe_result_to(&group.policy, succeeded, consecutive_failures, &deployments)
+    apply_probe_result_to(policy, succeeded, consecutive_failures, deployments)
+        .expect("test deployments should own their probe generations")
 }
 
 fn apply_probe_result_to(
@@ -203,69 +375,36 @@ fn apply_probe_result_to(
     succeeded: bool,
     consecutive_failures: &mut u32,
     deployments: &[Arc<Deployment>],
-) -> Duration {
-    if succeeded {
-        *consecutive_failures = 0;
-        for deployment in deployments {
-            update_probe_health(deployment, HealthStatus::Healthy);
-        }
-        return Duration::from_secs(policy.interval_secs);
-    }
-
-    *consecutive_failures = consecutive_failures.saturating_add(1);
-    let threshold_reached = *consecutive_failures >= policy.failure_threshold;
-    let target = if threshold_reached {
+) -> Option<Duration> {
+    let previous_failures = *consecutive_failures;
+    let next_failures = if succeeded {
+        0
+    } else {
+        previous_failures.saturating_add(1)
+    };
+    let threshold_reached = next_failures >= policy.failure_threshold;
+    let target = if succeeded {
+        HealthStatus::Healthy
+    } else if threshold_reached {
         HealthStatus::Unhealthy
     } else {
         HealthStatus::Degraded
     };
-    for deployment in deployments {
-        update_probe_health(deployment, target);
+    if !publish_probe_group(deployments, target) {
+        return None;
     }
-
-    let delay_secs = if threshold_reached {
+    *consecutive_failures = next_failures;
+    let delay_secs = if !succeeded && threshold_reached {
         policy.recovery_timeout_secs
     } else {
         policy.interval_secs
     };
-    Duration::from_secs(delay_secs)
+    Some(Duration::from_secs(delay_secs))
 }
 
-pub(super) fn update_probe_health(deployment: &Deployment, target: HealthStatus) {
-    deployment.state.set_probe_health_status(target);
-    deployment
-        .state
-        .probe_unhealthy
-        .store(target == HealthStatus::Unhealthy, Ordering::Relaxed);
-    if deployment.is_in_cooldown() {
-        return;
-    }
-
-    let mut current = deployment.state.health.load(Ordering::Relaxed);
-    loop {
-        let current_status = HealthStatus::from(current);
-        let next = match (target, current_status) {
-            (_, HealthStatus::Cooldown) => return,
-            (HealthStatus::Degraded, HealthStatus::Unhealthy) => return,
-            (HealthStatus::Healthy, _)
-            | (HealthStatus::Degraded, _)
-            | (HealthStatus::Unhealthy, _) => target,
-            (HealthStatus::Unknown | HealthStatus::Cooldown, _) => return,
-        };
-        if current_status == next {
-            return;
-        }
-
-        match deployment.state.health.compare_exchange_weak(
-            current,
-            next as u8,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return,
-            Err(observed) => current = observed,
-        }
-    }
+#[cfg(test)]
+pub(super) fn update_probe_health(deployment: &Deployment, target: HealthStatus) -> bool {
+    deployment.publish_probe_health(target)
 }
 
 fn log_probe_failure(

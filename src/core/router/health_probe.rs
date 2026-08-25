@@ -1,26 +1,21 @@
 //! Active health probes for gateway-configured router deployments.
 
-use super::deployment::{Deployment, DeploymentId, HealthCheckPolicy, HealthStatus};
+use super::deployment::{Deployment, HealthCheckPolicy, HealthStatus};
 use super::error::RouterError;
 use super::unified::{Router, RoutingSnapshot};
 use crate::core::providers::Provider;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient};
 use crate::core::types::health::HealthStatus as ProviderHealthStatus;
 use arc_swap::ArcSwap;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 #[derive(Debug)]
-struct ProbeGroup {
-    policy: HealthCheckPolicy,
-    provider: Provider,
-    deployments: HashMap<DeploymentId, Arc<Deployment>>,
+struct ProbeSupervisor {
     routing_snapshot: Arc<ArcSwap<RoutingSnapshot>>,
-    timeout_secs: u64,
-    custom_client: Option<Arc<BaseHttpClient>>,
+    wakeup: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,67 +34,7 @@ impl Router {
         }
 
         let snapshot = self.routing_snapshot.load_full();
-        let mut groups: HashMap<String, ProbeGroup> = HashMap::new();
-        for deployment in snapshot.deployments.values() {
-            let Some(policy) = deployment.config.health_check_policy.clone() else {
-                continue;
-            };
-
-            match groups.entry(policy.provider_name.clone()) {
-                Entry::Vacant(entry) => {
-                    let timeout = Duration::from_secs(deployment.config.timeout_secs);
-                    let custom_client = policy
-                        .endpoint
-                        .as_ref()
-                        .map(|endpoint| {
-                            BaseHttpClient::new_for_provider_no_redirect(
-                                "health_probe",
-                                BaseConfig {
-                                    api_base: Some(endpoint.to_string()),
-                                    endpoint_access: policy.endpoint_access,
-                                    timeout: timeout.as_secs(),
-                                    ..Default::default()
-                                },
-                            )
-                            .map(Arc::new)
-                        })
-                        .transpose()
-                        .map_err(|error| {
-                            RouterError::InvalidConfiguration(format!(
-                                "provider '{}' health probe client failed to initialize: {error}",
-                                policy.provider_name
-                            ))
-                        })?;
-                    entry.insert(ProbeGroup {
-                        policy,
-                        provider: deployment.provider.clone(),
-                        deployments: HashMap::from([(
-                            deployment.id.clone(),
-                            Arc::clone(deployment),
-                        )]),
-                        routing_snapshot: Arc::clone(&self.routing_snapshot),
-                        timeout_secs: deployment.config.timeout_secs,
-                        custom_client,
-                    });
-                }
-                Entry::Occupied(mut entry) => {
-                    let group = entry.get_mut();
-                    if group.policy != policy
-                        || group.timeout_secs != deployment.config.timeout_secs
-                    {
-                        return Err(RouterError::InvalidConfiguration(format!(
-                            "provider '{}' has conflicting health probe policies",
-                            policy.provider_name
-                        )));
-                    }
-                    group
-                        .deployments
-                        .insert(deployment.id.clone(), Arc::clone(deployment));
-                }
-            }
-        }
-
-        if groups.is_empty() {
+        if runtime::validate_probe_snapshot(snapshot.as_ref())? == 0 {
             return Ok(0);
         }
         tokio::runtime::Handle::try_current().map_err(|_| {
@@ -115,10 +50,14 @@ impl Router {
             ));
         }
 
-        for (provider_name, group) in groups {
-            tasks.insert(provider_name, tokio::spawn(run_probe_loop(group)));
-        }
-        Ok(tasks.len())
+        tasks.insert(
+            "health-probe-supervisor".to_string(),
+            tokio::spawn(run_probe_loop(ProbeSupervisor {
+                routing_snapshot: Arc::clone(&self.routing_snapshot),
+                wakeup: Arc::clone(&self.health_probe_wakeup),
+            })),
+        );
+        Ok(1)
     }
 
     #[cfg(test)]
@@ -471,20 +410,11 @@ pub(crate) mod tests {
         router.add_deployment(test_deployment("two", provider.clone(), test_policy(None)).await);
         let deployment = router.get_deployment("one").unwrap();
         let second = router.get_deployment("two").unwrap();
-        let group = ProbeGroup {
-            policy: test_policy(None),
-            provider,
-            deployments: HashMap::from([
-                (deployment.id.clone(), Arc::clone(&deployment)),
-                (second.id.clone(), Arc::clone(&second)),
-            ]),
-            routing_snapshot: Arc::clone(&router.routing_snapshot),
-            timeout_secs: 2,
-            custom_client: None,
-        };
+        let policy = test_policy(None);
+        let deployments = vec![Arc::clone(&deployment), Arc::clone(&second)];
         let mut failures = 0;
         assert_eq!(
-            apply_probe_result(&group, false, &mut failures),
+            apply_probe_result(&policy, &deployments, false, &mut failures),
             Duration::from_secs(30)
         );
         assert_eq!(deployment.state.health_status(), HealthStatus::Degraded);
@@ -494,7 +424,7 @@ pub(crate) mod tests {
             HealthStatus::Degraded
         );
         assert_eq!(
-            apply_probe_result(&group, false, &mut failures),
+            apply_probe_result(&policy, &deployments, false, &mut failures),
             Duration::from_secs(60)
         );
         assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
@@ -507,7 +437,7 @@ pub(crate) mod tests {
         deployment.record_failure();
         assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
         assert_eq!(
-            apply_probe_result(&group, true, &mut failures),
+            apply_probe_result(&policy, &deployments, true, &mut failures),
             Duration::from_secs(30)
         );
         assert_eq!(failures, 0);
@@ -520,8 +450,8 @@ pub(crate) mod tests {
         assert_eq!(second.state.probe_health_status(), HealthStatus::Healthy);
 
         deployment.enter_cooldown(60);
-        apply_probe_result(&group, false, &mut failures);
-        apply_probe_result(&group, false, &mut failures);
+        apply_probe_result(&policy, &deployments, false, &mut failures);
+        apply_probe_result(&policy, &deployments, false, &mut failures);
         assert_eq!(deployment.state.health_status(), HealthStatus::Cooldown);
         assert!(deployment.state.probe_unhealthy.load(Ordering::Relaxed));
         deployment.state.cooldown_until.store(1, Ordering::Relaxed);
@@ -529,7 +459,7 @@ pub(crate) mod tests {
         assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
 
         deployment.enter_cooldown(60);
-        apply_probe_result(&group, true, &mut failures);
+        apply_probe_result(&policy, &deployments, true, &mut failures);
         assert_eq!(deployment.state.health_status(), HealthStatus::Cooldown);
         assert!(!deployment.state.probe_unhealthy.load(Ordering::Relaxed));
         deployment.state.cooldown_until.store(1, Ordering::Relaxed);
@@ -573,21 +503,11 @@ pub(crate) mod tests {
         let router = Router::new(RouterConfig::default());
         router.add_deployment(test_deployment("one", provider.clone(), policy.clone()).await);
         let deployment = router.get_deployment("one").unwrap();
-        let custom_client = Arc::new(local_probe_client(
-            policy
-                .endpoint
-                .as_ref()
-                .expect("custom endpoint should exist"),
-        ));
-        let group = ProbeGroup {
-            policy,
-            provider,
-            deployments: HashMap::from([(deployment.id.clone(), Arc::clone(&deployment))]),
+        let supervisor = ProbeSupervisor {
             routing_snapshot: Arc::clone(&router.routing_snapshot),
-            timeout_secs: 2,
-            custom_client: Some(custom_client),
+            wakeup: Arc::clone(&router.health_probe_wakeup),
         };
-        let probe_task = tokio::spawn(run_probe_loop(group));
+        let probe_task = tokio::spawn(run_probe_loop(supervisor));
         tokio::time::timeout(Duration::from_millis(500), requests.recv())
             .await
             .expect("first probe should run immediately")

@@ -73,6 +73,92 @@ async fn gated_status_server(
     (endpoint, request_seen_rx, release_tx, task)
 }
 
+async fn controlled_status_server(
+    status: u16,
+) -> (
+    Url,
+    mpsc::UnboundedReceiver<oneshot::Sender<()>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("controlled probe server should bind");
+    let address = listener
+        .local_addr()
+        .expect("controlled probe address should exist");
+    let (request_tx, request_rx) = mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("controlled probe should connect");
+            let mut request = [0_u8; 2048];
+            let bytes_read = stream
+                .read(&mut request)
+                .await
+                .expect("controlled probe request should be readable");
+            assert!(
+                bytes_read > 0,
+                "controlled probe request should not be empty"
+            );
+            let (release_tx, release_rx) = oneshot::channel();
+            request_tx
+                .send(release_tx)
+                .expect("controlled probe request should be observable");
+            tokio::spawn(async move {
+                release_rx
+                    .await
+                    .expect("controlled probe response should be released");
+                let response = format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("controlled probe response should be writable");
+            });
+        }
+    });
+    let endpoint = Url::parse(&format!("http://{address}/health")).expect("probe URL should parse");
+    (endpoint, request_rx, task)
+}
+
+fn policy_for(endpoint: Url, provider_name: &str, interval_secs: u64) -> HealthCheckPolicy {
+    policy_with_schedule(endpoint, provider_name, interval_secs, interval_secs)
+}
+
+fn policy_with_schedule(
+    endpoint: Url,
+    provider_name: &str,
+    interval_secs: u64,
+    recovery_timeout_secs: u64,
+) -> HealthCheckPolicy {
+    HealthCheckPolicy {
+        provider_name: provider_name.to_string(),
+        interval_secs,
+        failure_threshold: 1,
+        recovery_timeout_secs,
+        endpoint: Some(endpoint),
+        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        expected_codes: vec![204],
+    }
+}
+
+fn deployment_with_policy(id: &str, provider: Provider, policy: HealthCheckPolicy) -> Deployment {
+    Deployment::new(
+        id.to_string(),
+        provider,
+        format!("{id}-model"),
+        format!("{id}-model"),
+    )
+    .with_config(DeploymentConfig {
+        timeout_secs: 2,
+        health_check_policy: Some(policy),
+        ..DeploymentConfig::default()
+    })
+}
+
 #[tokio::test]
 async fn running_probe_publishes_to_replacement_deployment() {
     let (endpoint, mut requests, server) = sequence_server(vec![500, 204, 204]).await;
@@ -241,4 +327,175 @@ async fn stale_success_is_not_published_to_changed_same_id_replacement() {
     new_server
         .await
         .expect("replacement probe server should stop");
+}
+
+#[tokio::test]
+async fn same_provider_replacements_share_one_probe() {
+    let (old_endpoint, mut old_requests, old_server) = controlled_status_server(204).await;
+    let old_provider = Provider::OpenAI(
+        OpenAIProvider::new(test_openai_config(
+            old_endpoint.to_string(),
+            "sk-old-health-probe-credential",
+        ))
+        .await
+        .expect("old provider should be valid"),
+    );
+    let old_policy = policy_for(old_endpoint, "openai-primary", 30);
+    let router = Router::new(RouterConfig::default());
+    for id in ["model-a", "model-b"] {
+        router.add_deployment(deployment_with_policy(
+            id,
+            old_provider.clone(),
+            old_policy.clone(),
+        ));
+    }
+    assert_eq!(router.start_configured_health_checks().unwrap(), 1);
+    let release_initial = tokio::time::timeout(Duration::from_secs(1), old_requests.recv())
+        .await
+        .expect("initial grouped probe should start")
+        .expect("initial grouped probe should be observed");
+
+    let (new_endpoint, mut new_requests, new_server) = controlled_status_server(204).await;
+    let replacement_policy = policy_for(new_endpoint, "replacement-provider", 30);
+    for id in ["model-a", "model-b"] {
+        router.add_deployment(deployment_with_policy(
+            id,
+            old_provider.clone(),
+            replacement_policy.clone(),
+        ));
+    }
+    release_initial
+        .send(())
+        .expect("initial grouped probe should be released");
+
+    let release_replacement = tokio::time::timeout(Duration::from_secs(1), new_requests.recv())
+        .await
+        .expect("replacement group probe should start")
+        .expect("replacement group probe should be observed");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), new_requests.recv())
+            .await
+            .is_err(),
+        "two compatible replacement deployments must share one probe"
+    );
+    release_replacement
+        .send(())
+        .expect("replacement group probe should be released");
+
+    drop(router);
+    old_server.abort();
+    new_server.abort();
+}
+
+#[tokio::test]
+async fn probe_groups_keep_independent_recovery_deadlines() {
+    let (slow_endpoint, mut slow_requests, slow_server) = controlled_status_server(500).await;
+    let (fast_endpoint, mut fast_requests, fast_server) = controlled_status_server(500).await;
+    let provider = Provider::OpenAI(
+        OpenAIProvider::new(test_openai_config(
+            slow_endpoint.to_string(),
+            "sk-health-probe-schedule-test",
+        ))
+        .await
+        .expect("provider should be valid"),
+    );
+    let router = Router::new(RouterConfig::default());
+    router.add_deployment(deployment_with_policy(
+        "slow",
+        provider.clone(),
+        policy_with_schedule(slow_endpoint, "slow-provider", 1, 3),
+    ));
+    router.add_deployment(deployment_with_policy(
+        "fast",
+        provider,
+        policy_with_schedule(fast_endpoint, "fast-provider", 1, 1),
+    ));
+
+    assert_eq!(router.start_configured_health_checks().unwrap(), 1);
+    let release_slow = tokio::time::timeout(Duration::from_secs(1), slow_requests.recv())
+        .await
+        .expect("slow probe should start")
+        .expect("slow probe should be observed");
+    let release_fast = tokio::time::timeout(Duration::from_secs(1), fast_requests.recv())
+        .await
+        .expect("fast probe should start concurrently")
+        .expect("fast probe should be observed");
+    release_slow
+        .send(())
+        .expect("slow probe should be released");
+    release_fast
+        .send(())
+        .expect("fast probe should be released");
+
+    let release_fast_retry = tokio::time::timeout(Duration::from_secs(2), fast_requests.recv())
+        .await
+        .expect("fast group should honor its one-second recovery deadline")
+        .expect("fast retry should be observed");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(600), slow_requests.recv())
+            .await
+            .is_err(),
+        "the fast sibling must not accelerate the slow group's recovery timeout"
+    );
+    release_fast_retry
+        .send(())
+        .expect("fast retry should be released");
+
+    drop(router);
+    slow_server.abort();
+    fast_server.abort();
+}
+
+#[tokio::test]
+async fn replacement_generation_rejects_post_validation_publication() {
+    let endpoint = Url::parse("http://127.0.0.1:9/health").expect("probe URL should parse");
+    let provider = Provider::OpenAI(
+        OpenAIProvider::new(test_openai_config(
+            endpoint.to_string(),
+            "sk-health-probe-generation-test",
+        ))
+        .await
+        .expect("provider should be valid"),
+    );
+    let router = Router::new(RouterConfig::default());
+    router.add_deployment(deployment_with_policy(
+        "racing",
+        provider,
+        policy_for(endpoint, "racing-provider", 30),
+    ));
+    let original = router
+        .get_deployment("racing")
+        .expect("original deployment should exist");
+
+    let validated = router
+        .get_deployment("racing")
+        .is_some_and(|current| std::sync::Arc::ptr_eq(&current, &original));
+    assert!(
+        validated,
+        "the old result should validate before replacement"
+    );
+    router.add_deployment(original.as_ref().clone());
+    let replacement = router
+        .get_deployment("racing")
+        .expect("replacement deployment should exist");
+
+    assert!(
+        !original.publish_probe_health(HealthStatus::Unhealthy),
+        "the old generation must reject publication after replacement"
+    );
+    assert_eq!(
+        replacement.state.health_status(),
+        HealthStatus::Healthy,
+        "a stale result must not mutate request health shared with the replacement"
+    );
+    assert_eq!(
+        replacement.state.probe_health_status(),
+        HealthStatus::Unknown
+    );
+    assert!(
+        !replacement
+            .state
+            .probe_unhealthy
+            .load(std::sync::atomic::Ordering::Relaxed)
+    );
 }

@@ -8,7 +8,7 @@
 //!
 //! ## Design Philosophy
 //!
-//! All state tracking uses atomic operations with `Relaxed` ordering for maximum performance.
+//! Request-path state uses atomic operations with `Relaxed` ordering for maximum performance.
 //! This is safe because:
 //! - State values are eventually consistent (exact precision not required for routing decisions)
 //! - No cross-field invariants need to be maintained atomically
@@ -16,7 +16,7 @@
 //!
 //! ## Performance Characteristics
 //!
-//! - Lock-free: All state updates use atomics, zero contention
+//! - Lock-free request path: probe lifecycle synchronization stays off the hot path
 //! - Zero-copy: Deployments are accessed by reference, never cloned
 //! - Cache-friendly: Hot path fields grouped together
 
@@ -28,6 +28,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[path = "deployment/probe_state.rs"]
+mod probe_state;
+use probe_state::ProbeLifecycle;
+pub(crate) use probe_state::publish_probe_group;
 use url::Url;
 
 /// Deployment identifier (unique within router)
@@ -80,9 +85,9 @@ pub struct RetrySchedule {
 }
 
 /// Runtime policy for an active provider health probe.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HealthCheckPolicy {
-    /// Gateway provider name used to group model deployments into one probe task.
+    /// Gateway provider name used to form one compatible probe group.
     pub provider_name: String,
     /// Delay between ordinary probe attempts.
     pub interval_secs: u64,
@@ -182,7 +187,7 @@ impl Default for DeploymentConfig {
 
 /// Deployment runtime state
 ///
-/// All fields use atomics for lock-free updates with `Relaxed` ordering.
+/// Request-path fields use atomics for lock-free updates with `Relaxed` ordering.
 /// This is safe because routing decisions can tolerate eventual consistency.
 ///
 /// ## State Reset
@@ -194,6 +199,8 @@ pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
     probe_health: Arc<AtomicU8>,
     probe_last_checked_at_millis: Arc<AtomicU64>,
+    probe_lifecycle: Arc<ProbeLifecycle>,
+    probe_generation: u64,
 }
 
 impl Deref for DeploymentState {
@@ -276,6 +283,8 @@ impl DeploymentState {
             }),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
+            probe_lifecycle: Arc::new(ProbeLifecycle::new()),
+            probe_generation: 0,
         }
     }
 
@@ -316,10 +325,13 @@ impl DeploymentState {
 
     /// Share request-routing state while requiring fresh probe evidence.
     pub(crate) fn for_snapshot_insertion(&self) -> Self {
+        let probe_generation = self.probe_lifecycle.next_generation();
         Self {
             inner: Arc::clone(&self.inner),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
+            probe_lifecycle: Arc::clone(&self.probe_lifecycle),
+            probe_generation,
         }
     }
 }
@@ -377,7 +389,7 @@ pub struct Deployment {
     /// Configuration
     pub config: DeploymentConfig,
 
-    /// Runtime state (lock-free)
+    /// Runtime state (lock-free request counters; synchronized probe lifecycle)
     pub state: DeploymentState,
 
     /// Tags for filtering (e.g., ["production", "fast"])
