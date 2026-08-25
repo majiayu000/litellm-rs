@@ -4,35 +4,55 @@ use crate::core::types::context::RequestContext;
 use crate::core::types::health::HealthStatus;
 use crate::core::types::message::MessageContent;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeHealthProbeSemantics {
+    ModelIndependent,
+    ModelSpecific,
+    #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
+    Unsupported,
+}
+
 impl Provider {
-    /// Probe the configured deployment model when the provider's native check
-    /// does not otherwise provide reliable upstream evidence.
-    pub(crate) async fn health_check_for_model(&self, model: &str) -> HealthStatus {
+    #[cfg_attr(not(feature = "providers-extra"), allow(unused_variables))]
+    pub(crate) fn native_health_probe_semantics(&self, model: &str) -> NativeHealthProbeSemantics {
         match self {
-            Provider::Anthropic(_) => self.chat_health_check(model).await,
+            Provider::Anthropic(_) => NativeHealthProbeSemantics::ModelSpecific,
             #[cfg(feature = "providers-extra")]
             Provider::VertexAI(_) if model.contains("gemini") => {
-                self.chat_health_check(model).await
+                NativeHealthProbeSemantics::ModelSpecific
             }
             #[cfg(feature = "providers-extra")]
-            Provider::VertexAI(_) => HealthStatus::Unknown,
+            Provider::VertexAI(_) => NativeHealthProbeSemantics::Unsupported,
             #[cfg(feature = "providers-extended")]
-            Provider::Gemini(_) => self.chat_health_check(model).await,
+            Provider::Gemini(_) | Provider::GitHubCopilot(_) => {
+                NativeHealthProbeSemantics::ModelSpecific
+            }
             #[cfg(feature = "providers-extended")]
-            Provider::GitHubCopilot(_) => self.chat_health_check(model).await,
-            #[cfg(feature = "providers-extended")]
-            Provider::FalAI(_) => HealthStatus::Unknown,
+            Provider::FalAI(_) => NativeHealthProbeSemantics::Unsupported,
             Provider::OpenAI(_)
             | Provider::Bedrock(_)
             | Provider::Mistral(_)
             | Provider::Cloudflare(_)
-            | Provider::OpenAILike(_) => self.health_check().await,
+            | Provider::OpenAILike(_) => NativeHealthProbeSemantics::ModelIndependent,
             #[cfg(feature = "providers-extra")]
-            Provider::Azure(_) | Provider::AzureAI(_) => self.health_check().await,
+            Provider::Azure(_) | Provider::AzureAI(_) => {
+                NativeHealthProbeSemantics::ModelIndependent
+            }
             #[cfg(feature = "providers-extended")]
             Provider::Ollama(_) | Provider::Cohere(_) | Provider::Replicate(_) => {
-                self.health_check().await
+                NativeHealthProbeSemantics::ModelIndependent
             }
+        }
+    }
+
+    /// Probe the configured deployment model when the provider's native check
+    /// does not otherwise provide reliable upstream evidence.
+    pub(crate) async fn health_check_for_model(&self, model: &str) -> HealthStatus {
+        match self.native_health_probe_semantics(model) {
+            NativeHealthProbeSemantics::ModelIndependent => self.health_check().await,
+            NativeHealthProbeSemantics::ModelSpecific => self.chat_health_check(model).await,
+            #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
+            NativeHealthProbeSemantics::Unsupported => HealthStatus::Unknown,
         }
     }
 

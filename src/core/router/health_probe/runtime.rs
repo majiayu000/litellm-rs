@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::providers::NativeHealthProbeSemantics;
 use crate::core::router::deployment::{ProviderInstanceIdentity, publish_probe_group};
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::HashMap;
@@ -8,8 +9,18 @@ use std::pin::Pin;
 use tokio::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ProbeScope {
+    CustomEndpoint,
+    NativeProvider(ProviderInstanceIdentity),
+    NativeModel {
+        provider_instance: ProviderInstanceIdentity,
+        model: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DynamicProbeKey {
-    native_provider_instance: Option<ProviderInstanceIdentity>,
+    scope: ProbeScope,
     provider_name: String,
     provider_kind: String,
     policy: HealthCheckPolicy,
@@ -152,11 +163,29 @@ fn current_probe_groups(snapshot: &RoutingSnapshot) -> Vec<ProbeTarget> {
         let Some(policy) = deployment.config.health_check_policy.clone() else {
             continue;
         };
+        let scope = if policy.endpoint.is_some() {
+            ProbeScope::CustomEndpoint
+        } else {
+            let provider_instance = deployment.state.provider_instance_identity();
+            match deployment
+                .provider
+                .native_health_probe_semantics(&deployment.model)
+            {
+                NativeHealthProbeSemantics::ModelSpecific => ProbeScope::NativeModel {
+                    provider_instance,
+                    model: deployment.model.clone(),
+                },
+                NativeHealthProbeSemantics::ModelIndependent => {
+                    ProbeScope::NativeProvider(provider_instance)
+                }
+                #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
+                NativeHealthProbeSemantics::Unsupported => {
+                    ProbeScope::NativeProvider(provider_instance)
+                }
+            }
+        };
         let key = DynamicProbeKey {
-            native_provider_instance: policy
-                .endpoint
-                .is_none()
-                .then(|| deployment.state.provider_instance_identity()),
+            scope,
             provider_name: policy.provider_name.clone(),
             provider_kind: deployment.provider.name().to_string(),
             policy,
