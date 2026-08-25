@@ -317,10 +317,10 @@ fn test_gateway_config_validate_local_provider_without_api_key() {
     config.providers[0].api_key = "".to_string();
     assert!(config.validate().is_ok());
 }
-
 #[test]
 fn test_gateway_config_validate_empty_database_url() {
     let mut config = create_valid_config();
+    config.storage.database.enabled = true;
     config.storage.database.url = "".to_string();
     let result = config.validate();
     assert!(result.is_err());
