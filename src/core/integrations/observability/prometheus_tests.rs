@@ -132,6 +132,27 @@ fn invalid_costs_do_not_poison_counter() {
 }
 
 #[test]
+fn finite_cost_overflow_keeps_last_finite_counter_value() {
+    let integration = PrometheusIntegration::with_defaults();
+    for request_id in ["first", "second"] {
+        integration.record_llm_end(&LlmEndEvent::new(request_id, "model").cost(f64::MAX));
+    }
+
+    let rendered = integration.render_metrics();
+    let cost = rendered
+        .lines()
+        .find(|line| line.starts_with("litellm_cost_usd_total{model=\"model\"}"))
+        .and_then(|line| line.split_whitespace().last())
+        .and_then(|value| value.parse::<f64>().ok())
+        .expect("cost counter should contain a numeric sample");
+    assert_eq!(cost, f64::MAX);
+    assert!(cost.is_finite());
+    assert!(rendered.contains("litellm_requests_success_total{model=\"model\"} 2"));
+    assert!(!rendered.contains(" NaN"));
+    assert!(!rendered.contains(" inf"));
+}
+
+#[test]
 fn concurrent_histogram_scrapes_are_internally_consistent() {
     let integration = Arc::new(PrometheusIntegration::with_defaults());
     integration.record_llm_end(&LlmEndEvent::new("seed", "model").latency(5));

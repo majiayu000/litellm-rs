@@ -236,12 +236,20 @@ impl Histogram {
     }
 }
 
-fn atomic_add_f64(value: &AtomicU64, delta: f64) {
+fn atomic_add_f64(value: &AtomicU64, delta: f64) -> bool {
     let mut current = value.load(Ordering::Relaxed);
     loop {
-        let next = (f64::from_bits(current) + delta).to_bits();
-        match value.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
+        let next = f64::from_bits(current) + delta;
+        if !next.is_finite() {
+            return false;
+        }
+        match value.compare_exchange_weak(
+            current,
+            next.to_bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
             Err(actual) => current = actual,
         }
     }
@@ -471,7 +479,12 @@ impl PrometheusIntegration {
             let counter = costs
                 .entry(labels)
                 .or_insert_with(|| AtomicU64::new(0.0_f64.to_bits()));
-            atomic_add_f64(counter, cost);
+            if !atomic_add_f64(counter, cost) {
+                warn!(
+                    cost,
+                    "Ignoring callback cost because the accumulated Prometheus cost total would become non-finite"
+                );
+            }
         }
     }
 
