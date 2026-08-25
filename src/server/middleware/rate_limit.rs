@@ -8,14 +8,14 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
-use actix_web::http::StatusCode;
+use actix_web::http::{StatusCode, header::HeaderMap};
 use actix_web::web;
 use actix_web::{HttpMessage, HttpResponse, ResponseError};
 use dashmap::DashMap;
 use futures::future::{Ready, ready};
 use std::fmt;
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -419,20 +419,32 @@ pub struct RateLimitMiddlewareService<S> {
     fallback_store: Arc<DashMap<String, KeyTracker>>,
 }
 
-/// Extract the IP address (without port) from a peer address string.
+/// Parse an IP address, optionally accompanied by a port.
 ///
-/// Handles IPv4 (`1.2.3.4:5678` → `1.2.3.4`) and IPv6 (`[::1]:5678` → `::1`).
-fn parse_peer_ip(peer: &str) -> String {
-    peer.parse::<SocketAddr>()
-        .map(|addr| addr.ip().to_string())
-        .unwrap_or_else(|_| peer.to_string())
+/// Handles bare IPv4/IPv6 addresses and socket addresses such as
+/// `1.2.3.4:5678` and `[::1]:5678`.
+fn parse_ip(value: &str) -> Option<IpAddr> {
+    let value = value.trim();
+    value
+        .parse::<IpAddr>()
+        .ok()
+        .or_else(|| value.parse::<SocketAddr>().ok().map(|addr| addr.ip()))
+        .map(|ip| ip.to_canonical())
+}
+
+fn is_trusted_proxy(ip: IpAddr, trusted_proxies: &[String]) -> bool {
+    trusted_proxies
+        .iter()
+        .filter_map(|proxy| parse_ip(proxy))
+        .any(|proxy| proxy == ip)
 }
 
 /// Extract a client identifier from the request.
 ///
 /// Priority:
 /// 1. Authenticated API key ID / user ID from `RequestContext`, when present
-/// 2. `X-Forwarded-For` first address — only when peer IP is in `trusted_proxies`
+/// 2. `X-Forwarded-For` rightmost non-trusted address — only when peer IP is
+///    in `trusted_proxies` (leftmost entries are attacker-controlled)
 /// 3. Direct peer address from connection info
 fn extract_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
     if let Some(identity) = authenticated_client_key(req) {
@@ -466,20 +478,44 @@ fn client_key_from_context(context: &RequestContext) -> Option<String> {
 }
 
 fn network_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
-    let conn = req.connection_info();
-    let peer = conn.peer_addr().unwrap_or("unknown");
-    let peer_ip = parse_peer_ip(peer);
+    let Some(peer_ip) = req.peer_addr().map(|addr| addr.ip().to_canonical()) else {
+        // Without a transport peer there is no trusted hop from which a
+        // forwarded header could have arrived.
+        return "ip:unknown".to_string();
+    };
 
-    if trusted_proxies.iter().any(|p| p == &peer_ip)
-        && let Some(forwarded) = req.headers().get("X-Forwarded-For")
-        && let Ok(val) = forwarded.to_str()
-        && let first = val.split(',').next().unwrap_or("").trim()
-        && !first.is_empty()
+    // Only honor X-Forwarded-For when the direct peer is a trusted proxy.
+    if is_trusted_proxy(peer_ip, trusted_proxies)
+        && let Some(client_ip) = last_untrusted_xff_ip(req.headers(), trusted_proxies)
     {
-        return format!("ip:{}", first);
+        return format!("ip:{}", client_ip);
     }
 
     format!("ip:{}", peer_ip)
+}
+
+/// Pick the client IP from all `X-Forwarded-For` fields by walking from the
+/// last field's last hop toward the first and skipping trusted proxies.
+///
+/// Everything left of the rightmost non-trusted entry is attacker-controlled:
+/// a client can seed `X-Forwarded-For` with arbitrary addresses before the
+/// request reaches the trusted proxy. Using the leftmost entry therefore lets
+/// clients rotate identities to dodge per-IP limits. A malformed entry in the
+/// trusted suffix rejects the header so parsing cannot continue into the
+/// attacker-controlled prefix.
+fn last_untrusted_xff_ip(headers: &HeaderMap, trusted_proxies: &[String]) -> Option<IpAddr> {
+    let mut fallback = None;
+    for field in headers.get_all("X-Forwarded-For").rev() {
+        for entry in field.as_bytes().rsplit(|byte| *byte == b',') {
+            let entry = std::str::from_utf8(entry).ok()?;
+            let ip = parse_ip(entry)?;
+            fallback.get_or_insert(ip);
+            if !is_trusted_proxy(ip, trusted_proxies) {
+                return Some(ip);
+            }
+        }
+    }
+    fallback
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimitMiddlewareService<S>

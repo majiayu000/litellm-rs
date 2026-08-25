@@ -1,4 +1,5 @@
 use super::*;
+use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::test::TestRequest;
 use uuid::Uuid;
 
@@ -9,42 +10,57 @@ fn require_recorded_at(value: Option<Instant>) -> Instant {
     }
 }
 
-#[test]
-fn test_parse_peer_ip_ipv4_with_port() {
-    assert_eq!(parse_peer_ip("127.0.0.1:1234"), "127.0.0.1");
+fn parse_single_xff(value: &str, trusted_proxies: &[String]) -> Option<IpAddr> {
+    let req = TestRequest::default()
+        .insert_header(("X-Forwarded-For", value))
+        .to_srv_request();
+    last_untrusted_xff_ip(req.headers(), trusted_proxies)
 }
 
 #[test]
-fn test_parse_peer_ip_ipv4_no_port() {
-    assert_eq!(parse_peer_ip("10.0.0.1"), "10.0.0.1");
+fn test_parse_ip_ipv4_with_port() {
+    assert_eq!(parse_ip("127.0.0.1:1234"), "127.0.0.1".parse().ok());
 }
 
 #[test]
-fn test_parse_peer_ip_ipv6_with_port() {
-    assert_eq!(parse_peer_ip("[::1]:8080"), "::1");
+fn test_parse_ip_ipv4_no_port() {
+    assert_eq!(parse_ip("10.0.0.1"), "10.0.0.1".parse().ok());
 }
 
 #[test]
-fn test_parse_peer_ip_unknown_falls_back() {
-    assert_eq!(parse_peer_ip("unknown"), "unknown");
+fn test_parse_ip_ipv6_with_port() {
+    assert_eq!(parse_ip("[::1]:8080"), "::1".parse().ok());
+}
+
+#[test]
+fn test_parse_ip_rejects_unknown() {
+    assert_eq!(parse_ip("unknown"), None);
+}
+
+#[test]
+fn test_parse_ip_canonicalizes_ipv4_mapped_ipv6() {
+    assert_eq!(
+        parse_ip("::ffff:192.0.2.1"),
+        Some("192.0.2.1".parse().unwrap())
+    );
 }
 
 #[test]
 fn test_trusted_proxy_match() {
     let proxies = ["10.0.0.1".to_string()];
-    assert!(proxies.iter().any(|p| p == "10.0.0.1"));
+    assert!(is_trusted_proxy("10.0.0.1".parse().unwrap(), &proxies));
 }
 
 #[test]
 fn test_trusted_proxy_no_match() {
     let proxies = ["10.0.0.1".to_string()];
-    assert!(!proxies.iter().any(|p| p == "10.0.0.2"));
+    assert!(!is_trusted_proxy("10.0.0.2".parse().unwrap(), &proxies));
 }
 
 #[test]
 fn test_trusted_proxy_empty_list() {
     let proxies: Vec<String> = vec![];
-    assert!(!proxies.iter().any(|p| p == "127.0.0.1"));
+    assert!(!is_trusted_proxy("127.0.0.1".parse().unwrap(), &proxies));
 }
 
 #[test]
@@ -84,13 +100,184 @@ fn test_extract_client_key_ignores_rotating_api_key_headers() {
 }
 
 #[test]
-fn test_extract_client_key_uses_trusted_forwarded_ip() {
+fn test_extract_client_key_uses_rightmost_untrusted_forwarded_ip() {
+    // Only enumerated proxies are skipped when walking X-Forwarded-For from
+    // the right. 10.0.0.2 is not listed, so its own address is used instead
+    // of the attacker-controllable leftmost entry.
     let req = TestRequest::default()
         .peer_addr("10.0.0.1:1000".parse().unwrap())
         .insert_header(("X-Forwarded-For", "198.51.100.7, 10.0.0.2"))
         .to_srv_request();
 
     let key = extract_client_key(&req, &["10.0.0.1".to_string()]);
+
+    assert_eq!(key, "ip:10.0.0.2");
+}
+
+#[test]
+fn test_extract_client_key_sees_through_enumerated_proxy_chain() {
+    let req = TestRequest::default()
+        .peer_addr("10.0.0.1:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "198.51.100.7, 10.0.0.2"))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1".to_string(), "10.0.0.2".to_string()]);
+
+    assert_eq!(key, "ip:198.51.100.7");
+}
+
+#[test]
+fn test_extract_client_key_normalizes_ipv4_ports_and_whitespace() {
+    let req = TestRequest::default()
+        .peer_addr("10.0.0.1:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "198.51.100.7:4242 , 10.0.0.2:8080"))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1:9000".to_string(), "10.0.0.2".to_string()]);
+
+    assert_eq!(key, "ip:198.51.100.7");
+}
+
+#[test]
+fn test_extract_client_key_normalizes_bracketed_ipv6_ports() {
+    let req = TestRequest::default()
+        .peer_addr("[2001:db8::1]:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "[2001:db8::7]:4242, [2001:db8::2]:8080"))
+        .to_srv_request();
+
+    let key = extract_client_key(
+        &req,
+        &[
+            "[2001:0DB8:0:0:0:0:0:1]:9000".to_string(),
+            "2001:0DB8:0:0:0:0:0:2".to_string(),
+        ],
+    );
+
+    assert_eq!(key, "ip:2001:db8::7");
+}
+
+#[test]
+fn test_extract_client_key_rejects_malformed_forwarded_chain() {
+    let req = TestRequest::default()
+        .peer_addr("10.0.0.1:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "198.51.100.7, malformed, 10.0.0.2"))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1".to_string(), "10.0.0.2".to_string()]);
+
+    assert_eq!(key, "ip:10.0.0.1");
+}
+
+#[test]
+fn test_extract_client_key_ignores_forwarded_header_from_untrusted_peer() {
+    let req = TestRequest::default()
+        .peer_addr("203.0.113.10:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "198.51.100.7"))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1".to_string()]);
+
+    assert_eq!(key, "ip:203.0.113.10");
+}
+
+#[test]
+fn test_extract_client_key_ignores_forwarded_header_for_malformed_proxy_config() {
+    let req = TestRequest::default()
+        .peer_addr("203.0.113.10:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "198.51.100.7"))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["203.0.113.10/24".to_string()]);
+
+    assert_eq!(key, "ip:203.0.113.10");
+}
+
+#[test]
+fn test_extract_client_key_without_peer_ignores_forwarded_header() {
+    let req = TestRequest::default()
+        .insert_header(("X-Forwarded-For", "198.51.100.7"))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["198.51.100.1".to_string()]);
+
+    assert_eq!(key, "ip:unknown");
+}
+
+#[test]
+fn test_extract_client_key_walks_repeated_forwarded_fields_in_global_reverse_order() {
+    let req = TestRequest::default()
+        .peer_addr("10.0.0.1:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "192.0.2.66"))
+        .append_header(("X-Forwarded-For", "198.51.100.7, 10.0.0.2"))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1".to_string(), "10.0.0.2".to_string()]);
+
+    assert_eq!(key, "ip:198.51.100.7");
+}
+
+#[test]
+fn test_extract_client_key_rejects_non_utf8_forwarded_field() {
+    let non_utf8 = HeaderValue::from_bytes(&[0xff]).unwrap();
+    let req = TestRequest::default()
+        .peer_addr("10.0.0.1:1000".parse().unwrap())
+        .insert_header(("X-Forwarded-For", "192.0.2.66"))
+        .append_header((HeaderName::from_static("x-forwarded-for"), non_utf8))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1".to_string()]);
+
+    assert_eq!(key, "ip:10.0.0.1");
+}
+
+#[test]
+fn test_extract_client_key_ignores_non_utf8_prefix_after_selecting_client() {
+    let mut forwarded = vec![0xff, b',', b' '];
+    forwarded.extend_from_slice(b"198.51.100.7");
+    let req = TestRequest::default()
+        .peer_addr("10.0.0.1:1000".parse().unwrap())
+        .insert_header((
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_bytes(&forwarded).unwrap(),
+        ))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1".to_string()]);
+
+    assert_eq!(key, "ip:198.51.100.7");
+}
+
+#[test]
+fn test_extract_client_key_rejects_non_utf8_suffix_before_client_boundary() {
+    let mut forwarded = b"198.51.100.7, ".to_vec();
+    forwarded.push(0xff);
+    let req = TestRequest::default()
+        .peer_addr("10.0.0.1:1000".parse().unwrap())
+        .insert_header((
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_bytes(&forwarded).unwrap(),
+        ))
+        .to_srv_request();
+
+    let key = extract_client_key(&req, &["10.0.0.1".to_string()]);
+
+    assert_eq!(key, "ip:10.0.0.1");
+}
+
+#[test]
+fn test_extract_client_key_canonicalizes_ipv4_mapped_ipv6_everywhere() {
+    let req = TestRequest::default()
+        .peer_addr("[::ffff:10.0.0.1]:1000".parse().unwrap())
+        .insert_header((
+            "X-Forwarded-For",
+            "[::ffff:198.51.100.7]:4242, ::ffff:10.0.0.2",
+        ))
+        .to_srv_request();
+
+    let key = extract_client_key(
+        &req,
+        &["10.0.0.1".to_string(), "[::ffff:10.0.0.2]:9000".to_string()],
+    );
 
     assert_eq!(key, "ip:198.51.100.7");
 }
@@ -233,4 +420,41 @@ fn test_enforce_fallback_capacity_evicts_oldest_when_all_fresh() {
     assert!(store.len() <= MAX_FALLBACK_ENTRIES);
     assert!(!store.contains_key("k-0"));
     assert!(store.contains_key(&format!("k-{}", MAX_FALLBACK_ENTRIES + 4)));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_ignores_attacker_seeded_prefix() {
+    // Client seeds "1.2.3.4"; the trusted proxy appends the client's real
+    // address. The seeded entry must be ignored (old code picked it).
+    let trusted = vec!["10.0.0.1".to_string()];
+    let got = parse_single_xff("1.2.3.4, 203.0.113.50", &trusted);
+    assert_eq!(got, Some("203.0.113.50".parse().unwrap()));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_walks_past_trusted_chain() {
+    let trusted = vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()];
+    let got = parse_single_xff("9.9.9.9, 1.2.3.4, 10.0.0.2, 10.0.0.1", &trusted);
+    assert_eq!(got, Some("1.2.3.4".parse().unwrap()));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_all_trusted_falls_back_to_rightmost() {
+    let trusted = vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()];
+    let got = parse_single_xff("10.0.0.2, 10.0.0.1", &trusted);
+    assert_eq!(got, Some("10.0.0.1".parse().unwrap()));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_single_entry() {
+    let trusted = vec![];
+    let got = parse_single_xff("203.0.113.7", &trusted);
+    assert_eq!(got, Some("203.0.113.7".parse().unwrap()));
+}
+
+#[test]
+fn test_last_untrusted_xff_ip_rejects_empty_entries_in_trusted_suffix() {
+    let trusted = vec!["10.0.0.1".to_string()];
+    let got = parse_single_xff("  ,  , 10.0.0.1", &trusted);
+    assert_eq!(got, None);
 }
