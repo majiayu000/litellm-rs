@@ -5,6 +5,7 @@ use super::types::{
     CostResult, CostType, LiteLLMModelInfo, PricingCostBreakdown, PricingCostEstimate, PricingUsage,
 };
 use crate::utils::error::gateway_error::{GatewayError, Result};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
 use std::sync::LazyLock;
@@ -67,6 +68,7 @@ impl PricingService {
         completion: Option<&str>,
         total_time_seconds: Option<f64>,
     ) -> Result<CostResult> {
+        let pricing_time = Utc::now();
         let (resolved_model, model_info) = self
             .get_model_info_for_provider(provider, model)
             .ok_or_else(|| model_not_found(provider, model))?;
@@ -96,11 +98,12 @@ impl PricingService {
             )
         } else {
             let usage = PricingUsage::new(input_tokens, output_tokens);
-            let breakdown = calculate_usage_cost_with_pricing(
+            let breakdown = super::usage_cost::calculate_usage_cost_with_pricing_at(
                 &model_info.litellm_provider,
                 &resolved_model,
                 &model_info,
                 &usage,
+                pricing_time,
             )?;
             Ok(CostResult {
                 input_cost: breakdown.input_cost,
@@ -123,11 +126,28 @@ impl PricingService {
         model: &str,
         usage: &PricingUsage,
     ) -> Result<PricingCostBreakdown> {
+        self.calculate_loaded_usage_cost_for_provider_at(provider, model, usage, Utc::now())
+    }
+
+    /// Calculate detailed token usage cost at a specific UTC instant.
+    pub fn calculate_loaded_usage_cost_for_provider_at(
+        &self,
+        provider: &str,
+        model: &str,
+        usage: &PricingUsage,
+        pricing_time: DateTime<Utc>,
+    ) -> Result<PricingCostBreakdown> {
         let (resolved_model, model_info) = self
             .get_model_info_for_provider(provider, model)
             .ok_or_else(|| model_not_found(provider, model))?;
 
-        calculate_usage_cost_with_pricing(provider, &resolved_model, &model_info, usage)
+        super::usage_cost::calculate_usage_cost_with_pricing_at(
+            provider,
+            &resolved_model,
+            &model_info,
+            usage,
+            pricing_time,
+        )
     }
 
     /// Calculate settlement cost for an already-successful request.
@@ -141,13 +161,20 @@ impl PricingService {
         model: &str,
         usage: &PricingUsage,
     ) -> Result<PricingCostBreakdown> {
-        match self.calculate_loaded_usage_cost_for_provider(provider, model, usage) {
+        let pricing_time = Utc::now();
+        match self.calculate_loaded_usage_cost_for_provider_at(provider, model, usage, pricing_time)
+        {
             Ok(breakdown) => Ok(breakdown),
             Err(error) => {
                 let Some(text_usage) = text_only_usage_for_modal_settlement(usage) else {
                     return Err(error);
                 };
-                match self.calculate_loaded_usage_cost_for_provider(provider, model, &text_usage) {
+                match self.calculate_loaded_usage_cost_for_provider_at(
+                    provider,
+                    model,
+                    &text_usage,
+                    pricing_time,
+                ) {
                     Ok(mut breakdown) => {
                         tracing::error!(
                             "modal cost calculation failed for '{provider}'/'{model}': {error}; \
@@ -186,11 +213,26 @@ impl PricingService {
         input_tokens: u32,
         max_output_tokens: Option<u32>,
     ) -> Result<PricingCostEstimate> {
+        let (resolved_model, model_info) = self
+            .get_model_info_for_provider(provider, model)
+            .ok_or_else(|| model_not_found(provider, model))?;
         let estimated_output_tokens = max_output_tokens.unwrap_or(100);
         let input_only = PricingUsage::new(input_tokens, 0);
         let full_usage = PricingUsage::new(input_tokens, estimated_output_tokens);
-        let input = self.dry_run_loaded_usage_cost_for_provider(provider, model, &input_only)?;
-        let full = self.dry_run_loaded_usage_cost_for_provider(provider, model, &full_usage)?;
+        // Reserve against the highest declared rate so a request crossing into
+        // a peak window cannot exceed its budget reservation at settlement.
+        let input = super::usage_cost::calculate_usage_cost_with_maximum_rates(
+            provider,
+            &resolved_model,
+            &model_info,
+            &input_only,
+        )?;
+        let full = super::usage_cost::calculate_usage_cost_with_maximum_rates(
+            provider,
+            &resolved_model,
+            &model_info,
+            &full_usage,
+        )?;
 
         Ok(PricingCostEstimate {
             min_cost: input.total_cost,
@@ -547,92 +589,6 @@ fn text_only_usage_for_modal_settlement(usage: &PricingUsage) -> Option<PricingU
     Some(text_usage)
 }
 
-fn calculate_usage_cost_with_pricing(
-    requested_provider: &str,
-    model: &str,
-    model_info: &LiteLLMModelInfo,
-    usage: &PricingUsage,
-) -> Result<PricingCostBreakdown> {
-    let (input_cost_per_token, output_cost_per_token) =
-        super::image_pricing::token_unit_prices(model, model_info, usage)?;
-
-    let input_cost_per_token = tiered_cost_per_token(
-        model_info,
-        input_cost_per_token,
-        "input_cost_per_token_above_",
-        usage.prompt_tokens,
-    );
-    let output_cost_per_token = tiered_cost_per_token(
-        model_info,
-        output_cost_per_token,
-        "output_cost_per_token_above_",
-        usage.prompt_tokens,
-    );
-    let cache_read_cost_per_token = tiered_cost_per_token(
-        model_info,
-        model_info
-            .extra
-            .get("cache_read_input_token_cost")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(input_cost_per_token),
-        "cache_read_input_token_cost_above_",
-        usage.prompt_tokens,
-    );
-    let cache_creation_cost_per_token = tiered_cost_per_token(
-        model_info,
-        model_info
-            .extra
-            .get("cache_creation_input_token_cost")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(input_cost_per_token),
-        "cache_creation_input_token_cost_above_",
-        usage.prompt_tokens,
-    );
-    let cache_creation_tokens = usage.cache_creation_token_count();
-    let cache_read_tokens = usage.cache_read_token_count();
-    let non_cached_tokens = usage.non_cached_prompt_tokens();
-    let input_cost = non_cached_tokens as f64 * input_cost_per_token;
-    let output_cost = usage.completion_tokens as f64 * output_cost_per_token;
-    let cache_cost = cache_creation_tokens as f64 * cache_creation_cost_per_token
-        + cache_read_tokens as f64 * cache_read_cost_per_token;
-    let audio_cost = priced_extra_units(
-        model_info,
-        model,
-        usage.audio_tokens,
-        &["input_cost_per_audio_token"],
-        "audio pricing",
-    )? + priced_extra_units(
-        model_info,
-        model,
-        usage.output_audio_tokens,
-        &["output_cost_per_audio_token"],
-        "output audio pricing",
-    )?;
-    let image_cost_per_token =
-        super::image_pricing::image_token_unit_price(model_info, usage).unwrap_or(0.0);
-    let image_cost = usage.image_tokens.unwrap_or(0) as f64 * image_cost_per_token
-        + super::image_pricing::output_image_cost(model, model_info, usage)?;
-    let reasoning_cost = usage.reasoning_tokens.unwrap_or(0) as f64
-        * extra_f64(model_info, "output_cost_per_reasoning_token");
-    let total_cost =
-        input_cost + output_cost + cache_cost + audio_cost + image_cost + reasoning_cost;
-
-    Ok(PricingCostBreakdown {
-        total_cost,
-        input_cost,
-        output_cost,
-        cache_cost,
-        audio_cost,
-        image_cost,
-        reasoning_cost,
-        usage: usage.clone(),
-        currency: "USD".to_string(),
-        model: model.to_string(),
-        provider: requested_provider.to_string(),
-        cost_type: CostType::TokenBased,
-    })
-}
-
 fn model_not_found(provider: &str, model: &str) -> GatewayError {
     GatewayError::not_found(format!(
         "Model not found for provider {}: {}",
@@ -640,83 +596,8 @@ fn model_not_found(provider: &str, model: &str) -> GatewayError {
     ))
 }
 
-fn extra_f64(pricing: &LiteLLMModelInfo, key: &str) -> f64 {
-    pricing
-        .extra
-        .get(key)
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(0.0)
-}
-
-fn priced_extra_units(
-    pricing: &LiteLLMModelInfo,
-    model: &str,
-    units: Option<u32>,
-    keys: &[&str],
-    pricing_type: &str,
-) -> Result<f64> {
-    let units = units.unwrap_or(0);
-    if units == 0 {
-        return Ok(0.0);
-    }
-
-    let (key, unit_price) = keys
-        .iter()
-        .find_map(|key| {
-            pricing
-                .extra
-                .get(*key)
-                .and_then(serde_json::Value::as_f64)
-                .map(|price| (*key, price))
-        })
-        .ok_or_else(|| {
-            GatewayError::Config(format!(
-                "Missing {pricing_type} for model {model}: {}",
-                keys.join(", ")
-            ))
-        })?;
-    if unit_price < 0.0 || unit_price.is_nan() {
-        return Err(GatewayError::Config(format!(
-            "Invalid {pricing_type} for model {model}: {key} ({unit_price})"
-        )));
-    }
-
-    Ok(units as f64 * unit_price)
-}
-
-fn tiered_cost_per_token(
-    pricing: &LiteLLMModelInfo,
-    base_cost: f64,
-    key_prefix: &str,
-    prompt_tokens: u32,
-) -> f64 {
-    pricing
-        .extra
-        .iter()
-        .filter_map(|(key, value)| {
-            if !key.starts_with(key_prefix) {
-                return None;
-            }
-            let threshold = extract_tier_threshold(key)?;
-            if prompt_tokens > threshold {
-                value.as_f64().map(|cost| (threshold, cost))
-            } else {
-                None
-            }
-        })
-        .max_by_key(|(threshold, _)| *threshold)
-        .map(|(_, cost)| cost)
-        .unwrap_or(base_cost)
-}
-
-fn extract_tier_threshold(key: &str) -> Option<u32> {
-    let threshold = key.split("_above_").nth(1)?.strip_suffix("_tokens")?;
-    if let Some(number) = threshold.strip_suffix('k') {
-        number.parse::<u32>().ok().map(|value| value * 1000)
-    } else {
-        threshold.parse::<u32>().ok()
-    }
-}
+#[cfg(test)]
+use super::usage_cost::extract_tier_threshold;
 
 #[cfg(test)]
 mod amazon_nova_catalog_authority_tests {

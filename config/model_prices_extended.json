@@ -11325,6 +11325,14 @@
     "input_cost_per_token": 2.2e-07,
     "output_cost_per_token": 6.6e-07,
     "cache_read_input_token_cost": 7e-09,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 4.4e-07, "output_cost_per_token": 1.32e-06, "cache_read_input_token_cost": 1.4e-08}
+    },
     "litellm_provider": "deepseek",
     "mode": "chat",
     "supports_function_calling": true,
@@ -11343,6 +11351,14 @@
     "input_cost_per_token": 2.2e-07,
     "output_cost_per_token": 6.6e-07,
     "cache_read_input_token_cost": 7e-09,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 4.4e-07, "output_cost_per_token": 1.32e-06, "cache_read_input_token_cost": 1.4e-08}
+    },
     "litellm_provider": "deepseek",
     "mode": "chat",
     "supports_function_calling": true,
@@ -13842,6 +13858,14 @@
   "deepseek/deepseek-chat": {
     "cache_creation_input_token_cost": 0.0,
     "cache_read_input_token_cost": 7e-09,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 4.4e-07, "output_cost_per_token": 1.32e-06, "cache_read_input_token_cost": 1.4e-08}
+    },
     "input_cost_per_token": 2.2e-07,
     "input_cost_per_token_cache_hit": 7e-09,
     "litellm_provider": "deepseek",
@@ -13895,6 +13919,14 @@
   },
   "deepseek/deepseek-reasoner": {
     "cache_read_input_token_cost": 7e-09,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 4.4e-07, "output_cost_per_token": 1.32e-06, "cache_read_input_token_cost": 1.4e-08}
+    },
     "input_cost_per_token": 2.2e-07,
     "input_cost_per_token_cache_hit": 7e-09,
     "litellm_provider": "deepseek",
@@ -42753,6 +42785,14 @@
     "input_cost_per_token": 2.2e-07,
     "output_cost_per_token": 6.6e-07,
     "cache_read_input_token_cost": 7e-09,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 4.4e-07, "output_cost_per_token": 1.32e-06, "cache_read_input_token_cost": 1.4e-08}
+    },
     "litellm_provider": "deepseek",
     "mode": "chat",
     "supports_function_calling": true,
@@ -42770,6 +42810,14 @@
     "input_cost_per_token": 2.2e-07,
     "output_cost_per_token": 6.6e-07,
     "cache_read_input_token_cost": 7e-09,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 4.4e-07, "output_cost_per_token": 1.32e-06, "cache_read_input_token_cost": 1.4e-08}
+    },
     "litellm_provider": "deepseek",
     "mode": "chat",
     "supported_endpoints": [
@@ -42799,6 +42847,14 @@
     "input_cost_per_token": 6.6e-07,
     "output_cost_per_token": 1.98e-06,
     "cache_read_input_token_cost": 2.2e-08,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 1.32e-06, "output_cost_per_token": 3.96e-06, "cache_read_input_token_cost": 4.4e-08}
+    },
     "litellm_provider": "deepseek",
     "mode": "chat",
     "supports_function_calling": true,
@@ -42812,6 +42868,14 @@
   "deepseek/deepseek-v4-flash": {
     "cache_creation_input_token_cost": 0.0,
     "cache_read_input_token_cost": 7e-09,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 4.4e-07, "output_cost_per_token": 1.32e-06, "cache_read_input_token_cost": 1.4e-08}
+    },
     "input_cost_per_token": 2.2e-07,
     "input_cost_per_token_cache_hit": 7e-09,
     "litellm_provider": "deepseek",
@@ -42838,6 +42902,14 @@
   "deepseek/deepseek-v4-flash-vision-exp": {
     "cache_creation_input_token_cost": 0.0,
     "cache_read_input_token_cost": 7e-09,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 4.4e-07, "output_cost_per_token": 1.32e-06, "cache_read_input_token_cost": 1.4e-08}
+    },
     "input_cost_per_token": 2.2e-07,
     "input_cost_per_token_cache_hit": 7e-09,
     "litellm_provider": "deepseek",
@@ -42869,6 +42941,14 @@
   "deepseek/deepseek-v4-pro": {
     "cache_creation_input_token_cost": 0.0,
     "cache_read_input_token_cost": 2.2e-08,
+    "time_of_use_pricing": {
+      "timezone": "UTC",
+      "peak_windows": [
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+        {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10}
+      ],
+      "peak_rates": {"input_cost_per_token": 1.32e-06, "output_cost_per_token": 3.96e-06, "cache_read_input_token_cost": 4.4e-08}
+    },
     "input_cost_per_token": 6.6e-07,
     "input_cost_per_token_cache_hit": 2.2e-08,
     "litellm_provider": "deepseek",
