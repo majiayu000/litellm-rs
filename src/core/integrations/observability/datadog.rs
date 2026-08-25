@@ -13,8 +13,8 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, info};
 
 use crate::core::traits::integration::{
-    CacheHitEvent, EmbeddingEndEvent, EmbeddingStartEvent, Integration, IntegrationError,
-    IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, Integration,
+    IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 use crate::utils::net::http::create_custom_client;
 
@@ -717,6 +717,30 @@ impl Integration for DataDogIntegration {
             self.record_metric("embedding.tokens", tokens as f64, 1, &tags, None)
                 .await?;
         }
+
+        Ok(())
+    }
+
+    async fn on_embedding_error(&self, event: &EmbeddingErrorEvent) -> IntegrationResult<()> {
+        let error_type = event.error_type.as_deref().unwrap_or("unknown");
+        let tags = [
+            ("model", event.model.as_str()),
+            ("provider", event.provider.as_deref().unwrap_or("unknown")),
+            ("error_type", error_type),
+            ("status", "error"),
+        ];
+
+        self.record_metric("embedding.errors", 1.0, 1, &tags, None)
+            .await?;
+        self.record_log(
+            &format!(
+                "Embedding request error: request_id={}, model={}, error={}",
+                event.request_id, event.model, event.error_message
+            ),
+            "error",
+            &tags,
+        )
+        .await?;
 
         Ok(())
     }

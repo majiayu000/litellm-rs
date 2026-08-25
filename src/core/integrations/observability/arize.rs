@@ -13,8 +13,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::core::traits::integration::{
-    CacheHitEvent, EmbeddingEndEvent, EmbeddingStartEvent, Integration, IntegrationError,
-    IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, Integration,
+    IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 use crate::utils::net::http::create_custom_client;
 
@@ -567,6 +567,61 @@ impl Integration for ArizeIntegration {
         Ok(())
     }
 
+    async fn on_embedding_error(&self, event: &EmbeddingErrorEvent) -> IntegrationResult<()> {
+        if !self.config.log_embeddings {
+            return Ok(());
+        }
+
+        let pending = self
+            .pending_requests
+            .write()
+            .await
+            .remove(&event.request_id);
+        let provider = event.provider.as_deref().unwrap_or("unknown");
+        let (start_time, mut features) = match pending {
+            Some(pending) => (pending.start_time, pending.features),
+            None => {
+                let mut features = self.build_features(&event.model, provider);
+                features.insert(
+                    "type".to_string(),
+                    ArizeValue::String("embedding".to_string()),
+                );
+                (
+                    Self::current_timestamp_ms().saturating_sub(event.latency_ms),
+                    features,
+                )
+            }
+        };
+        features.insert(
+            "error_message".to_string(),
+            ArizeValue::String(event.error_message.clone()),
+        );
+        if let Some(error_type) = &event.error_type {
+            features.insert(
+                "error_type".to_string(),
+                ArizeValue::String(error_type.clone()),
+            );
+        }
+
+        let record = ArizeRecord {
+            prediction_id: event.request_id.clone(),
+            model_id: self.config.model_id.clone(),
+            model_version: self.config.model_version.clone(),
+            environment: self.config.environment.clone(),
+            timestamp_ms: start_time as i64,
+            prediction_label: event.model.clone(),
+            features,
+            tags: self.build_tags(&[("status", "error"), ("type", "embedding")]),
+            actual_label: None,
+            latency_ms: Some(event.latency_ms),
+        };
+
+        let mut buffer = self.buffer.write().await;
+        buffer.push(record);
+
+        Ok(())
+    }
+
     async fn on_cache_hit(&self, _event: &CacheHitEvent) -> IntegrationResult<()> {
         // Cache hits can be tracked as a separate metric if needed
         Ok(())
@@ -675,5 +730,40 @@ mod tests {
 
         assert_eq!(tags.get("env"), Some(&"test".to_string()));
         assert_eq!(tags.get("extra"), Some(&"value".to_string()));
+    }
+
+    #[tokio::test]
+    async fn embedding_error_clears_pending_request_and_buffers_error_record() {
+        let integration = ArizeIntegration::new(ArizeConfig::new("test-key", "test-space"))
+            .expect("test integration");
+        let start = EmbeddingStartEvent {
+            request_id: "embedding-error".to_string(),
+            model: "embedding-model".to_string(),
+            provider: Some("provider".to_string()),
+            input_count: 1,
+            user_id: None,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        };
+        integration.on_embedding_start(&start).await.unwrap();
+        assert_eq!(integration.pending_requests.read().await.len(), 1);
+
+        integration
+            .on_embedding_error(&EmbeddingErrorEvent {
+                request_id: start.request_id,
+                model: start.model,
+                provider: start.provider,
+                error_message: "embedding failed".to_string(),
+                error_type: Some("provider_error".to_string()),
+                latency_ms: 25,
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            })
+            .await
+            .unwrap();
+
+        assert!(integration.pending_requests.read().await.is_empty());
+        let buffer = integration.buffer.read().await;
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer[0].tags.get("status"), Some(&"error".to_string()));
+        assert_eq!(buffer[0].tags.get("type"), Some(&"embedding".to_string()));
     }
 }

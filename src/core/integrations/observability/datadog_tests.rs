@@ -168,6 +168,45 @@ fn test_datadog_integration_creation() {
 }
 
 #[tokio::test]
+async fn embedding_error_records_embedding_metric_and_log() {
+    let mut config = DataDogConfig::new("test-api-key");
+    config.batch_size = 100;
+    let integration = DataDogIntegration::new(config).expect("test integration");
+    let start = EmbeddingStartEvent {
+        request_id: "embedding-error".to_string(),
+        model: "embedding-model".to_string(),
+        provider: Some("provider".to_string()),
+        input_count: 1,
+        user_id: None,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+    };
+    integration.on_embedding_start(&start).await.unwrap();
+    integration
+        .on_embedding_error(&EmbeddingErrorEvent {
+            request_id: start.request_id,
+            model: start.model,
+            provider: start.provider,
+            error_message: "embedding failed".to_string(),
+            error_type: Some("provider_error".to_string()),
+            latency_ms: 25,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        })
+        .await
+        .unwrap();
+
+    let buffer = integration.buffer().unwrap();
+    assert!(buffer.pending.iter().any(|event| matches!(
+        event,
+        BufferedEvent::Metric(metric) if metric.metric == "litellm.embedding.errors"
+    )));
+    assert!(buffer.pending.iter().any(|event| matches!(
+        event,
+        BufferedEvent::Log(log)
+            if log.status == "error" && log.message.contains("embedding failed")
+    )));
+}
+
+#[tokio::test]
 async fn test_datadog_auto_flush_requeues_failed_batch() {
     let mut config = DataDogConfig::new("test-api-key");
     config.batch_size = 1;

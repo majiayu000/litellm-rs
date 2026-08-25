@@ -13,8 +13,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::core::traits::integration::{
-    CacheHitEvent, EmbeddingEndEvent, EmbeddingStartEvent, Integration, IntegrationError,
-    IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, Integration,
+    IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 use crate::utils::net::http::create_custom_client;
 
@@ -454,6 +454,44 @@ impl Integration for HeliconeIntegration {
         Ok(())
     }
 
+    async fn on_embedding_error(&self, event: &EmbeddingErrorEvent) -> IntegrationResult<()> {
+        let pending = self
+            .pending_requests
+            .write()
+            .await
+            .remove(&event.request_id);
+        let (start_time, properties) = match pending {
+            Some(pending) => (pending.start_time, pending.properties),
+            None => (
+                Self::current_timestamp_ms().saturating_sub(event.latency_ms),
+                self.build_properties(&[("type", "embedding")]),
+            ),
+        };
+
+        let log_entry = HeliconeLogEntry {
+            request_id: event.request_id.clone(),
+            model: event.model.clone(),
+            provider: event
+                .provider
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            latency_ms: event.latency_ms,
+            status: "error".to_string(),
+            error: Some(event.error_message.clone()),
+            cost: None,
+            timestamp: start_time as i64,
+            properties,
+        };
+
+        let mut buffer = self.buffer.write().await;
+        buffer.push(log_entry);
+
+        Ok(())
+    }
+
     async fn on_cache_hit(&self, _event: &CacheHitEvent) -> IntegrationResult<()> {
         // Cache hits are tracked separately in Helicone
         Ok(())
@@ -545,5 +583,44 @@ mod tests {
         assert_eq!(props.get("env"), Some(&"test".to_string()));
         assert_eq!(props.get("user_id"), Some(&"user-123".to_string()));
         assert_eq!(props.get("extra"), Some(&"value".to_string()));
+    }
+
+    #[tokio::test]
+    async fn embedding_error_clears_pending_request_and_buffers_error_log() {
+        let integration =
+            HeliconeIntegration::new(HeliconeConfig::new("test-key")).expect("test integration");
+        let start = EmbeddingStartEvent {
+            request_id: "embedding-error".to_string(),
+            model: "embedding-model".to_string(),
+            provider: Some("provider".to_string()),
+            input_count: 1,
+            user_id: None,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        };
+        integration.on_embedding_start(&start).await.unwrap();
+        assert_eq!(integration.pending_requests.read().await.len(), 1);
+
+        integration
+            .on_embedding_error(&EmbeddingErrorEvent {
+                request_id: start.request_id,
+                model: start.model,
+                provider: start.provider,
+                error_message: "embedding failed".to_string(),
+                error_type: Some("provider_error".to_string()),
+                latency_ms: 25,
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            })
+            .await
+            .unwrap();
+
+        assert!(integration.pending_requests.read().await.is_empty());
+        let buffer = integration.buffer.read().await;
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer[0].status, "error");
+        assert_eq!(buffer[0].error.as_deref(), Some("embedding failed"));
+        assert_eq!(
+            buffer[0].properties.get("type"),
+            Some(&"embedding".to_string())
+        );
     }
 }
