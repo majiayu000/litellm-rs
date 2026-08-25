@@ -475,11 +475,14 @@ impl PrometheusIntegration {
                 );
                 return;
             }
-            let mut costs = self.metrics.cost_total.write();
-            let counter = costs
-                .entry(labels)
-                .or_insert_with(|| AtomicU64::new(0.0_f64.to_bits()));
-            if !atomic_add_f64(counter, cost) {
+            let overflowed = {
+                let mut costs = self.metrics.cost_total.write();
+                let counter = costs
+                    .entry(labels)
+                    .or_insert_with(|| AtomicU64::new(0.0_f64.to_bits()));
+                !atomic_add_f64(counter, cost)
+            };
+            if overflowed {
                 warn!(
                     cost,
                     "Ignoring callback cost because the accumulated Prometheus cost total would become non-finite"
