@@ -9,6 +9,7 @@ use tokio::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DynamicProbeKey {
+    native_deployment_id: Option<String>,
     provider_name: String,
     provider_kind: String,
     policy: HealthCheckPolicy,
@@ -25,7 +26,6 @@ struct ProbeMember {
 #[derive(Clone)]
 struct ProbeTarget {
     key: DynamicProbeKey,
-    snapshot_generation: u64,
     provider: Provider,
     deployments: Vec<Arc<Deployment>>,
 }
@@ -145,6 +145,7 @@ fn current_probe_groups(snapshot: &RoutingSnapshot) -> Vec<ProbeTarget> {
             continue;
         };
         let key = DynamicProbeKey {
+            native_deployment_id: policy.endpoint.is_none().then(|| deployment.id.clone()),
             provider_name: policy.provider_name.clone(),
             provider_kind: deployment.provider.name().to_string(),
             policy,
@@ -155,7 +156,6 @@ fn current_probe_groups(snapshot: &RoutingSnapshot) -> Vec<ProbeTarget> {
             .and_modify(|target| target.deployments.push(Arc::clone(deployment)))
             .or_insert_with(|| ProbeTarget {
                 key,
-                snapshot_generation: snapshot.generation(),
                 provider: deployment.provider.clone(),
                 deployments: vec![Arc::clone(deployment)],
             });
@@ -191,6 +191,7 @@ fn reconcile_schedules(
                 let schedule = entry.get_mut();
                 schedule.members = members;
                 schedule.epoch = schedule.epoch.wrapping_add(1);
+                schedule.consecutive_failures = 0;
                 if !schedule.running {
                     schedule.next_run = now;
                 }
@@ -242,13 +243,12 @@ fn apply_probe_outcome(
     }
 
     let snapshot = supervisor.routing_snapshot.load();
-    let target_is_current = snapshot.generation() == outcome.target.snapshot_generation
-        && outcome.target.deployments.iter().all(|observed| {
-            snapshot
-                .deployments
-                .get(&observed.id)
-                .is_some_and(|current| Arc::ptr_eq(current, observed))
-        });
+    let target_is_current = outcome.target.deployments.iter().all(|observed| {
+        snapshot
+            .deployments
+            .get(&observed.id)
+            .is_some_and(|current| Arc::ptr_eq(current, observed))
+    });
     if !target_is_current {
         schedule.next_run = Instant::now();
         return;
