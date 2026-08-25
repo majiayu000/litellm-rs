@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::info;
 
 pub(super) fn require_pricing_field(
     value: Option<f64>,
@@ -102,94 +102,6 @@ impl PricingService {
     pub fn get_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
         let data = self.pricing_data.read();
         data.models.get(model).cloned()
-    }
-
-    /// Calculate completion cost
-    pub async fn calculate_completion_cost(
-        &self,
-        model: &str,
-        input_tokens: u32,
-        output_tokens: u32,
-        prompt: Option<&str>,
-        completion: Option<&str>,
-        total_time_seconds: Option<f64>,
-    ) -> Result<CostResult> {
-        // Auto-refresh if needed
-        if self.needs_refresh()
-            && let Err(e) = self.refresh_pricing_data().await
-        {
-            warn!("Failed to refresh pricing data: {}", e);
-        }
-
-        let model_info = self
-            .get_model_info(model)
-            .ok_or_else(|| GatewayError::not_found(format!("Model not found: {}", model)))?;
-
-        if model_info.cost_per_second.is_some() {
-            let total_time_seconds = require_total_time_seconds(model, total_time_seconds)?;
-            return self.calculate_time_based_cost(model, &model_info, total_time_seconds);
-        }
-
-        match model_info.litellm_provider.as_str() {
-            "openai" | "azure" => {
-                self.calculate_token_based_cost(model, &model_info, input_tokens, output_tokens)
-            }
-            "anthropic" => {
-                self.calculate_token_based_cost(model, &model_info, input_tokens, output_tokens)
-            }
-            "google" | "vertex_ai" => self.calculate_google_cost(
-                model,
-                &model_info,
-                input_tokens,
-                output_tokens,
-                prompt,
-                completion,
-            ),
-            "zhipuai" | "glm" => {
-                self.calculate_token_based_cost(model, &model_info, input_tokens, output_tokens)
-            }
-            _ => {
-                // Default to token-based calculation
-                self.calculate_token_based_cost(model, &model_info, input_tokens, output_tokens)
-            }
-        }
-    }
-
-    /// Calculate token-based cost
-    pub(super) fn calculate_token_based_cost(
-        &self,
-        model: &str,
-        model_info: &LiteLLMModelInfo,
-        input_tokens: u32,
-        output_tokens: u32,
-    ) -> Result<CostResult> {
-        let input_cost_per_token = require_pricing_field(
-            model_info.input_cost_per_token,
-            model,
-            "token pricing",
-            "input_cost_per_token",
-        )?;
-        let output_cost_per_token = require_pricing_field(
-            model_info.output_cost_per_token,
-            model,
-            "token pricing",
-            "output_cost_per_token",
-        )?;
-
-        let input_cost = (input_tokens as f64) * input_cost_per_token;
-        let output_cost = (output_tokens as f64) * output_cost_per_token;
-        let total_cost = input_cost + output_cost;
-
-        Ok(CostResult {
-            input_cost,
-            output_cost,
-            total_cost,
-            input_tokens,
-            output_tokens,
-            model: model.to_string(),
-            provider: model_info.litellm_provider.clone(),
-            cost_type: CostType::TokenBased,
-        })
     }
 
     /// Calculate Google/Vertex AI cost (character or token based)
