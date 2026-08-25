@@ -5,12 +5,14 @@
 
 mod authority;
 mod cache;
+mod completion;
 mod events;
 mod google;
 mod image_pricing;
 mod loader;
 mod service;
 mod types;
+mod usage_cost;
 
 #[cfg(test)]
 mod tests;

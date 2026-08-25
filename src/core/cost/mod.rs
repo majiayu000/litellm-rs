@@ -19,7 +19,8 @@ pub mod utils;
     note = "use core::cost::calculator::* directly or PricingService for runtime pricing; removal is no earlier than 0.7.0"
 )]
 pub use calculator::{
-    CostCalculator, compare_model_costs, estimate_cost, generic_cost_per_token, get_model_pricing,
+    CostCalculator, compare_model_costs, estimate_cost, generic_cost_per_token,
+    generic_cost_per_token_at, get_model_pricing, get_model_pricing_at,
 };
 #[deprecated(
     note = "use core::pricing_service::CostResult; this legacy shape is retained only for compatibility and removal is no earlier than 0.7.0"
