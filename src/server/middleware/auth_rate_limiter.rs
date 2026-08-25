@@ -1,5 +1,7 @@
 //! Authentication rate limiter for brute force protection
 
+mod reservation;
+
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,6 +31,7 @@ pub struct AuthRateLimiter {
 /// Tracks authentication attempts for a single client
 struct AuthAttemptTracker {
     failure_count: u32,
+    in_flight: u32,
     window_start: Instant,
     lockout_until: Option<Instant>,
     lockout_count: u32,
@@ -101,52 +104,18 @@ impl AuthRateLimiter {
             .entry(client_id.to_string())
             .or_insert_with(|| AuthAttemptTracker {
                 failure_count: 0,
+                in_flight: 0,
                 window_start: now,
                 lockout_until: None,
                 lockout_count: 0,
             });
 
         let tracker = entry.value_mut();
-
-        // Requests admitted immediately before another request establishes a
-        // lockout may finish authentication after that lockout is active. Do
-        // not let those late failures count toward a new cycle or replace the
-        // current deadline with an exponentially longer one.
-        if tracker
-            .lockout_until
-            .is_some_and(|lockout_until| now < lockout_until)
-        {
-            drop(entry);
-            self.enforce_capacity(now);
-            return None;
-        }
-
-        tracker.failure_count += 1;
-
-        if tracker.failure_count >= self.max_attempts {
-            let lockout_multiplier = 2u64.pow(tracker.lockout_count);
-            let lockout_secs = self.base_lockout_secs.saturating_mul(lockout_multiplier);
-            let lockout_duration = Duration::from_secs(lockout_secs);
-
-            tracker.lockout_until = Some(now + lockout_duration);
-            tracker.lockout_count += 1;
-            tracker.failure_count = 0;
-
-            tracing::warn!(
-                "Client {} locked out for {} seconds (lockout #{})",
-                client_id,
-                lockout_secs,
-                tracker.lockout_count
-            );
-
-            drop(entry);
-            self.enforce_capacity(now);
-            return Some(lockout_secs);
-        }
+        let lockout_secs = self.apply_failure(client_id, tracker, now);
 
         drop(entry);
         self.enforce_capacity(now);
-        None
+        lockout_secs
     }
 
     pub fn record_success(&self, client_id: &str) {
@@ -180,9 +149,49 @@ impl AuthRateLimiter {
     fn cleanup_old_entries_at(&self, now: Instant) {
         let max_age = Duration::from_secs(self.window_secs.saturating_mul(2));
         self.attempts.retain(|_, tracker| {
-            now.duration_since(tracker.window_start) < max_age
+            tracker.in_flight > 0
+                || now.duration_since(tracker.window_start) < max_age
                 || tracker.lockout_until.is_some_and(|until| until > now)
         });
+    }
+
+    fn apply_failure(
+        &self,
+        client_id: &str,
+        tracker: &mut AuthAttemptTracker,
+        now: Instant,
+    ) -> Option<u64> {
+        // A direct failure may establish a lockout while an admitted request
+        // is still authenticating. Settle that reservation without extending
+        // the active deadline or counting it again in the next cycle.
+        if tracker
+            .lockout_until
+            .is_some_and(|lockout_until| now < lockout_until)
+        {
+            return None;
+        }
+
+        tracker.failure_count = tracker.failure_count.saturating_add(1);
+        if tracker.failure_count < self.max_attempts {
+            return None;
+        }
+
+        let lockout_multiplier = 2u64.pow(tracker.lockout_count);
+        let lockout_secs = self.base_lockout_secs.saturating_mul(lockout_multiplier);
+        let lockout_duration = Duration::from_secs(lockout_secs);
+
+        tracker.lockout_until = Some(now + lockout_duration);
+        tracker.lockout_count += 1;
+        tracker.failure_count = 0;
+
+        tracing::warn!(
+            "Client {} locked out for {} seconds (lockout #{})",
+            client_id,
+            lockout_secs,
+            tracker.lockout_count
+        );
+
+        Some(lockout_secs)
     }
 
     fn enforce_capacity(&self, now: Instant) {
@@ -194,10 +203,13 @@ impl AuthRateLimiter {
         let mut candidates: Vec<_> = self
             .attempts
             .iter()
-            .map(|entry| {
+            .filter_map(|entry| {
                 let tracker = entry.value();
+                if tracker.in_flight > 0 {
+                    return None;
+                }
                 let locked = tracker.lockout_until.is_some_and(|until| until > now);
-                (locked, tracker.window_start, entry.key().clone())
+                Some((locked, tracker.window_start, entry.key().clone()))
             })
             .collect();
         candidates.sort_by_key(|(locked, window_start, _)| (*locked, *window_start));

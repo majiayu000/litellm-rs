@@ -132,23 +132,26 @@ where
                     .map(ServiceResponse::map_into_left_body);
             }
 
-            if let Err(wait_seconds) = rate_limiter.check_allowed(&client_id) {
-                if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
-                    &req,
-                    rate_limit_enabled,
-                    rate_limit_rpm,
-                    &trusted_proxies,
-                )
-                .await
-                {
-                    return Ok(rate_limit_response(req, error));
+            let auth_attempt = match rate_limiter.reserve_attempt(&client_id) {
+                Ok(reservation) => reservation,
+                Err(wait_seconds) => {
+                    if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
+                        &req,
+                        rate_limit_enabled,
+                        rate_limit_rpm,
+                        &trusted_proxies,
+                    )
+                    .await
+                    {
+                        return Ok(rate_limit_response(req, error));
+                    }
+                    return Ok(failed_attempt_rate_limit_response(req, wait_seconds));
                 }
-                return Ok(failed_attempt_rate_limit_response(req, wait_seconds));
-            }
+            };
 
             let auth_method = match auth_method {
                 AuthMethod::Jwt(_) if !enable_jwt => {
-                    rate_limiter.record_failure(&client_id);
+                    auth_attempt.record_failure();
                     if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                         &req,
                         rate_limit_enabled,
@@ -162,7 +165,7 @@ where
                     return Ok(unauthorized_response(req, "JWT authentication disabled"));
                 }
                 AuthMethod::ApiKey(_) if !enable_api_key => {
-                    rate_limiter.record_failure(&client_id);
+                    auth_attempt.record_failure();
                     if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                         &req,
                         rate_limit_enabled,
@@ -182,7 +185,7 @@ where
             };
 
             if matches!(auth_method, AuthMethod::None) {
-                rate_limiter.record_failure(&client_id);
+                auth_attempt.record_failure();
                 if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                     &req,
                     rate_limit_enabled,
@@ -214,6 +217,7 @@ where
 
             match app_state.auth.authenticate(auth_method, context).await {
                 Ok(result) if result.success => {
+                    auth_attempt.release();
                     if let Some(reservation) = auth_rate_limit_reservation.take() {
                         reservation.release().await;
                     }
@@ -272,7 +276,7 @@ where
                         .map(ServiceResponse::map_into_left_body)
                 }
                 Ok(result) => {
-                    rate_limiter.record_failure(&client_id);
+                    auth_attempt.record_failure();
                     warn!(
                         "Authentication failed: {}",
                         result
@@ -297,6 +301,7 @@ where
                     ))
                 }
                 Err(err) => {
+                    auth_attempt.release();
                     if let Some(reservation) = auth_rate_limit_reservation.take() {
                         reservation.release().await;
                     }
