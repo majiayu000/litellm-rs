@@ -452,6 +452,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn accepts_ec_parameters_before_an_unencrypted_private_key() {
+        let (_directory, tls) = material();
+        let key = fs::read_to_string(&tls.key_file).expect("read key");
+        let ec_parameters =
+            "-----BEGIN EC PARAMETERS-----\nBggqhkjOPQMBBw==\n-----END EC PARAMETERS-----";
+        fs::write(&tls.key_file, format!("{ec_parameters}\n{key}"))
+            .expect("write EC parameters and key");
+
+        validate_rustls_config(&tls)
+            .expect("OpenSSL EC parameters before a private key must be accepted");
+    }
+
     #[actix_web::test]
     async fn http1_only_transport_negotiates_http1_and_stops_cleanly() {
         let (_directory, tls) = material();

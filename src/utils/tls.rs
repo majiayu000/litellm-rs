@@ -62,7 +62,12 @@ fn load_key(path: &str) -> std::result::Result<PrivateKeyDer<'static>, String> {
     let contents = read_pem(
         path,
         "key",
-        &["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"],
+        &[
+            "PRIVATE KEY",
+            "RSA PRIVATE KEY",
+            "EC PRIVATE KEY",
+            "EC PARAMETERS",
+        ],
     )?;
     let mut keys = PrivateKeyDer::pem_slice_iter(&contents)
         .collect::<std::result::Result<Vec<_>, _>>()
