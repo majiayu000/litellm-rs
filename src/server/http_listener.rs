@@ -1,10 +1,9 @@
-use crate::config::models::server::ServerConfig;
+use crate::config::{Validate, models::server::ServerConfig};
 use crate::server::http::HttpServer;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_web::{HttpServer as ActixHttpServer, web};
 use std::net::ToSocketAddrs;
-use validator::Validate;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct ListenerSettings {

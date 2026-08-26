@@ -21,7 +21,7 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_cors::Cors;
 use actix_web::{
-    App, HttpServer as ActixHttpServer,
+    App,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
     http::{Method, header},
