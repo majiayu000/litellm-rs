@@ -6,7 +6,8 @@ pub(crate) use reservation::AuthAttemptReservation;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -33,6 +34,7 @@ pub struct AuthRateLimiter {
     /// configured hard limit.
     capacity_admission_lock: Mutex<()>,
     eviction_candidates: Mutex<VecDeque<capacity::EvictionCandidate>>,
+    delayed_eviction_candidates: Mutex<BinaryHeap<Reverse<(Instant, u64, String)>>>,
     next_entry_id: AtomicU64,
     /// Total blocked attempts counter for monitoring
     blocked_count: AtomicU64,
@@ -115,6 +117,7 @@ impl AuthRateLimiter {
             max_entries: max_entries.max(1),
             capacity_admission_lock: Mutex::new(()),
             eviction_candidates: Mutex::new(VecDeque::new()),
+            delayed_eviction_candidates: Mutex::new(BinaryHeap::new()),
             next_entry_id: AtomicU64::new(1),
             blocked_count: AtomicU64::new(0),
         }

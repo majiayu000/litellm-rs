@@ -1,4 +1,5 @@
 use super::{AuthAttemptTracker, AuthRateLimiter};
+use std::cmp::Reverse;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -47,11 +48,23 @@ impl AuthRateLimiter {
 
     pub(super) fn enqueue_eviction_candidate(&self, candidate: Option<EvictionCandidate>) {
         if let Some(candidate) = candidate {
-            self.eviction_candidates.lock().push_back(candidate);
+            let lockout_deadline = {
+                self.attempts
+                    .get(&candidate.client_id)
+                    .filter(|tracker| tracker.entry_id == candidate.entry_id)
+                    .and_then(|tracker| tracker.lockout_until)
+                    .filter(|deadline| *deadline > Instant::now())
+            };
+            if let Some(deadline) = lockout_deadline {
+                self.delay_eviction_candidate(candidate, deadline);
+            } else {
+                self.eviction_candidates.lock().push_back(candidate);
+            }
         }
     }
 
     pub(super) fn evict_one_inactive(&self, now: Instant) -> bool {
+        self.promote_expired_candidates(now);
         let mut live_probes = 0;
         while live_probes < MAX_EVICTION_PROBES {
             let Some(candidate) = self.eviction_candidates.lock().pop_front() else {
@@ -69,18 +82,47 @@ impl AuthRateLimiter {
                 return true;
             }
 
-            let should_requeue = self
-                .attempts
-                .get(&candidate.client_id)
-                .is_some_and(|tracker| {
-                    tracker.entry_id == candidate.entry_id && tracker.eviction_queued
-                });
-            if should_requeue {
-                self.eviction_candidates.lock().push_back(candidate);
-                live_probes += 1;
+            let candidate_state = self.attempts.get(&candidate.client_id).and_then(|tracker| {
+                (tracker.entry_id == candidate.entry_id && tracker.eviction_queued)
+                    .then_some(tracker.lockout_until)
+            });
+            match candidate_state {
+                Some(Some(deadline)) if deadline > now => {
+                    self.delay_eviction_candidate(candidate, deadline);
+                }
+                Some(_) => {
+                    self.eviction_candidates.lock().push_back(candidate);
+                    live_probes += 1;
+                }
+                None => {}
             }
         }
         false
+    }
+
+    fn delay_eviction_candidate(&self, candidate: EvictionCandidate, deadline: Instant) {
+        self.delayed_eviction_candidates.lock().push(Reverse((
+            deadline,
+            candidate.entry_id,
+            candidate.client_id,
+        )));
+    }
+
+    fn promote_expired_candidates(&self, now: Instant) {
+        let mut delayed = self.delayed_eviction_candidates.lock();
+        let mut ready = self.eviction_candidates.lock();
+        while delayed
+            .peek()
+            .is_some_and(|Reverse((deadline, _, _))| *deadline <= now)
+        {
+            let Some(Reverse((_, entry_id, client_id))) = delayed.pop() else {
+                break;
+            };
+            ready.push_back(EvictionCandidate {
+                client_id,
+                entry_id,
+            });
+        }
     }
 
     pub(super) fn prune_eviction_candidates(&self) {
@@ -91,6 +133,13 @@ impl AuthRateLimiter {
                     tracker.entry_id == candidate.entry_id && tracker.eviction_queued
                 })
         });
+        self.delayed_eviction_candidates
+            .lock()
+            .retain(|Reverse((_, entry_id, client_id))| {
+                self.attempts
+                    .get(client_id)
+                    .is_some_and(|tracker| tracker.entry_id == *entry_id && tracker.eviction_queued)
+            });
     }
 }
 
@@ -132,10 +181,26 @@ mod tests {
         second.record_failure();
         assert!(waiting.await.unwrap().is_err());
 
-        assert_eq!(limiter.eviction_candidates.lock().len(), 1);
+        assert!(limiter.eviction_candidates.lock().is_empty());
+        assert_eq!(limiter.delayed_eviction_candidates.lock().len(), 1);
         assert!(!limiter.evict_one_inactive(Instant::now()));
         assert!(limiter.evict_one_inactive(Instant::now() + std::time::Duration::from_secs(61)));
         assert!(!limiter.attempts.contains_key("locked-client"));
+    }
+
+    #[test]
+    fn active_lockouts_do_not_consume_ready_probe_budget() {
+        let limiter = AuthRateLimiter::with_max_entries(2, 300, 60, 18);
+        for client in 0..17 {
+            let client_id = format!("locked-{client}");
+            assert_eq!(limiter.record_failure(&client_id), None);
+            assert_eq!(limiter.record_failure(&client_id), Some(60));
+        }
+        assert_eq!(limiter.record_failure("ready-client"), None);
+
+        assert!(limiter.evict_one_inactive(Instant::now()));
+        assert!(!limiter.attempts.contains_key("ready-client"));
+        assert_eq!(limiter.delayed_eviction_candidates.lock().len(), 17);
     }
 
     #[tokio::test]
@@ -159,5 +224,6 @@ mod tests {
 
         assert!(limiter.is_empty());
         assert!(limiter.eviction_candidates.lock().is_empty());
+        assert!(limiter.delayed_eviction_candidates.lock().is_empty());
     }
 }
