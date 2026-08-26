@@ -17,22 +17,44 @@ impl<T> Default for BatchState<T> {
 pub(super) struct DurableBatch<T> {
     state: Mutex<BatchState<T>>,
     flush_lock: Mutex<()>,
+    capacity: usize,
 }
 
-impl<T> Default for DurableBatch<T> {
-    fn default() -> Self {
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct BatchFull {
+    capacity: usize,
+}
+
+impl std::fmt::Display for BatchFull {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "export batch capacity {} reached; event was not buffered",
+            self.capacity
+        )
+    }
+}
+
+impl<T> DurableBatch<T> {
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
             state: Mutex::new(BatchState::default()),
             flush_lock: Mutex::new(()),
+            capacity: capacity.max(1),
         }
     }
 }
 
 impl<T: Clone> DurableBatch<T> {
-    pub(super) async fn push(&self, value: T) -> usize {
+    pub(super) async fn push(&self, value: T) -> Result<usize, BatchFull> {
         let mut state = self.state.lock().await;
+        if state.pending.len().saturating_add(state.in_flight.len()) >= self.capacity {
+            return Err(BatchFull {
+                capacity: self.capacity,
+            });
+        }
         state.pending.push(value);
-        state.pending.len()
+        Ok(state.pending.len())
     }
 
     pub(super) async fn serialize_flush(&self) -> MutexGuard<'_, ()> {
@@ -72,8 +94,8 @@ mod tests {
 
     #[tokio::test]
     async fn canceled_export_preserves_in_flight_batch_and_retry_order() {
-        let batch = Arc::new(DurableBatch::default());
-        batch.push(1).await;
+        let batch = Arc::new(DurableBatch::new(2));
+        batch.push(1).await.unwrap();
         let entered = Arc::new(Notify::new());
         let task = tokio::spawn({
             let batch = Arc::clone(&batch);
@@ -86,7 +108,7 @@ mod tests {
             }
         });
         entered.notified().await;
-        batch.push(2).await;
+        batch.push(2).await.unwrap();
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
         assert_eq!(batch.snapshot().await, [1, 2]);
@@ -95,5 +117,18 @@ mod tests {
         assert_eq!(batch.batch_for_export().await, [1, 2]);
         batch.acknowledge().await;
         assert!(batch.batch_for_export().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_export_retention_is_bounded() {
+        let batch = DurableBatch::new(2);
+        batch.push(1).await.unwrap();
+        assert_eq!(batch.batch_for_export().await, [1]);
+        batch.push(2).await.unwrap();
+
+        let error = batch.push(3).await.unwrap_err();
+        assert_eq!(error, BatchFull { capacity: 2 });
+        assert_eq!(batch.snapshot().await, [1, 2]);
+        assert_eq!(batch.batch_for_export().await, [1, 2]);
     }
 }

@@ -215,10 +215,11 @@ impl HeliconeIntegration {
 
         info!("Helicone integration initialized");
 
+        let buffer = DurableBatch::new(config.batch_size.max(1).saturating_mul(2));
         Ok(Self {
             config,
             http_client,
-            buffer: DurableBatch::default(),
+            buffer,
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             enabled: true,
         })
@@ -345,7 +346,13 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        if self.buffer.push(log_entry).await >= self.config.batch_size {
+        if self
+            .buffer
+            .push(log_entry)
+            .await
+            .map_err(|error| IntegrationError::other(format!("Helicone {error}")))?
+            >= self.config.batch_size
+        {
             let _ = self.flush().await;
         }
 
@@ -383,7 +390,13 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        if self.buffer.push(log_entry).await >= self.config.batch_size {
+        if self
+            .buffer
+            .push(log_entry)
+            .await
+            .map_err(|error| IntegrationError::other(format!("Helicone {error}")))?
+            >= self.config.batch_size
+        {
             let _ = self.flush().await;
         }
 
@@ -439,7 +452,10 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        self.buffer.push(log_entry).await;
+        self.buffer
+            .push(log_entry)
+            .await
+            .map_err(|error| IntegrationError::other(format!("Helicone {error}")))?;
 
         Ok(())
     }
@@ -476,7 +492,13 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        if self.buffer.push(log_entry).await >= self.config.batch_size {
+        if self
+            .buffer
+            .push(log_entry)
+            .await
+            .map_err(|error| IntegrationError::other(format!("Helicone {error}")))?
+            >= self.config.batch_size
+        {
             self.flush().await?;
         }
 

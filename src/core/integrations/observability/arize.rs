@@ -245,10 +245,11 @@ impl ArizeIntegration {
             config.model_id
         );
 
+        let buffer = DurableBatch::new(config.batch_size.max(1).saturating_mul(2));
         Ok(Self {
             config,
             http_client,
-            buffer: DurableBatch::default(),
+            buffer,
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             enabled: true,
         })
@@ -412,7 +413,13 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        if self.buffer.push(record).await >= self.config.batch_size {
+        if self
+            .buffer
+            .push(record)
+            .await
+            .map_err(|error| IntegrationError::other(format!("Arize {error}")))?
+            >= self.config.batch_size
+        {
             let _ = self.flush().await;
         }
 
@@ -466,7 +473,13 @@ impl Integration for ArizeIntegration {
             latency_ms: None,
         };
 
-        if self.buffer.push(record).await >= self.config.batch_size {
+        if self
+            .buffer
+            .push(record)
+            .await
+            .map_err(|error| IntegrationError::other(format!("Arize {error}")))?
+            >= self.config.batch_size
+        {
             let _ = self.flush().await;
         }
 
@@ -554,7 +567,10 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        self.buffer.push(record).await;
+        self.buffer
+            .push(record)
+            .await
+            .map_err(|error| IntegrationError::other(format!("Arize {error}")))?;
 
         Ok(())
     }
@@ -613,7 +629,13 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        if self.buffer.push(record).await >= self.config.batch_size {
+        if self
+            .buffer
+            .push(record)
+            .await
+            .map_err(|error| IntegrationError::other(format!("Arize {error}")))?
+            >= self.config.batch_size
+        {
             self.flush().await?;
         }
 
