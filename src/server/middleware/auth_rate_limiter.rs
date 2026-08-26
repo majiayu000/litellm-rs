@@ -141,7 +141,6 @@ impl AuthRateLimiter {
         let window_duration = Duration::from_secs(self.window_secs);
         if now.saturating_duration_since(tracker.window_start) >= window_duration {
             tracker.failure_count = 0;
-            tracker.generation = tracker.generation.wrapping_add(1);
             tracker.window_start = now;
             tracker.notify_state_change();
         }

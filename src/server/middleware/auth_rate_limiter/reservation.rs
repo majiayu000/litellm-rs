@@ -205,7 +205,6 @@ impl AuthRateLimiter {
         let window_duration = Duration::from_secs(self.window_secs);
         if now.saturating_duration_since(tracker.window_start) >= window_duration {
             tracker.failure_count = 0;
-            tracker.generation = tracker.generation.wrapping_add(1);
             tracker.window_start = now;
             tracker.notify_state_change();
         }
@@ -245,7 +244,6 @@ impl AuthRateLimiter {
         let window_duration = Duration::from_secs(self.window_secs);
         if now.saturating_duration_since(tracker.window_start) >= window_duration {
             tracker.failure_count = 0;
-            tracker.generation = tracker.generation.wrapping_add(1);
             tracker.window_start = now;
             tracker.notify_state_change();
         }
@@ -664,6 +662,41 @@ mod tests {
         assert_eq!(tracker.lockout_count, 1);
         assert!(original_deadline > expired_deadline);
         assert_eq!(tracker.lockout_until, Some(expired_deadline));
+    }
+
+    #[tokio::test]
+    async fn in_flight_failure_counts_after_historical_window_reset() {
+        let limiter = Arc::new(AuthRateLimiter::new(2, 300, 60));
+        limiter
+            .reserve_attempt("window-spanning-client")
+            .await
+            .unwrap()
+            .record_failure();
+        let slow = limiter
+            .reserve_attempt("window-spanning-client")
+            .await
+            .unwrap();
+        limiter
+            .attempts
+            .get_mut("window-spanning-client")
+            .unwrap()
+            .window_start = Instant::now() - Duration::from_secs(301);
+
+        let fresh = limiter
+            .reserve_attempt("window-spanning-client")
+            .await
+            .unwrap();
+        slow.record_failure();
+
+        assert_eq!(
+            limiter
+                .attempts
+                .get("window-spanning-client")
+                .unwrap()
+                .failure_count,
+            1
+        );
+        fresh.release();
     }
 
     #[tokio::test]

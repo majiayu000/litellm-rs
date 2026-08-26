@@ -19,9 +19,11 @@ impl AuthAttemptTracker {
     pub(super) fn mark_evictable(
         &mut self,
         client_id: &str,
-        now: Instant,
+        _now: Instant,
     ) -> Option<EvictionCandidate> {
-        if self.eviction_queued || !self.is_evictable(now) {
+        // Active lockouts are retained until their deadline, but still need a
+        // candidate so they become discoverable for eviction after expiry.
+        if self.eviction_queued || self.waiting > 0 || self.in_flight > 0 {
             return None;
         }
         self.eviction_queued = true;
@@ -108,5 +110,20 @@ mod tests {
 
         assert!(limiter.evict_one_inactive(Instant::now()));
         assert!(!limiter.attempts.contains_key("live-client"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_lockout_becomes_evictable_after_expiry() {
+        let limiter = std::sync::Arc::new(AuthRateLimiter::with_max_entries(2, 300, 60, 1));
+        let first = limiter.reserve_attempt("locked-client").await.unwrap();
+        let second = limiter.reserve_attempt("locked-client").await.unwrap();
+
+        first.record_failure();
+        second.record_failure();
+
+        assert_eq!(limiter.eviction_candidates.lock().len(), 1);
+        assert!(!limiter.evict_one_inactive(Instant::now()));
+        assert!(limiter.evict_one_inactive(Instant::now() + std::time::Duration::from_secs(61)));
+        assert!(!limiter.attempts.contains_key("locked-client"));
     }
 }
