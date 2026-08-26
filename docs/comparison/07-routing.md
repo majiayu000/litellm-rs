@@ -191,7 +191,7 @@ pub struct DeploymentState {
 ```
 
 - Local atomic counters per deployment with a shared rollover gate
-- Readers and writers lazily roll expired windows; a background reset is optional
+- Readers and writers lazily roll expired windows; optional `Weak`-owned maintenance performs eager cleanup
 - No external dependencies for rate tracking
 
 ---

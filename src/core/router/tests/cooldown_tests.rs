@@ -409,6 +409,37 @@ async fn test_minute_reset_task_preserves_fresh_window_usage() {
 }
 
 #[tokio::test]
+async fn test_minute_reset_task_releases_router_between_ticks() {
+    let router = Arc::new(Router::default());
+    let deployment = create_test_deployment("test-1", "gpt-4").await;
+    let state = deployment.state.clone();
+    state.rpm_current.store(1, Ordering::Relaxed);
+    state.minute_reset_at.store(0, Ordering::Release);
+    router.add_deployment(deployment);
+    let weak_router = Arc::downgrade(&router);
+    let task = router.clone().start_minute_reset_task();
+
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while state.rpm_current.load(Ordering::Relaxed) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("immediate maintenance tick should reset an expired window");
+    tokio::task::yield_now().await;
+    assert_eq!(Arc::strong_count(&router), 1);
+
+    drop(router);
+    assert!(weak_router.upgrade().is_none());
+    task.abort();
+    assert!(
+        task.await
+            .expect_err("task should be aborted")
+            .is_cancelled()
+    );
+}
+
+#[tokio::test]
 async fn test_min_requests_prevents_premature_cooldown() {
     // With min_requests=10, 3 failures out of only 3 total should NOT trip
     let config = RouterConfig {
