@@ -766,12 +766,16 @@ impl Router {
     /// Request readers and writers roll elapsed windows themselves, so this
     /// task is not required for correct rate-limit or circuit-breaker state.
     pub fn start_minute_reset_task(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let router = Arc::downgrade(&self);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
+                let Some(router) = router.upgrade() else {
+                    break;
+                };
                 let now = current_timestamp();
-                let snapshot = self.routing_snapshot.load();
+                let snapshot = router.routing_snapshot.load();
                 for deployment in snapshot.deployments.values() {
                     deployment.state.roll_minute_window(now);
                 }

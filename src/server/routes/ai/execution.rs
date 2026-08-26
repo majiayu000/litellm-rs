@@ -1,5 +1,6 @@
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::router::deployment::Deployment;
+use crate::core::router::error::CooldownReason;
 use crate::core::router::execution::{infer_cooldown_reason, router_error_to_provider_error};
 use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
 use crate::core::router::{RouterError, UnifiedRouter};
@@ -37,7 +38,16 @@ impl StreamingDeploymentLease {
     }
 
     pub(super) fn finish_failure(mut self, error: &ProviderError) {
-        let cooldown_reason = infer_cooldown_reason(error);
+        // Mid-stream failures cannot be retried. Preserve fail-fast cooldowns
+        // for rate limits and deterministic misconfiguration, while routing
+        // ordinary transient failures through the counted breaker path.
+        let inferred = infer_cooldown_reason(error);
+        let cooldown_reason = match inferred {
+            CooldownReason::RateLimit | CooldownReason::AuthError | CooldownReason::NotFound => {
+                inferred
+            }
+            _ => CooldownReason::ConsecutiveFailures,
+        };
         self.router
             .record_failure_with_reason_for_deployment(&self.deployment, cooldown_reason);
         self.release();
