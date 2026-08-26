@@ -17,6 +17,13 @@ struct RunningServer {
 
 impl RunningServer {
     async fn start(server_config: ServerConfig) -> Self {
+        Self::start_with_addresses(server_config, "127.0.0.1:0").await
+    }
+
+    async fn start_with_addresses(
+        server_config: ServerConfig,
+        addresses: impl std::net::ToSocketAddrs,
+    ) -> Self {
         let mut config = super::valid_test_config();
         config.gateway.server = server_config;
         config.gateway.auth.enable_jwt = false;
@@ -35,7 +42,7 @@ impl RunningServer {
         let (server, address) = build_actix_server(
             web::Data::new(gateway.state().clone()),
             &settings,
-            "127.0.0.1:0",
+            addresses,
         )
         .expect("production Actix builder should bind");
         let handle = server.handle();
@@ -58,6 +65,25 @@ impl RunningServer {
             .expect("server task should join");
         result.expect("server should stop cleanly");
     }
+}
+
+#[tokio::test]
+async fn production_builder_tries_candidates_but_binds_exactly_one() {
+    let occupied =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("first candidate should be reserved");
+    let occupied_address = occupied
+        .local_addr()
+        .expect("reserved address should exist");
+    let candidates = [
+        occupied_address,
+        "127.0.0.1:0".parse().expect("valid loopback candidate"),
+        "127.0.0.1:0".parse().expect("valid loopback candidate"),
+    ];
+
+    let running =
+        RunningServer::start_with_addresses(ServerConfig::default(), candidates.as_slice()).await;
+    assert_ne!(running.address, occupied_address);
+    running.stop().await;
 }
 
 impl Drop for RunningServer {
@@ -137,6 +163,16 @@ fn listener_settings_apply_workers_timeout_and_total_cap() {
     assert_eq!(capped.effective_workers, 4);
     assert_eq!(per_worker * capped.effective_workers, 8);
     assert!(per_worker * capped.effective_workers <= 10);
+
+    let reduced = validated_listener_settings(&ServerConfig {
+        workers: Some(4),
+        max_connections: Some(2),
+        ..ServerConfig::default()
+    })
+    .expect("small cap should reduce worker count");
+    assert_eq!(reduced.configured_workers, 4);
+    assert_eq!(reduced.effective_workers, 1);
+    assert_eq!(reduced.max_connections_per_worker, Some(2));
 }
 
 #[tokio::test]
