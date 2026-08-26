@@ -18,6 +18,15 @@ async fn metrics_endpoint_exposes_live_callback_sample_from_same_runtime() {
     );
 
     let mut config = Config::default();
+    config
+        .gateway
+        .providers
+        .push(crate::config::models::provider::ProviderConfig {
+            name: "metrics-test-openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-metrics-test".to_string(),
+            ..Default::default()
+        });
     config.gateway.auth.enable_jwt = false;
     config.gateway.auth.enable_api_key = false;
     config.gateway.auth.allow_anonymous = true;
