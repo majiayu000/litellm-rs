@@ -1,154 +1,72 @@
 ---
 name: provider-development
-description: LiteLLM-RS Provider 开发与架构指南。用于添加新 provider、迁移错误处理、维护 66+ provider 的一致性。包含架构对比分析和最佳实践。适用于新增 provider 实现、把旧错误枚举迁移到统一 ProviderError、或做架构选型对比时使用。
+description: LiteLLM-RS Provider 开发指南。用于添加新 provider（Tier 1 catalog 条目或 Tier 2 代码实现）、统一错误处理，或把旧错误枚举迁移到 ProviderError。
 ---
 
 # LiteLLM-RS Provider 开发指南
 
 ## 架构概述
 
-本项目采用**统一错误 + Trait Object**架构，这是经过对比分析后的最佳选择。
+本项目采用**统一错误 + 闭集 `Provider` 枚举派发**。`LLMProvider`
+统一各实现的方法签名，但路由部署存放的是具体 `Provider` 枚举，而不是
+`dyn LLMProvider` trait object。
 
 ### 当前架构层次
 
 ```
 ┌────────────────────────────────────────────────────────┐
 │                    网关层 (Gateway)                     │
-│  LiteLLMError (core/types/errors/litellm.rs)          │
-│  - 顶层错误类型，15 个变体                              │
+│  LiteLLMError = GatewayError（18 个变体）               │
+│  - 别名定义: core/types/errors/litellm.rs              │
+│  - 枚举定义: utils/error/gateway_error/types.rs        │
 │  - 处理路由、配置、认证等网关级错误                      │
 └────────────────────────────────────────────────────────┘
                           ↓
 ┌────────────────────────────────────────────────────────┐
 │                   Provider 层                          │
-│  ProviderError (core/providers/unified_provider.rs)   │
+│  ProviderError（经 unified_provider 模块导出，         │
+│  定义于 unified_provider_error.rs）                     │
 │  - 统一 provider 错误，24 个变体                        │
 │  - 每个变体包含 provider: &'static str 字段            │
 │  - 丰富的工厂方法和上下文信息                           │
 └────────────────────────────────────────────────────────┘
                           ↓
 ┌────────────────────────────────────────────────────────┐
-│              各 Provider 实现 (66+)                     │
-│  - 已迁移: type Error = ProviderError                  │
-│  - 待迁移: type Error = XxxError (独立错误枚举)         │
+│              各 Provider 实现（两层结构）                │
+│  - Tier 1: registry/catalog.rs 目录条目（def_chat 等），│
+│    经 OpenAILikeProvider 路由，无专属代码               │
+│  - Tier 2: 代码型 provider 目录，                       │
+│    实现 LLMProvider 并注册到闭集 Provider 枚举          │
 └────────────────────────────────────────────────────────┘
 ```
 
----
+Provider 数量随版本演进，不在此硬编码。枚举方法：
 
-## 架构方案对比
+```bash
+# 两个计数都会包含各自的 helper 定义，因此分别减 1
+grep -c 'def_chat(' src/core/providers/registry/catalog.rs
+grep -c 'def_local_chat(' src/core/providers/registry/catalog.rs
 
-### 方案一：Enum Dispatch（编译时多态）
-
-```rust
-#[enum_dispatch]
-pub enum Provider {
-    OpenAI(OpenAIProvider),
-    Anthropic(AnthropicProvider),
-    // ... 66+ 变体
-}
+# 排除基础设施目录后再人工确认代码型 provider
+ls -d src/core/providers/*/ | grep -vE '/(base|factory|macros|registry)/'
 ```
-
-| 指标 | 评估 |
-|------|------|
-| 方法调用延迟 | ~480ns（最快） |
-| 二进制体积 | 大（~50MB，66个变体单态化） |
-| 编译时间 | 慢（~10分钟） |
-| 运行时扩展 | 不支持 |
-| 适用场景 | 封闭类型集、高频调用 |
-
-**结论**：不适合 66+ provider 场景，二进制膨胀严重
-
-### 方案二：Trait Object + 统一错误（动态派发）✅ 当前采用
-
-```rust
-pub trait LLMProvider: Send + Sync {
-    type Error = ProviderError;  // 统一错误类型
-    async fn chat_completion(&self, ...) -> Result<ChatResponse, ProviderError>;
-}
-```
-
-| 指标 | 评估 |
-|------|------|
-| 方法调用延迟 | ~5,900ns |
-| 二进制体积 | 小（~10MB） |
-| 编译时间 | 快（~2分钟） |
-| 运行时扩展 | 支持 |
-| 适用场景 | 多后端系统、API 网关 |
-
-**结论**：最适合本项目，5μs 延迟在 10ms+ 网络延迟中可忽略（0.05%）
-
-### 方案三：混合模式（分层派发）
-
-```rust
-// 热路径：前 10 个 provider 用 enum dispatch
-enum FastProvider { OpenAI, Anthropic, Azure, ... }
-// 冷路径：其余 56 个用 trait object
-type ExtendedProvider = Box<dyn LLMProvider>;
-```
-
-| 指标 | 评估 |
-|------|------|
-| 加权延迟 | ~1,500ns（80/20 分布） |
-| 复杂度 | 高（两条代码路径） |
-| 适用场景 | 极致性能要求 |
-
-**结论**：备选方案，增加复杂度但性能更好
-
-### 方案四：完全单态化
-
-```rust
-pub async fn completion<P: LLMProvider>(provider: &P, ...) { ... }
-```
-
-| 指标 | 评估 |
-|------|------|
-| 方法调用延迟 | ~0ns（内联） |
-| 二进制体积 | 巨大（泛型代码 66x 拷贝） |
-| 编译时间 | 非常慢 |
-
-**结论**：不实用，66+ provider 会导致二进制爆炸
-
-### 方案五：SNAFU 堆栈错误（GreptimeDB 模式）
-
-```rust
-#[derive(Debug, Snafu)]
-pub enum ProviderError {
-    #[snafu(display("Auth failed: {source}"))]
-    Authentication { source: Box<dyn Error>, backtrace: Backtrace },
-}
-```
-
-| 指标 | 评估 |
-|------|------|
-| 错误上下文 | 丰富（堆栈、回溯） |
-| 性能开销 | 堆分配 + 回溯收集 |
-| 适用场景 | 复杂系统调试 |
-
-**结论**：可选增强，但当前 `ProviderError` 已足够
 
 ---
 
-## 性能对比总结
+## 当前派发契约
 
-| 方案 | 调用延迟 | 二进制体积 | 编译时间 | 扩展性 | 推荐度 |
-|------|----------|------------|----------|--------|--------|
-| Enum Dispatch | ~480ns | 大 | 慢 | 无 | ⭐⭐ |
-| **Trait Object** | ~5,900ns | **小** | **快** | **有** | ⭐⭐⭐⭐⭐ |
-| 混合模式 | ~1,500ns | 中 | 中 | 有 | ⭐⭐⭐⭐ |
-| 完全单态化 | ~0ns | 巨大 | 极慢 | 编译时 | ⭐ |
-| SNAFU | ~5,900ns | 小 | 快 | 有 | ⭐⭐⭐⭐ |
+`Provider` 定义在 `src/core/providers/mod.rs`，由本地 `dispatch_provider!` 宏把
+方法转发给具体实现。宏分别维护 `sync`、`async_err`、`value` 和
+`async_direct` 四类展开臂；Router 的 deployment 持有这个枚举，因此 Tier 2 provider
+仅实现 `LLMProvider` 还不够；还必须添加枚举变体、dispatch/factory 分支及模块
+注册。Tier 1 catalog provider 复用现有的 `Provider::OpenAILike` 变体，所以无需
+为每个兼容端点增加枚举成员。
 
-### 为什么 5μs 差异不重要
-
-```
-典型 LLM API 请求延迟分解：
-├── 网络往返：         50-200ms
-├── Provider API 处理： 500-5000ms
-├── 序列化/反序列化：   0.1-1ms
-├── 路由决策：          0.01-0.1ms
-└── 派发开销：          0.005ms (5μs)  ← 占比 0.001%-0.01%
-```
+`LLMProvider` 使用原生 `async fn` 且没有关联错误类型；所有可失败的方法直接
+返回 `ProviderError`。当前 trait 不是路由层的动态插件边界。真实的 trait object
+仅出现在局部边界，例如 `Box<dyn ErrorMapper<ProviderError>>` 和 boxed streaming
+`Stream`。仓库没有可支持具体纳秒、二进制大小或编译耗时对比的基准，因此本文
+不提供这些数字。
 
 ---
 
@@ -221,6 +139,11 @@ ProviderError::streaming_error("fireworks", "chat", Some(42), None, "Connection 
 
 ## 添加新 Provider
 
+### 先判断 Tier
+
+- **Tier 1（OpenAI 兼容、无需定制逻辑）**：只需在 `src/core/providers/registry/catalog.rs` 加一条 `def_chat("name", "Display Name", "https://api.example.com/v1", "NAME_API_KEY")`，工厂自动经 `OpenAILikeProvider` 路由，无需新建目录（本地部署类用 `def_local_chat`）。
+- **Tier 2（自定义请求转换、认证签名、非 SSE 流式协议、专属模型元数据等）**：按下文创建代码目录。
+
 ### 目录结构
 
 ```
@@ -234,55 +157,62 @@ src/core/providers/my_provider/
 
 ### 配置实现
 
+实现 `crate::core::traits::provider::ProviderConfig`（定义于 `src/core/traits/provider/config.rs`，必需方法：`validate` / `api_key` / `api_base` / `timeout` / `max_retries`）。参考真实实现：`src/core/providers/cloudflare/config.rs`。
+
 ```rust
 // config.rs
-use crate::core::providers::base::BaseProviderConfig;
-use crate::core::traits::config::ProviderConfig;
+use crate::core::traits::provider::ProviderConfig;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MyProviderConfig {
-    pub base: BaseProviderConfig,
-    pub custom_option: Option<String>,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
 }
+
+fn default_timeout() -> u64 { 60 }
+fn default_max_retries() -> u32 { 3 }
 
 impl Default for MyProviderConfig {
     fn default() -> Self {
         Self {
-            base: BaseProviderConfig {
-                api_key: std::env::var("MY_PROVIDER_API_KEY").ok(),
-                api_base: Some("https://api.myprovider.com/v1".to_string()),
-                ..Default::default()
-            },
-            custom_option: None,
+            api_key: std::env::var("MY_PROVIDER_API_KEY").ok(),
+            api_base: None,
+            timeout: default_timeout(),
+            max_retries: default_max_retries(),
         }
     }
 }
 
 impl ProviderConfig for MyProviderConfig {
     fn validate(&self) -> Result<(), String> {
-        if self.base.api_key.is_none() {
-            return Err("MY_PROVIDER_API_KEY is required".to_string());
-        }
-        Ok(())
+        self.validate_standard("my_provider")
     }
 
-    fn get_api_key(&self) -> Option<String> {
-        self.base.api_key.clone()
-    }
-
-    fn get_api_base(&self) -> String {
-        self.base.api_base.clone()
-            .unwrap_or_else(|| "https://api.myprovider.com/v1".to_string())
-    }
+    fn api_key(&self) -> Option<&str> { self.api_key.as_deref() }
+    fn api_base(&self) -> Option<&str> { self.api_base.as_deref() }
+    fn timeout(&self) -> std::time::Duration { std::time::Duration::from_secs(self.timeout) }
+    fn max_retries(&self) -> u32 { self.max_retries }
 }
 ```
 
-### Provider 实现（使用统一错误）
+### Provider 传输实现（使用统一错误）
+
+`LLMProvider` trait（`src/core/traits/provider/llm_provider/trait_definition.rs`）没有关联类型：方法签名直接使用 `ProviderError`，错误映射通过 `get_error_mapper()` 提供；trait 方法是原生 `async fn`，实现时无需 `#[async_trait]` 宏。下面是完整的传输 helper；`chat_completion` 还需要把成功 JSON 转成 `ChatResponse`，可参考 `cloudflare/provider.rs`。
 
 ```rust
 // provider.rs
+use super::{get_models, MyProviderConfig};
+use crate::core::providers::base::{header, BaseConfig, GlobalPoolManager, HttpMethod};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+use crate::core::traits::provider::ProviderConfig;
+use crate::core::types::{chat::ChatRequest, model::ModelInfo};
+use serde_json::Value;
+use std::sync::Arc;
 
 const PROVIDER_NAME: &str = "my_provider";
 
@@ -294,60 +224,62 @@ pub struct MyProvider {
 }
 
 impl MyProvider {
-    pub fn new(config: MyProviderConfig) -> Result<Self, ProviderError> {
+    pub async fn new(config: MyProviderConfig) -> Result<Self, ProviderError> {
         config.validate()
             .map_err(|e| ProviderError::configuration(PROVIDER_NAME, e))?;
 
-        let pool_manager = Arc::new(
-            GlobalPoolManager::new()
-                .map_err(|e| ProviderError::configuration(PROVIDER_NAME, e.to_string()))?
-        );
+        let http_config = BaseConfig {
+            api_key: config.api_key.clone(),
+            api_base: config.api_base.clone(),
+            timeout: config.timeout,
+            max_retries: config.max_retries,
+            ..BaseConfig::default()
+        };
+        let pool_manager = Arc::new(GlobalPoolManager::new_for_provider(
+            PROVIDER_NAME,
+            http_config,
+        )?);
 
         Ok(Self { config, pool_manager, models: get_models() })
     }
 
-    pub fn from_env() -> Result<Self, ProviderError> {
-        Self::new(MyProviderConfig::default())
-    }
-}
-
-#[async_trait]
-impl LLMProvider for MyProvider {
-    type Config = MyProviderConfig;
-    type Error = ProviderError;  // ← 使用统一错误
-    type ErrorMapper = crate::core::providers::base::GenericErrorMapper;
-
-    fn name(&self) -> &'static str {
-        PROVIDER_NAME
-    }
-
-    async fn chat_completion(
-        &self,
-        request: ChatRequest,
-        context: RequestContext,
-    ) -> Result<ChatResponse, Self::Error> {
-        let api_key = self.config.get_api_key()
+    async fn execute_chat_json(&self, request: &ChatRequest) -> Result<Value, ProviderError> {
+        let api_key = self.config.api_key()
             .ok_or_else(|| ProviderError::authentication(PROVIDER_NAME, "API key required"))?;
+        let api_base = self.config.api_base()
+            .ok_or_else(|| ProviderError::configuration(PROVIDER_NAME, "API base required"))?;
+        let url = format!("{}/chat/completions", api_base.trim_end_matches('/'));
+        let body = serde_json::to_value(request)
+            .map_err(|e| ProviderError::serialization(PROVIDER_NAME, e.to_string()))?;
+
+        let headers = vec![
+            header("Authorization", format!("Bearer {}", api_key)),
+            header("Content-Type", "application/json".to_string()),
+        ];
 
         let response = self.pool_manager
             .execute_request(&url, HttpMethod::POST, headers, Some(body))
-            .await
-            .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
+            .await?;
 
-        if !response.status().is_success() {
-            return Err(self.map_http_error(response.status().as_u16(), &body));
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = response.text().await
+                .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
+            return Err(self.map_http_error(status.as_u16(), &response_body));
         }
 
-        // ...
+        let response_body = response.bytes().await
+            .map_err(|e| ProviderError::network(PROVIDER_NAME, e.to_string()))?;
+        serde_json::from_slice(&response_body)
+            .map_err(|e| ProviderError::response_parsing(PROVIDER_NAME, e.to_string()))
     }
-}
 
-impl MyProvider {
     fn map_http_error(&self, status: u16, body: &str) -> ProviderError {
+        use crate::core::providers::shared::parse_retry_after_from_body;
         match status {
             401 => ProviderError::authentication(PROVIDER_NAME, "Invalid API key"),
             404 => ProviderError::model_not_found(PROVIDER_NAME, body),
-            429 => ProviderError::rate_limit(PROVIDER_NAME, self.parse_retry_after(body)),
+            429 => ProviderError::rate_limit(PROVIDER_NAME, parse_retry_after_from_body(body)),
             400 => ProviderError::invalid_request(PROVIDER_NAME, body),
             500..=599 => ProviderError::provider_unavailable(PROVIDER_NAME, body),
             _ => ProviderError::api_error(PROVIDER_NAME, status, body),
@@ -360,7 +292,7 @@ impl MyProvider {
 
 ```rust
 // model_info.rs
-use crate::core::types::common::{ModelInfo, ProviderCapability};
+use crate::core::types::model::{ModelInfo, ProviderCapability};
 
 pub fn get_models() -> Vec<ModelInfo> {
     vec![
@@ -398,15 +330,21 @@ mod provider;
 pub use config::MyProviderConfig;
 pub use provider::MyProvider;
 pub use model_info::get_models;
-
-// src/core/providers/mod.rs
-pub mod my_provider;
-pub use my_provider::{MyProvider, MyProviderConfig};
 ```
+
+Tier 2 provider 接入闭合枚举（无法运行时注册，需以下 crate 内改动，参考 `cloudflare` 的接线方式）：
+
+1. 在 `src/core/providers/mod.rs` 声明模块并给 `Provider` 增加带相同 feature gate 的变体。
+2. 把该变体加入 `dispatch_provider!` 的 `sync`、`async_err`、`value`、`async_direct` 四个 `@expand` 臂，并补齐 `Provider::name()` 和 `provider_type()` 分支。
+3. 在 `provider_type.rs` 增加 `ProviderType` 变体，并加入 `all_non_custom_provider_types()`；字符串转换由 registry 元数据派生，不要另写一套别名表。
+4. 在 `registry/types.rs` 的 `PROVIDER_TYPE_REGISTRY` 增加 canonical name、aliases、`catalog_backed` 和正确的 `ProviderDispatchKind`。
+   feature-gated 原生实现应复用或新增 cfg-sensitive dispatch-kind helper，分别表达启用与禁用时的模式；registry entry 本身没有 feature 字段。
+5. 在 `factory/builder.rs` 增加配置构造器，在 `factory/registry.rs` 增加工厂 match 分支；module、`Provider`、dispatch 与 factory wiring 使用同步的 cfg gate。
+6. 更新 provider-type/registry lifecycle、factory support 与 feature-on/off 测试，确认别名解析、支持状态和构造路径一致。
 
 ---
 
 ## References
 
 - [reference/migration-and-checklists.md](reference/migration-and-checklists.md) — 迁移现有 provider 到统一错误的步骤、错误映射对照表与迁移检查清单
-- [reference/industry-notes-and-faq.md](reference/industry-notes-and-faq.md) — 行业架构选择参考、性能基准来源与常见问题解答
+- [reference/industry-notes-and-faq.md](reference/industry-notes-and-faq.md) — 行业架构选择参考与常见问题解答

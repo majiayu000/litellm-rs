@@ -15,7 +15,8 @@ ProviderError::authentication(PROVIDER_NAME, "Invalid API key")
 ProviderError::rate_limit(PROVIDER_NAME, Some(60))
 ProviderError::model_not_found(PROVIDER_NAME, &model)
 
-// Bad
+// Bad - direct struct literals skip normalization; some variants carry extra
+// optional fields (e.g. RateLimit has retry_after/rpm_limit/tpm_limit/current_usage)
 ProviderError::Authentication {
     provider: PROVIDER_NAME,
     message: "Invalid API key".to_string()
@@ -37,7 +38,8 @@ let api_key = self.config.get_api_key().unwrap();
 
 ### 3. Provider Name Constant
 
-Use a constant for provider name:
+Use a constant for the static provider name (it also feeds `ProviderError`
+constructors, which take `&'static str`, and `error_provider_name()`):
 
 ```rust
 const PROVIDER_NAME: &str = "my_provider";
@@ -55,7 +57,7 @@ async fn transform_request(
     &self,
     mut request: ChatRequest,
     _context: RequestContext,
-) -> Result<Value, Self::Error> {
+) -> Result<Value, ProviderError> {
     // Provider-specific transformations
     if let Some(ref mut tool_choice) = request.tool_choice {
         // Map "required" to "any" for this provider
@@ -75,33 +77,49 @@ async fn transform_request(
 
 ## Checklist for New Providers
 
-```markdown
-## Configuration
-- [ ] Implement ProviderConfig trait
-- [ ] Include validate() method
+### Tier 1 (Catalog-Only)
+
+- [ ] Endpoint serves OpenAI-compatible `/chat/completions` with standard SSE `data: [DONE]` streaming
+- [ ] One `def_chat(...)` entry in `src/core/providers/registry/catalog.rs` (or `def_local_chat(...)` for keyless local servers)
+- [ ] Annotation comment in `src/core/providers/mod.rs`: `// <name>: Tier 1 -> registry/catalog.rs`
+- [ ] `auth_env_var` matches the provider's documented env var; add `alternate_auth_env_vars` for known aliases
+- [ ] `model_prefix: Some(...)` only when selector-prefix stripping is actually needed
+- [ ] Unit test asserting `get_definition("<name>")` resolves with the right base URL and key (see tests in `catalog.rs`)
+- [ ] No new module, enum variant, or factory branch
+
+### Tier 2 (Code-Based)
+
+**Configuration**
+- [ ] Implement `ProviderConfig` trait (or use `define_provider_config!`)
+- [ ] Include `validate()` method
 - [ ] Support environment variables
 - [ ] Set reasonable defaults
 
-## Provider Implementation
-- [ ] Use ProviderError (unified error type)
-- [ ] Implement all required LLMProvider methods
-- [ ] Map HTTP errors correctly
-- [ ] Support streaming (if applicable)
+**Provider Implementation**
+- [ ] Use `ProviderError` (unified error type) for every trait method
+- [ ] Implement all required `LLMProvider` methods (no associated types exist)
+- [ ] Map HTTP errors through an `ErrorMapper` (`DefaultErrorMapper` unless the API has bespoke bodies)
+- [ ] Support streaming via `chat_completion_stream` gated on `ChatCompletionStream` capability (if applicable)
 
-## Model Information
-- [ ] Define supported models
-- [ ] Include pricing information
-- [ ] Specify capabilities correctly
+**Model Information**
+- [ ] Define supported models returning the real `ModelInfo` shape (`src/core/types/model.rs`)
+- [ ] Include pricing information (per 1K tokens fields)
+- [ ] Specify capabilities correctly (static slice of `ProviderCapability`)
 
-## Quality
+**Quality**
 - [ ] No unwrap() calls
 - [ ] Clear error messages
 - [ ] All errors include provider name
 - [ ] Unit tests for error mapping
 
-## Registration
-- [ ] Add to providers/mod.rs
-- [ ] Add to provider registry
-```
-
----
+**Registration**
+- [ ] `pub mod <name>;` in `src/core/providers/mod.rs` (feature-gated as needed)
+- [ ] Variant in the closed `Provider` enum under the same feature gate
+- [ ] Variant added to all four `dispatch_provider!` `@expand` arms: `sync`, `async_err`, `value`, and `async_direct`
+- [ ] `Provider::name()` and `Provider::provider_type()` match arms added
+- [ ] `ProviderType` variant added to `provider_type.rs` and `all_non_custom_provider_types()`
+- [ ] `PROVIDER_TYPE_REGISTRY` entry includes canonical name, aliases, `catalog_backed`, and correct `ProviderDispatchKind`
+- [ ] Feature-gated native implementations use or add the appropriate cfg-sensitive dispatch-kind helper for enabled/disabled modes; registry entries remain present and have no feature field
+- [ ] Config builder in `factory/builder.rs` and factory match arm in `factory/registry.rs`
+- [ ] Matching cfg gates synchronize module, `Provider` enum, dispatch, and factory wiring (not the registry entry)
+- [ ] Provider-type/registry lifecycle, factory support, and feature-on/off tests updated

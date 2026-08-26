@@ -1,36 +1,30 @@
-## 行业参考
+## 当前架构说明
 
-### 类似系统的架构选择
+本项目使用闭集 `Provider` 枚举派发和统一 `ProviderError`：
 
-| 项目 | 架构 | 理由 |
-|------|------|------|
-| **SQLx** | Trait Object + 统一错误 | 多数据库支持 |
-| **SeaORM** | Trait Object + 统一错误 | 数据库抽象 |
-| **Diesel** | 泛型单态化 | 编译时类型安全 |
-| **GreptimeDB** | SNAFU 堆栈错误 | 复杂系统调试 |
-| **本项目** | Trait Object + 统一错误 | 66+ provider、API 网关 |
-
-### 性能基准来源
-
-- [enum_dispatch crate](https://docs.rs/enum_dispatch) - 12x 性能提升数据
-- [Rust Error Handling Guide 2025](https://markaicode.com/rust-error-handling-2025-guide/)
-- [thiserror vs anyhow vs snafu](https://dev.to/leapcell/rust-error-handling-compared-anyhow-vs-thiserror-vs-snafu-2003)
+- Router deployment 保存 `src/core/providers/mod.rs` 中的 `Provider` 枚举；本地
+  `dispatch_provider!` 宏通过 `sync`、`async_err`、`value` 和 `async_direct`
+  四类展开臂将调用转发给具体 provider。
+- `LLMProvider` 是各具体实现共享的接口，不是路由层的 trait-object 插件边界。
+- Tier 1 OpenAI 兼容端点通过 catalog 复用 `Provider::OpenAILike`；Tier 2
+  provider 需要增加模块、枚举/dispatch 和 factory wiring。
+- 仓库没有支持具体派发延迟、二进制体积或编译耗时对比的 benchmark，文档不应
+  给出这类数字。
 
 ---
 
 ## 常见问题
 
-### Q: 为什么不用 enum dispatch？
-A: 66 个 provider 会导致：
-- 二进制体积 ~50MB（vs ~10MB）
-- 编译时间 ~10 分钟（vs ~2 分钟）
-- 每次添加 provider 需要重新编译整个枚举
-
-### Q: 5μs 的性能损失重要吗？
-A: 不重要。在典型 LLM 请求中（500ms-5000ms），5μs 占比 0.001%-0.01%，完全可忽略。
-
 ### Q: 如何处理 provider 特有的错误？
-A: 使用 `ProviderError::Other { provider, message }` 或 `ProviderError::api_error(provider, status, message)`，在 message 中包含详细信息。
+
+A: 优先选择语义匹配的 `ProviderError` 工厂方法，例如 `authentication`、
+`rate_limit`、`invalid_request` 或 `not_supported`。只有没有更具体分类时才使用
+`ProviderError::api_error(provider, status, message)` 或 `Other`；不要创建新的
+provider 私有错误枚举。
 
 ### Q: 需要添加新的错误变体怎么办？
-A: 修改 `unified_provider.rs` 中的 `ProviderError` 枚举，添加新变体和工厂方法。这只需要改一个文件，而不是 50+ 文件。
+
+A: 枚举定义在 `src/core/providers/unified_provider_error.rs`，工厂方法和辅助行为
+主要在 `unified_provider_methods.rs`。新增变体还要检查 HTTP 映射、失败分类、
+脱敏、格式化和穷举 match；先搜索 `ProviderError::` 的现有处理点，不能假定只改
+一个文件即可。

@@ -1,76 +1,77 @@
 ## Retry Logic
 
-### Retryable Error Detection
+### Legacy Helpers on ProviderError
 
 ```rust
-impl ProviderError {
-    pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::RateLimit { .. }
-                | Self::Timeout { .. }
-                | Self::Network { .. }
-                | Self::ProviderUnavailable { .. }
-        )
-    }
+// src/core/providers/unified_provider_methods.rs
 
-    pub fn retry_after(&self) -> Option<Duration> {
-        match self {
-            Self::RateLimit { retry_after, .. } => {
-                retry_after.map(Duration::from_secs)
-            }
-            Self::Timeout { .. } => Some(Duration::from_secs(1)),
-            Self::Network { .. } => Some(Duration::from_millis(500)),
-            Self::ProviderUnavailable { .. } => Some(Duration::from_secs(5)),
-            _ => None,
-        }
-    }
+/// Check if this error is retryable.
+/// DEPRECATED since 0.6.0: use RetryPolicy::decide with ProviderFailureFacts.
+pub fn is_retryable(&self) -> bool;
 
-    pub fn should_fallback(&self) -> bool {
-        matches!(
-            self,
-            Self::ProviderUnavailable { .. }
-                | Self::RateLimit { .. }
-                | Self::QuotaExceeded { .. }
-                | Self::ModelNotFound { .. }
-        )
+/// Get retry delay in seconds (legacy hint).
+pub fn retry_delay(&self) -> Option<u64>;
+```
+
+There are no `retry_after()` or `should_fallback()` methods on
+`ProviderError`. Structured retry data lives in the `RateLimit` variant
+fields (`retry_after`, `rpm_limit`, `tpm_limit`) and in
+`ProviderFailureFacts` (`src/core/providers/failure.rs`), which both helpers
+delegate to.
+
+### What the Legacy Helpers Report
+
+Per `ProviderFailureFacts::from_error` in `src/core/providers/failure.rs`:
+
+| Variant | Retryable | Delay |
+|---------|-----------|-------|
+| `RateLimit` | Yes | `retry_after` field |
+| `Network`, `Timeout` | Yes | 1s |
+| `ProviderUnavailable` | Yes | 5s |
+| `ContentFiltered` | Only if `potentially_retryable == Some(true)` | 10s |
+| `ApiError` status 429 | Yes | 60s |
+| `ApiError` status 500-599 | Yes | 3s |
+| `ApiError` Bedrock-modeled 424 | Yes | 3s |
+| `DeploymentError` | Yes | 5s |
+| `Streaming` | Yes | 2s |
+| All other variants | No | - |
+
+### Canonical Decision Path: RetryPolicy
+
+```rust
+// src/core/router/retry_policy.rs
+let decision = RetryPolicy.decide(&router_config, &error, retry_context);
+if decision.should_retry {
+    if let Some(delay) = decision.delay {
+        tokio::time::sleep(delay).await;
     }
 }
 ```
+
+`RetryDecision` carries `should_retry: bool`, `delay: Option<Duration>`, and
+a `RetryDecisionReason`. The policy also enforces attempt limits and a retry
+budget via `RetryContext` (`attempt`, `max_attempts`,
+`retry_budget_remaining`). For per-deployment schedules use
+`decide_for_deployment`.
 
 ### Retry Implementation
 
+Two similarly named APIs serve different layers:
+
 ```rust
-pub async fn execute_with_retry<F, T, E>(
-    operation: F,
-    max_retries: u32,
-    base_delay: Duration,
-) -> Result<T, E>
-where
-    F: Fn() -> Pin<Box<dyn Future<Output = Result<T, E>> + Send>>,
-    E: std::fmt::Debug,
-{
-    let mut attempts = 0;
-    let mut last_error;
-
-    loop {
-        match operation().await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                attempts += 1;
-                last_error = e;
-
-                if attempts >= max_retries {
-                    break;
-                }
-
-                // Exponential backoff
-                let delay = base_delay * 2u32.pow(attempts - 1);
-                tokio::time::sleep(delay).await;
-            }
-        }
-    }
-
-    Err(last_error)
-}
+// src/utils/net/client/utils.rs: a low-level helper for synchronous closures.
+let result = ClientUtils::execute_with_retry(operation, &retry_config).await?;
 ```
+
+`ClientUtils` runs the closure over `0..=config.max_retries` (one initial
+attempt plus the configured retries) and sleeps between failures using the
+`RetryConfig` backoff calculation. Its closure is `Fn() -> Result<T, E>` where
+`E: Into<ProviderError> + Clone`; it is not an async-operation executor.
+
+Router traffic instead uses
+`Router::execute_with_selected_deployment_retry(model_name, callback)`. Its
+callback receives the selected `Arc<Deployment>`, and the router applies
+`RetryPolicy`, retry budgets, snapshot-safe reselection and cooldown behavior.
+The older `Router::execute_with_retry` callback receives only a
+`DeploymentId` and is deprecated; do not confuse either Router method with
+the `ClientUtils` helper.

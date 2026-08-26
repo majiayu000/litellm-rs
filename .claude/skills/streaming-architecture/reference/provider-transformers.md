@@ -1,305 +1,158 @@
 ## Contents
 
-- Provider-Specific Transformers
+- OpenAICompatibleTransformer
+- AnthropicTransformer
+- GeminiTransformer
+- CohereTransformer
+- DatabricksTransformer
 
-## Provider-Specific Transformers
+## OpenAICompatibleTransformer
 
-### OpenAI Transformer
+Source: `src/core/providers/base/sse/openai.rs`. The reusable workhorse: any
+OpenAI-compatible upstream (Tier 1 catalog providers, Azure, Mistral, ...)
+streams through it with a different `provider` label.
 
 ```rust
-pub struct OpenAITransformer;
+pub struct OpenAICompatibleTransformer {
+    provider: &'static str,
+}
 
-impl SSETransformer for OpenAITransformer {
-    fn transform(&self, event: &SSEEvent) -> Result<Option<ChatChunk>, StreamError> {
-        // Handle [DONE] marker
-        if event.data == "[DONE]" {
-            return Ok(None);
-        }
-
-        // Parse OpenAI chunk format
-        let chunk: ChatChunk = serde_json::from_str(&event.data)
-            .map_err(|e| StreamError::Parse {
-                provider: self.provider_name(),
-                message: e.to_string(),
-            })?;
-
-        Ok(Some(chunk))
-    }
-
-    fn is_done(&self, event: &SSEEvent) -> bool {
-        event.data == "[DONE]"
-    }
-
-    fn provider_name(&self) -> &'static str {
-        "openai"
-    }
-
-    fn handle_error(&self, event: &SSEEvent) -> Option<StreamError> {
-        if event.data.contains("\"error\"") {
-            if let Ok(error) = serde_json::from_str::<serde_json::Value>(&event.data) {
-                if let Some(msg) = error.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
-                    return Some(StreamError::ProviderError {
-                        provider: self.provider_name(),
-                        message: msg.to_string(),
-                    });
-                }
-            }
-        }
-        None
-    }
+impl OpenAICompatibleTransformer {
+    pub fn new(provider: &'static str) -> Self;
 }
 ```
 
-### Anthropic Transformer
+`transform_chunk` behavior:
+
+- JSON must parse and `choices` must be an array, otherwise
+  `ProviderError::response_parsing`.
+- Defaults for missing fields: `id` -> `"stream-chunk"`, `model` ->
+  `"unknown"`, `created` -> current timestamp; `system_fingerprint` passes
+  through when present.
+- Each choice's `delta` deserializes into `ChatDelta`; a missing `delta` is a
+  `ProviderError::response_parsing`.
+- A non-empty `reasoning_content` (preferred) or `reasoning` string in the
+  delta is mapped to `delta.thinking = Some(ThinkingDelta { content, ..Default::default() })`
+  (DeepSeek/OpenAI reasoning models).
+- Choice `index` prefers the upstream value and falls back to array position —
+  with `n > 1`, each chunk carries one choice with its real index.
+- Malformed `logprobs` or `usage` never fails the chunk: the field is logged
+  via `tracing::error!` and dropped while the chunk still flows.
+
+## AnthropicTransformer
+
+Source: `src/core/providers/base/sse/anthropic.rs`. Handles Anthropic's
+event-based protocol (the `type` field of each JSON payload).
 
 ```rust
 pub struct AnthropicTransformer {
-    /// Accumulated content for multi-part responses
-    accumulated_content: std::cell::RefCell<String>,
+    model: String,
+    tool_name_map: HashMap<String, String>,
+    message_id: Mutex<Option<String>>,
 }
 
 impl AnthropicTransformer {
-    pub fn new() -> Self {
-        Self {
-            accumulated_content: std::cell::RefCell::new(String::new()),
-        }
-    }
-}
-
-impl SSETransformer for AnthropicTransformer {
-    fn transform(&self, event: &SSEEvent) -> Result<Option<ChatChunk>, StreamError> {
-        // Anthropic uses event types
-        let event_type = event.event_type.as_deref().unwrap_or("");
-
-        match event_type {
-            "message_start" => {
-                // Initialize message, extract ID
-                let data: serde_json::Value = serde_json::from_str(&event.data)
-                    .map_err(|e| StreamError::Parse {
-                        provider: self.provider_name(),
-                        message: e.to_string(),
-                    })?;
-
-                let id = data.get("message")
-                    .and_then(|m| m.get("id"))
-                    .and_then(|i| i.as_str())
-                    .unwrap_or("msg_anthropic")
-                    .to_string();
-
-                Ok(Some(ChatChunk {
-                    id,
-                    object: "chat.completion.chunk".to_string(),
-                    created: chrono::Utc::now().timestamp(),
-                    model: data.get("message")
-                        .and_then(|m| m.get("model"))
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("claude")
-                        .to_string(),
-                    choices: vec![],
-                    usage: None,
-                    system_fingerprint: None,
-                }))
-            }
-
-            "content_block_delta" => {
-                let data: serde_json::Value = serde_json::from_str(&event.data)
-                    .map_err(|e| StreamError::Parse {
-                        provider: self.provider_name(),
-                        message: e.to_string(),
-                    })?;
-
-                let delta_text = data.get("delta")
-                    .and_then(|d| d.get("text"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
-
-                // Convert to OpenAI chunk format
-                Ok(Some(ChatChunk {
-                    id: "".to_string(),
-                    object: "chat.completion.chunk".to_string(),
-                    created: chrono::Utc::now().timestamp(),
-                    model: "".to_string(),
-                    choices: vec![crate::core::types::responses::ChunkChoice {
-                        index: 0,
-                        delta: crate::core::types::responses::ChunkDelta {
-                            role: None,
-                            content: Some(delta_text.to_string()),
-                            tool_calls: None,
-                            function_call: None,
-                        },
-                        finish_reason: None,
-                        logprobs: None,
-                    }],
-                    usage: None,
-                    system_fingerprint: None,
-                }))
-            }
-
-            "message_stop" => {
-                Ok(None)
-            }
-
-            "message_delta" => {
-                // Final message with usage info
-                let data: serde_json::Value = serde_json::from_str(&event.data)
-                    .map_err(|e| StreamError::Parse {
-                        provider: self.provider_name(),
-                        message: e.to_string(),
-                    })?;
-
-                let finish_reason = data.get("delta")
-                    .and_then(|d| d.get("stop_reason"))
-                    .and_then(|r| r.as_str())
-                    .map(|r| match r {
-                        "end_turn" => crate::core::types::responses::FinishReason::Stop,
-                        "max_tokens" => crate::core::types::responses::FinishReason::Length,
-                        "tool_use" => crate::core::types::responses::FinishReason::ToolCalls,
-                        _ => crate::core::types::responses::FinishReason::Stop,
-                    });
-
-                Ok(Some(ChatChunk {
-                    id: "".to_string(),
-                    object: "chat.completion.chunk".to_string(),
-                    created: chrono::Utc::now().timestamp(),
-                    model: "".to_string(),
-                    choices: vec![crate::core::types::responses::ChunkChoice {
-                        index: 0,
-                        delta: crate::core::types::responses::ChunkDelta {
-                            role: None,
-                            content: None,
-                            tool_calls: None,
-                            function_call: None,
-                        },
-                        finish_reason,
-                        logprobs: None,
-                    }],
-                    usage: data.get("usage").and_then(|u| {
-                        Some(crate::core::types::responses::Usage {
-                            prompt_tokens: u.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-                            completion_tokens: u.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-                            total_tokens: 0,
-                            prompt_tokens_details: None,
-                            completion_tokens_details: None,
-                            thinking_usage: None,
-                        })
-                    }),
-                    system_fingerprint: None,
-                }))
-            }
-
-            "error" => {
-                Err(StreamError::ProviderError {
-                    provider: self.provider_name(),
-                    message: event.data.clone(),
-                })
-            }
-
-            _ => Ok(None),
-        }
-    }
-
-    fn is_done(&self, event: &SSEEvent) -> bool {
-        event.event_type.as_deref() == Some("message_stop")
-    }
-
-    fn provider_name(&self) -> &'static str {
-        "anthropic"
-    }
-
-    fn handle_error(&self, event: &SSEEvent) -> Option<StreamError> {
-        if event.event_type.as_deref() == Some("error") {
-            return Some(StreamError::ProviderError {
-                provider: self.provider_name(),
-                message: event.data.clone(),
-            });
-        }
-        None
-    }
+    pub fn new(model: impl Into<String>) -> Self;
+    pub fn with_tool_name_map(mut self, tool_name_map: HashMap<String, String>) -> Self;
 }
 ```
 
-### Google Gemini Transformer
+`Clone` resets `message_id` to `None`, so each cloned stream keeps independent
+message ids.
+
+Event handling by `type`:
+
+| Event | Behavior |
+|-------|----------|
+| `message_start` | Stores `message.id`; emits a chunk with `role: Assistant` carrying that id |
+| `content_block_start` | `tool_use`: emits `ToolCallDelta` with name restored through `tool_name_map` and non-empty `input` serialized as arguments. `thinking`/`redacted_thinking`: emits `ThinkingDelta::start()`. `text` and unknown blocks yield nothing |
+| `content_block_delta` | `text_delta` -> `delta.content`; `input_json_delta` -> `partial_json` becomes tool-call arguments; `thinking_delta` -> thinking content; `signature_delta` -> thinking signature |
+| `message_delta` | Maps `delta.stop_reason` (`end_turn`->Stop, `max_tokens`->Length, `tool_use`->ToolCalls, plus `stop_sequence`/`refusal`/`pause_turn`) and builds `Usage` from `input_tokens`/`output_tokens`, folding cache token counts into `PromptTokensDetails` |
+| `message_stop` | Emits an empty-choices chunk carrying the stored message id |
+| `error` | Returns `ProviderError::streaming_error("anthropic", "chat", None, None, message)` |
+| `content_block_stop`, `ping` | Ignored |
+
+Unknown event types log a warning and are skipped.
+
+## GeminiTransformer
+
+Source: `src/core/providers/base/sse/gemini.rs`. Handles the
+candidates/parts streaming format plus strict usage accounting.
 
 ```rust
-pub struct GeminiTransformer;
+pub struct GeminiTransformer {
+    provider: &'static str,
+    model: String,
+    chunk_id: String, // format!("gemini-stream-{}", nanos)
+    usage_policy: Option<GeminiUsagePolicy>,
+    stream_usage: Arc<Mutex<GeminiStreamUsage>>,
+    tool_call_candidates: Arc<Mutex<HashSet<u32>>>,
+}
 
-impl SSETransformer for GeminiTransformer {
-    fn transform(&self, event: &SSEEvent) -> Result<Option<ChatChunk>, StreamError> {
-        // Gemini uses a different format
-        let data: serde_json::Value = serde_json::from_str(&event.data)
-            .map_err(|e| StreamError::Parse {
-                provider: self.provider_name(),
-                message: e.to_string(),
-            })?;
-
-        // Extract text from candidates[0].content.parts[0].text
-        let text = data.get("candidates")
-            .and_then(|c| c.as_array())
-            .and_then(|c| c.first())
-            .and_then(|c| c.get("content"))
-            .and_then(|c| c.get("parts"))
-            .and_then(|p| p.as_array())
-            .and_then(|p| p.first())
-            .and_then(|p| p.get("text"))
-            .and_then(|t| t.as_str());
-
-        let finish_reason = data.get("candidates")
-            .and_then(|c| c.as_array())
-            .and_then(|c| c.first())
-            .and_then(|c| c.get("finishReason"))
-            .and_then(|r| r.as_str())
-            .map(|r| match r {
-                "STOP" => crate::core::types::responses::FinishReason::Stop,
-                "MAX_TOKENS" => crate::core::types::responses::FinishReason::Length,
-                "SAFETY" => crate::core::types::responses::FinishReason::ContentFilter,
-                _ => crate::core::types::responses::FinishReason::Stop,
-            });
-
-        Ok(Some(ChatChunk {
-            id: "".to_string(),
-            object: "chat.completion.chunk".to_string(),
-            created: chrono::Utc::now().timestamp(),
-            model: "gemini".to_string(),
-            choices: vec![crate::core::types::responses::ChunkChoice {
-                index: 0,
-                delta: crate::core::types::responses::ChunkDelta {
-                    role: None,
-                    content: text.map(|t| t.to_string()),
-                    tool_calls: None,
-                    function_call: None,
-                },
-                finish_reason,
-                logprobs: None,
-            }],
-            usage: None,
-            system_fingerprint: None,
-        }))
-    }
-
-    fn is_done(&self, event: &SSEEvent) -> bool {
-        serde_json::from_str::<serde_json::Value>(&event.data)
-            .ok()
-            .and_then(|d| d.get("candidates"))
-            .and_then(|c| c.as_array())
-            .and_then(|c| c.first())
-            .and_then(|c| c.get("finishReason"))
-            .is_some()
-    }
-
-    fn provider_name(&self) -> &'static str {
-        "google"
-    }
-
-    fn handle_error(&self, event: &SSEEvent) -> Option<StreamError> {
-        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&event.data) {
-            if let Some(error) = data.get("error") {
-                return Some(StreamError::ProviderError {
-                    provider: self.provider_name(),
-                    message: error.to_string(),
-                });
-            }
-        }
-        None
-    }
+impl GeminiTransformer {
+    pub fn new(model: impl Into<String>) -> Self;
 }
 ```
+
+`new` targets provider `"gemini"` with direct-API usage policy;
+`new_vertex` (feature-gated) targets `"vertex_ai"`. `Clone` rebuilds usage and
+tool-call state instead of sharing it.
+
+Behavior:
+
+- `transform_chunk` parses `candidates[].content.parts[]`, joining all text
+  parts per candidate; tool calls are extracted via the shared
+  `google_tool_loop` helpers (`candidate_index`, `parse_function_call_parts`),
+  preferring the upstream candidate index over array position.
+- An in-band `error` object returns
+  `ProviderError::api_error("gemini", code, message)`.
+- Usage is governed by a small state machine (`GeminiStreamUsage`: Missing /
+  Valid / Invalid / Finalized). In stream mode (`transform_stream_chunk`
+  override) usage is suppressed on data chunks and recorded instead; chunks
+  with no choices are skipped.
+- `finish_stream` override emits exactly one final usage-only chunk after the
+  stream ends (empty chunk when observed usage was invalid).
+
+## CohereTransformer
+
+Source: `src/core/providers/base/sse/cohere.rs`. Supports both API versions.
+
+```rust
+pub struct CohereTransformer {
+    model: String,
+    response_id: String, // format!("chatcmpl-{}", uuid)
+    use_v2: bool,
+}
+
+impl CohereTransformer {
+    pub fn new(model: impl Into<String>, use_v2: bool) -> Self;
+}
+```
+
+The event name is read from the payload's `type` field, falling back to
+`event`.
+
+- v2 events: `content-delta` extracts
+  `delta.message.content.text` (or a bare string content); `message-end`
+  carries finish reason and optional `usage.tokens`. All other events
+  (`message-start`, `content-start`, `content-end`, `tool-call-*`,
+  `citation-*`) are skipped.
+- v1 events: `text-generation` (payload `text`) and `stream-end`
+  (top-level `finish_reason`); others skipped.
+
+Finish reasons normalize through `parse_cohere_finish_reason`
+(`stop|complete|end_turn` -> Stop, `length|max_tokens` -> Length,
+`tool_calls|tool_use` -> ToolCalls, `content_filter` -> ContentFilter).
+
+## DatabricksTransformer
+
+Source: `src/core/providers/base/sse/databricks.rs`. A unit struct over the
+OpenAI-compatible shape with one extension:
+
+- `delta.content` may be a string or an array of `{ "text": ... }` blocks
+  (Claude-style array content); array items are concatenated into one string.
+
+Everything else follows the OpenAI-compatible shape with its own defaults:
+missing `id` becomes `"chunk"`, missing `model` stays empty, missing `created`
+becomes the current timestamp, choice `index` falls back to `0`, and finish
+reasons go through the trait-default `parse_finish_reason`.
