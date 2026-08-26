@@ -321,9 +321,11 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body: Value = test::read_body_json(resp).await;
-        assert_eq!(body["data"]["reason"], "no providers configured");
+        assert_eq!(body["data"]["reason"], "no providers enabled");
         assert!(body["data"]["storage"].is_object());
         assert!(body["data"]["providers"].is_object());
+        assert_eq!(body["data"]["providers"]["total_providers"], 1);
+        assert_eq!(body["data"]["providers"]["enabled_providers"], 0);
     }
 
     #[tokio::test]
