@@ -55,7 +55,10 @@ struct PendingAttempt {
 
 enum AttemptActivation {
     Admitted(u64),
-    WaitForSettlement(watch::Receiver<u64>),
+    WaitForSettlement {
+        state_change: watch::Receiver<u64>,
+        window_reset_after: Duration,
+    },
     Rejected(u64),
 }
 
@@ -122,8 +125,15 @@ impl AuthRateLimiter {
                     pending.disarm();
                     return Err(retry_after);
                 }
-                AttemptActivation::WaitForSettlement(mut state_change) => {
-                    if state_change.changed().await.is_err() {
+                AttemptActivation::WaitForSettlement {
+                    mut state_change,
+                    window_reset_after,
+                } => {
+                    let state_result = tokio::select! {
+                        result = state_change.changed() => Some(result),
+                        () = tokio::time::sleep(window_reset_after) => None,
+                    };
+                    if state_result.is_some_and(|result| result.is_err()) {
                         tracing::error!(
                             client_id,
                             "Authentication limiter state notification closed unexpectedly"
@@ -193,10 +203,11 @@ impl AuthRateLimiter {
         }
 
         let window_duration = Duration::from_secs(self.window_secs);
-        if now.saturating_duration_since(tracker.window_start) > window_duration {
+        if now.saturating_duration_since(tracker.window_start) >= window_duration {
             tracker.failure_count = 0;
             tracker.generation = tracker.generation.wrapping_add(1);
             tracker.window_start = now;
+            tracker.notify_state_change();
         }
 
         if tracker.waiting >= MAX_QUEUED_ATTEMPTS_PER_CLIENT {
@@ -232,7 +243,7 @@ impl AuthRateLimiter {
         }
 
         let window_duration = Duration::from_secs(self.window_secs);
-        if now.saturating_duration_since(tracker.window_start) > window_duration {
+        if now.saturating_duration_since(tracker.window_start) >= window_duration {
             tracker.failure_count = 0;
             tracker.generation = tracker.generation.wrapping_add(1);
             tracker.window_start = now;
@@ -241,7 +252,12 @@ impl AuthRateLimiter {
         let occupied_attempts = tracker.failure_count.saturating_add(tracker.in_flight);
         if occupied_attempts >= self.max_attempts.max(1) {
             if tracker.in_flight > 0 {
-                return AttemptActivation::WaitForSettlement(tracker.state_epoch.subscribe());
+                let window_reset_after = window_duration
+                    .saturating_sub(now.saturating_duration_since(tracker.window_start));
+                return AttemptActivation::WaitForSettlement {
+                    state_change: tracker.state_epoch.subscribe(),
+                    window_reset_after,
+                };
             }
             if !Self::complete_waiter(client_id, tracker) {
                 return AttemptActivation::Rejected(CAPACITY_RETRY_SECS);
@@ -473,6 +489,58 @@ mod tests {
         queued.release();
 
         assert_eq!(limiter.blocked_attempts(), 0);
+    }
+
+    #[tokio::test]
+    async fn historical_failure_waiter_wakes_when_window_expires() {
+        let limiter = Arc::new(AuthRateLimiter::new(2, 1, 60));
+        limiter
+            .reserve_attempt("slow-shared-nat")
+            .await
+            .unwrap()
+            .record_failure();
+        let active = limiter.reserve_attempt("slow-shared-nat").await.unwrap();
+        let queued_limiter = Arc::clone(&limiter);
+        let queued =
+            tokio::spawn(async move { queued_limiter.reserve_attempt("slow-shared-nat").await });
+        tokio::task::yield_now().await;
+        assert!(!queued.is_finished());
+
+        let queued = tokio::time::timeout(Duration::from_secs(2), queued)
+            .await
+            .expect("historical failure window should expire on schedule")
+            .unwrap()
+            .expect("window expiry should release historical failure budget");
+
+        queued.release();
+        active.release();
+    }
+
+    #[tokio::test]
+    async fn cancelling_watch_waiter_releases_waiting_state() {
+        let limiter = Arc::new(AuthRateLimiter::new(2, 300, 60));
+        limiter
+            .reserve_attempt("cancelled-watch")
+            .await
+            .unwrap()
+            .record_failure();
+        let active = limiter.reserve_attempt("cancelled-watch").await.unwrap();
+        let queued_limiter = Arc::clone(&limiter);
+        let queued =
+            tokio::spawn(async move { queued_limiter.reserve_attempt("cancelled-watch").await });
+        tokio::task::yield_now().await;
+        assert!(!queued.is_finished());
+
+        queued.abort();
+        match queued.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(_) => panic!("aborted watch waiter must not complete normally"),
+        }
+        active.release();
+
+        let tracker = limiter.attempts.get("cancelled-watch").unwrap();
+        assert_eq!(tracker.waiting, 0);
+        assert_eq!(tracker.in_flight, 0);
     }
 
     #[tokio::test]
