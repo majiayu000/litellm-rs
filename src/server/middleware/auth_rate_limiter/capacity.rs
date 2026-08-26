@@ -175,6 +175,7 @@ mod tests {
         let waiting =
             tokio::spawn(async move { waiting_limiter.reserve_attempt("locked-client").await });
         tokio::task::yield_now().await;
+        assert_eq!(limiter.attempts.get("locked-client").unwrap().waiting, 1);
         assert!(!waiting.is_finished());
 
         first.record_failure();
@@ -216,6 +217,7 @@ mod tests {
                     async move { waiting_limiter.reserve_attempt(&waiting_client_id).await },
                 );
             tokio::task::yield_now().await;
+            assert_eq!(limiter.attempts.get(&client_id).unwrap().waiting, 1);
             assert!(!waiting.is_finished());
 
             active.release();
