@@ -3,6 +3,7 @@
 mod reservation;
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -24,6 +25,9 @@ pub struct AuthRateLimiter {
     base_lockout_secs: u64,
     /// Maximum retained client trackers
     max_entries: usize,
+    /// Serializes capacity accounting so concurrent cleanup cannot spend the
+    /// same overflow budget more than once.
+    capacity_eviction_lock: Mutex<()>,
     /// Total blocked attempts counter for monitoring
     blocked_count: AtomicU64,
 }
@@ -99,6 +103,7 @@ impl AuthRateLimiter {
             window_secs,
             base_lockout_secs,
             max_entries: max_entries.max(1),
+            capacity_eviction_lock: Mutex::new(()),
             blocked_count: AtomicU64::new(0),
         }
     }
@@ -175,8 +180,9 @@ impl AuthRateLimiter {
 
     pub fn cleanup_old_entries(&self) {
         let now = Instant::now();
+        let _capacity_guard = self.capacity_eviction_lock.lock();
         self.cleanup_old_entries_at(now);
-        self.enforce_capacity(now);
+        self.enforce_capacity_locked(now);
     }
 
     fn cleanup_old_entries_at(&self, now: Instant) {
@@ -228,6 +234,11 @@ impl AuthRateLimiter {
     }
 
     fn enforce_capacity(&self, now: Instant) {
+        let _capacity_guard = self.capacity_eviction_lock.lock();
+        self.enforce_capacity_locked(now);
+    }
+
+    fn enforce_capacity_locked(&self, now: Instant) {
         let overflow = self.attempts.len().saturating_sub(self.max_entries);
         if overflow == 0 {
             return;
@@ -247,7 +258,7 @@ impl AuthRateLimiter {
 
         let mut removed = 0;
         for (_, _, client_id, snapshot) in candidates {
-            if removed >= overflow {
+            if removed >= overflow || self.attempts.len() <= self.max_entries {
                 break;
             }
             if self.remove_if_unchanged(&client_id, snapshot) {
@@ -265,6 +276,7 @@ impl AuthRateLimiter {
     }
 
     fn remove_disposable_success(&self, client_id: &str) {
+        let _capacity_guard = self.capacity_eviction_lock.lock();
         self.attempts
             .remove_if(client_id, |_, tracker| tracker.is_disposable_success());
     }

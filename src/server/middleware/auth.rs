@@ -97,6 +97,7 @@ where
             let auth_method =
                 extract_auth_method_with_api_key_header(req.headers(), api_key_header.as_str());
             let client_id = get_client_identifier(&req, &trusted_proxies);
+            let network_rate_limit_enabled = rate_limit_enabled && client_id.is_some();
             let rate_limiter = get_auth_rate_limiter();
 
             if is_public {
@@ -132,12 +133,12 @@ where
                     .map(ServiceResponse::map_into_left_body);
             }
 
-            let auth_attempt = match rate_limiter.reserve_attempt(&client_id) {
+            let auth_attempt = match rate_limiter.reserve_network_attempt(client_id.as_deref()) {
                 Ok(reservation) => reservation,
                 Err(wait_seconds) => {
                     if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                         &req,
-                        rate_limit_enabled,
+                        network_rate_limit_enabled,
                         rate_limit_rpm,
                         &trusted_proxies,
                     )
@@ -154,7 +155,7 @@ where
                     auth_attempt.record_failure();
                     if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                         &req,
-                        rate_limit_enabled,
+                        network_rate_limit_enabled,
                         rate_limit_rpm,
                         &trusted_proxies,
                     )
@@ -168,7 +169,7 @@ where
                     auth_attempt.record_failure();
                     if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                         &req,
-                        rate_limit_enabled,
+                        network_rate_limit_enabled,
                         rate_limit_rpm,
                         &trusted_proxies,
                     )
@@ -188,7 +189,7 @@ where
                 auth_attempt.record_failure();
                 if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                     &req,
-                    rate_limit_enabled,
+                    network_rate_limit_enabled,
                     rate_limit_rpm,
                     &trusted_proxies,
                 )
@@ -202,7 +203,7 @@ where
             let mut auth_rate_limit_reservation = if requires_auth_verification(&auth_method) {
                 match reserve_gateway_rate_limit_before_auth(
                     &req,
-                    rate_limit_enabled,
+                    network_rate_limit_enabled,
                     rate_limit_rpm,
                     &trusted_proxies,
                 )
@@ -287,7 +288,7 @@ where
                     if auth_rate_limit_reservation.is_none()
                         && let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
                             &req,
-                            rate_limit_enabled,
+                            network_rate_limit_enabled,
                             rate_limit_rpm,
                             &trusted_proxies,
                         )
@@ -436,8 +437,11 @@ fn insert_request_context(req: &mut ServiceRequest, context: RequestContext) {
 /// credential into the key gives every guessed secret its own bucket, so an
 /// attacker rotating random credentials never accumulates failures in any
 /// one bucket and is never locked out — which defeats the limiter entirely.
-fn get_client_identifier(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
-    network_client_key(req, trusted_proxies)
+/// Requests without a transport peer return `None` so unrelated internal
+/// callers never collide in a process-wide `ip:unknown` bucket.
+fn get_client_identifier(req: &ServiceRequest, trusted_proxies: &[String]) -> Option<String> {
+    req.peer_addr()
+        .map(|_| network_client_key(req, trusted_proxies))
 }
 
 fn build_request_context(req: &mut ServiceRequest) -> RequestContext {
@@ -488,7 +492,7 @@ mod tests {
             .peer_addr("203.0.113.55:1000".parse().unwrap())
             .insert_header((header_name, header_value))
             .to_srv_request();
-        get_client_identifier(&req, &[])
+        get_client_identifier(&req, &[]).unwrap()
     }
 
     #[test]
@@ -546,7 +550,10 @@ mod tests {
             .peer_addr("203.0.113.70:1000".parse().unwrap())
             .to_srv_request();
 
-        assert_eq!(get_client_identifier(&req, &[]), "ip:203.0.113.70");
+        assert_eq!(
+            get_client_identifier(&req, &[]).as_deref(),
+            Some("ip:203.0.113.70")
+        );
     }
 
     #[test]
@@ -563,7 +570,10 @@ mod tests {
             get_client_identifier(&req_a, &[]),
             get_client_identifier(&req_b, &[])
         );
-        assert_eq!(get_client_identifier(&req_a, &[]), "ip:203.0.113.80");
+        assert_eq!(
+            get_client_identifier(&req_a, &[]).as_deref(),
+            Some("ip:203.0.113.80")
+        );
     }
 
     #[test]
@@ -579,22 +589,22 @@ mod tests {
             .to_srv_request();
 
         assert_eq!(
-            get_client_identifier(&trusted_req, &trusted),
-            "ip:198.51.100.20"
+            get_client_identifier(&trusted_req, &trusted).as_deref(),
+            Some("ip:198.51.100.20")
         );
         assert_eq!(
-            get_client_identifier(&untrusted_req, &trusted),
-            "ip:192.0.2.11"
+            get_client_identifier(&untrusted_req, &trusted).as_deref(),
+            Some("ip:192.0.2.11")
         );
     }
 
     #[test]
-    fn client_identifier_without_transport_peer_is_unknown() {
+    fn client_identifier_without_transport_peer_is_untracked() {
         let req = TestRequest::default()
             .insert_header(("x-forwarded-for", "198.51.100.20"))
             .to_srv_request();
 
-        assert_eq!(get_client_identifier(&req, &[]), "ip:unknown");
+        assert_eq!(get_client_identifier(&req, &[]), None);
     }
 
     #[test]

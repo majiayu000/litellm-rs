@@ -11,7 +11,7 @@ const IN_FLIGHT_RETRY_SECS: u64 = 1;
 /// and infrastructure errors cannot leak limiter capacity.
 #[must_use = "the authentication attempt reservation must be settled or retained"]
 pub(crate) struct AuthAttemptReservation {
-    limiter: Arc<AuthRateLimiter>,
+    limiter: Option<Arc<AuthRateLimiter>>,
     client_id: String,
     active: bool,
 }
@@ -30,7 +30,9 @@ impl AuthAttemptReservation {
             return;
         }
 
-        self.limiter.finish_reservation(&self.client_id, failed);
+        if let Some(limiter) = self.limiter.as_ref() {
+            limiter.finish_reservation(&self.client_id, failed);
+        }
     }
 }
 
@@ -41,6 +43,21 @@ impl Drop for AuthAttemptReservation {
 }
 
 impl AuthRateLimiter {
+    /// Reserve an attempt only when the request has a trustworthy network key.
+    pub(crate) fn reserve_network_attempt(
+        self: &Arc<Self>,
+        client_id: Option<&str>,
+    ) -> Result<AuthAttemptReservation, u64> {
+        match client_id {
+            Some(client_id) => self.reserve_attempt(client_id),
+            None => Ok(AuthAttemptReservation {
+                limiter: None,
+                client_id: String::new(),
+                active: true,
+            }),
+        }
+    }
+
     /// Atomically reserves one place in the failed-attempt window before
     /// asynchronous credential verification begins.
     pub(crate) fn reserve_attempt(
@@ -91,7 +108,7 @@ impl AuthRateLimiter {
         self.enforce_capacity(now);
 
         Ok(AuthAttemptReservation {
-            limiter: Arc::clone(self),
+            limiter: Some(Arc::clone(self)),
             client_id: client_id.to_string(),
             active: true,
         })
@@ -198,6 +215,23 @@ mod tests {
 
         assert!(!limiter.attempts.contains_key("successful-client"));
         assert!(limiter.reserve_attempt("successful-client").is_ok());
+    }
+
+    #[test]
+    fn peerless_attempts_do_not_share_or_create_a_limiter_bucket() {
+        let limiter = Arc::new(AuthRateLimiter::new(1, 300, 60));
+
+        limiter
+            .reserve_network_attempt(None)
+            .unwrap()
+            .record_failure();
+        limiter
+            .reserve_network_attempt(None)
+            .unwrap()
+            .record_failure();
+
+        assert!(limiter.is_empty());
+        assert_eq!(limiter.blocked_attempts(), 0);
     }
 
     #[test]
@@ -312,6 +346,50 @@ mod tests {
         assert!(limiter.attempts.contains_key("second-client"));
         second.release();
         assert!(limiter.len() <= limiter.max_entries());
+    }
+
+    #[test]
+    fn concurrent_capacity_enforcers_share_one_overflow_budget() {
+        const MAX_ENTRIES: usize = 3;
+        const WORKERS: usize = 4;
+        let limiter = Arc::new(AuthRateLimiter::with_max_entries(5, 300, 60, MAX_ENTRIES));
+        let now = Instant::now();
+        for client in 0..5 {
+            limiter.attempts.insert(
+                format!("client_{client}"),
+                AuthAttemptTracker {
+                    failure_count: 1,
+                    in_flight: 0,
+                    window_start: now,
+                    lockout_until: None,
+                    lockout_count: 0,
+                },
+            );
+        }
+
+        let capacity_guard = limiter.capacity_eviction_lock.lock();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let mut handles = Vec::with_capacity(WORKERS);
+        for _ in 0..WORKERS {
+            let limiter = Arc::clone(&limiter);
+            let ready_tx = ready_tx.clone();
+            handles.push(thread::spawn(move || {
+                ready_tx.send(()).unwrap();
+                limiter.enforce_capacity(now);
+            }));
+        }
+        drop(ready_tx);
+        for _ in 0..WORKERS {
+            ready_rx.recv().unwrap();
+        }
+        assert_eq!(limiter.len(), 5);
+
+        drop(capacity_guard);
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(limiter.len(), MAX_ENTRIES);
     }
 
     #[test]
