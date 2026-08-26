@@ -11,6 +11,7 @@ use crate::core::integrations::CallbackRuntime;
 use crate::core::ip_access::{IpAccessControl, IpAccessMiddleware};
 use crate::core::pricing_service::PricingService;
 use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter_with_redis};
+use crate::server::http_listener::{build_actix_server, validated_listener_settings};
 use crate::server::middleware::{
     AuthMiddleware, MetricsMiddleware, RateLimitMiddleware, RequestIdMiddleware,
     SecurityHeadersMiddleware, start_auth_rate_limiter_cleanup_task,
@@ -20,7 +21,7 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_cors::Cors;
 use actix_web::{
-    App, HttpServer as ActixHttpServer,
+    App,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
     http::{Method, header},
@@ -46,6 +47,7 @@ pub struct HttpServer {
 impl HttpServer {
     /// Create a new HTTP server
     pub async fn new(config: &Config) -> Result<Self> {
+        validated_listener_settings(&config.gateway.server)?;
         config.gateway.storage.redis.validate().map_err(|error| {
             GatewayError::Config(format!("Invalid Redis configuration: {error}"))
         })?;
@@ -188,7 +190,7 @@ impl HttpServer {
     }
 
     /// Create the Actix-web application
-    fn create_app(
+    pub(super) fn create_app(
         state: web::Data<AppState>,
     ) -> App<
         impl actix_web::dev::ServiceFactory<
@@ -230,12 +232,17 @@ impl HttpServer {
         let trusted_proxies = cfg.gateway.server.trusted_proxies.clone();
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
+        let max_body_size = cfg.gateway.server.max_body_size;
 
         let budget_limits = web::Data::new(Arc::clone(&state.budget_limits));
 
         App::new()
             .app_data(state)
             .app_data(budget_limits)
+            // server.max_body_size bounds JSON and form bodies; file/audio
+            // uploads enforce their own larger multipart limits instead.
+            .app_data(web::JsonConfig::default().limit(max_body_size))
+            .app_data(web::FormConfig::default().limit(max_body_size))
             .wrap(Logger::default())
             .wrap(DefaultHeaders::new().add(("Server", "LiteLLM-RS")))
             .wrap(SecurityHeadersMiddleware)
@@ -267,7 +274,7 @@ impl HttpServer {
             .configure(routes::budget::configure_budget_routes)
             .configure(routes::admin::configure_routes)
             .configure(routes::admin_dashboard::configure_routes)
-            .configure(routes::ai::configure_routes)
+            .configure(|cfg| routes::ai::configure_routes_with_body_limit(cfg, max_body_size))
             .configure(routes::pricing::configure_pricing_routes)
     }
 
@@ -337,24 +344,54 @@ impl HttpServer {
     ///
     /// Gracefully stops requests, drains workers, then closes storage.
     pub async fn start(mut self) -> Result<()> {
+        let listener_settings = validated_listener_settings(&self.config)?;
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
         let port = self.config.port;
         let budget_persistence_task = self.budget_persistence_task.take();
         let callback_runtime =
             std::mem::replace(&mut self.callback_runtime, CallbackRuntime::disabled());
 
-        info!("Starting HTTP server on {}", bind_addr);
+        // server.timeout bounds only how long a client may take to deliver
+        // the first request head (408 afterwards); it never bounds handler or
+        // streaming duration — those follow the outbound-client policy.
+        info!(
+            "Starting HTTP server on {} (workers={}, first_request_head_timeout={}s)",
+            bind_addr, listener_settings.effective_workers, self.config.timeout
+        );
+        if let Some(configured_total) = self.config.max_connections {
+            if listener_settings.effective_workers != listener_settings.configured_workers {
+                info!(
+                    "Reducing HTTP workers from {} to {} so server.max_connections={} can use Actix's minimum safe per-worker limit of 2",
+                    listener_settings.configured_workers,
+                    listener_settings.effective_workers,
+                    configured_total
+                );
+            }
+            if let Some(per_worker) = listener_settings.max_connections_per_worker {
+                info!(
+                    "Connection limit: {} per worker, {} server-wide effective (configured total={})",
+                    per_worker,
+                    per_worker * listener_settings.effective_workers,
+                    configured_total
+                );
+            }
+        }
 
         let state = web::Data::new(self.state);
         let storage = Arc::clone(&state.storage);
         let audit_logger = Arc::clone(&state.audit_logger);
 
-        let server = ActixHttpServer::new(move || Self::create_app(state.clone()))
-            .bind(&bind_addr)
-            .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?
-            .run();
+        // Try resolved addresses one at a time. Passing the hostname directly
+        // to Actix would create one full worker set per successful address,
+        // multiplying the configured server-wide connection cap.
+        let (server, selected_address) =
+            build_actix_server(state, &listener_settings, bind_addr.as_str())
+                .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?;
 
-        info!("HTTP server listening on {}", bind_addr);
+        info!(
+            "HTTP server listening on {} (selected from {})",
+            selected_address, bind_addr
+        );
 
         let server_handle = server.handle();
         let mut server_task = tokio::spawn(server);

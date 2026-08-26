@@ -8,7 +8,8 @@ use tracing::warn;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
-    /// Server host
+    /// Server host. When a hostname resolves to multiple addresses, startup
+    /// binds the first address that succeeds and does not listen on the rest.
     #[serde(default = "default_host")]
     pub host: String,
     /// Server port
@@ -16,13 +17,19 @@ pub struct ServerConfig {
     pub port: u16,
     /// Number of worker threads
     pub workers: Option<usize>,
-    /// Maximum connections
+    /// Maximum concurrent connections across the whole server. Actix applies
+    /// connection limits per worker, so startup derives a per-worker limit
+    /// of at least 2 that never exceeds this total (and may conservatively
+    /// round down). Small caps can reduce the effective worker count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_connections: Option<usize>,
-    /// Request timeout in seconds
+    /// First request head timeout in seconds. Bounds how long a client may
+    /// take to send the initial request headers (408 afterwards); it does not
+    /// apply to later keep-alive requests or bound handler/stream duration.
     #[serde(default = "default_timeout")]
     pub timeout: u64,
-    /// Maximum request body size in bytes
+    /// Maximum JSON/form request body size in bytes. File and audio uploads
+    /// enforce their own multipart limits instead.
     #[serde(default = "default_max_body_size")]
     pub max_body_size: usize,
     /// Enable development mode
@@ -138,6 +145,10 @@ impl ServerConfig {
 
         if self.max_body_size == 0 {
             return Err("Max body size cannot be 0".to_string());
+        }
+
+        if self.max_connections.is_some_and(|limit| limit < 2) {
+            return Err("server.max_connections must be at least 2".to_string());
         }
 
         if let Some(tls) = &self.tls {

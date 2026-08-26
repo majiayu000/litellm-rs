@@ -11,6 +11,7 @@ pub mod builder;
 mod callbacks;
 mod guardrails;
 pub mod http;
+mod http_listener;
 pub mod state;
 pub mod types;
 mod utils;
@@ -34,3 +35,6 @@ pub(crate) fn valid_test_config() -> crate::config::Config {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod http_capacity_tests;
