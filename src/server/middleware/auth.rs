@@ -133,16 +133,39 @@ where
                     .map(ServiceResponse::map_into_left_body);
             }
 
-            let auth_attempt = match rate_limiter.reserve_network_attempt(client_id.as_deref()) {
+            // Apply the gateway RPM admission before waiting for a per-client
+            // credential-check slot, so queued authentication requests cannot
+            // bypass the general request-rate bound.
+            let mut auth_rate_limit_reservation = if requires_auth_verification(&auth_method) {
+                match reserve_gateway_rate_limit_before_auth(
+                    &req,
+                    network_rate_limit_enabled,
+                    rate_limit_rpm,
+                    &trusted_proxies,
+                )
+                .await
+                {
+                    Ok(reservation) => Some(reservation),
+                    Err(error) => return Ok(rate_limit_response(req, error)),
+                }
+            } else {
+                None
+            };
+
+            let auth_attempt = match rate_limiter
+                .reserve_network_attempt(client_id.as_deref())
+                .await
+            {
                 Ok(reservation) => reservation,
                 Err(wait_seconds) => {
-                    if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
-                        &req,
-                        network_rate_limit_enabled,
-                        rate_limit_rpm,
-                        &trusted_proxies,
-                    )
-                    .await
+                    if auth_rate_limit_reservation.is_none()
+                        && let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
+                            &req,
+                            network_rate_limit_enabled,
+                            rate_limit_rpm,
+                            &trusted_proxies,
+                        )
+                        .await
                     {
                         return Ok(rate_limit_response(req, error));
                     }
@@ -153,13 +176,14 @@ where
             let auth_method = match auth_method {
                 AuthMethod::Jwt(_) if !enable_jwt => {
                     auth_attempt.record_failure();
-                    if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
-                        &req,
-                        network_rate_limit_enabled,
-                        rate_limit_rpm,
-                        &trusted_proxies,
-                    )
-                    .await
+                    if auth_rate_limit_reservation.is_none()
+                        && let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
+                            &req,
+                            network_rate_limit_enabled,
+                            rate_limit_rpm,
+                            &trusted_proxies,
+                        )
+                        .await
                     {
                         return Ok(rate_limit_response(req, error));
                     }
@@ -167,13 +191,14 @@ where
                 }
                 AuthMethod::ApiKey(_) if !enable_api_key => {
                     auth_attempt.record_failure();
-                    if let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
-                        &req,
-                        network_rate_limit_enabled,
-                        rate_limit_rpm,
-                        &trusted_proxies,
-                    )
-                    .await
+                    if auth_rate_limit_reservation.is_none()
+                        && let Err(error) = enforce_gateway_rate_limit_for_auth_rejection(
+                            &req,
+                            network_rate_limit_enabled,
+                            rate_limit_rpm,
+                            &trusted_proxies,
+                        )
+                        .await
                     {
                         return Ok(rate_limit_response(req, error));
                     }
@@ -199,22 +224,6 @@ where
                 }
                 return Ok(unauthorized_response(req, "Missing authentication"));
             }
-
-            let mut auth_rate_limit_reservation = if requires_auth_verification(&auth_method) {
-                match reserve_gateway_rate_limit_before_auth(
-                    &req,
-                    network_rate_limit_enabled,
-                    rate_limit_rpm,
-                    &trusted_proxies,
-                )
-                .await
-                {
-                    Ok(reservation) => Some(reservation),
-                    Err(error) => return Ok(rate_limit_response(req, error)),
-                }
-            } else {
-                None
-            };
 
             match app_state.auth.authenticate(auth_method, context).await {
                 Ok(result) if result.success => {

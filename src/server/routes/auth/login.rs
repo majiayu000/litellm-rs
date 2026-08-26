@@ -1,6 +1,8 @@
 //! User login endpoint
 
-use crate::server::middleware::AuthRateLimiter;
+use crate::server::middleware::{
+    AuthAttemptReservation, AuthRateLimiter, trusted_network_client_key,
+};
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use crate::utils::auth::crypto::password::verify_password;
@@ -70,7 +72,7 @@ struct LoginPrimaryStage<'a, U, P> {
     password_verifier: P,
     request: LoginRequest,
     client_ip: &'a str,
-    limiter: &'a AuthRateLimiter,
+    auth_attempt: Option<AuthAttemptReservation>,
 }
 
 #[async_trait(?Send)]
@@ -87,7 +89,9 @@ impl<U: LoginUserLookup, P: LoginPasswordVerifier> PrimaryAuthStage
                     "Login attempt with invalid username from IP {}",
                     self.client_ip
                 );
-                self.limiter.record_failure(self.client_ip);
+                if let Some(attempt) = self.auth_attempt.take() {
+                    attempt.record_failure();
+                }
                 return Err(AuthFlowFailure::unauthorized("Invalid credentials"));
             }
             Err(error) => {
@@ -98,7 +102,9 @@ impl<U: LoginUserLookup, P: LoginPasswordVerifier> PrimaryAuthStage
 
         if !user.is_active() {
             warn!("Login attempt for inactive user from IP {}", self.client_ip);
-            self.limiter.record_failure(self.client_ip);
+            if let Some(attempt) = self.auth_attempt.take() {
+                attempt.record_failure();
+            }
             return Err(AuthFlowFailure::forbidden("Account is disabled"));
         }
 
@@ -117,10 +123,15 @@ impl<U: LoginUserLookup, P: LoginPasswordVerifier> PrimaryAuthStage
                 "Login attempt with invalid password from IP {}",
                 self.client_ip
             );
-            self.limiter.record_failure(self.client_ip);
+            if let Some(attempt) = self.auth_attempt.take() {
+                attempt.record_failure();
+            }
             return Err(AuthFlowFailure::unauthorized("Invalid credentials"));
         }
 
+        if let Some(attempt) = self.auth_attempt.take() {
+            attempt.release();
+        }
         Ok(user)
     }
 }
@@ -251,49 +262,6 @@ fn get_login_rate_limiter() -> Arc<AuthRateLimiter> {
         .clone()
 }
 
-/// Parse the leftmost valid IP from an X-Forwarded-For header value.
-fn client_ip_from_xff(xff: &str) -> Option<String> {
-    xff.split(',')
-        .next()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| s.parse::<std::net::IpAddr>().ok())
-        .map(|ip| ip.to_string())
-}
-
-/// Extract the rate-limiting key (client IP) from the request.
-///
-/// * When the immediate peer is a **trusted proxy** (configured in `server.trusted_proxies`),
-///   the leftmost valid IP from `X-Forwarded-For` is used as the real client address.
-/// * Otherwise the raw TCP peer address is used so that `X-Forwarded-For` cannot be
-///   spoofed by untrusted callers.
-///
-/// Port numbers are always stripped so the limit applies per-IP, not per-connection.
-fn extract_client_ip(req: &HttpRequest, trusted_proxies: &[String]) -> String {
-    let peer = req
-        .connection_info()
-        .peer_addr()
-        .unwrap_or("unknown")
-        .to_string();
-
-    let peer_ip = peer
-        .parse::<std::net::SocketAddr>()
-        .map(|addr| addr.ip().to_string())
-        .unwrap_or(peer);
-
-    // Only consult X-Forwarded-For when the request arrives from a trusted proxy
-    if !trusted_proxies.is_empty()
-        && trusted_proxies.contains(&peer_ip)
-        && let Some(xff) = req.headers().get("x-forwarded-for")
-        && let Ok(xff_str) = xff.to_str()
-        && let Some(client_ip) = client_ip_from_xff(xff_str)
-    {
-        return client_ip;
-    }
-
-    peer_ip
-}
-
 /// Counter for probabilistic cleanup of rate limiter entries
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -322,7 +290,8 @@ async fn login_internal(
     team_id: Option<uuid::Uuid>,
 ) -> ActixResult<HttpResponse> {
     let cfg = state.config.load();
-    let client_ip = extract_client_ip(&req, &cfg.gateway.server.trusted_proxies);
+    let client_id = trusted_network_client_key(&req, &cfg.gateway.server.trusted_proxies);
+    let client_ip = client_id.as_deref().unwrap_or("unknown");
 
     // Rate limit: max 5 login attempts per IP per minute
     let limiter = get_login_rate_limiter();
@@ -333,17 +302,20 @@ async fn login_internal(
         limiter.cleanup_old_entries();
     }
 
-    if let Err(retry_after) = limiter.check_allowed(&client_ip) {
-        warn!(
-            "Login rate limit exceeded for IP {}: retry after {}s",
-            client_ip, retry_after
-        );
-        return Ok(HttpResponse::TooManyRequests()
-            .insert_header(("Retry-After", retry_after.to_string()))
-            .json(ApiResponse::<()>::error(
-                "Too many login attempts. Please try again later.".to_string(),
-            )));
-    }
+    let auth_attempt = match limiter.reserve_network_attempt(client_id.as_deref()).await {
+        Ok(attempt) => attempt,
+        Err(retry_after) => {
+            warn!(
+                "Login rate limit exceeded for IP {}: retry after {}s",
+                client_ip, retry_after
+            );
+            return Ok(HttpResponse::TooManyRequests()
+                .insert_header(("Retry-After", retry_after.to_string()))
+                .json(ApiResponse::<()>::error(
+                    "Too many login attempts. Please try again later.".to_string(),
+                )));
+        }
+    };
 
     info!("User login attempt from IP {}", client_ip);
     let mut flow = LoginFlowDriver {
@@ -351,8 +323,8 @@ async fn login_internal(
             users: DatabaseLoginUserLookup(state.storage.database.as_ref()),
             password_verifier: ProductionPasswordVerifier,
             request,
-            client_ip: &client_ip,
-            limiter: limiter.as_ref(),
+            client_ip,
+            auth_attempt: Some(auth_attempt),
         },
         team: LoginTeamSelectionStage {
             auth: state.auth.as_ref(),
@@ -495,7 +467,8 @@ mod tests {
                 "unused-hash".to_string(),
             );
             user.status = crate::core::models::user::types::UserStatus::Active;
-            let limiter = AuthRateLimiter::new(5, 60, 60);
+            let limiter = Arc::new(AuthRateLimiter::new(5, 60, 60));
+            let auth_attempt = limiter.reserve_attempt("ip:192.0.2.10").await.unwrap();
             let mut flow = LoginFlowDriver {
                 primary: LoginPrimaryStage {
                     users: UserLookupSpy { user: Some(user) },
@@ -505,7 +478,7 @@ mod tests {
                         password: "wrong".to_string(),
                     },
                     client_ip: "192.0.2.10",
-                    limiter: &limiter,
+                    auth_attempt: Some(auth_attempt),
                 },
                 team: TeamSpy {
                     selection,
@@ -529,6 +502,8 @@ mod tests {
             assert_eq!(team_calls.get(), 0);
             assert_eq!(rbac_calls.get(), 0);
             assert_eq!(encode_calls.get(), 0);
+            assert_eq!(limiter.len(), 1);
+            assert!(limiter.check_allowed("ip:192.0.2.10").is_ok());
         }
     }
 
@@ -660,42 +635,5 @@ mod tests {
         assert!(limiter.check_allowed(ip).is_ok());
         limiter.record_failure(ip);
         assert!(limiter.check_allowed(ip).is_err());
-    }
-
-    // ---- trusted-proxy XFF helpers ----
-
-    #[test]
-    fn test_client_ip_from_xff_single() {
-        assert_eq!(
-            client_ip_from_xff("203.0.113.5"),
-            Some("203.0.113.5".to_string())
-        );
-    }
-
-    #[test]
-    fn test_client_ip_from_xff_chain() {
-        // Leftmost address is the original client
-        assert_eq!(
-            client_ip_from_xff("203.0.113.5, 10.0.0.1, 10.0.0.2"),
-            Some("203.0.113.5".to_string())
-        );
-    }
-
-    #[test]
-    fn test_client_ip_from_xff_invalid_returns_none() {
-        assert_eq!(client_ip_from_xff("not-an-ip, 10.0.0.1"), None);
-    }
-
-    #[test]
-    fn test_client_ip_from_xff_empty_returns_none() {
-        assert_eq!(client_ip_from_xff(""), None);
-    }
-
-    #[test]
-    fn test_client_ip_from_xff_ipv6() {
-        assert_eq!(
-            client_ip_from_xff("2001:db8::1, 10.0.0.1"),
-            Some("2001:db8::1".to_string())
-        );
     }
 }
