@@ -11,31 +11,32 @@
 2. **修改 provider.rs**：
 
 ```rust
-// 修改前
-use super::error::FireworksError;
+// 修改前（XxxError 为 provider 专属错误枚举）
+use super::error::XxxError;
 
-impl LLMProvider for FireworksProvider {
-    type Error = FireworksError;
+impl LLMProvider for XxxProvider {
+    type Error = XxxError;
     // ...
 }
 
 // 创建错误
-Err(FireworksError::AuthenticationError("Invalid key".into()))
-Err(FireworksError::NetworkError(e.to_string()))
+Err(XxxError::AuthenticationError("Invalid key".into()))
+Err(XxxError::NetworkError(e.to_string()))
 ```
 
 ```rust
 // 修改后
 use crate::core::providers::unified_provider::ProviderError;
 
-impl LLMProvider for FireworksProvider {
-    type Error = ProviderError;
-    // ...
+impl LLMProvider for XxxProvider {
+    async fn chat_completion(/* ... */) -> Result<ChatResponse, ProviderError> {
+        // ...
+    }
 }
 
 // 创建错误
-Err(ProviderError::authentication("fireworks", "Invalid key"))
-Err(ProviderError::network("fireworks", e.to_string()))
+Err(ProviderError::authentication("xxx", "Invalid key"))
+Err(ProviderError::network("xxx", e.to_string()))
 ```
 
 ### 错误映射对照表
@@ -51,15 +52,12 @@ Err(ProviderError::network("fireworks", e.to_string()))
 | `XxxError::ApiError(status, msg)` | `ProviderError::api_error("xxx", status, msg)` |
 | `XxxError::NotSupported(feature)` | `ProviderError::not_supported("xxx", feature)` |
 
-### 迁移影响
+### 迁移边界
 
-| 指标 | 迁移前 | 迁移后 | 节省 |
-|------|--------|--------|------|
-| 错误文件数 | 50 | 1 | **49 文件** |
-| 错误代码行数 | ~10,000 | ~740 | **~9,260 行** |
-| ProviderErrorTrait 实现 | 50 | 0 | **50 实现** |
-| From<XxxError> 实现 | 50 | 0 | **50 实现** |
-| 编译时间 | ~5 分钟 | ~2 分钟 | **~60%** |
+当前 `LLMProvider` 没有关联 `Error` 类型，方法签名直接返回
+`ProviderError`。不要在新实现中写 `type Error = ProviderError`。也不要机械删除
+所有 `error.rs`：现存文件可能保留公开类型别名，或承载基于 `ProviderError`
+的 HTTP 映射逻辑；先搜索调用方并保持公开 API。
 
 ---
 
@@ -92,16 +90,16 @@ Err(ProviderError::network("fireworks", e.to_string()))
 - [ ] 单元测试覆盖错误映射
 
 ## 注册
-- [ ] 添加到 providers/mod.rs
-- [ ] 添加到 provider registry
+- [ ] Tier 1：添加 catalog 条目和 `providers/mod.rs` 注释
+- [ ] Tier 2：添加模块、`Provider` 枚举/dispatch 和 factory 分支
 ```
 
 ### 迁移检查清单
 
 ```markdown
 ## 错误迁移
-- [ ] 删除 error.rs 文件
-- [ ] 更新 type Error = ProviderError
+- [ ] 搜索 `error.rs` 调用方；仅在无别名/映射/API 用途时删除
+- [ ] 删除旧的关联 `type Error` 声明；方法直接返回 ProviderError
 - [ ] 替换所有 XxxError::Variant 为 ProviderError::factory()
 - [ ] 删除 ProviderErrorTrait impl
 - [ ] 删除 From<XxxError> impl

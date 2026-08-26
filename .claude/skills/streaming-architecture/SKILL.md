@@ -1,205 +1,201 @@
 ---
 name: streaming-architecture
-description: LiteLLM-RS Streaming Architecture. Covers UnifiedSSEParser, SSETransformer trait, VecDeque buffering, provider-specific transformers, and real-time event handling. Use when debugging SSE parsing, writing or modifying a provider stream transformer, wiring the stream processing pipeline, or tuning buffer sizes, timeouts, and backpressure.
+description: LiteLLM-RS Streaming Architecture. Covers UnifiedSSEParser line buffering, the SSETransformer trait, UnifiedSSEStream backpressure and overflow guarding, provider-specific transformers, and server-side SSE emission. Use when debugging SSE parsing, writing or modifying a provider stream transformer, wiring the stream processing pipeline, or tuning the stream idle timeout.
 ---
 
 # Streaming Architecture Guide
 
 ## Overview
 
-LiteLLM-RS implements a unified streaming system that handles Server-Sent Events (SSE) from 66+ providers with provider-specific transformations while presenting a consistent OpenAI-compatible output format.
+Provider streaming lives in `src/core/providers/base/sse.rs` plus per-provider
+transformers under `src/core/providers/base/sse/` (`openai.rs`, `anthropic.rs`,
+`gemini.rs`, `cohere.rs`, `databricks.rs`). The layer consumes a provider's raw
+SSE byte stream and yields `Result<ChatChunk, ProviderError>` items in an
+OpenAI-compatible shape, so the server routes never see provider-specific
+formats.
 
 ### Streaming Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Provider SSE Stream                          │
-│  (OpenAI, Anthropic, Google, etc.)                             │
+│                  Provider SSE byte stream                       │
+│  reqwest::Response::bytes_stream()                              │
+│  (OpenAI, Anthropic, Google, ...)                               │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    UnifiedSSEParser                             │
-│  - Buffer management with VecDeque                              │
-│  - Line-based SSE parsing                                       │
-│  - Event type detection                                         │
+│                  UnifiedSSEStream<S, T>                         │
+│  - polls upstream bytes, feeds UnifiedSSEParser                 │
+│  - chunk_buffer: VecDeque<ChatChunk>, capped at 10_000          │
+│  - Item = Result<ChatChunk, ProviderError>                      │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    SSETransformer                               │
-│  - Provider-specific data parsing                               │
-│  - Format normalization to ChatChunk                            │
-│  - Error handling                                               │
+│                  UnifiedSSEParser<T>                            │
+│  - String line buffer (incomplete tail retained across reads)   │
+│  - SSEEvent field parsing, multi-line data joining              │
+│  - end-marker / finish_stream dispatch                          │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    OpenAI-Compatible Output                     │
-│  ChatChunk (data: {...}\n\n or [DONE])                         │
+│                  SSETransformer (per provider)                  │
+│  - transform_chunk / transform_stream_chunk                     │
+│  - normalizes wire format to ChatChunk                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  Server route re-serialization                  │
+│  ChatChunk -> SSE frames ("data: {...}\n\n") + final [DONE]     │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+The parser owns its transformer: `UnifiedSSEParser<T: SSETransformer>` calls
+back into `T` while parsing, so there is no separate processing stage between
+parser and transformer.
 
 ---
 
 ## Core Components
 
-### UnifiedSSEParser
+### SSEEvent
 
 ```rust
-use std::collections::VecDeque;
-
-/// Unified SSE parser that handles various provider formats
-pub struct UnifiedSSEParser {
-    /// Buffer for incomplete lines
-    buffer: VecDeque<u8>,
-    /// Current event type being parsed
-    current_event_type: Option<String>,
-    /// Maximum buffer size to prevent memory issues
-    max_buffer_size: usize,
-}
-
-impl UnifiedSSEParser {
-    pub fn new() -> Self {
-        Self {
-            buffer: VecDeque::with_capacity(8192),
-            current_event_type: None,
-            max_buffer_size: 1024 * 1024, // 1MB max buffer
-        }
-    }
-
-    /// Feed bytes into the parser and extract complete events
-    pub fn feed(&mut self, bytes: &[u8]) -> Vec<SSEEvent> {
-        // Add bytes to buffer
-        for &byte in bytes {
-            if self.buffer.len() < self.max_buffer_size {
-                self.buffer.push_back(byte);
-            }
-        }
-
-        self.extract_events()
-    }
-
-    /// Extract complete SSE events from the buffer
-    fn extract_events(&mut self) -> Vec<SSEEvent> {
-        let mut events = Vec::new();
-        let mut current_data = String::new();
-
-        // Convert buffer to string for processing
-        let text: String = self.buffer.iter().map(|&b| b as char).collect();
-
-        // Process line by line
-        let mut processed_len = 0;
-        for line in text.split('\n') {
-            processed_len += line.len() + 1; // +1 for \n
-
-            let line = line.trim_end_matches('\r');
-
-            if line.is_empty() {
-                // Empty line marks end of event
-                if !current_data.is_empty() {
-                    events.push(SSEEvent {
-                        event_type: self.current_event_type.take(),
-                        data: current_data.clone(),
-                    });
-                    current_data.clear();
-                }
-                continue;
-            }
-
-            if let Some(event_type) = line.strip_prefix("event: ") {
-                self.current_event_type = Some(event_type.to_string());
-            } else if let Some(data) = line.strip_prefix("data: ") {
-                if !current_data.is_empty() {
-                    current_data.push('\n');
-                }
-                current_data.push_str(data);
-            } else if line.starts_with(':') {
-                // Comment line, ignore
-                continue;
-            } else if let Some(id) = line.strip_prefix("id: ") {
-                // Event ID, can be stored if needed
-                let _ = id;
-            } else if let Some(retry) = line.strip_prefix("retry: ") {
-                // Retry interval, can be stored if needed
-                let _ = retry;
-            }
-        }
-
-        // Remove processed bytes from buffer
-        // Keep any incomplete line
-        let last_newline = text.rfind('\n').map(|i| i + 1).unwrap_or(0);
-        for _ in 0..last_newline {
-            self.buffer.pop_front();
-        }
-
-        events
-    }
-
-    /// Reset parser state
-    pub fn reset(&mut self) {
-        self.buffer.clear();
-        self.current_event_type = None;
-    }
-}
-
+// src/core/providers/base/sse.rs
 #[derive(Debug, Clone)]
 pub struct SSEEvent {
     pub event_type: Option<String>,
     pub data: String,
+    pub id: Option<String>,
+    pub retry: Option<u64>,
 }
 ```
 
----
+`SSEEvent::from_line(&str) -> Option<SSEEvent>` parses one SSE field line:
 
-## SSETransformer Trait
+- Empty lines and `:` comment lines return `None`.
+- `data`, `event`, `id`, and `retry` set the matching field; whitespace after
+  the colon is trimmed.
+- `retry` must parse as `u64`, otherwise `None`; unknown fields return `None`.
+
+The parser accumulates multiple `data` lines of one event, joining them with
+`\n`, and dispatches on the blank line that terminates the event.
+
+### SSETransformer Trait
 
 ```rust
-use crate::core::types::responses::ChatChunk;
-
-/// Trait for transforming provider-specific SSE data to ChatChunk
-#[async_trait]
+// src/core/providers/base/sse.rs
 pub trait SSETransformer: Send + Sync {
-    /// Transform raw SSE data to ChatChunk
-    fn transform(&self, event: &SSEEvent) -> Result<Option<ChatChunk>, StreamError>;
-
-    /// Check if the event indicates stream end
-    fn is_done(&self, event: &SSEEvent) -> bool;
-
-    /// Get provider name for error context
     fn provider_name(&self) -> &'static str;
 
-    /// Handle provider-specific error events
-    fn handle_error(&self, event: &SSEEvent) -> Option<StreamError>;
-}
+    fn is_end_marker(&self, data: &str) -> bool {
+        data.trim() == "[DONE]"
+    }
 
-#[derive(Debug, thiserror::Error)]
-pub enum StreamError {
-    #[error("[{provider}] Parse error: {message}")]
-    Parse {
-        provider: &'static str,
-        message: String,
-    },
+    fn transform_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError>;
 
-    #[error("[{provider}] Stream interrupted: {message}")]
-    Interrupted {
-        provider: &'static str,
-        message: String,
-    },
+    fn transform_stream_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
+        self.transform_chunk(data)
+    }
 
-    #[error("[{provider}] Provider error: {message}")]
-    ProviderError {
-        provider: &'static str,
-        message: String,
-    },
+    fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
+        Ok(None)
+    }
+
+    fn parse_finish_reason(&self, reason: &str) -> Option<FinishReason> { ... }
 }
 ```
+
+- Errors are `ProviderError`
+  (`crate::core::providers::unified_provider::ProviderError`). There is no
+  dedicated `StreamError` enum.
+- The default `parse_finish_reason` maps case-insensitively:
+  `stop|end_turn` -> Stop, `length|max_tokens` -> Length,
+  `tool_calls|function_call|tool_use` -> ToolCalls,
+  `content_filter|safety|recitation` -> ContentFilter,
+  `stop_sequence` -> StopSequence, `refusal` -> Refusal,
+  `pause_turn` -> PauseTurn; unknown strings yield `None`.
+- Built-in implementations: `OpenAICompatibleTransformer`,
+  `AnthropicTransformer`, `GeminiTransformer`, `CohereTransformer`,
+  `DatabricksTransformer` (see
+  [reference/provider-transformers.md](reference/provider-transformers.md)).
+
+### UnifiedSSEParser\<T\>
+
+```rust
+// src/core/providers/base/sse.rs
+pub struct UnifiedSSEParser<T: SSETransformer> {
+    transformer: T,
+    buffer: String,
+    current_event: Option<SSEEvent>,
+}
+
+impl<T: SSETransformer> UnifiedSSEParser<T> {
+    pub fn new(transformer: T) -> Self;
+    pub fn process_bytes(&mut self, bytes: &[u8]) -> Result<Vec<ChatChunk>, ProviderError>;
+}
+```
+
+- The buffer is a `String`, not a byte deque. Each incoming read is decoded
+  independently with `String::from_utf8_lossy` and appended; only text up to
+  the last `\n` is processed and the incomplete tail stays buffered for the
+  next call. Line/event splits are retained, but a read boundary inside a
+  multibyte UTF-8 code point is lossy because the undecoded bytes are not
+  retained.
+- `process_bytes` runs non-stream mode: an end marker produces nothing and
+  events go through `transform_chunk`.
+- `UnifiedSSEStream` drives the private `process_stream_bytes` path (stream
+  mode): an end marker triggers `transformer.finish_stream()` instead, and data
+  goes through `transform_stream_chunk`.
+- No size cap applies to this buffer.
+- The private `finish_stream` flushes any leftover partial line and pending
+  event, then appends `transformer.finish_stream()` output.
+
+### UnifiedSSEStream\<S, T\>
+
+```rust
+// src/core/providers/base/sse.rs
+const MAX_CHUNK_BUFFER_SIZE: usize = 10_000;
+
+pub struct UnifiedSSEStream<S, T>
+where
+    S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + Unpin,
+    T: SSETransformer + Clone,
+{
+    inner: S,
+    parser: UnifiedSSEParser<T>,
+    chunk_buffer: VecDeque<ChatChunk>,
+    pending_error: Option<ProviderError>,
+    finished: bool,
+}
+```
+
+`poll_next` order: pop `chunk_buffer`, then take `pending_error`, then return
+`None` once `finished`, otherwise poll `inner` and feed bytes through
+`process_stream_bytes`.
+
+- A read that yields zero complete chunks stores nothing; the stream returns
+  `Pending` after `cx.waker().wake_by_ref()`.
+- If buffered plus new chunks would exceed `MAX_CHUNK_BUFFER_SIZE` (10_000),
+  it yields `Err(ProviderError::network(...))` instead of growing unboundedly.
+- Transport errors are wrapped as
+  `ProviderError::network(provider, format!("Stream error: {error}"))`; chunks
+  drained from `parser.finish_stream()` are emitted before the error item.
+- Upstream end-of-stream sets `finished` and drains `parser.finish_stream()`
+  before returning `None`.
+
+Helper `create_provider_sse_stream(response, provider_name)` boxes
+`response.bytes_stream()` behind an `OpenAICompatibleTransformer`.
 
 ---
 
 ## References
-- [reference/provider-transformers.md](reference/provider-transformers.md) — OpenAI, Anthropic, and Google Gemini SSETransformer implementations
-- [reference/stream-pipeline.md](reference/stream-pipeline.md) — StreamProcessor pipeline and actix HTTP response streaming
-- [reference/buffer-management.md](reference/buffer-management.md) — VecDeque buffer trimming and overflow protection internals
-- [reference/configuration.md](reference/configuration.md) — streaming YAML configuration: buffer sizes, timeouts, retry
-- [reference/best-practices.md](reference/best-practices.md) — incomplete events, stream ordering, resource cleanup, backpressure
+
+- [reference/provider-transformers.md](reference/provider-transformers.md) — behavior of the OpenAI-compatible, Anthropic, Gemini, Cohere, and Databricks transformers
+- [reference/stream-pipeline.md](reference/stream-pipeline.md) — UnifiedSSEStream pipeline internals, provider wiring pattern, and actix HTTP response streaming
+- [reference/buffer-management.md](reference/buffer-management.md) — parser line buffer retention and chunk-buffer overflow guard
+- [reference/configuration.md](reference/configuration.md) — `server.stream_idle_timeout` and fixed buffering constants
+- [reference/best-practices.md](reference/best-practices.md) — incremental parsing, per-stream state, error mapping, usage handling

@@ -1,118 +1,113 @@
 ## Contents
 
-- Stream Processing Pipeline
+- Parser Modes and Event Dispatch
+- Provider Wiring
 - HTTP Response Streaming
 
-## Stream Processing Pipeline
+## Parser Modes and Event Dispatch
+
+`UnifiedSSEParser<T>` has two entry paths that share one line-processing core:
 
 ```rust
-use futures::{Stream, StreamExt};
-use std::pin::Pin;
+// src/core/providers/base/sse.rs
+pub fn process_bytes(&mut self, bytes: &[u8]) -> Result<Vec<ChatChunk>, ProviderError>;
+fn process_stream_bytes(&mut self, bytes: &[u8]) -> Result<Vec<ChatChunk>, ProviderError>; // private
+```
 
-pub struct StreamProcessor<T: SSETransformer> {
-    parser: UnifiedSSEParser,
-    transformer: T,
-}
+Per line: `SSEEvent::from_line` parses fields; multiple `data` lines of an
+event join with `\n`; a blank line dispatches the accumulated event through
+`process_event`, which:
 
-impl<T: SSETransformer> StreamProcessor<T> {
-    pub fn new(transformer: T) -> Self {
-        Self {
-            parser: UnifiedSSEParser::new(),
-            transformer,
-        }
-    }
+1. Returns nothing for empty data.
+2. On an end marker (`transformer.is_end_marker`): stream mode calls
+   `transformer.finish_stream()`; non-stream mode returns nothing.
+3. Otherwise calls `transform_stream_chunk` (stream mode) or
+   `transform_chunk` (non-stream mode).
 
-    /// Process a byte stream and produce ChatChunks
-    pub fn process_stream(
-        mut self,
-        input: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
-    ) -> Pin<Box<dyn Stream<Item = Result<ChatChunk, StreamError>> + Send>> {
-        let stream = input.flat_map(move |result| {
-            match result {
-                Ok(bytes) => {
-                    let events = self.parser.feed(&bytes);
-                    let chunks: Vec<Result<ChatChunk, StreamError>> = events
-                        .into_iter()
-                        .filter_map(|event| {
-                            // Check for errors first
-                            if let Some(error) = self.transformer.handle_error(&event) {
-                                return Some(Err(error));
-                            }
+## Provider Wiring
 
-                            // Check if done
-                            if self.transformer.is_done(&event) {
-                                return None;
-                            }
+Providers wrap a reqwest response body in `UnifiedSSEStream`. Real example
+from `src/core/providers/openai/streaming.rs`:
 
-                            // Transform event
-                            match self.transformer.transform(&event) {
-                                Ok(Some(chunk)) => Some(Ok(chunk)),
-                                Ok(None) => None,
-                                Err(e) => Some(Err(e)),
-                            }
-                        })
-                        .collect();
+```rust
+use crate::core::providers::base::sse::{OpenAICompatibleTransformer, UnifiedSSEStream};
 
-                    futures::stream::iter(chunks)
-                }
-                Err(e) => {
-                    futures::stream::iter(vec![Err(StreamError::Interrupted {
-                        provider: self.transformer.provider_name(),
-                        message: e.to_string(),
-                    })])
-                }
-            }
-        });
+pub type OpenAIStream = UnifiedSSEStream<
+    Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+    OpenAICompatibleTransformer,
+>;
 
-        Box::pin(stream)
-    }
+pub fn create_openai_stream(
+    stream: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
+) -> OpenAIStream {
+    let transformer = OpenAICompatibleTransformer::new("openai");
+    UnifiedSSEStream::new(Box::pin(stream), transformer)
 }
 ```
 
----
+The same pattern appears across providers (`anthropic/streaming.rs`,
+`gemini/streaming.rs`, `cohere/streaming.rs`, ...):
+`UnifiedSSEStream::new(Box::pin(response.bytes_stream()), transformer)`.
+For plain OpenAI-compatible responses,
+`create_provider_sse_stream(response, provider_name)` in
+`src/core/providers/base/sse.rs` builds the boxed stream with an
+`OpenAICompatibleTransformer` in one call.
+
+### poll_next semantics
+
+```rust
+type Item = Result<ChatChunk, ProviderError>;
+```
+
+- Buffered chunks drain first (`chunk_buffer.pop_front()`), then any
+  `pending_error`.
+- A network read whose chunks plus buffered chunks would exceed
+  `MAX_CHUNK_BUFFER_SIZE` fails with `ProviderError::network`.
+- An upstream `Err` is wrapped as
+  `ProviderError::network(provider, format!("Stream error: {error}"))`; any
+  chunks from `parser.finish_stream()` flush before the error surfaces.
+- Upstream `None` drains `parser.finish_stream()` (leftover partial line,
+  pending event, transformer tail chunk) before ending the stream.
 
 ## HTTP Response Streaming
 
+Server routes convert provider chunks back into SSE frames for clients. The
+canonical path is `src/server/routes/ai/chat_streaming.rs`
+(`completions_streaming.rs` and `responses_stream.rs` follow the same shape):
+
 ```rust
-use actix_web::{HttpResponse, web};
-use futures::StreamExt;
+let (tx, rx) = mpsc::channel::<Bytes>(8);
+let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
 
-pub async fn stream_chat_completion(
-    request: ChatRequest,
-    provider: Arc<dyn LLMProvider>,
-) -> HttpResponse {
-    // Get streaming response from provider
-    let stream = match provider.chat_completion_stream(request, context).await {
-        Ok(s) => s,
-        Err(e) => {
-            return HttpResponse::InternalServerError()
-                .json(json!({"error": e.to_string()}));
-        }
-    };
+tokio::spawn(async move {
+    // loop over stream.next(), guarded by tokio::time::timeout when
+    // idle_timeout_secs > 0; select on tx.closed() to detect disconnects
+});
 
-    // Transform to SSE format
-    let sse_stream = stream.map(|result| {
-        match result {
-            Ok(chunk) => {
-                let json = serde_json::to_string(&chunk).unwrap_or_default();
-                Ok::<_, std::io::Error>(bytes::Bytes::from(format!("data: {}\n\n", json)))
-            }
-            Err(e) => {
-                let error_json = json!({"error": e.to_string()});
-                Ok(bytes::Bytes::from(format!("data: {}\n\n", error_json)))
-            }
-        }
-    });
+let sse_stream =
+    tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, actix_web::error::Error>);
 
-    // Add [DONE] marker at the end
-    let final_stream = sse_stream.chain(futures::stream::once(async {
-        Ok::<_, std::io::Error>(bytes::Bytes::from("data: [DONE]\n\n"))
-    }));
-
-    HttpResponse::Ok()
-        .content_type("text/event-stream")
-        .insert_header(("Cache-Control", "no-cache"))
-        .insert_header(("Connection", "keep-alive"))
-        .streaming(final_stream)
-}
+Ok(HttpResponse::Ok()
+    .insert_header((CONTENT_TYPE, "text/event-stream"))
+    .insert_header((CACHE_CONTROL, "no-cache"))
+    .insert_header(("Connection", "keep-alive"))
+    .insert_header(("X-Request-ID", context.request_id.as_str()))
+    .streaming(sse_stream))
 ```
+
+Inside the spawned task, per upstream item:
+
+- `Ok(chunk)`: usage is captured as it passes; empty chunks (no choices, no
+  usage) are skipped; `convert_core_chunk_to_streaming`
+  (`src/server/routes/ai/chat.rs`) converts the chunk and frames go to `tx`.
+- `Err(e)`: classified by `sse_error_classification` and sent as an SSE error
+  frame built by `format_sse_error`
+  (both in `src/server/routes/ai/chat_sse.rs`).
+- Idle timeout expiry sends a timeout error frame, records
+  `ProviderError::timeout`, and closes the stream.
+- After the loop, the terminal marker is emitted:
+  `Event::default().data("[DONE]").to_bytes()`
+  (`Event` from `crate::core::streaming::types`).
+
+There is no generic `StreamProcessor` pipeline type — `UnifiedSSEStream` is
+the only stream adapter between the provider HTTP body and the route task.

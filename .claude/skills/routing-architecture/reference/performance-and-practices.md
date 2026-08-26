@@ -1,72 +1,70 @@
 ## Performance Characteristics
 
-| Strategy | Selection Time | Memory Overhead | Best For |
-|----------|---------------|-----------------|----------|
-| SimpleShuffle | O(n) | Low | General use |
-| RoundRobin | O(n) | Low | Even distribution |
-| LeastBusy | O(n) | Medium | High concurrency |
-| LatencyBased | O(n) | Medium | Latency-sensitive |
-| PriorityBased | O(n) | Low | Priority-based routing |
-| UsageBased | O(n) | High | Quota management |
-| RateLimitAware | O(n) | Medium | High volume |
+All strategies run over an immutable `Vec<RoutingContext>` (Copy structs, built in one
+pass per selection — `strategy_impl.rs:16-27`), so there is no shared mutable state to
+lock during selection. Verified complexity from `src/core/router/strategy_impl.rs`:
+
+| Strategy | Function | Selection Complexity | Notes |
+|----------|----------|----------------------|-------|
+| SimpleShuffle | `weighted_random_from_context` | O(n) | One RNG draw + cumulative weight walk |
+| RoundRobin | `round_robin_from_context` | O(1) after counter | Per-model `DashMap<String, AtomicUsize>` |
+| LeastBusy | `least_busy_from_context` | O(n) | Random tie-break via reservoir sampling |
+| LatencyBased | `lowest_latency_from_context` | O(n) | Two passes: pool average then minimum |
+| PriorityBased | `lowest_priority_from_context` | O(n) | Simple minimum scan |
+| UsageBased | `lowest_usage_from_context` | O(n) | TPM percentage comparison |
+| RateLimitAware | `rate_limit_aware_from_context` | O(n) | min(TPM distance, RPM distance) |
+
+Candidate filtering (health, cooldown, RPM/TPM/parallel limits) is a separate O(n) pass
+in `selection.rs:226-373` that all strategies share. Reservation is one atomic increment;
+the RAII release on `DeploymentLease` drop is one atomic decrement. Router-wide counters
+(`provider_selected_count`, `strategy_used_count`, `fallback_triggered_count`) are
+`AtomicU64`s exposed via `Router::routing_metrics()` (`unified.rs:38-45,369-375`).
 
 ---
 
 ## Best Practices
 
-### 1. Always Enable Health Tracking
+### 1. Use the Lease API
 
 ```rust
-// Good - health-aware routing
-let healthy_providers: Vec<_> = providers
-    .iter()
-    .filter(|p| health_tracker.is_healthy(p.name()))
-    .collect();
+// Good - lease releases active_requests on drop, even on early return or cancel
+let lease = router.select_deployment_lease(&model)?;
+let deployment = lease.clone_deployment();
+// ... execute ...
 
-// Bad - ignores health status
-let provider = providers.first().unwrap();
+// Avoid - deprecated ID-returning selectors skip RAII release
+let id = router.select_deployment(&model)?; // #[deprecated(since = "0.5.0")]
 ```
 
-### 2. Implement Graceful Degradation
+### 2. Feed Outcomes Back to the Router
 
-```rust
-// Good - fallback to any available provider
-if healthy.is_empty() {
-    // Return degraded provider instead of failing
-    return providers.first().cloned();
-}
+Selection quality depends on recorded state (`record_success` /
+`record_failure_with_reason` update latency averages, failure counts, and the cooldown
+breaker). The built-in execution methods (`execute_with_selected_deployment`,
+`execute_with_selected_deployment_retry`) do this automatically — prefer them over manual
+select + call.
 
-// Bad - fails immediately
-if healthy.is_empty() {
-    return None;
-}
-```
+### 3. Give Data-Driven Strategies Data
 
-### 3. Record Metrics for All Operations
+UsageBased and RateLimitAware treat unlimited deployments as 0% used / max distance, so
+an unlimited deployment can be preferred over a limited one (or join a best-score tie);
+it is not ignored. Set `tpm` / `rpm` / `max_concurrent_requests` consistently on
+providers (YAML) when these strategies should compare like-for-like capacity; set
+`weight` for SimpleShuffle and `priority` for PriorityBased tiering.
 
-```rust
-// Good - tracks all outcomes
-match result {
-    Ok(_) => {
-        health_tracker.record_success(provider.name());
-        latency_tracker.record(provider.name(), elapsed);
-    }
-    Err(e) => {
-        health_tracker.record_failure(provider.name(), &e.to_string());
-        if let ProviderError::RateLimit { retry_after, .. } = e {
-            rate_limit_tracker.mark_limited(provider.name(), retry_after.unwrap_or(60));
-        }
-    }
-}
-```
+### 4. Register Fallbacks Explicitly and Validate
 
-### 4. Use Atomic Operations
+The full fallback executor `execute_with_selected_deployment` automatically consumes only
+`add_general` entries.
+`add_context_window` / `add_content_policy` / `add_rate_limit` populate typed lookup maps;
+using them requires the caller to resolve the appropriate `FallbackType` and wire that
+list into execution. Call `validate()` to catch cycles before startup. Tune the automatic
+General chain with `max_fallbacks` (default 5) and retries with `num_retries`.
 
-```rust
-// Good - lock-free counter
-self.current_index.fetch_add(1, Ordering::SeqCst)
+### 5. Keep Cooldown Tuning Consistent With Retries
 
-// Bad - requires mutex
-let mut guard = self.current_index.lock().unwrap();
-*guard += 1;
-```
+Retries use `CooldownReason::ConsecutiveFailures` so a deployment is not cooled down
+mid-retry unless it exceeds `allowed_fails` within a minute
+(`execute_impl.rs:144-157`). If you raise `num_retries`, check that
+`circuit_breaker.failure_threshold` and `min_requests` still make sense, otherwise every
+retry storm trips the breaker.
