@@ -74,16 +74,25 @@ async fn production_builder_tries_candidates_but_binds_exactly_one() {
     let occupied_address = occupied
         .local_addr()
         .expect("reserved address should exist");
-    let candidates = [
-        occupied_address,
-        "127.0.0.1:0".parse().expect("valid loopback candidate"),
-        "127.0.0.1:0".parse().expect("valid loopback candidate"),
-    ];
+    let available_address = reserve_available_address();
+    let unused_address = reserve_available_address();
+    let candidates = [occupied_address, available_address, unused_address];
 
     let running =
         RunningServer::start_with_addresses(ServerConfig::default(), candidates.as_slice()).await;
-    assert_ne!(running.address, occupied_address);
+    assert_eq!(running.address, available_address);
+    let unused_listener = std::net::TcpListener::bind(unused_address)
+        .expect("builder must stop after the first successful candidate");
     running.stop().await;
+    drop(unused_listener);
+}
+
+fn reserve_available_address() -> std::net::SocketAddr {
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("candidate address should be reserved");
+    listener
+        .local_addr()
+        .expect("reserved candidate address should exist")
 }
 
 impl Drop for RunningServer {
