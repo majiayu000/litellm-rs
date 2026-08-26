@@ -113,6 +113,15 @@ fn make_api_key(id: Uuid, user_id: Option<Uuid>, team_id: Option<Uuid>) -> ApiKe
 
 async fn auth_enabled_test_state() -> web::Data<AppState> {
     let mut config = crate::config::Config::default();
+    config
+        .gateway
+        .providers
+        .push(crate::config::models::provider::ProviderConfig {
+            name: "keys-test-openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-keys-test".to_string(),
+            ..Default::default()
+        });
     config.gateway.auth.enable_jwt = true;
     config.gateway.auth.enable_api_key = true;
     config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();

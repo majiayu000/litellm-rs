@@ -145,9 +145,11 @@ impl HttpServer {
             ))
         })?;
 
-        let callback_runtime =
-            crate::server::callbacks::build_callback_runtime(&config.gateway.monitoring.callbacks)
-                .await;
+        let callback_runtime = crate::server::callbacks::build_callback_runtime(
+            &config.gateway.monitoring.callbacks,
+            &config.gateway.monitoring.metrics,
+        )
+        .await;
         let audit_logger = if config.gateway.enterprise.audit_logging {
             AuditLogger::shared(AuditConfig::default().enable())
                 .await
@@ -446,6 +448,10 @@ async fn normalize_non_cors_options_before_cors(
 }
 
 #[cfg(test)]
+#[path = "http_metrics_tests.rs"]
+mod metrics_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
@@ -566,6 +572,7 @@ mod tests {
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = None;
+        config.gateway.monitoring.metrics.enabled = false;
         config.gateway.monitoring.callbacks.backends = vec![
             crate::config::models::monitoring::CallbackBackendConfig::OpenTelemetry(
                 crate::core::integrations::OpenTelemetryConfig::default(),
