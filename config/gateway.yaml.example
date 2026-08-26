@@ -44,6 +44,9 @@ providers:
       max_delay: 5000
       backoff_multiplier: 2.0
       jitter: 0.1
+    # Defaults alone do not enable active probes. OpenAI is multi-capability, so any
+    # non-default policy must also set a custom endpoint; native chat probes are only
+    # available for providers whose configured deployment is unambiguously chat-only.
     health_check:
       interval: 30
       failure_threshold: 5

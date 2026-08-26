@@ -343,6 +343,22 @@ impl ProviderConfig {
     /// Validate health settings at every runtime construction boundary.
     pub(crate) fn validate_health_check_runtime(&self) -> Result<(), String> {
         self.health_check.validate()?;
+        if self.health_check.has_runtime_overrides() && self.health_check.endpoint.is_none() {
+            let selector = self.effective_provider_selector();
+            let native_probe_is_safe = matches!(
+                selector.parse(),
+                Ok(crate::core::providers::provider_type::ProviderType::Anthropic)
+                    | Ok(crate::core::providers::provider_type::ProviderType::GitHubCopilot)
+            );
+            if !native_probe_is_safe {
+                return Err(format!(
+                    "Provider {} ({selector}) active health checks require a custom \
+                     health_check.endpoint because the configured model's request capability \
+                     cannot be inferred safely",
+                    self.name
+                ));
+            }
+        }
         if let Some(endpoint) = self.resolved_health_check_endpoint()? {
             if !endpoint.username().is_empty() || endpoint.password().is_some() {
                 return Err(format!(

@@ -26,9 +26,9 @@
 //!
 //! | Value            | Meaning                                                 |
 //! |------------------|---------------------------------------------------------|
-//! | `healthy`        | Live probe succeeded.                                   |
-//! | `unhealthy`      | Live probe failed.                                      |
-//! | `unknown`        | Provider is enabled but no successful probe yet wired.  |
+//! | `healthy`        | The latest live probe succeeded.                         |
+//! | `unhealthy`      | The latest live probe failed.                            |
+//! | `unknown`        | No deployment or no successful probe evidence yet.      |
 //! | `disabled`       | `enabled = false` in config; excluded from readiness.   |
 //!
 //! When zero providers are configured the aggregate reports `not_configured`
@@ -39,7 +39,7 @@
 use crate::server::middleware::MetricsMiddleware;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
-use actix_web::{HttpResponse, Result as ActixResult, web};
+use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use std::borrow::Cow;
 #[cfg(feature = "metrics")]
 use std::sync::LazyLock;
@@ -47,6 +47,9 @@ use std::sync::LazyLock;
 use sysinfo::System;
 
 use tracing::{debug, error};
+
+#[path = "health_provider_status.rs"]
+mod health_provider_status;
 
 #[cfg(feature = "metrics")]
 static HEALTH_SYSTEM: LazyLock<parking_lot::Mutex<System>> =
@@ -86,7 +89,10 @@ pub async fn health_check(_state: web::Data<AppState>) -> ActixResult<HttpRespon
 /// Returns 200 with `ready: true` only when the gateway can serve traffic
 /// per the aggregate rule documented at the module top. Returns 503 with
 /// `ready: false` and a short reason otherwise.
-async fn readiness_check(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
+async fn readiness_check(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+) -> ActixResult<HttpResponse> {
     debug!("Readiness check requested");
 
     let (storage_health, provider_health) = collect_component_health(&state).await;
@@ -95,15 +101,21 @@ async fn readiness_check(state: web::Data<AppState>) -> ActixResult<HttpResponse
         state.audit_logger.is_available(),
     );
 
+    let is_authenticated = crate::server::middleware::get_request_context(&request)
+        .is_ok_and(|context| context.user_id.is_some() || context.api_key_id().is_some());
+    let reason = if verdict.ready || is_authenticated {
+        verdict.reason
+    } else {
+        Cow::Borrowed("not ready")
+    };
     let body = ReadinessStatus {
         ready: verdict.ready,
-        reason: verdict.reason,
+        reason,
         timestamp: chrono::Utc::now(),
         version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
-        storage: storage_health,
-        providers: provider_health,
+        storage: is_authenticated.then_some(storage_health),
+        providers: is_authenticated.then_some(provider_health),
     };
-
     let response = ApiResponse::success(body);
     if verdict.ready {
         Ok(HttpResponse::Ok().json(response))
@@ -274,8 +286,10 @@ struct ReadinessStatus {
     reason: Cow<'static, str>,
     timestamp: chrono::DateTime<chrono::Utc>,
     version: Cow<'static, str>,
-    storage: crate::storage::StorageHealthStatus,
-    providers: ProviderHealthStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage: Option<crate::storage::StorageHealthStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    providers: Option<ProviderHealthStatus>,
 }
 
 /// Detailed health status
@@ -311,7 +325,7 @@ struct ProviderHealth {
     /// One of `healthy`, `unhealthy`, `unknown`, `disabled`.
     status: Cow<'static, str>,
     response_time_ms: Option<u64>,
-    last_check: chrono::DateTime<chrono::Utc>,
+    last_check: Option<chrono::DateTime<chrono::Utc>>,
     error_message: Option<String>,
 }
 
@@ -491,10 +505,10 @@ fn aggregate_readiness(
 
 /// Check provider health.
 ///
-/// Per-provider live probes are not yet wired (see issue #555). Enabled
-/// providers therefore report `unknown` until a real probe is implemented;
-/// `unknown` is treated as not-ready by [`aggregate_readiness`] so an
-/// unprobed deployment cannot present a green readiness signal.
+/// Enabled providers report `unknown` until a configured active probe succeeds.
+/// `unknown` is treated as not-ready by
+/// [`aggregate_readiness`] so an unverified deployment cannot present a green
+/// readiness signal.
 async fn check_provider_health(
     state: &AppState,
 ) -> Result<ProviderHealthStatus, crate::utils::error::gateway_error::GatewayError> {
@@ -502,21 +516,21 @@ async fn check_provider_health(
     let mut provider_details = Vec::new();
 
     for provider_config in cfg.providers() {
-        let (status, error_message): (Cow<'static, str>, Option<String>) =
-            if !provider_config.enabled {
-                (Cow::Borrowed("disabled"), None)
-            } else {
-                (
-                    Cow::Borrowed("unknown"),
-                    Some("Provider health check not implemented".to_string()),
-                )
-            };
+        let (status, error_message, last_check) = if !provider_config.enabled {
+            (Cow::Borrowed("disabled"), None, None)
+        } else {
+            health_provider_status::derive_health_for_provider(
+                &state.unified_router,
+                &provider_config.name,
+                provider_config.enabled,
+            )
+        };
 
         provider_details.push(ProviderHealth {
             name: provider_config.name.clone(),
             status,
             response_time_ms: None,
-            last_check: chrono::Utc::now(),
+            last_check,
             error_message,
         });
     }
@@ -610,7 +624,7 @@ mod tests {
             name: name.to_string(),
             status: Cow::Borrowed(status),
             response_time_ms: None,
-            last_check: chrono::Utc::now(),
+            last_check: Some(chrono::Utc::now()),
             error_message: None,
         }
     }

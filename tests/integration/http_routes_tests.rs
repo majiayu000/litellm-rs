@@ -14,6 +14,7 @@ mod tests {
     use litellm_rs::core::integrations::{
         CallbackRuntime, IntegrationManager, IntegrationManagerConfig,
     };
+    use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::core::traits::integration::{
         EmbeddingEndEvent, EmbeddingStartEvent, Integration, IntegrationResult, LlmEndEvent,
         LlmErrorEvent, LlmStartEvent,
@@ -22,6 +23,7 @@ mod tests {
     use litellm_rs::server::middleware::AuthMiddleware;
     use litellm_rs::server::routes;
     use litellm_rs::server::state::AppState;
+    use litellm_rs::utils::auth::crypto::keys::{extract_api_key_prefix, hash_api_key};
     use serde_json::Value;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -140,6 +142,31 @@ mod tests {
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
 
         build_state_with_config(config).await
+    }
+
+    async fn seed_readiness_api_key(state: &AppState) -> String {
+        let raw_key = "gw-readiness-authenticated-fixture".to_string();
+        let api_key = ApiKey {
+            metadata: Metadata::new(),
+            name: "readiness-test-key".to_string(),
+            key_hash: hash_api_key(&raw_key, None),
+            key_prefix: extract_api_key_prefix(&raw_key),
+            user_id: None,
+            team_id: None,
+            permissions: Vec::new(),
+            rate_limits: None,
+            expires_at: None,
+            is_active: true,
+            last_used_at: None,
+            usage_stats: UsageStats::default(),
+        };
+        state
+            .storage
+            .db()
+            .create_api_key(&api_key)
+            .await
+            .expect("readiness API key should persist");
+        raw_key
     }
 
     async fn build_openai_alias_state(base_url: &str) -> AppState {
@@ -264,6 +291,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_readiness_accessible_even_with_auth_enabled() {
+        let state = build_auth_enabled_state().await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::get().uri("/health/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["data"]["ready"], false);
+        assert_eq!(body["data"]["reason"], "not ready");
+        assert!(body["data"].get("storage").is_none());
+        assert!(body["data"].get("providers").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_authenticated_readiness_preserves_component_details() {
+        let state = build_auth_enabled_state().await;
+        let api_key = seed_readiness_api_key(&state).await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::get()
+            .uri("/health/ready")
+            .insert_header(("x-api-key", api_key))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["data"]["reason"], "no providers enabled");
+        assert!(body["data"]["storage"].is_object());
+        assert!(body["data"]["providers"].is_object());
+        assert_eq!(body["data"]["providers"]["total_providers"], 1);
+        assert_eq!(body["data"]["providers"]["enabled_providers"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_detailed_health_requires_auth() {
+        let state = build_auth_enabled_state().await;
+        let app = test::init_service(build_test_app(state)).await;
+        let req = test::TestRequest::get()
+            .uri("/health/detailed")
+            .to_request();
+
+        match test::try_call_service(&app, req).await {
+            Err(err) => {
+                assert_eq!(
+                    err.as_response_error().status_code(),
+                    StatusCode::UNAUTHORIZED,
+                );
+            }
+            Ok(resp) => assert_eq!(resp.status(), StatusCode::UNAUTHORIZED),
+        }
+    }
+
+    #[tokio::test]
     async fn test_readiness_reports_storage_failure_from_storage_layer() {
         let tempdir = match tempfile::tempdir() {
             Ok(tempdir) => tempdir,
@@ -273,7 +357,7 @@ mod tests {
 
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
-        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.enable_api_key = true;
         config.gateway.auth.allow_anonymous = true;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
@@ -281,12 +365,16 @@ mod tests {
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
 
         let state = build_state_with_config(config).await;
+        let api_key = seed_readiness_api_key(&state).await;
         if let Err(err) = std::fs::remove_dir_all(&storage_path) {
             panic!("failed to remove storage dir: {err}");
         }
         let app = test::init_service(build_test_app(state)).await;
 
-        let req = test::TestRequest::get().uri("/health/ready").to_request();
+        let req = test::TestRequest::get()
+            .uri("/health/ready")
+            .insert_header(("x-api-key", api_key))
+            .to_request();
         let resp = test::call_service(&app, req).await;
 
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -303,12 +391,15 @@ mod tests {
     async fn test_readiness_reports_unknown_enabled_provider() {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
-        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.enable_api_key = true;
         config.gateway.auth.allow_anonymous = true;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.database.url.clear();
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        // This case exercises the fail-closed pre-evidence state. Prevent the
+        // default active probe from replacing Unknown with a live outcome.
+        config.gateway.router.load_balancer.health_check_enabled = false;
         config.gateway.providers.push(ProviderConfig {
             name: "openai".to_string(),
             provider_type: "openai".to_string(),
@@ -318,9 +409,13 @@ mod tests {
         });
 
         let state = build_state_with_config(config).await;
+        let api_key = seed_readiness_api_key(&state).await;
         let app = test::init_service(build_test_app(state)).await;
 
-        let req = test::TestRequest::get().uri("/health/ready").to_request();
+        let req = test::TestRequest::get()
+            .uri("/health/ready")
+            .insert_header(("x-api-key", api_key))
+            .to_request();
         let resp = test::call_service(&app, req).await;
 
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);

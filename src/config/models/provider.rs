@@ -126,12 +126,17 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
-    pub(crate) fn configured_endpoint(&self) -> Option<&str> {
-        let provider_selector = if self.provider_type.trim().is_empty() {
-            self.name.as_str()
+    /// Provider selector used by every runtime construction path.
+    pub(crate) fn effective_provider_selector(&self) -> &str {
+        if self.provider_type.trim().is_empty() {
+            self.name.trim()
         } else {
-            self.provider_type.as_str()
-        };
+            self.provider_type.trim()
+        }
+    }
+
+    pub(crate) fn configured_endpoint(&self) -> Option<&str> {
+        let provider_selector = self.effective_provider_selector();
         self.base_url
             .as_deref()
             .filter(|url| !url.trim().is_empty())
@@ -262,6 +267,7 @@ impl Default for ProviderHealthCheckConfig {
 }
 
 impl ProviderHealthCheckConfig {
+    /// Whether this provider explicitly opts into active runtime probing.
     pub(crate) fn has_runtime_overrides(&self) -> bool {
         self != &Self::default()
     }
@@ -346,6 +352,16 @@ mod tests {
         assert_eq!(config.recovery_timeout, 60);
         assert!(config.endpoint.is_none());
         assert_eq!(config.expected_codes, vec![200]);
+        assert!(!config.has_runtime_overrides());
+    }
+
+    #[test]
+    fn test_health_check_runtime_overrides_require_non_default_configuration() {
+        let config = ProviderHealthCheckConfig {
+            interval: 15,
+            ..Default::default()
+        };
+        assert!(config.has_runtime_overrides());
     }
 
     #[test]

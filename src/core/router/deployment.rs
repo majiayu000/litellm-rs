@@ -15,6 +15,7 @@
 //! ## Performance Characteristics
 //!
 //! - Low contention: ordinary per-minute updates proceed concurrently
+//! - Probe lifecycle synchronization stays off the request path
 //! - Zero-copy: Deployments are accessed by reference, never cloned
 //! - Cache-friendly: Hot path fields grouped together
 
@@ -27,6 +28,14 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[path = "deployment/probe_state.rs"]
+mod probe_state;
+#[path = "deployment/provider_instance.rs"]
+mod provider_instance;
+use probe_state::ProbeLifecycle;
+pub(crate) use probe_state::publish_probe_group;
+pub(crate) use provider_instance::ProviderInstanceIdentity;
 use url::Url;
 
 /// Deployment identifier (unique within router)
@@ -79,9 +88,9 @@ pub struct RetrySchedule {
 }
 
 /// Runtime policy for an active provider health probe.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HealthCheckPolicy {
-    /// Gateway provider name used to group model deployments into one probe task.
+    /// Gateway provider name used to form one compatible probe group.
     pub provider_name: String,
     /// Delay between ordinary probe attempts.
     pub interval_secs: u64,
@@ -192,6 +201,11 @@ impl Default for DeploymentConfig {
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
     minute_window_lock: Arc<RwLock<()>>,
+    provider_instance_identity: ProviderInstanceIdentity,
+    probe_health: Arc<AtomicU8>,
+    probe_last_checked_at_millis: Arc<AtomicU64>,
+    probe_lifecycle: Arc<ProbeLifecycle>,
+    probe_generation: u64,
 }
 
 impl Deref for DeploymentState {
@@ -254,6 +268,10 @@ pub struct DeploymentStateInner {
 impl DeploymentState {
     /// Create new deployment state with default values
     pub fn new() -> Self {
+        Self::new_for_provider_instance(ProviderInstanceIdentity::new())
+    }
+
+    fn new_for_provider_instance(provider_instance_identity: ProviderInstanceIdentity) -> Self {
         let now = current_timestamp();
         Self {
             inner: Arc::new(DeploymentStateInner {
@@ -273,6 +291,11 @@ impl DeploymentState {
                 minute_reset_at: AtomicU64::new(now),
             }),
             minute_window_lock: Arc::new(RwLock::new(())),
+            provider_instance_identity,
+            probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
+            probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
+            probe_lifecycle: Arc::new(ProbeLifecycle::new()),
+            probe_generation: 0,
         }
     }
 
@@ -334,6 +357,50 @@ impl DeploymentState {
     /// Get current health status
     pub fn health_status(&self) -> HealthStatus {
         self.health.load(Ordering::Relaxed).into()
+    }
+
+    /// Get the last result published by the active readiness probe.
+    pub fn probe_health_status(&self) -> HealthStatus {
+        self.probe_health.load(Ordering::Acquire).into()
+    }
+
+    pub(crate) fn set_probe_health_status(&self, status: HealthStatus) {
+        self.probe_last_checked_at_millis
+            .store(current_timestamp_millis(), Ordering::Relaxed);
+        self.probe_health.store(status as u8, Ordering::Release);
+    }
+
+    /// Get the completion time of the last active probe, in Unix milliseconds.
+    pub fn probe_last_checked_at_millis(&self) -> Option<u64> {
+        match self.probe_last_checked_at_millis.load(Ordering::Relaxed) {
+            0 => None,
+            timestamp => Some(timestamp),
+        }
+    }
+
+    /// Share request-routing state while requiring fresh probe evidence.
+    pub(crate) fn for_snapshot_insertion(&self) -> Self {
+        self.for_snapshot_insertion_with_provider(self.provider_instance_identity.clone())
+    }
+
+    pub(crate) fn for_snapshot_insertion_with_provider(
+        &self,
+        provider_instance_identity: ProviderInstanceIdentity,
+    ) -> Self {
+        let probe_generation = self.probe_lifecycle.next_generation();
+        Self {
+            inner: Arc::clone(&self.inner),
+            minute_window_lock: Arc::clone(&self.minute_window_lock),
+            provider_instance_identity,
+            probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
+            probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
+            probe_lifecycle: Arc::clone(&self.probe_lifecycle),
+            probe_generation,
+        }
+    }
+
+    pub(crate) fn provider_instance_identity(&self) -> ProviderInstanceIdentity {
+        self.provider_instance_identity.clone()
     }
 }
 
@@ -403,7 +470,7 @@ pub struct Deployment {
     /// Configuration
     pub config: DeploymentConfig,
 
-    /// Shared low-contention runtime state
+    /// Shared low-contention runtime state with synchronized probe lifecycle
     pub state: DeploymentState,
 
     /// Tags for filtering (e.g., ["production", "fast"])
@@ -420,13 +487,29 @@ impl Deployment {
     /// * `model` - Actual model name (provider-specific)
     /// * `model_name` - User-facing model name (model group)
     pub fn new(id: DeploymentId, provider: Provider, model: String, model_name: String) -> Self {
+        Self::new_with_provider_instance(
+            id,
+            provider,
+            model,
+            model_name,
+            ProviderInstanceIdentity::new(),
+        )
+    }
+
+    pub(crate) fn new_with_provider_instance(
+        id: DeploymentId,
+        provider: Provider,
+        model: String,
+        model_name: String,
+        provider_instance_identity: ProviderInstanceIdentity,
+    ) -> Self {
         Self {
             id,
             provider,
             model,
             model_name,
             config: DeploymentConfig::default(),
-            state: DeploymentState::new(),
+            state: DeploymentState::new_for_provider_instance(provider_instance_identity),
             tags: Vec::new(),
         }
     }
@@ -614,12 +697,26 @@ impl Deployment {
 ///
 /// Returns the number of seconds since UNIX_EPOCH.
 pub(crate) fn current_timestamp() -> u64 {
+    current_timestamp_duration().as_secs()
+}
+
+fn current_timestamp_millis() -> u64 {
+    current_timestamp_duration()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn current_timestamp_duration() -> std::time::Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| std::time::Duration::from_secs(0))
-        .as_secs()
 }
 
 #[cfg(test)]
-#[path = "deployment_window_tests.rs"]
+#[path = "deployment/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "deployment_window_tests.rs"]
+mod deployment_window_tests;

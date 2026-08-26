@@ -2,23 +2,20 @@
 
 use super::deployment::{Deployment, HealthCheckPolicy, HealthStatus};
 use super::error::RouterError;
-use super::unified::Router;
+use super::unified::{Router, RoutingSnapshot};
 use crate::core::providers::Provider;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient};
 use crate::core::types::health::HealthStatus as ProviderHealthStatus;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use arc_swap::ArcSwap;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 #[derive(Debug)]
-struct ProbeGroup {
-    policy: HealthCheckPolicy,
-    provider: Provider,
-    deployments: Vec<Arc<Deployment>>,
-    timeout_secs: u64,
-    custom_client: Option<Arc<BaseHttpClient>>,
+struct ProbeSupervisor {
+    routing_snapshot: Arc<ArcSwap<RoutingSnapshot>>,
+    wakeup: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,61 +34,7 @@ impl Router {
         }
 
         let snapshot = self.routing_snapshot.load_full();
-        let mut groups: HashMap<String, ProbeGroup> = HashMap::new();
-        for deployment in snapshot.deployments.values() {
-            let Some(policy) = deployment.config.health_check_policy.clone() else {
-                continue;
-            };
-
-            match groups.entry(policy.provider_name.clone()) {
-                Entry::Vacant(entry) => {
-                    let timeout = Duration::from_secs(deployment.config.timeout_secs);
-                    let custom_client = policy
-                        .endpoint
-                        .as_ref()
-                        .map(|endpoint| {
-                            BaseHttpClient::new_for_provider_no_redirect(
-                                "health_probe",
-                                BaseConfig {
-                                    api_base: Some(endpoint.to_string()),
-                                    endpoint_access: policy.endpoint_access,
-                                    timeout: timeout.as_secs(),
-                                    ..Default::default()
-                                },
-                            )
-                            .map(Arc::new)
-                        })
-                        .transpose()
-                        .map_err(|error| {
-                            RouterError::InvalidConfiguration(format!(
-                                "provider '{}' health probe client failed to initialize: {error}",
-                                policy.provider_name
-                            ))
-                        })?;
-                    entry.insert(ProbeGroup {
-                        policy,
-                        provider: deployment.provider.clone(),
-                        deployments: vec![deployment.clone()],
-                        timeout_secs: deployment.config.timeout_secs,
-                        custom_client,
-                    });
-                }
-                Entry::Occupied(mut entry) => {
-                    let group = entry.get_mut();
-                    if group.policy != policy
-                        || group.timeout_secs != deployment.config.timeout_secs
-                    {
-                        return Err(RouterError::InvalidConfiguration(format!(
-                            "provider '{}' has conflicting health probe policies",
-                            policy.provider_name
-                        )));
-                    }
-                    group.deployments.push(deployment.clone());
-                }
-            }
-        }
-
-        if groups.is_empty() {
+        if runtime::validate_probe_snapshot(snapshot.as_ref())? == 0 {
             return Ok(0);
         }
         tokio::runtime::Handle::try_current().map_err(|_| {
@@ -107,10 +50,14 @@ impl Router {
             ));
         }
 
-        for (provider_name, group) in groups {
-            tasks.insert(provider_name, tokio::spawn(run_probe_loop(group)));
-        }
-        Ok(tasks.len())
+        tasks.insert(
+            "health-probe-supervisor".to_string(),
+            tokio::spawn(run_probe_loop(ProbeSupervisor {
+                routing_snapshot: Arc::clone(&self.routing_snapshot),
+                wakeup: Arc::clone(&self.health_probe_wakeup),
+            })),
+        );
+        Ok(1)
     }
 
     #[cfg(test)]
@@ -119,166 +66,17 @@ impl Router {
     }
 }
 
-async fn run_probe_loop(group: ProbeGroup) {
-    let mut consecutive_failures = 0_u32;
-
-    loop {
-        let result = match tokio::time::timeout(
-            Duration::from_secs(group.timeout_secs),
-            execute_probe(
-                &group.provider,
-                &group.policy,
-                group.custom_client.as_deref(),
-            ),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(ProbeFailure::Timeout),
-        };
-
-        let delay = match result {
-            Ok(()) => {
-                if consecutive_failures > 0 {
-                    tracing::info!(
-                        provider = %group.policy.provider_name,
-                        "provider health probe recovered"
-                    );
-                }
-                apply_probe_result(&group, true, &mut consecutive_failures)
-            }
-            Err(failure) => {
-                let delay = apply_probe_result(&group, false, &mut consecutive_failures);
-                log_probe_failure(&group.policy, consecutive_failures, &failure);
-                delay
-            }
-        };
-
-        tokio::time::sleep(delay).await;
-    }
-}
-
-async fn execute_probe(
-    provider: &Provider,
-    policy: &HealthCheckPolicy,
-    custom_client: Option<&BaseHttpClient>,
-) -> Result<(), ProbeFailure> {
-    if let Some(endpoint) = &policy.endpoint {
-        let client = custom_client.ok_or(ProbeFailure::ClientUnavailable)?;
-        let response = client
-            .get(endpoint.clone())
-            .map_err(|error| ProbeFailure::Request(error.to_string()))?
-            .send()
-            .await
-            .map_err(|error| ProbeFailure::Request(error.to_string()))?;
-        let status = response.status().as_u16();
-        if policy.expected_codes.contains(&status) {
-            Ok(())
-        } else {
-            Err(ProbeFailure::UnexpectedStatus(status))
-        }
-    } else {
-        match provider.health_check().await {
-            ProviderHealthStatus::Healthy => Ok(()),
-            status => Err(ProbeFailure::ProviderStatus(status)),
-        }
-    }
-}
-
-fn apply_probe_result(
-    group: &ProbeGroup,
-    succeeded: bool,
-    consecutive_failures: &mut u32,
-) -> Duration {
-    if succeeded {
-        *consecutive_failures = 0;
-        for deployment in &group.deployments {
-            update_probe_health(deployment, HealthStatus::Healthy);
-        }
-        return Duration::from_secs(group.policy.interval_secs);
-    }
-
-    *consecutive_failures = consecutive_failures.saturating_add(1);
-    let threshold_reached = *consecutive_failures >= group.policy.failure_threshold;
-    let target = if threshold_reached {
-        HealthStatus::Unhealthy
-    } else {
-        HealthStatus::Degraded
-    };
-    for deployment in &group.deployments {
-        update_probe_health(deployment, target);
-    }
-
-    let delay_secs = if threshold_reached {
-        group.policy.recovery_timeout_secs
-    } else {
-        group.policy.interval_secs
-    };
-    Duration::from_secs(delay_secs)
-}
-
-fn update_probe_health(deployment: &Deployment, target: HealthStatus) {
-    deployment
-        .state
-        .probe_unhealthy
-        .store(target == HealthStatus::Unhealthy, Ordering::Relaxed);
-    if deployment.is_in_cooldown() {
-        return;
-    }
-
-    let mut current = deployment.state.health.load(Ordering::Relaxed);
-    loop {
-        let current_status = HealthStatus::from(current);
-        let next = match (target, current_status) {
-            (_, HealthStatus::Cooldown) => return,
-            (HealthStatus::Degraded, HealthStatus::Unhealthy) => return,
-            (HealthStatus::Healthy, _)
-            | (HealthStatus::Degraded, _)
-            | (HealthStatus::Unhealthy, _) => target,
-            (HealthStatus::Unknown | HealthStatus::Cooldown, _) => return,
-        };
-        if current_status == next {
-            return;
-        }
-
-        match deployment.state.health.compare_exchange_weak(
-            current,
-            next as u8,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return,
-            Err(observed) => current = observed,
-        }
-    }
-}
-
-fn log_probe_failure(
-    policy: &HealthCheckPolicy,
-    consecutive_failures: u32,
-    failure: &ProbeFailure,
-) {
-    if consecutive_failures >= policy.failure_threshold {
-        tracing::error!(
-            provider = %policy.provider_name,
-            consecutive_failures,
-            failure = ?failure,
-            "provider health probe marked deployments unhealthy"
-        );
-    } else {
-        tracing::warn!(
-            provider = %policy.provider_name,
-            consecutive_failures,
-            failure = ?failure,
-            "provider health probe failed"
-        );
-    }
-}
+#[path = "health_probe/runtime.rs"]
+mod runtime;
+use runtime::run_probe_loop;
+#[cfg(test)]
+use runtime::{apply_probe_result, execute_probe, update_probe_health};
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::core::net::ProviderEndpointAccess;
+    use crate::core::providers::anthropic::{AnthropicConfig, AnthropicProvider};
     use crate::core::providers::openai::OpenAIProvider;
     use crate::core::providers::openai::config::test_openai_config;
     use crate::core::router::config::RouterConfig;
@@ -333,13 +131,17 @@ mod tests {
                 .read(&mut request)
                 .await
                 .expect("request should be readable");
-            let reason = if status == 204 {
-                "No Content"
-            } else {
-                "Internal Server Error"
+            let (reason, body) = match status {
+                200 => (
+                    "OK",
+                    r#"{"id":"msg_probe","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"probe-model","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}"#,
+                ),
+                204 => ("No Content", ""),
+                _ => ("Internal Server Error", ""),
             };
             let response = format!(
-                "HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
             );
             stream
                 .write_all(response.as_bytes())
@@ -352,7 +154,7 @@ mod tests {
         (endpoint, task)
     }
 
-    async fn sequence_server(
+    pub(crate) async fn sequence_server(
         statuses: Vec<u16>,
     ) -> (
         Url,
@@ -499,6 +301,7 @@ mod tests {
         assert_eq!(
             execute_probe(
                 &provider,
+                "gpt-test",
                 &test_policy(Some(healthy_endpoint)),
                 Some(&client),
             )
@@ -514,6 +317,7 @@ mod tests {
         assert_eq!(
             execute_probe(
                 &provider,
+                "gpt-test",
                 &test_policy(Some(failed_endpoint)),
                 Some(&client),
             )
@@ -531,7 +335,7 @@ mod tests {
         let mut policy = test_policy(Some(endpoint));
         policy.expected_codes = vec![302];
 
-        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        let result = execute_probe(&provider, "gpt-test", &policy, Some(&client)).await;
         redirect_task.await.expect("redirect server should stop");
         let target_was_requested = redirect_target.await.expect("redirect target should stop");
 
@@ -543,7 +347,7 @@ mod tests {
         policy.endpoint = Some(endpoint);
         policy.expected_codes = vec![200];
 
-        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        let result = execute_probe(&provider, "gpt-test", &policy, Some(&client)).await;
         redirect_task.await.expect("redirect server should stop");
         let target_was_requested = redirect_target.await.expect("redirect target should stop");
 
@@ -583,7 +387,7 @@ mod tests {
         let client = local_probe_client(&client_endpoint);
         let policy = test_policy(Some(Url::parse("http://127.0.0.1:18081/health").unwrap()));
 
-        let result = execute_probe(&provider, &policy, Some(&client)).await;
+        let result = execute_probe(&provider, "gpt-test", &policy, Some(&client)).await;
         assert!(matches!(
             result,
             Err(ProbeFailure::Request(message)) if message.contains("authority")
@@ -591,61 +395,82 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_probe_calls_provider_health_check() {
-        let (endpoint, server) = status_server(204).await;
-        let base_url = endpoint
-            .join("/v1")
-            .expect("base URL should resolve")
-            .to_string();
-        let provider = test_provider(Some(base_url)).await;
+    async fn safe_native_probe_verifies_the_configured_chat_model() {
+        let (endpoint, server) = status_server(200).await;
+        let provider = Provider::Anthropic(
+            AnthropicProvider::new(
+                AnthropicConfig::new_test("sk-ant-native-probe")
+                    .with_base_url(endpoint.origin().ascii_serialization())
+                    .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork)
+                    .with_allow_unknown_models(true)
+                    .with_configured_models(vec!["probe-model".to_string()]),
+            )
+            .expect("test Anthropic provider should be valid"),
+        );
         let mut policy = test_policy(None);
         policy.expected_codes = vec![200];
 
-        assert_eq!(execute_probe(&provider, &policy, None).await, Ok(()));
-        server.await.expect("test server should stop");
+        assert_eq!(
+            execute_probe(&provider, "probe-model", &policy, None).await,
+            Ok(())
+        );
+        let request = server.await.expect("test server should stop");
+        let request = String::from_utf8(request).expect("probe request should be UTF-8");
+        assert!(request.starts_with("POST /v1/messages "));
+        assert!(request.contains(r#""model":"probe-model""#));
+        assert!(request.contains(r#""max_tokens":1"#));
     }
 
     #[tokio::test]
     async fn threshold_recovery_and_cooldown_transitions_are_enforced() {
         let provider = test_provider(None).await;
-        let deployment =
-            Arc::new(test_deployment("one", provider.clone(), test_policy(None)).await);
-        let second = Arc::new(test_deployment("two", provider.clone(), test_policy(None)).await);
-        let group = ProbeGroup {
-            policy: test_policy(None),
-            provider,
-            deployments: vec![deployment.clone(), second.clone()],
-            timeout_secs: 2,
-            custom_client: None,
-        };
+        let router = Router::new(RouterConfig::default());
+        router.add_deployment(test_deployment("one", provider.clone(), test_policy(None)).await);
+        router.add_deployment(test_deployment("two", provider.clone(), test_policy(None)).await);
+        let deployment = router.get_deployment("one").unwrap();
+        let second = router.get_deployment("two").unwrap();
+        let policy = test_policy(None);
+        let deployments = vec![Arc::clone(&deployment), Arc::clone(&second)];
         let mut failures = 0;
-
         assert_eq!(
-            apply_probe_result(&group, false, &mut failures),
+            apply_probe_result(&policy, &deployments, false, &mut failures),
             Duration::from_secs(30)
         );
         assert_eq!(deployment.state.health_status(), HealthStatus::Degraded);
         assert_eq!(second.state.health_status(), HealthStatus::Degraded);
         assert_eq!(
-            apply_probe_result(&group, false, &mut failures),
+            deployment.state.probe_health_status(),
+            HealthStatus::Degraded
+        );
+        assert_eq!(
+            apply_probe_result(&policy, &deployments, false, &mut failures),
             Duration::from_secs(60)
         );
         assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
         assert_eq!(second.state.health_status(), HealthStatus::Unhealthy);
+        assert_eq!(
+            deployment.state.probe_health_status(),
+            HealthStatus::Unhealthy
+        );
 
         deployment.record_failure();
         assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
         assert_eq!(
-            apply_probe_result(&group, true, &mut failures),
+            apply_probe_result(&policy, &deployments, true, &mut failures),
             Duration::from_secs(30)
         );
         assert_eq!(failures, 0);
         assert_eq!(deployment.state.health_status(), HealthStatus::Healthy);
         assert_eq!(second.state.health_status(), HealthStatus::Healthy);
+        assert_eq!(
+            deployment.state.probe_health_status(),
+            HealthStatus::Healthy
+        );
+        assert_eq!(second.state.probe_health_status(), HealthStatus::Healthy);
 
         deployment.enter_cooldown(60);
-        apply_probe_result(&group, false, &mut failures);
-        apply_probe_result(&group, false, &mut failures);
+        apply_probe_result(&policy, &deployments, false, &mut failures);
+        apply_probe_result(&policy, &deployments, false, &mut failures);
         assert_eq!(deployment.state.health_status(), HealthStatus::Cooldown);
         assert!(deployment.state.probe_unhealthy.load(Ordering::Relaxed));
         deployment.state.cooldown_until.store(1, Ordering::Relaxed);
@@ -653,7 +478,7 @@ mod tests {
         assert_eq!(deployment.state.health_status(), HealthStatus::Unhealthy);
 
         deployment.enter_cooldown(60);
-        apply_probe_result(&group, true, &mut failures);
+        apply_probe_result(&policy, &deployments, true, &mut failures);
         assert_eq!(deployment.state.health_status(), HealthStatus::Cooldown);
         assert!(!deployment.state.probe_unhealthy.load(Ordering::Relaxed));
         deployment.state.cooldown_until.store(1, Ordering::Relaxed);
@@ -694,22 +519,14 @@ mod tests {
         policy.failure_threshold = 1;
         policy.interval_secs = 1;
         policy.recovery_timeout_secs = 1;
-        let deployment = Arc::new(test_deployment("one", provider.clone(), policy.clone()).await);
-        let custom_client = Arc::new(local_probe_client(
-            policy
-                .endpoint
-                .as_ref()
-                .expect("custom endpoint should exist"),
-        ));
-        let group = ProbeGroup {
-            policy,
-            provider,
-            deployments: vec![deployment.clone()],
-            timeout_secs: 2,
-            custom_client: Some(custom_client),
+        let router = Router::new(RouterConfig::default());
+        router.add_deployment(test_deployment("one", provider.clone(), policy.clone()).await);
+        let deployment = router.get_deployment("one").unwrap();
+        let supervisor = ProbeSupervisor {
+            routing_snapshot: Arc::clone(&router.routing_snapshot),
+            wakeup: Arc::clone(&router.health_probe_wakeup),
         };
-
-        let probe_task = tokio::spawn(run_probe_loop(group));
+        let probe_task = tokio::spawn(run_probe_loop(supervisor));
         tokio::time::timeout(Duration::from_millis(500), requests.recv())
             .await
             .expect("first probe should run immediately")
@@ -751,7 +568,13 @@ mod tests {
 
     #[tokio::test]
     async fn global_switch_disables_probe_tasks() {
-        let provider = test_provider(None).await;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("disabled probe listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("disabled probe address should exist");
+        let provider = test_provider(Some(format!("http://{address}/v1"))).await;
         let config = RouterConfig {
             enable_pre_call_checks: false,
             ..RouterConfig::default()
@@ -761,6 +584,12 @@ mod tests {
 
         assert_eq!(router.start_configured_health_checks().unwrap(), 0);
         assert_eq!(router.health_probe_task_count(), 0);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "disabled health checks must not create background upstream traffic"
+        );
     }
 
     #[test]
