@@ -48,7 +48,6 @@ impl AuthRateLimiter {
         client_id: &str,
     ) -> Result<AuthAttemptReservation, u64> {
         let now = Instant::now();
-        self.cleanup_old_entries_at(now);
 
         let mut entry = self
             .attempts
@@ -118,10 +117,20 @@ impl AuthRateLimiter {
         };
         tracker.in_flight = in_flight;
 
-        let _lockout_secs = failed
+        // A separate admitted request may have established a lockout while
+        // this credential check was in flight. Settle this reservation without
+        // extending that active deadline or counting it in the next cycle.
+        let should_count_failure = failed
+            && tracker
+                .lockout_until
+                .is_none_or(|lockout_until| now >= lockout_until);
+        let _lockout_secs = should_count_failure
             .then(|| self.apply_failure(client_id, tracker, now))
             .flatten();
         drop(entry);
+        if !failed {
+            self.remove_disposable_success(client_id);
+        }
         self.enforce_capacity(now);
     }
 }
@@ -187,12 +196,76 @@ mod tests {
         first.release();
         drop(cancelled);
 
-        let tracker = limiter.attempts.get("successful-client").unwrap();
+        assert!(!limiter.attempts.contains_key("successful-client"));
+        assert!(limiter.reserve_attempt("successful-client").is_ok());
+    }
+
+    #[test]
+    fn high_cardinality_successes_do_not_accumulate_trackers() {
+        let limiter = Arc::new(AuthRateLimiter::with_max_entries(5, 300, 60, 2));
+
+        for client in 0..100 {
+            limiter
+                .reserve_attempt(&format!("successful-client-{client}"))
+                .unwrap()
+                .release();
+        }
+
+        assert!(limiter.is_empty());
+    }
+
+    #[test]
+    fn late_reserved_failures_do_not_extend_an_active_lockout() {
+        let limiter = Arc::new(AuthRateLimiter::new(2, 300, 60));
+        let first = limiter.reserve_attempt("late-client").unwrap();
+        let second = limiter.reserve_attempt("late-client").unwrap();
+
+        assert_eq!(limiter.record_failure("late-client"), None);
+        assert_eq!(limiter.record_failure("late-client"), Some(60));
+        let original_deadline = limiter
+            .attempts
+            .get("late-client")
+            .and_then(|tracker| tracker.lockout_until)
+            .unwrap();
+
+        first.record_failure();
+        second.record_failure();
+
+        let tracker = limiter.attempts.get("late-client").unwrap();
         assert_eq!(tracker.in_flight, 0);
         assert_eq!(tracker.failure_count, 0);
-        assert_eq!(tracker.lockout_until, None);
-        drop(tracker);
-        assert!(limiter.reserve_attempt("successful-client").is_ok());
+        assert_eq!(tracker.lockout_count, 1);
+        assert_eq!(tracker.lockout_until, Some(original_deadline));
+    }
+
+    #[test]
+    fn capacity_eviction_cannot_remove_a_newly_active_tracker() {
+        let limiter = Arc::new(AuthRateLimiter::with_max_entries(5, 300, 60, 1));
+        assert_eq!(limiter.record_failure("candidate"), None);
+        let snapshot = limiter
+            .attempts
+            .get("candidate")
+            .and_then(|tracker| tracker.eviction_snapshot())
+            .unwrap();
+        let (reserved_tx, reserved_rx) = std::sync::mpsc::channel();
+        let (settle_tx, settle_rx) = std::sync::mpsc::channel();
+        let worker_limiter = Arc::clone(&limiter);
+        let worker = thread::spawn(move || {
+            let reservation = worker_limiter.reserve_attempt("candidate").unwrap();
+            reserved_tx.send(()).unwrap();
+            settle_rx.recv().unwrap();
+            reservation.record_failure();
+        });
+
+        reserved_rx.recv().unwrap();
+        assert!(!limiter.remove_if_unchanged("candidate", snapshot));
+        assert_eq!(limiter.attempts.get("candidate").unwrap().in_flight, 1);
+
+        settle_tx.send(()).unwrap();
+        worker.join().unwrap();
+        let tracker = limiter.attempts.get("candidate").unwrap();
+        assert_eq!(tracker.in_flight, 0);
+        assert_eq!(tracker.failure_count, 2);
     }
 
     #[test]

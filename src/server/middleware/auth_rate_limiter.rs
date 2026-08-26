@@ -37,6 +37,40 @@ struct AuthAttemptTracker {
     lockout_count: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EvictionSnapshot {
+    failure_count: u32,
+    window_start: Instant,
+    lockout_until: Option<Instant>,
+    lockout_count: u32,
+}
+
+impl AuthAttemptTracker {
+    fn eviction_snapshot(&self) -> Option<EvictionSnapshot> {
+        (self.in_flight == 0).then_some(EvictionSnapshot {
+            failure_count: self.failure_count,
+            window_start: self.window_start,
+            lockout_until: self.lockout_until,
+            lockout_count: self.lockout_count,
+        })
+    }
+
+    fn matches_eviction_snapshot(&self, snapshot: EvictionSnapshot) -> bool {
+        self.in_flight == 0
+            && self.failure_count == snapshot.failure_count
+            && self.window_start == snapshot.window_start
+            && self.lockout_until == snapshot.lockout_until
+            && self.lockout_count == snapshot.lockout_count
+    }
+
+    fn is_disposable_success(&self) -> bool {
+        self.in_flight == 0
+            && self.failure_count == 0
+            && self.lockout_until.is_none()
+            && self.lockout_count == 0
+    }
+}
+
 impl Default for AuthRateLimiter {
     fn default() -> Self {
         Self::new(5, 300, 60)
@@ -97,7 +131,6 @@ impl AuthRateLimiter {
 
     pub fn record_failure(&self, client_id: &str) -> Option<u64> {
         let now = Instant::now();
-        self.cleanup_old_entries_at(now);
 
         let mut entry = self
             .attempts
@@ -161,16 +194,6 @@ impl AuthRateLimiter {
         tracker: &mut AuthAttemptTracker,
         now: Instant,
     ) -> Option<u64> {
-        // A direct failure may establish a lockout while an admitted request
-        // is still authenticating. Settle that reservation without extending
-        // the active deadline or counting it again in the next cycle.
-        if tracker
-            .lockout_until
-            .is_some_and(|lockout_until| now < lockout_until)
-        {
-            return None;
-        }
-
         if tracker.failure_count == 0 {
             tracker.window_start = now;
         }
@@ -179,12 +202,19 @@ impl AuthRateLimiter {
             return None;
         }
 
-        let lockout_multiplier = 2u64.pow(tracker.lockout_count);
-        let lockout_secs = self.base_lockout_secs.saturating_mul(lockout_multiplier);
-        let lockout_duration = Duration::from_secs(lockout_secs);
+        let lockout_multiplier = 2u64.saturating_pow(tracker.lockout_count);
+        let mut lockout_secs = self.base_lockout_secs.saturating_mul(lockout_multiplier);
+        let lockout_until = loop {
+            if let Some(deadline) = now.checked_add(Duration::from_secs(lockout_secs)) {
+                break deadline;
+            }
+            // Preserve the longest platform-representable backoff rather than
+            // panicking when a very large concurrent batch drives saturation.
+            lockout_secs /= 2;
+        };
 
-        tracker.lockout_until = Some(now + lockout_duration);
-        tracker.lockout_count += 1;
+        tracker.lockout_until = Some(lockout_until);
+        tracker.lockout_count = tracker.lockout_count.saturating_add(1);
         tracker.failure_count = 0;
 
         tracing::warn!(
@@ -208,18 +238,35 @@ impl AuthRateLimiter {
             .iter()
             .filter_map(|entry| {
                 let tracker = entry.value();
-                if tracker.in_flight > 0 {
-                    return None;
-                }
+                let snapshot = tracker.eviction_snapshot()?;
                 let locked = tracker.lockout_until.is_some_and(|until| until > now);
-                Some((locked, tracker.window_start, entry.key().clone()))
+                Some((locked, tracker.window_start, entry.key().clone(), snapshot))
             })
             .collect();
-        candidates.sort_by_key(|(locked, window_start, _)| (*locked, *window_start));
+        candidates.sort_by_key(|(locked, window_start, _, _)| (*locked, *window_start));
 
-        for (_, _, client_id) in candidates.into_iter().take(overflow) {
-            self.attempts.remove(&client_id);
+        let mut removed = 0;
+        for (_, _, client_id, snapshot) in candidates {
+            if removed >= overflow {
+                break;
+            }
+            if self.remove_if_unchanged(&client_id, snapshot) {
+                removed += 1;
+            }
         }
+    }
+
+    fn remove_if_unchanged(&self, client_id: &str, snapshot: EvictionSnapshot) -> bool {
+        self.attempts
+            .remove_if(client_id, |_, tracker| {
+                tracker.matches_eviction_snapshot(snapshot)
+            })
+            .is_some()
+    }
+
+    fn remove_disposable_success(&self, client_id: &str) {
+        self.attempts
+            .remove_if(client_id, |_, tracker| tracker.is_disposable_success());
     }
 }
 
@@ -364,24 +411,41 @@ mod tests {
     }
 
     #[test]
-    fn test_record_failure_does_not_escalate_active_lockout() {
-        let limiter = AuthRateLimiter::new(1, 300, 60);
+    fn test_direct_failures_continue_counting_during_active_lockout() {
+        let limiter = AuthRateLimiter::new(2, 300, 60);
         let client = "active_lockout_client";
 
+        assert_eq!(limiter.record_failure(client), None);
         assert_eq!(limiter.record_failure(client), Some(60));
-        let (original_deadline, original_lockout_count) = {
-            let entry = limiter.attempts.get(client).unwrap();
-            (entry.lockout_until.unwrap(), entry.lockout_count)
-        };
+        assert_eq!(limiter.record_failure(client), None);
+        assert_eq!(limiter.record_failure(client), Some(120));
 
-        for _ in 0..10 {
-            assert_eq!(limiter.record_failure(client), None);
+        let entry = limiter.attempts.get(client).unwrap();
+        assert_eq!(entry.lockout_count, 2);
+        assert_eq!(entry.failure_count, 0);
+        assert!(
+            entry
+                .lockout_until
+                .is_some_and(|until| until > Instant::now() + Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn test_direct_failure_backoff_saturates_without_panicking() {
+        let limiter = AuthRateLimiter::new(1, 300, 60);
+        let client = "saturated_backoff_client";
+
+        for _ in 0..80 {
+            assert!(limiter.record_failure(client).is_some());
         }
 
         let entry = limiter.attempts.get(client).unwrap();
-        assert_eq!(entry.lockout_until, Some(original_deadline));
-        assert_eq!(entry.lockout_count, original_lockout_count);
-        assert_eq!(entry.failure_count, 0);
+        assert_eq!(entry.lockout_count, 80);
+        assert!(
+            entry
+                .lockout_until
+                .is_some_and(|until| until > Instant::now())
+        );
     }
 
     #[test]
@@ -657,16 +721,14 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrent_late_failures_do_not_escalate_active_lockout() {
-        const THREADS: usize = 8;
-        let limiter = Arc::new(AuthRateLimiter::new(1, 300, 60));
+    fn test_concurrent_direct_failures_escalate_active_lockout() {
+        const THREADS: usize = 4;
+        let limiter = Arc::new(AuthRateLimiter::new(THREADS as u32, 300, 60));
         let client = "concurrent_active_lockout_client";
+        for _ in 0..THREADS - 1 {
+            assert_eq!(limiter.record_failure(client), None);
+        }
         assert_eq!(limiter.record_failure(client), Some(60));
-        let original_deadline = limiter
-            .attempts
-            .get(client)
-            .and_then(|entry| entry.lockout_until)
-            .unwrap();
         let barrier = Arc::new(std::sync::Barrier::new(THREADS + 1));
         let mut handles = Vec::with_capacity(THREADS);
 
@@ -675,20 +737,23 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             handles.push(thread::spawn(move || {
                 barrier.wait();
-                for _ in 0..10 {
-                    assert_eq!(limiter.record_failure(client), None);
-                }
+                limiter.record_failure(client)
             }));
         }
 
         barrier.wait();
+        let mut escalations = Vec::new();
         for handle in handles {
-            handle.join().unwrap();
+            escalations.push(handle.join().unwrap());
         }
 
         let entry = limiter.attempts.get(client).unwrap();
-        assert_eq!(entry.lockout_until, Some(original_deadline));
-        assert_eq!(entry.lockout_count, 1);
+        assert_eq!(
+            escalations.iter().filter(|result| result.is_some()).count(),
+            1
+        );
+        assert!(escalations.contains(&Some(120)));
+        assert_eq!(entry.lockout_count, 2);
         assert_eq!(entry.failure_count, 0);
     }
 }
