@@ -8,8 +8,11 @@ server:
   host: "0.0.0.0"
   port: 8000
   workers: 4
+  # Server-wide concurrent connection cap. The runtime derives a per-worker
+  # limit of at least 2 without exceeding this value. The effective cap may
+  # round down, and small caps reduce the effective worker count. Minimum: 2.
   max_connections: 1000
-  timeout: 30
+  timeout: 30 # seconds to receive the first request head
   max_body_size: 10485760
   dev_mode: false
   cors:
@@ -171,6 +174,8 @@ ip_access:
 
 monitoring:
   metrics:
+    # Enables gateway, HTTP, rate-limit, and LLM callback metrics at /metrics.
+    # LLM callback metric names use the fixed `litellm` prefix.
     enabled: true
     port: 9090
     path: "/metrics"
@@ -190,6 +195,7 @@ monitoring:
   callbacks:
     queue_capacity: 1024
     timeout_ms: 5000
+    # Available backends: opentelemetry, datadog, langfuse.
     backends: []
 
 cache:

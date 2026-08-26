@@ -82,7 +82,7 @@ fn codex_wire_distinguishes_tier_two_and_redacts_unknown_payload() {
 #[actix_web::test]
 async fn codex_wire_http_rejects_before_provider_dispatch() {
     let _guard = super::CODEX_DISPATCH_TEST_LOCK.lock().await;
-    let mut config = crate::config::Config::default();
+    let mut config = crate::server::valid_test_config();
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     let server = crate::server::HttpServer::new(&config).await.unwrap();
@@ -144,7 +144,7 @@ async fn codex_wire_http_rejects_before_provider_dispatch() {
 #[actix_web::test]
 async fn codex_tier_one_reaches_provider_dispatch() {
     let _guard = super::CODEX_DISPATCH_TEST_LOCK.lock().await;
-    let mut config = crate::config::Config::default();
+    let mut config = crate::server::valid_test_config();
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     let server = crate::server::HttpServer::new(&config).await.unwrap();

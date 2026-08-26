@@ -43,6 +43,7 @@
 
 pub mod arize;
 pub mod datadog;
+mod durable_batch;
 pub mod helicone;
 pub mod opentelemetry;
 pub mod prometheus;

@@ -168,6 +168,131 @@ fn test_datadog_integration_creation() {
 }
 
 #[tokio::test]
+async fn embedding_error_records_embedding_metric_and_log() {
+    let mut config = DataDogConfig::new("test-api-key");
+    config.batch_size = 100;
+    let integration = DataDogIntegration::new(config).expect("test integration");
+    let start = EmbeddingStartEvent {
+        request_id: "embedding-error".to_string(),
+        model: "embedding-model".to_string(),
+        provider: Some("provider".to_string()),
+        input_count: 1,
+        user_id: None,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+    };
+    integration.on_embedding_start(&start).await.unwrap();
+    integration
+        .on_embedding_error(&EmbeddingErrorEvent {
+            request_id: start.request_id,
+            model: start.model,
+            provider: start.provider,
+            error_message: "embedding failed".to_string(),
+            error_type: Some("provider_error".to_string()),
+            latency_ms: 25,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        })
+        .await
+        .unwrap();
+
+    let buffer = integration.buffer().unwrap();
+    assert!(buffer.pending.iter().any(|event| matches!(
+        event,
+        BufferedEvent::Metric(metric) if metric.metric == "litellm.embedding.errors"
+    )));
+    assert!(buffer.pending.iter().any(|event| matches!(
+        event,
+        BufferedEvent::Log(log)
+            if log.status == "error" && log.message.contains("embedding failed")
+    )));
+}
+
+#[tokio::test]
+async fn embedding_error_enqueues_log_before_metric_flush_failure() {
+    let (base_url, server) = response_server(vec![("/metrics", 503), ("/logs", 202)]).await;
+    let mut config = DataDogConfig::new("test-api-key");
+    config.batch_size = 1;
+    let mut integration = DataDogIntegration::new(config).unwrap();
+    integration.metrics_url = format!("{base_url}/metrics");
+    integration.logs_url = format!("{base_url}/logs");
+
+    let result = integration
+        .on_embedding_error(&EmbeddingErrorEvent {
+            request_id: "embedding-error".to_string(),
+            model: "embedding-model".to_string(),
+            provider: Some("provider".to_string()),
+            error_message: "embedding failed".to_string(),
+            error_type: Some("provider_error".to_string()),
+            latency_ms: 25,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        })
+        .await;
+
+    assert!(result.is_err(), "the metrics endpoint must report failure");
+    let mut paths = server.await.unwrap();
+    paths.sort();
+    assert_eq!(paths, ["/logs", "/metrics"]);
+    let buffer = integration.buffer().unwrap();
+    assert!(buffer.pending.is_empty());
+    assert!(
+        buffer
+            .in_flight
+            .iter()
+            .any(|event| matches!(event, BufferedEvent::Metric(_)))
+    );
+    assert!(
+        !buffer
+            .in_flight
+            .iter()
+            .any(|event| matches!(event, BufferedEvent::Log(_))),
+        "a successful log request must be acknowledged even when metrics fail"
+    );
+}
+
+#[tokio::test]
+async fn embedding_error_group_capacity_is_atomic_under_concurrency() {
+    let mut config = DataDogConfig::new("test-api-key");
+    config.batch_size = 1;
+    let integration = Arc::new(DataDogIntegration::new(config).unwrap());
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let mut tasks = Vec::new();
+    for request in ["one", "two"] {
+        let events = vec![
+            integration.metric_event("embedding.errors", 1.0, 1, &[], None),
+            integration.log_event(request, "error", &[]),
+        ];
+        let integration = Arc::clone(&integration);
+        let barrier = Arc::clone(&barrier);
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            integration.enqueue_group(events)
+        }));
+    }
+    barrier.wait().await;
+    let first = tasks.remove(0).await.unwrap();
+    let second = tasks.remove(0).await.unwrap();
+    assert_ne!(first.is_ok(), second.is_ok());
+
+    let buffer = integration.buffer().unwrap();
+    assert_eq!(buffer.len(), 2);
+    assert_eq!(
+        buffer
+            .pending
+            .iter()
+            .filter(|event| matches!(event, BufferedEvent::Metric(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        buffer
+            .pending
+            .iter()
+            .filter(|event| matches!(event, BufferedEvent::Log(_)))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn test_datadog_auto_flush_requeues_failed_batch() {
     let mut config = DataDogConfig::new("test-api-key");
     config.batch_size = 1;
@@ -279,6 +404,10 @@ async fn test_datadog_timeout_durably_acknowledges_completed_metric_endpoint() {
         assert_eq!(buffer.in_flight.len(), 1);
         assert!(matches!(buffer.in_flight[0], BufferedEvent::Log(_)));
     }
+    integration
+        .record_metric("test.metric.after-timeout", 2.0, 1, &[], None)
+        .await
+        .expect("new events remain pending behind the failed batch");
     integration.flush().await.unwrap();
     let paths = paths.lock().await.clone();
     assert_eq!(
@@ -286,8 +415,8 @@ async fn test_datadog_timeout_durably_acknowledges_completed_metric_endpoint() {
             .iter()
             .filter(|path| path.as_str() == "/metrics")
             .count(),
-        1,
-        "a completed metrics request must never be duplicated"
+        2,
+        "the completed metric must not be duplicated and the pending metric must be drained"
     );
     assert_eq!(
         paths.iter().filter(|path| path.as_str() == "/logs").count(),

@@ -17,7 +17,12 @@ impl ErrorMapper<ProviderError> for AzureErrorMapper {
                 ProviderError::invalid_request("azure", format!("Bad request: {}", response_body))
             }
             401 => ProviderError::authentication("azure", "Invalid Azure API key or credentials"),
-            403 => ProviderError::authentication("azure", "Forbidden: insufficient permissions"),
+            // Upstream 403 is a permission failure; keep the status.
+            403 => ProviderError::api_error(
+                "azure",
+                status_code,
+                "Forbidden: insufficient permissions",
+            ),
             404 => azure_deployment_error("Azure deployment not found"),
             429 => ProviderError::rate_limit("azure", Some(60)),
             500..=599 => ProviderError::api_error(
@@ -112,8 +117,9 @@ mod tests {
     #[test]
     fn test_azure_error_mapper_403() {
         let mapper = AzureErrorMapper;
+        // 403 keeps its upstream status as a permission failure.
         let err = mapper.map_http_error(403, "");
-        assert!(matches!(err, ProviderError::Authentication { .. }));
+        assert!(matches!(err, ProviderError::ApiError { status: 403, .. }));
     }
 
     #[test]

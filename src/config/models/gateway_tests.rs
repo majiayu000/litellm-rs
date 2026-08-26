@@ -42,18 +42,22 @@ fn create_test_provider(name: &str) -> ProviderConfig {
         ..ProviderConfig::default()
     }
 }
-
 fn create_valid_config() -> GatewayConfig {
     let mut config = GatewayConfig {
         providers: vec![create_test_provider("test-provider")],
         ..Default::default()
     };
-    config.storage.database.enabled = true;
-    config.storage.database.url = "postgres://localhost/test".to_string();
+    #[cfg(feature = "sqlite")]
+    let (database_enabled, database_url) = (true, "sqlite::memory:");
+    #[cfg(all(not(feature = "sqlite"), feature = "postgres"))]
+    let (database_enabled, database_url) = (true, "postgres://localhost/test");
+    #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+    let (database_enabled, database_url) = (false, "");
+    config.storage.database.enabled = database_enabled;
+    config.storage.database.url = database_url.to_string();
     config.auth.jwt_secret = "StrongJwtSecretWithMixedCaseAndNumbers1234!".to_string();
     config
 }
-
 fn pricing_from_yaml(yaml: &str) -> GatewayPricingConfig {
     match serde_yml::from_str(yaml) {
         Ok(pricing) => pricing,
@@ -313,10 +317,10 @@ fn test_gateway_config_validate_local_provider_without_api_key() {
     config.providers[0].api_key = "".to_string();
     assert!(config.validate().is_ok());
 }
-
 #[test]
 fn test_gateway_config_validate_empty_database_url() {
     let mut config = create_valid_config();
+    config.storage.database.enabled = true;
     config.storage.database.url = "".to_string();
     let result = config.validate();
     assert!(result.is_err());

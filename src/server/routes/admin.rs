@@ -145,7 +145,7 @@ mod tests {
     use actix_web::{App, http::StatusCode, test};
 
     fn base_test_config(auth_enabled: bool) -> Config {
-        let mut config = Config::default();
+        let mut config = crate::server::valid_test_config();
         config.gateway.auth.enable_jwt = auth_enabled;
         config.gateway.auth.enable_api_key = auth_enabled;
         config.gateway.auth.allow_anonymous = !auth_enabled;

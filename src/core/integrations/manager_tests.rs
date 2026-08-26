@@ -9,8 +9,10 @@ struct MockIntegration {
     start_count: AtomicU32,
     end_count: AtomicU32,
     error_count: AtomicU32,
+    embedding_error_count: AtomicU32,
     flush_count: AtomicU32,
     should_fail: bool,
+    embedding_error_delay_ms: u64,
 }
 
 impl MockIntegration {
@@ -21,8 +23,10 @@ impl MockIntegration {
             start_count: AtomicU32::new(0),
             end_count: AtomicU32::new(0),
             error_count: AtomicU32::new(0),
+            embedding_error_count: AtomicU32::new(0),
             flush_count: AtomicU32::new(0),
             should_fail: false,
+            embedding_error_delay_ms: 0,
         }
     }
 
@@ -33,6 +37,11 @@ impl MockIntegration {
 
     fn failing(mut self) -> Self {
         self.should_fail = true;
+        self
+    }
+
+    fn slow_embedding_error(mut self, delay_ms: u64) -> Self {
+        self.embedding_error_delay_ms = delay_ms;
         self
     }
 }
@@ -67,6 +76,21 @@ impl Integration for MockIntegration {
 
     async fn on_llm_error(&self, _event: &LlmErrorEvent) -> IntegrationResult<()> {
         self.error_count.fetch_add(1, Ordering::SeqCst);
+        if self.should_fail {
+            Err(IntegrationError::other("Mock failure"))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn on_embedding_error(&self, _event: &EmbeddingErrorEvent) -> IntegrationResult<()> {
+        if self.embedding_error_delay_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                self.embedding_error_delay_ms,
+            ))
+            .await;
+        }
+        self.embedding_error_count.fetch_add(1, Ordering::SeqCst);
         if self.should_fail {
             Err(IntegrationError::other("Mock failure"))
         } else {
@@ -175,6 +199,74 @@ async fn test_on_llm_error() {
     manager.on_llm_error(&event).await.unwrap();
 
     assert_eq!(integration_ref.error_count.load(Ordering::SeqCst), 1);
+}
+
+fn embedding_error_event() -> EmbeddingErrorEvent {
+    EmbeddingErrorEvent {
+        request_id: "embedding-error".to_string(),
+        model: "embedding-model".to_string(),
+        provider: Some("provider".to_string()),
+        error_message: "failed".to_string(),
+        error_type: Some("provider_error".to_string()),
+        latency_ms: 25,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+    }
+}
+
+#[tokio::test]
+async fn embedding_error_parallel_dispatch_times_out_slow_integration() {
+    let manager = IntegrationManager::new(
+        IntegrationManagerConfig::new()
+            .parallel(true)
+            .timeout_ms(100)
+            .log_errors(false),
+    );
+    let fast = Arc::new(MockIntegration::new("fast"));
+    let fast_ref = Arc::clone(&fast);
+    for name in ["slow-1", "slow-2", "slow-3"] {
+        manager
+            .register(Arc::new(
+                MockIntegration::new(name).slow_embedding_error(500),
+            ))
+            .await;
+    }
+    manager.register(fast).await;
+
+    tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        manager.on_embedding_error(&embedding_error_event()),
+    )
+    .await
+    .expect("manager timeout must bound the slow exporter")
+    .unwrap();
+    assert_eq!(fast_ref.embedding_error_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn embedding_error_sequential_timeout_continues_when_not_fail_fast() {
+    let manager = IntegrationManager::new(
+        IntegrationManagerConfig::new()
+            .parallel(false)
+            .timeout_ms(25)
+            .log_errors(false),
+    );
+    let fast = Arc::new(MockIntegration::new("fast"));
+    let fast_ref = Arc::clone(&fast);
+    manager
+        .register(Arc::new(
+            MockIntegration::new("slow").slow_embedding_error(500),
+        ))
+        .await;
+    manager.register(fast).await;
+
+    tokio::time::timeout(
+        std::time::Duration::from_millis(150),
+        manager.on_embedding_error(&embedding_error_event()),
+    )
+    .await
+    .expect("sequential dispatch must apply the per-integration timeout")
+    .unwrap();
+    assert_eq!(fast_ref.embedding_error_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

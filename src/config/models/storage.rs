@@ -1,9 +1,14 @@
 //! Storage configuration
 
+use super::default_connection_timeout;
+#[cfg(test)]
+use super::default_redis_max_connections;
 use super::file_storage::{FileStorageConfig, VectorDbConfig};
 use super::*;
-use super::{default_connection_timeout, default_redis_max_connections};
 use serde::{Deserialize, Serialize};
+
+mod redis_config;
+pub use redis_config::RedisConfig;
 
 /// Storage configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -23,9 +28,20 @@ pub struct StorageConfig {
 
 impl StorageConfig {
     /// Merge storage configurations
-    pub fn merge(mut self, other: Self) -> Self {
+    pub fn merge(self, other: Self) -> Self {
+        self.merge_with_redis_cluster_override(other, None)
+    }
+
+    /// Merge storage configurations with presence-aware Redis cluster semantics.
+    pub(crate) fn merge_with_redis_cluster_override(
+        mut self,
+        other: Self,
+        redis_cluster: Option<bool>,
+    ) -> Self {
         self.database = self.database.merge(other.database);
-        self.redis = self.redis.merge(other.redis);
+        self.redis = self
+            .redis
+            .merge_with_cluster_override(other.redis, redis_cluster);
         self.files = self.files.merge(other.files);
         if other.vector_db.is_some() {
             self.vector_db = other.vector_db;
@@ -183,78 +199,6 @@ impl DatabaseConfig {
         }
         self
     }
-}
-
-/// Redis configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RedisConfig {
-    /// Redis URL
-    pub url: String,
-    /// Enable Redis (if false, use in-memory cache)
-    #[serde(default = "default_redis_enabled")]
-    pub enabled: bool,
-    /// Maximum connections
-    #[serde(default = "default_redis_max_connections")]
-    pub max_connections: u32,
-    /// Connection timeout in seconds
-    #[serde(default = "default_connection_timeout")]
-    pub connection_timeout: u64,
-    /// Enable cluster mode
-    #[serde(default)]
-    pub cluster: bool,
-    /// When `enabled` is true and Redis init fails, allow the gateway to keep
-    /// running with an in-process/no-op fallback instead of failing startup.
-    ///
-    /// Defaults to `false` so an explicitly enabled-but-unreachable Redis is
-    /// surfaced at startup. Set to `true` only when running in environments
-    /// where caching is best-effort and silent degradation is acceptable.
-    #[serde(default)]
-    pub allow_degraded: bool,
-}
-
-impl Default for RedisConfig {
-    fn default() -> Self {
-        Self {
-            url: "redis://localhost:6379".to_string(),
-            enabled: default_redis_enabled(),
-            max_connections: default_redis_max_connections(),
-            connection_timeout: default_connection_timeout(),
-            cluster: false,
-            allow_degraded: false,
-        }
-    }
-}
-
-impl RedisConfig {
-    /// Merge Redis configurations
-    pub fn merge(mut self, other: Self) -> Self {
-        let default = Self::default();
-        if !other.url.is_empty() && other.url != default.url {
-            self.url = other.url;
-        }
-        if other.max_connections != default_redis_max_connections() {
-            self.max_connections = other.max_connections;
-        }
-        if other.connection_timeout != default_connection_timeout() {
-            self.connection_timeout = other.connection_timeout;
-        }
-        if other.cluster {
-            self.cluster = true;
-        }
-        // Redis defaults to enabled=false; propagate if other differs from default
-        if other.enabled != default_redis_enabled() {
-            self.enabled = other.enabled;
-        }
-        if other.allow_degraded {
-            self.allow_degraded = true;
-        }
-        self
-    }
-}
-
-fn default_redis_enabled() -> bool {
-    false
 }
 
 #[cfg(test)]

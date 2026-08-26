@@ -11,6 +11,7 @@ use crate::core::integrations::CallbackRuntime;
 use crate::core::ip_access::{IpAccessControl, IpAccessMiddleware};
 use crate::core::pricing_service::PricingService;
 use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter_with_redis};
+use crate::server::http_listener::{build_actix_server, validated_listener_settings};
 use crate::server::middleware::{
     AuthMiddleware, MetricsMiddleware, RateLimitMiddleware, RequestIdMiddleware,
     SecurityHeadersMiddleware, start_auth_rate_limiter_cleanup_task,
@@ -47,26 +48,14 @@ pub struct HttpServer {
 impl HttpServer {
     /// Create a new HTTP server
     pub async fn new(config: &Config) -> Result<Self> {
-        info!("Creating HTTP server");
+        validated_listener_settings(&config.gateway.server)?;
+        config.gateway.storage.redis.validate().map_err(|error| {
+            GatewayError::Config(format!("Invalid Redis configuration: {error}"))
+        })?;
+        config.validate()?;
 
         let tls = crate::server::tls::load_listener_tls(&config.gateway.server)?;
-
-        crate::config::models::gateway::GatewayConfig::validate_model_alias_map(
-            &config.gateway.model_aliases,
-        )
-        .map_err(|error| GatewayError::Config(format!("Invalid model aliases: {error}")))?;
-        Self::validate_cors_config(&config.gateway.server.cors)?;
-        config
-            .gateway
-            .cache
-            .validate()
-            .map_err(|e| GatewayError::Config(format!("Invalid cache configuration: {}", e)))?;
-        config
-            .gateway
-            .monitoring
-            .callbacks
-            .validate()
-            .map_err(|e| GatewayError::Config(format!("Invalid callback configuration: {}", e)))?;
+        info!("Creating HTTP server");
         start_auth_rate_limiter_cleanup_task();
 
         let storage = crate::storage::StorageLayer::new(&config.gateway.storage).await?;
@@ -160,9 +149,11 @@ impl HttpServer {
             ))
         })?;
 
-        let callback_runtime =
-            crate::server::callbacks::build_callback_runtime(&config.gateway.monitoring.callbacks)
-                .await;
+        let callback_runtime = crate::server::callbacks::build_callback_runtime(
+            &config.gateway.monitoring.callbacks,
+            &config.gateway.monitoring.metrics,
+        )
+        .await;
         let audit_logger = if config.gateway.enterprise.audit_logging {
             AuditLogger::shared(AuditConfig::default().enable())
                 .await
@@ -244,12 +235,17 @@ impl HttpServer {
         let trusted_proxies = cfg.gateway.server.trusted_proxies.clone();
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
+        let max_body_size = cfg.gateway.server.max_body_size;
 
         let budget_limits = web::Data::new(Arc::clone(&state.budget_limits));
 
         App::new()
             .app_data(state)
             .app_data(budget_limits)
+            // server.max_body_size bounds JSON and form bodies; file/audio
+            // uploads enforce their own larger multipart limits instead.
+            .app_data(web::JsonConfig::default().limit(max_body_size))
+            .app_data(web::FormConfig::default().limit(max_body_size))
             .wrap(Logger::default())
             .wrap(DefaultHeaders::new().add(("Server", "LiteLLM-RS")))
             .wrap(SecurityHeadersMiddleware)
@@ -281,7 +277,7 @@ impl HttpServer {
             .configure(routes::budget::configure_budget_routes)
             .configure(routes::admin::configure_routes)
             .configure(routes::admin_dashboard::configure_routes)
-            .configure(routes::ai::configure_routes)
+            .configure(|cfg| routes::ai::configure_routes_with_body_limit(cfg, max_body_size))
             .configure(routes::pricing::configure_pricing_routes)
     }
 
@@ -351,21 +347,62 @@ impl HttpServer {
     ///
     /// Gracefully stops requests, drains workers, then closes storage.
     pub async fn start(mut self) -> Result<()> {
+        let listener_settings = validated_listener_settings(&self.config)?;
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
+        let port = self.config.port;
         let budget_persistence_task = self.budget_persistence_task.take();
         let callback_runtime =
             std::mem::replace(&mut self.callback_runtime, CallbackRuntime::disabled());
 
-        info!("Starting HTTP server on {}", bind_addr);
+        // server.timeout bounds only how long a client may take to deliver
+        // the first request head (408 afterwards); it never bounds handler or
+        // streaming duration — those follow the outbound-client policy.
+        info!(
+            "Starting HTTP server on {} (workers={}, first_request_head_timeout={}s)",
+            bind_addr, listener_settings.effective_workers, self.config.timeout
+        );
+        if let Some(configured_total) = self.config.max_connections {
+            if listener_settings.effective_workers != listener_settings.configured_workers {
+                info!(
+                    "Reducing HTTP workers from {} to {} so server.max_connections={} can use Actix's minimum safe per-worker limit of 2",
+                    listener_settings.configured_workers,
+                    listener_settings.effective_workers,
+                    configured_total
+                );
+            }
+            if let Some(per_worker) = listener_settings.max_connections_per_worker {
+                info!(
+                    "Connection limit: {} per worker, {} server-wide effective (configured total={})",
+                    per_worker,
+                    per_worker * listener_settings.effective_workers,
+                    configured_total
+                );
+            }
+        }
 
         let state = web::Data::new(self.state);
         let storage = Arc::clone(&state.storage);
         let audit_logger = Arc::clone(&state.audit_logger);
 
-        let server =
-            crate::server::tls::bind_server(&bind_addr, &self.config, state, self.tls.take())?;
+        // Try resolved addresses one at a time. Passing the hostname directly
+        // to Actix would create one full worker set per successful address,
+        // multiplying the configured server-wide connection cap.
+        let listener = match self.tls.take() {
+            Some(tls) => crate::server::tls::build_tls_server(
+                state,
+                &listener_settings,
+                bind_addr.as_str(),
+                tls,
+            ),
+            None => build_actix_server(state, &listener_settings, bind_addr.as_str()),
+        };
+        let (server, selected_address) =
+            listener.map_err(|e| Self::format_bind_error(e, &bind_addr, port))?;
 
-        info!("HTTP server listening on {}", bind_addr);
+        info!(
+            "HTTP server listening on {} (selected from {})",
+            selected_address, bind_addr
+        );
 
         let server_handle = server.handle();
         let mut server_task = tokio::spawn(server);
@@ -459,6 +496,10 @@ async fn normalize_non_cors_options_before_cors(
 }
 
 #[cfg(test)]
+#[path = "http_metrics_tests.rs"]
+mod metrics_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
@@ -502,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_rejects_invalid_cors_config_before_startup() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.server.cors.allowed_origins = vec!["*".to_string()];
         config.gateway.server.cors.allow_credentials = true;
 
@@ -513,7 +554,8 @@ mod tests {
 
         match error {
             GatewayError::Config(message) => {
-                assert!(message.contains("Invalid CORS configuration"));
+                assert!(message.contains("Gateway config error"));
+                assert!(message.contains("CORS"));
                 assert!(message.contains("credentials"));
             }
             other => panic!("expected config error, got: {other:?}"),
@@ -524,7 +566,7 @@ mod tests {
     /// the pricing source, which points at a non-existent file so the initial
     /// load fails deterministically.
     fn config_with_broken_pricing(allow_degraded: bool) -> Config {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         // Disable enterprise/storage subsystems that would require real I/O.
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
@@ -558,7 +600,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_wires_enabled_cache_config() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = None;
@@ -574,10 +616,11 @@ mod tests {
 
     #[tokio::test]
     async fn new_wires_configured_callback_backend() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = None;
+        config.gateway.monitoring.metrics.enabled = false;
         config.gateway.monitoring.callbacks.backends = vec![
             crate::config::models::monitoring::CallbackBackendConfig::OpenTelemetry(
                 crate::core::integrations::OpenTelemetryConfig::default(),
@@ -603,7 +646,7 @@ mod tests {
     /// returns an empty snapshot set, exercising the "Ok(snapshots)" arm.
     #[tokio::test]
     async fn new_succeeds_with_in_memory_budgets_when_db_disabled() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         // Disable pricing so we don't conflate with the broken-pricing tests.
@@ -629,7 +672,7 @@ mod tests {
             "reject_preflight",
         );
 
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
         config.gateway.auth.allow_anonymous = true;
@@ -678,7 +721,7 @@ mod tests {
         let _metrics_guard = MetricsMiddleware::test_lock().await;
         MetricsMiddleware::reset_for_tests();
 
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = true;
         config.gateway.auth.enable_api_key = true;
         config.gateway.auth.allow_anonymous = false;
@@ -719,13 +762,14 @@ mod tests {
     }
 
     include!("http_cors_tests.rs");
+    include!("http_validation_tests.rs");
 
     #[tokio::test]
     async fn app_factory_does_not_collect_http_metrics_when_metrics_disabled() {
         let _metrics_guard = MetricsMiddleware::test_lock().await;
         MetricsMiddleware::reset_for_tests();
 
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
         config.gateway.auth.allow_anonymous = true;
@@ -756,7 +800,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_factory_mounts_explicit_cache_admin_surface() {
-        let mut config = Config::default();
+        let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
         config.gateway.auth.allow_anonymous = true;

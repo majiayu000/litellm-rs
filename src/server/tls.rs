@@ -1,6 +1,7 @@
 //! TLS configuration and listener support.
 
 use crate::config::models::server::{ServerConfig, TlsConfig};
+use crate::server::http_listener::ListenerSettings;
 use crate::server::{HttpServer, state::AppState};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_http::{HttpService, Protocol};
@@ -10,7 +11,7 @@ use actix_tls::accept::{
     TlsError,
     rustls_0_23::{Acceptor as RustlsAcceptor, TlsStream},
 };
-use actix_web::{HttpServer as ActixHttpServer, dev::AppConfig, web};
+use actix_web::{dev::AppConfig, web};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 use std::{
@@ -24,11 +25,11 @@ const TLS_BACKLOG: u32 = 1024;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Validated TLS state cached before gateway dependencies are initialized.
-pub(crate) struct ListenerTls {
+pub(super) struct ListenerTls {
     config: rustls::ServerConfig,
 }
 
-pub(crate) fn load_listener_tls(server: &ServerConfig) -> Result<Option<ListenerTls>> {
+pub(super) fn load_listener_tls(server: &ServerConfig) -> Result<Option<ListenerTls>> {
     server
         .tls
         .as_ref()
@@ -36,22 +37,15 @@ pub(crate) fn load_listener_tls(server: &ServerConfig) -> Result<Option<Listener
         .transpose()
 }
 
-/// Bind the configured HTTP or HTTPS listener.
-pub(crate) fn bind_server(
-    bind_addr: &str,
-    server: &ServerConfig,
+/// Bind one HTTPS listener with the same worker, capacity, and request-head
+/// settings used by the plain HTTP listener.
+pub(super) fn build_tls_server(
     state: web::Data<AppState>,
-    tls: Option<ListenerTls>,
-) -> Result<Server> {
-    let map_bind_error = |error| HttpServer::format_bind_error(error, bind_addr, server.port);
-    let Some(tls) = tls else {
-        return ActixHttpServer::new(move || HttpServer::create_app(state.clone()))
-            .bind(bind_addr)
-            .map(ActixHttpServer::run)
-            .map_err(map_bind_error);
-    };
-
-    bind_http1_only(bind_addr, state, tls.config).map_err(map_bind_error)
+    settings: &ListenerSettings,
+    addresses: impl ToSocketAddrs,
+    tls: ListenerTls,
+) -> io::Result<(Server, SocketAddr)> {
+    bind_http1_only(addresses, state, tls.config, settings)
 }
 
 /// Build a rustls configuration without relying on a process-global provider.
@@ -153,52 +147,52 @@ fn read_pem(
 }
 
 fn bind_http1_only(
-    bind_addr: &str,
+    addresses: impl ToSocketAddrs,
     state: web::Data<AppState>,
     config: rustls::ServerConfig,
-) -> std::io::Result<Server> {
-    let listeners = bind_resolved_listeners(bind_addr, TLS_BACKLOG)?;
-    let mut builder = Server::build();
-    for listener in listeners {
-        let address = listener.local_addr()?;
-        let app_config = secure_app_config(address);
-        let state = state.clone();
-        let config = config.clone();
-        builder = builder.listen("actix-web-https-http1", listener, move || {
-            let factory = HttpServer::create_app(state.clone())
-                .into_factory()
-                .map_err(|error: actix_web::Error| error.error_response());
-            let app_config = app_config.clone();
-            let http = HttpService::build()
-                .client_disconnect_timeout(std::time::Duration::from_secs(1))
-                .finish(map_config(factory, move |_| app_config.clone()));
-
-            http1_tls_transport(config.clone())
-                .map_err(TlsError::into_service_error)
-                .and_then(http.map_err(TlsError::Service))
-        })?;
+    settings: &ListenerSettings,
+) -> std::io::Result<(Server, SocketAddr)> {
+    let (listener, address) = bind_first_resolved_listener(addresses, TLS_BACKLOG)?;
+    let app_config = secure_app_config(address);
+    let request_timeout = settings.first_request_head_timeout;
+    let mut builder = Server::build()
+        .workers(settings.effective_workers)
+        .backlog(TLS_BACKLOG);
+    if let Some(per_worker) = settings.max_connections_per_worker {
+        builder = builder.max_concurrent_connections(per_worker);
     }
-    Ok(builder.run())
+    let builder = builder.listen("actix-web-https-http1", listener, move || {
+        let factory = HttpServer::create_app(state.clone())
+            .into_factory()
+            .map_err(|error: actix_web::Error| error.error_response());
+        let app_config = app_config.clone();
+        let http = HttpService::build()
+            .client_request_timeout(request_timeout)
+            .client_disconnect_timeout(std::time::Duration::from_secs(1))
+            .finish(map_config(factory, move |_| app_config.clone()));
+
+        http1_tls_transport(config.clone())
+            .map_err(TlsError::into_service_error)
+            .and_then(http.map_err(TlsError::Service))
+    })?;
+    Ok((builder.run(), address))
 }
 
-fn bind_resolved_listeners(
+fn bind_first_resolved_listener(
     addrs: impl ToSocketAddrs,
     backlog: u32,
-) -> io::Result<Vec<TcpListener>> {
-    let mut listeners = Vec::new();
+) -> io::Result<(TcpListener, SocketAddr)> {
     let mut last_error = None;
     for address in addrs.to_socket_addrs()? {
         match create_tcp_listener(address, backlog) {
-            Ok(listener) => listeners.push(listener),
+            Ok(listener) => {
+                let selected_address = listener.local_addr()?;
+                return Ok((listener, selected_address));
+            }
             Err(error) => last_error = Some(error),
         }
     }
-
-    if listeners.is_empty() {
-        Err(last_error.unwrap_or_else(|| io::Error::other("Could not bind to address")))
-    } else {
-        Ok(listeners)
-    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("Could not bind to address")))
 }
 
 fn create_tcp_listener(address: SocketAddr, backlog: u32) -> io::Result<TcpListener> {
@@ -282,30 +276,29 @@ mod tests {
     }
 
     #[test]
-    fn binds_all_available_resolved_addresses_and_skips_failed_ones() {
+    fn binds_first_available_resolved_address_and_stops() {
         let occupied = create_tcp_listener(
             "127.0.0.1:0".parse().expect("loopback address"),
             TLS_BACKLOG,
         )
         .expect("occupy loopback address");
         let unavailable = occupied.local_addr().expect("occupied address");
-        let candidates = [
-            unavailable,
-            "127.0.0.1:0".parse().expect("first free address"),
-            "127.0.0.1:0".parse().expect("second free address"),
-        ];
+        let available = reserve_available_address();
+        let unused = reserve_available_address();
+        let candidates = [unavailable, available, unused];
 
-        let listeners = bind_resolved_listeners(&candidates[..], TLS_BACKLOG)
-            .expect("available addresses should still bind");
-        let addresses = listeners
-            .iter()
-            .map(TcpListener::local_addr)
-            .collect::<io::Result<std::collections::HashSet<_>>>()
-            .expect("bound addresses");
+        let (listener, selected) = bind_first_resolved_listener(&candidates[..], TLS_BACKLOG)
+            .expect("available address should still bind");
+        assert_eq!(selected, available);
+        let unused_listener = TcpListener::bind(unused)
+            .expect("later candidate must remain available after the first successful bind");
+        drop(listener);
+        drop(unused_listener);
+    }
 
-        assert_eq!(listeners.len(), 2);
-        assert_eq!(addresses.len(), 2);
-        assert!(!addresses.contains(&unavailable));
+    fn reserve_available_address() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("reserve candidate address");
+        listener.local_addr().expect("candidate address")
     }
 
     #[test]

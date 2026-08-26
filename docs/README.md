@@ -88,8 +88,6 @@ Real benchmark results from our unified router (run with `cargo bench`):
 | Router Creation | **39.4 ns** | Create empty router instance |
 | Add Deployment | **1.04 µs** | Insert single deployment |
 | Alias Resolution | **31.9 ns** | Model name alias lookup |
-| Record Success | **47.3 ns** | Atomic counter update (lock-free) |
-| Record Failure | **65.5 ns** | Atomic failure counter update |
 
 ### Routing Strategy Performance (10 deployments)
 
@@ -110,7 +108,7 @@ Real benchmark results from our unified router (run with `cargo bench`):
 | 50 | 3.2 µs | ~312K ops/s |
 | 100 | 6.3 µs | ~159K ops/s |
 
-### Concurrent Performance (lock-free operations)
+### Concurrent Performance (historical benchmark)
 
 | Concurrent Tasks | Time | Throughput |
 |------------------|------|------------|
@@ -121,9 +119,8 @@ Real benchmark results from our unified router (run with `cargo bench`):
 
 ### Key Performance Characteristics
 
-- **Lock-free design**: Uses `DashMap` and atomic operations for zero-lock concurrent access
+- **Low-contention design**: Uses `DashMap`, atomics, and a per-deployment rollover gate
 - **Static dispatch**: Provider enum avoids vtable overhead
-- **Nanosecond-level atomic ops**: Record success/failure in ~50ns
 - **Linear scaling**: Concurrent throughput scales with task count
 - **Sub-microsecond routing**: Most strategies complete under 2µs
 
