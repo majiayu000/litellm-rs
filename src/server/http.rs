@@ -38,6 +38,7 @@ pub struct HttpServer {
     config: ServerConfig,
     /// Application state
     state: AppState,
+    tls: Option<crate::server::tls::ListenerTls>,
     /// Background worker that drains budget persistence events on shutdown.
     budget_persistence_task: Option<JoinHandle<()>>,
     /// Background worker that delivers configured callback events.
@@ -53,6 +54,7 @@ impl HttpServer {
         })?;
         config.validate()?;
 
+        let tls = crate::server::tls::load_listener_tls(&config.gateway.server)?;
         info!("Creating HTTP server");
         start_auth_rate_limiter_cleanup_task();
 
@@ -184,6 +186,7 @@ impl HttpServer {
         Ok(Self {
             config: config.gateway.server.clone(),
             state,
+            tls,
             budget_persistence_task,
             callback_runtime,
         })
@@ -384,9 +387,17 @@ impl HttpServer {
         // Try resolved addresses one at a time. Passing the hostname directly
         // to Actix would create one full worker set per successful address,
         // multiplying the configured server-wide connection cap.
+        let listener = match self.tls.take() {
+            Some(tls) => crate::server::tls::build_tls_server(
+                state,
+                &listener_settings,
+                bind_addr.as_str(),
+                tls,
+            ),
+            None => build_actix_server(state, &listener_settings, bind_addr.as_str()),
+        };
         let (server, selected_address) =
-            build_actix_server(state, &listener_settings, bind_addr.as_str())
-                .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?;
+            listener.map_err(|e| Self::format_bind_error(e, &bind_addr, port))?;
 
         info!(
             "HTTP server listening on {} (selected from {})",

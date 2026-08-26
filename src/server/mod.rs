@@ -13,6 +13,9 @@ mod guardrails;
 pub mod http;
 mod http_listener;
 pub mod state;
+pub(crate) mod tls;
+#[cfg(test)]
+mod tls_listener_tests;
 pub mod types;
 mod utils;
 

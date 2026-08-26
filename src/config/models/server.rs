@@ -172,7 +172,7 @@ pub struct TlsConfig {
     /// Require client certificates
     #[serde(default)]
     pub require_client_cert: bool,
-    /// Enable HTTP/2
+    /// Request HTTP/2 TLS (currently unsupported)
     #[serde(default)]
     pub http2: bool,
 }
@@ -188,22 +188,21 @@ impl TlsConfig {
             return Err("TLS private key file path is required".to_string());
         }
 
-        // Check if files exist
-        if !std::path::Path::new(&self.cert_file).exists() {
-            return Err(format!(
-                "TLS certificate file not found: {}",
-                self.cert_file
-            ));
+        if self.ca_file.is_some() {
+            return Err(
+                "tls.ca_file is unsupported until client certificate auth is implemented"
+                    .to_string(),
+            );
         }
 
-        if !std::path::Path::new(&self.key_file).exists() {
-            return Err(format!("TLS private key file not found: {}", self.key_file));
+        if self.require_client_cert {
+            return Err(
+                "tls.require_client_cert is not implemented yet; set it to false".to_string(),
+            );
         }
 
-        if let Some(ca_file) = &self.ca_file
-            && !std::path::Path::new(ca_file).exists()
-        {
-            return Err(format!("TLS CA file not found: {}", ca_file));
+        if self.http2 {
+            return Err("tls.http2 is unsupported; set it to false to use HTTP/1 TLS".to_string());
         }
 
         Ok(())
