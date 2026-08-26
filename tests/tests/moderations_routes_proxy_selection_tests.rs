@@ -74,6 +74,38 @@ async fn moderation_route_proxies_request_with_provider_headers() {
 }
 
 #[tokio::test]
+async fn moderation_route_preserves_upstream_403() {
+    let mock = MockModerationServer::start_moderation_mock_with_status(StatusCode::FORBIDDEN).await;
+    let state = build_test_app_state(vec![moderation_provider(&mock.base_url)]).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/moderations")
+            .set_json(json!({
+                "model": "omni-moderation-latest",
+                "input": "moderate this text"
+            }))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["error"]["message"], "moderation access denied");
+    assert_eq!(body["error"]["type"], "permission_error");
+    assert_eq!(body["error"]["code"], "permission_denied");
+    assert_eq!(mock.requests().len(), 1);
+    mock.stop_moderation_mock().await;
+}
+
+#[tokio::test]
 async fn moderation_route_resolves_alias_to_provider_fallback_model() {
     let mock = MockModerationServer::start_moderation_mock().await;
     let state = build_test_app_state(vec![moderation_provider(&mock.base_url)]).await;
@@ -144,11 +176,16 @@ async fn root_moderation_alias_proxies_request() {
 async fn moderation_route_uses_default_model_for_provider_selection_when_omitted() {
     let mock = MockModerationServer::start_moderation_mock().await;
     let state = build_test_app_state(vec![
-        moderation_provider_with_models(
+        named_moderation_provider(
+            "unrelated-provider",
             "http://127.0.0.1:9/v1",
             vec!["unrelated-moderation-model".to_string()],
         ),
-        moderation_provider_with_models(&mock.base_url, vec!["omni-moderation-latest".to_string()]),
+        named_moderation_provider(
+            "default-provider",
+            &mock.base_url,
+            vec!["omni-moderation-latest".to_string()],
+        ),
     ])
     .await;
     let app = test::init_service(

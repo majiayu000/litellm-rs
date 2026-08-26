@@ -67,10 +67,7 @@ impl OpenAIProvider {
                 message: e.to_string(),
             })?;
 
-        let response_bytes = response.bytes().await.map_err(|e| OpenAIError::Network {
-            provider: "openai",
-            message: e.to_string(),
-        })?;
+        let response_bytes = read_success_response_bytes(response).await?;
 
         let response_json: Value =
             serde_json::from_slice(&response_bytes).map_err(|e| OpenAIError::ResponseParsing {
@@ -131,10 +128,7 @@ impl OpenAIProvider {
                 message: e.to_string(),
             })?;
 
-        let response_bytes = response.bytes().await.map_err(|e| OpenAIError::Network {
-            provider: "openai",
-            message: e.to_string(),
-        })?;
+        let response_bytes = read_success_response_bytes(response).await?;
 
         serde_json::from_slice(&response_bytes).map_err(|e| OpenAIError::ResponseParsing {
             provider: "openai",
@@ -317,12 +311,23 @@ impl OptionalMultipartText for multipart::Form {
     }
 }
 
-async fn read_success_response_bytes(response: reqwest::Response) -> Result<Vec<u8>, OpenAIError> {
+pub(super) async fn read_success_response_bytes(
+    response: reqwest::Response,
+) -> Result<Vec<u8>, OpenAIError> {
     let status = response.status();
-    let response_bytes = response.bytes().await.map_err(|e| OpenAIError::Network {
-        provider: "openai",
-        message: e.to_string(),
-    })?;
+    let response_bytes = match response.bytes().await {
+        Ok(response_bytes) => response_bytes,
+        Err(_) if !status.is_success() => {
+            return Err(OpenAIErrorMapper
+                .map_http_error(status.as_u16(), "failed to read upstream error body"));
+        }
+        Err(error) => {
+            return Err(OpenAIError::Network {
+                provider: "openai",
+                message: error.to_string(),
+            });
+        }
+    };
 
     if !status.is_success() {
         let body = String::from_utf8_lossy(&response_bytes);

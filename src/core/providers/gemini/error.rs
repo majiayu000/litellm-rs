@@ -25,7 +25,13 @@ impl GeminiErrorMapper {
         match status {
             400 => ProviderError::invalid_request("gemini", format!("Bad request: {}", body)),
             401 => ProviderError::authentication("gemini", "Invalid or missing API key"),
-            403 => ProviderError::authentication("gemini", "Forbidden: insufficient permissions"),
+            // Upstream 403 is a permission failure; keep the status.
+            403 => ProviderError::api_error(
+                "gemini",
+                status,
+                crate::core::providers::unified_provider::parse_error_message_from_body(body)
+                    .unwrap_or_else(|| body.to_string()),
+            ),
             404 => ProviderError::model_not_found("gemini", "Model or endpoint not found"),
             429 => {
                 let retry_after = parse_retry_after_from_body(body);
@@ -40,103 +46,7 @@ impl GeminiErrorMapper {
 
     /// Response
     pub fn from_api_response(response: &serde_json::Value) -> ProviderError {
-        // Error
-        if let Some(error) = response.get("error") {
-            let code = error.get("code").and_then(|c| c.as_u64()).unwrap_or(500) as u16;
-            let message = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error");
-            let status = error.get("status").and_then(|s| s.as_str()).unwrap_or("");
-
-            return match (code, status) {
-                (401, _) | (_, "UNAUTHENTICATED") => {
-                    ProviderError::authentication("gemini", message)
-                }
-                (403, _) | (_, "PERMISSION_DENIED") => {
-                    ProviderError::authentication("gemini", message)
-                }
-                (400, _) | (_, "INVALID_ARGUMENT") => {
-                    ProviderError::invalid_request("gemini", message)
-                }
-                (404, _) | (_, "NOT_FOUND") => ProviderError::model_not_found("gemini", message),
-                (429, _) | (_, "RESOURCE_EXHAUSTED") => {
-                    let retry_after = Self::extract_retry_after_from_error(error);
-                    ProviderError::RateLimit {
-                        provider: "gemini",
-                        message: message.to_string(),
-                        retry_after,
-                        rpm_limit: None,
-                        tpm_limit: None,
-                        current_usage: None,
-                    }
-                }
-                (503, _) | (_, "UNAVAILABLE") => {
-                    ProviderError::provider_unavailable("gemini", "Service unavailable")
-                }
-                (_, "FAILED_PRECONDITION") => ProviderError::invalid_request("gemini", message),
-                (_, "UNIMPLEMENTED") => ProviderError::NotSupported {
-                    provider: "gemini",
-                    feature: message.to_string(),
-                },
-                _ => ProviderError::api_error("gemini", code, message),
-            };
-        }
-
-        // Error
-        if let Some(message) = response.get("message")
-            && let Some(msg_str) = message.as_str()
-        {
-            return ProviderError::api_error("gemini", 500, msg_str);
-        }
-
-        // Error
-        if let Some(candidates) = response.get("candidates")
-            && let Some(candidate) = candidates.as_array().and_then(|c| c.first())
-            && let Some(finish_reason) = candidate.get("finishReason").and_then(|r| r.as_str())
-        {
-            return match finish_reason {
-                "SAFETY" => {
-                    ProviderError::invalid_request("gemini", "Content blocked by safety filters")
-                }
-                "RECITATION" => {
-                    ProviderError::invalid_request("gemini", "Content blocked due to recitation")
-                }
-                "MAX_TOKENS" => {
-                    ProviderError::invalid_request("gemini", "Maximum token limit reached")
-                }
-                "STOP" => ProviderError::api_error("gemini", 200, "Generation completed"),
-                _ => ProviderError::api_error(
-                    "gemini",
-                    500,
-                    format!("Unknown finish reason: {}", finish_reason),
-                ),
-            };
-        }
-
-        // Default
-        ProviderError::api_error("gemini", 500, "Unknown API error")
-    }
-
-    /// Extract retry delay from Gemini error object (handles `details[]` array)
-    fn extract_retry_after_from_error(error: &serde_json::Value) -> Option<u64> {
-        // Check
-        if let Some(retry_after) = error.get("retry_after") {
-            return retry_after.as_u64();
-        }
-
-        // Check
-        if let Some(details) = error.get("details")
-            && let Some(details_array) = details.as_array()
-        {
-            for detail in details_array {
-                if let Some(retry_after) = detail.get("retry_after") {
-                    return retry_after.as_u64();
-                }
-            }
-        }
-
-        None
+        crate::core::providers::google_error::map_google_error_envelope("gemini", response)
     }
 }
 
@@ -193,6 +103,51 @@ mod tests {
             }
             _ => panic!("Expected authentication error"),
         }
+    }
+
+    #[test]
+    fn status_only_permission_denied_defaults_to_403() {
+        let response = json!({
+            "error": {
+                "message": "caller lacks permission",
+                "status": "PERMISSION_DENIED"
+            }
+        });
+
+        assert!(matches!(
+            GeminiErrorMapper::from_api_response(&response),
+            ProviderError::ApiError {
+                status: 403,
+                ref message,
+                ..
+            } if message == "caller lacks permission"
+        ));
+    }
+
+    #[test]
+    fn http_403_preserves_google_error_envelope_message() {
+        let body = r#"{"error":{"code":403,"message":"service account lacks aiplatform.endpoints.predict","status":"PERMISSION_DENIED"}}"#;
+        assert!(matches!(
+            GeminiErrorMapper::from_http_status(403, body),
+            ProviderError::ApiError {
+                status: 403,
+                ref message,
+                ..
+            } if message == "service account lacks aiplatform.endpoints.predict"
+        ));
+    }
+
+    #[test]
+    fn http_403_transport_status_overrides_contradictory_envelope_code() {
+        let body = r#"{"error":{"code":401,"message":"accepted credential lacks model permission","status":"UNAUTHENTICATED"}}"#;
+        assert!(matches!(
+            GeminiErrorMapper::from_http_status(403, body),
+            ProviderError::ApiError {
+                status: 403,
+                ref message,
+                ..
+            } if message == "accepted credential lacks model permission"
+        ));
     }
 
     #[test]

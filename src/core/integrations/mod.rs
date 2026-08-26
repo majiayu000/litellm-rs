@@ -68,8 +68,9 @@ pub use observability::{
 
 // Re-export trait types for convenience
 pub use crate::core::traits::integration::{
-    BoxedIntegration, CacheHitEvent, EmbeddingEndEvent, EmbeddingStartEvent, Integration,
-    IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    BoxedIntegration, CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent,
+    Integration, IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent,
+    LlmStreamEvent,
 };
 pub use callback_runtime::{
     CallbackDispatchError, CallbackDispatcher, CallbackRuntime, CallbackTerminalPermit,

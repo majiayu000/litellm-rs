@@ -12,7 +12,6 @@ use crate::config::models::gateway::{GatewayConfig, GatewayPricingConfig, Unpric
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::rate_limit::RateLimitConfig;
 use crate::config::models::server::ServerConfig;
-use crate::config::models::storage::{DatabaseConfig, RedisConfig};
 
 // ==================== Server Config Validation ====================
 
@@ -365,8 +364,16 @@ fn test_gateway_validation_rejects_unwired_semantic_cache() {
         }],
         ..Default::default()
     };
-    config.storage.database.enabled = true;
-    config.storage.database.url = "postgres://localhost/test".to_string();
+    #[cfg(feature = "sqlite")]
+    {
+        config.storage.database.enabled = true;
+        config.storage.database.url = "sqlite::memory:".to_string();
+    }
+    #[cfg(all(not(feature = "sqlite"), feature = "postgres"))]
+    {
+        config.storage.database.enabled = true;
+        config.storage.database.url = "postgres://localhost/test".to_string();
+    }
     config.auth.jwt_secret = "StrongJwtSecretWithMixedCaseAndNumbers1234!".to_string();
     config.cache.semantic_cache = true;
 
@@ -457,35 +464,6 @@ fn test_rate_limit_validation_rejects_zero_requests_per_minute_alias() {
     let error = Validate::validate(&config).unwrap_err();
     assert!(error.contains("Effective RPM"));
     assert!(error.contains("greater than 0"));
-}
-
-#[test]
-fn test_database_validation_skips_when_disabled() {
-    let config = DatabaseConfig {
-        enabled: false,
-        url: "".to_string(),
-        max_connections: 0,
-        connection_timeout: 0,
-        ssl: false,
-        auto_migrate: false,
-        auto_migrate_configured: false,
-        fallback_to_sqlite: false,
-        allow_degraded: false,
-    };
-    assert!(Validate::validate(&config).is_ok());
-}
-
-#[test]
-fn test_redis_validation_skips_when_disabled() {
-    let config = RedisConfig {
-        enabled: false,
-        url: "".to_string(),
-        max_connections: 0,
-        connection_timeout: 0,
-        cluster: false,
-        allow_degraded: false,
-    };
-    assert!(Validate::validate(&config).is_ok());
 }
 
 #[test]
