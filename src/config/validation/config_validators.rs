@@ -187,6 +187,8 @@ impl Validate for ServerConfig {
         // Validate TLS configuration if present
         if let Some(tls) = &self.tls {
             tls.validate()?;
+            #[cfg(feature = "gateway")]
+            crate::server::tls::validate_rustls_config(tls)?;
         }
 
         Ok(())

@@ -14,7 +14,10 @@ mod tests {
     };
     use litellm_rs::config::models::server::{CorsConfig, ServerConfig, TlsConfig};
     use litellm_rs::config::models::storage::RedisConfig;
+    use rcgen::generate_simple_self_signed;
+    use std::fs;
     use std::path::Path;
+    use tempfile::TempDir;
 
     // ==================== GatewayConfig Validation ====================
 
@@ -207,6 +210,39 @@ mod tests {
             http2: false,
         });
         assert!(config.is_tls_enabled());
+    }
+
+    #[test]
+    fn gateway_validation_rejects_invalid_tls_material() {
+        let directory = TempDir::new().expect("temporary TLS directory");
+        let certified =
+            generate_simple_self_signed(["localhost".to_owned()]).expect("self-signed certificate");
+        let other = generate_simple_self_signed(["localhost".to_owned()])
+            .expect("second self-signed certificate");
+        let cert_file = directory.path().join("cert.pem");
+        let key_file = directory.path().join("key.pem");
+        fs::write(&cert_file, certified.cert.pem()).expect("write certificate");
+        fs::write(&key_file, other.signing_key.serialize_pem()).expect("write mismatched key");
+
+        let mut config = create_valid_gateway_config();
+        config.server.tls = Some(TlsConfig {
+            cert_file: cert_file.to_string_lossy().into_owned(),
+            key_file: key_file.to_string_lossy().into_owned(),
+            ca_file: None,
+            require_client_cert: false,
+            http2: false,
+        });
+
+        let error = config
+            .validate()
+            .expect_err("validate-config must reject a mismatched TLS key");
+        assert!(error.contains("certificate/key pair"), "{error}");
+
+        fs::write(&cert_file, "not PEM").expect("write malformed certificate");
+        let error = config
+            .validate()
+            .expect_err("validate-config must reject malformed TLS material");
+        assert!(error.contains("no TLS certificates"), "{error}");
     }
 
     // ==================== CorsConfig Validation ====================

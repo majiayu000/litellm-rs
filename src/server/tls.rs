@@ -79,8 +79,7 @@ fn build_rustls_config(tls: &TlsConfig) -> std::result::Result<rustls::ServerCon
     Ok(config)
 }
 
-#[cfg(test)]
-fn validate_rustls_config(tls: &TlsConfig) -> std::result::Result<(), String> {
+pub(crate) fn validate_rustls_config(tls: &TlsConfig) -> std::result::Result<(), String> {
     build_rustls_config(tls).map(drop)
 }
 
