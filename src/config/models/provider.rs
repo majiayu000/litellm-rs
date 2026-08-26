@@ -126,12 +126,17 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
-    pub(crate) fn configured_endpoint(&self) -> Option<&str> {
-        let provider_selector = if self.provider_type.trim().is_empty() {
-            self.name.as_str()
+    /// Provider selector used by every runtime construction path.
+    pub(crate) fn effective_provider_selector(&self) -> &str {
+        if self.provider_type.trim().is_empty() {
+            self.name.trim()
         } else {
-            self.provider_type.as_str()
-        };
+            self.provider_type.trim()
+        }
+    }
+
+    pub(crate) fn configured_endpoint(&self) -> Option<&str> {
+        let provider_selector = self.effective_provider_selector();
         self.base_url
             .as_deref()
             .filter(|url| !url.trim().is_empty())

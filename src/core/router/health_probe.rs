@@ -76,6 +76,7 @@ use runtime::{apply_probe_result, execute_probe, update_probe_health};
 pub(crate) mod tests {
     use super::*;
     use crate::core::net::ProviderEndpointAccess;
+    use crate::core::providers::anthropic::{AnthropicConfig, AnthropicProvider};
     use crate::core::providers::openai::OpenAIProvider;
     use crate::core::providers::openai::config::test_openai_config;
     use crate::core::router::config::RouterConfig;
@@ -133,7 +134,7 @@ pub(crate) mod tests {
             let (reason, body) = match status {
                 200 => (
                     "OK",
-                    r#"{"id":"probe","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#,
+                    r#"{"id":"msg_probe","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"probe-model","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}"#,
                 ),
                 204 => ("No Content", ""),
                 _ => ("Internal Server Error", ""),
@@ -394,24 +395,29 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn native_probe_verifies_the_configured_provider_model() {
+    async fn safe_native_probe_verifies_the_configured_chat_model() {
         let (endpoint, server) = status_server(200).await;
-        let base_url = endpoint
-            .join("/v1")
-            .expect("base URL should resolve")
-            .to_string();
-        let provider = test_provider(Some(base_url)).await;
+        let provider = Provider::Anthropic(
+            AnthropicProvider::new(
+                AnthropicConfig::new_test("sk-ant-native-probe")
+                    .with_base_url(endpoint.origin().ascii_serialization())
+                    .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork)
+                    .with_allow_unknown_models(true)
+                    .with_configured_models(vec!["probe-model".to_string()]),
+            )
+            .expect("test Anthropic provider should be valid"),
+        );
         let mut policy = test_policy(None);
         policy.expected_codes = vec![200];
 
         assert_eq!(
-            execute_probe(&provider, "gpt-test", &policy, None).await,
+            execute_probe(&provider, "probe-model", &policy, None).await,
             Ok(())
         );
         let request = server.await.expect("test server should stop");
         let request = String::from_utf8(request).expect("probe request should be UTF-8");
-        assert!(request.starts_with("POST /v1/chat/completions "));
-        assert!(request.contains(r#""model":"gpt-test""#));
+        assert!(request.starts_with("POST /v1/messages "));
+        assert!(request.contains(r#""model":"probe-model""#));
         assert!(request.contains(r#""max_tokens":1"#));
     }
 

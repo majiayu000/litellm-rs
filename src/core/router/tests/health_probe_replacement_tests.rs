@@ -160,6 +160,19 @@ fn deployment_with_policy(id: &str, provider: Provider, policy: HealthCheckPolic
     })
 }
 
+fn anthropic_probe_provider(endpoint: &Url, api_key: &str, model: &str) -> Provider {
+    Provider::Anthropic(
+        AnthropicProvider::new(
+            AnthropicConfig::new_test(api_key)
+                .with_base_url(endpoint.origin().ascii_serialization())
+                .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork)
+                .with_allow_unknown_models(true)
+                .with_configured_models(vec![model.to_string()]),
+        )
+        .expect("test Anthropic provider should be valid"),
+    )
+}
+
 #[tokio::test]
 async fn running_probe_publishes_to_replacement_deployment() {
     let (endpoint, mut requests, server) = sequence_server(vec![500, 204, 204]).await;
@@ -334,24 +347,18 @@ async fn stale_success_is_not_published_to_changed_same_id_replacement() {
 async fn reused_provider_identity_cannot_group_distinct_native_deployments() {
     let (first_endpoint, mut first_requests, first_server) = controlled_status_server(204).await;
     let (second_endpoint, mut second_requests, second_server) = controlled_status_server(204).await;
-    let first_provider = Provider::OpenAI(
-        OpenAIProvider::new(test_openai_config(
-            first_endpoint.to_string(),
-            "sk-first-health-probe-credential",
-        ))
-        .await
-        .expect("first provider should be valid"),
+    let first_provider = anthropic_probe_provider(
+        &first_endpoint,
+        "sk-ant-first-health-probe-credential",
+        "model-a-model",
     );
-    let second_provider = Provider::OpenAI(
-        OpenAIProvider::new(test_openai_config(
-            second_endpoint.to_string(),
-            "sk-second-health-probe-credential",
-        ))
-        .await
-        .expect("second provider should be valid"),
+    let second_provider = anthropic_probe_provider(
+        &second_endpoint,
+        "sk-ant-second-health-probe-credential",
+        "model-b-model",
     );
     let policy = HealthCheckPolicy {
-        provider_name: "openai-primary".to_string(),
+        provider_name: "anthropic-primary".to_string(),
         interval_secs: 30,
         failure_threshold: 1,
         recovery_timeout_secs: 30,

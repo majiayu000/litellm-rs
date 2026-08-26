@@ -84,6 +84,24 @@ pub(super) fn validate_probe_snapshot(snapshot: &RoutingSnapshot) -> Result<usiz
     let mut provider_policies = HashMap::new();
     let targets = current_probe_groups(snapshot);
     for target in &targets {
+        if target.key.policy.endpoint.is_none() {
+            let deployment = target.deployments.first().ok_or_else(|| {
+                RouterError::InvalidConfiguration(format!(
+                    "provider '{}' produced an empty health probe target",
+                    target.key.provider_name
+                ))
+            })?;
+            if !target
+                .provider
+                .has_safe_native_health_probe(&deployment.model)
+            {
+                return Err(RouterError::InvalidConfiguration(format!(
+                    "provider '{}' deployment '{}' requires a custom health_check.endpoint; \
+                     its configured model capability cannot be inferred safely for a native probe",
+                    target.key.provider_name, deployment.id
+                )));
+            }
+        }
         match provider_policies.entry(target.key.provider_name.clone()) {
             Entry::Vacant(entry) => {
                 entry.insert((target.key.policy.clone(), target.key.timeout_secs));
