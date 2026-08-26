@@ -4,150 +4,157 @@
 
 ## ProviderError (24 Variants)
 
-```rust
-// src/core/providers/unified_provider.rs
+Defined in `src/core/providers/unified_provider_error.rs` and exported as
+`crate::core::providers::ProviderError` via `src/core/providers/unified_provider.rs`.
 
+```rust
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ProviderError {
-    // Authentication & Authorization
-    #[error("[{provider}] Authentication failed: {message}")]
+    #[error("Authentication failed for {provider}: {message}")]
     Authentication {
         provider: &'static str,
         message: String,
     },
 
-    // Rate Limiting & Quotas
-    #[error("[{provider}] Rate limit exceeded: {message}")]
+    #[error("Rate limit exceeded for {provider}: {message}")]
     RateLimit {
         provider: &'static str,
         message: String,
         retry_after: Option<u64>,
+        /// Requests per minute limit
         rpm_limit: Option<u32>,
+        /// Tokens per minute limit
         tpm_limit: Option<u32>,
-        current_usage: Option<u32>,
+        /// Current usage level
+        current_usage: Option<f64>,
     },
 
-    #[error("[{provider}] Quota exceeded: {message}")]
+    #[error("Quota exceeded for {provider}: {message}")]
     QuotaExceeded {
         provider: &'static str,
         message: String,
     },
 
-    // Model & Request Errors
-    #[error("[{provider}] Model not found: {model}")]
+    #[error("Model '{model}' not found for {provider}")]
     ModelNotFound {
         provider: &'static str,
         model: String,
     },
 
-    #[error("[{provider}] Invalid request: {message}")]
+    #[error("Invalid request for {provider}: {message}")]
     InvalidRequest {
         provider: &'static str,
         message: String,
     },
 
-    // Network & Availability
-    #[error("[{provider}] Network error: {message}")]
+    #[error("Network error for {provider}: {message}")]
     Network {
         provider: &'static str,
         message: String,
     },
 
-    #[error("[{provider}] Request timeout: {message}")]
-    Timeout {
-        provider: &'static str,
-        message: String,
-    },
-
-    #[error("[{provider}] Provider unavailable: {message}")]
+    #[error("Provider {provider} is unavailable: {message}")]
     ProviderUnavailable {
         provider: &'static str,
         message: String,
     },
 
-    // Feature Support
-    #[error("[{provider}] Feature not supported: {feature}")]
+    #[error("Feature '{feature}' not supported by {provider}")]
     NotSupported {
         provider: &'static str,
         feature: String,
     },
 
-    #[error("[{provider}] Not implemented: {feature}")]
+    #[error("Feature '{feature}' not implemented for {provider}")]
     NotImplemented {
         provider: &'static str,
         feature: String,
     },
 
-    #[error("[{provider}] Feature disabled: {feature}")]
-    FeatureDisabled {
-        provider: &'static str,
-        feature: String,
-    },
-
-    // Content & Token Limits
-    #[error("[{provider}] Context length exceeded: max={max}, actual={actual}")]
-    ContextLengthExceeded {
-        provider: &'static str,
-        max: u32,
-        actual: u32,
-    },
-
-    #[error("[{provider}] Token limit exceeded: {message}")]
-    TokenLimitExceeded {
-        provider: &'static str,
-        message: String,
-    },
-
-    #[error("[{provider}] Content filtered: {reason}")]
-    ContentFiltered {
-        provider: &'static str,
-        reason: String,
-        policy_violations: Option<Vec<String>>,
-        potentially_retryable: Option<bool>,
-    },
-
-    // Configuration & Serialization
-    #[error("[{provider}] Configuration error: {message}")]
+    #[error("Configuration error for {provider}: {message}")]
     Configuration {
         provider: &'static str,
         message: String,
     },
 
-    #[error("[{provider}] Serialization error: {message}")]
+    #[error("Serialization error for {provider}: {message}")]
     Serialization {
         provider: &'static str,
         message: String,
     },
 
-    // Advanced Errors
-    #[error("[{provider}] API error (status={status}): {message}")]
+    #[error("Timeout for {provider}: {message}")]
+    Timeout {
+        provider: &'static str,
+        message: String,
+    },
+
+    /// Context length exceeded with structured limits (VertexAI pattern)
+    #[error("Context length exceeded for {provider}: max {max} tokens, got {actual} tokens")]
+    ContextLengthExceeded {
+        provider: &'static str,
+        max: usize,
+        actual: usize,
+    },
+
+    /// Content filtered by safety systems (VertexAI/OpenAI pattern)
+    #[error("Content filtered by {provider} safety systems: {reason}")]
+    ContentFiltered {
+        provider: &'static str,
+        reason: String,
+        /// Policy categories that were violated
+        policy_violations: Option<Vec<String>>,
+        /// Whether this might succeed with prompt modification
+        potentially_retryable: Option<bool>,
+    },
+
+    /// API error with status code (Universal pattern)
+    #[error("API error for {provider} (status {status}): {message}")]
     ApiError {
         provider: &'static str,
         status: u16,
         message: String,
     },
 
-    #[error("[{provider}] Deployment error ({deployment}): {message}")]
+    /// Token limit exceeded (separate from context length)
+    #[error("Token limit exceeded for {provider}: {message}")]
+    TokenLimitExceeded {
+        provider: &'static str,
+        message: String,
+    },
+
+    /// Feature disabled by provider (VertexAI pattern)
+    #[error("Feature disabled for {provider}: {feature}")]
+    FeatureDisabled {
+        provider: &'static str,
+        feature: String,
+    },
+
+    /// Azure deployment specific error
+    #[error("Azure deployment error for {deployment}: {message}")]
     DeploymentError {
         provider: &'static str,
         deployment: String,
         message: String,
     },
 
-    #[error("[{provider}] Response parsing error: {message}")]
+    /// Response parsing error (universal pattern)
+    #[error("Failed to parse {provider} response: {message}")]
     ResponseParsing {
         provider: &'static str,
         message: String,
     },
 
-    #[error("[{provider}] Routing error: {message}")]
+    /// Multi-provider routing error (OpenRouter pattern)
+    #[error("Routing error from {provider}: tried {attempted_providers:?}, final error: {message}")]
     RoutingError {
         provider: &'static str,
         attempted_providers: Vec<String>,
         message: String,
     },
 
-    #[error("[{provider}] Transformation error ({from_format} -> {to_format}): {message}")]
+    /// Transformation error between provider formats (OpenRouter pattern)
+    #[error("Transformation error for {provider}: from {from_format} to {to_format}: {message}")]
     TransformationError {
         provider: &'static str,
         from_format: String,
@@ -155,23 +162,30 @@ pub enum ProviderError {
         message: String,
     },
 
-    #[error("[{provider}] Streaming error ({stream_type}): {message}")]
-    Streaming {
-        provider: &'static str,
-        stream_type: String,
-        position: Option<u64>,
-        last_chunk: Option<String>,
-        message: String,
-    },
-
-    #[error("[{provider}] Operation cancelled ({operation_type}): {cancellation_reason}")]
+    /// Async operation cancelled (Rust async pattern)
+    #[error("Operation cancelled for {provider}: {operation_type}")]
     Cancelled {
         provider: &'static str,
         operation_type: String,
-        cancellation_reason: String,
+        /// Reason for cancellation
+        cancellation_reason: Option<String>,
     },
 
-    #[error("[{provider}] Error: {message}")]
+    /// Streaming operation error (SSE/WebSocket pattern)
+    #[error("Streaming error for {provider}: {stream_type} at position {position:?}")]
+    Streaming {
+        provider: &'static str,
+        /// Type of stream (chat, completion, etc.)
+        stream_type: String,
+        /// Position in stream where error occurred
+        position: Option<u64>,
+        /// Last valid chunk received
+        last_chunk: Option<String>,
+        /// Error message
+        message: String,
+    },
+
+    #[error("{provider} error: {message}")]
     Other {
         provider: &'static str,
         message: String,

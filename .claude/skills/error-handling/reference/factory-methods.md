@@ -4,6 +4,9 @@
 
 ## Factory Methods
 
+Constructors live in the `impl ProviderError` block in
+`src/core/providers/unified_provider_methods.rs`.
+
 ### Basic Factory Methods
 
 ```rust
@@ -18,7 +21,10 @@ impl ProviderError {
     pub fn rate_limit(provider: &'static str, retry_after: Option<u64>) -> Self {
         Self::RateLimit {
             provider,
-            message: "Rate limit exceeded".to_string(),
+            message: match retry_after {
+                Some(seconds) => format!("Rate limit exceeded. Retry after {} seconds", seconds),
+                None => "Rate limit exceeded".to_string(),
+            },
             retry_after,
             rpm_limit: None,
             tpm_limit: None,
@@ -108,14 +114,20 @@ impl ProviderError {
         retry_after: Option<u64>,
         rpm_limit: Option<u32>,
         tpm_limit: Option<u32>,
-        current_usage: Option<u32>,
+        current_usage: Option<f64>,
     ) -> Self {
+        let message = match (rpm_limit, tpm_limit) {
+            (Some(rpm), Some(tpm)) => {
+                format!("Rate limit exceeded: {}RPM, {}TPM limits reached", rpm, tpm)
+            }
+            (Some(rpm), None) => format!("Rate limit exceeded: {}RPM limit reached", rpm),
+            (None, Some(tpm)) => format!("Rate limit exceeded: {}TPM limit reached", tpm),
+            (None, None) => "Rate limit exceeded".to_string(),
+        };
+
         Self::RateLimit {
             provider,
-            message: format!(
-                "Rate limit exceeded. RPM: {:?}, TPM: {:?}, Current: {:?}",
-                rpm_limit, tpm_limit, current_usage
-            ),
+            message,
             retry_after,
             rpm_limit,
             tpm_limit,
@@ -125,8 +137,8 @@ impl ProviderError {
 
     pub fn context_length_exceeded(
         provider: &'static str,
-        max: u32,
-        actual: u32,
+        max: usize,
+        actual: usize,
     ) -> Self {
         Self::ContextLengthExceeded {
             provider,
@@ -178,3 +190,9 @@ impl ProviderError {
     }
 }
 ```
+
+Other constructors in the same impl block: `quota_exceeded`,
+`rate_limit_simple`, `rate_limit_with_retry`, `not_implemented`,
+`initialization`, `token_limit_exceeded`, `feature_disabled`,
+`deployment_error` (hardcodes provider `"azure"`), `transformation_error`,
+`cancelled`, and `other`.
