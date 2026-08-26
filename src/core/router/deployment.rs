@@ -3,35 +3,31 @@
 //! This module defines the fundamental building blocks for the LiteLLM Router:
 //! - `Deployment`: A concrete provider deployment with configuration and runtime state
 //! - `DeploymentConfig`: Configuration parameters (TPM/RPM limits, timeouts, weights)
-//! - `DeploymentState`: Lock-free runtime state using atomic operations
+//! - `DeploymentState`: Low-contention runtime state using atomic operations
 //! - `HealthStatus`: Health status enumeration for deployments
 //!
 //! ## Design Philosophy
 //!
-//! State tracking uses atomics to avoid contention on the request path.
-//! This is safe because:
-//! - State values are eventually consistent (exact precision not required for routing decisions)
-//! - Minute-window rollover uses acquire/release ordering while it clears related counters
-//! - Routing can tolerate slightly stale state for massive performance gains
+//! State tracking uses atomic operations for low-contention updates. Per-minute
+//! counter updates share a read lock, while the rare rollover takes its write
+//! lock so a reset cannot erase usage from the new window.
 //!
 //! ## Performance Characteristics
 //!
-//! - Lock-free: All state updates use atomics, zero contention
+//! - Low contention: ordinary per-minute updates proceed concurrently
 //! - Zero-copy: Deployments are accessed by reference, never cloned
 //! - Cache-friendly: Hot path fields grouped together
 
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
 use crate::utils::auth::crypto::hmac::CredentialDigest;
+use parking_lot::RwLock;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
-
-#[path = "deployment/minute_window.rs"]
-mod minute_window;
 
 /// Deployment identifier (unique within router)
 pub type DeploymentId = String;
@@ -185,19 +181,17 @@ impl Default for DeploymentConfig {
 
 /// Deployment runtime state
 ///
-/// Counters use relaxed atomics; minute rollover coordinates clearing with
-/// acquire/release ordering. Routing tolerates boundary requests being
-/// attributed to either adjacent minute.
+/// Counters use relaxed atomics. Per-minute snapshots and updates additionally
+/// coordinate with rollover through a shared read/write gate.
 ///
 /// ## State Reset
 ///
-/// Request recording lazily rolls expired counters forward. An optional
-/// background task also retires inactive windows without owning correctness.
-/// The `minute_reset_at` timestamp tracks when the last reset occurred.
+/// Per-minute counters roll lazily when readers or writers observe an elapsed
+/// window. No background task is required for correct per-minute semantics.
 #[derive(Debug, Clone)]
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
-    reset_in_progress: Arc<AtomicBool>,
+    minute_window_lock: Arc<RwLock<()>>,
 }
 
 impl Deref for DeploymentState {
@@ -278,8 +272,63 @@ impl DeploymentState {
                 consecutive_successes: AtomicU32::new(0),
                 minute_reset_at: AtomicU64::new(now),
             }),
-            reset_in_progress: Arc::new(AtomicBool::new(false)),
+            minute_window_lock: Arc::new(RwLock::new(())),
         }
+    }
+
+    /// Explicitly start a fresh per-minute counter window.
+    ///
+    /// Production correctness does not depend on calling this method because
+    /// counter readers and writers also roll elapsed windows lazily.
+    pub fn reset_minute(&self) {
+        let _guard = self.minute_window_lock.write();
+        self.finish_minute_reset(current_timestamp());
+    }
+
+    pub(crate) fn roll_minute_window(&self, now: u64) {
+        self.with_current_minute(now, || ());
+    }
+
+    pub(crate) fn minute_counters(&self, now: u64) -> MinuteCounters {
+        self.roll_minute_window(now);
+        let _guard = self.minute_window_lock.read();
+        MinuteCounters {
+            tpm: self.tpm_current.load(Ordering::Relaxed),
+            rpm: self.rpm_current.load(Ordering::Relaxed),
+            failures: self.fails_this_minute.load(Ordering::Relaxed),
+        }
+    }
+
+    fn with_current_minute<T>(&self, now: u64, operation: impl FnOnce() -> T) -> T {
+        let guard = self.minute_window_lock.read();
+        let last = self.minute_reset_at.load(Ordering::Acquire);
+        if !minute_window_needs_roll(now, last) {
+            let result = operation();
+            drop(guard);
+            return result;
+        }
+        drop(guard);
+
+        let reset_guard = self.minute_window_lock.write();
+        // `now` may have been prefetched by a selector that stalled while
+        // another caller rolled the window. Re-read the wall clock on this
+        // rare slow path so an old observer cannot masquerade as rollback
+        // and erase fresh usage.
+        let reset_now = current_timestamp();
+        let last = self.minute_reset_at.load(Ordering::Acquire);
+        if minute_window_needs_roll(reset_now, last) {
+            self.finish_minute_reset(reset_now);
+        }
+        let result = operation();
+        drop(reset_guard);
+        result
+    }
+
+    fn finish_minute_reset(&self, now: u64) {
+        self.tpm_current.store(0, Ordering::Relaxed);
+        self.rpm_current.store(0, Ordering::Relaxed);
+        self.fails_this_minute.store(0, Ordering::Relaxed);
+        self.minute_reset_at.store(now, Ordering::Release);
     }
 
     /// Get current health status
@@ -292,6 +341,19 @@ impl Default for DeploymentState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+const MINUTE_WINDOW_SECS: u64 = 60;
+
+fn minute_window_needs_roll(now: u64, last: u64) -> bool {
+    now < last || now - last >= MINUTE_WINDOW_SECS
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MinuteCounters {
+    pub(crate) tpm: u64,
+    pub(crate) rpm: u64,
+    pub(crate) failures: u32,
 }
 
 /// Deployment - a concrete provider deployment
@@ -341,7 +403,7 @@ pub struct Deployment {
     /// Configuration
     pub config: DeploymentConfig,
 
-    /// Runtime state (lock-free)
+    /// Shared low-contention runtime state
     pub state: DeploymentState,
 
     /// Tags for filtering (e.g., ["production", "fast"])
@@ -432,12 +494,13 @@ impl Deployment {
     /// * `tokens` - Number of tokens consumed
     /// * `latency_us` - Request latency in microseconds
     pub fn record_success(&self, tokens: u64, latency_us: u64) {
-        let (now, ()) = self.state.with_current_minute(|state| {
-            state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
-            state.rpm_current.fetch_add(1, Ordering::Relaxed);
-        });
+        let now = current_timestamp();
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.success_requests.fetch_add(1, Ordering::Relaxed);
+        self.state.with_current_minute(now, || {
+            self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+            self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+        });
         self.state.last_request_at.store(now, Ordering::Relaxed);
 
         // Update average latency using exponential moving average (alpha = 0.2)
@@ -464,11 +527,21 @@ impl Deployment {
     /// Increments failure counters. The caller is responsible for deciding
     /// whether to enter cooldown based on failure rate.
     pub fn record_failure(&self) {
-        let (now, ()) = self.state.with_current_minute(|state| {
-            state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
-        });
+        self.record_failure_with_minute_counters();
+    }
+
+    pub(crate) fn record_failure_with_minute_counters(&self) -> MinuteCounters {
+        let now = current_timestamp();
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.fail_requests.fetch_add(1, Ordering::Relaxed);
+        let counters = self.state.with_current_minute(now, || {
+            self.state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
+            MinuteCounters {
+                tpm: self.state.tpm_current.load(Ordering::Relaxed),
+                rpm: self.state.rpm_current.load(Ordering::Relaxed),
+                failures: self.state.fails_this_minute.load(Ordering::Relaxed),
+            }
+        });
         self.state.last_request_at.store(now, Ordering::Relaxed);
 
         // Reset consecutive success counter on failure
@@ -491,6 +564,7 @@ impl Deployment {
                 Err(observed) => current = observed,
             }
         }
+        counters
     }
 
     pub(crate) fn promote_to_healthy_if_degraded(&self) {
@@ -539,7 +613,7 @@ impl Deployment {
 /// Get current Unix timestamp in seconds
 ///
 /// Returns the number of seconds since UNIX_EPOCH.
-fn current_timestamp() -> u64 {
+pub(crate) fn current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| std::time::Duration::from_secs(0))
@@ -547,204 +621,5 @@ fn current_timestamp() -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::Ordering;
-
-    // ==================== HealthStatus Tests ====================
-
-    #[test]
-    fn test_health_status_from_u8_healthy() {
-        assert_eq!(HealthStatus::from(1), HealthStatus::Healthy);
-    }
-
-    #[test]
-    fn test_health_status_from_u8_degraded() {
-        assert_eq!(HealthStatus::from(2), HealthStatus::Degraded);
-    }
-
-    #[test]
-    fn test_health_status_from_u8_unhealthy() {
-        assert_eq!(HealthStatus::from(3), HealthStatus::Unhealthy);
-    }
-
-    #[test]
-    fn test_health_status_from_u8_cooldown() {
-        assert_eq!(HealthStatus::from(4), HealthStatus::Cooldown);
-    }
-
-    #[test]
-    fn test_health_status_from_u8_unknown() {
-        assert_eq!(HealthStatus::from(0), HealthStatus::Unknown);
-        assert_eq!(HealthStatus::from(255), HealthStatus::Unknown);
-    }
-
-    #[test]
-    fn test_health_status_to_u8() {
-        assert_eq!(u8::from(HealthStatus::Unknown), 0);
-        assert_eq!(u8::from(HealthStatus::Healthy), 1);
-        assert_eq!(u8::from(HealthStatus::Degraded), 2);
-        assert_eq!(u8::from(HealthStatus::Unhealthy), 3);
-        assert_eq!(u8::from(HealthStatus::Cooldown), 4);
-    }
-
-    #[test]
-    fn test_health_status_clone() {
-        let status = HealthStatus::Healthy;
-        let cloned = status;
-        assert_eq!(status, cloned);
-    }
-
-    // ==================== DeploymentConfig Tests ====================
-
-    #[test]
-    fn test_deployment_config_default() {
-        let config = DeploymentConfig::default();
-        assert!(config.tpm_limit.is_none());
-        assert!(config.rpm_limit.is_none());
-        assert!(config.max_parallel_requests.is_none());
-        assert_eq!(config.weight, 1);
-        assert_eq!(config.timeout_secs, 60);
-        assert_eq!(config.priority, 0);
-        assert!(config.health_check_policy.is_none());
-    }
-
-    #[test]
-    fn test_deployment_config_custom() {
-        let config = DeploymentConfig {
-            tpm_limit: Some(100_000),
-            rpm_limit: Some(500),
-            max_parallel_requests: Some(10),
-            weight: 2,
-            timeout_secs: 120,
-            priority: 1,
-            retry_schedule: None,
-            health_check_policy: None,
-        };
-        assert_eq!(config.tpm_limit, Some(100_000));
-        assert_eq!(config.rpm_limit, Some(500));
-        assert_eq!(config.max_parallel_requests, Some(10));
-        assert_eq!(config.weight, 2);
-    }
-
-    #[test]
-    fn test_deployment_config_clone() {
-        let config = DeploymentConfig {
-            tpm_limit: Some(50_000),
-            rpm_limit: Some(100),
-            ..DeploymentConfig::default()
-        };
-        let cloned = config.clone();
-        assert_eq!(config.tpm_limit, cloned.tpm_limit);
-        assert_eq!(config.rpm_limit, cloned.rpm_limit);
-    }
-
-    // ==================== DeploymentState Tests ====================
-
-    #[test]
-    fn test_deployment_state_new() {
-        let state = DeploymentState::new();
-        assert_eq!(state.health_status(), HealthStatus::Healthy);
-        assert_eq!(state.tpm_current.load(Ordering::Relaxed), 0);
-        assert_eq!(state.rpm_current.load(Ordering::Relaxed), 0);
-        assert_eq!(state.active_requests.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn test_deployment_state_default() {
-        let state = DeploymentState::default();
-        assert_eq!(state.health_status(), HealthStatus::Healthy);
-    }
-
-    #[test]
-    fn test_deployment_state_reset_minute() {
-        let state = DeploymentState::new();
-        state.tpm_current.store(1000, Ordering::Relaxed);
-        state.rpm_current.store(50, Ordering::Relaxed);
-        state.fails_this_minute.store(5, Ordering::Relaxed);
-
-        state.reset_minute();
-
-        assert_eq!(state.tpm_current.load(Ordering::Relaxed), 0);
-        assert_eq!(state.rpm_current.load(Ordering::Relaxed), 0);
-        assert_eq!(state.fails_this_minute.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn test_stale_reset_observer_rechecks_timestamp_under_gate() {
-        let state = DeploymentState::new();
-        let now = current_timestamp();
-        state.minute_reset_at.store(now - 60, Ordering::Relaxed);
-        state.reset_minute_if_elapsed();
-        state.fails_this_minute.store(1, Ordering::Relaxed);
-
-        state.reset_minute_if_elapsed();
-
-        assert_eq!(state.fails_this_minute.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn test_deployment_state_health_status() {
-        let state = DeploymentState::new();
-        state
-            .health
-            .store(HealthStatus::Degraded as u8, Ordering::Relaxed);
-        assert_eq!(state.health_status(), HealthStatus::Degraded);
-    }
-
-    #[test]
-    fn test_deployment_state_clone() {
-        let state = DeploymentState::new();
-        state.total_requests.store(100, Ordering::Relaxed);
-        state.success_requests.store(95, Ordering::Relaxed);
-
-        let cloned = state.clone();
-        assert_eq!(cloned.total_requests.load(Ordering::Relaxed), 100);
-        assert_eq!(cloned.success_requests.load(Ordering::Relaxed), 95);
-
-        cloned.total_requests.store(101, Ordering::Relaxed);
-        state.success_requests.store(96, Ordering::Relaxed);
-
-        assert_eq!(state.total_requests.load(Ordering::Relaxed), 101);
-        assert_eq!(cloned.success_requests.load(Ordering::Relaxed), 96);
-    }
-
-    #[tokio::test]
-    async fn test_deployment_clone_shares_runtime_state()
-    -> Result<(), crate::core::providers::unified_provider::ProviderError> {
-        let deployment = Deployment::new(
-            "test-1".to_string(),
-            Provider::OpenAI(
-                crate::core::providers::openai::OpenAIProvider::with_api_key(
-                    "sk-test-key-for-unit-testing-only",
-                )
-                .await?,
-            ),
-            "gpt-4-turbo".to_string(),
-            "gpt-4".to_string(),
-        );
-
-        let cloned = deployment.clone();
-        cloned.state.active_requests.store(7, Ordering::Relaxed);
-
-        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 7);
-        Ok(())
-    }
-
-    // ==================== current_timestamp Tests ====================
-
-    #[test]
-    fn test_current_timestamp() {
-        let ts = current_timestamp();
-        assert!(ts > 0);
-        // Timestamp should be after year 2020
-        assert!(ts > 1577836800); // 2020-01-01
-    }
-
-    #[test]
-    fn test_current_timestamp_monotonic() {
-        let ts1 = current_timestamp();
-        let ts2 = current_timestamp();
-        assert!(ts2 >= ts1);
-    }
-}
+#[path = "deployment_window_tests.rs"]
+mod tests;

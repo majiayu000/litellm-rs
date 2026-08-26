@@ -440,14 +440,14 @@ fn test_env_var() {
 ```rust
 pub fn start_minute_reset_task(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
     let router = Arc::downgrade(&self);
-    drop(self);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
             let Some(router) = router.upgrade() else { break };
+            let now = current_timestamp();
             for deployment in router.routing_snapshot.load().deployments.values() {
-                deployment.state.reset_minute_if_elapsed();
+                deployment.state.roll_minute_window(now);
             }
         }
     })

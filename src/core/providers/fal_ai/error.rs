@@ -16,7 +16,9 @@ impl ErrorMapper<ProviderError> for FalAIErrorMapper {
     fn map_http_error(&self, status: u16, body: &str) -> ProviderError {
         match status {
             401 => ProviderError::authentication("fal_ai", format!("Invalid API key: {}", body)),
-            403 => ProviderError::authentication("fal_ai", format!("Access forbidden: {}", body)),
+            403 => {
+                ProviderError::api_error("fal_ai", status, format!("Access forbidden: {}", body))
+            }
             404 => ProviderError::not_implemented(
                 "fal_ai",
                 format!("Model or endpoint not found: {}", body),
@@ -69,6 +71,19 @@ mod tests {
         let error = mapper.map_http_error(401, "Unauthorized");
         let debug = format!("{:?}", error).to_lowercase();
         assert!(debug.contains("authentication") || debug.contains("api key"));
+    }
+
+    #[test]
+    fn test_map_http_error_403() {
+        let error = FalAIErrorMapper.map_http_error(403, "model access denied");
+        assert!(matches!(
+            error,
+            ProviderError::ApiError {
+                status: 403,
+                ref message,
+                ..
+            } if message.contains("model access denied")
+        ));
     }
 
     #[test]

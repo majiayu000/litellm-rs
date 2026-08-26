@@ -6,8 +6,8 @@ use tokio::task::JoinSet;
 use tracing::warn;
 
 use crate::core::traits::integration::{
-    CacheHitEvent, EmbeddingEndEvent, EmbeddingStartEvent, Integration, IntegrationError,
-    IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, Integration,
+    IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 use crate::utils::net::http::create_custom_client;
 
@@ -207,6 +207,27 @@ impl OpenTelemetryIntegration {
     }
 
     #[cfg(test)]
+    pub(super) fn pending_error_span_count(&self) -> usize {
+        self.pending_spans
+            .read()
+            .spans
+            .iter()
+            .filter(|span| span.status == super::SpanStatus::Error)
+            .count()
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_span_attribute(&self, key: &str) -> Option<super::AttributeValue> {
+        self.pending_spans
+            .read()
+            .spans
+            .last()?
+            .attributes
+            .get(key)
+            .cloned()
+    }
+
+    #[cfg(test)]
     pub(super) fn export_task_count(&self) -> usize {
         self.export_state.lock().tasks.len()
     }
@@ -316,6 +337,11 @@ impl Integration for OpenTelemetryIntegration {
 
         let mut span = active
             .span
+            .attribute("llm.model", event.model.clone())
+            .attribute(
+                "llm.provider",
+                event.provider.as_deref().unwrap_or("unknown"),
+            )
             .attribute("error.message", event.error_message.clone())
             .end_error(&event.error_message);
 
@@ -387,6 +413,33 @@ impl Integration for OpenTelemetryIntegration {
 
         if let Some(cost) = event.cost_usd {
             span = span.attribute("llm.cost_usd", cost);
+        }
+
+        self.add_span(span);
+
+        Ok(())
+    }
+
+    async fn on_embedding_error(&self, event: &EmbeddingErrorEvent) -> IntegrationResult<()> {
+        let active = self.active_spans.write().remove(&event.request_id);
+
+        let Some(active) = active else {
+            return Ok(());
+        };
+
+        let mut span = active
+            .span
+            .attribute("llm.model", event.model.clone())
+            .attribute(
+                "llm.provider",
+                event.provider.as_deref().unwrap_or("unknown"),
+            )
+            .attribute("llm.latency_ms", event.latency_ms as i64)
+            .attribute("error.message", event.error_message.clone())
+            .end_error(&event.error_message);
+
+        if let Some(ref error_type) = event.error_type {
+            span = span.attribute("error.type", error_type.clone());
         }
 
         self.add_span(span);

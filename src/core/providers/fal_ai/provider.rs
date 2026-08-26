@@ -327,10 +327,17 @@ impl LLMProvider for FalAIProvider {
         let response = self.execute_image_request(&url, headers, body).await?;
 
         let status = response.status();
-        let response_bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ProviderError::network("fal_ai", e.to_string()))?;
+        let response_bytes = match response.bytes().await {
+            Ok(response_bytes) => response_bytes,
+            Err(_) if !status.is_success() => {
+                return Err(HttpErrorMapper::map_status_code(
+                    "fal_ai",
+                    status.as_u16(),
+                    "failed to read upstream error body",
+                ));
+            }
+            Err(error) => return Err(ProviderError::network("fal_ai", error.to_string())),
+        };
 
         if !status.is_success() {
             let error_text = String::from_utf8_lossy(&response_bytes);
@@ -369,6 +376,34 @@ impl LLMProvider for FalAIProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn forbidden_fal_api_base() -> std::io::Result<String> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let address = listener.local_addr()?;
+        tokio::spawn(async move {
+            let (mut socket, _) = listener
+                .accept()
+                .await
+                .expect("Fal AI test server should accept request");
+            let mut request = [0_u8; 4096];
+            socket
+                .read(&mut request)
+                .await
+                .expect("Fal AI test server should read request");
+            let body = r#"{"detail":"model access denied"}"#;
+            let response = format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("Fal AI test server should write response");
+        });
+        Ok(format!("http://{address}"))
+    }
 
     #[test]
     fn test_provider_creation_fails_without_api_key() {
@@ -508,6 +543,39 @@ mod tests {
 
         let result = provider.chat_completion(request, context).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn image_generation_preserves_upstream_403() -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = FalAIConfig::with_api_key("test-key");
+        config.base.api_base = Some(forbidden_fal_api_base().await?);
+        config.base.max_retries = 0;
+        let provider = FalAIProvider::new(config)?;
+        let request = ImageGenerationRequest {
+            prompt: "restricted model".to_string(),
+            model: Some("fal-ai/restricted".to_string()),
+            n: None,
+            size: None,
+            quality: None,
+            response_format: None,
+            style: None,
+            user: None,
+        };
+
+        let error = provider
+            .image_generation(request, RequestContext::default())
+            .await
+            .expect_err("Fal AI 403 should be returned as a permission failure");
+
+        assert!(matches!(
+            error,
+            ProviderError::ApiError {
+                status: 403,
+                ref message,
+                ..
+            } if message.contains("model access denied")
+        ));
+        Ok(())
     }
 
     #[tokio::test]

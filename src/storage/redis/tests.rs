@@ -1,7 +1,8 @@
 //! Redis module tests
 
 use super::pool::RedisPool;
-use crate::config::models::storage::RedisConfig;
+use crate::config::models::storage::{RedisConfig, StorageConfig};
+use crate::storage::StorageLayer;
 use crate::utils::error::gateway_error::GatewayError;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -99,6 +100,47 @@ async fn test_redis_pool_disabled_is_noop() {
         .await
         .expect("Disabled redis config should create no-op pool");
     assert!(pool.is_noop());
+}
+
+#[tokio::test]
+async fn cluster_mode_is_rejected_before_standalone_connection_attempt() {
+    let config = RedisConfig {
+        url: "redis://127.0.0.1:1".to_string(),
+        enabled: true,
+        max_connections: 10,
+        connection_timeout: 1,
+        cluster: true,
+        allow_degraded: true,
+    };
+
+    let error = RedisPool::new(&config)
+        .await
+        .expect_err("cluster mode must fail instead of degrading or connecting");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("storage.redis.cluster=true"),
+        "got: {message}"
+    );
+    assert!(
+        message.contains("storage.redis.cluster=false"),
+        "got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn storage_rejects_cluster_mode_before_optional_dependency_initialization() {
+    let mut config = StorageConfig::default();
+    config.redis.enabled = true;
+    config.redis.cluster = true;
+    config.redis.allow_degraded = true;
+
+    let error = StorageLayer::new(&config)
+        .await
+        .expect_err("cluster mode must be rejected rather than degraded");
+
+    assert!(matches!(error, GatewayError::Config(_)));
+    assert!(error.to_string().contains("storage.redis.cluster=false"));
 }
 
 #[tokio::test]

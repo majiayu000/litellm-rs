@@ -35,14 +35,6 @@
     "observability-architecture": {
       "enabled": true,
       "path": ".claude/skills/observability-architecture"
-    },
-    "mcp-gateway": {
-      "enabled": true,
-      "path": ".claude/skills/mcp-gateway"
-    },
-    "a2a-protocol": {
-      "enabled": true,
-      "path": ".claude/skills/a2a-protocol"
     }
   }
 }
