@@ -324,6 +324,20 @@ impl ArizeIntegration {
 
         Ok(())
     }
+
+    async fn buffer_record(&self, record: ArizeRecord) -> IntegrationResult<usize> {
+        match self.buffer.push(record).await {
+            Ok(pending) => Ok(pending),
+            Err(full) => {
+                let record = full.into_value();
+                self.flush().await?;
+                self.buffer
+                    .push(record)
+                    .await
+                    .map_err(|error| IntegrationError::other(format!("Arize {error}")))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -413,13 +427,7 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        if self
-            .buffer
-            .push(record)
-            .await
-            .map_err(|error| IntegrationError::other(format!("Arize {error}")))?
-            >= self.config.batch_size
-        {
+        if self.buffer_record(record).await? >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -473,13 +481,7 @@ impl Integration for ArizeIntegration {
             latency_ms: None,
         };
 
-        if self
-            .buffer
-            .push(record)
-            .await
-            .map_err(|error| IntegrationError::other(format!("Arize {error}")))?
-            >= self.config.batch_size
-        {
+        if self.buffer_record(record).await? >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -567,10 +569,9 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        self.buffer
-            .push(record)
-            .await
-            .map_err(|error| IntegrationError::other(format!("Arize {error}")))?;
+        if self.buffer_record(record).await? >= self.config.batch_size {
+            self.flush().await?;
+        }
 
         Ok(())
     }
@@ -629,13 +630,7 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        if self
-            .buffer
-            .push(record)
-            .await
-            .map_err(|error| IntegrationError::other(format!("Arize {error}")))?
-            >= self.config.batch_size
-        {
+        if self.buffer_record(record).await? >= self.config.batch_size {
             self.flush().await?;
         }
 

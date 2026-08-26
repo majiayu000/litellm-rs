@@ -283,6 +283,20 @@ impl HeliconeIntegration {
 
         Ok(())
     }
+
+    async fn buffer_log(&self, log: HeliconeLogEntry) -> IntegrationResult<usize> {
+        match self.buffer.push(log).await {
+            Ok(pending) => Ok(pending),
+            Err(full) => {
+                let log = full.into_value();
+                self.flush().await?;
+                self.buffer
+                    .push(log)
+                    .await
+                    .map_err(|error| IntegrationError::other(format!("Helicone {error}")))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -346,13 +360,7 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        if self
-            .buffer
-            .push(log_entry)
-            .await
-            .map_err(|error| IntegrationError::other(format!("Helicone {error}")))?
-            >= self.config.batch_size
-        {
+        if self.buffer_log(log_entry).await? >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -390,13 +398,7 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        if self
-            .buffer
-            .push(log_entry)
-            .await
-            .map_err(|error| IntegrationError::other(format!("Helicone {error}")))?
-            >= self.config.batch_size
-        {
+        if self.buffer_log(log_entry).await? >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -452,10 +454,9 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        self.buffer
-            .push(log_entry)
-            .await
-            .map_err(|error| IntegrationError::other(format!("Helicone {error}")))?;
+        if self.buffer_log(log_entry).await? >= self.config.batch_size {
+            self.flush().await?;
+        }
 
         Ok(())
     }
@@ -492,13 +493,7 @@ impl Integration for HeliconeIntegration {
             properties,
         };
 
-        if self
-            .buffer
-            .push(log_entry)
-            .await
-            .map_err(|error| IntegrationError::other(format!("Helicone {error}")))?
-            >= self.config.batch_size
-        {
+        if self.buffer_log(log_entry).await? >= self.config.batch_size {
             self.flush().await?;
         }
 

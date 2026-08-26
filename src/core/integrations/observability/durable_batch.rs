@@ -21,11 +21,18 @@ pub(super) struct DurableBatch<T> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct BatchFull {
+pub(super) struct BatchFull<T> {
     capacity: usize,
+    value: T,
 }
 
-impl std::fmt::Display for BatchFull {
+impl<T> BatchFull<T> {
+    pub(super) fn into_value(self) -> T {
+        self.value
+    }
+}
+
+impl<T> std::fmt::Display for BatchFull<T> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
@@ -46,11 +53,12 @@ impl<T> DurableBatch<T> {
 }
 
 impl<T: Clone> DurableBatch<T> {
-    pub(super) async fn push(&self, value: T) -> Result<usize, BatchFull> {
+    pub(super) async fn push(&self, value: T) -> Result<usize, BatchFull<T>> {
         let mut state = self.state.lock().await;
         if state.pending.len().saturating_add(state.in_flight.len()) >= self.capacity {
             return Err(BatchFull {
                 capacity: self.capacity,
+                value,
             });
         }
         state.pending.push(value);
@@ -127,7 +135,13 @@ mod tests {
         batch.push(2).await.unwrap();
 
         let error = batch.push(3).await.unwrap_err();
-        assert_eq!(error, BatchFull { capacity: 2 });
+        assert_eq!(
+            error,
+            BatchFull {
+                capacity: 2,
+                value: 3
+            }
+        );
         assert_eq!(batch.snapshot().await, [1, 2]);
         assert_eq!(batch.batch_for_export().await, [1, 2]);
     }
