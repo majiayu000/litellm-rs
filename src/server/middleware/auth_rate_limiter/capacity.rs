@@ -23,7 +23,12 @@ impl AuthAttemptTracker {
     ) -> Option<EvictionCandidate> {
         // Active lockouts are retained until their deadline, but still need a
         // candidate so they become discoverable for eviction after expiry.
-        if self.eviction_queued || self.waiting > 0 || self.in_flight > 0 {
+        let has_persistent_history =
+            self.failure_count > 0 || self.lockout_until.is_some() || self.lockout_count > 0;
+        if self.eviction_queued
+            || self.in_flight > 0
+            || (self.waiting > 0 && !has_persistent_history)
+        {
             return None;
         }
         self.eviction_queued = true;
@@ -117,13 +122,42 @@ mod tests {
         let limiter = std::sync::Arc::new(AuthRateLimiter::with_max_entries(2, 300, 60, 1));
         let first = limiter.reserve_attempt("locked-client").await.unwrap();
         let second = limiter.reserve_attempt("locked-client").await.unwrap();
+        let waiting_limiter = std::sync::Arc::clone(&limiter);
+        let waiting =
+            tokio::spawn(async move { waiting_limiter.reserve_attempt("locked-client").await });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
 
         first.record_failure();
         second.record_failure();
+        assert!(waiting.await.unwrap().is_err());
 
         assert_eq!(limiter.eviction_candidates.lock().len(), 1);
         assert!(!limiter.evict_one_inactive(Instant::now()));
         assert!(limiter.evict_one_inactive(Instant::now() + std::time::Duration::from_secs(61)));
         assert!(!limiter.attempts.contains_key("locked-client"));
+    }
+
+    #[tokio::test]
+    async fn queued_successes_do_not_leave_stale_candidates() {
+        let limiter = std::sync::Arc::new(AuthRateLimiter::new(1, 300, 60));
+        for client in 0..20 {
+            let client_id = format!("successful-client-{client}");
+            let active = limiter.reserve_attempt(&client_id).await.unwrap();
+            let waiting_limiter = std::sync::Arc::clone(&limiter);
+            let waiting_client_id = client_id.clone();
+            let waiting =
+                tokio::spawn(
+                    async move { waiting_limiter.reserve_attempt(&waiting_client_id).await },
+                );
+            tokio::task::yield_now().await;
+            assert!(!waiting.is_finished());
+
+            active.release();
+            waiting.await.unwrap().unwrap().release();
+        }
+
+        assert!(limiter.is_empty());
+        assert!(limiter.eviction_candidates.lock().is_empty());
     }
 }
