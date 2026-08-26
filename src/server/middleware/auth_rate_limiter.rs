@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 
 /// Default maximum number of client trackers retained by one limiter.
 pub const DEFAULT_MAX_ENTRIES: usize = 10_000;
@@ -44,6 +44,7 @@ struct AuthAttemptTracker {
     in_flight: u32,
     waiting: u32,
     admission: Arc<Semaphore>,
+    state_epoch: watch::Sender<u64>,
     entry_id: u64,
     eviction_queued: bool,
     generation: u64,
@@ -54,11 +55,13 @@ struct AuthAttemptTracker {
 
 impl AuthAttemptTracker {
     fn new(now: Instant, max_concurrent_checks: usize, entry_id: u64) -> Self {
+        let (state_epoch, _) = watch::channel(0);
         Self {
             failure_count: 0,
             in_flight: 0,
             waiting: 0,
             admission: Arc::new(Semaphore::new(max_concurrent_checks.max(1))),
+            state_epoch,
             entry_id,
             eviction_queued: false,
             generation: 0,
@@ -74,6 +77,11 @@ impl AuthAttemptTracker {
             && self.failure_count == 0
             && self.lockout_until.is_none()
             && self.lockout_count == 0
+    }
+
+    fn notify_state_change(&self) {
+        self.state_epoch
+            .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
     }
 }
 
@@ -127,6 +135,7 @@ impl AuthRateLimiter {
                 return Err(remaining);
             }
             tracker.lockout_until = None;
+            tracker.notify_state_change();
         }
 
         let window_duration = Duration::from_secs(self.window_secs);
@@ -134,6 +143,7 @@ impl AuthRateLimiter {
             tracker.failure_count = 0;
             tracker.generation = tracker.generation.wrapping_add(1);
             tracker.window_start = now;
+            tracker.notify_state_change();
         }
 
         let candidate = tracker.mark_evictable(client_id, now);
@@ -146,6 +156,7 @@ impl AuthRateLimiter {
         let now = Instant::now();
         if let Some(mut entry) = self.attempts.get_mut(client_id) {
             let result = self.apply_failure(client_id, entry.value_mut(), now);
+            entry.notify_state_change();
             let candidate = entry.mark_evictable(client_id, now);
             drop(entry);
             self.enqueue_eviction_candidate(candidate);
@@ -155,6 +166,7 @@ impl AuthRateLimiter {
         let _capacity_guard = self.capacity_admission_lock.lock();
         if let Some(mut entry) = self.attempts.get_mut(client_id) {
             let result = self.apply_failure(client_id, entry.value_mut(), now);
+            entry.notify_state_change();
             let candidate = entry.mark_evictable(client_id, now);
             drop(entry);
             self.enqueue_eviction_candidate(candidate);
@@ -182,6 +194,7 @@ impl AuthRateLimiter {
         if let Some(mut entry) = self.attempts.get_mut(client_id) {
             entry.failure_count = 0;
             entry.generation = entry.generation.wrapping_add(1);
+            entry.notify_state_change();
             let candidate = entry.mark_evictable(client_id, Instant::now());
             drop(entry);
             self.enqueue_eviction_candidate(candidate);

@@ -2,7 +2,7 @@ use super::{AuthAttemptTracker, AuthRateLimiter};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 
 const CAPACITY_RETRY_SECS: u64 = 1;
 const MAX_QUEUED_ATTEMPTS_PER_CLIENT: u32 = 256;
@@ -51,6 +51,12 @@ struct PendingAttempt {
     limiter: Arc<AuthRateLimiter>,
     client_id: String,
     active: bool,
+}
+
+enum AttemptActivation {
+    Admitted(u64),
+    WaitForSettlement(watch::Receiver<u64>),
+    Rejected(u64),
 }
 
 impl PendingAttempt {
@@ -109,9 +115,25 @@ impl AuthRateLimiter {
             }
         };
 
-        let result = self.activate_waiter(client_id);
+        let generation = loop {
+            match self.activate_waiter(client_id) {
+                AttemptActivation::Admitted(generation) => break generation,
+                AttemptActivation::Rejected(retry_after) => {
+                    pending.disarm();
+                    return Err(retry_after);
+                }
+                AttemptActivation::WaitForSettlement(mut state_change) => {
+                    if state_change.changed().await.is_err() {
+                        tracing::error!(
+                            client_id,
+                            "Authentication limiter state notification closed unexpectedly"
+                        );
+                        return Err(CAPACITY_RETRY_SECS);
+                    }
+                }
+            }
+        };
         pending.disarm();
-        let generation = result?;
 
         Ok(AuthAttemptReservation {
             limiter: Some(Arc::clone(self)),
@@ -185,32 +207,28 @@ impl AuthRateLimiter {
         Ok(Arc::clone(&tracker.admission))
     }
 
-    fn activate_waiter(&self, client_id: &str) -> Result<u64, u64> {
+    fn activate_waiter(&self, client_id: &str) -> AttemptActivation {
         let now = Instant::now();
         let Some(mut entry) = self.attempts.get_mut(client_id) else {
             tracing::error!(
                 client_id,
                 "Authentication attempt waiter lost its tracker before admission"
             );
-            return Err(CAPACITY_RETRY_SECS);
+            return AttemptActivation::Rejected(CAPACITY_RETRY_SECS);
         };
         let tracker = entry.value_mut();
-        let Some(waiting) = tracker.waiting.checked_sub(1) else {
-            tracing::error!(
-                client_id,
-                "Authentication attempt waiter was admitted more than once"
-            );
-            return Err(CAPACITY_RETRY_SECS);
-        };
-        tracker.waiting = waiting;
 
         if let Some(lockout_until) = tracker.lockout_until {
             if now < lockout_until {
+                if !Self::complete_waiter(client_id, tracker) {
+                    return AttemptActivation::Rejected(CAPACITY_RETRY_SECS);
+                }
                 let remaining = lockout_until.duration_since(now).as_secs().max(1);
                 self.blocked_count.fetch_add(1, Ordering::Relaxed);
-                return Err(remaining);
+                return AttemptActivation::Rejected(remaining);
             }
             tracker.lockout_until = None;
+            tracker.notify_state_change();
         }
 
         let window_duration = Duration::from_secs(self.window_secs);
@@ -218,14 +236,36 @@ impl AuthRateLimiter {
             tracker.failure_count = 0;
             tracker.generation = tracker.generation.wrapping_add(1);
             tracker.window_start = now;
+            tracker.notify_state_change();
         }
         let occupied_attempts = tracker.failure_count.saturating_add(tracker.in_flight);
         if occupied_attempts >= self.max_attempts.max(1) {
+            if tracker.in_flight > 0 {
+                return AttemptActivation::WaitForSettlement(tracker.state_epoch.subscribe());
+            }
+            if !Self::complete_waiter(client_id, tracker) {
+                return AttemptActivation::Rejected(CAPACITY_RETRY_SECS);
+            }
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
-            return Err(CAPACITY_RETRY_SECS);
+            return AttemptActivation::Rejected(CAPACITY_RETRY_SECS);
+        }
+        if !Self::complete_waiter(client_id, tracker) {
+            return AttemptActivation::Rejected(CAPACITY_RETRY_SECS);
         }
         tracker.in_flight = tracker.in_flight.saturating_add(1);
-        Ok(tracker.generation)
+        AttemptActivation::Admitted(tracker.generation)
+    }
+
+    fn complete_waiter(client_id: &str, tracker: &mut AuthAttemptTracker) -> bool {
+        let Some(waiting) = tracker.waiting.checked_sub(1) else {
+            tracing::error!(
+                client_id,
+                "Authentication attempt waiter was completed more than once"
+            );
+            return false;
+        };
+        tracker.waiting = waiting;
+        true
     }
 
     fn cancel_waiter(&self, client_id: &str) {
@@ -282,6 +322,7 @@ impl AuthRateLimiter {
         let _lockout_secs = should_count_failure
             .then(|| self.apply_failure(client_id, tracker, now))
             .flatten();
+        tracker.notify_state_change();
         let disposable = !failed && tracker.is_disposable_success();
         let candidate = if disposable {
             None
@@ -362,7 +403,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queued_guess_cannot_replace_a_settled_failure_before_lockout() {
+    async fn queued_guess_waits_until_failure_budget_is_available() {
         let limiter = Arc::new(AuthRateLimiter::new(3, 300, 60));
         let first = limiter
             .reserve_attempt("interleaved-attacker")
@@ -385,10 +426,17 @@ mod tests {
         assert!(!queued.is_finished());
 
         first.record_failure();
-        assert_eq!(queued.await.unwrap().err(), Some(CAPACITY_RETRY_SECS));
+        tokio::task::yield_now().await;
+        assert!(!queued.is_finished());
         assert!(limiter.check_allowed("interleaved-attacker").is_ok());
 
         second.release();
+        let queued = tokio::time::timeout(Duration::from_secs(1), queued)
+            .await
+            .expect("queued attempt should resume when failure budget is available")
+            .unwrap()
+            .expect("queued attempt should be admitted rather than rejected");
+        queued.release();
         third.release();
         assert!(
             limiter
@@ -396,6 +444,35 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn historical_failures_queue_concurrent_valid_authentication() {
+        let limiter = Arc::new(AuthRateLimiter::new(5, 300, 60));
+        for _ in 0..4 {
+            limiter
+                .reserve_attempt("shared-nat")
+                .await
+                .unwrap()
+                .record_failure();
+        }
+
+        let active = limiter.reserve_attempt("shared-nat").await.unwrap();
+        let queued_limiter = Arc::clone(&limiter);
+        let queued =
+            tokio::spawn(async move { queued_limiter.reserve_attempt("shared-nat").await });
+        tokio::task::yield_now().await;
+        assert!(!queued.is_finished());
+
+        active.release();
+        let queued = tokio::time::timeout(Duration::from_secs(1), queued)
+            .await
+            .expect("valid authentication should resume after the active check succeeds")
+            .unwrap()
+            .expect("historical failures must not cause a false 429");
+        queued.release();
+
+        assert_eq!(limiter.blocked_attempts(), 0);
     }
 
     #[tokio::test]
