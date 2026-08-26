@@ -282,10 +282,15 @@ impl AuthRateLimiter {
         let _lockout_secs = should_count_failure
             .then(|| self.apply_failure(client_id, tracker, now))
             .flatten();
-        let candidate = tracker.mark_evictable(client_id, now);
+        let disposable = !failed && tracker.is_disposable_success();
+        let candidate = if disposable {
+            None
+        } else {
+            tracker.mark_evictable(client_id, now)
+        };
         drop(entry);
         self.enqueue_eviction_candidate(candidate);
-        if !failed {
+        if disposable {
             self.remove_disposable_success(client_id);
         }
     }
@@ -434,6 +439,7 @@ mod tests {
                 .release();
         }
         assert!(limiter.is_empty());
+        assert!(limiter.eviction_candidates.lock().is_empty());
     }
 
     #[tokio::test]

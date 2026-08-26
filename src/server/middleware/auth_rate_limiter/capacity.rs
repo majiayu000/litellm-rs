@@ -45,7 +45,8 @@ impl AuthRateLimiter {
     }
 
     pub(super) fn evict_one_inactive(&self, now: Instant) -> bool {
-        for _ in 0..MAX_EVICTION_PROBES {
+        let mut live_probes = 0;
+        while live_probes < MAX_EVICTION_PROBES {
             let Some(candidate) = self.eviction_candidates.lock().pop_front() else {
                 return false;
             };
@@ -69,6 +70,7 @@ impl AuthRateLimiter {
                 });
             if should_requeue {
                 self.eviction_candidates.lock().push_back(candidate);
+                live_probes += 1;
             }
         }
         false
@@ -82,5 +84,29 @@ impl AuthRateLimiter {
                     tracker.entry_id == candidate.entry_id && tracker.eviction_queued
                 })
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_candidates_do_not_consume_the_live_probe_budget() {
+        let limiter = AuthRateLimiter::with_max_entries(5, 300, 60, 1);
+        for stale in 0..=MAX_EVICTION_PROBES {
+            limiter
+                .eviction_candidates
+                .lock()
+                .push_back(EvictionCandidate {
+                    client_id: format!("stale-{stale}"),
+                    entry_id: stale as u64,
+                });
+        }
+
+        limiter.record_failure("live-client");
+
+        assert!(limiter.evict_one_inactive(Instant::now()));
+        assert!(!limiter.attempts.contains_key("live-client"));
     }
 }
