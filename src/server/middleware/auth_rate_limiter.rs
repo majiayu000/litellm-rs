@@ -6,8 +6,7 @@ pub(crate) use reservation::AuthAttemptReservation;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -33,8 +32,7 @@ pub struct AuthRateLimiter {
     /// Serializes creation and cleanup so the tracker map never exceeds its
     /// configured hard limit.
     capacity_admission_lock: Mutex<()>,
-    eviction_candidates: Mutex<VecDeque<capacity::EvictionCandidate>>,
-    delayed_eviction_candidates: Mutex<BinaryHeap<Reverse<(Instant, u64, String)>>>,
+    eviction_queues: Mutex<capacity::EvictionQueues>,
     next_entry_id: AtomicU64,
     /// Total blocked attempts counter for monitoring
     blocked_count: AtomicU64,
@@ -49,6 +47,8 @@ struct AuthAttemptTracker {
     state_epoch: watch::Sender<u64>,
     entry_id: u64,
     eviction_queued: bool,
+    eviction_token: u64,
+    eviction_deadline: Option<Instant>,
     generation: u64,
     window_start: Instant,
     lockout_until: Option<Instant>,
@@ -66,6 +66,8 @@ impl AuthAttemptTracker {
             state_epoch,
             entry_id,
             eviction_queued: false,
+            eviction_token: 0,
+            eviction_deadline: None,
             generation: 0,
             window_start: now,
             lockout_until: None,
@@ -116,8 +118,10 @@ impl AuthRateLimiter {
             base_lockout_secs,
             max_entries: max_entries.max(1),
             capacity_admission_lock: Mutex::new(()),
-            eviction_candidates: Mutex::new(VecDeque::new()),
-            delayed_eviction_candidates: Mutex::new(BinaryHeap::new()),
+            eviction_queues: Mutex::new(capacity::EvictionQueues {
+                ready: BTreeMap::new(),
+                delayed: BTreeMap::new(),
+            }),
             next_entry_id: AtomicU64::new(1),
             blocked_count: AtomicU64::new(0),
         }

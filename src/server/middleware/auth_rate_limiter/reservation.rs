@@ -160,11 +160,19 @@ impl AuthRateLimiter {
     ) -> Result<(PendingAttempt, Arc<Semaphore>), u64> {
         let now = Instant::now();
         let admission = if let Some(mut entry) = self.attempts.get_mut(client_id) {
-            self.queue_on_tracker(entry.value_mut(), now)?
+            let (admission, retired_candidate) =
+                self.queue_on_tracker(client_id, entry.value_mut(), now)?;
+            drop(entry);
+            self.remove_eviction_candidate(retired_candidate);
+            admission
         } else {
             let _capacity_guard = self.capacity_admission_lock.lock();
             if let Some(mut entry) = self.attempts.get_mut(client_id) {
-                self.queue_on_tracker(entry.value_mut(), now)?
+                let (admission, retired_candidate) =
+                    self.queue_on_tracker(client_id, entry.value_mut(), now)?;
+                drop(entry);
+                self.remove_eviction_candidate(retired_candidate);
+                admission
             } else {
                 if self.attempts.len() >= self.max_entries && !self.evict_one_inactive(now) {
                     self.blocked_count.fetch_add(1, Ordering::Relaxed);
@@ -190,9 +198,10 @@ impl AuthRateLimiter {
 
     fn queue_on_tracker(
         &self,
+        client_id: &str,
         tracker: &mut AuthAttemptTracker,
         now: Instant,
-    ) -> Result<Arc<Semaphore>, u64> {
+    ) -> Result<(Arc<Semaphore>, Option<super::capacity::EvictionCandidate>), u64> {
         if let Some(lockout_until) = tracker.lockout_until {
             if now < lockout_until {
                 let remaining = lockout_until.duration_since(now).as_secs().max(1);
@@ -213,8 +222,9 @@ impl AuthRateLimiter {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             return Err(CAPACITY_RETRY_SECS);
         }
+        let retired_candidate = tracker.retire_eviction_candidate(client_id);
         tracker.waiting = tracker.waiting.saturating_add(1);
-        Ok(Arc::clone(&tracker.admission))
+        Ok((Arc::clone(&tracker.admission), retired_candidate))
     }
 
     fn activate_waiter(&self, client_id: &str) -> AttemptActivation {
@@ -299,7 +309,13 @@ impl AuthRateLimiter {
         };
         entry.waiting = waiting;
         let disposable = entry.is_disposable_success();
+        let candidate = if disposable {
+            None
+        } else {
+            entry.mark_evictable(client_id, Instant::now())
+        };
         drop(entry);
+        self.enqueue_eviction_candidate(candidate);
         if disposable {
             self.remove_disposable_success(client_id);
         }
@@ -582,7 +598,7 @@ mod tests {
                 .release();
         }
         assert!(limiter.is_empty());
-        assert!(limiter.eviction_candidates.lock().is_empty());
+        assert!(limiter.eviction_queues.lock().ready.is_empty());
     }
 
     #[tokio::test]
