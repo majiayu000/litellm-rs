@@ -331,7 +331,7 @@ async fn stale_success_is_not_published_to_changed_same_id_replacement() {
 }
 
 #[tokio::test]
-async fn distinct_provider_instances_receive_distinct_native_probes() {
+async fn reused_provider_identity_cannot_group_distinct_native_deployments() {
     let (first_endpoint, mut first_requests, first_server) = controlled_status_server(204).await;
     let (second_endpoint, mut second_requests, second_server) = controlled_status_server(204).await;
     let first_provider = Provider::OpenAI(
@@ -360,12 +360,23 @@ async fn distinct_provider_instances_receive_distinct_native_probes() {
         expected_codes: vec![204],
     };
     let router = Router::new(RouterConfig::default());
-    router.add_deployment(deployment_with_policy(
-        "model-a",
-        first_provider,
-        policy.clone(),
-    ));
-    router.add_deployment(deployment_with_policy("model-b", second_provider, policy));
+    let provider_instance = crate::core::router::deployment::ProviderInstanceIdentity::new();
+    for (id, provider) in [("model-a", first_provider), ("model-b", second_provider)] {
+        router.add_deployment(
+            Deployment::new_with_provider_instance(
+                id.to_string(),
+                provider,
+                format!("{id}-model"),
+                format!("{id}-model"),
+                provider_instance.clone(),
+            )
+            .with_config(DeploymentConfig {
+                timeout_secs: 2,
+                health_check_policy: Some(policy.clone()),
+                ..DeploymentConfig::default()
+            }),
+        );
+    }
     assert_eq!(router.start_configured_health_checks().unwrap(), 1);
     let release_first = tokio::time::timeout(Duration::from_secs(1), first_requests.recv())
         .await
@@ -373,7 +384,7 @@ async fn distinct_provider_instances_receive_distinct_native_probes() {
         .expect("first native probe should be observed");
     let release_second = tokio::time::timeout(Duration::from_secs(1), second_requests.recv())
         .await
-        .expect("second native probe must not share the first provider instance")
+        .expect("second native probe must not reuse the first deployment's result")
         .expect("second native probe should be observed");
     release_first
         .send(())
@@ -388,7 +399,7 @@ async fn distinct_provider_instances_receive_distinct_native_probes() {
 }
 
 #[tokio::test]
-async fn default_gateway_health_config_probes_shared_provider_once() {
+async fn default_gateway_health_config_starts_no_active_probe() {
     let (endpoint, mut requests, server) = controlled_status_server(204).await;
     let provider = ProviderConfig {
         name: "default-probe".to_string(),
@@ -403,19 +414,12 @@ async fn default_gateway_health_config_probes_shared_provider_once() {
     let router = Router::from_gateway_config(&[provider], None)
         .await
         .expect("default provider health configuration should start");
-    let release = tokio::time::timeout(Duration::from_secs(1), requests.recv())
-        .await
-        .expect("default native probe should run")
-        .expect("default native probe should be observed");
     assert!(
         tokio::time::timeout(Duration::from_millis(300), requests.recv())
             .await
             .is_err(),
-        "models cloned from one provider instance must share one native probe"
+        "default provider health configuration must not issue upstream requests"
     );
-    release
-        .send(())
-        .expect("default native probe should be released");
 
     let first = router
         .get_deployment("default-probe-model-a")
@@ -423,8 +427,8 @@ async fn default_gateway_health_config_probes_shared_provider_once() {
     let second = router
         .get_deployment("default-probe-model-b")
         .expect("second configured model should exist");
-    wait_for_probe_health(&first, HealthStatus::Healthy).await;
-    wait_for_probe_health(&second, HealthStatus::Healthy).await;
+    assert_eq!(first.state.probe_health_status(), HealthStatus::Unknown);
+    assert_eq!(second.state.probe_health_status(), HealthStatus::Unknown);
 
     drop(router);
     server.abort();

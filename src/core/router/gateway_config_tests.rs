@@ -233,3 +233,24 @@ fn credential_resolver_and_construction_source_guards() {
     let construction = function(gateway, "pub async fn from_gateway_config_with_aliases(");
     assert_eq!(construction.matches("create_provider(").count(), 1);
 }
+
+#[test]
+fn explicit_fal_ai_native_probe_requires_custom_endpoint() {
+    let mut provider = crate::config::models::provider::ProviderConfig {
+        name: "fal-primary".to_string(),
+        provider_type: "fal_ai".to_string(),
+        health_check: crate::config::models::provider::ProviderHealthCheckConfig {
+            interval: 15,
+            ..Default::default()
+        },
+        ..crate::config::models::provider::ProviderConfig::default()
+    };
+
+    let error = provider
+        .validate_health_check_runtime()
+        .expect_err("FalAI cannot perform a native active probe");
+    assert!(error.contains("FalAI active health checks require a custom health_check.endpoint"));
+
+    provider.health_check.endpoint = Some("https://8.8.8.8/health".to_string());
+    assert!(provider.validate_health_check_runtime().is_ok());
+}

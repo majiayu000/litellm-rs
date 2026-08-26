@@ -177,8 +177,9 @@ async fn unknown_native_status_preserves_unknown_evidence_without_counting_failu
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
-async fn model_specific_probes_isolate_models_and_singleflight_same_model_clones() {
+async fn native_probes_are_isolated_per_deployment_even_for_same_model_clones() {
     use crate::core::providers::gemini::{GeminiConfig, GeminiProvider};
+    use crate::core::router::deployment::ProviderInstanceIdentity;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::mpsc;
 
@@ -276,7 +277,7 @@ async fn model_specific_probes_isolate_models_and_singleflight_same_model_clones
 
     assert_eq!(router.start_configured_health_checks().unwrap(), 1);
     let mut requests = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..3 {
         requests.push(
             tokio::time::timeout(Duration::from_secs(2), request_rx.recv())
                 .await
@@ -284,18 +285,12 @@ async fn model_specific_probes_isolate_models_and_singleflight_same_model_clones
                 .expect("probe server should report each request"),
         );
     }
-    assert!(
-        tokio::time::timeout(Duration::from_millis(300), request_rx.recv())
-            .await
-            .is_err(),
-        "same-model clones must share one model-specific probe"
-    );
     assert_eq!(
         requests
             .iter()
             .filter(|request| request.contains("/models/gemini-2.5-flash:"))
             .count(),
-        1
+        2
     );
     assert_eq!(
         requests

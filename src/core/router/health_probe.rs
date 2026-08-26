@@ -130,13 +130,17 @@ pub(crate) mod tests {
                 .read(&mut request)
                 .await
                 .expect("request should be readable");
-            let reason = if status == 204 {
-                "No Content"
-            } else {
-                "Internal Server Error"
+            let (reason, body) = match status {
+                200 => (
+                    "OK",
+                    r#"{"id":"probe","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#,
+                ),
+                204 => ("No Content", ""),
+                _ => ("Internal Server Error", ""),
             };
             let response = format!(
-                "HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
             );
             stream
                 .write_all(response.as_bytes())
@@ -390,8 +394,8 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn native_probe_calls_provider_health_check() {
-        let (endpoint, server) = status_server(204).await;
+    async fn native_probe_verifies_the_configured_provider_model() {
+        let (endpoint, server) = status_server(200).await;
         let base_url = endpoint
             .join("/v1")
             .expect("base URL should resolve")
@@ -404,7 +408,11 @@ pub(crate) mod tests {
             execute_probe(&provider, "gpt-test", &policy, None).await,
             Ok(())
         );
-        server.await.expect("test server should stop");
+        let request = server.await.expect("test server should stop");
+        let request = String::from_utf8(request).expect("probe request should be UTF-8");
+        assert!(request.starts_with("POST /v1/chat/completions "));
+        assert!(request.contains(r#""model":"gpt-test""#));
+        assert!(request.contains(r#""max_tokens":1"#));
     }
 
     #[tokio::test]

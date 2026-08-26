@@ -29,11 +29,10 @@ impl Provider {
             }
             #[cfg(feature = "providers-extended")]
             Provider::FalAI(_) => NativeHealthProbeSemantics::Unsupported,
-            Provider::OpenAI(_)
-            | Provider::Bedrock(_)
-            | Provider::Mistral(_)
-            | Provider::Cloudflare(_)
-            | Provider::OpenAILike(_) => NativeHealthProbeSemantics::ModelIndependent,
+            Provider::OpenAI(_) | Provider::Bedrock(_) => NativeHealthProbeSemantics::ModelSpecific,
+            Provider::Mistral(_) | Provider::Cloudflare(_) | Provider::OpenAILike(_) => {
+                NativeHealthProbeSemantics::ModelIndependent
+            }
             #[cfg(feature = "providers-extra")]
             Provider::Azure(_) | Provider::AzureAI(_) => {
                 NativeHealthProbeSemantics::ModelIndependent
@@ -79,6 +78,44 @@ impl Provider {
             ) => HealthStatus::Degraded,
             Err(_) => HealthStatus::Unhealthy,
         }
+    }
+}
+
+#[cfg(test)]
+mod native_semantics_tests {
+    use super::*;
+    use crate::core::providers::bedrock::{BedrockConfig, BedrockProvider};
+    use crate::core::providers::openai::OpenAIProvider;
+    use crate::core::providers::openai::config::test_openai_config;
+
+    #[tokio::test]
+    async fn openai_and_bedrock_native_probes_verify_the_configured_model() {
+        let openai = Provider::OpenAI(
+            OpenAIProvider::new(test_openai_config(
+                "http://127.0.0.1:9".to_string(),
+                "sk-model-probe-test",
+            ))
+            .await
+            .expect("test OpenAI provider should be valid"),
+        );
+        let bedrock = Provider::Bedrock(
+            BedrockProvider::new(BedrockConfig {
+                aws_access_key_id: "AKIATEST123456789012".to_string(),
+                aws_secret_access_key: "test_secret".to_string(),
+                ..BedrockConfig::default()
+            })
+            .await
+            .expect("test Bedrock provider should be valid"),
+        );
+
+        assert_eq!(
+            openai.native_health_probe_semantics("configured-openai-model"),
+            NativeHealthProbeSemantics::ModelSpecific
+        );
+        assert_eq!(
+            bedrock.native_health_probe_semantics("configured-bedrock-model"),
+            NativeHealthProbeSemantics::ModelSpecific
+        );
     }
 }
 

@@ -339,6 +339,18 @@ impl ProviderConfig {
     /// Validate health settings at every runtime construction boundary.
     pub(crate) fn validate_health_check_runtime(&self) -> Result<(), String> {
         self.health_check.validate()?;
+        if self.health_check.has_runtime_overrides()
+            && self.health_check.endpoint.is_none()
+            && matches!(
+                self.provider_type.trim().parse(),
+                Ok(crate::core::providers::provider_type::ProviderType::FalAI)
+            )
+        {
+            return Err(format!(
+                "Provider {} FalAI active health checks require a custom health_check.endpoint",
+                self.name
+            ));
+        }
         if let Some(endpoint) = self.resolved_health_check_endpoint()? {
             if !endpoint.username().is_empty() || endpoint.password().is_some() {
                 return Err(format!(

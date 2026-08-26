@@ -261,6 +261,13 @@ impl Default for ProviderHealthCheckConfig {
     }
 }
 
+impl ProviderHealthCheckConfig {
+    /// Whether this provider explicitly opts into active runtime probing.
+    pub(crate) fn has_runtime_overrides(&self) -> bool {
+        self != &Self::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +347,16 @@ mod tests {
         assert_eq!(config.recovery_timeout, 60);
         assert!(config.endpoint.is_none());
         assert_eq!(config.expected_codes, vec![200]);
+        assert!(!config.has_runtime_overrides());
+    }
+
+    #[test]
+    fn test_health_check_runtime_overrides_require_non_default_configuration() {
+        let config = ProviderHealthCheckConfig {
+            interval: 15,
+            ..Default::default()
+        };
+        assert!(config.has_runtime_overrides());
     }
 
     #[test]

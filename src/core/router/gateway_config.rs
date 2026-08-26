@@ -384,15 +384,17 @@ fn deployment_config_from_provider(
             backoff_multiplier: config.retry.backoff_multiplier,
             jitter_ratio: config.retry.jitter,
         }),
-        health_check_policy: Some(HealthCheckPolicy {
-            provider_name: config.name.clone(),
-            interval_secs: config.health_check.interval,
-            failure_threshold: config.health_check.failure_threshold,
-            recovery_timeout_secs: config.health_check.recovery_timeout,
-            endpoint,
-            endpoint_access: config.endpoint_access,
-            expected_codes: config.health_check.expected_codes.clone(),
-        }),
+        health_check_policy: config.health_check.has_runtime_overrides().then_some(
+            HealthCheckPolicy {
+                provider_name: config.name.clone(),
+                interval_secs: config.health_check.interval,
+                failure_threshold: config.health_check.failure_threshold,
+                recovery_timeout_secs: config.health_check.recovery_timeout,
+                endpoint,
+                endpoint_access: config.endpoint_access,
+                expected_codes: config.health_check.expected_codes.clone(),
+            },
+        ),
     })
 }
 
@@ -607,17 +609,9 @@ mod tests {
     }
 
     #[test]
-    fn test_default_provider_health_config_maps_native_probe_policy() {
+    fn test_default_provider_health_config_preserves_no_probe_behavior() {
         let deployment = deployment_config_from_provider(&ProviderConfig::default()).unwrap();
-        let policy = deployment
-            .health_check_policy
-            .expect("default health configuration should enable native probes");
-
-        assert_eq!(policy.interval_secs, 30);
-        assert_eq!(policy.failure_threshold, 5);
-        assert_eq!(policy.recovery_timeout_secs, 60);
-        assert!(policy.endpoint.is_none());
-        assert_eq!(policy.expected_codes, vec![200]);
+        assert!(deployment.health_check_policy.is_none());
     }
 
     #[tokio::test]

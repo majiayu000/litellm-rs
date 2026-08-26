@@ -41,6 +41,8 @@ providers:
       max_delay: 5000
       backoff_multiplier: 2.0
       jitter: 0.1
+    # Defaults alone do not enable active probes. Change a policy value or set a custom
+    # endpoint to opt in; native model probes may issue a one-token provider request.
     health_check:
       interval: 30
       failure_threshold: 5

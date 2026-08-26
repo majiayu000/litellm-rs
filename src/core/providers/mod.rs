@@ -413,7 +413,6 @@ macro_rules! dispatch_provider_selective {
 mod audio_dispatch;
 mod capability_dispatch;
 mod model_health_check;
-pub(crate) use model_health_check::NativeHealthProbeSemantics;
 
 /// Unified built-in Provider enum (Rust-idiomatic design).
 ///

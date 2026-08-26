@@ -1,6 +1,5 @@
 use super::*;
-use crate::core::providers::NativeHealthProbeSemantics;
-use crate::core::router::deployment::{ProviderInstanceIdentity, publish_probe_group};
+use crate::core::router::deployment::publish_probe_group;
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -11,10 +10,9 @@ use tokio::time::Instant;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ProbeScope {
     CustomEndpoint,
-    NativeProvider(ProviderInstanceIdentity),
-    NativeModel {
-        provider_instance: ProviderInstanceIdentity,
-        model: String,
+    NativeDeployment {
+        deployment_id: String,
+        deployment_instance: usize,
     },
 }
 
@@ -166,22 +164,12 @@ fn current_probe_groups(snapshot: &RoutingSnapshot) -> Vec<ProbeTarget> {
         let scope = if policy.endpoint.is_some() {
             ProbeScope::CustomEndpoint
         } else {
-            let provider_instance = deployment.state.provider_instance_identity();
-            match deployment
-                .provider
-                .native_health_probe_semantics(&deployment.model)
-            {
-                NativeHealthProbeSemantics::ModelSpecific => ProbeScope::NativeModel {
-                    provider_instance,
-                    model: deployment.model.clone(),
-                },
-                NativeHealthProbeSemantics::ModelIndependent => {
-                    ProbeScope::NativeProvider(provider_instance)
-                }
-                #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
-                NativeHealthProbeSemantics::Unsupported => {
-                    ProbeScope::NativeProvider(provider_instance)
-                }
+            // Native probes use deployment credentials and model configuration. Binding the
+            // schedule to the current deployment instance prevents cloned identities or a
+            // public provider-field replacement from receiving another deployment's result.
+            ProbeScope::NativeDeployment {
+                deployment_id: deployment.id.clone(),
+                deployment_instance: Arc::as_ptr(deployment) as usize,
             }
         };
         let key = DynamicProbeKey {
