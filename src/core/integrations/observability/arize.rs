@@ -245,10 +245,11 @@ impl ArizeIntegration {
             config.model_id
         );
 
+        let buffer = DurableBatch::new(config.batch_size.max(1).saturating_mul(2));
         Ok(Self {
             config,
             http_client,
-            buffer: DurableBatch::default(),
+            buffer,
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             enabled: true,
         })
@@ -322,6 +323,20 @@ impl ArizeIntegration {
         }
 
         Ok(())
+    }
+
+    async fn buffer_record(&self, record: ArizeRecord) -> IntegrationResult<usize> {
+        match self.buffer.push(record).await {
+            Ok(pending) => Ok(pending),
+            Err(full) => {
+                let record = full.into_value();
+                self.flush().await?;
+                self.buffer
+                    .push(record)
+                    .await
+                    .map_err(|error| IntegrationError::other(format!("Arize {error}")))
+            }
+        }
     }
 }
 
@@ -412,7 +427,7 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        if self.buffer.push(record).await >= self.config.batch_size {
+        if self.buffer_record(record).await? >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -466,7 +481,7 @@ impl Integration for ArizeIntegration {
             latency_ms: None,
         };
 
-        if self.buffer.push(record).await >= self.config.batch_size {
+        if self.buffer_record(record).await? >= self.config.batch_size {
             let _ = self.flush().await;
         }
 
@@ -554,7 +569,9 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        self.buffer.push(record).await;
+        if self.buffer_record(record).await? >= self.config.batch_size {
+            self.flush().await?;
+        }
 
         Ok(())
     }
@@ -613,7 +630,7 @@ impl Integration for ArizeIntegration {
             latency_ms: Some(event.latency_ms),
         };
 
-        if self.buffer.push(record).await >= self.config.batch_size {
+        if self.buffer_record(record).await? >= self.config.batch_size {
             self.flush().await?;
         }
 
