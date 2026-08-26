@@ -1,6 +1,6 @@
 //! User registration endpoint
 
-use crate::server::middleware::AuthRateLimiter;
+use crate::server::middleware::{AuthRateLimiter, trusted_network_client_key};
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use crate::utils::auth::crypto::password::hash_password;
@@ -22,15 +22,6 @@ fn get_register_rate_limiter() -> Arc<AuthRateLimiter> {
         .clone()
 }
 
-/// Extract client IP from the request for rate limiting.
-/// Uses only the TCP peer address to prevent X-Forwarded-For spoofing.
-fn extract_client_ip(req: &HttpRequest) -> String {
-    req.connection_info()
-        .peer_addr()
-        .unwrap_or("unknown")
-        .to_string()
-}
-
 /// Counter for probabilistic cleanup of rate limiter entries
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -44,7 +35,9 @@ pub async fn register(
     state: web::Data<AppState>,
     request: web::Json<RegisterRequest>,
 ) -> ActixResult<HttpResponse> {
-    let client_ip = extract_client_ip(&req);
+    let trusted_proxies = state.config.load().server().trusted_proxies.clone();
+    let client_id = trusted_network_client_key(&req, &trusted_proxies);
+    let client_ip = client_id.as_deref().unwrap_or("unknown");
 
     // Rate limit: max 10 registration attempts per IP per hour
     let limiter = get_register_rate_limiter();
@@ -55,20 +48,23 @@ pub async fn register(
         limiter.cleanup_old_entries();
     }
 
-    if let Err(retry_after) = limiter.check_allowed(&client_ip) {
-        warn!(
-            "Registration rate limit exceeded for IP {}: retry after {}s",
-            client_ip, retry_after
-        );
-        return Ok(HttpResponse::TooManyRequests()
-            .insert_header(("Retry-After", retry_after.to_string()))
-            .json(ApiResponse::<()>::error(
-                "Too many registration attempts. Please try again later.".to_string(),
-            )));
-    }
+    let auth_attempt = match limiter.reserve_network_attempt(client_id.as_deref()).await {
+        Ok(attempt) => attempt,
+        Err(retry_after) => {
+            warn!(
+                "Registration rate limit exceeded for IP {}: retry after {}s",
+                client_ip, retry_after
+            );
+            return Ok(HttpResponse::TooManyRequests()
+                .insert_header(("Retry-After", retry_after.to_string()))
+                .json(ApiResponse::<()>::error(
+                    "Too many registration attempts. Please try again later.".to_string(),
+                )));
+        }
+    };
 
-    // Count this attempt toward the rate limit
-    limiter.record_failure(&client_ip);
+    // Count every admitted registration request before any backend await.
+    auth_attempt.record_failure();
 
     info!("User registration attempt: {}", request.username);
 

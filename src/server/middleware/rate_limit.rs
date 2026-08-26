@@ -10,7 +10,7 @@ use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::http::{StatusCode, header::HeaderMap};
 use actix_web::web;
-use actix_web::{HttpMessage, HttpResponse, ResponseError};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, ResponseError};
 use dashmap::DashMap;
 use futures::future::{Ready, ready};
 use std::fmt;
@@ -477,21 +477,33 @@ fn client_key_from_context(context: &RequestContext) -> Option<String> {
         .map(|user_id| format!("user:{}", user_id))
 }
 
-fn network_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
-    let Some(peer_ip) = req.peer_addr().map(|addr| addr.ip().to_canonical()) else {
-        // Without a transport peer there is no trusted hop from which a
-        // forwarded header could have arrived.
-        return "ip:unknown".to_string();
-    };
+pub(super) fn network_client_key(req: &ServiceRequest, trusted_proxies: &[String]) -> String {
+    network_client_key_from_parts(req.peer_addr(), req.headers(), trusted_proxies)
+        .unwrap_or_else(|| "ip:unknown".to_string())
+}
+
+pub(crate) fn trusted_network_client_key(
+    req: &HttpRequest,
+    trusted_proxies: &[String],
+) -> Option<String> {
+    network_client_key_from_parts(req.peer_addr(), req.headers(), trusted_proxies)
+}
+
+fn network_client_key_from_parts(
+    peer_addr: Option<SocketAddr>,
+    headers: &HeaderMap,
+    trusted_proxies: &[String],
+) -> Option<String> {
+    let peer_ip = peer_addr?.ip().to_canonical();
 
     // Only honor X-Forwarded-For when the direct peer is a trusted proxy.
     if is_trusted_proxy(peer_ip, trusted_proxies)
-        && let Some(client_ip) = last_untrusted_xff_ip(req.headers(), trusted_proxies)
+        && let Some(client_ip) = last_untrusted_xff_ip(headers, trusted_proxies)
     {
-        return format!("ip:{}", client_ip);
+        return Some(format!("ip:{}", client_ip));
     }
 
-    format!("ip:{}", peer_ip)
+    Some(format!("ip:{}", peer_ip))
 }
 
 /// Pick the client IP from all `X-Forwarded-For` fields by walking from the
