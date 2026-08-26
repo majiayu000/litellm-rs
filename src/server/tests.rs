@@ -3,6 +3,7 @@
 //! This module contains all tests for the server components.
 
 use crate::config::models::gateway::GATEWAY_ENV_LOCK;
+use crate::config::models::server::TlsConfig;
 use crate::server::HttpServer;
 #[cfg(test)]
 use crate::server::builder::{ServerBuilder, load_default_config_or_env, load_explicit_config};
@@ -223,6 +224,33 @@ async fn default_config_path_can_fall_back_to_env_when_file_is_missing() {
 
     assert_eq!(config.providers().len(), 1);
     assert_eq!(config.providers()[0].name, "openai");
+}
+
+#[tokio::test]
+async fn invalid_tls_in_existing_default_config_does_not_fall_back_to_env() {
+    let _env_lock = GATEWAY_ENV_LOCK.lock().await;
+    let _env = EnvGuard::with_minimal_gateway_config();
+    let temp_dir = tempfile::tempdir().expect("temporary config directory");
+    let config_path = temp_dir.path().join("gateway.yaml");
+    let missing_cert = temp_dir.path().join("missing-cert.pem");
+    let missing_key = temp_dir.path().join("missing-key.pem");
+    let mut config = valid_programmatic_config();
+    config.gateway.server.tls = Some(TlsConfig {
+        cert_file: missing_cert.to_string_lossy().into_owned(),
+        key_file: missing_key.to_string_lossy().into_owned(),
+        ca_file: None,
+        require_client_cert: false,
+        http2: false,
+    });
+    let yaml = serde_yml::to_string(&config.gateway).expect("serialize gateway config");
+    std::fs::write(&config_path, yaml).expect("write default config");
+
+    let error = load_default_config_or_env(&config_path).await.expect_err(
+        "invalid TLS must fail instead of falling back to plaintext environment config",
+    );
+    let message = error.to_string();
+    assert!(message.contains("Failed to load default configuration file"));
+    assert!(message.contains("cannot open TLS cert file"), "{message}");
 }
 
 #[test]

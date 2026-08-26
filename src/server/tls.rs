@@ -6,7 +6,7 @@ use crate::server::{HttpServer, state::AppState};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use actix_http::{HttpService, Protocol};
 use actix_server::Server;
-use actix_service::{IntoServiceFactory, ServiceFactoryExt as _, map_config};
+use actix_service::{IntoServiceFactory, ServiceFactoryExt as _, fn_service, map_config};
 use actix_tls::accept::{
     TlsError,
     rustls_0_23::{Acceptor as RustlsAcceptor, TlsStream},
@@ -220,10 +220,13 @@ fn http1_tls_transport(
     Error = TlsError<io::Error, Infallible>,
     InitError = (),
 > + Clone {
-    http1_tls_acceptor(config).map(|io: TlsStream<actix_web::rt::net::TcpStream>| {
-        let peer_addr = io.get_ref().0.peer_addr().ok();
-        (io, Protocol::Http1, peer_addr)
-    })
+    http1_tls_acceptor(config).and_then(fn_service(
+        |io: TlsStream<actix_web::rt::net::TcpStream>| async move {
+            io.get_ref().0.set_nodelay(true).map_err(TlsError::Tls)?;
+            let peer_addr = io.get_ref().0.peer_addr().ok();
+            Ok((io, Protocol::Http1, peer_addr))
+        },
+    ))
 }
 
 fn http1_tls_acceptor(config: rustls::ServerConfig) -> RustlsAcceptor {
@@ -559,6 +562,11 @@ mod tests {
                         Protocol,
                         Option<SocketAddr>,
                     )| async move {
+                        if !stream.get_ref().0.nodelay().map_err(TlsError::Tls)? {
+                            return Err(TlsError::Tls(io::Error::other(
+                                "accepted TLS connection did not enable TCP_NODELAY",
+                            )));
+                        }
                         if protocol != Protocol::Http1 {
                             return Err(TlsError::Tls(io::Error::other(
                                 "listener selected a protocol other than HTTP/1",
