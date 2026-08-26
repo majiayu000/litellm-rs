@@ -191,7 +191,7 @@ impl GeminiClient {
             // Request
             let error_text = read_streaming_error_body(response)
                 .await
-                .map_err(|error| error.into_provider_error("gemini"))?;
+                .unwrap_or_else(|_| "failed to read upstream error body".to_string());
             return Err(GeminiErrorMapper::from_http_status(
                 status.as_u16(),
                 &error_text,
@@ -224,10 +224,15 @@ impl GeminiClient {
     /// Handle
     async fn handle_response(&self, response: Response) -> Result<Value, ProviderError> {
         let status = response.status();
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| gemini_network_error(format!("Failed to read response: {}", e)))?;
+        let response_text = match response.text().await {
+            Ok(response_text) => response_text,
+            Err(_) if !status.is_success() => "failed to read upstream error body".to_string(),
+            Err(error) => {
+                return Err(gemini_network_error(format!(
+                    "Failed to read response: {error}"
+                )));
+            }
+        };
 
         if self.config.debug {
             let response_bytes = response_text.len();

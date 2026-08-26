@@ -7,11 +7,13 @@
 #[cfg(test)]
 mod tests {
     use litellm_rs::Config;
+    use litellm_rs::config::ConfigOverlay;
     use litellm_rs::config::models::gateway::{GatewayConfig, UnpricedModelPolicy};
     use litellm_rs::config::models::provider::{
         ProviderConfig, ProviderHealthCheckConfig, RetryConfig,
     };
     use litellm_rs::config::models::server::{CorsConfig, ServerConfig, TlsConfig};
+    use litellm_rs::config::models::storage::RedisConfig;
     use std::path::Path;
 
     // ==================== GatewayConfig Validation ====================
@@ -453,6 +455,125 @@ mod tests {
         // Override should take precedence
         let provider = merged.get_provider("test-openai").unwrap();
         assert_eq!(provider.api_key, "new-api-key");
+    }
+
+    #[tokio::test]
+    async fn enabled_redis_cluster_true_base_is_cleared_before_final_validation() {
+        let temp_dir = tempfile::tempdir().expect("temporary config directory should exist");
+        let base_path = temp_dir.path().join("base.yaml");
+        let overlay_path = temp_dir.path().join("overlay.yaml");
+
+        let mut base = Config {
+            gateway: create_valid_gateway_config(),
+        };
+        base.gateway.storage.redis.enabled = true;
+        base.gateway.storage.redis.cluster = true;
+        let overlay = Config {
+            gateway: create_valid_gateway_config(),
+        };
+
+        tokio::fs::write(
+            &base_path,
+            base.to_yaml().expect("base config should serialize"),
+        )
+        .await
+        .expect("base config should be written");
+        tokio::fs::write(
+            &overlay_path,
+            overlay.to_yaml().expect("overlay config should serialize"),
+        )
+        .await
+        .expect("overlay config should be written");
+
+        let standalone_error = Config::from_file(&base_path)
+            .await
+            .expect_err("standalone cluster config must still fail final validation");
+        assert!(
+            standalone_error
+                .to_string()
+                .contains("storage.redis.cluster=false")
+        );
+
+        let base = Config::overlay_from_file(base_path)
+            .await
+            .expect("invalid intermediate base layer should parse")
+            .into_config();
+        let overlay = Config::overlay_from_file(overlay_path)
+            .await
+            .expect("overlay config should load");
+        let merged = base.merge_overlay(overlay);
+
+        merged
+            .validate()
+            .expect("merged cluster=false configuration should finally validate");
+        assert!(merged.gateway.storage.redis.enabled);
+        assert!(!merged.gateway.storage.redis.cluster);
+    }
+
+    #[tokio::test]
+    async fn omitted_redis_cluster_file_overlay_preserves_true_base() {
+        let temp_dir = tempfile::tempdir().expect("temporary config directory should exist");
+        let overlay_path = temp_dir.path().join("overlay.yaml");
+        let mut base = Config {
+            gateway: create_valid_gateway_config(),
+        };
+        base.gateway.storage.redis.enabled = true;
+        base.gateway.storage.redis.cluster = true;
+        let serialized = Config {
+            gateway: create_valid_gateway_config(),
+        }
+        .to_yaml()
+        .expect("overlay config should serialize");
+        let without_cluster = serialized
+            .lines()
+            .filter(|line| line.trim() != "cluster: false")
+            .collect::<Vec<_>>()
+            .join("\n");
+        tokio::fs::write(&overlay_path, without_cluster)
+            .await
+            .expect("overlay config should be written");
+
+        let overlay = Config::overlay_from_file(overlay_path)
+            .await
+            .expect("overlay config should load");
+        let merged = base.merge_overlay(overlay);
+
+        assert!(merged.gateway.storage.redis.cluster);
+    }
+
+    #[test]
+    fn programmatic_redis_cluster_false_overlay_overrides_true_base() {
+        let mut base = Config {
+            gateway: create_valid_gateway_config(),
+        };
+        base.gateway.storage.redis.enabled = true;
+        base.gateway.storage.redis.cluster = true;
+        let overlay = ConfigOverlay::from_config(Config {
+            gateway: create_valid_gateway_config(),
+        })
+        .with_redis_cluster(false);
+
+        let merged = base.merge_overlay(overlay);
+
+        merged
+            .validate()
+            .expect("programmatic explicit false must produce a valid merged configuration");
+        assert!(merged.gateway.storage.redis.enabled);
+        assert!(!merged.gateway.storage.redis.cluster);
+    }
+
+    #[test]
+    fn redis_config_exhaustive_literal_remains_source_compatible() {
+        let config = RedisConfig {
+            url: "redis://localhost:6379".to_string(),
+            enabled: false,
+            max_connections: 10,
+            connection_timeout: 5,
+            cluster: false,
+            allow_degraded: false,
+        };
+
+        assert!(!config.cluster);
     }
 
     // ==================== Default Config Tests ====================

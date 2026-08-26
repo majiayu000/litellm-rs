@@ -3,26 +3,26 @@
 //! This module defines the fundamental building blocks for the LiteLLM Router:
 //! - `Deployment`: A concrete provider deployment with configuration and runtime state
 //! - `DeploymentConfig`: Configuration parameters (TPM/RPM limits, timeouts, weights)
-//! - `DeploymentState`: Lock-free runtime state using atomic operations
+//! - `DeploymentState`: Low-contention runtime state using atomic operations
 //! - `HealthStatus`: Health status enumeration for deployments
 //!
 //! ## Design Philosophy
 //!
-//! Request-path state uses atomic operations with `Relaxed` ordering for maximum performance.
-//! This is safe because:
-//! - State values are eventually consistent (exact precision not required for routing decisions)
-//! - No cross-field invariants need to be maintained atomically
-//! - Routing can tolerate slightly stale state for massive performance gains
+//! State tracking uses atomic operations for low-contention updates. Per-minute
+//! counter updates share a read lock, while the rare rollover takes its write
+//! lock so a reset cannot erase usage from the new window.
 //!
 //! ## Performance Characteristics
 //!
-//! - Lock-free request path: probe lifecycle synchronization stays off the hot path
+//! - Low contention: ordinary per-minute updates proceed concurrently
+//! - Probe lifecycle synchronization stays off the request path
 //! - Zero-copy: Deployments are accessed by reference, never cloned
 //! - Cache-friendly: Hot path fields grouped together
 
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
 use crate::utils::auth::crypto::hmac::CredentialDigest;
+use parking_lot::RwLock;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -190,16 +190,17 @@ impl Default for DeploymentConfig {
 
 /// Deployment runtime state
 ///
-/// Request-path fields use atomics for lock-free updates with `Relaxed` ordering.
-/// This is safe because routing decisions can tolerate eventual consistency.
+/// Counters use relaxed atomics. Per-minute snapshots and updates additionally
+/// coordinate with rollover through a shared read/write gate.
 ///
 /// ## State Reset
 ///
-/// TPM/RPM counters are reset every minute by a background task.
-/// The `minute_reset_at` timestamp tracks when the last reset occurred.
+/// Per-minute counters roll lazily when readers or writers observe an elapsed
+/// window. No background task is required for correct per-minute semantics.
 #[derive(Debug, Clone)]
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
+    minute_window_lock: Arc<RwLock<()>>,
     provider_instance_identity: ProviderInstanceIdentity,
     probe_health: Arc<AtomicU8>,
     probe_last_checked_at_millis: Arc<AtomicU64>,
@@ -289,6 +290,7 @@ impl DeploymentState {
                 consecutive_successes: AtomicU32::new(0),
                 minute_reset_at: AtomicU64::new(now),
             }),
+            minute_window_lock: Arc::new(RwLock::new(())),
             provider_instance_identity,
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
@@ -297,15 +299,59 @@ impl DeploymentState {
         }
     }
 
-    /// Reset per-minute counters
+    /// Explicitly start a fresh per-minute counter window.
     ///
-    /// Should be called by a background task every minute.
+    /// Production correctness does not depend on calling this method because
+    /// counter readers and writers also roll elapsed windows lazily.
     pub fn reset_minute(&self) {
+        let _guard = self.minute_window_lock.write();
+        self.finish_minute_reset(current_timestamp());
+    }
+
+    pub(crate) fn roll_minute_window(&self, now: u64) {
+        self.with_current_minute(now, || ());
+    }
+
+    pub(crate) fn minute_counters(&self, now: u64) -> MinuteCounters {
+        self.roll_minute_window(now);
+        let _guard = self.minute_window_lock.read();
+        MinuteCounters {
+            tpm: self.tpm_current.load(Ordering::Relaxed),
+            rpm: self.rpm_current.load(Ordering::Relaxed),
+            failures: self.fails_this_minute.load(Ordering::Relaxed),
+        }
+    }
+
+    fn with_current_minute<T>(&self, now: u64, operation: impl FnOnce() -> T) -> T {
+        let guard = self.minute_window_lock.read();
+        let last = self.minute_reset_at.load(Ordering::Acquire);
+        if !minute_window_needs_roll(now, last) {
+            let result = operation();
+            drop(guard);
+            return result;
+        }
+        drop(guard);
+
+        let reset_guard = self.minute_window_lock.write();
+        // `now` may have been prefetched by a selector that stalled while
+        // another caller rolled the window. Re-read the wall clock on this
+        // rare slow path so an old observer cannot masquerade as rollback
+        // and erase fresh usage.
+        let reset_now = current_timestamp();
+        let last = self.minute_reset_at.load(Ordering::Acquire);
+        if minute_window_needs_roll(reset_now, last) {
+            self.finish_minute_reset(reset_now);
+        }
+        let result = operation();
+        drop(reset_guard);
+        result
+    }
+
+    fn finish_minute_reset(&self, now: u64) {
         self.tpm_current.store(0, Ordering::Relaxed);
         self.rpm_current.store(0, Ordering::Relaxed);
         self.fails_this_minute.store(0, Ordering::Relaxed);
-        self.minute_reset_at
-            .store(current_timestamp(), Ordering::Relaxed);
+        self.minute_reset_at.store(now, Ordering::Release);
     }
 
     /// Get current health status
@@ -344,6 +390,7 @@ impl DeploymentState {
         let probe_generation = self.probe_lifecycle.next_generation();
         Self {
             inner: Arc::clone(&self.inner),
+            minute_window_lock: Arc::clone(&self.minute_window_lock),
             provider_instance_identity,
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
@@ -361,6 +408,19 @@ impl Default for DeploymentState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+const MINUTE_WINDOW_SECS: u64 = 60;
+
+fn minute_window_needs_roll(now: u64, last: u64) -> bool {
+    now < last || now - last >= MINUTE_WINDOW_SECS
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MinuteCounters {
+    pub(crate) tpm: u64,
+    pub(crate) rpm: u64,
+    pub(crate) failures: u32,
 }
 
 /// Deployment - a concrete provider deployment
@@ -410,7 +470,7 @@ pub struct Deployment {
     /// Configuration
     pub config: DeploymentConfig,
 
-    /// Runtime state (lock-free request counters; synchronized probe lifecycle)
+    /// Shared low-contention runtime state with synchronized probe lifecycle
     pub state: DeploymentState,
 
     /// Tags for filtering (e.g., ["production", "fast"])
@@ -517,14 +577,14 @@ impl Deployment {
     /// * `tokens` - Number of tokens consumed
     /// * `latency_us` - Request latency in microseconds
     pub fn record_success(&self, tokens: u64, latency_us: u64) {
-        // Update counters
+        let now = current_timestamp();
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.success_requests.fetch_add(1, Ordering::Relaxed);
-        self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
-        self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
-        self.state
-            .last_request_at
-            .store(current_timestamp(), Ordering::Relaxed);
+        self.state.with_current_minute(now, || {
+            self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+            self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+        });
+        self.state.last_request_at.store(now, Ordering::Relaxed);
 
         // Update average latency using exponential moving average (alpha = 0.2)
         let current_avg = self.state.avg_latency_us.load(Ordering::Relaxed);
@@ -550,12 +610,22 @@ impl Deployment {
     /// Increments failure counters. The caller is responsible for deciding
     /// whether to enter cooldown based on failure rate.
     pub fn record_failure(&self) {
+        self.record_failure_with_minute_counters();
+    }
+
+    pub(crate) fn record_failure_with_minute_counters(&self) -> MinuteCounters {
+        let now = current_timestamp();
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.fail_requests.fetch_add(1, Ordering::Relaxed);
-        self.state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
-        self.state
-            .last_request_at
-            .store(current_timestamp(), Ordering::Relaxed);
+        let counters = self.state.with_current_minute(now, || {
+            self.state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
+            MinuteCounters {
+                tpm: self.state.tpm_current.load(Ordering::Relaxed),
+                rpm: self.state.rpm_current.load(Ordering::Relaxed),
+                failures: self.state.fails_this_minute.load(Ordering::Relaxed),
+            }
+        });
+        self.state.last_request_at.store(now, Ordering::Relaxed);
 
         // Reset consecutive success counter on failure
         self.state.consecutive_successes.store(0, Ordering::Relaxed);
@@ -577,6 +647,7 @@ impl Deployment {
                 Err(observed) => current = observed,
             }
         }
+        counters
     }
 
     pub(crate) fn promote_to_healthy_if_degraded(&self) {
@@ -625,7 +696,7 @@ impl Deployment {
 /// Get current Unix timestamp in seconds
 ///
 /// Returns the number of seconds since UNIX_EPOCH.
-fn current_timestamp() -> u64 {
+pub(crate) fn current_timestamp() -> u64 {
     current_timestamp_duration().as_secs()
 }
 
@@ -645,3 +716,7 @@ fn current_timestamp_duration() -> std::time::Duration {
 #[cfg(test)]
 #[path = "deployment/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "deployment_window_tests.rs"]
+mod deployment_window_tests;

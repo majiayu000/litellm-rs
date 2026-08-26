@@ -5,7 +5,9 @@ use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::chat::{ChatMessage, ChatRequest};
 use crate::core::types::context::RequestContext;
+use crate::core::types::embedding::{EmbeddingInput, EmbeddingRequest};
 use crate::core::types::health::HealthStatus;
+use crate::core::types::image::ImageGenerationRequest;
 use crate::core::types::message::{MessageContent, MessageRole};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -41,11 +43,23 @@ async fn read_full_http_request(socket: &mut TcpStream) -> std::io::Result<()> {
 }
 
 async fn response_url(status: &str, body: &str) -> std::io::Result<String> {
+    response_url_with_declared_length(status, body, body.len()).await
+}
+
+async fn truncated_response_url(status: &str, body: &str) -> std::io::Result<String> {
+    response_url_with_declared_length(status, body, body.len() + 64).await
+}
+
+async fn response_url_with_declared_length(
+    status: &str,
+    body: &str,
+    declared_length: usize,
+) -> std::io::Result<String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+        declared_length
     );
 
     tokio::spawn(async move {
@@ -109,6 +123,134 @@ async fn test_openai_streaming_maps_non_success_status_before_sse()
         other => panic!("expected OpenAI API error envelope, got {other:?}"),
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_openai_chat_maps_non_success_status_before_deserialization()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = r#"{"error":{"type":"permission_error","message":"project access denied"}}"#;
+    let api_base = response_url("403 Forbidden", body).await?;
+    let config = test_openai_config(api_base, "sk-test123456789012345678901234567890123456");
+    let provider = OpenAIProvider::new(config).await?;
+
+    let error = LLMProvider::chat_completion(
+        &provider,
+        openai_chat_stream_request(),
+        RequestContext::default(),
+    )
+    .await
+    .expect_err("non-streaming OpenAI 403 should be mapped before response parsing");
+
+    assert!(matches!(
+        error,
+        ProviderError::ApiError {
+            status: 403,
+            ref message,
+            ..
+        } if message.contains("project access denied")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_openai_chat_preserves_403_when_error_body_is_truncated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api_base =
+        truncated_response_url("403 Forbidden", r#"{"error":{"message":"cut"}}"#).await?;
+    let provider = OpenAIProvider::new(test_openai_config(api_base, "sk-test-truncated")).await?;
+
+    let error = LLMProvider::chat_completion(
+        &provider,
+        openai_chat_stream_request(),
+        RequestContext::default(),
+    )
+    .await
+    .expect_err("truncated OpenAI error body must not erase HTTP 403");
+
+    assert!(matches!(
+        error,
+        ProviderError::ApiError {
+            status: 403,
+            ref message,
+            ..
+        } if message.contains("failed to read upstream error body")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_openai_streaming_preserves_403_when_error_body_is_truncated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api_base =
+        truncated_response_url("403 Forbidden", r#"{"error":{"message":"cut"}}"#).await?;
+    let provider = OpenAIProvider::new(test_openai_config(api_base, "sk-test-stream-cut")).await?;
+
+    let error = match LLMProvider::chat_completion_stream(
+        &provider,
+        openai_chat_stream_request(),
+        RequestContext::default(),
+    )
+    .await
+    {
+        Ok(_) => panic!("truncated streaming error body must not erase HTTP 403"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        ProviderError::ApiError {
+            status: 403,
+            ref message,
+            ..
+        } if message.contains("failed to read upstream error body")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_openai_embeddings_map_non_success_status_before_deserialization()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = r#"{"error":{"type":"permission_error","message":"embedding access denied"}}"#;
+    let api_base = response_url("403 Forbidden", body).await?;
+    let provider = OpenAIProvider::new(test_openai_config(api_base, "sk-test-embedding")).await?;
+    let request = EmbeddingRequest {
+        model: "text-embedding-3-small".to_string(),
+        input: EmbeddingInput::Text("hello".to_string()),
+        user: None,
+        encoding_format: None,
+        dimensions: None,
+        task_type: None,
+    };
+
+    let error = LLMProvider::embeddings(&provider, request, RequestContext::default())
+        .await
+        .expect_err("OpenAI embeddings 403 should be mapped before response parsing");
+    assert!(matches!(error, ProviderError::ApiError { status: 403, .. }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_openai_image_generation_maps_non_success_status_before_deserialization()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = r#"{"error":{"type":"permission_error","message":"image access denied"}}"#;
+    let api_base = response_url("403 Forbidden", body).await?;
+    let provider = OpenAIProvider::new(test_openai_config(api_base, "sk-test-image")).await?;
+    let request = ImageGenerationRequest {
+        prompt: "restricted image".to_string(),
+        model: Some("gpt-image-1".to_string()),
+        n: None,
+        size: None,
+        quality: None,
+        response_format: None,
+        style: None,
+        user: None,
+    };
+
+    let error = LLMProvider::image_generation(&provider, request, RequestContext::default())
+        .await
+        .expect_err("OpenAI image 403 should be mapped before response parsing");
+    assert!(matches!(error, ProviderError::ApiError { status: 403, .. }));
     Ok(())
 }
 

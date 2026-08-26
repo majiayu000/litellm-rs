@@ -100,12 +100,10 @@ impl VertexAIProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.map_err(|error| {
-                ProviderError::network(
-                    "vertex_ai",
-                    format!("failed to read error response: {error}"),
-                )
-            })?;
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "failed to read upstream error body".to_string());
 
             return Err(HttpErrorMapper::map_status_code(
                 "vertex_ai",

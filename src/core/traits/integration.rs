@@ -362,6 +362,25 @@ pub struct EmbeddingEndEvent {
     pub timestamp_ms: i64,
 }
 
+/// Embedding error event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingErrorEvent {
+    /// Request ID (matches start event)
+    pub request_id: String,
+    /// Model name
+    pub model: String,
+    /// Provider name
+    pub provider: Option<String>,
+    /// Sanitized error message
+    pub error_message: String,
+    /// Error type/code
+    pub error_type: Option<String>,
+    /// Request latency in milliseconds
+    pub latency_ms: u64,
+    /// Error timestamp (Unix milliseconds)
+    pub timestamp_ms: i64,
+}
+
 /// Cache hit event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheHitEvent {
@@ -411,6 +430,12 @@ pub trait Integration: Send + Sync {
 
     /// Called when an embedding request completes (optional)
     async fn on_embedding_end(&self, event: &EmbeddingEndEvent) -> IntegrationResult<()> {
+        let _ = event;
+        Ok(())
+    }
+
+    /// Called when an embedding request fails (optional)
+    async fn on_embedding_error(&self, event: &EmbeddingErrorEvent) -> IntegrationResult<()> {
         let _ = event;
         Ok(())
     }

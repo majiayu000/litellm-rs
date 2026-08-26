@@ -34,6 +34,10 @@ pub struct RedisConnection {
 impl RedisPool {
     /// Create a new Redis pool
     pub async fn new(config: &RedisConfig) -> Result<Self> {
+        crate::config::Validate::validate(config).map_err(|error| {
+            GatewayError::Config(format!("Invalid Redis configuration: {error}"))
+        })?;
+
         if !config.enabled {
             info!("Redis disabled in config; using no-op Redis pool");
             return Ok(Self {
