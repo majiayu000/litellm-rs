@@ -94,6 +94,11 @@ impl KeyManager {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_recorded_key_usage(&self, key_id: Uuid) -> bool {
+        self.last_used_cache.contains_key(&key_id)
+    }
+
     /// Generate a new API key
     ///
     /// Returns a tuple of (key_id, raw_key). The raw_key should be shown to the user
@@ -147,6 +152,19 @@ impl KeyManager {
     ///
     /// Returns verification result with key info if valid.
     pub async fn validate_key(&self, raw_key: &str) -> Result<VerifyKeyResult> {
+        let result = self.validate_key_without_usage_update(raw_key).await?;
+        self.record_validated_key_usage(&result);
+        Ok(result)
+    }
+
+    /// Validate a raw API key without recording it as used.
+    ///
+    /// Authorization-sensitive callers must use this method and call
+    /// [`Self::record_validated_key_usage`] only after access is granted.
+    pub(crate) async fn validate_key_without_usage_update(
+        &self,
+        raw_key: &str,
+    ) -> Result<VerifyKeyResult> {
         debug!("Validating API key");
 
         // Hash the provided key
@@ -187,8 +205,24 @@ impl KeyManager {
             });
         }
 
-        // Update last used (throttled to once per 5 minutes per key)
-        let key_id = key.id;
+        debug!("API key validated successfully");
+        Ok(VerifyKeyResult {
+            valid: true,
+            key: Some(KeyInfo::from(&key)),
+            invalid_reason: None,
+        })
+    }
+
+    /// Record usage for a successfully validated key, throttled to once per
+    /// five minutes per key.
+    pub(crate) fn record_validated_key_usage(&self, result: &VerifyKeyResult) {
+        if !result.valid {
+            return;
+        }
+        let Some(key_id) = result.key.as_ref().map(|key| key.id) else {
+            return;
+        };
+
         let now = Instant::now();
         self.prune_last_used_cache(now);
         let should_update = match self.last_used_cache.get(&key_id) {
@@ -205,13 +239,6 @@ impl KeyManager {
                 }
             });
         }
-
-        debug!("API key validated successfully");
-        Ok(VerifyKeyResult {
-            valid: true,
-            key: Some(KeyInfo::from(&key)),
-            invalid_reason: None,
-        })
     }
 
     /// Revoke an API key

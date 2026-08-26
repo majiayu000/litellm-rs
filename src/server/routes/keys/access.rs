@@ -1,12 +1,14 @@
 use super::types::{CreateKeyRequest, KeyErrorResponse, UpdateKeyRequest};
 use crate::auth::{AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE, AuthMethod, AuthResult};
 use crate::core::keys::{KeyInfo, KeyPermissions, KeyRateLimits, KeyStatus};
+use crate::core::models::ApiKey;
 use crate::core::models::user::types::{User, UserRole};
-use crate::core::types::context::RequestContext;
+use crate::core::types::context::{RequestContext, SharedRequestContext};
 use crate::server::middleware::extract_auth_method_with_api_key_header;
 use crate::server::routes::ApiResponse;
+use crate::server::routes::ai::check_permission;
 use crate::server::state::AppState;
-use actix_web::{HttpRequest, HttpResponse, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use tracing::error;
 use uuid::Uuid;
 
@@ -65,6 +67,72 @@ pub(super) fn check_auth_result_ownership(
         let caller_team = auth.context.team_id();
         caller_team.is_some() && caller_team == key_team_id
     }
+}
+
+/// Whether a caller may see the metadata returned by `/v1/keys/verify` for a
+/// valid key. Presenting the key's own secret is always sufficient; anything
+/// else falls back to standard ownership rules.
+pub(super) fn verify_key_access_allowed(auth: &AuthResult, key_info: &KeyInfo) -> bool {
+    if auth.context.api_key_id() == Some(key_info.id) {
+        return true;
+    }
+    verify_unknown_key_access_allowed(auth)
+        || verify_key_owned_by_caller(auth, key_info.user_id, key_info.team_id)
+}
+
+fn verify_key_owned_by_caller(
+    auth: &AuthResult,
+    key_user_id: Option<Uuid>,
+    key_team_id: Option<Uuid>,
+) -> bool {
+    if auth.api_key.is_some() {
+        let caller_team = auth.context.team_id();
+        if caller_team.is_some() && caller_team == key_team_id {
+            return true;
+        }
+    }
+
+    let Some(user) = auth.user.as_ref() else {
+        let caller_team = auth.context.team_id();
+        return caller_team.is_some() && caller_team == key_team_id;
+    };
+    if key_user_id == Some(user.id()) {
+        return true;
+    }
+    user.has_role(&UserRole::Manager)
+        && key_team_id.is_some_and(|team_id| user.team_ids.contains(&team_id))
+}
+
+/// Whether a caller may probe a key whose ownership cannot be established.
+/// This is deliberately limited to the repository's existing read-management
+/// operation so missing keys do not become an existence oracle.
+pub(super) fn verify_unknown_key_access_allowed(auth: &AuthResult) -> bool {
+    check_permission(auth.user.as_ref(), auth.api_key.as_ref(), "keys.list_all")
+}
+
+/// Reconstruct the authentication result already established by
+/// `AuthMiddleware`. Missing principals or context fail closed.
+pub(super) fn auth_result_from_request_extensions(req: &HttpRequest) -> Option<AuthResult> {
+    let extensions = req.extensions();
+    let user = extensions.get::<User>().cloned();
+    let api_key = extensions.get::<ApiKey>().cloned();
+    if user.is_none() && api_key.is_none() {
+        return None;
+    }
+
+    let context = extensions
+        .get::<SharedRequestContext>()
+        .map(|context| context.as_ref().clone())
+        .or_else(|| extensions.get::<RequestContext>().cloned())?;
+
+    Some(AuthResult {
+        success: true,
+        user,
+        api_key,
+        session: None,
+        error: None,
+        context,
+    })
 }
 
 pub(super) fn is_auth_enabled(state: &web::Data<AppState>) -> bool {
@@ -234,7 +302,7 @@ mod tests {
 
     #[actix_web::test]
     async fn direct_auth_distinguishes_invalid_credentials_from_storage_failure() {
-        let mut config = crate::config::Config::default();
+        let mut config = crate::server::valid_test_config();
         config.gateway.auth.enable_jwt = true;
         config.gateway.auth.enable_api_key = true;
         config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();

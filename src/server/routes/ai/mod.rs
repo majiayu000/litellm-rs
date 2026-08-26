@@ -372,7 +372,6 @@ async fn engine_embeddings(
 
 #[cfg(test)]
 mod tests {
-    use crate::Config;
     use crate::core::types::context::RequestContext;
     use crate::server::HttpServer as GatewayHttpServer;
     use crate::server::middleware::RequestIdMiddleware;
@@ -426,7 +425,8 @@ mod tests {
     }
 
     async fn build_no_provider_state() -> crate::server::state::AppState {
-        let mut config = Config::default();
+        let mut config = crate::server::valid_test_config();
+        config.gateway.providers[0].enabled = false;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
 

@@ -3,7 +3,7 @@
 use super::router_tests::create_test_deployment;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::router::config::RouterConfig;
-use crate::core::router::deployment::HealthStatus;
+use crate::core::router::deployment::{HealthStatus, current_timestamp};
 use crate::core::router::error::CooldownReason;
 use crate::core::router::unified::Router;
 use std::sync::Arc;
@@ -303,17 +303,17 @@ async fn test_infer_cooldown_reason_api_error_401() {
 }
 
 #[tokio::test]
-async fn test_infer_cooldown_reason_bedrock_403() {
+async fn test_infer_cooldown_reason_upstream_403_is_auth_error_for_all_providers() {
     let bedrock = ProviderError::api_error("bedrock", 403, "Access denied");
-    let unrelated = ProviderError::api_error("custom_httpx", 403, "Forbidden");
+    let other = ProviderError::api_error("custom_httpx", 403, "Forbidden");
 
     assert_eq!(
         Router::infer_cooldown_reason(&bedrock),
         CooldownReason::AuthError
     );
     assert_eq!(
-        Router::infer_cooldown_reason(&unrelated),
-        CooldownReason::ConsecutiveFailures
+        Router::infer_cooldown_reason(&other),
+        CooldownReason::AuthError
     );
 }
 
@@ -350,6 +350,93 @@ async fn test_minute_reset_task_integration() {
     }
 
     task.abort();
+}
+
+#[tokio::test]
+async fn test_minute_reset_task_preserves_fresh_window_usage() {
+    let router = Arc::new(Router::default());
+    let fresh = create_test_deployment("fresh", "gpt-4").await;
+    let expired = create_test_deployment("expired", "gpt-4").await;
+    expired.state.tpm_current.store(2000, Ordering::Relaxed);
+    expired.state.rpm_current.store(2, Ordering::Relaxed);
+    expired.state.fails_this_minute.store(2, Ordering::Relaxed);
+    expired
+        .state
+        .minute_reset_at
+        .store(current_timestamp().saturating_sub(61), Ordering::Relaxed);
+    router.add_deployment(fresh);
+    router.add_deployment(expired);
+
+    router.record_success("fresh", 1000, 50_000);
+    router.record_failure("fresh");
+
+    let task = router.clone().start_minute_reset_task();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let expired_rpm = router
+                .get_deployment("expired")
+                .expect("expired deployment should remain registered")
+                .state
+                .rpm_current
+                .load(Ordering::Relaxed);
+            if expired_rpm == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("minute reset task should roll the expired window");
+
+    if let Some(deployment) = router.get_deployment("fresh") {
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 1000);
+        assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            deployment.state.fails_this_minute.load(Ordering::Relaxed),
+            1
+        );
+    } else {
+        panic!("fresh deployment should remain registered");
+    }
+
+    let expired = router
+        .get_deployment("expired")
+        .expect("expired deployment should remain registered");
+    assert_eq!(expired.state.tpm_current.load(Ordering::Relaxed), 0);
+    assert_eq!(expired.state.fails_this_minute.load(Ordering::Relaxed), 0);
+
+    task.abort();
+}
+
+#[tokio::test]
+async fn test_minute_reset_task_releases_router_between_ticks() {
+    let router = Arc::new(Router::default());
+    let deployment = create_test_deployment("test-1", "gpt-4").await;
+    let state = deployment.state.clone();
+    state.rpm_current.store(1, Ordering::Relaxed);
+    state.minute_reset_at.store(0, Ordering::Release);
+    router.add_deployment(deployment);
+    let weak_router = Arc::downgrade(&router);
+    let task = router.clone().start_minute_reset_task();
+
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while state.rpm_current.load(Ordering::Relaxed) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("immediate maintenance tick should reset an expired window");
+    tokio::task::yield_now().await;
+    assert_eq!(Arc::strong_count(&router), 1);
+
+    drop(router);
+    assert!(weak_router.upgrade().is_none());
+    task.abort();
+    assert!(
+        task.await
+            .expect_err("task should be aborted")
+            .is_cancelled()
+    );
 }
 
 #[tokio::test]

@@ -11,6 +11,7 @@ use crate::core::integrations::CallbackRuntime;
 use crate::core::ip_access::{IpAccessControl, IpAccessMiddleware};
 use crate::core::pricing_service::PricingService;
 use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter_with_redis};
+use crate::server::http_listener::{build_actix_server, validated_listener_settings};
 use crate::server::middleware::{
     AuthMiddleware, MetricsMiddleware, RateLimitMiddleware, RequestIdMiddleware,
     SecurityHeadersMiddleware, start_auth_rate_limiter_cleanup_task,
@@ -27,7 +28,6 @@ use actix_web::{
     middleware::{Condition, DefaultHeaders, Logger, Next, from_fn},
     web,
 };
-use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -44,95 +44,16 @@ pub struct HttpServer {
     callback_runtime: CallbackRuntime,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct ListenerSettings {
-    configured_workers: usize,
-    effective_workers: usize,
-    first_request_head_timeout: std::time::Duration,
-    max_connections_per_worker: Option<usize>,
-}
-
 impl HttpServer {
-    fn validated_listener_settings(config: &ServerConfig) -> Result<ListenerSettings> {
-        Validate::validate(config).map_err(|error| {
-            GatewayError::Config(format!("Invalid server configuration: {error}"))
-        })?;
-
-        let configured_workers = config.worker_count();
-        let first_request_head_timeout = std::time::Duration::from_secs(config.timeout);
-        let Some(total_connections) = config.max_connections else {
-            return Ok(ListenerSettings {
-                configured_workers,
-                effective_workers: configured_workers,
-                first_request_head_timeout,
-                max_connections_per_worker: None,
-            });
-        };
-
-        // Actix's max_connections setting is per worker, and actix-server
-        // 2.6 cannot re-enable a worker after a limit of 1 is released. Keep
-        // each worker at 2 or more connections and round down so the effective
-        // server-wide capacity never exceeds the configured total.
-        let workers = configured_workers.min(total_connections / 2).max(1);
-        Ok(ListenerSettings {
-            configured_workers,
-            effective_workers: workers,
-            first_request_head_timeout,
-            max_connections_per_worker: Some(total_connections / workers),
-        })
-    }
-
-    fn build_actix_server(
-        state: web::Data<AppState>,
-        settings: &ListenerSettings,
-        addresses: impl ToSocketAddrs,
-    ) -> std::io::Result<(actix_web::dev::Server, std::net::SocketAddr)> {
-        let mut last_error = None;
-        for address in addresses.to_socket_addrs()? {
-            let app_state = state.clone();
-            let mut builder = ActixHttpServer::new(move || Self::create_app(app_state.clone()))
-                .workers(settings.effective_workers)
-                .client_request_timeout(settings.first_request_head_timeout);
-            if let Some(per_worker) = settings.max_connections_per_worker {
-                builder = builder.max_connections(per_worker);
-            }
-            match builder.bind(address) {
-                Ok(builder) => {
-                    let bound_addresses = builder.addrs();
-                    let [selected_address] = bound_addresses.as_slice() else {
-                        return Err(std::io::Error::other(
-                            "Actix must bind exactly one resolved address",
-                        ));
-                    };
-                    return Ok((builder.run(), *selected_address));
-                }
-                Err(error) => last_error = Some(error),
-            }
-        }
-        Err(last_error.unwrap_or_else(|| std::io::Error::other("Could not bind to address")))
-    }
-
     /// Create a new HTTP server
     pub async fn new(config: &Config) -> Result<Self> {
-        Self::validated_listener_settings(&config.gateway.server)?;
-        info!("Creating HTTP server");
+        validated_listener_settings(&config.gateway.server)?;
+        config.gateway.storage.redis.validate().map_err(|error| {
+            GatewayError::Config(format!("Invalid Redis configuration: {error}"))
+        })?;
+        config.validate()?;
 
-        crate::config::models::gateway::GatewayConfig::validate_model_alias_map(
-            &config.gateway.model_aliases,
-        )
-        .map_err(|error| GatewayError::Config(format!("Invalid model aliases: {error}")))?;
-        Self::validate_cors_config(&config.gateway.server.cors)?;
-        config
-            .gateway
-            .cache
-            .validate()
-            .map_err(|e| GatewayError::Config(format!("Invalid cache configuration: {}", e)))?;
-        config
-            .gateway
-            .monitoring
-            .callbacks
-            .validate()
-            .map_err(|e| GatewayError::Config(format!("Invalid callback configuration: {}", e)))?;
+        info!("Creating HTTP server");
         start_auth_rate_limiter_cleanup_task();
 
         let storage = crate::storage::StorageLayer::new(&config.gateway.storage).await?;
@@ -226,9 +147,11 @@ impl HttpServer {
             ))
         })?;
 
-        let callback_runtime =
-            crate::server::callbacks::build_callback_runtime(&config.gateway.monitoring.callbacks)
-                .await;
+        let callback_runtime = crate::server::callbacks::build_callback_runtime(
+            &config.gateway.monitoring.callbacks,
+            &config.gateway.monitoring.metrics,
+        )
+        .await;
         let audit_logger = if config.gateway.enterprise.audit_logging {
             AuditLogger::shared(AuditConfig::default().enable())
                 .await
@@ -267,7 +190,7 @@ impl HttpServer {
     }
 
     /// Create the Actix-web application
-    fn create_app(
+    pub(super) fn create_app(
         state: web::Data<AppState>,
     ) -> App<
         impl actix_web::dev::ServiceFactory<
@@ -421,7 +344,7 @@ impl HttpServer {
     ///
     /// Gracefully stops requests, drains workers, then closes storage.
     pub async fn start(mut self) -> Result<()> {
-        let listener_settings = Self::validated_listener_settings(&self.config)?;
+        let listener_settings = validated_listener_settings(&self.config)?;
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
         let port = self.config.port;
         let budget_persistence_task = self.budget_persistence_task.take();
@@ -462,7 +385,7 @@ impl HttpServer {
         // to Actix would create one full worker set per successful address,
         // multiplying the configured server-wide connection cap.
         let (server, selected_address) =
-            Self::build_actix_server(state, &listener_settings, bind_addr.as_str())
+            build_actix_server(state, &listener_settings, bind_addr.as_str())
                 .map_err(|e| Self::format_bind_error(e, &bind_addr, port))?;
 
         info!(
@@ -562,5 +485,342 @@ async fn normalize_non_cors_options_before_cors(
 }
 
 #[cfg(test)]
-#[path = "http_tests.rs"]
-mod tests;
+#[path = "http_metrics_tests.rs"]
+mod metrics_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use actix_web::{
+        http::{StatusCode, header},
+        test as actix_test,
+    };
+
+    #[test]
+    fn build_cors_rejects_wildcard_with_credentials() {
+        let cors_config = CorsConfig {
+            allowed_origins: vec!["*".to_string()],
+            allow_credentials: true,
+            ..Default::default()
+        };
+
+        let error = match HttpServer::build_cors(&cors_config) {
+            Ok(_) => panic!("invalid CORS configuration should be rejected"),
+            Err(error) => error,
+        };
+
+        match error {
+            GatewayError::Config(message) => {
+                assert!(message.contains("Invalid CORS configuration"));
+                assert!(message.contains("credentials"));
+            }
+            other => panic!("expected config error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn app_factory_cors_builder_falls_back_without_panicking() {
+        let cors_config = CorsConfig {
+            allowed_origins: vec!["*".to_string()],
+            allow_credentials: true,
+            ..Default::default()
+        };
+
+        let _cors = HttpServer::build_cors_for_app_factory(&cors_config);
+    }
+
+    #[tokio::test]
+    async fn new_rejects_invalid_cors_config_before_startup() {
+        let mut config = valid_http_test_config();
+        config.gateway.server.cors.allowed_origins = vec!["*".to_string()];
+        config.gateway.server.cors.allow_credentials = true;
+
+        let error = match HttpServer::new(&config).await {
+            Ok(_) => panic!("server startup should reject invalid CORS configuration"),
+            Err(error) => error,
+        };
+
+        match error {
+            GatewayError::Config(message) => {
+                assert!(message.contains("Gateway config error"));
+                assert!(message.contains("CORS"));
+                assert!(message.contains("credentials"));
+            }
+            other => panic!("expected config error, got: {other:?}"),
+        }
+    }
+
+    /// Build a config whose only optional dependency that is *configured* is
+    /// the pricing source, which points at a non-existent file so the initial
+    /// load fails deterministically.
+    fn config_with_broken_pricing(allow_degraded: bool) -> Config {
+        let mut config = valid_http_test_config();
+        // Disable enterprise/storage subsystems that would require real I/O.
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source =
+            Some("/nonexistent/path/that/cannot/be/loaded.json".to_string());
+        config.gateway.pricing.allow_degraded = allow_degraded;
+        config
+    }
+
+    #[tokio::test]
+    async fn new_fails_when_pricing_source_broken_and_not_allowed_to_degrade() {
+        let config = config_with_broken_pricing(false);
+        let result = HttpServer::new(&config).await;
+        assert!(
+            result.is_err(),
+            "pricing source load failure with allow_degraded=false must fail startup"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_succeeds_when_pricing_source_broken_but_allowed_to_degrade() {
+        let config = config_with_broken_pricing(true);
+        let result = HttpServer::new(&config).await;
+        assert!(
+            result.is_ok(),
+            "pricing source load failure with allow_degraded=true must keep startup running, \
+             got: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn new_wires_enabled_cache_config() {
+        let mut config = valid_http_test_config();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+        config.gateway.cache.enabled = true;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("enabled cache should wire runtime cache: {error}"),
+        };
+
+        assert!(server.state().response_cache.is_some());
+    }
+
+    #[tokio::test]
+    async fn new_wires_configured_callback_backend() {
+        let mut config = valid_http_test_config();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+        config.gateway.monitoring.metrics.enabled = false;
+        config.gateway.monitoring.callbacks.backends = vec![
+            crate::config::models::monitoring::CallbackBackendConfig::OpenTelemetry(
+                crate::core::integrations::OpenTelemetryConfig::default(),
+            ),
+        ];
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("configured callbacks should wire at startup: {error}"),
+        };
+
+        assert!(server.state().callbacks.is_enabled());
+        assert_eq!(
+            server.state().callbacks.registered_integrations().await,
+            vec!["opentelemetry"]
+        );
+    }
+
+    /// In-memory budget snapshots load succeeds (returns empty) on sqlite, so
+    /// we can't trigger a real "load failed" path from `Config::default()`
+    /// alone without a mock. The disabled-DB branch is covered here: when the
+    /// database is disabled we use the in-memory sqlite backend which always
+    /// returns an empty snapshot set, exercising the "Ok(snapshots)" arm.
+    #[tokio::test]
+    async fn new_succeeds_with_in_memory_budgets_when_db_disabled() {
+        let mut config = valid_http_test_config();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        // Disable pricing so we don't conflate with the broken-pricing tests.
+        config.gateway.pricing.source = None;
+
+        let result = HttpServer::new(&config).await;
+        assert!(
+            result.is_ok(),
+            "disabled DB must keep startup running with in-memory budgets, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn app_factory_metrics_endpoint_includes_recorded_http_requests() {
+        let _metrics_guard = MetricsMiddleware::test_lock().await;
+        MetricsMiddleware::reset_for_tests();
+        crate::server::middleware::reset_unpriced_metrics_for_tests();
+        crate::server::middleware::record_unpriced_event(
+            "metrics-http-provider",
+            "tenant-http-private-model",
+            "reject",
+            "reject_preflight",
+        );
+
+        let mut config = valid_http_test_config();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("server startup failed: {error}"),
+        };
+
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        let health_req = actix_test::TestRequest::get().uri("/health").to_request();
+        let health_resp = actix_test::call_service(&app, health_req).await;
+        assert_eq!(health_resp.status(), StatusCode::OK);
+        drop(actix_test::read_body(health_resp).await);
+
+        let metrics_req = actix_test::TestRequest::get().uri("/metrics").to_request();
+        let metrics_resp = actix_test::call_service(&app, metrics_req).await;
+        assert_eq!(metrics_resp.status(), StatusCode::OK);
+
+        let body = actix_test::read_body(metrics_resp).await;
+        let body = match std::str::from_utf8(&body) {
+            Ok(body) => body,
+            Err(error) => panic!("metrics response was not utf-8: {error}"),
+        };
+
+        assert!(body.contains("gateway_http_requests_total 1"));
+        assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 1"));
+        assert!(body.contains(
+            "gateway_unpriced_events_total{provider=\"metrics-http-provider\",model_bucket=\"other\",policy=\"reject\",outcome=\"reject_preflight\"} 1"
+        ));
+        assert!(!body.contains("tenant-http-private-model"));
+
+        let rendered_after_scrape = MetricsMiddleware::render_prometheus();
+        assert!(rendered_after_scrape.contains("gateway_http_requests_total 1"));
+    }
+
+    #[tokio::test]
+    async fn app_factory_metrics_records_auth_rejections_before_handler() {
+        let _metrics_guard = MetricsMiddleware::test_lock().await;
+        MetricsMiddleware::reset_for_tests();
+
+        let mut config = valid_http_test_config();
+        config.gateway.auth.enable_jwt = true;
+        config.gateway.auth.enable_api_key = true;
+        config.gateway.auth.allow_anonymous = false;
+        config.gateway.auth.jwt_secret = "AaaAaaAaaAaaAaaAaaAaaAaaAaaAaa1!".to_string();
+        config.gateway.rate_limit.enabled = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("server startup failed: {error}"),
+        };
+
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        let models_req = actix_test::TestRequest::get()
+            .uri("/v1/models")
+            .to_request();
+        match actix_test::try_call_service(&app, models_req).await {
+            Ok(response) => {
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                drop(actix_test::read_body(response).await);
+            }
+            Err(error) => assert_eq!(
+                error.as_response_error().status_code(),
+                StatusCode::UNAUTHORIZED
+            ),
+        }
+
+        let body = MetricsMiddleware::render_prometheus();
+        assert!(body.contains("gateway_http_requests_total 1"));
+        assert!(body.contains("gateway_http_request_errors_total 1"));
+        assert!(body.contains("gateway_http_responses_total{class=\"4xx\"} 1"));
+    }
+
+    include!("http_cors_tests.rs");
+    include!("http_validation_tests.rs");
+
+    #[tokio::test]
+    async fn app_factory_does_not_collect_http_metrics_when_metrics_disabled() {
+        let _metrics_guard = MetricsMiddleware::test_lock().await;
+        MetricsMiddleware::reset_for_tests();
+
+        let mut config = valid_http_test_config();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.monitoring.metrics.enabled = false;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("server startup failed: {error}"),
+        };
+
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        let health_req = actix_test::TestRequest::get().uri("/health").to_request();
+        let health_resp = actix_test::call_service(&app, health_req).await;
+        assert_eq!(health_resp.status(), StatusCode::OK);
+        drop(actix_test::read_body(health_resp).await);
+
+        let body = MetricsMiddleware::render_prometheus();
+        assert!(body.contains("gateway_http_requests_total 0"));
+        assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 0"));
+    }
+
+    #[tokio::test]
+    async fn app_factory_mounts_explicit_cache_admin_surface() {
+        let mut config = valid_http_test_config();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.monitoring.metrics.enabled = false;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+
+        let server = match HttpServer::new(&config).await {
+            Ok(server) => server,
+            Err(error) => panic!("server startup failed: {error}"),
+        };
+
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        let req = actix_test::TestRequest::get()
+            .uri("/admin/cache/status")
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+
+        let body: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert_eq!(body["status"], "unsupported");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("not wired")
+        );
+    }
+}

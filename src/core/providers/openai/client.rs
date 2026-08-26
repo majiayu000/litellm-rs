@@ -127,10 +127,7 @@ impl OpenAIProvider {
                 message: e.to_string(),
             })?;
 
-        let response_bytes = response.bytes().await.map_err(|e| ProviderError::Network {
-            provider: "openai",
-            message: e.to_string(),
-        })?;
+        let response_bytes = super::api_methods::read_success_response_bytes(response).await?;
 
         let response_json: Value = serde_json::from_slice(&response_bytes).map_err(|e| {
             ProviderError::ResponseParsing {
@@ -171,7 +168,7 @@ impl OpenAIProvider {
         if !status.is_success() {
             let body = read_streaming_error_body(response)
                 .await
-                .map_err(|e| e.into_provider_error("openai"))?;
+                .unwrap_or_else(|_| "failed to read upstream error body".to_string());
             let mapper = super::error_mapper::OpenAIErrorMapper;
             return Err(mapper.map_http_error(status.as_u16(), &body));
         }

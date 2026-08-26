@@ -3,7 +3,7 @@
 //! This module contains the implementation of 7 routing strategies
 //! for selecting deployments.
 
-use super::deployment::{Deployment, DeploymentId};
+use super::deployment::{Deployment, DeploymentId, current_timestamp};
 use dashmap::DashMap;
 use rand::Rng;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -32,17 +32,19 @@ pub fn build_routing_contexts<'id>(
     deployments: &DashMap<DeploymentId, Deployment>,
 ) -> Vec<RoutingContext<'id>> {
     let mut contexts = Vec::with_capacity(candidate_ids.len());
+    let now = current_timestamp();
 
     for id in candidate_ids {
         if let Some(deployment) = deployments.get(id.as_str()) {
+            let minute = deployment.state.minute_counters(now);
             contexts.push(RoutingContext {
                 deployment_id: id,
                 weight: deployment.config.weight,
                 priority: deployment.config.priority,
                 active_requests: deployment.state.active_requests.load(Relaxed),
-                tpm_current: deployment.state.tpm_current.load(Relaxed),
+                tpm_current: minute.tpm,
                 tpm_limit: deployment.config.tpm_limit,
-                rpm_current: deployment.state.rpm_current.load(Relaxed),
+                rpm_current: minute.rpm,
                 rpm_limit: deployment.config.rpm_limit,
                 avg_latency_us: deployment.state.avg_latency_us.load(Relaxed),
             });

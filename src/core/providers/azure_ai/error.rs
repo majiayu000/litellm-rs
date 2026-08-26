@@ -33,7 +33,8 @@ impl ErrorMapper<ProviderError> for AzureAIErrorMapper {
                     ProviderError::authentication("azure_ai", "Authentication failed")
                 }
             }
-            403 => ProviderError::authentication("azure_ai", "Access forbidden"),
+            // Upstream 403 is a permission failure; keep the status.
+            403 => ProviderError::api_error("azure_ai", status_code, "Access forbidden"),
             404 => {
                 if response_body.contains("model") {
                     ProviderError::model_not_found("azure_ai", "Model not found")

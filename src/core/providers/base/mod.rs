@@ -9,6 +9,10 @@ pub mod model_entry;
 pub mod pricing;
 pub mod sse;
 
+#[cfg(test)]
+#[path = "sse_utf8_tests.rs"]
+mod sse_utf8_tests;
+
 pub use crate::core::pricing::{PricingDatabase, get_pricing_db};
 pub use crate::utils::net::http::ProviderRequestBuilder;
 pub use config::BaseConfig;

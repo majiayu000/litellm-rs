@@ -375,8 +375,9 @@ fn moderation_gateway_error_to_provider_error(error: GatewayError) -> ProviderEr
             ProviderError::invalid_request("moderation_proxy", message)
         }
         GatewayError::Config(message) => ProviderError::configuration("moderation_proxy", message),
-        GatewayError::Auth(message) | GatewayError::Forbidden(message) => {
-            ProviderError::authentication("moderation_proxy", message)
+        GatewayError::Auth(message) => ProviderError::authentication("moderation_proxy", message),
+        GatewayError::Forbidden(message) => {
+            ProviderError::api_error("moderation_proxy", 403, message)
         }
         GatewayError::Timeout(message) => ProviderError::timeout("moderation_proxy", message),
         GatewayError::RateLimit {
@@ -404,7 +405,8 @@ async fn moderation_upstream_error(response: reqwest::Response) -> ProviderError
 
     match status {
         400 => ProviderError::invalid_request("moderation_proxy", message),
-        401 | 403 => ProviderError::authentication("moderation_proxy", message),
+        401 => ProviderError::authentication("moderation_proxy", message),
+        403 => ProviderError::api_error("moderation_proxy", status, message),
         402 => ProviderError::quota_exceeded("moderation_proxy", message),
         404 => ProviderError::model_not_found("moderation_proxy", message),
         408 | 504 => ProviderError::timeout("moderation_proxy", message),

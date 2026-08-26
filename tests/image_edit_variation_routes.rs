@@ -29,6 +29,7 @@ mod tests {
     #[derive(Clone)]
     struct MockImageState {
         captured_requests: Arc<Mutex<Vec<CapturedImageRequest>>>,
+        status: StatusCode,
     }
 
     struct MockImageServer {
@@ -40,9 +41,14 @@ mod tests {
 
     impl MockImageServer {
         async fn start_image_mock() -> Self {
+            Self::start_image_mock_with_status(StatusCode::OK).await
+        }
+
+        async fn start_image_mock_with_status(status: StatusCode) -> Self {
             let captured_requests = Arc::new(Mutex::new(Vec::new()));
             let state = MockImageState {
                 captured_requests: Arc::clone(&captured_requests),
+                status,
             };
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
@@ -102,6 +108,15 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
+        if state.status != StatusCode::OK {
+            return HttpResponse::build(state.status).json(json!({
+                "error": {
+                    "message": "image model access denied",
+                    "type": "permission_error",
+                    "code": "permission_denied"
+                }
+            }));
+        }
         HttpResponse::Ok().json(json!({
             "created": 1710000000,
             "data": [{ "url": "https://images.example.test/edit.png" }]
@@ -114,6 +129,15 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
+        if state.status != StatusCode::OK {
+            return HttpResponse::build(state.status).json(json!({
+                "error": {
+                    "message": "image model access denied",
+                    "type": "permission_error",
+                    "code": "permission_denied"
+                }
+            }));
+        }
         HttpResponse::Ok().json(json!({
             "created": 1710000001,
             "data": [{ "b64_json": "dmFyaWF0aW9u" }]
@@ -573,6 +597,40 @@ mod tests {
             "image proxy model spend must charge image tokens once"
         );
 
+        mock.stop_image_mock().await;
+    }
+
+    #[tokio::test]
+    async fn image_edit_route_preserves_upstream_403() {
+        let mock = MockImageServer::start_image_mock_with_status(StatusCode::FORBIDDEN).await;
+        let state = build_test_state(vec![image_route_provider(&mock.base_url)]).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let boundary = "litellm-rs-image-boundary";
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/edits")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(image_edit_multipart_body(boundary))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["error"]["message"], "image model access denied");
+        assert_eq!(body["error"]["type"], "permission_error");
+        assert_eq!(body["error"]["code"], "permission_denied");
+        assert_eq!(mock.requests().len(), 1);
         mock.stop_image_mock().await;
     }
 

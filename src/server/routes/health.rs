@@ -204,10 +204,15 @@ async fn version_info() -> HttpResponse {
 async fn metrics(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
     debug!("Metrics requested");
 
+    let callback_metrics = state
+        .callbacks
+        .render_prometheus_metrics()
+        .unwrap_or_default();
     let metrics = render_prometheus_metrics(
         state.config.load().providers().len(),
         &MetricsMiddleware::render_prometheus(),
         &crate::core::rate_limiter::render_degraded_metrics(),
+        &callback_metrics,
     );
 
     Ok(HttpResponse::Ok()
@@ -219,6 +224,7 @@ fn render_prometheus_metrics(
     providers_count: usize,
     http_metrics: &str,
     rate_limiter_metrics: &str,
+    callback_metrics: &str,
 ) -> String {
     format!(
         r#"# HELP gateway_uptime_seconds Total uptime of the gateway in seconds
@@ -240,13 +246,16 @@ gateway_providers_total {}
 {}
 
 {}
+
+{}
 "#,
         get_uptime_seconds(),
         get_memory_usage(),
         get_cpu_usage(),
         providers_count,
         http_metrics,
-        rate_limiter_metrics
+        rate_limiter_metrics,
+        callback_metrics
     )
 }
 
@@ -731,12 +740,14 @@ mod tests {
             "gateway_http_requests_total 7\n\
              gateway_http_responses_total{class=\"2xx\"} 5\n",
             "# HELP rate_limiter_degraded_total Redis distributed rate limiter degraded operations\n",
+            "litellm_requests_total{model=\"gpt-4\"} 3\n",
         );
 
         assert!(body.contains("gateway_providers_total 2"));
         assert!(body.contains("gateway_http_requests_total 7"));
         assert!(body.contains("gateway_http_responses_total{class=\"2xx\"} 5"));
         assert!(body.contains("rate_limiter_degraded_total"));
+        assert!(body.contains("litellm_requests_total{model=\"gpt-4\"} 3"));
     }
 
     #[test]

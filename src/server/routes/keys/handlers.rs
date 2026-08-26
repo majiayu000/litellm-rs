@@ -1,10 +1,10 @@
 //! HTTP request handlers for API key management
 
 use super::access::{
-    authenticate_request, check_auth_result_ownership, check_ownership, filter_and_paginate_keys,
-    invalidate_api_key_auth_cache, is_auth_enabled, resolve_create_key_scope,
-    validate_create_key_rate_limits, validate_update_key_permissions,
-    validate_update_key_rate_limits,
+    auth_result_from_request_extensions, authenticate_request, check_auth_result_ownership,
+    check_ownership, filter_and_paginate_keys, invalidate_api_key_auth_cache, is_auth_enabled,
+    resolve_create_key_scope, validate_create_key_rate_limits, validate_update_key_permissions,
+    validate_update_key_rate_limits, verify_key_access_allowed, verify_unknown_key_access_allowed,
 };
 use super::types::{
     CreateKeyRequest, CreateKeyResponse, KeyErrorResponse, KeyResponse, KeyUsageResponse,
@@ -684,15 +684,55 @@ pub async fn get_key_usage(
 
 /// POST /v1/keys/verify - Verify an API key
 pub async fn verify_key(
+    req: HttpRequest,
     state: web::Data<AppState>,
     request: web::Json<VerifyKeyRequest>,
 ) -> ActixResult<HttpResponse> {
     info!("Verifying API key");
 
+    // AuthMiddleware has already authenticated this non-public route and
+    // attached the principal. Reuse that result rather than repeating the
+    // authoritative database lookup and last-used update.
+    let auth_opt = if is_auth_enabled(&state) {
+        match auth_result_from_request_extensions(&req) {
+            Some(auth) => Some(auth),
+            None => {
+                let error_response =
+                    KeyErrorResponse::unauthorized("Authentication required to verify a key");
+                return Ok(HttpResponse::Unauthorized()
+                    .json(ApiResponse::<()>::error(error_response.error)));
+            }
+        }
+    } else {
+        None
+    };
+
     let key_manager = get_key_manager(&state);
 
-    match key_manager.validate_key(&request.key).await {
+    match key_manager
+        .validate_key_without_usage_update(&request.key)
+        .await
+    {
         Ok(result) => {
+            // Ownership check (skipped when auth is disabled): metadata for a
+            // valid key may only be seen by the key's own caller, its owner,
+            // or management access. Verifying your own key by presenting its
+            // secret is always allowed.
+            if let Some(auth) = auth_opt.as_ref() {
+                let allowed = result
+                    .key
+                    .as_ref()
+                    .map(|key_info| verify_key_access_allowed(auth, key_info))
+                    .unwrap_or_else(|| verify_unknown_key_access_allowed(auth));
+                if !allowed {
+                    warn!("Caller attempted to verify a key without authorization");
+                    let error_response =
+                        KeyErrorResponse::forbidden("Not authorized to verify this key");
+                    return Ok(HttpResponse::Forbidden()
+                        .json(ApiResponse::<()>::error(error_response.error)));
+                }
+            }
+            key_manager.record_validated_key_usage(&result);
             let response = VerifyKeyResponse { result };
             Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
         }

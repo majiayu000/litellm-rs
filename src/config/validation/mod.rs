@@ -21,6 +21,8 @@ mod enterprise_validators;
 mod monitoring_validators;
 mod router_validators;
 mod ssrf;
+#[cfg(test)]
+mod storage_tests;
 mod storage_validators;
 #[cfg(test)]
 mod tests;
