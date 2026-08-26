@@ -65,44 +65,53 @@ use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, error::Interna
 
 /// Configure AI API routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
+    configure_routes_impl(cfg, None);
+}
+
+/// Configure AI API routes with an explicit JSON body limit.
+pub fn configure_routes_with_body_limit(cfg: &mut web::ServiceConfig, max_body_size: usize) {
+    configure_routes_impl(cfg, Some(max_body_size));
+}
+
+fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usize>) {
     cfg.service(
         web::resource("/completions")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(completions)),
     )
     .service(
         web::resource("/moderations")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(create_moderation)),
     )
     .service(
         web::resource("/rerank")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(rerank)),
     )
     .service(
         web::resource("/engines/{model_id}/completions")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(engine_completions)),
     )
     .service(
         web::resource("/openai/deployments/{model_id}/completions")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(web::post().to(engine_completions)),
     );
     cfg.service(
         web::scope("/v1")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             // Legacy text completions
@@ -201,7 +210,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
     cfg.service(
         web::scope("/v1beta")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(
@@ -215,7 +224,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
     cfg.service(
         web::scope("/gemini/v1beta")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(
@@ -229,7 +238,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
     cfg.service(
         web::scope("/gemini/v1")
-            .app_data(openai_json_error_config())
+            .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
             .route(
@@ -323,12 +332,16 @@ pub(crate) fn openai_internal_error_response(message: impl Into<String>) -> Http
     openai_errors::internal_error(message)
 }
 
-fn openai_json_error_config() -> web::JsonConfig {
-    web::JsonConfig::default().error_handler(|error, _req| {
+fn openai_json_error_config(max_body_size: Option<usize>) -> web::JsonConfig {
+    let config = web::JsonConfig::default().error_handler(|error, _req| {
         let response =
             openai_errors::validation_error(format!("Invalid JSON request body: {error}"));
         InternalError::from_response(error, response).into()
-    })
+    });
+    match max_body_size {
+        Some(limit) => config.limit(limit),
+        None => config,
+    }
 }
 
 fn openai_query_error_config() -> web::QueryConfig {
@@ -365,6 +378,51 @@ mod tests {
     use actix_web::{App, HttpResponse, http::StatusCode, test, web};
     use serde::Deserialize;
     use serde_json::Value;
+
+    #[actix_web::test]
+    async fn public_configure_routes_keeps_actix_callback_shape() {
+        let _: fn(&mut web::ServiceConfig) = super::configure_routes;
+        let _: fn(&mut web::ServiceConfig, usize) = super::configure_routes_with_body_limit;
+    }
+
+    #[actix_web::test]
+    async fn public_configure_routes_keeps_actix_default_json_limit() {
+        let state = build_no_provider_state().await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(super::configure_routes),
+        )
+        .await;
+        fn payload_with_size(target_size: usize) -> String {
+            const PREFIX: &str =
+                "{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"";
+            const SUFFIX: &str = "\"}]}";
+            format!(
+                "{PREFIX}{}{SUFFIX}",
+                "x".repeat(target_size - PREFIX.len() - SUFFIX.len())
+            )
+        }
+
+        let accepted_request = test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("content-type", "application/json"))
+            .set_payload(payload_with_size(2 * 1024 * 1024 - 1024))
+            .to_request();
+        let accepted_response = test::call_service(&app, accepted_request).await;
+        let accepted_body = test::read_body(accepted_response).await;
+        assert!(!String::from_utf8_lossy(&accepted_body).contains("Invalid JSON request body"));
+
+        let rejected_request = test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("content-type", "application/json"))
+            .set_payload(payload_with_size(2 * 1024 * 1024 + 1024))
+            .to_request();
+        let rejected_response = test::call_service(&app, rejected_request).await;
+        assert_eq!(rejected_response.status(), StatusCode::BAD_REQUEST);
+        let rejected_body = test::read_body(rejected_response).await;
+        assert!(String::from_utf8_lossy(&rejected_body).contains("Invalid JSON request body"));
+    }
 
     async fn build_no_provider_state() -> crate::server::state::AppState {
         let mut config = crate::server::valid_test_config();

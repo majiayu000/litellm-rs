@@ -29,7 +29,10 @@ use tracing::{debug, error, warn};
 /// Auth middleware for Actix-web
 pub struct AuthMiddleware;
 
-fn bypasses_header_auth(path: &str) -> bool {
+fn bypasses_header_auth(path: &str, auth_method: &AuthMethod) -> bool {
+    if path == "/health/ready" {
+        return matches!(auth_method, AuthMethod::None);
+    }
     is_public_route(path) || path == "/auth/refresh"
 }
 
@@ -73,10 +76,6 @@ where
         let service = Rc::clone(&self.service);
 
         Box::pin(async move {
-            // Check public route with &str reference before any mutable borrows,
-            // avoiding a per-request String allocation for the path.
-            let is_public = bypasses_header_auth(req.path());
-
             let app_state = match req.app_data::<web::Data<AppState>>().cloned() {
                 Some(state) => state,
                 None => {
@@ -96,6 +95,7 @@ where
             let context = build_request_context(&mut req);
             let auth_method =
                 extract_auth_method_with_api_key_header(req.headers(), api_key_header.as_str());
+            let is_public = bypasses_header_auth(req.path(), &auth_method);
             let client_id = get_client_identifier(&req, &trusted_proxies);
             let network_rate_limit_enabled = rate_limit_enabled && client_id.is_some();
             let rate_limiter = get_auth_rate_limiter();
@@ -228,9 +228,6 @@ where
             match app_state.auth.authenticate(auth_method, context).await {
                 Ok(result) if result.success => {
                     auth_attempt.release();
-                    if let Some(reservation) = auth_rate_limit_reservation.take() {
-                        reservation.release().await;
-                    }
                     // This is an IP-wide failure bucket, so a valid credential
                     // cannot prove that earlier failures came from the same
                     // principal. Preserve the failures to prevent an attacker
@@ -253,6 +250,9 @@ where
                         }
                         Err(error) => {
                             warn!("Authenticated API key policy is invalid: {}", error);
+                            if let Some(reservation) = auth_rate_limit_reservation.take() {
+                                reservation.release().await;
+                            }
                             return Ok(authentication_unavailable_response(req));
                         }
                     }
@@ -278,6 +278,10 @@ where
                     }
                     if let Some(api_key) = result.api_key {
                         req.extensions_mut().insert::<ApiKey>(api_key);
+                    }
+
+                    if let Some(reservation) = auth_rate_limit_reservation.take() {
+                        reservation.release().await;
                     }
 
                     service
@@ -628,6 +632,19 @@ mod tests {
             "session-id".to_string()
         )));
         assert!(!requires_auth_verification(&AuthMethod::None));
+    }
+
+    #[test]
+    fn readiness_uses_optional_header_auth() {
+        assert!(bypasses_header_auth("/health/ready", &AuthMethod::None));
+        assert!(!bypasses_header_auth(
+            "/health/ready",
+            &AuthMethod::ApiKey("present".to_string())
+        ));
+        assert!(bypasses_header_auth(
+            "/health",
+            &AuthMethod::ApiKey("ignored".to_string())
+        ));
     }
 
     #[test]

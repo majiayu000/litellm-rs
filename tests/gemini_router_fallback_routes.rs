@@ -159,6 +159,10 @@ mod tests {
         config.gateway.auth.allow_anonymous = true;
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
+        // These tests assert foreground fallback request counts. Active health
+        // probes are an independent background workload and are enabled by
+        // default, so disable them explicitly for this request-path fixture.
+        config.gateway.router.load_balancer.health_check_enabled = false;
         config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
         let state = GatewayHttpServer::new(&config)

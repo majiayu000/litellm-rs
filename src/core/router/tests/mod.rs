@@ -6,6 +6,7 @@
 mod cooldown_tests;
 mod execution_tests;
 mod fallback_tests;
+mod health_probe_replacement_tests;
 mod router_tests;
 mod strategy_tests;
 

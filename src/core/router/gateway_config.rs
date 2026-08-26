@@ -13,7 +13,8 @@ mod gateway_alias_tests;
 
 use super::config::RouterConfig;
 use super::deployment::{
-    Deployment, DeploymentConfig, HealthCheckPolicy, LegacySelectorMetadata, RetrySchedule,
+    Deployment, DeploymentConfig, HealthCheckPolicy, LegacySelectorMetadata,
+    ProviderInstanceIdentity, RetrySchedule,
 };
 use super::error::RouterError;
 use super::gateway_aliases::normalize_model_aliases;
@@ -224,6 +225,7 @@ impl Router {
                     provider_name, e
                 ))
             })?;
+            let provider_instance_identity = ProviderInstanceIdentity::new();
             let legacy_metadata = construction.legacy_metadata;
 
             // Determine which models this deployment serves.
@@ -280,8 +282,10 @@ impl Router {
                         &model,
                         deployment_config.clone(),
                         tags.clone(),
+                        provider_instance_identity.clone(),
                     ),
                     legacy_metadata.clone(),
+                    provider_name.clone(),
                 ));
             }
         }
@@ -297,13 +301,12 @@ impl Router {
         let mut aliases = normalized_aliases.iter().collect::<Vec<_>>();
         aliases.sort_unstable_by_key(|(alias, _)| *alias);
         router.try_update_routing_snapshot(move |snapshot| {
-            for (deployment, legacy_metadata) in staged {
-                match legacy_metadata {
-                    Some(metadata) => {
-                        snapshot.insert_deployment_with_legacy_metadata(deployment, metadata);
-                    }
-                    None => snapshot.insert_deployment(deployment),
-                }
+            for (deployment, legacy_metadata, provider_name) in staged {
+                snapshot.insert_gateway_deployment(
+                    deployment,
+                    legacy_metadata,
+                    provider_name.as_str(),
+                );
             }
             for (alias, target) in aliases {
                 snapshot.add_model_alias(alias, target)?;
@@ -336,12 +339,14 @@ fn create_deployment_from_config(
     model: &str,
     deployment_config: DeploymentConfig,
     tags: Vec<String>,
+    provider_instance_identity: ProviderInstanceIdentity,
 ) -> Deployment {
-    Deployment::new(
+    Deployment::new_with_provider_instance(
         deployment_id.to_string(),
         provider,
         model.to_string(),
         model.to_string(),
+        provider_instance_identity,
     )
     .with_config(deployment_config)
     .with_tags(tags)
@@ -379,7 +384,7 @@ fn deployment_config_from_provider(
             backoff_multiplier: config.retry.backoff_multiplier,
             jitter_ratio: config.retry.jitter,
         }),
-        health_check_policy: config.health_check.has_runtime_overrides().then(|| {
+        health_check_policy: config.health_check.has_runtime_overrides().then_some(
             HealthCheckPolicy {
                 provider_name: config.name.clone(),
                 interval_secs: config.health_check.interval,
@@ -388,8 +393,8 @@ fn deployment_config_from_provider(
                 endpoint,
                 endpoint_access: config.endpoint_access,
                 expected_codes: config.health_check.expected_codes.clone(),
-            }
-        }),
+            },
+        ),
     })
 }
 
@@ -606,7 +611,6 @@ mod tests {
     #[test]
     fn test_default_provider_health_config_preserves_no_probe_behavior() {
         let deployment = deployment_config_from_provider(&ProviderConfig::default()).unwrap();
-
         assert!(deployment.health_check_policy.is_none());
     }
 

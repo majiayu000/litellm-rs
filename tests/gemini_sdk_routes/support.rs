@@ -275,6 +275,9 @@ pub(crate) async fn build_test_state(providers: Vec<ProviderConfig>) -> AppState
     config.gateway.auth.allow_anonymous = true;
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
+    // SDK route tests assert foreground wire requests. Active probes are a
+    // separate default-on workload, so exclude them from this fixture.
+    config.gateway.router.load_balancer.health_check_enabled = false;
     config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
     let state = GatewayHttpServer::new(&config)
@@ -292,6 +295,7 @@ pub(crate) async fn build_auth_required_state(providers: Vec<ProviderConfig>) ->
     let mut config = Config::default();
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
+    config.gateway.router.load_balancer.health_check_enabled = false;
     config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
     let state = GatewayHttpServer::new(&config)

@@ -64,6 +64,7 @@ pub struct RoutingSnapshot {
     pub(crate) model_index: HashMap<String, Vec<DeploymentId>>,
     pub(crate) model_order: Vec<String>,
     pub(crate) model_aliases: HashMap<String, String>,
+    pub(super) provider_names: HashMap<DeploymentId, String>,
     legacy_selector_metadata: HashMap<DeploymentId, LegacySelectorMetadata>,
 }
 
@@ -75,6 +76,7 @@ impl RoutingSnapshot {
             model_index: HashMap::new(),
             model_order: Vec::new(),
             model_aliases: HashMap::new(),
+            provider_names: HashMap::new(),
             legacy_selector_metadata: HashMap::new(),
         }
     }
@@ -100,6 +102,7 @@ impl RoutingSnapshot {
             model_index: HashMap::new(),
             model_order: Vec::new(),
             model_aliases: previous.model_aliases.clone(),
+            provider_names: HashMap::new(),
             // A bulk replacement carries no fresh credential provenance. Runtime
             // state may follow a stable deployment ID, but selector metadata may
             // not: retaining it would accept an old credential after rotation.
@@ -108,7 +111,9 @@ impl RoutingSnapshot {
 
         for mut deployment in deployments {
             if let Some(old) = previous.deployments.get(&deployment.id) {
-                deployment.state = old.state.clone();
+                deployment.state = old.state.for_snapshot_insertion_with_provider(
+                    deployment.state.provider_instance_identity(),
+                );
             }
             snapshot.insert_deployment(deployment);
         }
@@ -126,9 +131,8 @@ impl RoutingSnapshot {
     pub(super) fn insert_deployment(&mut self, mut deployment: Deployment) {
         let model_name = deployment.model_name.clone();
         let deployment_id = deployment.id.clone();
-        if let Some(old) = self.deployments.get(&deployment_id) {
-            deployment.state = old.state.clone();
-        }
+        let provider_name = self.retained_provider_name(&deployment_id, deployment.provider.name());
+        deployment.state = self.state_for_insertion(&deployment);
 
         if let Some(old) = self
             .deployments
@@ -137,6 +141,8 @@ impl RoutingSnapshot {
         {
             self.remove_from_model_index(&old.model_name, &deployment_id);
         }
+        self.provider_names
+            .insert(deployment_id.clone(), provider_name);
 
         if !self.model_index.contains_key(&model_name) {
             self.model_order.push(model_name.clone());
@@ -161,6 +167,7 @@ impl RoutingSnapshot {
 
     fn remove_deployment(&mut self, id: &str) -> Option<Deployment> {
         let removed = self.deployments.remove(id);
+        self.provider_names.remove(id);
         self.legacy_selector_metadata.remove(id);
 
         if let Some(ref deployment) = removed {
@@ -305,18 +312,14 @@ impl RoutingSnapshot {
 #[derive(Debug)]
 pub struct Router {
     /// Atomically installed routing metadata generation.
-    pub(crate) routing_snapshot: ArcSwap<RoutingSnapshot>,
-
+    pub(crate) routing_snapshot: Arc<ArcSwap<RoutingSnapshot>>,
     /// Serializes snapshot writers so concurrent updates cannot overwrite one
     /// another while readers keep using lock-free ArcSwap loads.
     pub(crate) routing_snapshot_write_lock: Mutex<()>,
-
     /// Router configuration
     pub(crate) config: RouterConfig,
-
     /// Fallback configuration
     pub(crate) fallback_config: FallbackConfig,
-
     /// Round-robin counters (per model, for RoundRobin strategy)
     pub(crate) round_robin_counters: DashMap<String, AtomicUsize>,
 
@@ -329,15 +332,16 @@ pub struct Router {
     /// Atomic counter: number of fallback model attempts.
     pub(crate) fallback_triggered_count: AtomicU64,
 
-    /// One active health probe task per gateway provider.
+    /// Single supervisor task coordinating all current health probe groups.
     pub(crate) health_probe_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    pub(crate) health_probe_wakeup: Arc<tokio::sync::Notify>,
 }
 
 impl Router {
     /// Create a new router with the given configuration
     pub fn new(config: RouterConfig) -> Self {
         Self {
-            routing_snapshot: ArcSwap::from_pointee(RoutingSnapshot::empty()),
+            routing_snapshot: Arc::new(ArcSwap::from_pointee(RoutingSnapshot::empty())),
             routing_snapshot_write_lock: Mutex::new(()),
             config,
             fallback_config: FallbackConfig::default(),
@@ -346,6 +350,7 @@ impl Router {
             strategy_used_count: AtomicU64::new(0),
             fallback_triggered_count: AtomicU64::new(0),
             health_probe_tasks: Mutex::new(HashMap::new()),
+            health_probe_wakeup: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -382,6 +387,7 @@ impl Router {
         let result = update(&mut next);
         next.generation = next_routing_generation();
         self.routing_snapshot.store(Arc::new(next));
+        self.health_probe_wakeup.notify_one();
         result
     }
 
@@ -394,6 +400,7 @@ impl Router {
         let result = update(&mut next)?;
         next.generation = next_routing_generation();
         self.routing_snapshot.store(Arc::new(next));
+        self.health_probe_wakeup.notify_one();
         Ok(result)
     }
 
@@ -406,6 +413,8 @@ impl Router {
     }
 
     /// Add a deployment to the router
+    /// Every insertion resets probe evidence; remove/re-add does not restore aliases.
+    /// Restore identity/probes from gateway config; dynamic rebinding is unsupported.
     pub fn add_deployment(&self, deployment: Deployment) {
         self.update_routing_snapshot(|snapshot| {
             snapshot.legacy_selector_metadata.remove(&deployment.id);
@@ -427,9 +436,13 @@ impl Router {
     ///
     /// Builds the new generation locally first, then installs it with a single
     /// ArcSwap store so readers never observe mixed deployment/index state.
+    /// Every input resets probe evidence; remove/re-add does not restore aliases.
+    /// Restore identity/probes from gateway config; dynamic rebinding is unsupported.
     pub fn set_model_list(&self, deployments: Vec<Deployment>) {
         self.update_routing_snapshot(|snapshot| {
+            let provider_names = snapshot.provider_names.clone();
             *snapshot = RoutingSnapshot::from_deployments_preserving_state(deployments, snapshot);
+            snapshot.restore_provider_names(provider_names);
         });
     }
 

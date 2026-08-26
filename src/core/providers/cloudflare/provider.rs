@@ -395,7 +395,8 @@ impl LLMProvider for CloudflareProvider {
             .execute_request(&url, HttpMethod::GET, headers, None::<serde_json::Value>)
             .await
         {
-            Ok(_) => HealthStatus::Healthy,
+            Ok(response) if response.status().is_success() => HealthStatus::Healthy,
+            Ok(_) => HealthStatus::Unhealthy,
             Err(_) => HealthStatus::Unhealthy,
         }
     }

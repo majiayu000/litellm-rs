@@ -85,6 +85,13 @@ The gateway router config maps these fields into the runtime router:
 - `router.circuit_breaker.success_threshold` sets the successes required to recover from cooldown.
 - `router.load_balancer.health_check_enabled` enables pre-call deployment health checks.
 
+Active provider probes are opt-in: a provider's `health_check` must differ from the defaults.
+Native probes are limited to provider types whose configured deployment is unambiguously a chat
+model (currently Anthropic and GitHub Copilot); they send a one-token request and may incur provider
+charges. OpenAI, Bedrock, OpenAI-compatible, Vertex AI, FalAI, and other multi-capability providers
+require a custom `health_check.endpoint`. Without an active probe policy, readiness remains
+fail-closed (`Unknown`).
+
 `router.load_balancer.sticky_sessions` and `router.load_balancer.session_timeout` are reserved for future session affinity. Non-default values fail config validation until runtime affinity is implemented.
 
 Gateway YAML can publish stable model names and deterministic primary/fallback

@@ -1,5 +1,7 @@
 use super::*;
 use crate::core::types::{chat::ChatMessage, message::MessageContent, message::MessageRole};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 fn create_test_config() -> CloudflareConfig {
     CloudflareConfig {
@@ -11,6 +13,42 @@ fn create_test_config() -> CloudflareConfig {
 
 async fn create_test_provider() -> CloudflareProvider {
     CloudflareProvider::new(create_test_config()).await.unwrap()
+}
+
+async fn read_http_headers(socket: &mut TcpStream) -> std::io::Result<()> {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+
+    loop {
+        let bytes_read = socket.read(&mut buffer).await?;
+        if bytes_read == 0 {
+            return Ok(());
+        }
+        request.extend_from_slice(&buffer[..bytes_read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            return Ok(());
+        }
+    }
+}
+
+async fn health_response_base_url(status: &str) -> std::io::Result<String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let addr = listener.local_addr()?;
+    let response = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+    tokio::spawn(async move {
+        let Ok((mut socket, _)) = listener.accept().await else {
+            return;
+        };
+        if read_http_headers(&mut socket).await.is_err() {
+            return;
+        }
+        if let Err(error) = socket.write_all(response.as_bytes()).await {
+            eprintln!("test server failed to write response: {error}");
+        }
+    });
+
+    Ok(format!("http://{addr}"))
 }
 
 // ==================== Provider Creation Tests ====================
@@ -87,6 +125,35 @@ async fn test_provider_without_api_token() {
 
     let provider = CloudflareProvider::new(config).await;
     assert!(provider.is_err());
+}
+
+#[tokio::test]
+async fn health_check_is_healthy_only_for_2xx_responses() {
+    for (response_status, expected_health) in [
+        ("200 OK", HealthStatus::Healthy),
+        ("204 No Content", HealthStatus::Healthy),
+        ("302 Found", HealthStatus::Unhealthy),
+        ("401 Unauthorized", HealthStatus::Unhealthy),
+        ("403 Forbidden", HealthStatus::Unhealthy),
+        ("429 Too Many Requests", HealthStatus::Unhealthy),
+        ("500 Internal Server Error", HealthStatus::Unhealthy),
+    ] {
+        let api_base = health_response_base_url(response_status)
+            .await
+            .expect("test health endpoint should start");
+        let provider = CloudflareProvider::new(CloudflareConfig {
+            api_base: Some(api_base),
+            ..create_test_config()
+        })
+        .await
+        .expect("Cloudflare provider should construct");
+
+        assert_eq!(
+            provider.health_check().await,
+            expected_health,
+            "unexpected health for HTTP {response_status}"
+        );
+    }
 }
 
 // ==================== Provider Capabilities Tests ====================

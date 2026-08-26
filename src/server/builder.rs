@@ -90,28 +90,36 @@ pub(super) async fn load_default_config_or_env(config_path: &Path) -> Result<Con
         config_path.display()
     );
 
-    match Config::from_file(config_path).await {
+    if tokio::fs::try_exists(config_path).await.map_err(|error| {
+        GatewayError::Config(format!(
+            "Failed to inspect default configuration file {}: {error}",
+            config_path.display()
+        ))
+    })? {
+        let config = Config::from_file(config_path).await.map_err(|file_error| {
+            GatewayError::Config(format!(
+                "Failed to load default configuration file {}: {file_error}",
+                config_path.display()
+            ))
+        })?;
+        info!("✅ Configuration file loaded successfully");
+        return Ok(config);
+    }
+
+    info!(
+        "⚠️  Default configuration file {} does not exist. Trying environment variables.",
+        config_path.display()
+    );
+    match Config::from_env() {
         Ok(config) => {
-            info!("✅ Configuration file loaded successfully");
+            info!("✅ Loaded configuration from environment variables");
             Ok(config)
         }
-        Err(file_error) => {
-            info!(
-                "⚠️  Failed to load {}: {}. Trying environment variables.",
-                config_path.display(),
-                file_error
-            );
-            match Config::from_env() {
-                Ok(config) => {
-                    info!("✅ Loaded configuration from environment variables");
-                    Ok(config)
-                }
-                Err(env_error) => Err(GatewayError::Config(format!(
-                    "Failed to load default configuration file ({}) and environment ({}).",
-                    file_error, env_error
-                ))),
-            }
-        }
+        Err(env_error) => Err(GatewayError::Config(format!(
+            "Default configuration file {} does not exist and environment configuration failed ({}).",
+            config_path.display(),
+            env_error
+        ))),
     }
 }
 
@@ -148,7 +156,8 @@ async fn run_server_with_loaded_config(
     // Create and start server
     let server = HttpServer::new(&config).await?;
     info!(
-        "🌐 Server starting at: http://{}:{}",
+        "🌐 Server starting at: {}://{}:{}",
+        server_scheme(config.server()),
         config.server().host,
         config.server().port
     );
@@ -159,4 +168,32 @@ async fn run_server_with_loaded_config(
     info!("   POST /v1/embeddings - Text embeddings");
 
     server.start().await
+}
+
+fn server_scheme(config: &crate::config::models::server::ServerConfig) -> &'static str {
+    if config.is_tls_enabled() {
+        "https"
+    } else {
+        "http"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::models::server::TlsConfig;
+
+    #[test]
+    fn startup_scheme_tracks_tls_listener() {
+        let mut config = crate::config::models::server::ServerConfig::default();
+        assert_eq!(server_scheme(&config), "http");
+        config.tls = Some(TlsConfig {
+            cert_file: "cert.pem".into(),
+            key_file: "key.pem".into(),
+            ca_file: None,
+            require_client_cert: false,
+            http2: false,
+        });
+        assert_eq!(server_scheme(&config), "https");
+    }
 }

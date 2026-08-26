@@ -8,8 +8,11 @@ server:
   host: "0.0.0.0"
   port: 8000
   workers: 4
+  # Server-wide concurrent connection cap. The runtime derives a per-worker
+  # limit of at least 2 without exceeding this value. The effective cap may
+  # round down, and small caps reduce the effective worker count. Minimum: 2.
   max_connections: 1000
-  timeout: 30
+  timeout: 30 # seconds to receive the first request head
   max_body_size: 10485760
   dev_mode: false
   cors:
@@ -41,6 +44,9 @@ providers:
       max_delay: 5000
       backoff_multiplier: 2.0
       jitter: 0.1
+    # Defaults alone do not enable active probes. OpenAI is multi-capability, so any
+    # non-default policy must also set a custom endpoint; native chat probes are only
+    # available for providers whose configured deployment is unambiguously chat-only.
     health_check:
       interval: 30
       failure_threshold: 5

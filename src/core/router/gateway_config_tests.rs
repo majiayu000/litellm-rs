@@ -233,3 +233,79 @@ fn credential_resolver_and_construction_source_guards() {
     let construction = function(gateway, "pub async fn from_gateway_config_with_aliases(");
     assert_eq!(construction.matches("create_provider(").count(), 1);
 }
+
+#[test]
+fn ambiguous_native_probe_capabilities_require_custom_endpoint_at_config_boundaries() {
+    for provider_type in [
+        "openai",
+        "bedrock",
+        "openrouter",
+        "vertex_ai",
+        "gemini",
+        "fal_ai",
+        "mistral",
+        "cloudflare",
+        "azure",
+        "azure_ai",
+        "ollama",
+        "cohere",
+        "replicate",
+    ] {
+        let mut provider = crate::config::models::provider::ProviderConfig {
+            name: format!("{provider_type}-primary"),
+            provider_type: provider_type.to_string(),
+            health_check: crate::config::models::provider::ProviderHealthCheckConfig {
+                interval: 15,
+                ..Default::default()
+            },
+            ..crate::config::models::provider::ProviderConfig::default()
+        };
+
+        let error = provider
+            .validate_health_check_runtime()
+            .expect_err("multi-capability providers require an explicit probe endpoint");
+        assert!(
+            error.contains("require a custom health_check.endpoint"),
+            "{error}"
+        );
+
+        provider.health_check.endpoint = Some("https://8.8.8.8/health".to_string());
+        assert!(provider.validate_health_check_runtime().is_ok());
+    }
+}
+
+#[test]
+fn fal_ai_name_selector_cannot_bypass_native_probe_validation() {
+    let provider = crate::config::models::provider::ProviderConfig {
+        name: "fal_ai".to_string(),
+        provider_type: String::new(),
+        health_check: crate::config::models::provider::ProviderHealthCheckConfig {
+            interval: 15,
+            ..Default::default()
+        },
+        ..crate::config::models::provider::ProviderConfig::default()
+    };
+
+    let error = provider
+        .validate_health_check_runtime()
+        .expect_err("the effective name selector must be validated");
+    assert!(
+        error.contains("require a custom health_check.endpoint"),
+        "{error}"
+    );
+}
+
+#[test]
+fn unambiguously_chat_only_provider_can_opt_into_native_probe() {
+    let provider = crate::config::models::provider::ProviderConfig {
+        name: "anthropic-primary".to_string(),
+        provider_type: "anthropic".to_string(),
+        health_check: crate::config::models::provider::ProviderHealthCheckConfig {
+            interval: 15,
+            ..Default::default()
+        },
+        ..crate::config::models::provider::ProviderConfig::default()
+    };
+
+    assert!(provider.validate_health_check_runtime().is_ok());
+}

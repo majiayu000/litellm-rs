@@ -26,6 +26,8 @@ pub mod logging; // Logging & monitoring
 pub mod net; // Network & client utilities
 pub mod sync; // Concurrent-safe value helpers
 pub mod sys; // System utilities // Business logic
+#[cfg(feature = "gateway")]
+pub(crate) mod tls;
 
 // Re-export commonly used types from each module for convenience
 pub use ai::models::capabilities::ModelCapabilities;

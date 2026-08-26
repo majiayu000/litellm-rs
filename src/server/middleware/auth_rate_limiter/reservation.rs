@@ -134,11 +134,11 @@ impl AuthRateLimiter {
             if let Some(mut entry) = self.attempts.get_mut(client_id) {
                 self.queue_on_tracker(entry.value_mut(), now)?
             } else {
-                if self.attempts.len() >= self.max_entries {
+                if self.attempts.len() >= self.max_entries && !self.evict_one_inactive(now) {
                     self.blocked_count.fetch_add(1, Ordering::Relaxed);
                     return Err(CAPACITY_RETRY_SECS);
                 }
-                let mut tracker = AuthAttemptTracker::new(now, self.max_attempts.max(1) as usize);
+                let mut tracker = self.new_tracker(now);
                 tracker.waiting = 1;
                 let admission = Arc::clone(&tracker.admission);
                 self.attempts.insert(client_id.to_string(), tracker);
@@ -219,6 +219,11 @@ impl AuthRateLimiter {
             tracker.generation = tracker.generation.wrapping_add(1);
             tracker.window_start = now;
         }
+        let occupied_attempts = tracker.failure_count.saturating_add(tracker.in_flight);
+        if occupied_attempts >= self.max_attempts.max(1) {
+            self.blocked_count.fetch_add(1, Ordering::Relaxed);
+            return Err(CAPACITY_RETRY_SECS);
+        }
         tracker.in_flight = tracker.in_flight.saturating_add(1);
         Ok(tracker.generation)
     }
@@ -277,7 +282,9 @@ impl AuthRateLimiter {
         let _lockout_secs = should_count_failure
             .then(|| self.apply_failure(client_id, tracker, now))
             .flatten();
+        let candidate = tracker.mark_evictable(client_id, now);
         drop(entry);
+        self.enqueue_eviction_candidate(candidate);
         if !failed {
             self.remove_disposable_success(client_id);
         }
@@ -350,6 +357,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queued_guess_cannot_replace_a_settled_failure_before_lockout() {
+        let limiter = Arc::new(AuthRateLimiter::new(3, 300, 60));
+        let first = limiter
+            .reserve_attempt("interleaved-attacker")
+            .await
+            .unwrap();
+        let second = limiter
+            .reserve_attempt("interleaved-attacker")
+            .await
+            .unwrap();
+        let third = limiter
+            .reserve_attempt("interleaved-attacker")
+            .await
+            .unwrap();
+        let queued_limiter = Arc::clone(&limiter);
+        let queued =
+            tokio::spawn(
+                async move { queued_limiter.reserve_attempt("interleaved-attacker").await },
+            );
+        tokio::task::yield_now().await;
+        assert!(!queued.is_finished());
+
+        first.record_failure();
+        assert_eq!(queued.await.unwrap().err(), Some(CAPACITY_RETRY_SECS));
+        assert!(limiter.check_allowed("interleaved-attacker").is_ok());
+
+        second.release();
+        third.release();
+        assert!(
+            limiter
+                .reserve_attempt("interleaved-attacker")
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
     async fn successful_and_cancelled_attempts_release_without_lockout() {
         let limiter = Arc::new(AuthRateLimiter::new(2, 300, 60));
         let first = limiter.reserve_attempt("successful-client").await.unwrap();
@@ -406,6 +450,23 @@ mod tests {
 
         first.release();
         assert!(limiter.is_empty());
+    }
+
+    #[tokio::test]
+    async fn idle_failure_trackers_cannot_poison_new_identity_capacity() {
+        let limiter = Arc::new(AuthRateLimiter::with_max_entries(5, 300, 60, 2));
+        assert_eq!(limiter.record_failure("idle-first"), None);
+        assert_eq!(limiter.record_failure("idle-second"), None);
+        assert_eq!(limiter.len(), 2);
+
+        let replacement = limiter.reserve_attempt("new-client").await.unwrap();
+        assert_eq!(limiter.len(), 2);
+        assert!(limiter.attempts.contains_key("new-client"));
+        assert!(
+            !limiter.attempts.contains_key("idle-first")
+                || !limiter.attempts.contains_key("idle-second")
+        );
+        replacement.release();
     }
 
     #[tokio::test]

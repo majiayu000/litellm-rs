@@ -1,10 +1,12 @@
 //! Authentication rate limiter for brute force protection
 
+mod capacity;
 mod reservation;
 pub(crate) use reservation::AuthAttemptReservation;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -30,6 +32,8 @@ pub struct AuthRateLimiter {
     /// Serializes creation and cleanup so the tracker map never exceeds its
     /// configured hard limit.
     capacity_admission_lock: Mutex<()>,
+    eviction_candidates: Mutex<VecDeque<capacity::EvictionCandidate>>,
+    next_entry_id: AtomicU64,
     /// Total blocked attempts counter for monitoring
     blocked_count: AtomicU64,
 }
@@ -40,6 +44,8 @@ struct AuthAttemptTracker {
     in_flight: u32,
     waiting: u32,
     admission: Arc<Semaphore>,
+    entry_id: u64,
+    eviction_queued: bool,
     generation: u64,
     window_start: Instant,
     lockout_until: Option<Instant>,
@@ -47,12 +53,14 @@ struct AuthAttemptTracker {
 }
 
 impl AuthAttemptTracker {
-    fn new(now: Instant, max_concurrent_checks: usize) -> Self {
+    fn new(now: Instant, max_concurrent_checks: usize, entry_id: u64) -> Self {
         Self {
             failure_count: 0,
             in_flight: 0,
             waiting: 0,
             admission: Arc::new(Semaphore::new(max_concurrent_checks.max(1))),
+            entry_id,
+            eviction_queued: false,
             generation: 0,
             window_start: now,
             lockout_until: None,
@@ -98,6 +106,8 @@ impl AuthRateLimiter {
             base_lockout_secs,
             max_entries: max_entries.max(1),
             capacity_admission_lock: Mutex::new(()),
+            eviction_candidates: Mutex::new(VecDeque::new()),
+            next_entry_id: AtomicU64::new(1),
             blocked_count: AtomicU64::new(0),
         }
     }
@@ -126,20 +136,31 @@ impl AuthRateLimiter {
             tracker.window_start = now;
         }
 
+        let candidate = tracker.mark_evictable(client_id, now);
+        drop(entry);
+        self.enqueue_eviction_candidate(candidate);
         Ok(())
     }
 
     pub fn record_failure(&self, client_id: &str) -> Option<u64> {
         let now = Instant::now();
         if let Some(mut entry) = self.attempts.get_mut(client_id) {
-            return self.apply_failure(client_id, entry.value_mut(), now);
+            let result = self.apply_failure(client_id, entry.value_mut(), now);
+            let candidate = entry.mark_evictable(client_id, now);
+            drop(entry);
+            self.enqueue_eviction_candidate(candidate);
+            return result;
         }
 
         let _capacity_guard = self.capacity_admission_lock.lock();
         if let Some(mut entry) = self.attempts.get_mut(client_id) {
-            return self.apply_failure(client_id, entry.value_mut(), now);
+            let result = self.apply_failure(client_id, entry.value_mut(), now);
+            let candidate = entry.mark_evictable(client_id, now);
+            drop(entry);
+            self.enqueue_eviction_candidate(candidate);
+            return result;
         }
-        if self.attempts.len() >= self.max_entries {
+        if self.attempts.len() >= self.max_entries && !self.evict_one_inactive(now) {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             tracing::error!(
                 client_id,
@@ -149,9 +170,11 @@ impl AuthRateLimiter {
             return Some(1);
         }
 
-        let mut tracker = AuthAttemptTracker::new(now, self.max_attempts.max(1) as usize);
+        let mut tracker = self.new_tracker(now);
         let lockout_secs = self.apply_failure(client_id, &mut tracker, now);
+        let candidate = tracker.mark_evictable(client_id, now);
         self.attempts.insert(client_id.to_string(), tracker);
+        self.enqueue_eviction_candidate(candidate);
         lockout_secs
     }
 
@@ -159,6 +182,9 @@ impl AuthRateLimiter {
         if let Some(mut entry) = self.attempts.get_mut(client_id) {
             entry.failure_count = 0;
             entry.generation = entry.generation.wrapping_add(1);
+            let candidate = entry.mark_evictable(client_id, Instant::now());
+            drop(entry);
+            self.enqueue_eviction_candidate(candidate);
         }
     }
 
@@ -182,6 +208,7 @@ impl AuthRateLimiter {
         let now = Instant::now();
         let _capacity_guard = self.capacity_admission_lock.lock();
         self.cleanup_old_entries_at(now);
+        self.prune_eviction_candidates();
     }
 
     fn cleanup_old_entries_at(&self, now: Instant) {
@@ -551,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn test_capacity_rejects_new_identity_and_retains_active_lockout() {
+    fn test_capacity_evicts_idle_identity_and_retains_active_lockout() {
         let limiter = AuthRateLimiter::with_max_entries(2, 300, 60, 2);
 
         limiter.record_failure("old_1");
@@ -559,11 +586,12 @@ mod tests {
         limiter.record_failure("locked_client");
         assert!(limiter.check_allowed("locked_client").is_err());
 
-        assert_eq!(limiter.record_failure("new_client"), Some(1));
+        assert_eq!(limiter.record_failure("new_client"), None);
 
         assert_eq!(limiter.len(), 2);
         assert!(limiter.attempts.contains_key("locked_client"));
-        assert!(!limiter.attempts.contains_key("new_client"));
+        assert!(limiter.attempts.contains_key("new_client"));
+        assert!(!limiter.attempts.contains_key("old_1"));
     }
 
     // ==================== Window Reset Tests ====================
