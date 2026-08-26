@@ -345,3 +345,52 @@ async fn stream_budget_fallback_ignores_retry_limit() {
     );
     lease.finish_success(0);
 }
+
+#[tokio::test]
+async fn stream_unpriced_fallback_returns_last_model_not_priced_error() {
+    let router = Arc::new(build_same_provider_budget_fallback_router(0).await);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+
+    let result = execute_stream_with_selected_deployment(
+        router,
+        "shared-model",
+        ProviderCapability::ChatCompletionStream,
+        {
+            let attempts = attempts.clone();
+            move |_provider, model, _deployment_id| {
+                let attempts = attempts.clone();
+                async move {
+                    attempts.lock().unwrap().push(model.clone());
+                    Err::<String, _>(super::super::spend::model_not_priced_error(
+                        "openai",
+                        &model,
+                        format!("missing pricing for {model}"),
+                    ))
+                }
+            }
+        },
+    )
+    .await;
+
+    let error = match result {
+        Err(error) => error,
+        Ok((_stream, lease)) => {
+            drop(lease);
+            panic!("all-unpriced streaming candidates should fail closed");
+        }
+    };
+    match error {
+        GatewayError::Provider(ProviderError::InvalidRequest {
+            provider: "pricing",
+            message,
+        }) => assert!(
+            message.contains("gpt-cheap"),
+            "the final error should come from the last hard-excluded deployment: {message}"
+        ),
+        other => panic!("expected the last model-not-priced error, got {other:?}"),
+    }
+    assert_eq!(
+        attempts.lock().unwrap().as_slice(),
+        ["gpt-expensive", "gpt-cheap"]
+    );
+}

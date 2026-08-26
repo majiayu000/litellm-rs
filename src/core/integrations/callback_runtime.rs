@@ -8,9 +8,21 @@ use tracing::{error, warn};
 
 use super::IntegrationManager;
 use crate::core::traits::integration::{
-    EmbeddingEndEvent, EmbeddingStartEvent, IntegrationError, IntegrationResult, LlmEndEvent,
-    LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, IntegrationError,
+    IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
+
+pub(crate) trait CallbackMetrics: Send + Sync {
+    fn begin_llm_lifecycle(&self, event: &LlmStartEvent);
+    fn finish_llm_lifecycle(&self, event: &LlmEndEvent);
+    fn fail_llm_lifecycle(&self, event: &LlmErrorEvent);
+    fn cancel_llm_lifecycle(&self, event: &LlmStartEvent);
+    fn record_embedding_start(&self, event: &EmbeddingStartEvent);
+    fn record_embedding_end(&self, event: &EmbeddingEndEvent);
+    fn render(&self) -> String;
+}
+
+pub(crate) type CallbackMetricsRecorder = Arc<dyn CallbackMetrics>;
 
 #[derive(Debug)]
 enum CallbackEvent {
@@ -20,6 +32,7 @@ enum CallbackEvent {
     Stream(LlmStreamEvent),
     EmbeddingStart(EmbeddingStartEvent),
     EmbeddingEnd(EmbeddingEndEvent),
+    EmbeddingError(EmbeddingErrorEvent),
 }
 
 /// Error returned when an event cannot enter the non-blocking callback queue.
@@ -38,6 +51,7 @@ pub enum CallbackDispatchError {
 pub struct CallbackDispatcher {
     sender: Option<mpsc::Sender<CallbackEvent>>,
     manager: Option<Arc<IntegrationManager>>,
+    callback_metrics: Option<CallbackMetricsRecorder>,
 }
 
 /// Capacity reserved for the terminal event of an admitted lifecycle.
@@ -66,6 +80,70 @@ impl CallbackTerminalPermit {
             permit.send(CallbackEvent::EmbeddingEnd(event));
         }
     }
+
+    /// Enqueue an embedding error using its reserved capacity.
+    pub fn emit_embedding_error(self, event: EmbeddingErrorEvent) {
+        if let Some(permit) = self.permit {
+            permit.send(CallbackEvent::EmbeddingError(event));
+        }
+    }
+}
+
+enum CallbackMetricsKind {
+    Llm(Box<LlmStartEvent>),
+    Embedding,
+}
+
+/// Request lifecycle guard for synchronous in-process callback metrics.
+///
+/// This is deliberately separate from [`CallbackTerminalPermit`]: exporter
+/// queue admission keeps its public failure semantics, while metrics never
+/// enter that queue. Dropping an unfinished LLM guard releases the active
+/// request gauge during cancellation, task abortion, or panic unwinding.
+pub(crate) struct CallbackMetricsPermit {
+    recorder: CallbackMetricsRecorder,
+    kind: CallbackMetricsKind,
+    completed: bool,
+}
+
+impl CallbackMetricsPermit {
+    pub(crate) fn update_llm_target(&mut self, model: &str, provider: &str) {
+        if let CallbackMetricsKind::Llm(event) = &mut self.kind {
+            event.model = model.to_string();
+            event.provider = Some(provider.to_string());
+        }
+    }
+
+    pub(crate) fn emit_end(mut self, event: &LlmEndEvent) {
+        self.recorder.finish_llm_lifecycle(event);
+        self.completed = true;
+    }
+
+    pub(crate) fn emit_error(mut self, event: &LlmErrorEvent) {
+        if matches!(self.kind, CallbackMetricsKind::Llm(_)) {
+            self.recorder.fail_llm_lifecycle(event);
+        }
+        self.completed = true;
+    }
+
+    pub(crate) fn emit_embedding_end(mut self, event: &EmbeddingEndEvent) {
+        self.recorder.record_embedding_end(event);
+        self.completed = true;
+    }
+
+    pub(crate) fn emit_embedding_error(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for CallbackMetricsPermit {
+    fn drop(&mut self) {
+        if !self.completed
+            && let CallbackMetricsKind::Llm(event) = &self.kind
+        {
+            self.recorder.cancel_llm_lifecycle(event);
+        }
+    }
 }
 
 impl CallbackDispatcher {
@@ -74,17 +152,28 @@ impl CallbackDispatcher {
         Self::default()
     }
 
-    /// Whether this dispatcher has an active callback worker.
+    /// Whether this dispatcher has exporter delivery or in-process metrics enabled.
     pub fn is_enabled(&self) -> bool {
-        self.sender.is_some()
+        self.sender.is_some() || self.callback_metrics.is_some()
     }
 
     /// List the callback integrations registered with this dispatcher.
     pub async fn registered_integrations(&self) -> Vec<&'static str> {
-        match &self.manager {
+        let mut integrations = match &self.manager {
             Some(manager) => manager.list_integrations().await,
             None => Vec::new(),
+        };
+        if self.callback_metrics.is_some() {
+            integrations.push("prometheus");
         }
+        integrations
+    }
+
+    /// Render metrics from the configured Prometheus callback backend.
+    pub fn render_prometheus_metrics(&self) -> Option<String> {
+        self.callback_metrics
+            .as_ref()
+            .map(|metrics| metrics.render())
     }
 
     /// Atomically admit an LLM start and reserve capacity for its terminal event.
@@ -121,6 +210,29 @@ impl CallbackDispatcher {
     /// Enqueue an LLM stream event without waiting for exporter I/O.
     pub fn emit_stream(&self, event: LlmStreamEvent) -> Result<(), CallbackDispatchError> {
         self.try_send(CallbackEvent::Stream(event))
+    }
+
+    pub(crate) fn begin_llm_metrics(&self, event: &LlmStartEvent) -> Option<CallbackMetricsPermit> {
+        let recorder = self.callback_metrics.clone()?;
+        recorder.begin_llm_lifecycle(event);
+        Some(CallbackMetricsPermit {
+            recorder,
+            kind: CallbackMetricsKind::Llm(Box::new(event.clone())),
+            completed: false,
+        })
+    }
+
+    pub(crate) fn begin_embedding_metrics(
+        &self,
+        event: &EmbeddingStartEvent,
+    ) -> Option<CallbackMetricsPermit> {
+        let recorder = self.callback_metrics.clone()?;
+        recorder.record_embedding_start(event);
+        Some(CallbackMetricsPermit {
+            recorder,
+            kind: CallbackMetricsKind::Embedding,
+            completed: false,
+        })
     }
 
     fn try_send(&self, event: CallbackEvent) -> Result<(), CallbackDispatchError> {
@@ -189,6 +301,7 @@ impl CallbackRuntime {
             dispatcher: CallbackDispatcher {
                 sender: Some(sender),
                 manager: Some(manager),
+                callback_metrics: None,
             },
             shutdown_tx: Some(shutdown_tx),
             worker: Some(worker),
@@ -207,6 +320,14 @@ impl CallbackRuntime {
     /// Obtain the request-path dispatcher.
     pub fn dispatcher(&self) -> CallbackDispatcher {
         self.dispatcher.clone()
+    }
+
+    pub(crate) fn with_callback_metrics(
+        mut self,
+        metrics: Option<CallbackMetricsRecorder>,
+    ) -> Self {
+        self.dispatcher.callback_metrics = metrics;
+        self
     }
 
     /// Drain pending events, flush integrations, and stop the worker.
@@ -269,6 +390,7 @@ async fn dispatch_event(manager: &IntegrationManager, event: CallbackEvent) {
         CallbackEvent::Stream(event) => manager.on_llm_stream(&event).await,
         CallbackEvent::EmbeddingStart(event) => manager.on_embedding_start(&event).await,
         CallbackEvent::EmbeddingEnd(event) => manager.on_embedding_end(&event).await,
+        CallbackEvent::EmbeddingError(event) => manager.on_embedding_error(&event).await,
     };
     if let Err(error) = result {
         error!("Callback event dispatch failed: {}", error);
@@ -284,7 +406,7 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::*;
-    use crate::core::integrations::IntegrationManagerConfig;
+    use crate::core::integrations::{IntegrationManagerConfig, PrometheusIntegration};
     use crate::core::traits::integration::{Integration, LlmErrorEvent};
 
     struct RecordingIntegration {
@@ -527,6 +649,67 @@ mod tests {
         runtime.shutdown().await.unwrap();
 
         assert_eq!(*events.lock(), vec!["start", "end"]);
+    }
+
+    #[tokio::test]
+    async fn metrics_lifecycle_is_independent_without_hiding_queue_errors() {
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let manager = Arc::new(IntegrationManager::new(
+            IntegrationManagerConfig::default().parallel(false),
+        ));
+        manager
+            .register(Arc::new(BlockingIntegration {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+                events: Arc::new(Mutex::new(Vec::new())),
+            }))
+            .await;
+        let prometheus = Arc::new(PrometheusIntegration::with_defaults());
+        let runtime = CallbackRuntime::new(manager, 2)
+            .unwrap()
+            .with_callback_metrics(Some(prometheus));
+        let dispatcher = runtime.dispatcher();
+        let entered_wait = entered.notified();
+
+        let first = dispatcher
+            .begin_llm(LlmStartEvent::new("req-1", "model"))
+            .unwrap();
+        entered_wait.await;
+
+        let second_start = LlmStartEvent::new("req-2", "model");
+        let second_metrics = dispatcher
+            .begin_llm_metrics(&second_start)
+            .expect("configured metrics should admit independently");
+        assert!(matches!(
+            dispatcher.begin_llm(second_start),
+            Err(CallbackDispatchError::QueueFull)
+        ));
+        second_metrics.emit_end(&LlmEndEvent::new("req-2", "model").latency(25));
+        assert_eq!(
+            dispatcher.emit_end(LlmEndEvent::new("queued", "model")),
+            Ok(())
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                dispatcher.emit_end(LlmEndEvent::new("retry", "model")),
+                Err(CallbackDispatchError::QueueFull)
+            );
+        }
+
+        let cancelled = dispatcher
+            .begin_llm_metrics(&LlmStartEvent::new("req-3", "model"))
+            .expect("configured metrics should admit independently");
+        drop(cancelled);
+
+        let rendered = dispatcher.render_prometheus_metrics().unwrap();
+        assert!(rendered.contains("litellm_requests_total{model=\"model\"} 2"));
+        assert!(rendered.contains("litellm_requests_success_total{model=\"model\"} 1"));
+        assert!(rendered.contains("litellm_active_requests 0"));
+
+        first.emit_end(LlmEndEvent::new("req-1", "model"));
+        release.notify_one();
+        runtime.shutdown().await.unwrap();
     }
 
     #[tokio::test]

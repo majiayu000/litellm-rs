@@ -214,7 +214,6 @@ pub fn configure_pricing_routes(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Config;
     use crate::core::pricing_service::LiteLLMModelInfo;
     use crate::server::HttpServer as GatewayHttpServer;
     use actix_web::http::StatusCode;
@@ -244,7 +243,7 @@ mod tests {
     }
 
     async fn build_pricing_route_state() -> AppState {
-        let mut config = Config::default();
+        let mut config = crate::server::valid_test_config();
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
 

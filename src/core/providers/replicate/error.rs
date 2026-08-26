@@ -35,7 +35,8 @@ impl ErrorMapper<ProviderError> for ReplicateErrorMapper {
     fn map_http_error(&self, status_code: u16, response_body: &str) -> ProviderError {
         match status_code {
             401 => ProviderError::replicate_authentication("Invalid API token"),
-            403 => ProviderError::replicate_authentication("Permission denied"),
+            // Upstream 403 is a permission failure; keep the status.
+            403 => ProviderError::api_error("replicate", status_code, "Permission denied"),
             404 => {
                 // Try to extract model name from error
                 if response_body.contains("model") || response_body.contains("version") {
@@ -142,8 +143,9 @@ mod tests {
     #[test]
     fn test_error_mapper_403() {
         let mapper = ReplicateErrorMapper;
+        // 403 keeps its upstream status as a permission failure.
         let err = mapper.map_http_error(403, "Forbidden");
-        assert!(matches!(err, ProviderError::Authentication { .. }));
+        assert!(matches!(err, ProviderError::ApiError { status: 403, .. }));
     }
 
     #[test]

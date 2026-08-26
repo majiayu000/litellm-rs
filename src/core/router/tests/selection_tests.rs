@@ -461,3 +461,40 @@ async fn test_latency_based_skips_rate_limited() {
     );
     router.release_deployment(&id);
 }
+
+#[tokio::test]
+async fn elapsed_minute_restores_standard_selection_eligibility() {
+    let router = Router::default();
+    let mut deployment = create_test_deployment("elapsed-standard", "gpt-4").await;
+    deployment.config.rpm_limit = Some(1);
+    deployment.config.tpm_limit = Some(10);
+    deployment.state.rpm_current.store(1, Relaxed);
+    deployment.state.tpm_current.store(10, Relaxed);
+    deployment.state.minute_reset_at.store(0, Relaxed);
+    router.add_deployment(deployment);
+
+    let id = router
+        .select_deployment("gpt-4")
+        .expect("expired usage must not permanently exclude a deployment");
+
+    assert_eq!(id, "elapsed-standard");
+    router.release_deployment(&id);
+}
+
+#[tokio::test]
+async fn elapsed_minute_restores_capability_selection_eligibility() {
+    let router = Router::default();
+    let mut deployment = create_test_deployment("elapsed-capability", "gpt-4").await;
+    deployment.config.rpm_limit = Some(1);
+    deployment.config.tpm_limit = Some(10);
+    deployment.state.rpm_current.store(1, Relaxed);
+    deployment.state.tpm_current.store(10, Relaxed);
+    deployment.state.minute_reset_at.store(0, Relaxed);
+    router.add_deployment(deployment);
+
+    let selected = router
+        .select_capability_deployment("gpt-4", &ProviderCapability::ChatCompletion)
+        .expect("capability selection must roll expired usage before filtering");
+
+    assert_eq!(selected.deployment_id, "elapsed-capability");
+}

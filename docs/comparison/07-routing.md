@@ -19,7 +19,7 @@ This document provides an in-depth analysis of the routing strategies between th
 
 | Aspect | Python LiteLLM | Rust LiteLLM-RS |
 |--------|---------------|-----------------|
-| **Architecture** | Plugin-based with external caching (Redis) | Lock-free atomic operations, in-memory |
+| **Architecture** | Plugin-based with external caching (Redis) | Atomic counters with synchronized rollover, in-memory |
 | **Strategy Count** | 6 strategies + custom | 7 strategies built-in |
 | **Concurrency Model** | asyncio + external state | DashMap + Atomic operations |
 | **State Management** | Distributed (Redis/DualCache) | Local (Atomic counters) |
@@ -82,10 +82,10 @@ pub enum RoutingStrategy {
 ```
 
 **Key Characteristics**:
-- Lock-free atomic operations (`AtomicU64`, `AtomicU32`)
+- Atomic counters with synchronized per-minute rollover
 - State stored directly on `DeploymentState` struct
 - Uses `DashMap` for concurrent access
-- All state operations use `Ordering::Relaxed` for performance
+- Counter updates use `Ordering::Relaxed`; rollover publication uses acquire/release ordering
 
 ---
 
@@ -190,8 +190,8 @@ pub struct DeploymentState {
 }
 ```
 
-- Local atomic counters per deployment
-- Background task resets counters every minute
+- Local atomic counters per deployment with a shared rollover gate
+- Readers and writers lazily roll expired windows; optional `Weak`-owned maintenance performs eager cleanup
 - No external dependencies for rate tracking
 
 ---
@@ -629,7 +629,7 @@ impl Router {
 |--------|--------|------|
 | **Async Runtime** | asyncio | Tokio |
 | **State Storage** | Redis/DualCache | DashMap + Atomics |
-| **Lock Strategy** | Distributed locks | Lock-free |
+| **Lock Strategy** | Distributed locks | Low-contention per-deployment rollover gate |
 | **Memory Model** | GIL-protected | Atomic ordering |
 
 ### 7.2 State Tracking

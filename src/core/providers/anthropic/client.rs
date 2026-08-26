@@ -12,6 +12,7 @@ use crate::core::providers::base::{
     BaseConfig, BaseHttpClient, HeaderPair, apply_provider_headers, header, header_owned,
     header_static, read_streaming_error_body,
 };
+#[cfg(test)]
 use crate::core::providers::shared::parse_retry_after_from_body;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::{
@@ -24,8 +25,7 @@ use crate::core::types::{
 
 use super::config::AnthropicConfig;
 use super::error::{
-    anthropic_api_error, anthropic_auth_error, anthropic_network_error, anthropic_parse_error,
-    anthropic_rate_limit_error,
+    AnthropicErrorMapper, anthropic_api_error, anthropic_network_error, anthropic_parse_error,
 };
 #[cfg(test)]
 use super::models::get_anthropic_registry;
@@ -143,7 +143,7 @@ impl AnthropicClient {
             let status = response.status().as_u16();
             let error_text = read_streaming_error_body(response)
                 .await
-                .map_err(|error| error.into_provider_error("anthropic"))?;
+                .unwrap_or_else(|_| "failed to read upstream error body".to_string());
             return Err(self.map_http_error(status, &error_text));
         }
 
@@ -258,10 +258,15 @@ impl AnthropicClient {
     /// Handle
     async fn handle_response(&self, response: Response) -> Result<Value, ProviderError> {
         let status = response.status().as_u16();
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| anthropic_network_error(format!("Failed to read response: {}", e)))?;
+        let response_text = match response.text().await {
+            Ok(response_text) => response_text,
+            Err(_) if status != 200 => "failed to read upstream error body".to_string(),
+            Err(error) => {
+                return Err(anthropic_network_error(format!(
+                    "Failed to read response: {error}"
+                )));
+            }
+        };
 
         if status != 200 {
             return Err(self.map_http_error(status, &response_text));
@@ -273,18 +278,7 @@ impl AnthropicClient {
 
     /// Error
     fn map_http_error(&self, status: u16, body: &str) -> ProviderError {
-        match status {
-            400 => anthropic_api_error(400, format!("Bad request: {}", body)),
-            401 => anthropic_auth_error("Invalid or missing API key"),
-            403 => anthropic_auth_error("Forbidden: insufficient permissions"),
-            404 => anthropic_api_error(404, "Model or endpoint not found"),
-            429 => {
-                let retry_after = parse_retry_after_from_body(body);
-                anthropic_rate_limit_error(retry_after)
-            }
-            500..=599 => anthropic_api_error(status, format!("Server error: {}", body)),
-            _ => anthropic_api_error(status, body),
-        }
+        AnthropicErrorMapper::from_http_status(status, body)
     }
     /// Separate system messages from user messages
     pub(super) fn separate_system_messages(

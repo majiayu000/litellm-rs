@@ -141,8 +141,9 @@ fn test_error_mapper_http_401() {
 #[test]
 fn test_error_mapper_http_403() {
     let mapper = VertexAIErrorMapper;
+    // 403 keeps its upstream status as a permission failure.
     let error = mapper.map_http_error(403, "Forbidden");
-    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(matches!(error, ProviderError::ApiError { status: 403, .. }));
 }
 
 #[test]
@@ -241,7 +242,15 @@ fn test_error_mapper_json_permission_denied() {
         }
     });
     let error = mapper.map_json_error(&response);
-    assert!(matches!(error, ProviderError::Configuration { .. }));
+    // PERMISSION_DENIED keeps HTTP 403 as a permission failure.
+    assert!(matches!(
+        error,
+        ProviderError::ApiError {
+            status: 403,
+            ref message,
+            ..
+        } if message == "Access denied"
+    ));
 }
 
 #[test]

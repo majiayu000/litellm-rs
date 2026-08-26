@@ -1,6 +1,7 @@
 use actix_web::http::StatusCode;
 use actix_web::{App, HttpMessage, HttpRequest, HttpResponse, test, web};
 use litellm_rs::Config;
+use litellm_rs::config::models::provider::ProviderConfig;
 use litellm_rs::core::models::user::types::{User, UserRole, UserStatus};
 use litellm_rs::core::models::{ApiKey, Metadata, RateLimits, UsageStats};
 use litellm_rs::core::types::context::{RequestContext, SharedRequestContext};
@@ -156,6 +157,7 @@ async fn build_test_state_with_rate_limit(
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+    add_disabled_bootstrap_provider(&mut config);
     if let Some(default_rpm) = default_rpm {
         config.gateway.rate_limit.enabled = true;
         config.gateway.rate_limit.default_rpm = default_rpm;
@@ -188,6 +190,7 @@ async fn build_test_state_with_requests_per_minute_alias(
     config.gateway.rate_limit.enabled = true;
     config.gateway.rate_limit.default_rpm = default_rpm;
     config.gateway.rate_limit.requests_per_minute = Some(requests_per_minute);
+    add_disabled_bootstrap_provider(&mut config);
 
     let server = HttpServer::new(&config)
         .await
@@ -199,6 +202,16 @@ async fn build_test_state_with_requests_per_minute_alias(
         .await
         .expect("failed to run in-memory DB migrations for requests_per_minute test");
     state
+}
+
+fn add_disabled_bootstrap_provider(config: &mut Config) {
+    config.gateway.providers.push(ProviderConfig {
+        name: "disabled-test-bootstrap".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-test".to_string(),
+        enabled: false,
+        ..ProviderConfig::default()
+    });
 }
 
 async fn build_test_state(enable_jwt: bool, enable_api_key: bool) -> AppState {

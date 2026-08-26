@@ -19,9 +19,12 @@ impl ErrorMapper<ProviderError> for AmazonNovaErrorMapper {
             401 => {
                 ProviderError::authentication("amazon_nova", format!("Invalid API key: {}", body))
             }
-            403 => {
-                ProviderError::authentication("amazon_nova", format!("Access forbidden: {}", body))
-            }
+            // Upstream 403 is a permission failure; keep the status.
+            403 => ProviderError::api_error(
+                "amazon_nova",
+                status,
+                format!("Access forbidden: {}", body),
+            ),
             404 => ProviderError::not_implemented(
                 "amazon_nova",
                 format!("Model or endpoint not found: {}", body),
