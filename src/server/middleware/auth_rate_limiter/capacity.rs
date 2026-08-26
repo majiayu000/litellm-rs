@@ -76,6 +76,16 @@ impl AuthRateLimiter {
     pub(super) fn enqueue_eviction_candidate(&self, candidate: Option<EvictionCandidate>) {
         if let Some(candidate) = candidate {
             let mut queues = self.eviction_queues.lock();
+            let Some(tracker) = self.attempts.get(&candidate.client_id) else {
+                return;
+            };
+            if tracker.entry_id != candidate.entry_id
+                || !tracker.eviction_queued
+                || tracker.eviction_token != candidate.token
+                || tracker.eviction_deadline != candidate.deadline
+            {
+                return;
+            }
             if let Some(deadline) = candidate.deadline {
                 queues.delayed.insert(
                     (deadline, candidate.entry_id, candidate.token),
@@ -86,6 +96,7 @@ impl AuthRateLimiter {
                     .ready
                     .insert((candidate.entry_id, candidate.token), candidate.client_id);
             }
+            drop(tracker);
         }
     }
 
@@ -248,6 +259,28 @@ mod tests {
 
         assert_eq!(limiter.eviction_queues.lock().ready.len(), 1);
         assert!(limiter.evict_one_inactive(Instant::now()));
+    }
+
+    #[test]
+    fn late_enqueue_cannot_resurrect_a_retired_candidate() {
+        let limiter = AuthRateLimiter::with_max_entries(5, 300, 60, 1);
+        limiter.record_failure("client");
+        let (old_candidate, late_candidate) = {
+            let mut tracker = limiter.attempts.get_mut("client").unwrap();
+            let old_candidate = tracker.retire_eviction_candidate("client");
+            let late_candidate = tracker.mark_evictable("client", Instant::now());
+            (old_candidate, late_candidate)
+        };
+        limiter.remove_eviction_candidate(old_candidate);
+        let retired_candidate = {
+            let mut tracker = limiter.attempts.get_mut("client").unwrap();
+            tracker.retire_eviction_candidate("client")
+        };
+        limiter.remove_eviction_candidate(retired_candidate);
+
+        limiter.enqueue_eviction_candidate(late_candidate);
+
+        assert!(limiter.eviction_queues.lock().ready.is_empty());
     }
 
     #[tokio::test]
