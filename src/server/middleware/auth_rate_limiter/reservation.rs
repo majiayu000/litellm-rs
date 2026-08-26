@@ -73,7 +73,7 @@ impl AuthRateLimiter {
         }
 
         let window_duration = Duration::from_secs(self.window_secs);
-        if now.duration_since(tracker.window_start) > window_duration {
+        if now.saturating_duration_since(tracker.window_start) > window_duration {
             tracker.failure_count = 0;
             tracker.window_start = now;
         }
@@ -312,5 +312,19 @@ mod tests {
         assert!(limiter.attempts.contains_key("second-client"));
         second.release();
         assert!(limiter.len() <= limiter.max_entries());
+    }
+
+    #[test]
+    fn reservation_tolerates_tracker_created_with_later_timestamp() {
+        let limiter = Arc::new(AuthRateLimiter::new(5, 300, 60));
+        let client = "future-reservation-client";
+        assert_eq!(limiter.record_failure(client), None);
+        {
+            let mut tracker = limiter.attempts.get_mut(client).unwrap();
+            tracker.window_start = Instant::now() + Duration::from_secs(1);
+        }
+
+        limiter.reserve_attempt(client).unwrap().release();
+        assert!(limiter.attempts.contains_key(client));
     }
 }

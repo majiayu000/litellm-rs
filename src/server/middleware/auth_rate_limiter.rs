@@ -121,7 +121,7 @@ impl AuthRateLimiter {
         }
 
         let window_duration = Duration::from_secs(self.window_secs);
-        if now.duration_since(tracker.window_start) > window_duration {
+        if now.saturating_duration_since(tracker.window_start) > window_duration {
             tracker.failure_count = 0;
             tracker.window_start = now;
         }
@@ -183,7 +183,7 @@ impl AuthRateLimiter {
         let max_age = Duration::from_secs(self.window_secs.saturating_mul(2));
         self.attempts.retain(|_, tracker| {
             tracker.in_flight > 0
-                || now.duration_since(tracker.window_start) < max_age
+                || now.saturating_duration_since(tracker.window_start) < max_age
                 || tracker.lockout_until.is_some_and(|until| until > now)
         });
     }
@@ -755,5 +755,20 @@ mod tests {
         assert!(escalations.contains(&Some(120)));
         assert_eq!(entry.lockout_count, 2);
         assert_eq!(entry.failure_count, 0);
+    }
+
+    #[test]
+    fn future_window_timestamp_does_not_panic_checks_or_cleanup() {
+        let limiter = AuthRateLimiter::new(5, 300, 60);
+        let client = "future-window-client";
+        assert_eq!(limiter.record_failure(client), None);
+        {
+            let mut tracker = limiter.attempts.get_mut(client).unwrap();
+            tracker.window_start = Instant::now() + Duration::from_secs(1);
+        }
+
+        assert!(limiter.check_allowed(client).is_ok());
+        limiter.cleanup_old_entries();
+        assert!(limiter.attempts.contains_key(client));
     }
 }
