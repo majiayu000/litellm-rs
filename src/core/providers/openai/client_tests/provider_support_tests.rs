@@ -172,6 +172,23 @@ fn test_get_supported_openai_params_gpt55() {
 }
 
 #[test]
+fn test_get_supported_openai_params_uses_exact_catalog_resolution() {
+    let provider = create_test_provider();
+    let snapshot_params = provider.get_supported_openai_params("openai/gpt-5.5-2026-04-23");
+    let unknown_params = provider.get_supported_openai_params("unknown-model");
+
+    assert!(snapshot_params.contains(&"reasoning_effort"));
+    assert_eq!(
+        provider.get_supported_openai_params("openai/gpt-5.5-2026-08-01"),
+        unknown_params
+    );
+    assert_eq!(
+        provider.get_supported_openai_params("anthropic/gpt-5.5"),
+        unknown_params
+    );
+}
+
+#[test]
 fn test_get_supported_openai_params_gpt55_pro() {
     let provider = create_test_provider();
     let params = provider.get_supported_openai_params("gpt-5.5-pro");

@@ -8,7 +8,9 @@ use std::sync::OnceLock;
 
 use crate::core::pricing::get_pricing_db;
 use crate::core::types::model::ModelInfo;
+use crate::core::types::model_id::ModelIdRef;
 
+use super::model_id::identity_for;
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
 };
@@ -18,6 +20,43 @@ use super::static_models::static_model_entries;
 #[derive(Debug)]
 pub struct OpenAIModelRegistry {
     models: HashMap<String, OpenAIModelSpec>,
+}
+
+/// A catalog hit that preserves the caller's exact wire identifier.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedOpenAIModel<'registry, 'input> {
+    wire_id: &'input str,
+    public_id: &'input str,
+    catalog_id: &'registry str,
+    canonical_base_id: Option<&'static str>,
+    spec: &'registry OpenAIModelSpec,
+}
+
+impl<'registry, 'input> ResolvedOpenAIModel<'registry, 'input> {
+    /// Return the exact identifier received from the caller.
+    pub fn wire_id(self) -> &'input str {
+        self.wire_id
+    }
+
+    /// Return the provider-local identifier exposed by the API.
+    pub fn public_id(self) -> &'input str {
+        self.public_id
+    }
+
+    /// Return the exact key used to retrieve the catalog entry.
+    pub fn catalog_id(self) -> &'registry str {
+        self.catalog_id
+    }
+
+    /// Return an explicitly declared canonical base model, when one exists.
+    pub fn canonical_base_id(self) -> Option<&'static str> {
+        self.canonical_base_id
+    }
+
+    /// Return the resolved model specification.
+    pub fn spec(self) -> &'registry OpenAIModelSpec {
+        self.spec
+    }
 }
 
 impl Default for OpenAIModelRegistry {
@@ -437,13 +476,33 @@ impl OpenAIModelRegistry {
 
     /// Get specific model specification
     pub fn get_model_spec(&self, model_id: &str) -> Option<&OpenAIModelSpec> {
-        self.models.get(model_id)
+        self.resolve_model(model_id).map(ResolvedOpenAIModel::spec)
+    }
+
+    /// Resolve an optionally provider-qualified model against exact catalog
+    /// entries and explicitly declared aliases only.
+    pub fn resolve_model<'registry, 'input>(
+        &'registry self,
+        model_id: &'input str,
+    ) -> Option<ResolvedOpenAIModel<'registry, 'input>> {
+        let parsed = ModelIdRef::parse(model_id);
+        let public_id = parsed.for_provider("openai")?;
+        let identity = identity_for(public_id);
+        let catalog_candidate = identity.map_or(public_id, |entry| entry.catalog_id);
+        let (catalog_id, spec) = self.models.get_key_value(catalog_candidate)?;
+
+        Some(ResolvedOpenAIModel {
+            wire_id: parsed.raw(),
+            public_id,
+            catalog_id,
+            canonical_base_id: identity.and_then(|entry| entry.canonical_base_id),
+            spec,
+        })
     }
 
     /// Check if model supports a feature
     pub fn supports_feature(&self, model_id: &str, feature: &OpenAIModelFeature) -> bool {
-        self.models
-            .get(model_id)
+        self.get_model_spec(model_id)
             .map(|spec| spec.features.contains(feature))
             .unwrap_or(false)
     }
@@ -513,6 +572,57 @@ mod tests {
         let registry = OpenAIModelRegistry::new();
         let models = registry.get_all_models();
         assert!(!models.is_empty());
+    }
+
+    #[test]
+    fn provider_qualified_registry_lookup_is_exact_and_preserves_wire_id() {
+        let registry = get_openai_registry();
+        let resolved = registry
+            .resolve_model("openai/gpt-5.5")
+            .expect("provider-qualified catalog model should resolve");
+
+        assert_eq!(resolved.wire_id(), "openai/gpt-5.5");
+        assert_eq!(resolved.public_id(), "gpt-5.5");
+        assert_eq!(resolved.catalog_id(), "gpt-5.5");
+        assert_eq!(resolved.spec().model_info.id, "gpt-5.5");
+        assert_eq!(
+            registry
+                .get_model_spec("openai/gpt-5.5")
+                .expect("qualified lookup should use the shared resolver")
+                .model_info
+                .id,
+            "gpt-5.5"
+        );
+    }
+
+    #[test]
+    fn registry_rejects_wrong_provider_and_unlisted_lookalikes() {
+        let registry = get_openai_registry();
+
+        for model in [
+            "anthropic/gpt-5.5",
+            "openai/",
+            "/gpt-5.5",
+            "gpt-5.5-2026-08-01",
+            "gpt-5.50",
+            "gpt-5.5-prologue",
+        ] {
+            assert!(
+                registry.resolve_model(model).is_none(),
+                "{model} must not resolve through prefix or suffix matching"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_snapshot_exposes_explicit_base_identity() {
+        let registry = get_openai_registry();
+        let resolved = registry
+            .resolve_model("openai/gpt-5.5-2026-04-23")
+            .expect("the catalogued GPT-5.5 snapshot should resolve");
+
+        assert_eq!(resolved.catalog_id(), "gpt-5.5-2026-04-23");
+        assert_eq!(resolved.canonical_base_id(), Some("gpt-5.5"));
     }
 
     #[test]

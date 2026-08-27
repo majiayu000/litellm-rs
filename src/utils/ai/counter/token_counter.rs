@@ -2,6 +2,8 @@
 
 use super::types::{ModelTokenConfig, TokenEstimate};
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent};
+use crate::core::providers::openai::models::get_openai_registry;
+use crate::core::types::model_id::ModelIdRef;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
 use tiktoken_rs::{ChatCompletionRequestMessage, bpe_for_model, num_tokens_from_messages};
@@ -332,7 +334,10 @@ impl TokenCounter {
                 refusal: None,
             });
         }
-        match num_tokens_from_messages(tokenizer_model_name(model), &tiktoken_messages) {
+        let Some(model) = tokenizer_model_name(model) else {
+            return Ok(None);
+        };
+        match num_tokens_from_messages(model, &tiktoken_messages) {
             Ok(tokens) => Ok(Some(usize_to_u32(tokens)?)),
             Err(_) => Ok(None),
         }
@@ -353,7 +358,7 @@ fn exact_text_tokens(model: &str, text: &str) -> Result<Option<u32>> {
 }
 
 fn exact_bpe_for_model(model: &str) -> std::result::Result<&'static tiktoken_rs::CoreBPE, ()> {
-    bpe_for_model(tokenizer_model_name(model)).map_err(|_| ())
+    bpe_for_model(tokenizer_model_name(model).ok_or(())?).map_err(|_| ())
 }
 
 fn plain_text_message_content(message: &ChatMessage) -> Option<Option<String>> {
@@ -364,11 +369,11 @@ fn plain_text_message_content(message: &ChatMessage) -> Option<Option<String>> {
     }
 }
 
-fn tokenizer_model_name(model: &str) -> &str {
-    model
-        .rsplit_once('/')
-        .map(|(_, model)| model)
-        .unwrap_or(model)
+fn tokenizer_model_name(model: &str) -> Option<&'static str> {
+    ModelIdRef::parse(model).for_provider("openai")?;
+    get_openai_registry()
+        .resolve_model(model)
+        .map(|resolved| resolved.catalog_id())
 }
 
 fn usize_to_u32(value: usize) -> Result<u32> {
@@ -409,6 +414,15 @@ mod tests {
         let debug_str = format!("{:?}", counter);
         assert!(debug_str.contains("TokenCounter"));
         assert!(debug_str.contains("model_configs"));
+    }
+
+    #[test]
+    fn test_exact_text_tokens_rejects_wrong_provider_qualifier() {
+        assert!(
+            exact_text_tokens("anthropic/gpt-4", "Hello")
+                .expect("wrong-provider tokenizer lookup should remain non-fatal")
+                .is_none()
+        );
     }
 
     // ==================== Model Config Tests ====================

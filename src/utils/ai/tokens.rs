@@ -1,4 +1,6 @@
+use crate::core::providers::openai::models::get_openai_registry;
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::types::model_id::ModelIdRef;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tiktoken_rs::{CoreBPE, bpe_for_model};
@@ -76,7 +78,17 @@ impl TokenUtils {
     ];
 
     pub fn select_tokenizer(model: &str) -> Result<TokenizerType, ProviderError> {
-        let model_lower = model.to_lowercase();
+        let parsed = ModelIdRef::parse(model);
+        if let Some(provider) = parsed.provider() {
+            if provider.eq_ignore_ascii_case("openai") && !parsed.model().is_empty() {
+                return Ok(TokenizerType::OpenAI);
+            }
+            if !provider.is_empty() {
+                return Ok(TokenizerType::Custom(model.to_string()));
+            }
+        }
+
+        let model_lower = parsed.model().to_lowercase();
 
         if Self::OPENAI_MODELS
             .iter()
@@ -407,20 +419,33 @@ impl TokenUtils {
 }
 
 fn exact_bpe_for_model(model: &str) -> Result<&'static CoreBPE, ProviderError> {
-    let model = tokenizer_model_name(model);
-    bpe_for_model(model).map_err(|error| {
+    let public_id = tokenizer_model_name(model)?;
+    let catalog_id = get_openai_registry()
+        .resolve_model(model)
+        .map(|resolved| resolved.catalog_id())
+        .ok_or_else(|| {
+            ProviderError::invalid_request(
+                "tokenizer",
+                format!("unsupported OpenAI tokenizer model '{public_id}'"),
+            )
+        })?;
+    bpe_for_model(catalog_id).map_err(|error| {
         ProviderError::invalid_request(
             "tokenizer",
-            format!("unsupported OpenAI tokenizer model '{model}': {error}"),
+            format!("unsupported OpenAI tokenizer model '{public_id}': {error}"),
         )
     })
 }
 
-fn tokenizer_model_name(model: &str) -> &str {
-    model
-        .rsplit_once('/')
-        .map(|(_, model)| model)
-        .unwrap_or(model)
+fn tokenizer_model_name(model: &str) -> Result<&str, ProviderError> {
+    ModelIdRef::parse(model)
+        .for_provider("openai")
+        .ok_or_else(|| {
+            ProviderError::invalid_request(
+                "tokenizer",
+                format!("model '{model}' is not a valid OpenAI model identifier"),
+            )
+        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -468,6 +493,18 @@ mod tests {
     }
 
     #[test]
+    fn test_select_tokenizer_respects_provider_qualifier() {
+        assert!(matches!(
+            TokenUtils::select_tokenizer("openai/gpt-4").unwrap(),
+            TokenizerType::OpenAI
+        ));
+        assert!(matches!(
+            TokenUtils::select_tokenizer("anthropic/gpt-4").unwrap(),
+            TokenizerType::Custom(_)
+        ));
+    }
+
+    #[test]
     fn test_token_counting() {
         let text = "Hello world this is a test";
         let count = TokenUtils::count_tokens_for_text("gpt-4", text).unwrap();
@@ -485,6 +522,17 @@ mod tests {
     #[test]
     fn test_openai_unknown_model_does_not_silently_fallback() {
         let error = TokenUtils::encode("gpt-future-unknown", "Hello").unwrap_err();
+        match error {
+            ProviderError::InvalidRequest { message, .. } => {
+                assert!(message.contains("unsupported OpenAI tokenizer model"));
+            }
+            other => panic!("expected invalid tokenizer request, got {other}"),
+        }
+    }
+
+    #[test]
+    fn test_provider_qualified_openai_unknown_model_does_not_silently_fallback() {
+        let error = TokenUtils::encode("openai/gpt-future-unknown", "Hello").unwrap_err();
         match error {
             ProviderError::InvalidRequest { message, .. } => {
                 assert!(message.contains("unsupported OpenAI tokenizer model"));

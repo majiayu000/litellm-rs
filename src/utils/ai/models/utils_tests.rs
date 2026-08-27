@@ -329,6 +329,10 @@ fn test_get_base_model_gpt4() {
 fn test_get_base_model_gpt55() {
     assert_eq!(ModelUtils::get_base_model("gpt-5.5-2026-04-23"), "gpt-5.5");
     assert_eq!(
+        ModelUtils::get_base_model("openai/gpt-5.5-2026-04-23"),
+        "gpt-5.5"
+    );
+    assert_eq!(
         ModelUtils::get_base_model("gpt-5.5-pro-2026-04-23"),
         "gpt-5.5-pro"
     );
@@ -421,6 +425,32 @@ fn test_is_valid_model_with_provider() {
 #[test]
 fn test_is_valid_model_unknown() {
     assert!(!ModelUtils::is_valid_model("unknown-xyz-123"));
+}
+
+#[test]
+fn test_openai_validation_rejects_non_catalog_lookalikes() {
+    for model in [
+        "gpt-5.5-2026-08-01",
+        "openai/gpt-5.5-2026-08-01",
+        "gpt-5.50",
+        "gpt-5.5-prologue",
+    ] {
+        assert!(
+            !ModelUtils::is_valid_model(model),
+            "{model} is not catalogued"
+        );
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_err(),
+            "{model} must fail exact OpenAI validation"
+        );
+    }
+
+    assert!(!ModelUtils::is_valid_model("anthropic/gpt-5.5"));
+    assert!(ModelUtils::validate_model_with_provider("anthropic/gpt-5.5", "openai").is_err());
+
+    let wrong_provider_caps = ModelUtils::get_model_capabilities("anthropic/gpt-5.5");
+    assert!(!wrong_provider_caps.supports_function_calling);
+    assert_eq!(wrong_provider_caps.context_window, None);
 }
 
 // ==================== get_model_family Tests ====================

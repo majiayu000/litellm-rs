@@ -1,5 +1,7 @@
+use crate::core::providers::openai::models::get_openai_registry;
 use crate::core::providers::shared::gemini_context_window;
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::types::model_id::ModelIdRef;
 
 use super::capabilities::ModelCapabilities;
 
@@ -7,11 +9,17 @@ pub struct ModelUtils;
 
 impl ModelUtils {
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
-        let model_lower = model
-            .to_lowercase()
-            .rsplit_once('/')
-            .map(|(_, model)| model.to_string())
-            .unwrap_or_else(|| model.to_lowercase());
+        let parsed = ModelIdRef::parse(model);
+        let model_lower = get_openai_registry()
+            .resolve_model(model)
+            .map(|resolved| resolved.catalog_id().to_lowercase())
+            .unwrap_or_else(|| {
+                if parsed.provider().is_some() && is_openai_model_name(parsed.model()) {
+                    parsed.raw().to_lowercase()
+                } else {
+                    parsed.model().to_lowercase()
+                }
+            });
 
         if model_lower.starts_with("gpt-5") {
             ModelCapabilities {
@@ -270,7 +278,14 @@ impl ModelUtils {
     }
 
     pub fn get_base_model(model: &str) -> String {
-        let model_lower = model.to_lowercase();
+        let resolved_openai = get_openai_registry().resolve_model(model);
+        if let Some(base_model) = resolved_openai.and_then(|resolved| resolved.canonical_base_id())
+        {
+            return base_model.to_string();
+        }
+        let model_lower = resolved_openai
+            .map(|resolved| resolved.catalog_id().to_lowercase())
+            .unwrap_or_else(|| model.to_lowercase());
 
         if model_lower.starts_with("gpt-5") {
             if model_lower.contains("5.5-pro") {
@@ -391,6 +406,30 @@ impl ModelUtils {
     }
 
     pub fn is_valid_model(model: &str) -> bool {
+        let parsed = ModelIdRef::parse(model);
+        if let Some(provider) = parsed.provider() {
+            if provider.eq_ignore_ascii_case("openai") {
+                return get_openai_registry().resolve_model(model).is_some();
+            }
+            if is_openai_model_name(parsed.model()) {
+                return false;
+            }
+            return [
+                "anthropic",
+                "google",
+                "cohere",
+                "mistral",
+                "meta",
+                "azure",
+                "replicate",
+            ]
+            .iter()
+            .any(|known_provider| provider.eq_ignore_ascii_case(known_provider));
+        }
+        if is_openai_model_name(parsed.model()) {
+            return get_openai_registry().resolve_model(model).is_some();
+        }
+
         let known_providers = [
             "openai",
             "anthropic",
@@ -474,6 +513,17 @@ impl ModelUtils {
     }
 
     pub fn validate_model_with_provider(model: &str, provider: &str) -> Result<(), ProviderError> {
+        if provider.eq_ignore_ascii_case("openai") {
+            return if get_openai_registry().resolve_model(model).is_some() {
+                Ok(())
+            } else {
+                Err(ProviderError::ModelNotFound {
+                    provider: "openai",
+                    model: format!("Model '{model}' is not in the OpenAI model catalog"),
+                })
+            };
+        }
+
         let compatible_models = Self::get_compatible_models_for_provider(provider);
 
         if compatible_models.is_empty() {
@@ -505,31 +555,15 @@ impl ModelUtils {
 
     pub fn get_compatible_models_for_provider(provider: &str) -> Vec<String> {
         match provider.to_lowercase().as_str() {
-            "openai" => vec![
-                "gpt-5.5".to_string(),
-                "gpt-5.5-pro".to_string(),
-                "gpt-5.4".to_string(),
-                "gpt-5.4-mini".to_string(),
-                "gpt-5.4-nano".to_string(),
-                "gpt-5.4-pro".to_string(),
-                "gpt-5.2".to_string(),
-                "gpt-image-2".to_string(),
-                "gpt-image-1".to_string(),
-                "gpt-image-1-mini".to_string(),
-                "gpt-image-1.5".to_string(),
-                "chatgpt-image-latest".to_string(),
-                "o3-pro".to_string(),
-                "o3-mini".to_string(),
-                "o4-mini".to_string(),
-                "gpt-4.1".to_string(),
-                "gpt-4.1-mini".to_string(),
-                "gpt-4.1-nano".to_string(),
-                "gpt-4".to_string(),
-                "gpt-4-turbo".to_string(),
-                "gpt-4-32k".to_string(),
-                "gpt-3.5-turbo".to_string(),
-                "gpt-3.5-turbo-16k".to_string(),
-            ],
+            "openai" => {
+                let mut models = get_openai_registry()
+                    .get_all_models()
+                    .into_iter()
+                    .map(|model| model.id)
+                    .collect::<Vec<_>>();
+                models.sort();
+                models
+            }
             "anthropic" => vec![
                 "claude-opus-4-8".to_string(),
                 "claude-opus-4-7".to_string(),
@@ -579,6 +613,26 @@ impl ModelUtils {
             _ => vec![],
         }
     }
+}
+
+fn is_openai_model_name(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    [
+        "gpt-",
+        "chatgpt-image-",
+        "o1",
+        "o3",
+        "o4",
+        "dall-e-",
+        "whisper-",
+        "tts-",
+        "text-embedding-",
+        "omni-moderation-",
+        "computer-use-",
+        "codex-",
+    ]
+    .iter()
+    .any(|prefix| model.starts_with(prefix))
 }
 
 #[cfg(test)]
