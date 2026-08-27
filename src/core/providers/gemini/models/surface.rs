@@ -9,7 +9,12 @@ struct DeveloperModelLifecycle {
     shutdown_date: Option<&'static str>,
 }
 
-const DEVELOPER_CHAT_MODELS: [DeveloperModelLifecycle; 9] = [
+const DEVELOPER_CHAT_MODELS: [DeveloperModelLifecycle; 10] = [
+    DeveloperModelLifecycle {
+        id: "gemini-3.7-flash",
+        release_date: "2026-08-13",
+        shutdown_date: None,
+    },
     DeveloperModelLifecycle {
         id: "gemini-3.6-flash",
         release_date: "2026-07-21",
@@ -110,7 +115,8 @@ impl GoogleGeminiApiSurface {
             Self::VertexAi => {
                 !matches!(
                     spec.family,
-                    GeminiModelFamily::Gemini36Flash
+                    GeminiModelFamily::Gemini37Flash
+                        | GeminiModelFamily::Gemini36Flash
                         | GeminiModelFamily::Gemini35FlashLite
                         | GeminiModelFamily::Gemini10Pro
                         | GeminiModelFamily::Gemini10ProVision
@@ -120,7 +126,8 @@ impl GoogleGeminiApiSurface {
             }
             Self::VertexAiExperimental => !matches!(
                 spec.family,
-                GeminiModelFamily::Gemini36Flash
+                GeminiModelFamily::Gemini37Flash
+                    | GeminiModelFamily::Gemini36Flash
                     | GeminiModelFamily::Gemini35FlashLite
                     | GeminiModelFamily::Gemini10Pro
                     | GeminiModelFamily::Gemini10ProVision
@@ -200,7 +207,11 @@ mod tests {
                 .iter()
                 .any(|model| model.id == "gemini-3.5-flash")
         );
-        for developer_only_id in ["gemini-3.6-flash", "gemini-3.5-flash-lite"] {
+        for developer_only_id in [
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+        ] {
             assert!(developer_ids.contains(&developer_only_id));
             assert!(
                 !vertex_models
@@ -253,6 +264,15 @@ mod tests {
         assert_eq!(
             developer_model.metadata["google_lifecycle_source"],
             serde_json::json!(OFFICIAL_LIFECYCLE_SOURCE)
+        );
+
+        let gemini_37 = developer_models
+            .iter()
+            .find(|model| model.id == "gemini-3.7-flash")
+            .unwrap();
+        assert_eq!(
+            gemini_37.metadata["google_release_date"],
+            serde_json::json!("2026-08-13")
         );
 
         let vertex_model = vertex_models

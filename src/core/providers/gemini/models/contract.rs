@@ -5,11 +5,15 @@ use crate::core::types::{
     message::{MessageContent, MessageRole},
 };
 
-/// Whether Google requires the July 2026 fixed-sampling request contract.
+/// Whether Google requires the current fixed-sampling request contract.
 pub(crate) fn uses_fixed_sampling_contract(model_id: &str) -> bool {
     matches!(
         get_gemini_registry().get_model_family(model_id),
-        Some(GeminiModelFamily::Gemini36Flash | GeminiModelFamily::Gemini35FlashLite)
+        Some(
+            GeminiModelFamily::Gemini37Flash
+                | GeminiModelFamily::Gemini36Flash
+                | GeminiModelFamily::Gemini35FlashLite
+        )
     )
 }
 
@@ -47,10 +51,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_sampling_contract_is_limited_to_july_2026_models() {
+    fn fixed_sampling_contract_is_limited_to_documented_models() {
+        assert!(uses_fixed_sampling_contract("gemini-3.7-flash"));
         assert!(uses_fixed_sampling_contract("gemini-3.6-flash"));
         assert!(uses_fixed_sampling_contract("gemini-3.5-flash-lite"));
         assert!(!uses_fixed_sampling_contract("gemini-3.5-flash"));
+        assert!(!uses_fixed_sampling_contract("gemini-3.7-flash-preview"));
     }
 
     #[test]

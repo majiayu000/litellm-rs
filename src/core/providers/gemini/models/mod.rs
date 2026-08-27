@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 
 mod catalog;
 mod contract;
+#[cfg(test)]
+mod current_tests;
 mod surface;
 
 pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
@@ -48,6 +50,7 @@ pub enum ModelFeature {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeminiModelFamily {
+    Gemini37Flash,
     Gemini36Flash,
     /// Gemini 3.5 series (2026 - Latest)
     Gemini35Flash,
@@ -146,7 +149,7 @@ pub struct GeminiModelRegistry {
 
 impl GeminiModelRegistry {
     /// Expected number of Gemini models for capacity hint
-    const EXPECTED_MODEL_COUNT: usize = 19;
+    const EXPECTED_MODEL_COUNT: usize = 20;
 
     pub fn new() -> Self {
         let mut registry = Self {
@@ -217,7 +220,9 @@ impl GeminiModelRegistry {
     pub fn from_model_name(model_name: &str) -> Option<GeminiModelFamily> {
         let model_lower = model_name.to_lowercase();
 
-        if model_lower.contains("gemini-3.6-flash") {
+        if model_name == "gemini-3.7-flash" {
+            Some(GeminiModelFamily::Gemini37Flash)
+        } else if model_lower.contains("gemini-3.6-flash") {
             Some(GeminiModelFamily::Gemini36Flash)
         } else if model_lower.contains("gemini-3.5-flash-lite") {
             Some(GeminiModelFamily::Gemini35FlashLite)
