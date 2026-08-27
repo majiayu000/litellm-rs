@@ -201,6 +201,78 @@ fn provider_aware_authority_resolves_amazon_nova_short_alias() {
 }
 
 #[test]
+fn provider_aware_authority_preserves_non_provider_qualifiers() {
+    let service = PricingService::new(None);
+    for model in [
+        "synthetic/model",
+        "region-a/model-2026",
+        "region-b/model-2026",
+        "deployment-x/model-2026",
+    ] {
+        service.add_custom_model(model.to_string(), test_model_info("synthetic"));
+    }
+
+    for (requested, expected) in [
+        ("region-a/model", "region-a/model-2026"),
+        ("region-b/model", "region-b/model-2026"),
+        ("deployment-x/model", "deployment-x/model-2026"),
+    ] {
+        let Some((resolved, _)) = service.get_model_info_for_provider("synthetic", requested)
+        else {
+            panic!("qualified synthetic model should resolve: {requested}");
+        };
+        assert_eq!(resolved, expected);
+    }
+}
+
+#[test]
+fn provider_exact_eligibility_rejects_nested_catalog_qualifiers() {
+    let azure_aliases = pricing_provider_aliases("azure", "gpt-5.1");
+    assert_eq!(
+        provider_exact_plain_model("azure/gpt-5.1", &azure_aliases),
+        Some("gpt-5.1")
+    );
+    assert_eq!(
+        provider_exact_plain_model("azure/us/gpt-5.1", &azure_aliases),
+        None
+    );
+    assert_eq!(
+        provider_exact_plain_model("azure/eu/gpt-5.1", &azure_aliases),
+        None
+    );
+
+    let vertex_aliases = pricing_provider_aliases("vertex_ai", "gemini-1.5-pro");
+    assert_eq!(
+        provider_exact_plain_model(
+            "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas",
+            &vertex_aliases,
+        ),
+        None
+    );
+}
+
+#[test]
+fn provider_aware_authority_preserves_nested_catalog_qualifiers() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    for (provider, requested, expected) in [
+        ("azure", "AZURE/US/GPT-5.1", "azure/us/gpt-5.1"),
+        ("azure", "AZURE/EU/GPT-5.1", "azure/eu/gpt-5.1"),
+        (
+            "vertex_ai",
+            "VERTEX_AI/META/LLAMA-4-SCOUT-17B-16E-INSTRUCT-MAAS",
+            "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas",
+        ),
+    ] {
+        let Some((resolved, _)) = service.get_model_info_for_provider(provider, requested) else {
+            panic!("qualified catalog model should resolve: {requested}");
+        };
+        assert_eq!(resolved, expected);
+    }
+}
+
+#[test]
 fn provider_aware_authority_resolves_mixed_case_provider_exact_key() {
     let service = PricingService::with_embedded_default()
         .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));

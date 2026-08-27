@@ -68,8 +68,7 @@ impl PricingService {
         // Update in-memory data and timestamp in single lock
         {
             let mut pricing_data = self.pricing_data.write();
-            pricing_data.models.clear();
-            pricing_data.models.extend(data);
+            pricing_data.replace_models(data);
             pricing_data.last_updated = SystemTime::now();
         }
 
@@ -116,5 +115,28 @@ mod tests {
             super::super::REMOTE_LITELLM_PRICING_SOURCE
         );
         assert!(!service.should_fallback_to_embedded_on_remote_error());
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_preserves_models_and_canonical_index() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let missing_source = temp_dir.path().join("missing-pricing.json");
+        let service = PricingService::new(Some(missing_source.to_string_lossy().into_owned()));
+        let model_info = serde_json::from_str(r#"{"litellm_provider":"synthetic","mode":"chat"}"#)
+            .expect("test model should deserialize");
+        service.add_custom_model("synthetic/Mixed-Model".to_string(), model_info);
+
+        let error = service
+            .force_refresh()
+            .await
+            .expect_err("missing pricing source must return an error");
+
+        assert!(matches!(error, GatewayError::Io(_)));
+        assert_eq!(
+            service
+                .get_model_info_for_provider("synthetic", "MIXED-MODEL")
+                .map(|(model, _)| model),
+            Some("synthetic/Mixed-Model".to_string())
+        );
     }
 }

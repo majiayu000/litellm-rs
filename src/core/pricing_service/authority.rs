@@ -21,7 +21,7 @@ impl PricingService {
         let models = service.load_from_embedded_default()?;
         {
             let mut data = service.pricing_data.write();
-            data.models = models;
+            data.replace_models(models);
             data.last_updated = SystemTime::now();
         }
         Ok(service)
@@ -50,7 +50,7 @@ impl PricingService {
         model: &str,
     ) -> Option<(String, LiteLLMModelInfo)> {
         let data = self.pricing_data.read();
-        resolve_model_info_for_provider(&data.models, provider, model)
+        resolve_model_info_for_provider(&data, provider, model)
     }
 
     /// Calculate a completion cost from already-loaded pricing data.
@@ -276,10 +276,11 @@ impl PricingService {
 }
 
 fn resolve_model_info_for_provider(
-    models: &HashMap<String, LiteLLMModelInfo>,
+    data: &super::types::PricingData,
     provider: &str,
     model: &str,
 ) -> Option<(String, LiteLLMModelInfo)> {
+    let models = &data.models;
     let normalized_provider = crate::core::pricing::normalize_pricing_provider(provider);
     if normalized_provider == "amazon_nova" {
         return amazon_nova_pricing_model_info(model);
@@ -290,8 +291,8 @@ fn resolve_model_info_for_provider(
         let prefixed_provider = crate::core::pricing::normalize_pricing_provider(prefixed_provider);
         if prefixed_provider != "openai_like"
             && let Some(resolved) =
-                resolve_model_info_for_provider(models, &prefixed_provider, stripped_model)
-                    .or_else(|| resolve_model_info_for_provider(models, &prefixed_provider, model))
+                resolve_model_info_for_provider(data, &prefixed_provider, stripped_model)
+                    .or_else(|| resolve_model_info_for_provider(data, &prefixed_provider, model))
         {
             return Some(resolved);
         }
@@ -312,47 +313,51 @@ fn resolve_model_info_for_provider(
     {
         return Some((model.to_string(), info.clone()));
     }
+    if let Some((candidate, info)) = data
+        .get_model_case_insensitive(model)
+        .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
+    {
+        return Some((candidate.to_string(), info.clone()));
+    }
 
     let normalized_model = crate::core::pricing::normalize_model_key(model);
-    if normalized_model != model
-        && let Some(info) = models
-            .get(normalized_model)
-            .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
-    {
-        return Some((normalized_model.to_string(), info.clone()));
-    }
-
-    let provider_exact_model = format!("{normalized_provider}/{normalized_model}");
-    if let Some(info) = models
-        .get(&provider_exact_model)
-        .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
-    {
-        return Some((provider_exact_model, info.clone()));
-    }
-    if let Some((candidate, info)) = models
-        .iter()
-        .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(&provider_exact_model))
-        .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
-        .min_by_key(|(candidate, _)| *candidate)
-    {
-        return Some((candidate.clone(), info.clone()));
-    }
-
     if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
         for candidate in
             super::google::exact_pricing_candidates(&normalized_provider, model, normalized_model)
         {
-            if let Some(info) = models
-                .get(&candidate)
-                .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
+            if let Some((canonical, info)) =
+                data.get_model_case_insensitive(&candidate)
+                    .filter(|(_, info)| {
+                        provider_name_matches(&info.litellm_provider, &provider_aliases)
+                    })
             {
-                return Some((candidate, info.clone()));
+                return Some((canonical.to_string(), info.clone()));
             }
         }
         return None;
     }
 
-    let requested = normalized_model.to_lowercase();
+    if let Some(plain_model) = provider_exact_plain_model(model, &provider_aliases) {
+        if plain_model != model
+            && let Some((canonical, info)) =
+                data.get_model_case_insensitive(plain_model)
+                    .filter(|(_, info)| {
+                        provider_name_matches(&info.litellm_provider, &provider_aliases)
+                    })
+        {
+            return Some((canonical.to_string(), info.clone()));
+        }
+
+        let provider_exact_model = format!("{normalized_provider}/{plain_model}");
+        if let Some((canonical, info)) = data
+            .get_model_case_insensitive(&provider_exact_model)
+            .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
+        {
+            return Some((canonical.to_string(), info.clone()));
+        }
+    }
+
+    let requested = model.to_lowercase();
     models
         .iter()
         .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
@@ -562,6 +567,16 @@ fn provider_prefixed_model(model: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((provider, stripped_model))
+}
+
+fn provider_exact_plain_model<'a>(model: &'a str, provider_aliases: &[String]) -> Option<&'a str> {
+    let Some((prefix, stripped_model)) = provider_prefixed_model(model) else {
+        return Some(model);
+    };
+    if stripped_model.contains('/') || !provider_name_matches(prefix, provider_aliases) {
+        return None;
+    }
+    Some(stripped_model)
 }
 
 fn is_xiaomi_mimo_model(model: &str) -> bool {

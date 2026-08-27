@@ -70,6 +70,45 @@ pub struct PricingService {
     pub(super) event_sender: broadcast::Sender<PricingUpdateEvent>,
 }
 
+impl PricingData {
+    pub(super) fn replace_models(&mut self, models: HashMap<String, LiteLLMModelInfo>) {
+        let mut canonical_model_keys = HashMap::with_capacity(models.len());
+        for model in models.keys() {
+            index_canonical_model_key(&mut canonical_model_keys, model);
+        }
+        self.models = models;
+        self.canonical_model_keys = canonical_model_keys;
+    }
+
+    pub(super) fn insert_model(&mut self, model: String, model_info: LiteLLMModelInfo) {
+        index_canonical_model_key(&mut self.canonical_model_keys, &model);
+        self.models.insert(model, model_info);
+    }
+
+    pub(super) fn get_model_case_insensitive(
+        &self,
+        model: &str,
+    ) -> Option<(&str, &LiteLLMModelInfo)> {
+        let lowercase = model.to_ascii_lowercase();
+        let canonical = self.canonical_model_keys.get(&lowercase)?;
+        self.models
+            .get_key_value(canonical)
+            .map(|(model, info)| (model.as_str(), info))
+    }
+}
+
+fn index_canonical_model_key(index: &mut HashMap<String, String>, model: &str) {
+    index
+        .entry(model.to_ascii_lowercase())
+        .and_modify(|canonical| {
+            if model < canonical.as_str() {
+                canonical.clear();
+                canonical.push_str(model);
+            }
+        })
+        .or_insert_with(|| model.to_string());
+}
+
 impl PricingService {
     /// Create a new pricing service
     pub fn new(pricing_url: Option<String>) -> Self {
@@ -77,10 +116,7 @@ impl PricingService {
         let use_embedded_fallback_on_remote_error = false;
 
         let service = Self {
-            pricing_data: Arc::new(RwLock::new(PricingData {
-                models: HashMap::new(),
-                last_updated: SystemTime::UNIX_EPOCH,
-            })),
+            pricing_data: Arc::new(RwLock::new(PricingData::default())),
             http_client: default_outbound_client().clone(),
             pricing_url: pricing_url.unwrap_or_default(),
             use_embedded_fallback_on_remote_error,
@@ -236,7 +272,7 @@ impl PricingService {
     pub fn add_custom_model(&self, model: String, model_info: LiteLLMModelInfo) {
         {
             let mut data = self.pricing_data.write();
-            data.models.insert(model.clone(), model_info.clone());
+            data.insert_model(model.clone(), model_info.clone());
         }
 
         // Send update event
@@ -378,7 +414,40 @@ mod tests {
         let service = PricingService::new(None);
         let data = service.pricing_data.read();
         assert!(data.models.is_empty());
+        assert!(data.canonical_model_keys.is_empty());
         assert_eq!(data.last_updated, SystemTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn canonical_model_index_uses_lexical_key_for_case_only_collisions() {
+        for order in [
+            ["synthetic/phi-4", "synthetic/Phi-4"],
+            ["synthetic/Phi-4", "synthetic/phi-4"],
+        ] {
+            let mut inserted = PricingData::default();
+            for model in order {
+                inserted.insert_model(model.to_string(), create_test_model_info("synthetic"));
+            }
+            assert_eq!(
+                inserted
+                    .get_model_case_insensitive("SYNTHETIC/PHI-4")
+                    .map(|(model, _)| model),
+                Some("synthetic/Phi-4")
+            );
+
+            let models = order
+                .into_iter()
+                .map(|model| (model.to_string(), create_test_model_info("synthetic")))
+                .collect();
+            let mut replaced = PricingData::default();
+            replaced.replace_models(models);
+            assert_eq!(
+                replaced
+                    .get_model_case_insensitive("SYNTHETIC/PHI-4")
+                    .map(|(model, _)| model),
+                Some("synthetic/Phi-4")
+            );
+        }
     }
 
     // ==================== Model Info Tests ====================

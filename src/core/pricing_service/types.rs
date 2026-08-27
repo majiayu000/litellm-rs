@@ -10,6 +10,8 @@ use std::time::SystemTime;
 pub(super) struct PricingData {
     /// Model pricing data (model_name -> LiteLLMModelInfo)
     pub models: HashMap<String, LiteLLMModelInfo>,
+    /// Case-insensitive model key lookup (lowercase -> canonical model name).
+    pub canonical_model_keys: HashMap<String, String>,
     /// Last update time
     pub last_updated: SystemTime,
 }
@@ -18,6 +20,7 @@ impl Default for PricingData {
     fn default() -> Self {
         Self {
             models: HashMap::new(),
+            canonical_model_keys: HashMap::new(),
             last_updated: SystemTime::UNIX_EPOCH,
         }
     }
@@ -460,10 +463,9 @@ mod tests {
             },
         );
 
-        let data = PricingData {
-            models,
-            last_updated: SystemTime::now(),
-        };
+        let mut data = PricingData::default();
+        data.replace_models(models);
+        data.last_updated = SystemTime::now();
 
         assert_eq!(data.models.len(), 1);
         assert!(data.models.contains_key("gpt-4"));
