@@ -165,6 +165,8 @@ impl SdkConfigBuilder {
                 "gpt-5.4".to_string(),
                 "gpt-5.5".to_string(),
                 "gpt-5.5-pro".to_string(),
+                "gpt-5.6".to_string(),
+                "gpt-5.6-luna".to_string(),
                 "gpt-5.4-mini".to_string(),
                 "gpt-5.4-nano".to_string(),
             ],
@@ -594,6 +596,12 @@ mod tests {
             Some(&"gpt-5.4".to_string())
         );
         assert!(config.providers[0].models.contains(&"gpt-5.4".to_string()));
+        assert!(config.providers[0].models.contains(&"gpt-5.6".to_string()));
+        assert!(
+            config.providers[0]
+                .models
+                .contains(&"gpt-5.6-luna".to_string())
+        );
     }
 
     #[test]

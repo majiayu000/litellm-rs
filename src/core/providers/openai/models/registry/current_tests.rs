@@ -105,6 +105,13 @@ fn realtime_2x_catalog_entries_match_official_model_cards() {
                 .contains(&OpenAIModelFeature::StreamingSupport)
         );
         assert!(!model.features.contains(&OpenAIModelFeature::JsonMode));
+        assert!(!model.features.contains(&OpenAIModelFeature::ChatCompletion));
+        assert!(
+            !model
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::ChatCompletion)
+        );
         assert!(
             !model
                 .model_info
@@ -122,6 +129,34 @@ fn realtime_2x_catalog_entries_match_official_model_cards() {
         assert!(model.features.contains(&OpenAIModelFeature::AudioOutput));
         assert!(model.features.contains(&OpenAIModelFeature::RealtimeAudio));
     }
+}
+
+#[test]
+fn realtime_2_reasoning_detection_is_boundary_safe() {
+    let registry = get_openai_registry();
+
+    for model_id in [
+        "gpt-realtime-2",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-mini",
+    ] {
+        assert!(
+            registry.supports_feature(model_id, &OpenAIModelFeature::ReasoningMode),
+            "{model_id} should expose documented Realtime reasoning"
+        );
+    }
+
+    assert!(
+        registry.get_model_spec("gpt-realtime-2025-08-28").is_some(),
+        "legacy Realtime snapshot should be present in the embedded catalog"
+    );
+    assert!(
+        !registry.supports_feature(
+            "gpt-realtime-2025-08-28",
+            &OpenAIModelFeature::ReasoningMode
+        ),
+        "legacy Realtime snapshot must not be classified as Realtime 2"
+    );
 }
 
 #[test]

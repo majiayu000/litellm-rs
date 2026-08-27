@@ -93,11 +93,9 @@ impl OpenAIModelRegistry {
         let is_realtime =
             model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime");
 
-        if model_id.starts_with("gpt-") {
+        if model_id.starts_with("gpt-") && !is_realtime {
             features.push(OpenAIModelFeature::ChatCompletion);
-            if !is_realtime {
-                features.push(OpenAIModelFeature::JsonMode);
-            }
+            features.push(OpenAIModelFeature::JsonMode);
         }
 
         if model_info.supports_tools {
@@ -113,7 +111,7 @@ impl OpenAIModelRegistry {
             || model_id.starts_with("o4")
             || model_id.starts_with("gpt-5.5")
             || gpt56_family(model_id).is_some()
-            || model_id.starts_with("gpt-realtime-2")
+            || is_realtime_2_reasoning_model(model_id)
         {
             features.push(OpenAIModelFeature::ReasoningMode);
         }
@@ -544,6 +542,16 @@ fn gpt56_family(model_id: &str) -> Option<OpenAIModelFamily> {
     } else {
         None
     }
+}
+
+fn is_realtime_2_reasoning_model(model_id: &str) -> bool {
+    [
+        "gpt-realtime-2.1-mini",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2",
+    ]
+    .iter()
+    .any(|alias| matches_alias_or_snapshot(model_id, alias))
 }
 
 fn matches_alias_or_snapshot(model_id: &str, alias: &str) -> bool {
