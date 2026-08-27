@@ -4,10 +4,14 @@ use super::{
 };
 use crate::core::types::model::ModelInfo;
 
+mod claude5;
+
 impl AnthropicModelRegistry {
     /// Initialize model registry
     pub(super) fn initialize_models(&mut self) {
-        // Claude Opus 4.8 (Latest generally available flagship - May 2026)
+        claude5::register(self);
+
+        // Claude Opus 4.8 (generally available flagship - May 2026)
         // Pricing source: https://docs.anthropic.com/en/docs/about-claude/pricing
         self.register_model(
             "claude-opus-4-8",

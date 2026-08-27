@@ -39,7 +39,13 @@ pub enum ModelFeature {
 /// Model
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnthropicModelFamily {
-    /// Claude Opus 4.8 models (latest flagship)
+    /// Claude Fable 5 models
+    ClaudeFable5,
+    /// Claude Opus 5 models
+    ClaudeOpus5,
+    /// Claude Sonnet 5 models
+    ClaudeSonnet5,
+    /// Claude Opus 4.8 models
     ClaudeOpus48,
     /// Claude Opus 4.7 models
     ClaudeOpus47,
@@ -206,6 +212,13 @@ impl AnthropicModelRegistry {
 
     /// Get model family from name
     pub fn from_model_name(model_name: &str) -> Option<AnthropicModelFamily> {
+        match model_name {
+            "claude-fable-5" => return Some(AnthropicModelFamily::ClaudeFable5),
+            "claude-opus-5" => return Some(AnthropicModelFamily::ClaudeOpus5),
+            "claude-sonnet-5" => return Some(AnthropicModelFamily::ClaudeSonnet5),
+            _ => {}
+        }
+
         let model_lower = model_name.to_lowercase();
 
         // Check newest models first (most specific)
@@ -287,6 +300,99 @@ pub fn get_anthropic_registry() -> &'static AnthropicModelRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_current_claude_5_catalog() {
+        let registry = get_anthropic_registry();
+        let cases = [
+            (
+                "claude-fable-5",
+                AnthropicModelFamily::ClaudeFable5,
+                0.010,
+                0.050,
+                0.0125,
+                0.001,
+            ),
+            (
+                "claude-opus-5",
+                AnthropicModelFamily::ClaudeOpus5,
+                0.005,
+                0.025,
+                0.00625,
+                0.0005,
+            ),
+            (
+                "claude-sonnet-5",
+                AnthropicModelFamily::ClaudeSonnet5,
+                0.002,
+                0.010,
+                0.0025,
+                0.0002,
+            ),
+        ];
+
+        for (id, family, input, output, cache_write, cache_read) in cases {
+            let spec = registry
+                .get_model_spec(id)
+                .unwrap_or_else(|| panic!("{id} should be registered"));
+
+            assert_eq!(spec.model_info.id, id);
+            assert_eq!(spec.family, family);
+            assert_eq!(spec.model_info.max_context_length, 1_000_000);
+            assert_eq!(spec.model_info.max_output_length, Some(128_000));
+            assert!(spec.model_info.supports_streaming);
+            assert!(spec.model_info.supports_tools);
+            assert!(spec.model_info.supports_multimodal);
+            assert!(
+                !spec.features.contains(&ModelFeature::ThinkingMode),
+                "Claude 5 does not support manual budget-token thinking"
+            );
+            assert_eq!(
+                spec.model_info.metadata.get("supports_adaptive_thinking"),
+                Some(&serde_json::Value::Bool(true))
+            );
+            assert_eq!(
+                spec.model_info
+                    .metadata
+                    .get("supports_manual_extended_thinking"),
+                Some(&serde_json::Value::Bool(false))
+            );
+            assert!(spec.features.contains(&ModelFeature::ComputerUse));
+            assert_eq!(spec.pricing.input_cost_per_1k_tokens, input);
+            assert_eq!(spec.pricing.output_cost_per_1k_tokens, output);
+            assert_eq!(
+                spec.pricing.cache_creation_input_token_cost,
+                Some(cache_write)
+            );
+            assert_eq!(spec.pricing.cache_read_input_token_cost, Some(cache_read));
+            assert_eq!(spec.pricing.batch_discount, Some(0.5));
+            assert_eq!(AnthropicModelRegistry::from_model_name(id), Some(family));
+        }
+    }
+
+    #[test]
+    fn test_current_claude_5_ids_are_exact_and_public() {
+        let registry = get_anthropic_registry();
+
+        for unsupported in [
+            "claude-fable-5-20260801",
+            "claude-opus-5-latest",
+            "claude-opus-5-20260724",
+            "claude-sonnet-5-preview",
+            "prefix-claude-sonnet-5",
+            "claude-mythos-5",
+        ] {
+            assert!(
+                registry.get_model_spec(unsupported).is_none(),
+                "{unsupported} must not be registered"
+            );
+            assert_eq!(
+                AnthropicModelRegistry::from_model_name(unsupported),
+                None,
+                "{unsupported} must not resolve to a Claude 5 family"
+            );
+        }
+    }
 
     #[test]
     fn test_model_registry() {
