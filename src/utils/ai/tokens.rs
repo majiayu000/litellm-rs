@@ -1,3 +1,4 @@
+use super::models::utils::openai_gpt56_limits;
 use crate::core::providers::unified_provider::ProviderError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -247,6 +248,10 @@ impl TokenUtils {
     }
 
     pub fn get_max_tokens_for_model(model: &str) -> Option<usize> {
+        if let Some((context_window, _)) = openai_gpt56_limits(model) {
+            return Some(context_window);
+        }
+
         match model.to_lowercase().as_str() {
             m if m.contains("gpt-5.5") => Some(1_048_576),
             m if m.contains("gpt-5.4")
@@ -525,6 +530,47 @@ mod tests {
             Some(200000)
         );
         assert_eq!(TokenUtils::get_max_tokens_for_model("unknown-model"), None);
+    }
+
+    #[test]
+    fn test_gpt56_limits_are_registry_aligned_and_boundary_safe() {
+        for model in [
+            "gpt-5.6",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.6-2026-08-01",
+            "openai/gpt-5.6-terra-2026-08-01",
+        ] {
+            assert_eq!(
+                TokenUtils::get_max_tokens_for_model(model),
+                Some(1_050_000),
+                "{model}"
+            );
+            assert!(TokenUtils::validate_token_limit(model, 1_000_000).is_ok());
+        }
+
+        for model in ["gpt-5.6-cyber", "openai/gpt-5.6-cyber-2026-08-01"] {
+            assert_eq!(
+                TokenUtils::get_max_tokens_for_model(model),
+                Some(400_000),
+                "{model}"
+            );
+            assert!(TokenUtils::validate_token_limit(model, 400_001).is_err());
+        }
+
+        for model in [
+            "gpt-5.60",
+            "gpt-5.6-foo",
+            "gpt-5.6-solstice",
+            "gpt-5.6-cybernetic",
+        ] {
+            assert_eq!(
+                TokenUtils::get_max_tokens_for_model(model),
+                Some(272_000),
+                "{model} must retain the generic GPT-5 limit"
+            );
+        }
     }
 
     #[test]

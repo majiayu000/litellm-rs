@@ -1,3 +1,4 @@
+use crate::core::providers::openai::get_openai_registry;
 use crate::core::providers::shared::gemini_context_window;
 use crate::core::providers::unified_provider::ProviderError;
 
@@ -13,7 +14,21 @@ impl ModelUtils {
             .map(|(_, model)| model.to_string())
             .unwrap_or_else(|| model.to_lowercase());
 
-        if model_lower.starts_with("gpt-5") {
+        if let Some((context_window, max_output)) = openai_gpt56_limits(&model_lower) {
+            ModelCapabilities {
+                supports_function_calling: true,
+                supports_parallel_function_calling: true,
+                supports_tool_choice: true,
+                supports_response_schema: true,
+                supports_system_messages: true,
+                supports_web_search: false,
+                supports_url_context: true,
+                supports_vision: true,
+                supports_streaming: true,
+                max_tokens: Some(max_output),
+                context_window: Some(context_window),
+            }
+        } else if model_lower.starts_with("gpt-5") {
             ModelCapabilities {
                 supports_function_calling: true,
                 supports_parallel_function_calling: true,
@@ -437,6 +452,14 @@ impl ModelUtils {
         ];
 
         let model_lower = model.to_lowercase();
+        let model_id = model_lower
+            .rsplit_once('/')
+            .map(|(_, model_id)| model_id)
+            .unwrap_or(&model_lower);
+
+        if model_id.starts_with("gpt-5.6") {
+            return gpt56_catalog_id(model_id).is_some();
+        }
 
         for provider in &known_providers {
             if model_lower.contains(provider) {
@@ -486,9 +509,14 @@ impl ModelUtils {
             .strip_prefix(&provider_prefix)
             .unwrap_or(&model_lower);
 
-        let model_matches = compatible_models
-            .iter()
-            .any(|compatible_model| model_for_match.starts_with(&compatible_model.to_lowercase()));
+        let model_matches =
+            if provider.eq_ignore_ascii_case("openai") && model_for_match.starts_with("gpt-5.6") {
+                gpt56_catalog_id(model_for_match).is_some()
+            } else {
+                compatible_models.iter().any(|compatible_model| {
+                    model_for_match.starts_with(&compatible_model.to_lowercase())
+                })
+            };
 
         if !model_matches {
             return Err(ProviderError::ModelNotFound {
@@ -506,6 +534,11 @@ impl ModelUtils {
     pub fn get_compatible_models_for_provider(provider: &str) -> Vec<String> {
         match provider.to_lowercase().as_str() {
             "openai" => vec![
+                "gpt-5.6".to_string(),
+                "gpt-5.6-sol".to_string(),
+                "gpt-5.6-terra".to_string(),
+                "gpt-5.6-luna".to_string(),
+                "gpt-5.6-cyber".to_string(),
                 "gpt-5.5".to_string(),
                 "gpt-5.5-pro".to_string(),
                 "gpt-5.4".to_string(),
@@ -579,6 +612,53 @@ impl ModelUtils {
             _ => vec![],
         }
     }
+}
+
+pub(crate) fn openai_gpt56_limits(model: &str) -> Option<(usize, usize)> {
+    let catalog_id = gpt56_catalog_id(model)?;
+    let model_info = &get_openai_registry().get_model_spec(catalog_id)?.model_info;
+
+    Some((
+        model_info.max_context_length as usize,
+        model_info.max_output_length? as usize,
+    ))
+}
+
+fn gpt56_catalog_id(model: &str) -> Option<&'static str> {
+    let model_lower = model.to_ascii_lowercase();
+    let model_id = model_lower
+        .rsplit_once('/')
+        .map(|(_, model_id)| model_id)
+        .unwrap_or(&model_lower);
+
+    if matches_alias_or_snapshot(model_id, "gpt-5.6-cyber") {
+        Some("gpt-5.6-cyber")
+    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-terra") {
+        Some("gpt-5.6-terra")
+    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-luna") {
+        Some("gpt-5.6-luna")
+    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-sol") {
+        Some("gpt-5.6-sol")
+    } else if matches_alias_or_snapshot(model_id, "gpt-5.6") {
+        Some("gpt-5.6")
+    } else {
+        None
+    }
+}
+
+fn matches_alias_or_snapshot(model_id: &str, alias: &str) -> bool {
+    model_id == alias || model_id.strip_prefix(alias).is_some_and(is_snapshot_suffix)
+}
+
+fn is_snapshot_suffix(suffix: &str) -> bool {
+    let bytes = suffix.as_bytes();
+    bytes.len() == 11
+        && bytes[0] == b'-'
+        && bytes[5] == b'-'
+        && bytes[8] == b'-'
+        && bytes[1..5].iter().all(u8::is_ascii_digit)
+        && bytes[6..8].iter().all(u8::is_ascii_digit)
+        && bytes[9..11].iter().all(u8::is_ascii_digit)
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(feature = "providers-extended")]
 use crate::core::providers::gemini::get_gemini_registry;
+use crate::core::providers::openai::get_openai_registry;
 use crate::core::providers::shared::{
     GEMINI_15_PRO_CONTEXT_WINDOW, GEMINI_20_FLASH_CONTEXT_WINDOW,
 };
@@ -57,6 +58,42 @@ fn test_get_model_capabilities_gpt55_matches_catalog_shape() {
     assert_eq!(prefixed_pro_caps.context_window, Some(1_048_576));
     assert_eq!(prefixed_pro_caps.max_tokens, Some(128000));
     assert!(!prefixed_pro_caps.supports_streaming);
+}
+
+#[test]
+fn test_get_model_capabilities_gpt56_matches_registry_shape() {
+    let registry = get_openai_registry();
+    for (model, catalog_id) in [
+        ("gpt-5.6", "gpt-5.6"),
+        ("gpt-5.6-sol", "gpt-5.6-sol"),
+        ("gpt-5.6-terra", "gpt-5.6-terra"),
+        ("gpt-5.6-luna", "gpt-5.6-luna"),
+        ("gpt-5.6-cyber", "gpt-5.6-cyber"),
+        ("openai/gpt-5.6-terra", "gpt-5.6-terra"),
+        ("gpt-5.6-luna-2026-08-01", "gpt-5.6-luna"),
+    ] {
+        let spec = registry
+            .get_model_spec(catalog_id)
+            .expect("GPT-5.6 catalog entry should exist");
+        let caps = ModelUtils::get_model_capabilities(model);
+
+        assert_eq!(
+            caps.context_window,
+            Some(spec.model_info.max_context_length as usize),
+            "{model} context window should match the OpenAI registry"
+        );
+        assert_eq!(
+            caps.max_tokens,
+            spec.model_info
+                .max_output_length
+                .map(|limit| limit as usize),
+            "{model} max output should match the OpenAI registry"
+        );
+        assert!(caps.supports_function_calling, "{model}");
+        assert!(caps.supports_response_schema, "{model}");
+        assert!(caps.supports_vision, "{model}");
+        assert!(caps.supports_streaming, "{model}");
+    }
 }
 
 #[test]
@@ -423,6 +460,41 @@ fn test_is_valid_model_unknown() {
     assert!(!ModelUtils::is_valid_model("unknown-xyz-123"));
 }
 
+#[test]
+fn test_gpt56_validation_is_registry_aligned_and_boundary_safe() {
+    for model in [
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.6-cyber",
+        "gpt-5.6-2026-08-01",
+        "gpt-5.6-terra-2026-08-01",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-cyber-2026-08-01",
+    ] {
+        assert!(ModelUtils::is_valid_model(model), "{model}");
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_ok(),
+            "{model}"
+        );
+    }
+
+    for model in [
+        "gpt-5.60",
+        "gpt-5.6-foo",
+        "gpt-5.6-solstice",
+        "gpt-5.6-cybernetic",
+        "openai/gpt-5.6-lunatic",
+    ] {
+        assert!(!ModelUtils::is_valid_model(model), "{model}");
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_err(),
+            "{model}"
+        );
+    }
+}
+
 // ==================== get_model_family Tests ====================
 
 #[test]
@@ -494,6 +566,11 @@ fn test_validate_model_with_provider_unknown_provider() {
 #[test]
 fn test_get_compatible_models_openai() {
     let models = ModelUtils::get_compatible_models_for_provider("openai");
+    assert!(models.contains(&"gpt-5.6".to_string()));
+    assert!(models.contains(&"gpt-5.6-sol".to_string()));
+    assert!(models.contains(&"gpt-5.6-terra".to_string()));
+    assert!(models.contains(&"gpt-5.6-luna".to_string()));
+    assert!(models.contains(&"gpt-5.6-cyber".to_string()));
     assert!(models.contains(&"gpt-5.5".to_string()));
     assert!(models.contains(&"gpt-5.5-pro".to_string()));
     assert!(models.contains(&"gpt-4".to_string()));
