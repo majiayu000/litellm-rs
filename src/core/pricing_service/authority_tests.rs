@@ -201,6 +201,24 @@ fn provider_aware_authority_resolves_amazon_nova_short_alias() {
 }
 
 #[test]
+fn provider_aware_authority_resolves_mixed_case_provider_exact_key() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    let Some((resolved, _)) = service.get_model_info_for_provider("azure", "GPT-5.5") else {
+        panic!("mixed-case Azure model should resolve");
+    };
+
+    assert_eq!(resolved, "azure/gpt-5.5");
+
+    let Some((resolved, _)) = service.get_model_info_for_provider("azure_ai", "phi-4") else {
+        panic!("lowercase Azure AI model should resolve to its mixed-case catalog key");
+    };
+
+    assert_eq!(resolved, "azure_ai/Phi-4");
+}
+
+#[test]
 fn provider_aware_authority_preserves_core_pricing_tiers() {
     let service = match PricingService::with_embedded_default() {
         Ok(service) => service,
@@ -225,17 +243,14 @@ fn provider_aware_authority_preserves_core_pricing_tiers() {
 
 #[test]
 fn provider_aware_authority_breaks_equal_length_fuzzy_ties_deterministically() {
-    let service = PricingService::new(None);
-    service.add_custom_model(
-        "region-b/model-2026".to_string(),
-        test_model_info("synthetic"),
-    );
-    service.add_custom_model(
-        "region-a/model-2026".to_string(),
-        test_model_info("synthetic"),
-    );
-
-    for _ in 0..8 {
+    for candidates in [
+        ["region-b/model-2026", "region-a/model-2026"],
+        ["region-a/model-2026", "region-b/model-2026"],
+    ] {
+        let service = PricingService::new(None);
+        for candidate in candidates {
+            service.add_custom_model(candidate.to_string(), test_model_info("synthetic"));
+        }
         let Some((resolved, _)) = service.get_model_info_for_provider("synthetic", "model") else {
             panic!("synthetic fuzzy model should resolve");
         };

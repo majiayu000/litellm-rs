@@ -329,6 +329,14 @@ fn resolve_model_info_for_provider(
     {
         return Some((provider_exact_model, info.clone()));
     }
+    if let Some((candidate, info)) = models
+        .iter()
+        .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(&provider_exact_model))
+        .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
+        .min_by(|(left, _), (right, _)| left.cmp(right))
+    {
+        return Some((candidate.clone(), info.clone()));
+    }
 
     if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
         for candidate in
