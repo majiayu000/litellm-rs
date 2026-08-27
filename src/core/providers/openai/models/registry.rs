@@ -12,7 +12,7 @@ use crate::core::types::model::ModelInfo;
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
 };
-use super::static_models::static_model_entries;
+use super::static_models::{StaticModelEntry, current_model_entries, static_model_entries};
 
 /// OpenAI model registry
 #[derive(Debug)]
@@ -70,6 +70,11 @@ impl OpenAIModelRegistry {
                 );
             }
         }
+
+        // The embedded pricing snapshot can lag newly released model cards.
+        // Reapply the small, manually verified current catalog so stale token
+        // limits or capabilities cannot downgrade these entries.
+        self.add_static_entries(current_model_entries());
     }
 
     /// Detect model features based on model info
@@ -102,6 +107,8 @@ impl OpenAIModelRegistry {
             || model_id.starts_with("o3")
             || model_id.starts_with("o4")
             || model_id.starts_with("gpt-5.5")
+            || model_id.starts_with("gpt-5.6")
+            || model_id.starts_with("gpt-realtime-2")
         {
             features.push(OpenAIModelFeature::ReasoningMode);
         }
@@ -192,6 +199,12 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT4
         } else if model_id.starts_with("gpt-3.5") {
             OpenAIModelFamily::GPT35
+        } else if model_id == "gpt-5.6" || model_id.starts_with("gpt-5.6-sol") {
+            OpenAIModelFamily::GPT56Sol
+        } else if model_id.starts_with("gpt-5.6-terra") {
+            OpenAIModelFamily::GPT56Terra
+        } else if model_id.starts_with("gpt-5.6-luna") {
+            OpenAIModelFamily::GPT56Luna
         } else if model_id.starts_with("gpt-5.5-pro") {
             OpenAIModelFamily::GPT55Pro
         } else if model_id.starts_with("gpt-5.5") {
@@ -284,7 +297,8 @@ impl OpenAIModelRegistry {
             }
         }
 
-        config.supports_batch = model_id.starts_with("gpt-5.5")
+        config.supports_batch = model_id.starts_with("gpt-5.6")
+            || model_id.starts_with("gpt-5.5")
             || matches!(
                 model_id.as_str(),
                 "gpt-4"
@@ -304,9 +318,11 @@ impl OpenAIModelRegistry {
 
     /// Add static model definitions as fallback (data from `static_models` module)
     fn add_static_models(&mut self) {
-        for (id, name, family, max_context, max_output, input_cost, output_cost) in
-            static_model_entries()
-        {
+        self.add_static_entries(static_model_entries());
+    }
+
+    fn add_static_entries(&mut self, entries: Vec<StaticModelEntry>) {
+        for (id, name, family, max_context, max_output, input_cost, output_cost) in entries {
             let mut model_info = ModelInfo {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -333,6 +349,9 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT52Codex
                         | OpenAIModelFamily::GPT55
                         | OpenAIModelFamily::GPT55Pro
+                        | OpenAIModelFamily::GPT56Sol
+                        | OpenAIModelFamily::GPT56Terra
+                        | OpenAIModelFamily::GPT56Luna
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -361,6 +380,9 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT52Codex
                         | OpenAIModelFamily::GPT55
                         | OpenAIModelFamily::GPT55Pro
+                        | OpenAIModelFamily::GPT56Sol
+                        | OpenAIModelFamily::GPT56Terra
+                        | OpenAIModelFamily::GPT56Luna
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -479,15 +501,15 @@ impl OpenAIModelRegistry {
     /// Get the best model for a specific use case
     pub fn get_recommended_model(&self, use_case: OpenAIUseCase) -> Option<String> {
         match use_case {
-            OpenAIUseCase::GeneralChat => Some("gpt-5.5".to_string()),
-            OpenAIUseCase::CodeGeneration => Some("gpt-5.5".to_string()),
-            OpenAIUseCase::Reasoning => Some("o3-pro".to_string()),
-            OpenAIUseCase::Vision => Some("gpt-5.5".to_string()),
+            OpenAIUseCase::GeneralChat => Some("gpt-5.6".to_string()),
+            OpenAIUseCase::CodeGeneration => Some("gpt-5.6".to_string()),
+            OpenAIUseCase::Reasoning => Some("gpt-5.6".to_string()),
+            OpenAIUseCase::Vision => Some("gpt-5.6".to_string()),
             OpenAIUseCase::ImageGeneration => Some("gpt-image-2".to_string()),
             OpenAIUseCase::AudioTranscription => Some("whisper-1".to_string()),
             OpenAIUseCase::TextToSpeech => Some("tts-1-hd".to_string()),
             OpenAIUseCase::Embeddings => Some("text-embedding-3-large".to_string()),
-            OpenAIUseCase::CostOptimized => Some("gpt-5.4-nano".to_string()),
+            OpenAIUseCase::CostOptimized => Some("gpt-5.6-luna".to_string()),
         }
     }
 }
@@ -503,6 +525,10 @@ pub fn get_openai_registry() -> &'static OpenAIModelRegistry {
 fn normalize_price_per_1k(cost: f64) -> f64 {
     (cost * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
 }
+
+#[cfg(test)]
+#[path = "registry/current_tests.rs"]
+mod current_tests;
 
 #[cfg(test)]
 mod tests {
@@ -626,15 +652,15 @@ mod tests {
 
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::GeneralChat),
-            Some("gpt-5.5".to_string())
+            Some("gpt-5.6".to_string())
         );
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::Reasoning),
-            Some("o3-pro".to_string())
+            Some("gpt-5.6".to_string())
         );
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::CostOptimized),
-            Some("gpt-5.4-nano".to_string())
+            Some("gpt-5.6-luna".to_string())
         );
     }
 
