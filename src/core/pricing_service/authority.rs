@@ -322,6 +322,14 @@ fn resolve_model_info_for_provider(
         return Some((normalized_model.to_string(), info.clone()));
     }
 
+    let provider_exact_model = format!("{normalized_provider}/{normalized_model}");
+    if let Some(info) = models
+        .get(&provider_exact_model)
+        .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
+    {
+        return Some((provider_exact_model, info.clone()));
+    }
+
     if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
         for candidate in
             super::google::exact_pricing_candidates(&normalized_provider, model, normalized_model)
@@ -341,7 +349,7 @@ fn resolve_model_info_for_provider(
         .iter()
         .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
         .filter(|(candidate, _)| is_shared_model_match(&candidate.to_lowercase(), &requested))
-        .max_by_key(|(candidate, _)| candidate.len())
+        .max_by(|(left, _), (right, _)| left.len().cmp(&right.len()).then_with(|| right.cmp(left)))
         .map(|(candidate, info)| (candidate.clone(), info.clone()))
         .or_else(|| provider_catalog_model_info(&normalized_provider, model))
 }

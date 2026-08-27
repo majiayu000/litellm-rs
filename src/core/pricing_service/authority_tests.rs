@@ -173,7 +173,7 @@ fn provider_aware_authority_resolves_xai_openai_like_prefix() {
         Err(error) => panic!("xAI OpenAI-like prefixed model should resolve: {error}"),
     };
 
-    assert_eq!(cost.model, "xai/grok-4.3-latest");
+    assert_eq!(cost.model, "xai/grok-4.3");
     assert_eq!(cost.provider, "openai_like");
     assert!((cost.total_cost - 0.0025).abs() < f64::EPSILON);
 }
@@ -216,11 +216,31 @@ fn provider_aware_authority_preserves_core_pricing_tiers() {
         Err(error) => panic!("Azure tiered fallback pricing should resolve: {error}"),
     };
 
-    assert_eq!(cost.model, "azure/gpt-5.5-2026-04-23");
+    assert_eq!(cost.model, "azure/gpt-5.5");
     assert_eq!(cost.provider, "azure");
     assert!((cost.input_cost - 3.0).abs() < 1e-12);
     assert!((cost.output_cost - 0.045).abs() < 1e-12);
     assert!((cost.total_cost - 3.045).abs() < 1e-12);
+}
+
+#[test]
+fn provider_aware_authority_breaks_equal_length_fuzzy_ties_deterministically() {
+    let service = PricingService::new(None);
+    service.add_custom_model(
+        "region-b/model-2026".to_string(),
+        test_model_info("synthetic"),
+    );
+    service.add_custom_model(
+        "region-a/model-2026".to_string(),
+        test_model_info("synthetic"),
+    );
+
+    for _ in 0..8 {
+        let Some((resolved, _)) = service.get_model_info_for_provider("synthetic", "model") else {
+            panic!("synthetic fuzzy model should resolve");
+        };
+        assert_eq!(resolved, "region-a/model-2026");
+    }
 }
 
 #[test]
