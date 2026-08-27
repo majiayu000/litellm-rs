@@ -1,6 +1,3 @@
-use std::borrow::Cow;
-
-use crate::core::pricing::{get_pricing_db, normalize_pricing_provider};
 use crate::core::providers::openai::models::{
     OpenAIModelResolution, get_openai_registry, looks_like_openai_model,
 };
@@ -563,24 +560,7 @@ impl ModelUtils {
         let compatible_models = Self::get_compatible_models_for_provider(provider);
 
         if compatible_models.is_empty() {
-            let pricing_key = if parsed.provider().is_some() {
-                Cow::Borrowed(model)
-            } else {
-                Cow::Owned(format!("{provider}/{}", parsed.model()))
-            };
-            let provider = normalize_pricing_provider(provider);
-            let matches_pricing_catalog = get_pricing_db()
-                .get_model_info(&pricing_key)
-                .is_some_and(|info| normalize_pricing_provider(&info.litellm_provider) == provider);
-
-            return if matches_pricing_catalog {
-                Ok(())
-            } else {
-                Err(ProviderError::ModelNotFound {
-                    provider: "unknown",
-                    model: format!("Model '{model}' is not compatible with provider '{provider}'"),
-                })
-            };
+            return Ok(());
         }
 
         let model_lower = model.to_lowercase();

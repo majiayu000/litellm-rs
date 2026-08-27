@@ -546,7 +546,30 @@ fn test_validate_model_with_provider_invalid() {
 
 #[test]
 fn test_validate_model_with_provider_unknown_provider() {
-    assert!(ModelUtils::validate_model_with_provider("any-model", "unknown-provider").is_err());
+    assert!(ModelUtils::validate_model_with_provider("any-model", "unknown-provider").is_ok());
+}
+
+#[test]
+fn test_not_applicable_provider_deployments_pass_through() {
+    for (model, provider) in [
+        ("unknown-provider/opaque-deployment", "unknown-provider"),
+        ("opaque-deployment", "unknown-provider"),
+        ("azure/custom-deployment", "azure"),
+    ] {
+        assert!(
+            ModelUtils::validate_model_with_provider(model, provider).is_ok(),
+            "{model} is a provider-native deployment for {provider}"
+        );
+    }
+
+    assert!(
+        ModelUtils::validate_model_with_provider("other/custom-deployment", "azure").is_err(),
+        "an explicit mismatched qualifier must fail"
+    );
+    assert!(
+        ModelUtils::validate_model_with_provider("openai/gpt-future-unknown", "openai").is_err(),
+        "an explicit unknown OpenAI identity must fail"
+    );
 }
 
 #[test]
