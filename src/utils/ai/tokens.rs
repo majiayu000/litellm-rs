@@ -1,4 +1,6 @@
-use crate::core::providers::openai::models::get_openai_registry;
+use crate::core::providers::openai::models::{
+    OpenAIModelResolution, get_openai_registry, looks_like_openai_model,
+};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::model_id::ModelIdRef;
 use serde::{Deserialize, Serialize};
@@ -79,13 +81,17 @@ impl TokenUtils {
 
     pub fn select_tokenizer(model: &str) -> Result<TokenizerType, ProviderError> {
         let parsed = ModelIdRef::parse(model);
-        if let Some(provider) = parsed.provider() {
-            if provider.eq_ignore_ascii_case("openai") && !parsed.model().is_empty() {
+        match get_openai_registry().resolve_model_policy(model) {
+            OpenAIModelResolution::Resolved(_)
+            | OpenAIModelResolution::ExplicitOpenAIUnknown { .. } => {
                 return Ok(TokenizerType::OpenAI);
             }
-            if !provider.is_empty() {
-                return Ok(TokenizerType::Custom(model.to_string()));
-            }
+            OpenAIModelResolution::NotApplicable => {}
+        }
+        if let Some(provider) = parsed.provider()
+            && !provider.is_empty()
+        {
+            return Ok(TokenizerType::Custom(model.to_string()));
         }
 
         let model_lower = parsed.model().to_lowercase();
@@ -419,33 +425,37 @@ impl TokenUtils {
 }
 
 fn exact_bpe_for_model(model: &str) -> Result<&'static CoreBPE, ProviderError> {
-    let public_id = tokenizer_model_name(model)?;
-    let catalog_id = get_openai_registry()
-        .resolve_model(model)
-        .map(|resolved| resolved.catalog_id())
-        .ok_or_else(|| {
-            ProviderError::invalid_request(
-                "tokenizer",
-                format!("unsupported OpenAI tokenizer model '{public_id}'"),
-            )
-        })?;
+    let catalog_id = tokenizer_model_name(model)?;
     bpe_for_model(catalog_id).map_err(|error| {
         ProviderError::invalid_request(
             "tokenizer",
-            format!("unsupported OpenAI tokenizer model '{public_id}': {error}"),
+            format!("unsupported OpenAI tokenizer model '{model}': {error}"),
         )
     })
 }
 
-fn tokenizer_model_name(model: &str) -> Result<&str, ProviderError> {
-    ModelIdRef::parse(model)
-        .for_provider("openai")
-        .ok_or_else(|| {
-            ProviderError::invalid_request(
+fn tokenizer_model_name(model: &str) -> Result<&'static str, ProviderError> {
+    match get_openai_registry().resolve_model_policy(model) {
+        OpenAIModelResolution::Resolved(resolved) => Ok(resolved.catalog_id()),
+        OpenAIModelResolution::ExplicitOpenAIUnknown { wire_id, .. } => {
+            Err(ProviderError::invalid_request(
                 "tokenizer",
-                format!("model '{model}' is not a valid OpenAI model identifier"),
-            )
-        })
+                format!("unsupported OpenAI tokenizer model '{wire_id}'"),
+            ))
+        }
+        OpenAIModelResolution::NotApplicable
+            if ModelIdRef::parse(model).provider().is_none() && looks_like_openai_model(model) =>
+        {
+            Err(ProviderError::invalid_request(
+                "tokenizer",
+                format!("unsupported OpenAI tokenizer model '{model}'"),
+            ))
+        }
+        OpenAIModelResolution::NotApplicable => Err(ProviderError::invalid_request(
+            "tokenizer",
+            format!("model '{model}' does not resolve to an OpenAI catalog identity"),
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -500,6 +510,22 @@ mod tests {
         ));
         assert!(matches!(
             TokenUtils::select_tokenizer("anthropic/gpt-4").unwrap(),
+            TokenizerType::Custom(_)
+        ));
+    }
+
+    #[test]
+    fn test_azure_openai_tokenizers_use_exact_openai_identity() {
+        for model in ["azure/gpt-4", "azure_ai/gpt-4"] {
+            assert!(matches!(
+                TokenUtils::select_tokenizer(model).unwrap(),
+                TokenizerType::OpenAI
+            ));
+            assert!(!TokenUtils::encode(model, "Hello").unwrap().is_empty());
+        }
+
+        assert!(matches!(
+            TokenUtils::select_tokenizer("azure_ai/Phi-4").unwrap(),
             TokenizerType::Custom(_)
         ));
     }

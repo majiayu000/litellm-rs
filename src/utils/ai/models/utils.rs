@@ -1,4 +1,9 @@
-use crate::core::providers::openai::models::get_openai_registry;
+use std::borrow::Cow;
+
+use crate::core::pricing::{get_pricing_db, normalize_pricing_provider};
+use crate::core::providers::openai::models::{
+    OpenAIModelResolution, get_openai_registry, looks_like_openai_model,
+};
 use crate::core::providers::shared::gemini_context_window;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::model_id::ModelIdRef;
@@ -10,16 +15,17 @@ pub struct ModelUtils;
 impl ModelUtils {
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
         let parsed = ModelIdRef::parse(model);
-        let model_lower = get_openai_registry()
-            .resolve_model(model)
-            .map(|resolved| resolved.catalog_id().to_lowercase())
-            .unwrap_or_else(|| {
+        let model_lower = match get_openai_registry().resolve_model_policy(model) {
+            OpenAIModelResolution::Resolved(resolved) => resolved.catalog_id().to_lowercase(),
+            OpenAIModelResolution::ExplicitOpenAIUnknown { .. } => String::new(),
+            OpenAIModelResolution::NotApplicable => {
                 if parsed.provider().is_some() && is_openai_model_name(parsed.model()) {
                     parsed.raw().to_lowercase()
                 } else {
                     parsed.model().to_lowercase()
                 }
-            });
+            }
+        };
 
         if model_lower.starts_with("gpt-5") {
             ModelCapabilities {
@@ -278,14 +284,16 @@ impl ModelUtils {
     }
 
     pub fn get_base_model(model: &str) -> String {
-        let resolved_openai = get_openai_registry().resolve_model(model);
-        if let Some(base_model) = resolved_openai.and_then(|resolved| resolved.canonical_base_id())
-        {
-            return base_model.to_string();
-        }
-        let model_lower = resolved_openai
-            .map(|resolved| resolved.catalog_id().to_lowercase())
-            .unwrap_or_else(|| model.to_lowercase());
+        let model_lower = match get_openai_registry().resolve_model_policy(model) {
+            OpenAIModelResolution::Resolved(resolved) => {
+                if let Some(base_model) = resolved.canonical_base_id() {
+                    return base_model.to_string();
+                }
+                resolved.catalog_id().to_lowercase()
+            }
+            OpenAIModelResolution::ExplicitOpenAIUnknown { .. }
+            | OpenAIModelResolution::NotApplicable => model.to_lowercase(),
+        };
 
         if model_lower.starts_with("gpt-5") {
             if model_lower.contains("5.5-pro") {
@@ -407,11 +415,16 @@ impl ModelUtils {
 
     pub fn is_valid_model(model: &str) -> bool {
         let parsed = ModelIdRef::parse(model);
+        match get_openai_registry().resolve_model_policy(model) {
+            OpenAIModelResolution::Resolved(_) => return true,
+            OpenAIModelResolution::ExplicitOpenAIUnknown { .. } => return false,
+            OpenAIModelResolution::NotApplicable => {}
+        }
         if let Some(provider) = parsed.provider() {
-            if provider.eq_ignore_ascii_case("openai") {
-                return get_openai_registry().resolve_model(model).is_some();
+            if provider.eq_ignore_ascii_case("azure_ai") {
+                return Self::validate_model_with_provider(model, provider).is_ok();
             }
-            if is_openai_model_name(parsed.model()) {
+            if looks_like_openai_model(parsed.model()) {
                 return false;
             }
             return [
@@ -438,6 +451,7 @@ impl ModelUtils {
             "mistral",
             "meta",
             "azure",
+            "azure_ai",
             "replicate",
         ];
 
@@ -513,21 +527,60 @@ impl ModelUtils {
     }
 
     pub fn validate_model_with_provider(model: &str, provider: &str) -> Result<(), ProviderError> {
-        if provider.eq_ignore_ascii_case("openai") {
-            return if get_openai_registry().resolve_model(model).is_some() {
-                Ok(())
-            } else {
-                Err(ProviderError::ModelNotFound {
-                    provider: "openai",
-                    model: format!("Model '{model}' is not in the OpenAI model catalog"),
-                })
-            };
+        let parsed = ModelIdRef::parse(model);
+        if let Some(model_provider) = parsed.provider()
+            && !model_provider.eq_ignore_ascii_case(provider)
+        {
+            return Err(ProviderError::ModelNotFound {
+                provider: "unknown",
+                model: format!(
+                    "Model '{model}' is qualified for '{model_provider}', not '{provider}'"
+                ),
+            });
+        }
+
+        let is_openai_host = ["openai", "azure", "azure_ai"]
+            .iter()
+            .any(|candidate| provider.eq_ignore_ascii_case(candidate));
+        match get_openai_registry().resolve_model_policy(model) {
+            OpenAIModelResolution::Resolved(_) if is_openai_host => return Ok(()),
+            OpenAIModelResolution::Resolved(_)
+            | OpenAIModelResolution::ExplicitOpenAIUnknown { .. } => {
+                return Err(ProviderError::ModelNotFound {
+                    provider: "unknown",
+                    model: format!("Model '{model}' is not compatible with provider '{provider}'"),
+                });
+            }
+            OpenAIModelResolution::NotApplicable => {}
+        }
+        if is_openai_host && looks_like_openai_model(parsed.model()) {
+            return Err(ProviderError::ModelNotFound {
+                provider: "unknown",
+                model: format!("Model '{model}' is not compatible with provider '{provider}'"),
+            });
         }
 
         let compatible_models = Self::get_compatible_models_for_provider(provider);
 
         if compatible_models.is_empty() {
-            return Ok(());
+            let pricing_key = if parsed.provider().is_some() {
+                Cow::Borrowed(model)
+            } else {
+                Cow::Owned(format!("{provider}/{}", parsed.model()))
+            };
+            let provider = normalize_pricing_provider(provider);
+            let matches_pricing_catalog = get_pricing_db()
+                .get_model_info(&pricing_key)
+                .is_some_and(|info| normalize_pricing_provider(&info.litellm_provider) == provider);
+
+            return if matches_pricing_catalog {
+                Ok(())
+            } else {
+                Err(ProviderError::ModelNotFound {
+                    provider: "unknown",
+                    model: format!("Model '{model}' is not compatible with provider '{provider}'"),
+                })
+            };
         }
 
         let model_lower = model.to_lowercase();
@@ -616,23 +669,7 @@ impl ModelUtils {
 }
 
 fn is_openai_model_name(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    [
-        "gpt-",
-        "chatgpt-image-",
-        "o1",
-        "o3",
-        "o4",
-        "dall-e-",
-        "whisper-",
-        "tts-",
-        "text-embedding-",
-        "omni-moderation-",
-        "computer-use-",
-        "codex-",
-    ]
-    .iter()
-    .any(|prefix| model.starts_with(prefix))
+    looks_like_openai_model(model)
 }
 
 #[cfg(test)]

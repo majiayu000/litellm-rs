@@ -8,9 +8,8 @@ use std::sync::OnceLock;
 
 use crate::core::pricing::get_pricing_db;
 use crate::core::types::model::ModelInfo;
-use crate::core::types::model_id::ModelIdRef;
 
-use super::model_id::identity_for;
+use super::model_id::{OpenAIModelResolution, ResolvedOpenAIModel, resolve_with_catalog};
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
 };
@@ -20,43 +19,6 @@ use super::static_models::static_model_entries;
 #[derive(Debug)]
 pub struct OpenAIModelRegistry {
     models: HashMap<String, OpenAIModelSpec>,
-}
-
-/// A catalog hit that preserves the caller's exact wire identifier.
-#[derive(Debug, Clone, Copy)]
-pub struct ResolvedOpenAIModel<'registry, 'input> {
-    wire_id: &'input str,
-    public_id: &'input str,
-    catalog_id: &'registry str,
-    canonical_base_id: Option<&'static str>,
-    spec: &'registry OpenAIModelSpec,
-}
-
-impl<'registry, 'input> ResolvedOpenAIModel<'registry, 'input> {
-    /// Return the exact identifier received from the caller.
-    pub fn wire_id(self) -> &'input str {
-        self.wire_id
-    }
-
-    /// Return the provider-local identifier exposed by the API.
-    pub fn public_id(self) -> &'input str {
-        self.public_id
-    }
-
-    /// Return the exact key used to retrieve the catalog entry.
-    pub fn catalog_id(self) -> &'registry str {
-        self.catalog_id
-    }
-
-    /// Return an explicitly declared canonical base model, when one exists.
-    pub fn canonical_base_id(self) -> Option<&'static str> {
-        self.canonical_base_id
-    }
-
-    /// Return the resolved model specification.
-    pub fn spec(self) -> &'registry OpenAIModelSpec {
-        self.spec
-    }
 }
 
 impl Default for OpenAIModelRegistry {
@@ -485,18 +447,22 @@ impl OpenAIModelRegistry {
         &'registry self,
         model_id: &'input str,
     ) -> Option<ResolvedOpenAIModel<'registry, 'input>> {
-        let parsed = ModelIdRef::parse(model_id);
-        let public_id = parsed.for_provider("openai")?;
-        let identity = identity_for(public_id);
-        let catalog_candidate = identity.map_or(public_id, |entry| entry.catalog_id);
-        let (catalog_id, spec) = self.models.get_key_value(catalog_candidate)?;
+        match self.resolve_model_policy(model_id) {
+            OpenAIModelResolution::Resolved(model) => Some(model),
+            OpenAIModelResolution::ExplicitOpenAIUnknown { .. }
+            | OpenAIModelResolution::NotApplicable => None,
+        }
+    }
 
-        Some(ResolvedOpenAIModel {
-            wire_id: parsed.raw(),
-            public_id,
-            catalog_id,
-            canonical_base_id: identity.and_then(|entry| entry.canonical_base_id),
-            spec,
+    /// Resolve provider-aware OpenAI identity without rewriting the wire ID.
+    pub fn resolve_model_policy<'registry, 'input>(
+        &'registry self,
+        model_id: &'input str,
+    ) -> OpenAIModelResolution<'registry, 'input> {
+        resolve_with_catalog(model_id, |candidate| {
+            self.models
+                .get_key_value(candidate)
+                .map(|(catalog_id, spec)| (catalog_id.as_str(), spec))
         })
     }
 
