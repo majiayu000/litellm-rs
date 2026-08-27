@@ -1,5 +1,4 @@
 use super::*;
-use crate::core::providers::Provider;
 
 // ==================== Provider Creation Tests ====================
 
@@ -106,18 +105,6 @@ fn test_model_supports_capability_unknown_model() {
 }
 
 #[test]
-fn qualified_dall_e_alias_preserves_image_variation_routing() {
-    let provider = Provider::OpenAI(create_test_provider());
-
-    for model in ["dall-e-2", "openai/dall-e-2"] {
-        assert!(
-            provider.supports_capability_for_model(model, &ProviderCapability::ImageVariation),
-            "{model} should preserve the OpenAI image-variation fallback"
-        );
-    }
-}
-
-#[test]
 fn test_get_model_info() {
     let provider = create_test_provider();
 
@@ -182,23 +169,6 @@ fn test_get_supported_openai_params_gpt55() {
     assert!(params.contains(&"metadata"));
     assert!(params.contains(&"service_tier"));
     assert_eq!(params, prefixed_params);
-}
-
-#[test]
-fn test_get_supported_openai_params_uses_exact_catalog_resolution() {
-    let provider = create_test_provider();
-    let snapshot_params = provider.get_supported_openai_params("openai/gpt-5.5-2026-04-23");
-    let unknown_params = provider.get_supported_openai_params("unknown-model");
-
-    assert!(snapshot_params.contains(&"reasoning_effort"));
-    assert_eq!(
-        provider.get_supported_openai_params("openai/gpt-5.5-2026-08-01"),
-        unknown_params
-    );
-    assert_eq!(
-        provider.get_supported_openai_params("anthropic/gpt-5.5"),
-        unknown_params
-    );
 }
 
 #[test]

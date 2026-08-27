@@ -7,15 +7,11 @@
 //! - `api_types`: OpenAI API request/response serialization types
 
 mod api_types;
-mod model_id;
-#[cfg(test)]
-mod model_id_tests;
 mod registry;
 mod registry_types;
 mod static_models;
 
 // Re-export everything at the same path as before
 pub use api_types::*;
-pub use model_id::ResolvedOpenAIModel;
 pub use registry::*;
 pub use registry_types::*;

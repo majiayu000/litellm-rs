@@ -9,7 +9,6 @@ use std::sync::OnceLock;
 use crate::core::pricing::get_pricing_db;
 use crate::core::types::model::ModelInfo;
 
-use super::model_id::{ResolvedOpenAIModel, resolve_with_catalog};
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
 };
@@ -438,25 +437,13 @@ impl OpenAIModelRegistry {
 
     /// Get specific model specification
     pub fn get_model_spec(&self, model_id: &str) -> Option<&OpenAIModelSpec> {
-        self.resolve_model(model_id).map(ResolvedOpenAIModel::spec)
-    }
-
-    /// Resolve an optionally provider-qualified model against exact catalog
-    /// entries and explicitly declared aliases only.
-    pub fn resolve_model<'registry, 'input>(
-        &'registry self,
-        model_id: &'input str,
-    ) -> Option<ResolvedOpenAIModel<'registry, 'input>> {
-        resolve_with_catalog(model_id, |candidate| {
-            self.models
-                .get_key_value(candidate)
-                .map(|(catalog_id, spec)| (catalog_id.as_str(), spec))
-        })
+        self.models.get(model_id)
     }
 
     /// Check if model supports a feature
     pub fn supports_feature(&self, model_id: &str, feature: &OpenAIModelFeature) -> bool {
-        self.get_model_spec(model_id)
+        self.models
+            .get(model_id)
             .map(|spec| spec.features.contains(feature))
             .unwrap_or(false)
     }
@@ -526,57 +513,6 @@ mod tests {
         let registry = OpenAIModelRegistry::new();
         let models = registry.get_all_models();
         assert!(!models.is_empty());
-    }
-
-    #[test]
-    fn provider_qualified_registry_lookup_is_exact_and_preserves_wire_id() {
-        let registry = get_openai_registry();
-        let resolved = registry
-            .resolve_model("openai/gpt-5.5")
-            .expect("provider-qualified catalog model should resolve");
-
-        assert_eq!(resolved.wire_id(), "openai/gpt-5.5");
-        assert_eq!(resolved.public_id(), "gpt-5.5");
-        assert_eq!(resolved.catalog_id(), "gpt-5.5");
-        assert_eq!(resolved.spec().model_info.id, "gpt-5.5");
-        assert_eq!(
-            registry
-                .get_model_spec("openai/gpt-5.5")
-                .expect("qualified lookup should use the shared resolver")
-                .model_info
-                .id,
-            "gpt-5.5"
-        );
-    }
-
-    #[test]
-    fn registry_rejects_wrong_provider_and_unlisted_lookalikes() {
-        let registry = get_openai_registry();
-
-        for model in [
-            "anthropic/gpt-5.5",
-            "openai/",
-            "/gpt-5.5",
-            "gpt-5.6-terra-2026-08-01",
-            "gpt-5.50",
-            "gpt-5.5-prologue",
-        ] {
-            assert!(
-                registry.resolve_model(model).is_none(),
-                "{model} must not resolve through prefix or suffix matching"
-            );
-        }
-    }
-
-    #[test]
-    fn exact_snapshot_exposes_explicit_base_identity() {
-        let registry = get_openai_registry();
-        let resolved = registry
-            .resolve_model("openai/gpt-5.5-2026-04-23")
-            .expect("the catalogued GPT-5.5 snapshot should resolve");
-
-        assert_eq!(resolved.catalog_id(), "gpt-5.5-2026-04-23");
-        assert_eq!(resolved.canonical_base_id(), Some("gpt-5.5"));
     }
 
     #[test]

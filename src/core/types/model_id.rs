@@ -1,7 +1,12 @@
-//! Borrowed parsing for optionally provider-qualified model identifiers.
+//! Borrowed, lossless syntax views over model identifiers.
 
-/// A model identifier split into its original wire form, optional provider,
-/// and provider-local model name.
+/// A model identifier split at its first `/`, without assigning semantics to
+/// either segment.
+///
+/// The first segment is exposed as `provider` for callers that use qualified
+/// IDs, but it is not validated or normalized. Some provider-native IDs, such
+/// as `BAAI/bge-m3`, also contain `/`; consumers must use their own context to
+/// decide whether the first segment is a provider qualifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelIdRef<'a> {
     raw: &'a str,
@@ -10,7 +15,7 @@ pub struct ModelIdRef<'a> {
 }
 
 impl<'a> ModelIdRef<'a> {
-    /// Parse an identifier without allocating or rewriting its wire value.
+    /// Split at the first `/` without allocating, validating, or rewriting.
     pub fn parse(raw: &'a str) -> Self {
         let (provider, model) = raw
             .split_once('/')
@@ -28,29 +33,16 @@ impl<'a> ModelIdRef<'a> {
         self.raw
     }
 
-    /// Return the provider qualifier, if present.
+    /// Return the text before the first `/`, if a slash is present.
+    ///
+    /// This is a syntactic view only and may be empty or provider-native data.
     pub fn provider(self) -> Option<&'a str> {
         self.provider
     }
 
-    /// Return the provider-local portion of the identifier.
+    /// Return the complete text after the first `/`, or the full unqualified
+    /// identifier when no slash is present.
     pub fn model(self) -> &'a str {
         self.model
-    }
-
-    /// Return the provider-local model name when this identifier is either
-    /// unqualified or explicitly qualified for `expected`.
-    pub fn for_provider(self, expected: &str) -> Option<&'a str> {
-        if self.model.is_empty() {
-            return None;
-        }
-
-        match self.provider {
-            None => Some(self.model),
-            Some(provider) if !provider.is_empty() && provider.eq_ignore_ascii_case(expected) => {
-                Some(self.model)
-            }
-            Some(_) => None,
-        }
     }
 }
