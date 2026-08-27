@@ -333,7 +333,7 @@ fn resolve_model_info_for_provider(
         .iter()
         .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(&provider_exact_model))
         .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
-        .min_by(|(left, _), (right, _)| left.cmp(right))
+        .min_by_key(|(candidate, _)| *candidate)
     {
         return Some((candidate.clone(), info.clone()));
     }
@@ -357,7 +357,7 @@ fn resolve_model_info_for_provider(
         .iter()
         .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
         .filter(|(candidate, _)| is_shared_model_match(&candidate.to_lowercase(), &requested))
-        .max_by(|(left, _), (right, _)| left.len().cmp(&right.len()).then_with(|| right.cmp(left)))
+        .max_by_key(|(candidate, _)| (candidate.len(), std::cmp::Reverse(*candidate)))
         .map(|(candidate, info)| (candidate.clone(), info.clone()))
         .or_else(|| provider_catalog_model_info(&normalized_provider, model))
 }
