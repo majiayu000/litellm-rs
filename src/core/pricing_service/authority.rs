@@ -320,7 +320,7 @@ fn exact_pricing_candidates(
     push_unique(&mut candidates, &format!("{provider}/{}", parsed.raw()));
     if parsed.provider().is_some_and(|prefix| {
         let prefix = crate::core::pricing::normalize_pricing_provider(prefix);
-        provider_aliases.iter().any(|alias| alias == &prefix)
+        prefix == provider || provider_aliases.iter().any(|alias| alias == &prefix)
     }) {
         push_unique(&mut candidates, parsed.model());
         push_unique(&mut candidates, &format!("{provider}/{}", parsed.model()));

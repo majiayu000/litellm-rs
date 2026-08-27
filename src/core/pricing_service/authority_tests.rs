@@ -69,6 +69,21 @@ fn provider_aware_authority_resolves_anthropic_mimo_alias() {
 }
 
 #[test]
+fn provider_aware_authority_strips_qualified_anthropic_mimo_prefix() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    let Some((resolved, info)) =
+        service.get_model_info_for_provider("anthropic", "anthropic/mimo-v2.5-pro")
+    else {
+        panic!("qualified Anthropic-compatible MiMo should resolve through Xiaomi pricing");
+    };
+
+    assert_eq!(resolved, "mimo-v2.5-pro");
+    assert_eq!(info.litellm_provider, "xiaomi_mimo");
+}
+
+#[test]
 fn google_authority_uses_specialized_character_pricing() {
     let service = PricingService::with_embedded_default()
         .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
