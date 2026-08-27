@@ -216,6 +216,52 @@ async fn test_provider_models_have_pricing() {
     }
 }
 
+#[tokio::test]
+async fn test_mistral_small_4_static_pricing_and_alias_boundaries() {
+    let provider = MistralProvider::new(create_test_config()).await.unwrap();
+    let models = provider.models();
+
+    for model_id in ["mistral-small-2603", "mistral-small-4"] {
+        let Some(model) = models.iter().find(|model| model.id == model_id) else {
+            panic!("{model_id} should be present in the static Mistral catalog");
+        };
+        assert_eq!(model.input_cost_per_1k_tokens, Some(0.00015));
+        assert_eq!(model.output_cost_per_1k_tokens, Some(0.0006));
+    }
+
+    let Some(alias) = models.iter().find(|model| model.id == "mistral-small-4") else {
+        panic!("mistral-small-4 alias should be present");
+    };
+    assert_eq!(
+        alias.metadata.get("alias_for"),
+        Some(&serde_json::json!("mistral-small-latest"))
+    );
+    assert_eq!(
+        provider.canonical_model_id("mistral/mistral-small-2603"),
+        "mistral-small-2603"
+    );
+    assert_eq!(
+        provider.canonical_model_id("mistral/mistral-small-4"),
+        "mistral-small-latest"
+    );
+
+    let Some(previous_generation) = models.iter().find(|model| model.id == "mistral-small-2506")
+    else {
+        panic!("mistral-small-2506 should remain in the static Mistral catalog");
+    };
+    assert_eq!(previous_generation.input_cost_per_1k_tokens, Some(0.0001));
+    assert_eq!(previous_generation.output_cost_per_1k_tokens, Some(0.0003));
+    assert!(
+        !models
+            .iter()
+            .any(|model| model.id == "mistral-small-2603-preview")
+    );
+    assert_eq!(
+        provider.canonical_model_id("mistral/mistral-small-2603-preview"),
+        "mistral-small-2603-preview"
+    );
+}
+
 // ==================== Supported Params Tests ====================
 
 #[tokio::test]
