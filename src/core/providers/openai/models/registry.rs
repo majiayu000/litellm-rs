@@ -603,7 +603,7 @@ mod tests {
             "anthropic/gpt-5.5",
             "openai/",
             "/gpt-5.5",
-            "gpt-5.5-2026-08-01",
+            "gpt-5.6-terra-2026-08-01",
             "gpt-5.50",
             "gpt-5.5-prologue",
         ] {
