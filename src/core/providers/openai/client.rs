@@ -519,7 +519,11 @@ impl LLMProvider for OpenAIProvider {
                 | super::models::OpenAIModelFamily::GPT54
                 | super::models::OpenAIModelFamily::GPT54Mini
                 | super::models::OpenAIModelFamily::GPT54Nano
-                | super::models::OpenAIModelFamily::GPT55 => &[
+                | super::models::OpenAIModelFamily::GPT55
+                | super::models::OpenAIModelFamily::GPT56Sol
+                | super::models::OpenAIModelFamily::GPT56Terra
+                | super::models::OpenAIModelFamily::GPT56Luna
+                | super::models::OpenAIModelFamily::GPT56Cyber => &[
                     "messages",
                     "model",
                     "temperature",

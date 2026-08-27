@@ -41,6 +41,15 @@ pub(super) fn entries() -> Vec<StaticModelEntry> {
             0.0012,
         ),
         (
+            "gpt-5.6-cyber",
+            "GPT-5.6 Cyber",
+            OpenAIModelFamily::GPT56Cyber,
+            400_000,
+            Some(128_000),
+            0.0125,
+            0.075,
+        ),
+        (
             "gpt-realtime-2",
             "GPT Realtime 2",
             OpenAIModelFamily::Realtime,

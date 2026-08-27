@@ -118,6 +118,7 @@ pub enum OpenAIModelFamily {
     GPT56Sol,      // GPT-5.6 flagship tier (2026)
     GPT56Terra,    // GPT-5.6 balanced tier (2026)
     GPT56Luna,     // GPT-5.6 cost-optimized tier (2026)
+    GPT56Cyber,    // GPT-5.6 restricted cybersecurity tier (2026)
     O1,            // O1 reasoning models
     O1Pro,         // O1 Pro reasoning models
     O3,            // O3 reasoning models (2025)

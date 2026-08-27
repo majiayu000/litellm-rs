@@ -90,9 +90,14 @@ impl OpenAIModelRegistry {
             features.push(OpenAIModelFeature::StreamingSupport);
         }
 
+        let is_realtime =
+            model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime");
+
         if model_id.starts_with("gpt-") {
             features.push(OpenAIModelFeature::ChatCompletion);
-            features.push(OpenAIModelFeature::JsonMode);
+            if !is_realtime {
+                features.push(OpenAIModelFeature::JsonMode);
+            }
         }
 
         if model_info.supports_tools {
@@ -107,7 +112,7 @@ impl OpenAIModelRegistry {
             || model_id.starts_with("o3")
             || model_id.starts_with("o4")
             || model_id.starts_with("gpt-5.5")
-            || model_id.starts_with("gpt-5.6")
+            || gpt56_family(model_id).is_some()
             || model_id.starts_with("gpt-realtime-2")
         {
             features.push(OpenAIModelFeature::ReasoningMode);
@@ -199,12 +204,8 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT4
         } else if model_id.starts_with("gpt-3.5") {
             OpenAIModelFamily::GPT35
-        } else if model_id == "gpt-5.6" || model_id.starts_with("gpt-5.6-sol") {
-            OpenAIModelFamily::GPT56Sol
-        } else if model_id.starts_with("gpt-5.6-terra") {
-            OpenAIModelFamily::GPT56Terra
-        } else if model_id.starts_with("gpt-5.6-luna") {
-            OpenAIModelFamily::GPT56Luna
+        } else if let Some(family) = gpt56_family(model_id) {
+            family
         } else if model_id.starts_with("gpt-5.5-pro") {
             OpenAIModelFamily::GPT55Pro
         } else if model_id.starts_with("gpt-5.5") {
@@ -297,7 +298,7 @@ impl OpenAIModelRegistry {
             }
         }
 
-        config.supports_batch = model_id.starts_with("gpt-5.6")
+        config.supports_batch = gpt56_family(model_id).is_some()
             || model_id.starts_with("gpt-5.5")
             || matches!(
                 model_id.as_str(),
@@ -331,7 +332,8 @@ impl OpenAIModelRegistry {
                 max_output_length: max_output,
                 supports_streaming: family != OpenAIModelFamily::Embedding
                     && family != OpenAIModelFamily::Whisper
-                    && family != OpenAIModelFamily::Moderation,
+                    && family != OpenAIModelFamily::Moderation
+                    && family != OpenAIModelFamily::Realtime,
                 supports_tools: matches!(
                     family,
                     OpenAIModelFamily::GPT4
@@ -352,6 +354,7 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT56Sol
                         | OpenAIModelFamily::GPT56Terra
                         | OpenAIModelFamily::GPT56Luna
+                        | OpenAIModelFamily::GPT56Cyber
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -383,6 +386,7 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT56Sol
                         | OpenAIModelFamily::GPT56Terra
                         | OpenAIModelFamily::GPT56Luna
+                        | OpenAIModelFamily::GPT56Cyber
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -524,6 +528,37 @@ pub fn get_openai_registry() -> &'static OpenAIModelRegistry {
 
 fn normalize_price_per_1k(cost: f64) -> f64 {
     (cost * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
+}
+
+fn gpt56_family(model_id: &str) -> Option<OpenAIModelFamily> {
+    if matches_alias_or_snapshot(model_id, "gpt-5.6-cyber") {
+        Some(OpenAIModelFamily::GPT56Cyber)
+    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-terra") {
+        Some(OpenAIModelFamily::GPT56Terra)
+    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-luna") {
+        Some(OpenAIModelFamily::GPT56Luna)
+    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-sol")
+        || matches_alias_or_snapshot(model_id, "gpt-5.6")
+    {
+        Some(OpenAIModelFamily::GPT56Sol)
+    } else {
+        None
+    }
+}
+
+fn matches_alias_or_snapshot(model_id: &str, alias: &str) -> bool {
+    model_id == alias || model_id.strip_prefix(alias).is_some_and(is_snapshot_suffix)
+}
+
+fn is_snapshot_suffix(suffix: &str) -> bool {
+    let bytes = suffix.as_bytes();
+    bytes.len() == 11
+        && bytes[0] == b'-'
+        && bytes[5] == b'-'
+        && bytes[8] == b'-'
+        && bytes[1..5].iter().all(u8::is_ascii_digit)
+        && bytes[6..8].iter().all(u8::is_ascii_digit)
+        && bytes[9..11].iter().all(u8::is_ascii_digit)
 }
 
 #[cfg(test)]
