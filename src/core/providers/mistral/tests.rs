@@ -178,8 +178,8 @@ async fn test_current_mistral_alias_metadata() {
     };
     assert_eq!(small_4.max_context_length, 256000);
     assert!(small_4.supports_multimodal);
-    assert_eq!(small_4.input_cost_per_1k_tokens, Some(0.0001));
-    assert_eq!(small_4.output_cost_per_1k_tokens, Some(0.0003));
+    assert_eq!(small_4.input_cost_per_1k_tokens, Some(0.00015));
+    assert_eq!(small_4.output_cost_per_1k_tokens, Some(0.0006));
 
     let Some(medium_alias) = models.iter().find(|m| m.id == "mistral-medium") else {
         panic!("mistral-medium alias should be present");
@@ -221,7 +221,12 @@ async fn test_mistral_small_4_static_pricing_and_alias_boundaries() {
     let provider = MistralProvider::new(create_test_config()).await.unwrap();
     let models = provider.models();
 
-    for model_id in ["mistral-small-2603", "mistral-small-4"] {
+    for model_id in [
+        "mistral-small-latest",
+        "mistral-small-2603",
+        "mistral-small-4",
+        "mistral-small",
+    ] {
         let Some(model) = models.iter().find(|model| model.id == model_id) else {
             panic!("{model_id} should be present in the static Mistral catalog");
         };

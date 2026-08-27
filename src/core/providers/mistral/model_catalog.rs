@@ -75,8 +75,8 @@ const MODEL_SPECS: &[MistralModelSpec] = &[
         supports_streaming: true,
         supports_tools: true,
         supports_multimodal: true,
-        input_cost_per_1k_tokens: 0.0001,
-        output_cost_per_1k_tokens: 0.0003,
+        input_cost_per_1k_tokens: 0.00015,
+        output_cost_per_1k_tokens: 0.0006,
         alias_for: None,
     },
     MistralModelSpec {
@@ -396,8 +396,8 @@ const MODEL_SPECS: &[MistralModelSpec] = &[
         supports_streaming: true,
         supports_tools: true,
         supports_multimodal: true,
-        input_cost_per_1k_tokens: 0.0001,
-        output_cost_per_1k_tokens: 0.0003,
+        input_cost_per_1k_tokens: 0.00015,
+        output_cost_per_1k_tokens: 0.0006,
         alias_for: Some("mistral-small-latest"),
     },
     MistralModelSpec {
