@@ -60,23 +60,6 @@ fn test_get_model_capabilities_gpt55_matches_catalog_shape() {
 }
 
 #[test]
-fn test_azure_openai_capabilities_use_exact_catalog_identity() {
-    let openai = ModelUtils::get_model_capabilities("openai/gpt-5.5");
-
-    for model in ["azure/gpt-5.5", "azure_ai/gpt-5.5"] {
-        let capabilities = ModelUtils::get_model_capabilities(model);
-        assert_eq!(
-            capabilities.supports_function_calling,
-            openai.supports_function_calling
-        );
-        assert_eq!(capabilities.supports_vision, openai.supports_vision);
-        assert_eq!(capabilities.supports_streaming, openai.supports_streaming);
-        assert_eq!(capabilities.max_tokens, openai.max_tokens);
-        assert_eq!(capabilities.context_window, openai.context_window);
-    }
-}
-
-#[test]
 fn test_get_model_capabilities_gpt35() {
     let caps = ModelUtils::get_model_capabilities("gpt-3.5-turbo");
     assert!(caps.supports_function_calling);
@@ -346,20 +329,9 @@ fn test_get_base_model_gpt4() {
 fn test_get_base_model_gpt55() {
     assert_eq!(ModelUtils::get_base_model("gpt-5.5-2026-04-23"), "gpt-5.5");
     assert_eq!(
-        ModelUtils::get_base_model("openai/gpt-5.5-2026-04-23"),
-        "gpt-5.5"
-    );
-    assert_eq!(
         ModelUtils::get_base_model("gpt-5.5-pro-2026-04-23"),
         "gpt-5.5-pro"
     );
-}
-
-#[test]
-fn test_azure_openai_base_model_uses_explicit_snapshot_identity() {
-    for model in ["azure/gpt-5.5-2026-04-23", "azure_ai/gpt-5.5-2026-04-23"] {
-        assert_eq!(ModelUtils::get_base_model(model), "gpt-5.5");
-    }
 }
 
 #[test]
@@ -443,41 +415,12 @@ fn test_is_valid_model_known() {
 #[test]
 fn test_is_valid_model_with_provider() {
     assert!(ModelUtils::is_valid_model("openai/gpt-4"));
-    assert!(ModelUtils::is_valid_model("azure/gpt-5.5"));
-    assert!(ModelUtils::is_valid_model("azure_ai/gpt-5.5"));
-    assert!(ModelUtils::is_valid_model("azure_ai/Phi-4"));
     assert!(ModelUtils::is_valid_model("anthropic/claude-3"));
 }
 
 #[test]
 fn test_is_valid_model_unknown() {
     assert!(!ModelUtils::is_valid_model("unknown-xyz-123"));
-}
-
-#[test]
-fn test_openai_validation_rejects_non_catalog_lookalikes() {
-    for model in [
-        "gpt-5.5-2026-08-01",
-        "openai/gpt-5.5-2026-08-01",
-        "gpt-5.50",
-        "gpt-5.5-prologue",
-    ] {
-        assert!(
-            !ModelUtils::is_valid_model(model),
-            "{model} is not catalogued"
-        );
-        assert!(
-            ModelUtils::validate_model_with_provider(model, "openai").is_err(),
-            "{model} must fail exact OpenAI validation"
-        );
-    }
-
-    assert!(!ModelUtils::is_valid_model("anthropic/gpt-5.5"));
-    assert!(ModelUtils::validate_model_with_provider("anthropic/gpt-5.5", "openai").is_err());
-
-    let wrong_provider_caps = ModelUtils::get_model_capabilities("anthropic/gpt-5.5");
-    assert!(!wrong_provider_caps.supports_function_calling);
-    assert_eq!(wrong_provider_caps.context_window, None);
 }
 
 // ==================== get_model_family Tests ====================
@@ -531,9 +474,6 @@ fn test_validate_model_with_provider_valid() {
     assert!(ModelUtils::validate_model_with_provider("openai/gpt-5.5", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("openai/gpt-5.5-pro", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gpt-4", "openai").is_ok());
-    assert!(ModelUtils::validate_model_with_provider("azure/gpt-5.5", "azure").is_ok());
-    assert!(ModelUtils::validate_model_with_provider("azure_ai/gpt-5.5", "azure_ai").is_ok());
-    assert!(ModelUtils::validate_model_with_provider("azure_ai/Phi-4", "azure_ai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "anthropic").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gemini-3.1-pro-preview", "google").is_ok());
 }
@@ -547,38 +487,6 @@ fn test_validate_model_with_provider_invalid() {
 #[test]
 fn test_validate_model_with_provider_unknown_provider() {
     assert!(ModelUtils::validate_model_with_provider("any-model", "unknown-provider").is_ok());
-}
-
-#[test]
-fn test_not_applicable_provider_deployments_pass_through() {
-    for (model, provider) in [
-        ("unknown-provider/opaque-deployment", "unknown-provider"),
-        ("opaque-deployment", "unknown-provider"),
-        ("azure/custom-deployment", "azure"),
-    ] {
-        assert!(
-            ModelUtils::validate_model_with_provider(model, provider).is_ok(),
-            "{model} is a provider-native deployment for {provider}"
-        );
-    }
-
-    assert!(
-        ModelUtils::validate_model_with_provider("other/custom-deployment", "azure").is_err(),
-        "an explicit mismatched qualifier must fail"
-    );
-    assert!(
-        ModelUtils::validate_model_with_provider("openai/gpt-future-unknown", "openai").is_err(),
-        "an explicit unknown OpenAI identity must fail"
-    );
-}
-
-#[test]
-fn test_empty_compat_provider_rejects_wrong_qualifier_and_fake_snapshot() {
-    assert!(ModelUtils::validate_model_with_provider("other/Phi-4", "azure_ai").is_err());
-    assert!(
-        ModelUtils::validate_model_with_provider("azure_ai/gpt-5.5-2026-08-01", "azure_ai")
-            .is_err()
-    );
 }
 
 // ==================== get_compatible_models_for_provider Tests ====================

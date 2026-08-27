@@ -2,7 +2,6 @@
 
 use super::types::{ModelTokenConfig, TokenEstimate};
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent};
-use crate::core::providers::openai::models::{OpenAIModelResolution, get_openai_registry};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
 use tiktoken_rs::{ChatCompletionRequestMessage, bpe_for_model, num_tokens_from_messages};
@@ -333,10 +332,7 @@ impl TokenCounter {
                 refusal: None,
             });
         }
-        let Some(model) = tokenizer_model_name(model)? else {
-            return Ok(None);
-        };
-        match num_tokens_from_messages(model, &tiktoken_messages) {
+        match num_tokens_from_messages(tokenizer_model_name(model), &tiktoken_messages) {
             Ok(tokens) => Ok(Some(usize_to_u32(tokens)?)),
             Err(_) => Ok(None),
         }
@@ -350,17 +346,14 @@ impl Default for TokenCounter {
 }
 
 fn exact_text_tokens(model: &str, text: &str) -> Result<Option<u32>> {
-    let Some(bpe) = exact_bpe_for_model(model)? else {
-        return Ok(None);
-    };
-    Ok(Some(usize_to_u32(bpe.count_with_special_tokens(text))?))
+    match exact_bpe_for_model(model) {
+        Ok(bpe) => Ok(Some(usize_to_u32(bpe.count_with_special_tokens(text))?)),
+        Err(_) => Ok(None),
+    }
 }
 
-fn exact_bpe_for_model(model: &str) -> Result<Option<&'static tiktoken_rs::CoreBPE>> {
-    let Some(model) = tokenizer_model_name(model)? else {
-        return Ok(None);
-    };
-    Ok(bpe_for_model(model).ok())
+fn exact_bpe_for_model(model: &str) -> std::result::Result<&'static tiktoken_rs::CoreBPE, ()> {
+    bpe_for_model(tokenizer_model_name(model)).map_err(|_| ())
 }
 
 fn plain_text_message_content(message: &ChatMessage) -> Option<Option<String>> {
@@ -371,14 +364,11 @@ fn plain_text_message_content(message: &ChatMessage) -> Option<Option<String>> {
     }
 }
 
-fn tokenizer_model_name(model: &str) -> Result<Option<&'static str>> {
-    match get_openai_registry().resolve_model_policy(model) {
-        OpenAIModelResolution::Resolved(resolved) => Ok(Some(resolved.catalog_id())),
-        OpenAIModelResolution::ExplicitOpenAIUnknown { wire_id, .. } => Err(GatewayError::Config(
-            format!("unsupported explicit OpenAI model '{wire_id}'"),
-        )),
-        OpenAIModelResolution::NotApplicable => Ok(None),
-    }
+fn tokenizer_model_name(model: &str) -> &str {
+    model
+        .rsplit_once('/')
+        .map(|(_, model)| model)
+        .unwrap_or(model)
 }
 
 fn usize_to_u32(value: usize) -> Result<u32> {
@@ -419,15 +409,6 @@ mod tests {
         let debug_str = format!("{:?}", counter);
         assert!(debug_str.contains("TokenCounter"));
         assert!(debug_str.contains("model_configs"));
-    }
-
-    #[test]
-    fn test_exact_text_tokens_rejects_wrong_provider_qualifier() {
-        assert!(
-            exact_text_tokens("anthropic/gpt-4", "Hello")
-                .expect("wrong-provider tokenizer lookup should remain non-fatal")
-                .is_none()
-        );
     }
 
     // ==================== Model Config Tests ====================
@@ -771,7 +752,3 @@ mod tests {
         assert!(tokens > 0);
     }
 }
-
-#[cfg(test)]
-#[path = "token_counter_policy_tests.rs"]
-mod policy_tests;

@@ -1,8 +1,4 @@
-use crate::core::providers::openai::models::{
-    OpenAIModelResolution, get_openai_registry, looks_like_openai_model,
-};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::model_id::ModelIdRef;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tiktoken_rs::{CoreBPE, bpe_for_model};
@@ -80,21 +76,7 @@ impl TokenUtils {
     ];
 
     pub fn select_tokenizer(model: &str) -> Result<TokenizerType, ProviderError> {
-        let parsed = ModelIdRef::parse(model);
-        match get_openai_registry().resolve_model_policy(model) {
-            OpenAIModelResolution::Resolved(_)
-            | OpenAIModelResolution::ExplicitOpenAIUnknown { .. } => {
-                return Ok(TokenizerType::OpenAI);
-            }
-            OpenAIModelResolution::NotApplicable => {}
-        }
-        if let Some(provider) = parsed.provider()
-            && !provider.is_empty()
-        {
-            return Ok(TokenizerType::Custom(model.to_string()));
-        }
-
-        let model_lower = parsed.model().to_lowercase();
+        let model_lower = model.to_lowercase();
 
         if Self::OPENAI_MODELS
             .iter()
@@ -425,8 +407,8 @@ impl TokenUtils {
 }
 
 fn exact_bpe_for_model(model: &str) -> Result<&'static CoreBPE, ProviderError> {
-    let catalog_id = tokenizer_model_name(model)?;
-    bpe_for_model(catalog_id).map_err(|error| {
+    let model = tokenizer_model_name(model);
+    bpe_for_model(model).map_err(|error| {
         ProviderError::invalid_request(
             "tokenizer",
             format!("unsupported OpenAI tokenizer model '{model}': {error}"),
@@ -434,28 +416,11 @@ fn exact_bpe_for_model(model: &str) -> Result<&'static CoreBPE, ProviderError> {
     })
 }
 
-fn tokenizer_model_name(model: &str) -> Result<&'static str, ProviderError> {
-    match get_openai_registry().resolve_model_policy(model) {
-        OpenAIModelResolution::Resolved(resolved) => Ok(resolved.catalog_id()),
-        OpenAIModelResolution::ExplicitOpenAIUnknown { wire_id, .. } => {
-            Err(ProviderError::invalid_request(
-                "tokenizer",
-                format!("unsupported OpenAI tokenizer model '{wire_id}'"),
-            ))
-        }
-        OpenAIModelResolution::NotApplicable
-            if ModelIdRef::parse(model).provider().is_none() && looks_like_openai_model(model) =>
-        {
-            Err(ProviderError::invalid_request(
-                "tokenizer",
-                format!("unsupported OpenAI tokenizer model '{model}'"),
-            ))
-        }
-        OpenAIModelResolution::NotApplicable => Err(ProviderError::invalid_request(
-            "tokenizer",
-            format!("model '{model}' does not resolve to an OpenAI catalog identity"),
-        )),
-    }
+fn tokenizer_model_name(model: &str) -> &str {
+    model
+        .rsplit_once('/')
+        .map(|(_, model)| model)
+        .unwrap_or(model)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -503,34 +468,6 @@ mod tests {
     }
 
     #[test]
-    fn test_select_tokenizer_respects_provider_qualifier() {
-        assert!(matches!(
-            TokenUtils::select_tokenizer("openai/gpt-4").unwrap(),
-            TokenizerType::OpenAI
-        ));
-        assert!(matches!(
-            TokenUtils::select_tokenizer("anthropic/gpt-4").unwrap(),
-            TokenizerType::Custom(_)
-        ));
-    }
-
-    #[test]
-    fn test_azure_openai_tokenizers_use_exact_openai_identity() {
-        for model in ["azure/gpt-4", "azure_ai/gpt-4"] {
-            assert!(matches!(
-                TokenUtils::select_tokenizer(model).unwrap(),
-                TokenizerType::OpenAI
-            ));
-            assert!(!TokenUtils::encode(model, "Hello").unwrap().is_empty());
-        }
-
-        assert!(matches!(
-            TokenUtils::select_tokenizer("azure_ai/Phi-4").unwrap(),
-            TokenizerType::Custom(_)
-        ));
-    }
-
-    #[test]
     fn test_token_counting() {
         let text = "Hello world this is a test";
         let count = TokenUtils::count_tokens_for_text("gpt-4", text).unwrap();
@@ -548,17 +485,6 @@ mod tests {
     #[test]
     fn test_openai_unknown_model_does_not_silently_fallback() {
         let error = TokenUtils::encode("gpt-future-unknown", "Hello").unwrap_err();
-        match error {
-            ProviderError::InvalidRequest { message, .. } => {
-                assert!(message.contains("unsupported OpenAI tokenizer model"));
-            }
-            other => panic!("expected invalid tokenizer request, got {other}"),
-        }
-    }
-
-    #[test]
-    fn test_provider_qualified_openai_unknown_model_does_not_silently_fallback() {
-        let error = TokenUtils::encode("openai/gpt-future-unknown", "Hello").unwrap_err();
         match error {
             ProviderError::InvalidRequest { message, .. } => {
                 assert!(message.contains("unsupported OpenAI tokenizer model"));

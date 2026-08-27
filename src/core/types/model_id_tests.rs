@@ -16,6 +16,12 @@ fn model_id_ref_preserves_wire_identity_and_qualifier_boundaries() {
     let nested = ModelIdRef::parse("openai/organization/model");
     assert_eq!(nested.model(), "organization/model");
 
+    let provider_native = ModelIdRef::parse("azure_ai/deployments/team/model");
+    assert_eq!(provider_native.raw(), "azure_ai/deployments/team/model");
+    assert_eq!(provider_native.provider(), Some("azure_ai"));
+    assert_eq!(provider_native.model(), "deployments/team/model");
+    assert_eq!(provider_native.for_provider("openai"), None);
+
     for malformed in ["", "openai/", "/gpt-5.5"] {
         assert_eq!(ModelIdRef::parse(malformed).for_provider("openai"), None);
     }

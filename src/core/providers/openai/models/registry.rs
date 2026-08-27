@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use crate::core::pricing::get_pricing_db;
 use crate::core::types::model::ModelInfo;
 
-use super::model_id::{OpenAIModelResolution, ResolvedOpenAIModel, resolve_with_catalog};
+use super::model_id::{ResolvedOpenAIModel, resolve_with_catalog};
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
 };
@@ -447,18 +447,6 @@ impl OpenAIModelRegistry {
         &'registry self,
         model_id: &'input str,
     ) -> Option<ResolvedOpenAIModel<'registry, 'input>> {
-        match self.resolve_model_policy(model_id) {
-            OpenAIModelResolution::Resolved(model) => Some(model),
-            OpenAIModelResolution::ExplicitOpenAIUnknown { .. }
-            | OpenAIModelResolution::NotApplicable => None,
-        }
-    }
-
-    /// Resolve provider-aware OpenAI identity without rewriting the wire ID.
-    pub fn resolve_model_policy<'registry, 'input>(
-        &'registry self,
-        model_id: &'input str,
-    ) -> OpenAIModelResolution<'registry, 'input> {
         resolve_with_catalog(model_id, |candidate| {
             self.models
                 .get_key_value(candidate)

@@ -49,21 +49,6 @@ impl<'registry, 'input> ResolvedOpenAIModel<'registry, 'input> {
     }
 }
 
-/// Provider-aware result of applying exact OpenAI catalog identity policy.
-#[derive(Debug, Clone, Copy)]
-pub enum OpenAIModelResolution<'registry, 'input> {
-    /// The provider-local ID is an exact catalog entry or explicit alias.
-    Resolved(ResolvedOpenAIModel<'registry, 'input>),
-    /// The caller explicitly selected an OpenAI-hosting path, but the ID is
-    /// OpenAI-shaped and absent from the exact catalog.
-    ExplicitOpenAIUnknown {
-        wire_id: &'input str,
-        public_id: &'input str,
-    },
-    /// This ID belongs to a non-OpenAI model path and should be handled there.
-    NotApplicable,
-}
-
 const MODEL_IDENTITIES: &[OpenAIModelIdentity] = &[OpenAIModelIdentity {
     public_id: "gpt-5.5-2026-04-23",
     catalog_id: "gpt-5.5-2026-04-23",
@@ -81,69 +66,17 @@ pub(super) fn identity_for(public_id: &str) -> Option<OpenAIModelIdentity> {
 pub(super) fn resolve_with_catalog<'registry, 'input>(
     model_id: &'input str,
     lookup: impl FnOnce(&str) -> Option<(&'registry str, &'registry OpenAIModelSpec)>,
-) -> OpenAIModelResolution<'registry, 'input> {
+) -> Option<ResolvedOpenAIModel<'registry, 'input>> {
     let parsed = ModelIdRef::parse(model_id);
-    let provider = parsed.provider();
-    let is_openai_provider = provider.is_some_and(|value| value.eq_ignore_ascii_case("openai"));
-    let is_azure_openai_provider = provider.is_some_and(|value| {
-        value.eq_ignore_ascii_case("azure") || value.eq_ignore_ascii_case("azure_ai")
-    });
-
-    if provider.is_some() && !is_openai_provider && !is_azure_openai_provider {
-        return OpenAIModelResolution::NotApplicable;
-    }
-
-    let public_id = parsed.model();
-    if public_id.is_empty() {
-        return if is_openai_provider {
-            OpenAIModelResolution::ExplicitOpenAIUnknown {
-                wire_id: parsed.raw(),
-                public_id,
-            }
-        } else {
-            OpenAIModelResolution::NotApplicable
-        };
-    }
+    let public_id = parsed.for_provider("openai")?;
 
     let identity = identity_for(public_id);
     let catalog_candidate = identity.map_or(public_id, |entry| entry.catalog_id);
-    if let Some((catalog_id, spec)) = lookup(catalog_candidate) {
-        return OpenAIModelResolution::Resolved(ResolvedOpenAIModel {
-            wire_id: parsed.raw(),
-            public_id,
-            catalog_id,
-            canonical_base_id: identity.and_then(|entry| entry.canonical_base_id),
-            spec,
-        });
-    }
-
-    if is_openai_provider || (is_azure_openai_provider && looks_like_openai_model(public_id)) {
-        OpenAIModelResolution::ExplicitOpenAIUnknown {
-            wire_id: parsed.raw(),
-            public_id,
-        }
-    } else {
-        OpenAIModelResolution::NotApplicable
-    }
-}
-
-/// Whether a provider-local identifier belongs to an OpenAI naming family.
-pub fn looks_like_openai_model(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    [
-        "gpt-",
-        "chatgpt-image-",
-        "o1",
-        "o3",
-        "o4",
-        "dall-e-",
-        "whisper-",
-        "tts-",
-        "text-embedding-",
-        "omni-moderation-",
-        "computer-use-",
-        "codex-",
-    ]
-    .iter()
-    .any(|prefix| model.starts_with(prefix))
+    lookup(catalog_candidate).map(|(catalog_id, spec)| ResolvedOpenAIModel {
+        wire_id: parsed.raw(),
+        public_id,
+        catalog_id,
+        canonical_base_id: identity.and_then(|entry| entry.canonical_base_id),
+        spec,
+    })
 }

@@ -16,6 +16,6 @@ mod static_models;
 
 // Re-export everything at the same path as before
 pub use api_types::*;
-pub use model_id::{OpenAIModelResolution, ResolvedOpenAIModel, looks_like_openai_model};
+pub use model_id::ResolvedOpenAIModel;
 pub use registry::*;
 pub use registry_types::*;
