@@ -424,6 +424,53 @@ async fn test_xai_grok_43_reasoning_effort_is_top_level() {
 }
 
 #[tokio::test]
+async fn test_xai_current_models_use_top_level_reasoning_effort() {
+    let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+        .with_provider_name("xai")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    for (model, effort) in [
+        ("grok-4.5", "low"),
+        ("grok-4.5-latest", "medium"),
+        ("grok-build-latest", "high"),
+        ("grok-4.6", "low"),
+        ("xai/grok-4.6", "medium"),
+        ("grok-4.6", "high"),
+        ("grok-4.6", "xhigh"),
+    ] {
+        let request = ChatRequest {
+            model: model.to_string(),
+            messages: vec![],
+            reasoning_effort: Some(effort.to_string()),
+            ..Default::default()
+        };
+
+        let json = provider.transform_chat_request(request).unwrap();
+        assert_eq!(json["reasoning_effort"], effort);
+        assert!(json.get("reasoning").is_none());
+    }
+}
+
+#[tokio::test]
+async fn test_xai_current_models_enforce_reasoning_effort_levels() {
+    let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+        .with_provider_name("xai")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    let request = ChatRequest {
+        model: "grok-4.5".to_string(),
+        messages: vec![],
+        reasoning_effort: Some("xhigh".to_string()),
+        ..Default::default()
+    };
+
+    let err = provider.transform_chat_request(request).unwrap_err();
+    assert!(err.to_string().contains("low, medium, high"));
+}
+
+#[tokio::test]
 async fn test_xai_multi_agent_reasoning_effort_is_nested() {
     let config = OpenAILikeConfig::new("https://api.x.ai/v1")
         .with_provider_name("xai")
@@ -477,6 +524,28 @@ async fn test_xai_high_context_uses_registered_pricing() {
         .unwrap();
 
     assert!((cost - 0.315).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn test_xai_current_model_cost_fails_closed_until_tiered_authority() {
+    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+
+    let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+        .with_provider_name("xai")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    for (model, input_tokens) in [
+        ("grok-4.5", 199_999),
+        ("grok-4.5", 200_000),
+        ("grok-4.6", 199_999),
+        ("grok-4.6", 200_000),
+    ] {
+        let error = LLMProvider::calculate_cost(&provider, model, input_tokens, 1_000)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("pricing is unavailable"));
+    }
 }
 
 #[tokio::test]

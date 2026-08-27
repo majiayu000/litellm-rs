@@ -455,7 +455,17 @@ impl OpenAILikeProvider {
         }
 
         Self::reject_xai_reasoning_incompatible_params(request)?;
-
+        if let Some(allowed) = super::models::xai_reasoning_efforts_for_model(model)
+            && !allowed.contains(&effort.as_str())
+        {
+            return Err(OpenAILikeError::configuration(
+                PROVIDER_NAME,
+                format!(
+                    "xAI model {model} supports reasoning_effort values: {}",
+                    allowed.join(", ")
+                ),
+            ));
+        }
         match super::models::xai_reasoning_param_for_model(model) {
             Some(super::models::XaiReasoningParam::TopLevelReasoningEffort) => {
                 request["reasoning_effort"] = Value::String(effort);
@@ -707,19 +717,24 @@ impl LLMProvider for OpenAILikeProvider {
         if self.config.provider_name != "xai" && super::models::is_xai_priced_model(model) {
             return Ok(0.0);
         }
-
         let model_info = self.get_model_info(model);
-        if self.config.provider_name == "meta_llama"
+        if ((self.config.provider_name == "meta_llama"
             && crate::core::providers::registry::catalog_policy::catalog_model_info(
                 &self.provider_name,
                 model,
             )
-            .is_some()
+            .is_some())
+            || (self.config.provider_name == "xai" && super::models::is_xai_current_model(model)))
             && (model_info.input_cost_per_1k_tokens.is_none()
                 || model_info.output_cost_per_1k_tokens.is_none())
         {
+            let provider = if self.provider_name == "xai" {
+                "xai"
+            } else {
+                "meta_llama"
+            };
             return Err(ProviderError::invalid_request(
-                "meta_llama",
+                provider,
                 format!("pricing is unavailable for model '{model}'"),
             ));
         }
