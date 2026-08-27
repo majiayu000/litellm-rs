@@ -40,12 +40,15 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
             });
 
     let mut model_candidates = vec![model.to_string()];
-    if let Provider::OpenAI(provider) = provider {
+    let mapped_model = if let Provider::OpenAI(provider) = provider {
         let mapped = provider.config.get_model_mapping(model);
         if !model_candidates.contains(&mapped) {
-            model_candidates.insert(0, mapped);
+            model_candidates.insert(0, mapped.clone());
         }
-    }
+        Some(mapped)
+    } else {
+        None
+    };
 
     for pricing_provider in &provider_candidates {
         for pricing_model in &model_candidates {
@@ -57,7 +60,26 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
         }
     }
 
+    if let Some(identity) = mapped_model.as_deref().and_then(|mapped| {
+        unpriced_openai_mapping_identity(&provider.provider_type(), model, mapped)
+    }) {
+        return identity;
+    }
+
     (provider_name.to_string(), model.to_string())
+}
+
+fn unpriced_openai_mapping_identity(
+    provider_type: &ProviderType,
+    requested_model: &str,
+    mapped_model: &str,
+) -> Option<(String, String)> {
+    (mapped_model != requested_model
+        && matches!(
+            provider_type,
+            ProviderType::OpenAI | ProviderType::OpenAICompatible
+        ))
+    .then(|| ("openai".to_string(), mapped_model.to_string()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -266,4 +288,53 @@ fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
             });
         total.saturating_add(tokens)
     })
+}
+
+#[cfg(test)]
+mod mapped_identity_tests {
+    use super::*;
+
+    #[test]
+    fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {
+        assert_eq!(
+            unpriced_openai_mapping_identity(
+                &ProviderType::OpenAICompatible,
+                "public-alias",
+                "canonical-model",
+            ),
+            Some(("openai".to_string(), "canonical-model".to_string()))
+        );
+        assert_eq!(
+            unpriced_openai_mapping_identity(
+                &ProviderType::OpenAICompatible,
+                "same-model",
+                "same-model",
+            ),
+            None
+        );
+        assert_eq!(
+            unpriced_openai_mapping_identity(
+                &ProviderType::Anthropic,
+                "public-alias",
+                "canonical-model",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn retained_mapping_identity_does_not_price_non_image_requests() {
+        let pricing = PricingService::new(None);
+        let (provider, model) = unpriced_openai_mapping_identity(
+            &ProviderType::OpenAICompatible,
+            "public-alias",
+            "canonical-model",
+        )
+        .expect("real mapping should retain canonical identity");
+
+        let error = pricing
+            .calculate_loaded_usage_cost_for_provider(&provider, &model, &PricingUsage::new(10, 5))
+            .expect_err("identity retention must not invent a non-image price");
+        assert!(error.to_string().contains("Model not found"));
+    }
 }

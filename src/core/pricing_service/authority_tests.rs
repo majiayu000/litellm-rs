@@ -173,7 +173,7 @@ fn provider_aware_authority_resolves_xai_openai_like_prefix() {
         Err(error) => panic!("xAI OpenAI-like prefixed model should resolve: {error}"),
     };
 
-    assert_eq!(cost.model, "xai/grok-4.3-latest");
+    assert_eq!(cost.model, "xai/grok-4.3");
     assert_eq!(cost.provider, "openai_like");
     assert!((cost.total_cost - 0.0025).abs() < f64::EPSILON);
 }
@@ -216,7 +216,7 @@ fn provider_aware_authority_preserves_core_pricing_tiers() {
         Err(error) => panic!("Azure tiered fallback pricing should resolve: {error}"),
     };
 
-    assert_eq!(cost.model, "azure/gpt-5.5-2026-04-23");
+    assert_eq!(cost.model, "azure/gpt-5.5");
     assert_eq!(cost.provider, "azure");
     assert!((cost.input_cost - 3.0).abs() < 1e-12);
     assert!((cost.output_cost - 0.045).abs() < 1e-12);
@@ -256,4 +256,180 @@ fn provider_aware_authority_rejects_missing_token_pricing() {
     };
 
     assert!(error.to_string().contains("output_cost_per_token"));
+}
+
+#[test]
+fn provider_scoped_authority_preserves_native_slash_namespaces() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    for (provider, model, expected) in [
+        (
+            "together_ai",
+            "BAAI/bge-base-en-v1.5",
+            "together_ai/BAAI/bge-base-en-v1.5",
+        ),
+        (
+            "together_ai",
+            "openai/gpt-oss-120b",
+            "together_ai/openai/gpt-oss-120b",
+        ),
+        (
+            "anyscale",
+            "google/gemma-7b-it",
+            "anyscale/google/gemma-7b-it",
+        ),
+    ] {
+        let Some((resolved, info)) = service.get_model_info_for_provider(provider, model) else {
+            panic!("{provider}/{model} should retain its provider-native namespace");
+        };
+        assert_eq!(resolved, expected);
+        assert_eq!(
+            crate::core::pricing::normalize_pricing_provider(&info.litellm_provider),
+            provider
+        );
+    }
+}
+
+#[test]
+fn provider_scoped_authority_preserves_region_and_deployment_qualifiers() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    for (model, expected) in [
+        ("us/gpt-5.1", "azure/us/gpt-5.1"),
+        ("AZURE/EU/GPT-5.1", "azure/eu/gpt-5.1"),
+        ("gpt-5.1", "azure/gpt-5.1"),
+    ] {
+        let Some((resolved, _)) = service.get_model_info_for_provider("azure", model) else {
+            panic!("Azure pricing should resolve {model}");
+        };
+        assert_eq!(resolved, expected);
+    }
+
+    service.add_custom_model(
+        "azure/deployment-blue/gpt-5.1".to_string(),
+        test_model_info("azure"),
+    );
+    let Some((resolved, _)) =
+        service.get_model_info_for_provider("azure", "deployment-blue/gpt-5.1")
+    else {
+        panic!("deployment-qualified model should resolve without losing its qualifier");
+    };
+    assert_eq!(resolved, "azure/deployment-blue/gpt-5.1");
+
+    let Some((plain, _)) = service.get_model_info_for_provider("azure", "gpt-5.1") else {
+        panic!("plain Azure model should retain its generic exact row");
+    };
+    assert_eq!(plain, "azure/gpt-5.1");
+}
+
+#[test]
+fn provider_scoped_authority_resolves_vertex_publishers_but_not_unknown_suffixes() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    let Some((resolved, info)) =
+        service.get_model_info_for_provider("vertex_ai", "meta/llama-4-scout-17b-16e-instruct")
+    else {
+        panic!("Vertex publisher alias should resolve through its bounded explicit alias");
+    };
+    assert_eq!(
+        resolved,
+        "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas"
+    );
+    assert_eq!(info.litellm_provider, "vertex_ai-llama_models");
+    assert!(
+        service
+            .get_model_info_for_provider("vertex_ai", "gemini-1.5-pro-9999")
+            .is_none()
+    );
+}
+
+#[test]
+fn provider_scoped_casefold_keeps_cross_provider_collisions() {
+    let service = PricingService::new(None);
+    let mut gemini = test_model_info("gemini");
+    gemini.input_cost_per_token = Some(0.000_001);
+    let mut vertex = test_model_info("vertex_ai");
+    vertex.input_cost_per_token = Some(0.000_002);
+    service.add_custom_model("Model-X".to_string(), gemini);
+    service.add_custom_model("model-x".to_string(), vertex);
+
+    let (gemini_key, gemini_info) = service
+        .get_model_info_for_provider("gemini", "MODEL-X")
+        .expect("Gemini collision entry should remain scoped");
+    let (vertex_key, vertex_info) = service
+        .get_model_info_for_provider("vertex_ai", "MODEL-X")
+        .expect("Vertex collision entry should remain scoped");
+    assert_eq!(gemini_key, "Model-X");
+    assert_eq!(gemini_info.input_cost_per_token, Some(0.000_001));
+    assert_eq!(vertex_key, "model-x");
+    assert_eq!(vertex_info.input_cost_per_token, Some(0.000_002));
+}
+
+#[test]
+fn provider_scoped_casefold_is_lexical_regardless_of_insertion_order() {
+    fn build(reverse: bool) -> PricingService {
+        let service = PricingService::new(None);
+        let lower = ("model-x".to_string(), test_model_info("runtime_provider"));
+        let upper = ("Model-X".to_string(), test_model_info("runtime_provider"));
+        let entries = if reverse {
+            vec![upper, lower]
+        } else {
+            vec![lower, upper]
+        };
+        for (model, info) in entries {
+            service.add_custom_model(model, info);
+        }
+        service
+    }
+
+    for service in [build(false), build(true)] {
+        let (mixed, _) = service
+            .get_model_info_for_provider("runtime_provider", "MODEL-X")
+            .expect("mixed-case lookup should use deterministic canonical key");
+        assert_eq!(mixed, "Model-X");
+        assert_eq!(
+            service
+                .get_model_info_for_provider("runtime_provider", "model-x")
+                .expect("exact lowercase spelling should win")
+                .0,
+            "model-x"
+        );
+    }
+}
+
+#[test]
+fn provider_scoped_exact_rows_precede_old_fuzzy_aliases() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    assert_eq!(
+        service
+            .get_model_info_for_provider("openai_like", "xai/grok-4.3")
+            .expect("xAI exact row should resolve")
+            .0,
+        "xai/grok-4.3"
+    );
+    assert_eq!(
+        service
+            .get_model_info_for_provider("azure", "gpt-5.5")
+            .expect("Azure exact row should resolve")
+            .0,
+        "azure/gpt-5.5"
+    );
+
+    assert!(
+        service
+            .get_model_info_for_provider("anthropic", "mimo-v2.5-pro")
+            .is_some()
+    );
+    assert_eq!(
+        service
+            .get_model_info_for_provider("amazon_nova", "nova-2-lite")
+            .expect("Amazon Nova explicit catalog alias should remain supported")
+            .0,
+        "amazon.nova-2-lite-v1:0"
+    );
 }
