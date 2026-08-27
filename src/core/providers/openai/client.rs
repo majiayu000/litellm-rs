@@ -332,6 +332,19 @@ impl OpenAIProvider {
     ) -> bool {
         if let Some(model_spec) = self.model_registry.get_model_spec(model_id) {
             model_spec.model_info.capabilities.contains(capability)
+                || match capability {
+                    ProviderCapability::FunctionCalling => model_spec.model_info.supports_tools,
+                    ProviderCapability::FineTuning => model_spec
+                        .features
+                        .contains(&super::models::OpenAIModelFeature::FineTuning),
+                    ProviderCapability::ImageVariation => {
+                        model_spec.family == super::models::OpenAIModelFamily::DALLE2
+                    }
+                    ProviderCapability::RealtimeApi => model_spec
+                        .features
+                        .contains(&super::models::OpenAIModelFeature::RealtimeAudio),
+                    _ => false,
+                }
         } else {
             false
         }

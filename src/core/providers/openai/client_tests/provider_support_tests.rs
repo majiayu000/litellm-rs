@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::providers::Provider;
 
 // ==================== Provider Creation Tests ====================
 
@@ -102,6 +103,18 @@ fn test_model_supports_capability_unknown_model() {
     assert!(
         !provider.model_supports_capability("unknown-model", &ProviderCapability::ChatCompletion)
     );
+}
+
+#[test]
+fn qualified_dall_e_alias_preserves_image_variation_routing() {
+    let provider = Provider::OpenAI(create_test_provider());
+
+    for model in ["dall-e-2", "openai/dall-e-2"] {
+        assert!(
+            provider.supports_capability_for_model(model, &ProviderCapability::ImageVariation),
+            "{model} should preserve the OpenAI image-variation fallback"
+        );
+    }
 }
 
 #[test]

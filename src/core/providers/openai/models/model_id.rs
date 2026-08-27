@@ -68,12 +68,33 @@ pub(super) fn resolve_with_catalog<'registry, 'input>(
     mut lookup: impl FnMut(&str) -> Option<(&'registry str, &'registry OpenAIModelSpec)>,
 ) -> Option<ResolvedOpenAIModel<'registry, 'input>> {
     let parsed = ModelIdRef::parse(model_id);
-    let public_id = parsed.for_provider("openai")?;
 
+    if let Some((catalog_id, spec)) = lookup(parsed.raw()) {
+        let public_id = parsed
+            .for_provider("openai")
+            .filter(|_| parsed.provider().is_some())
+            .unwrap_or_else(|| parsed.raw());
+        let identity = identity_for(public_id);
+
+        return Some(ResolvedOpenAIModel {
+            wire_id: parsed.raw(),
+            public_id,
+            catalog_id,
+            canonical_base_id: identity.and_then(|entry| entry.canonical_base_id),
+            spec,
+        });
+    }
+
+    let public_id = parsed.for_provider("openai")?;
     let identity = identity_for(public_id);
     let catalog_entry = identity
         .and_then(|entry| lookup(entry.catalog_id))
-        .or_else(|| parsed.provider().and_then(|_| lookup(parsed.raw())))
+        .or_else(|| {
+            parsed.provider().and_then(|_| {
+                let qualified_catalog_id = format!("openai/{public_id}");
+                lookup(&qualified_catalog_id)
+            })
+        })
         .or_else(|| lookup(public_id));
 
     catalog_entry.map(|(catalog_id, spec)| ResolvedOpenAIModel {
