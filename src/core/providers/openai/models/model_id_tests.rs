@@ -21,6 +21,18 @@ fn registry_resolves_only_exact_openai_catalog_identities() {
 }
 
 #[test]
+fn registry_preserves_exact_already_qualified_catalog_keys() {
+    let registry = get_openai_registry();
+    let resolved = registry
+        .resolve_model("openai/container")
+        .expect("an exact already-qualified OpenAI catalog key should resolve");
+
+    assert_eq!(resolved.wire_id(), "openai/container");
+    assert_eq!(resolved.public_id(), "container");
+    assert_eq!(resolved.catalog_id(), "openai/container");
+}
+
+#[test]
 fn registry_rejects_provider_native_and_non_exact_openai_ids() {
     let registry = get_openai_registry();
 

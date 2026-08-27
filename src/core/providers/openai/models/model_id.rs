@@ -65,14 +65,18 @@ pub(super) fn identity_for(public_id: &str) -> Option<OpenAIModelIdentity> {
 
 pub(super) fn resolve_with_catalog<'registry, 'input>(
     model_id: &'input str,
-    lookup: impl FnOnce(&str) -> Option<(&'registry str, &'registry OpenAIModelSpec)>,
+    mut lookup: impl FnMut(&str) -> Option<(&'registry str, &'registry OpenAIModelSpec)>,
 ) -> Option<ResolvedOpenAIModel<'registry, 'input>> {
     let parsed = ModelIdRef::parse(model_id);
     let public_id = parsed.for_provider("openai")?;
 
     let identity = identity_for(public_id);
-    let catalog_candidate = identity.map_or(public_id, |entry| entry.catalog_id);
-    lookup(catalog_candidate).map(|(catalog_id, spec)| ResolvedOpenAIModel {
+    let catalog_entry = identity
+        .and_then(|entry| lookup(entry.catalog_id))
+        .or_else(|| parsed.provider().and_then(|_| lookup(parsed.raw())))
+        .or_else(|| lookup(public_id));
+
+    catalog_entry.map(|(catalog_id, spec)| ResolvedOpenAIModel {
         wire_id: parsed.raw(),
         public_id,
         catalog_id,
