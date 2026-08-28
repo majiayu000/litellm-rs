@@ -92,7 +92,7 @@ fn test_anthropic_client_preserves_thinking_blocks() {
 
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-sonnet-4-20250514",
         "content": [
             {
                 "type": "thinking",
@@ -149,7 +149,7 @@ fn test_anthropic_client_preserves_thinking_blocks() {
             .is_some_and(ThinkingContent::is_redacted)
     );
 
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
     request.messages = vec![
         result.choices[0].message.clone(),
         ChatMessage {

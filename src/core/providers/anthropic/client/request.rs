@@ -54,6 +54,23 @@ impl AnthropicClient {
         if let Some(protocol) = claude_5_protocol {
             Self::validate_claude_5_request(request, protocol)?;
         }
+        if claude_5_protocol.is_none()
+            && model_spec.is_some_and(|model_spec| {
+                !model_spec.features.contains(&ModelFeature::ThinkingMode)
+            })
+            && request
+                .messages
+                .iter()
+                .any(|message| message.thinking.is_some())
+        {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} does not support Anthropic thinking history",
+                    request.model
+                ),
+            ));
+        }
         if model_spec.is_none()
             && claude_5_protocol.is_none()
             && (request
@@ -231,7 +248,9 @@ impl AnthropicClient {
                 } else {
                     anthropic_request["thinking"] = json!({"type": "disabled"});
                 }
-                if let Some(effort) = thinking.effort {
+                if thinking.enabled
+                    && let Some(effort) = thinking.effort
+                {
                     anthropic_request["output_config"] = json!({"effort": effort.as_str()});
                 }
             } else if model_spec.is_none() {
