@@ -12,6 +12,7 @@ pub mod service;
 
 // Split from requests.rs (new modules)
 pub mod anthropic;
+pub mod anthropic_continuation;
 pub mod chat;
 pub mod codex;
 pub mod content;
