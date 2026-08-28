@@ -39,16 +39,15 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
                 unique
             });
 
-    let mut model_candidates = vec![model.to_string()];
     let mapped_model = if let Provider::OpenAI(provider) = provider {
-        let mapped = provider.config.get_model_mapping(model);
-        if !model_candidates.contains(&mapped) {
-            model_candidates.insert(0, mapped.clone());
-        }
-        Some(mapped)
+        Some(provider.config.get_model_mapping(model))
     } else {
         None
     };
+    let model_candidates = mapped_model
+        .as_ref()
+        .filter(|mapped| mapped.as_str() != model)
+        .map_or_else(|| vec![model.to_string()], |mapped| vec![mapped.clone()]);
 
     for pricing_provider in &provider_candidates {
         for pricing_model in &model_candidates {
@@ -294,6 +293,27 @@ fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
 mod mapped_identity_tests {
     use super::*;
 
+    fn priced_model_info() -> crate::core::pricing_service::LiteLLMModelInfo {
+        crate::core::pricing_service::LiteLLMModelInfo {
+            max_tokens: Some(4096),
+            max_input_tokens: Some(4096),
+            max_output_tokens: Some(4096),
+            input_cost_per_token: Some(0.001),
+            output_cost_per_token: Some(0.002),
+            input_cost_per_character: None,
+            output_cost_per_character: None,
+            cost_per_second: None,
+            litellm_provider: "openai".to_string(),
+            mode: "chat".to_string(),
+            supports_function_calling: Some(true),
+            supports_vision: Some(false),
+            supports_streaming: Some(true),
+            supports_parallel_function_calling: Some(true),
+            supports_system_message: Some(true),
+            extra: std::collections::HashMap::new(),
+        }
+    }
+
     #[test]
     fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {
         assert_eq!(
@@ -336,5 +356,32 @@ mod mapped_identity_tests {
             .calculate_loaded_usage_cost_for_provider(&provider, &model, &PricingUsage::new(10, 5))
             .expect_err("identity retention must not invent a non-image price");
         assert!(error.to_string().contains("Model not found"));
+    }
+
+    #[tokio::test]
+    async fn production_resolver_preserves_explicit_unpriced_mapping_over_priced_raw_alias() {
+        let pricing = PricingService::new(None);
+        pricing.add_custom_model("review-public-alias".to_string(), priced_model_info());
+        let mut config = crate::core::providers::openai::OpenAIConfig::default();
+        config.base.api_key = Some("sk-test".to_string());
+        config.model_mappings.insert(
+            "review-public-alias".to_string(),
+            "review-canonical-unpriced".to_string(),
+        );
+        let provider = Provider::OpenAI(
+            crate::core::providers::openai::OpenAIProvider::new(config)
+                .await
+                .expect("test provider should build"),
+        );
+
+        let identity = pricing_identity_for_provider(&pricing, &provider, "review-public-alias");
+
+        assert_eq!(
+            identity,
+            (
+                "openai".to_string(),
+                "review-canonical-unpriced".to_string()
+            )
+        );
     }
 }
