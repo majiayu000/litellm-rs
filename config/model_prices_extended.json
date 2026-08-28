@@ -7,8 +7,8 @@
     "source_sha256": "110ba21cebb52cf6bdbb5130f38eaa761762ac78b4af547a9bcd099cd08a7d32",
     "generated_by": "scripts/sync_litellm_pricing.py",
     "upstream_model_count": 3362,
-    "compatibility_overlay_count": 179,
-    "compatibility_overlay_override_count": 67,
+    "compatibility_overlay_count": 182,
+    "compatibility_overlay_override_count": 70,
     "compatibility_overlay_add_count": 112,
     "compatibility_overlay_keys": [
       "MiniMax-M2",
@@ -188,6 +188,9 @@
       "voyage-finance-2",
       "voyage-law-2",
       "whisper-large-v3-turbo",
+      "xai/grok-4.5",
+      "xai/grok-4.5-latest",
+      "xai/grok-4.6",
       "yi-large",
       "yi-medium"
     ],
@@ -22588,7 +22591,6 @@
     "cache_read_input_token_cost": 7.5e-08,
     "cache_read_input_token_cost_flex": 3.75e-08,
     "input_cost_per_token": 7.5e-07,
-    "input_cost_per_token_batches": 3.75e-07,
     "input_cost_per_token_flex": 3.75e-07,
     "litellm_provider": "gemini",
     "max_input_tokens": 1048576,
@@ -22597,7 +22599,6 @@
     "mode": "chat",
     "output_cost_per_reasoning_token": 3.75e-06,
     "output_cost_per_token": 3.75e-06,
-    "output_cost_per_token_batches": 1.875e-06,
     "output_cost_per_token_flex": 1.875e-06,
     "rpm": 2000,
     "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -22648,7 +22649,6 @@
     "cache_read_input_token_cost": 7.5e-08,
     "cache_read_input_token_cost_flex": 3.75e-08,
     "input_cost_per_token": 7.5e-07,
-    "input_cost_per_token_batches": 3.75e-07,
     "input_cost_per_token_flex": 3.75e-07,
     "litellm_provider": "gemini",
     "max_input_tokens": 1048576,
@@ -22657,7 +22657,6 @@
     "mode": "chat",
     "output_cost_per_reasoning_token": 3.75e-06,
     "output_cost_per_token": 3.75e-06,
-    "output_cost_per_token_batches": 1.875e-06,
     "output_cost_per_token_flex": 1.875e-06,
     "rpm": 2000,
     "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -22930,7 +22929,6 @@
     "cache_read_input_token_cost": 7.5e-08,
     "cache_read_input_token_cost_flex": 3.75e-08,
     "input_cost_per_token": 7.5e-07,
-    "input_cost_per_token_batches": 3.75e-07,
     "input_cost_per_token_flex": 3.75e-07,
     "litellm_provider": "vertex_ai-language-models",
     "max_input_tokens": 1048576,
@@ -22939,7 +22937,6 @@
     "mode": "chat",
     "output_cost_per_reasoning_token": 3.75e-06,
     "output_cost_per_token": 3.75e-06,
-    "output_cost_per_token_batches": 1.875e-06,
     "output_cost_per_token_flex": 1.875e-06,
     "source": "https://ai.google.dev/gemini-api/docs/pricing",
     "supported_endpoints": [
@@ -26665,9 +26662,6 @@
     "supports_vision": true,
     "supports_streaming": false,
     "supports_system_message": true,
-    "input_cost_per_token_above_272k_tokens": 6e-05,
-    "output_cost_per_token_above_272k_tokens": 0.00027,
-    "cache_read_input_token_cost_above_272k_tokens": 6e-05,
     "source": "https://developers.openai.com/api/docs/models/gpt-5.5-pro"
   },
   "gpt-5.5-pro-2026-04-23": {
@@ -26683,9 +26677,6 @@
     "supports_vision": true,
     "supports_streaming": false,
     "supports_system_message": true,
-    "input_cost_per_token_above_272k_tokens": 6e-05,
-    "output_cost_per_token_above_272k_tokens": 0.00027,
-    "cache_read_input_token_cost_above_272k_tokens": 6e-05,
     "source": "https://developers.openai.com/api/docs/models/gpt-5.5-pro"
   },
   "gpt-5.4": {
@@ -43715,14 +43706,17 @@
     "mode": "chat",
     "output_cost_per_token": 6e-06,
     "output_cost_per_token_above_200k_tokens": 1.2e-05,
-    "source": "https://docs.x.ai/docs/models",
+    "source": "https://docs.x.ai/developers/pricing",
     "supports_function_calling": true,
     "supports_prompt_caching": true,
     "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_tool_choice": true,
     "supports_vision": true,
-    "supports_web_search": true
+    "supports_web_search": true,
+    "input_cost_per_token_above_199999_tokens": 4e-06,
+    "output_cost_per_token_above_199999_tokens": 1.2e-05,
+    "cache_read_input_token_cost_above_199999_tokens": 6e-07
   },
   "xai/grok-4.5-latest": {
     "cache_read_input_token_cost": 3e-07,
@@ -43736,14 +43730,17 @@
     "mode": "chat",
     "output_cost_per_token": 6e-06,
     "output_cost_per_token_above_200k_tokens": 1.2e-05,
-    "source": "https://docs.x.ai/docs/models",
+    "source": "https://docs.x.ai/developers/pricing",
     "supports_function_calling": true,
     "supports_prompt_caching": true,
     "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_tool_choice": true,
     "supports_vision": true,
-    "supports_web_search": true
+    "supports_web_search": true,
+    "input_cost_per_token_above_199999_tokens": 4e-06,
+    "output_cost_per_token_above_199999_tokens": 1.2e-05,
+    "cache_read_input_token_cost_above_199999_tokens": 6e-07
   },
   "xai/grok-4.6": {
     "cache_read_input_token_cost": 5e-07,
@@ -43757,14 +43754,17 @@
     "mode": "chat",
     "output_cost_per_token": 6e-06,
     "output_cost_per_token_above_200k_tokens": 1.2e-05,
-    "source": "https://docs.x.ai/developers/models",
+    "source": "https://docs.x.ai/developers/pricing",
     "supports_function_calling": true,
     "supports_prompt_caching": true,
     "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_tool_choice": true,
     "supports_vision": true,
-    "supports_web_search": true
+    "supports_web_search": true,
+    "input_cost_per_token_above_199999_tokens": 4e-06,
+    "output_cost_per_token_above_199999_tokens": 1.2e-05,
+    "cache_read_input_token_cost_above_199999_tokens": 1e-06
   },
   "xai/grok-code-fast": {
     "cache_read_input_token_cost": 2e-07,

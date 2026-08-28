@@ -64,12 +64,19 @@ class SyncPricingTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     sync.load_overlay_entries([path])
 
-    def test_control_blocks_are_not_rendered_as_models(self) -> None:
+    def test_missing_declared_overlay_is_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing = pathlib.Path(temp_dir) / "missing-overlay.json"
+            with self.assertRaisesRegex(SystemExit, "does not exist"):
+                sync.load_overlay_entries([missing])
+
+    def test_only_exact_control_blocks_are_filtered(self) -> None:
         source = {
             "_metadata": {"source": "upstream"},
             "fallback_generalizations": {"foo": "bar"},
             "sample_spec": {"litellm_provider": "sample"},
-            "example_model": {"litellm_provider": "sample"},
+            "example-real-model": {"litellm_provider": "sample"},
+            "model-with-example-suffix": {"litellm_provider": "sample"},
             "real-model": {
                 "litellm_provider": "openai",
                 "input_cost_per_token": 1.0,
@@ -86,9 +93,28 @@ class SyncPricingTests(unittest.TestCase):
         )
         self.assertNotIn("fallback_generalizations", rendered)
         self.assertNotIn("sample_spec", rendered)
-        self.assertNotIn("example_model", rendered)
+        self.assertIn("example-real-model", rendered)
+        self.assertIn("model-with-example-suffix", rendered)
         self.assertIn("real-model", rendered)
-        self.assertEqual(rendered["_metadata"]["upstream_model_count"], 1)
+        self.assertEqual(rendered["_metadata"]["upstream_model_count"], 3)
+
+    def test_malformed_control_block_is_not_silently_filtered(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "control block.*JSON object"):
+            sync.model_entries({"sample_spec": []})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = pathlib.Path(temp_dir) / "overlay.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "_metadata": {"compatibility_overlay_keys": []},
+                        "fallback_generalizations": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SystemExit, "control block.*JSON object"):
+                sync.load_overlay_entries([path])
 
     def test_official_overrides_win_and_are_tracked(self) -> None:
         source = {
@@ -162,6 +188,13 @@ class PricingSchemaValidationTests(unittest.TestCase):
                 sync.OFFICIAL_PRICING_CONTRACTS["xai/grok-4.5"],
             )
 
+    def test_forbidden_runtime_fields_fail_contract_validation(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "forbidden.*above_272k"):
+            sync.validate_forbidden_fields(
+                "gpt-5.5-pro",
+                {"input_cost_per_token_above_272k_tokens": 0.000060},
+            )
+
 
 class OfficialPricingRegressionTests(unittest.TestCase):
     @classmethod
@@ -218,6 +251,15 @@ class OfficialPricingRegressionTests(unittest.TestCase):
         self.assert_fields("gemini/gemini-3.7-flash", expected | {"litellm_provider": "gemini"})
         self.assert_fields("gemini-3.6-flash", expected)
         self.assert_fields("gemini-3.7-flash", expected)
+        for model in (
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "gemini/gemini-3.6-flash",
+            "gemini/gemini-3.7-flash",
+        ):
+            self.assertNotIn("input_cost_per_token_batches", self.catalog[model])
+            self.assertNotIn("output_cost_per_token_batches", self.catalog[model])
+            self.assertNotIn("cache_read_input_token_cost_batches", self.catalog[model])
 
     def test_issue_1213_xai_tiered_exact_ids(self) -> None:
         self.assert_fields(
@@ -229,6 +271,9 @@ class OfficialPricingRegressionTests(unittest.TestCase):
                 "input_cost_per_token_above_200k_tokens": 0.000004,
                 "output_cost_per_token_above_200k_tokens": 0.000012,
                 "cache_read_input_token_cost_above_200k_tokens": 0.0000006,
+                "input_cost_per_token_above_199999_tokens": 0.000004,
+                "output_cost_per_token_above_199999_tokens": 0.000012,
+                "cache_read_input_token_cost_above_199999_tokens": 0.0000006,
             },
         )
         self.assert_fields(
@@ -240,6 +285,9 @@ class OfficialPricingRegressionTests(unittest.TestCase):
                 "input_cost_per_token_above_200k_tokens": 0.000004,
                 "output_cost_per_token_above_200k_tokens": 0.000012,
                 "cache_read_input_token_cost_above_200k_tokens": 0.000001,
+                "input_cost_per_token_above_199999_tokens": 0.000004,
+                "output_cost_per_token_above_199999_tokens": 0.000012,
+                "cache_read_input_token_cost_above_199999_tokens": 0.000001,
             },
         )
 
@@ -268,17 +316,21 @@ class OfficialPricingRegressionTests(unittest.TestCase):
             {"input_cost_per_token": 0.0000025, "output_cost_per_token": 0.000010},
         )
 
-    def test_gpt_5_5_pro_has_no_cache_discount_at_either_tier(self) -> None:
+    def test_gpt_5_5_pro_has_no_cache_discount_or_unverified_tier(self) -> None:
         expected = {
             "input_cost_per_token": 0.000030,
             "output_cost_per_token": 0.000180,
             "cache_read_input_token_cost": 0.000030,
-            "input_cost_per_token_above_272k_tokens": 0.000060,
-            "output_cost_per_token_above_272k_tokens": 0.000270,
-            "cache_read_input_token_cost_above_272k_tokens": 0.000060,
         }
-        self.assert_fields("gpt-5.5-pro", expected)
-        self.assert_fields("gpt-5.5-pro-2026-04-23", expected)
+        tier_fields = (
+            "input_cost_per_token_above_272k_tokens",
+            "output_cost_per_token_above_272k_tokens",
+            "cache_read_input_token_cost_above_272k_tokens",
+        )
+        for model in ("gpt-5.5-pro", "gpt-5.5-pro-2026-04-23"):
+            self.assert_fields(model, expected)
+            for field in tier_fields:
+                self.assertNotIn(field, self.catalog[model])
 
     def test_deepseek_time_of_use_is_preserved(self) -> None:
         for model in ("deepseek-v4-flash", "deepseek/deepseek-v4-flash"):

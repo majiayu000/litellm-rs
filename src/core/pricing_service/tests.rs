@@ -95,6 +95,31 @@ fn pricing_usage_treats_cached_tokens_as_read_fallback() {
 }
 
 #[test]
+fn provider_pricing_xai_long_context_is_inclusive_at_200k() {
+    let service = PricingService::with_embedded_default().unwrap();
+
+    for (prompt_tokens, expected_cost) in [
+        (199_999, 199_999.0 * 0.000002),
+        (200_000, 200_000.0 * 0.000004),
+        (200_001, 200_001.0 * 0.000004),
+    ] {
+        for model in ["grok-4.5", "grok-4.6"] {
+            let cost = service
+                .calculate_loaded_usage_cost_for_provider(
+                    "xai",
+                    model,
+                    &PricingUsage::new(prompt_tokens, 0),
+                )
+                .unwrap();
+            assert!(
+                (cost.total_cost - expected_cost).abs() < 1e-12,
+                "{model} at {prompt_tokens}"
+            );
+        }
+    }
+}
+
+#[test]
 fn provider_pricing_charges_cache_creation_and_read_separately() {
     let service = PricingService::new(None);
     let mut model_info = LiteLLMModelInfo {

@@ -36,12 +36,32 @@ SOURCE_URL_PATTERN = re.compile(
     r"^https://raw\.githubusercontent\.com/BerriAI/litellm/"
     r"(?P<commit>[0-9a-f]{40})/model_prices_and_context_window\.json$"
 )
-NON_MODEL_KEYS = frozenset(("fallback_generalizations", "sample_spec"))
+NON_MODEL_KEYS = frozenset(("_metadata", "fallback_generalizations", "sample_spec"))
 
 MISTRAL_SOURCE = "https://docs.mistral.ai/inference/pricing"
 COHERE_SOURCE = "https://docs.cohere.com/changelog/command-gets-refreshed"
 GEMINI_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
 OPENAI_SOURCE = "https://developers.openai.com/api/docs/models/gpt-5.5-pro"
+XAI_SOURCE = "https://docs.x.ai/developers/pricing"
+GPT_PRO_TIER_FIELDS = (
+    "input_cost_per_token_above_272k_tokens",
+    "output_cost_per_token_above_272k_tokens",
+    "cache_read_input_token_cost_above_272k_tokens",
+)
+GEMINI_BATCH_FIELDS = (
+    "input_cost_per_token_batches",
+    "output_cost_per_token_batches",
+    "cache_read_input_token_cost_batches",
+)
+OFFICIAL_OVERRIDE_REMOVALS = {
+    "gpt-5.5-pro": GPT_PRO_TIER_FIELDS,
+    "gpt-5.5-pro-2026-04-23": GPT_PRO_TIER_FIELDS,
+    "gemini-3.6-flash": GEMINI_BATCH_FIELDS,
+    "gemini-3.7-flash": GEMINI_BATCH_FIELDS,
+    "gemini/gemini-3.6-flash": GEMINI_BATCH_FIELDS,
+    "gemini/gemini-3.7-flash": GEMINI_BATCH_FIELDS,
+}
+FORBIDDEN_PRICING_FIELDS = OFFICIAL_OVERRIDE_REMOVALS
 
 # These rows intentionally override upstream or compatibility-overlay values
 # when an official first-party source is newer or more expressive. Keep this
@@ -119,19 +139,52 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.000030,
         "output_cost_per_token": 0.000180,
         "cache_read_input_token_cost": 0.000030,
-        "input_cost_per_token_above_272k_tokens": 0.000060,
-        "output_cost_per_token_above_272k_tokens": 0.000270,
-        "cache_read_input_token_cost_above_272k_tokens": 0.000060,
         "source": OPENAI_SOURCE,
     },
     "gpt-5.5-pro-2026-04-23": {
         "input_cost_per_token": 0.000030,
         "output_cost_per_token": 0.000180,
         "cache_read_input_token_cost": 0.000030,
-        "input_cost_per_token_above_272k_tokens": 0.000060,
-        "output_cost_per_token_above_272k_tokens": 0.000270,
-        "cache_read_input_token_cost_above_272k_tokens": 0.000060,
         "source": OPENAI_SOURCE,
+    },
+    # Both runtime tier consumers use `prompt_tokens > threshold`. The raw
+    # 199999 threshold therefore encodes xAI's documented inclusive >=200k
+    # boundary; the upstream 200k fields remain for source-schema fidelity.
+    "xai/grok-4.5": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "cache_read_input_token_cost": 0.0000003,
+        "input_cost_per_token_above_199999_tokens": 0.000004,
+        "output_cost_per_token_above_199999_tokens": 0.000012,
+        "cache_read_input_token_cost_above_199999_tokens": 0.0000006,
+        "input_cost_per_token_above_200k_tokens": 0.000004,
+        "output_cost_per_token_above_200k_tokens": 0.000012,
+        "cache_read_input_token_cost_above_200k_tokens": 0.0000006,
+        "source": XAI_SOURCE,
+    },
+    "xai/grok-4.5-latest": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "cache_read_input_token_cost": 0.0000003,
+        "input_cost_per_token_above_199999_tokens": 0.000004,
+        "output_cost_per_token_above_199999_tokens": 0.000012,
+        "cache_read_input_token_cost_above_199999_tokens": 0.0000006,
+        "input_cost_per_token_above_200k_tokens": 0.000004,
+        "output_cost_per_token_above_200k_tokens": 0.000012,
+        "cache_read_input_token_cost_above_200k_tokens": 0.0000006,
+        "source": XAI_SOURCE,
+    },
+    "xai/grok-4.6": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "cache_read_input_token_cost": 0.0000005,
+        "input_cost_per_token_above_199999_tokens": 0.000004,
+        "output_cost_per_token_above_199999_tokens": 0.000012,
+        "cache_read_input_token_cost_above_199999_tokens": 0.000001,
+        "input_cost_per_token_above_200k_tokens": 0.000004,
+        "output_cost_per_token_above_200k_tokens": 0.000012,
+        "cache_read_input_token_cost_above_200k_tokens": 0.000001,
+        "source": XAI_SOURCE,
     },
 }
 
@@ -205,12 +258,18 @@ OFFICIAL_PRICING_CONTRACTS: dict[str, dict[str, Any]] = {
         "output_cost_per_token": 0.00000066,
         "cache_read_input_token_cost": 0.000000007,
     },
-    **OFFICIAL_OVERRIDE_PATCHES,
 }
+for model, patch in OFFICIAL_OVERRIDE_PATCHES.items():
+    OFFICIAL_PRICING_CONTRACTS.setdefault(model, {}).update(patch)
 
 
 def is_metadata_key(key: str) -> bool:
-    return key in NON_MODEL_KEYS or key.startswith("_") or "example" in key
+    return key in NON_MODEL_KEYS
+
+
+def validate_control_block(key: str, value: Any) -> None:
+    if not isinstance(value, dict):
+        raise SystemExit(f"control block {key!r} must be a JSON object")
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -267,6 +326,7 @@ def model_entries(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     entries: dict[str, dict[str, Any]] = {}
     for key, value in data.items():
         if is_metadata_key(key):
+            validate_control_block(key, value)
             continue
         if not isinstance(value, dict):
             raise SystemExit(f"pricing entry {key!r} must be a JSON object")
@@ -392,18 +452,27 @@ def validate_official_contracts(entries: dict[str, dict[str, Any]]) -> None:
         if entry is None:
             raise SystemExit(f"official pricing contract is missing exact model ID {model!r}")
         validate_contract_entry(model, entry, contract)
+        validate_forbidden_fields(model, entry)
 
     for model in ("deepseek-v4-flash", "deepseek/deepseek-v4-flash"):
         if "time_of_use_pricing" not in entries[model]:
             raise SystemExit(f"official pricing contract {model!r} is missing time_of_use_pricing")
 
 
+def validate_forbidden_fields(model: str, entry: dict[str, Any]) -> None:
+    for field in FORBIDDEN_PRICING_FIELDS.get(model, ()):
+        if field in entry:
+            raise SystemExit(f"official pricing contract {model!r} contains forbidden field {field}")
+
+
 def load_overlay_entries(paths: list[Path]) -> dict[str, dict[str, Any]]:
     overlay: dict[str, dict[str, Any]] = {}
     for path in paths:
         if not path.exists():
-            continue
+            raise SystemExit(f"declared overlay file {path} does not exist")
         data = load_json(path)
+        for key in NON_MODEL_KEYS & data.keys():
+            validate_control_block(key, data[key])
         metadata = data.get("_metadata", {})
         if not isinstance(metadata, dict):
             raise SystemExit(f"_metadata in {path} must be a JSON object")
@@ -450,6 +519,8 @@ def apply_official_overrides(
                 f"official override target {model!r} is missing from source and compatibility overlay"
             )
         entry = dict(original)
+        for field in OFFICIAL_OVERRIDE_REMOVALS.get(model, ()):
+            entry.pop(field, None)
         entry.update(patch)
         patched[model] = entry
     return patched
