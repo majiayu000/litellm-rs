@@ -1,4 +1,5 @@
 use super::model_id::ModelIdRef;
+use std::collections::{HashMap, HashSet};
 
 #[test]
 fn model_id_ref_exposes_an_unqualified_id_losslessly() {
@@ -54,4 +55,33 @@ fn model_id_ref_preserves_raw_case_and_delimiters() {
     assert_eq!(parsed.raw(), raw);
     assert_eq!(parsed.provider(), Some("OPENAI"));
     assert_eq!(parsed.model(), "/Organization/Model");
+}
+
+#[test]
+fn model_id_ref_hash_matches_lossless_equality() {
+    let raw = ModelIdRef::parse("gpt-5.5");
+    let raw_again = ModelIdRef::parse("gpt-5.5");
+    let qualified = ModelIdRef::parse("openai/gpt-5.5");
+    let native_slash = ModelIdRef::parse("BAAI/bge-m3");
+    let native_slash_again = ModelIdRef::parse("BAAI/bge-m3");
+
+    let mut set = HashSet::new();
+    assert!(set.insert(raw));
+    assert!(!set.insert(raw_again));
+    assert!(set.insert(qualified));
+    assert!(set.insert(native_slash));
+    assert!(!set.insert(native_slash_again));
+    assert_eq!(set.len(), 3);
+
+    let mut map = HashMap::new();
+    map.insert(raw, "raw");
+    map.insert(qualified, "qualified");
+    map.insert(native_slash, "native-slash");
+
+    assert_eq!(map.get(&raw_again), Some(&"raw"));
+    assert_eq!(
+        map.get(&ModelIdRef::parse("openai/gpt-5.5")),
+        Some(&"qualified")
+    );
+    assert_eq!(map.get(&native_slash_again), Some(&"native-slash"));
 }
