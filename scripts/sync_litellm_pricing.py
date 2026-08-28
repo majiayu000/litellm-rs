@@ -22,6 +22,8 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from model_catalog_authority import build_catalog_authority
+
 
 DEFAULT_SOURCE_COMMIT = "ec94a1f82aa9066dbf205773abf71595d3208388"
 DEFAULT_SOURCE_URL = (
@@ -29,6 +31,8 @@ DEFAULT_SOURCE_URL = (
     f"{DEFAULT_SOURCE_COMMIT}/model_prices_and_context_window.json"
 )
 DEFAULT_OUTPUT = Path("config/model_prices_extended.json")
+DEFAULT_CATALOG_DECISIONS = Path("config/model_catalog_decisions.json")
+DEFAULT_CATALOG_AUTHORITY = Path("config/model_catalog_authority.json")
 DEFAULT_MIN_MODELS = 2500
 TOKEN_LIMIT_FIELDS = ("max_tokens", "max_input_tokens", "max_output_tokens")
 SOURCE_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -592,6 +596,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-commit", default=DEFAULT_SOURCE_COMMIT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
+        "--catalog-decisions", type=Path, default=DEFAULT_CATALOG_DECISIONS
+    )
+    parser.add_argument(
+        "--catalog-authority-output", type=Path, default=DEFAULT_CATALOG_AUTHORITY
+    )
+    parser.add_argument(
         "--overlay-file",
         action="append",
         type=Path,
@@ -631,6 +641,25 @@ def main() -> int:
     merged_entries = model_entries(data)
     validate_entries(merged_entries, args.min_models)
     validate_official_contracts(merged_entries)
+    decisions = load_json(args.catalog_decisions)
+    catalog_authority = build_catalog_authority(merged_entries, decisions)
+    authority_metadata = catalog_authority["_metadata"]
+    data["_metadata"].update(
+        {
+            "catalog_decision_revision": authority_metadata["revision"],
+            "catalog_decision_source_sha256": authority_metadata[
+                "decision_source_sha256"
+            ],
+            "catalog_authority_sha256": authority_metadata["classification_sha256"],
+            "catalog_authority_entry_count": authority_metadata["total_entry_count"],
+            "catalog_authority_enforced_providers": authority_metadata[
+                "enforced_providers"
+            ],
+            "catalog_authority_provider_coverage": authority_metadata[
+                "provider_coverage"
+            ],
+        }
+    )
 
     if args.check:
         if not args.output.exists():
@@ -643,13 +672,25 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+        if not args.catalog_authority_output.exists():
+            print(f"{args.catalog_authority_output} does not exist", file=sys.stderr)
+            return 1
+        current_authority = load_json(args.catalog_authority_output)
+        if current_authority != catalog_authority:
+            print(
+                f"{args.catalog_authority_output} is out of sync with {args.catalog_decisions}",
+                file=sys.stderr,
+            )
+            return 1
     else:
+        write_catalog(args.catalog_authority_output, catalog_authority)
         write_catalog(args.output, data)
 
     print(
         (
             f"validated {len(source_entries)} upstream LiteLLM pricing entries "
             f"and {overlay_count} local compatibility entries from {args.source_url}"
+            f"; classified {authority_metadata['total_entry_count']} exact pricing rows"
         ),
         file=sys.stderr,
     )

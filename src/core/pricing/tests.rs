@@ -6,8 +6,18 @@ use std::path::{Path, PathBuf};
 fn parse_litellm_pricing_json_filters_metadata_entries() {
     let content = r#"{
             "sample_spec": {"this": "is not a model"},
-            "_comment": {"ignored": true},
-            "provider_example_model": {"ignored": true},
+            "_metadata": {"source": "upstream"},
+            "fallback_generalizations": {"gpt-test": "gpt"},
+            "_comment": {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000004,
+                "litellm_provider": "test"
+            },
+            "provider_example_model": {
+                "input_cost_per_token": 0.000005,
+                "output_cost_per_token": 0.000006,
+                "litellm_provider": "test"
+            },
             "gpt-test": {
                 "max_tokens": 4096,
                 "input_cost_per_token": 0.000001,
@@ -19,9 +29,22 @@ fn parse_litellm_pricing_json_filters_metadata_entries() {
 
     let parsed = parse_litellm_pricing_json(content).unwrap();
 
-    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed.len(), 3);
     assert_eq!(parsed["gpt-test"].litellm_provider, "openai");
     assert_eq!(parsed["gpt-test"].input_cost_per_token, Some(0.000001));
+    assert!(parsed.contains_key("_comment"));
+    assert!(parsed.contains_key("provider_example_model"));
+}
+
+#[test]
+fn parse_litellm_pricing_json_rejects_malformed_exact_control_blocks() {
+    for key in ["_metadata", "fallback_generalizations", "sample_spec"] {
+        let content = format!(r#"{{"{key}": []}}"#);
+        assert!(
+            parse_litellm_pricing_json(&content).is_err(),
+            "{key} must be an object"
+        );
+    }
 }
 
 #[test]

@@ -194,7 +194,668 @@
       "yi-large",
       "yi-medium"
     ],
-    "total_model_count": 3474
+    "total_model_count": 3474,
+    "catalog_decision_revision": "classification-1241-v1",
+    "catalog_decision_source_sha256": "e6f047d1f6c2d644dd236bc0b51bbf4a82b0354a56c89b00eb68c816bce6e032",
+    "catalog_authority_sha256": "57d6bc1901811975420c2cfb43e208e2b578dd9dd99d6cd3cb379980d67bf1a0",
+    "catalog_authority_entry_count": 3474,
+    "catalog_authority_enforced_providers": [
+      "azure",
+      "azure_ai",
+      "openai"
+    ],
+    "catalog_authority_provider_coverage": {
+      "01ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "agentcore": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "ai21": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 12
+      },
+      "aiml": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 13
+      },
+      "amazon_nova": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 4
+      },
+      "anthropic": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 28
+      },
+      "anyscale": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 12
+      },
+      "apiserpent": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "assemblyai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "aws_polly": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 4
+      },
+      "azure": {
+        "callable": 0,
+        "pricing_only": 221,
+        "unreviewed": 0
+      },
+      "azure_ai": {
+        "callable": 37,
+        "pricing_only": 0,
+        "unreviewed": 75
+      },
+      "azure_text": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 3
+      },
+      "baseten": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 11
+      },
+      "bedrock": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 269
+      },
+      "bedrock_converse": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 151
+      },
+      "bedrock_mantle": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 15
+      },
+      "bing_grounding": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "black_forest_labs": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 8
+      },
+      "cerebras": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 7
+      },
+      "chatgpt": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 10
+      },
+      "cloudflare": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 30
+      },
+      "codestral": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "cognition": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 3
+      },
+      "cohere": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 35
+      },
+      "cohere_chat": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "crusoe": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 7
+      },
+      "darkbloom": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "dashscope": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 45
+      },
+      "databricks": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 49
+      },
+      "dataforseo": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "deepgram": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 36
+      },
+      "deepinfra": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 135
+      },
+      "deepseek": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 15
+      },
+      "duckduckgo": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "elevenlabs": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 4
+      },
+      "exa_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "fal_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 71
+      },
+      "featherless_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "firecrawl": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "fireworks_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 314
+      },
+      "fireworks_ai-embedding-models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 7
+      },
+      "friendliai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "gemini": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 84
+      },
+      "gigachat": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 6
+      },
+      "github_copilot": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 33
+      },
+      "gmi": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 17
+      },
+      "google_pse": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "gradient_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 13
+      },
+      "groq": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 27
+      },
+      "heroku": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 4
+      },
+      "hyperbolic": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 16
+      },
+      "inception": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "jina_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "lambda_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 20
+      },
+      "lemonade": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 5
+      },
+      "libertai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 12
+      },
+      "linkup": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "llamagate": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 16
+      },
+      "meta": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 3
+      },
+      "meta_llama": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 4
+      },
+      "minimax": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 21
+      },
+      "mistral": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 105
+      },
+      "moonshot": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 29
+      },
+      "morph": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "nebius": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 30
+      },
+      "nimble": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "nlp_cloud": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "novita": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 135
+      },
+      "nscale": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 16
+      },
+      "nvidia_nim": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 3
+      },
+      "oci": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 44
+      },
+      "ollama": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 29
+      },
+      "openai": {
+        "callable": 142,
+        "pricing_only": 72,
+        "unreviewed": 12
+      },
+      "openrouter": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 100
+      },
+      "ovhcloud": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 15
+      },
+      "palm": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 6
+      },
+      "parallel_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "perplexity": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 47
+      },
+      "pinstripes": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 6
+      },
+      "publicai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 9
+      },
+      "recraft": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "reducto": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "replicate": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 40
+      },
+      "runwayml": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 14
+      },
+      "sagemaker": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 6
+      },
+      "sambanova": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 19
+      },
+      "sarvam": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "scaleway": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 17
+      },
+      "scx-ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "searxng": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "serper": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "snowflake": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 37
+      },
+      "soniox": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "stability": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 25
+      },
+      "tavily": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "tencent": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "tensormesh": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 10
+      },
+      "text-completion-codestral": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "text-completion-inception": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "text-completion-openai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 6
+      },
+      "tinyfish": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "together_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 67
+      },
+      "v0": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 3
+      },
+      "vercel_ai_gateway": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 101
+      },
+      "vertex_ai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 28
+      },
+      "vertex_ai-ai21_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 5
+      },
+      "vertex_ai-anthropic_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 37
+      },
+      "vertex_ai-deepseek_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 3
+      },
+      "vertex_ai-embedding-models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 10
+      },
+      "vertex_ai-image-models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 8
+      },
+      "vertex_ai-language-models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 38
+      },
+      "vertex_ai-llama_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 11
+      },
+      "vertex_ai-minimax_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "vertex_ai-mistral_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 19
+      },
+      "vertex_ai-moonshot_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "vertex_ai-openai_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 3
+      },
+      "vertex_ai-qwen_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 4
+      },
+      "vertex_ai-text-models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "vertex_ai-video-models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 7
+      },
+      "vertex_ai-zai_models": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "volcengine": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 12
+      },
+      "voyage": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 32
+      },
+      "wandb": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 35
+      },
+      "watsonx": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 29
+      },
+      "xai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 36
+      },
+      "xiaomi_mimo": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 2
+      },
+      "you_com": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 1
+      },
+      "zai": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 14
+      },
+      "zhipu": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 25
+      }
+    }
   },
   "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0": {
     "deprecation_date": "2026-09-30",

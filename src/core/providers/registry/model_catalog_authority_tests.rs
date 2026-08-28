@@ -1,0 +1,233 @@
+use super::model_catalog_authority::{
+    CatalogAuthority, CatalogClassification, CatalogDecision, CatalogEndpoint, CatalogResolution,
+};
+use crate::core::types::model::ProviderCapability;
+
+fn authority_json() -> String {
+    serde_json::json!({
+        "_metadata": {
+            "schema_version": 1,
+            "revision": "test-ledger-1",
+            "decision_source_sha256": "a".repeat(64),
+            "pricing_universe_sha256": "b".repeat(64),
+            "classification_sha256": "c".repeat(64),
+            "total_entry_count": 5,
+            "enforced_providers": ["azure", "azure_ai", "openai"],
+            "provider_coverage": {
+                "openai": {"callable": 1, "pricing_only": 1, "unreviewed": 0},
+                "other": {"callable": 0, "pricing_only": 0, "unreviewed": 1},
+                "together_ai": {"callable": 2, "pricing_only": 0, "unreviewed": 0}
+            }
+        },
+        "provider_aliases": {
+            "openai": [],
+            "other": [],
+            "together_ai": ["together"]
+        },
+        "entries": [
+            {
+                "provider": "openai",
+                "pricing_key": "gpt-test",
+                "decision": "callable",
+                "evidence_sources": ["review"],
+                "catalog_model_id": "gpt-test",
+                "endpoints": ["chat_completions"],
+                "capabilities": ["chat_completion", "tool_calling"],
+                "supported_parameters": ["messages", "tools"],
+                "aliases": ["gpt-test-latest"]
+            },
+            {
+                "provider": "openai",
+                "pricing_key": "openai/container",
+                "decision": "pricing_only",
+                "evidence_sources": ["review"],
+                "reason": "tool_or_session_charge"
+            },
+            {
+                "provider": "other",
+                "pricing_key": "other/model",
+                "decision": "unreviewed",
+                "evidence_sources": ["review"]
+            },
+            {
+                "provider": "together_ai",
+                "pricing_key": "together_ai/BAAI/bge-base-en-v1.5",
+                "decision": "callable",
+                "evidence_sources": ["review"],
+                "catalog_model_id": "BAAI/bge-base-en-v1.5",
+                "endpoints": ["embeddings"],
+                "capabilities": ["embeddings"],
+                "supported_parameters": ["input"],
+                "aliases": []
+            },
+            {
+                "provider": "together_ai",
+                "pricing_key": "together_ai/baai/bge-base-en-v1.5",
+                "decision": "callable",
+                "evidence_sources": ["review"],
+                "catalog_model_id": "baai/bge-base-en-v1.5",
+                "aliases": []
+            }
+        ]
+    })
+    .to_string()
+}
+
+#[test]
+fn exact_provider_scoped_resolution_distinguishes_all_three_decisions() {
+    let authority = CatalogAuthority::from_json(&authority_json()).expect("valid authority");
+
+    let CatalogResolution::Callable(model) = authority.resolve_model("openai", "gpt-test") else {
+        panic!("gpt-test should be callable");
+    };
+    assert_eq!(model.catalog_model_id(), "gpt-test");
+    assert_eq!(
+        model.explicit_endpoints(),
+        Some(&[CatalogEndpoint::ChatCompletions][..])
+    );
+    assert!(
+        model
+            .explicit_capabilities()
+            .expect("explicit capabilities")
+            .contains(&ProviderCapability::ToolCalling)
+    );
+    assert_eq!(
+        model.explicit_supported_parameters(),
+        Some(&["messages".to_string(), "tools".to_string()][..])
+    );
+    assert_eq!(
+        authority.classification("openai", "gpt-test"),
+        CatalogClassification::Callable
+    );
+
+    assert_eq!(
+        authority.resolve_model("openai", "openai/container"),
+        CatalogResolution::PricingOnly
+    );
+    assert_eq!(
+        authority.resolve_model("other", "other/model"),
+        CatalogResolution::Unreviewed
+    );
+    assert_eq!(
+        authority.resolve_model("openai", "fake-gpt-test-2026-08-28"),
+        CatalogResolution::Unknown
+    );
+}
+
+#[test]
+fn provider_qualification_is_bounded_and_native_slash_is_lossless() {
+    let authority = CatalogAuthority::from_json(&authority_json()).expect("valid authority");
+
+    for model in [
+        "BAAI/bge-base-en-v1.5",
+        "together_ai/BAAI/bge-base-en-v1.5",
+        "together/BAAI/bge-base-en-v1.5",
+    ] {
+        let CatalogResolution::Callable(resolved) = authority.resolve_model("together_ai", model)
+        else {
+            panic!("{model} should resolve exactly");
+        };
+        assert_eq!(resolved.catalog_model_id(), "BAAI/bge-base-en-v1.5");
+    }
+
+    assert_eq!(
+        authority.resolve_model("together_ai", "openai/BAAI/bge-base-en-v1.5"),
+        CatalogResolution::Unknown
+    );
+    assert_eq!(
+        authority.resolve_model("together_ai", "together/together_ai/BAAI/bge-base-en-v1.5"),
+        CatalogResolution::Unknown
+    );
+}
+
+#[test]
+fn model_ids_are_case_sensitive_without_lowercase_collision_loss() {
+    let authority = CatalogAuthority::from_json(&authority_json()).expect("valid authority");
+
+    let CatalogResolution::Callable(upper) =
+        authority.resolve_model("together_ai", "BAAI/bge-base-en-v1.5")
+    else {
+        panic!("upper-case native ID should resolve");
+    };
+    let CatalogResolution::Callable(lower) =
+        authority.resolve_model("together_ai", "baai/bge-base-en-v1.5")
+    else {
+        panic!("lower-case native ID should resolve");
+    };
+    assert_ne!(upper.catalog_model_id(), lower.catalog_model_id());
+    assert_eq!(
+        authority.explicit_capabilities("together_ai", "baai/bge-base-en-v1.5"),
+        None
+    );
+    assert_eq!(
+        authority.resolve_model("together_ai", "BaAi/bge-base-en-v1.5"),
+        CatalogResolution::Unknown
+    );
+}
+
+#[test]
+fn unreviewed_rows_remain_exactly_price_addressable_but_have_no_capabilities() {
+    let authority = CatalogAuthority::from_json(&authority_json()).expect("valid authority");
+
+    assert_eq!(
+        authority.decision_for_pricing_key("other", "other/model"),
+        Some(CatalogDecision::Unreviewed)
+    );
+    assert_eq!(authority.decision_for_pricing_key("other", "model"), None);
+    assert_eq!(
+        authority.resolve_model("other", "other/model"),
+        CatalogResolution::Unreviewed
+    );
+}
+
+#[test]
+fn strict_schema_and_exact_collisions_fail_closed() {
+    let with_unknown = authority_json().replace(
+        "\"revision\":\"test-ledger-1\"",
+        "\"revision\":\"test-ledger-1\",\"future\":true",
+    );
+    assert!(CatalogAuthority::from_json(&with_unknown).is_err());
+
+    let duplicate = authority_json().replace(
+        "\"pricing_key\":\"openai/container\"",
+        "\"pricing_key\":\"gpt-test\"",
+    );
+    let error = CatalogAuthority::from_json(&duplicate).expect_err("duplicate must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate pricing classification")
+    );
+}
+
+#[test]
+fn embedded_authority_enforces_reviewed_and_unreviewed_rows_without_inference() {
+    let authority = CatalogAuthority::from_embedded().expect("embedded authority must validate");
+
+    assert_eq!(
+        authority.classification("openai", "gpt-4o-2024-05-13"),
+        CatalogClassification::Callable
+    );
+    assert_eq!(
+        authority.classification("openai", "chatgpt-4o-latest"),
+        CatalogClassification::PricingOnly
+    );
+    assert_eq!(
+        authority.classification("azure_ai", "azure_ai/FW-DeepSeek-V4-Pro"),
+        CatalogClassification::Unreviewed
+    );
+    assert_eq!(
+        authority.classification("azure_ai", "FW-DeepSeek-V4-Pro"),
+        CatalogClassification::Unknown,
+        "an unreviewed pricing key must not invent a catalog model identity"
+    );
+    assert_eq!(
+        authority.explicit_capabilities("openai", "gpt-4o-2024-05-13"),
+        None,
+        "Callable does not imply endpoint or capability metadata"
+    );
+    assert_eq!(
+        authority.resolve_model("azure_ai", "azure_ai/Cohere-embed-v3-english"),
+        authority.resolve_model("azure-ai", "Cohere-embed-v3-english")
+    );
+}
