@@ -1,13 +1,17 @@
 //! Chat completions endpoint
 
+use crate::core::models::openai::continuation::{
+    ChatCompletionRequestWithExtensions, ChatCompletionResponseWithExtensions,
+};
 use crate::core::models::openai::{
     ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ContentLogprob, Logprobs, Tool,
     ToolChoice, TopLogprob, Usage,
 };
-use crate::core::providers::ProviderError;
+use crate::core::providers::{ChatContinuationRequest, ProviderError};
 use crate::core::streaming::types::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
 };
+use crate::core::types::anthropic_continuation::ChatMessageExtensions;
 use crate::core::types::{
     self,
     chat::ChatRequest as CoreChatRequest,
@@ -41,38 +45,69 @@ mod chat_streaming;
 pub async fn chat_completions(
     state: web::Data<AppState>,
     req: HttpRequest,
-    request: web::Json<ChatCompletionRequest>,
+    request: web::Json<ChatCompletionRequestWithExtensions>,
 ) -> ActixResult<HttpResponse> {
-    info!("Chat completion request for model: {}", request.model);
+    info!(
+        "Chat completion request for model: {}",
+        request.legacy().model
+    );
 
     let context = match super::token_policy::shared_request_context_with_api_key_token_limit(&req) {
         Ok(context) => context,
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
 
-    if let Err(e) = RequestValidator::validate_chat_completion_request(
-        &request.model,
-        &request.messages,
-        request.max_tokens,
-        request.temperature,
+    if let Err(e) = RequestValidator::validate_chat_completion_request_with_extensions(
+        &request.legacy().model,
+        &request.legacy().messages,
+        request.message_extensions(),
+        request.legacy().max_tokens,
+        request.legacy().temperature,
     ) {
         warn!("Invalid chat completion request: {}", e);
         return Ok(openai_errors::validation_error(e.to_string()));
     }
     if let Err(error) = super::context::enforce_api_key_model_and_token_limits(
         &req,
-        &request.model,
-        super::token_policy::requested_chat_output_token_limit(&request),
+        &request.legacy().model,
+        super::token_policy::requested_chat_output_token_limit(request.legacy()),
     ) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
-    let request = Arc::new(request.into_inner());
+    let typed = request.into_inner();
+    let opt_in = typed.has_continuation()
+        || req
+            .headers()
+            .get("x-litellm-anthropic-continuation")
+            .is_some_and(|value| value == "v1");
+    if let Some(value) = req.headers().get("x-litellm-anthropic-continuation")
+        && value != "v1"
+    {
+        return Ok(openai_errors::validation_error(
+            "x-litellm-anthropic-continuation must equal v1",
+        ));
+    }
+    let (legacy, extensions) = typed.into_parts();
+    let request = Arc::new(legacy);
 
     if request.stream.unwrap_or(false) {
+        if opt_in {
+            return Ok(openai_errors::validation_error(
+                "Anthropic continuation streaming is tracked by #1237 and is not yet supported",
+            ));
+        }
         chat_streaming::handle_streaming_chat_completion(state.get_ref(), request, context).await
     } else {
-        match handle_chat_completion_with_shared_state(state.get_ref(), request, context).await {
+        match handle_chat_completion_with_extensions(
+            state.get_ref(),
+            request,
+            context,
+            extensions,
+            opt_in,
+        )
+        .await
+        {
             Ok(response) => Ok(HttpResponse::Ok().json(response)),
             Err(e) => {
                 error!("Chat completion error: {}", e);
@@ -97,25 +132,50 @@ pub async fn handle_chat_completion_with_shared_state(
     context: SharedRequestContext,
 ) -> Result<ChatCompletionResponse, GatewayError> {
     crate::server::guardrails::check_chat_input(state, request.as_ref()).await?;
-    handle_chat_completion_internal(state, request, context).await
+    let extensions = vec![ChatMessageExtensions::new(); request.messages.len()];
+    Ok(
+        handle_chat_completion_internal(state, request, context, extensions, false)
+            .await?
+            .into_parts()
+            .0,
+    )
+}
+
+pub(super) async fn handle_chat_completion_with_extensions(
+    state: &AppState,
+    request: Arc<ChatCompletionRequest>,
+    context: SharedRequestContext,
+    extensions: Vec<ChatMessageExtensions>,
+    opt_in: bool,
+) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
+    crate::server::guardrails::check_chat_input(state, request.as_ref()).await?;
+    handle_chat_completion_internal(state, request, context, extensions, opt_in).await
 }
 
 async fn handle_chat_completion_internal(
     state: &AppState,
     request: Arc<ChatCompletionRequest>,
     context: SharedRequestContext,
-) -> Result<ChatCompletionResponse, GatewayError> {
+    extensions: Vec<ChatMessageExtensions>,
+    opt_in: bool,
+) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
     let unified_router = &state.unified_router;
     let requested_model = request.model.clone();
-    let core_request = build_core_chat_request(request.as_ref(), requested_model, false)?;
-    if let Some(cached) =
-        super::response_cache::lookup_chat(state, request.as_ref(), context.as_ref()).await?
+    let core_request = ChatContinuationRequest::new(
+        build_core_chat_request(request.as_ref(), requested_model, false)?,
+        extensions,
+    )?;
+    if !opt_in
+        && let Some(cached) =
+            super::response_cache::lookup_chat(state, request.as_ref(), context.as_ref()).await?
     {
         super::response_cache::ensure_chat_cache_pricing_gate(state, request.as_ref())?;
         crate::server::guardrails::check_chat_output(state, &cached).await?;
-        return Ok(cached);
+        let extensions = vec![ChatMessageExtensions::new(); cached.choices.len()];
+        return ChatCompletionResponseWithExtensions::from_parts(cached, extensions)
+            .map_err(GatewayError::internal);
     }
-    let requested_model = core_request.model.clone();
+    let requested_model = core_request.request().model.clone();
     let callback = CallbackLifecycle::new(
         &state.callbacks,
         state.budgeted.pricing(),
@@ -155,17 +215,20 @@ async fn handle_chat_completion_internal(
                     &provider,
                     &selected_model,
                 );
+                let (legacy_request, extensions) = core_request.into_parts();
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
                     &provider_name,
                     &selected_model,
-                    core_request.clone(),
+                    legacy_request,
                 )?;
+                let request_for_provider =
+                    ChatContinuationRequest::new(request_for_provider, extensions)?;
                 let request_for_budget =
                     super::spend::ChatCompletionBudgetRequest::from(original_request.as_ref())
                         .with_output_limits(
-                            request_for_provider.max_tokens,
-                            request_for_provider.max_completion_tokens,
+                            request_for_provider.request().max_tokens,
+                            request_for_provider.request().max_completion_tokens,
                         );
                 let provider_context = context.as_ref().clone();
                 let reserve_pricing_service = pricing_service.clone();
@@ -208,13 +271,18 @@ async fn handle_chat_completion_internal(
                                 callback_pricing_provider,
                                 callback_pricing_model,
                             );
-                            provider.chat_completion(request_for_provider, provider_context)
+                            provider.chat_completion_with_continuation(
+                                request_for_provider,
+                                provider_context,
+                                opt_in,
+                            )
                         },
                         |response, reservations, budget| {
                             let (budget_reservation, key_budget_reservation) =
                                 reservations.into_parts();
                             async move {
                                 let tokens = response
+                                    .response()
                                     .usage
                                     .as_ref()
                                     .map(|usage| u64::from(usage.total_tokens))
@@ -227,7 +295,7 @@ async fn handle_chat_completion_internal(
                                         (
                                             budget.provider(),
                                             budget.model(),
-                                            response.usage.as_ref(),
+                                            response.response().usage.as_ref(),
                                         ),
                                         (&settle_pricing_provider, &settle_pricing_model),
                                         budget_reservation,
@@ -252,20 +320,23 @@ async fn handle_chat_completion_internal(
         }
     };
 
+    let (core_response, choice_extensions) = core_response.into_parts();
     let response = convert_core_chat_response(core_response);
     if let Err(error) = crate::server::guardrails::check_chat_output(state, &response).await {
         callback.fail(error.to_string(), "guardrail_output");
         return Err(error);
     }
-    if let Err(error) =
-        super::response_cache::store_chat(state, request.as_ref(), &response, context.as_ref())
-            .await
+    if !opt_in
+        && let Err(error) =
+            super::response_cache::store_chat(state, request.as_ref(), &response, context.as_ref())
+                .await
     {
         callback.fail(error.to_string(), "cache_error");
         return Err(error);
     }
     callback.complete_usage(response.usage.as_ref(), "success");
-    Ok(response)
+    ChatCompletionResponseWithExtensions::from_parts(response, choice_extensions)
+        .map_err(GatewayError::internal)
 }
 
 pub(crate) fn build_core_chat_request(

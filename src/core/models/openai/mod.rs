@@ -11,6 +11,7 @@
 //! - `helpers` - Helper implementations and Display traits
 
 pub mod audio;
+pub mod continuation;
 pub mod helpers;
 pub mod messages;
 pub mod requests;

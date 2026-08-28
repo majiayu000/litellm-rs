@@ -7,6 +7,7 @@ use crate::core::types::content::{
     AudioData, CacheControl, ContentPart, DocumentSource, ImageSource,
 };
 use crate::core::types::message::{MessageContent, MessageRole};
+use crate::core::types::thinking::{ThinkingConfig, ThinkingEffort};
 use crate::core::types::tools::{
     FunctionCall, FunctionChoice, FunctionDefinition, Tool, ToolCall, ToolChoice, ToolType,
 };
@@ -24,6 +25,79 @@ fn tool(name: &str) -> Tool {
             parameters: Some(json!({"type": "object"})),
         },
     }
+}
+
+#[test]
+fn reasoning_effort_maps_once_to_adaptive_output_config() {
+    let mut request = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    request.reasoning_effort = Some("high".to_string());
+
+    let transformed = anthropic_client()
+        .transform_chat_request(&request)
+        .expect("exact Claude 5 reasoning must be supported");
+
+    assert_eq!(transformed["thinking"]["type"], "adaptive");
+    assert_eq!(transformed["output_config"], json!({"effort": "high"}));
+    assert_eq!(
+        transformed
+            .as_object()
+            .expect("request is an object")
+            .keys()
+            .filter(|key| key.as_str() == "output_config")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
+    let client = anthropic_client();
+
+    let mut invalid = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    invalid.reasoning_effort = Some("maximum".to_string());
+    assert!(client.transform_chat_request(&invalid).is_err());
+
+    let mut conflict = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    conflict.reasoning_effort = Some("high".to_string());
+    conflict.thinking = Some(
+        ThinkingConfig::new()
+            .enabled()
+            .with_effort(ThinkingEffort::Low),
+    );
+    assert!(client.transform_chat_request(&conflict).is_err());
+
+    let mut manual = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    manual.reasoning_effort = Some("medium".to_string());
+    manual.thinking = Some(ThinkingConfig::new().enabled().with_budget(1024));
+    assert!(client.transform_chat_request(&manual).is_err());
+
+    let mut old_model = ChatRequest::new("claude-3-opus-20240229").add_user_message("solve");
+    old_model.reasoning_effort = Some("high".to_string());
+    assert!(client.transform_chat_request(&old_model).is_err());
+}
+
+#[test]
+fn claude5_legacy_function_calls_error_while_modern_tools_remain_valid() {
+    let client = anthropic_client();
+    let mut legacy = ChatRequest::new("claude-opus-5").add_user_message("weather?");
+    legacy.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: None,
+        function_call: Some(FunctionCall {
+            name: "lookup".to_string(),
+            arguments: "{}".to_string(),
+        }),
+        ..Default::default()
+    });
+    let error = client
+        .transform_chat_request(&legacy)
+        .expect_err("legacy function_call must fail");
+    assert!(error.to_string().contains("tools/tool_choice"));
+
+    let modern = ChatRequest::new("claude-opus-5")
+        .add_user_message("weather?")
+        .with_tools(vec![tool("lookup")]);
+    assert!(client.transform_chat_request(&modern).is_ok());
 }
 
 #[test]

@@ -5,12 +5,29 @@ use serde_json::{Value, json};
 use crate::core::providers::anthropic::error::anthropic_api_error;
 use crate::core::providers::anthropic::models::{ModelFeature, get_anthropic_registry};
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::providers::{ChatContinuationRequest, ChatContinuationResponse};
+use crate::core::types::anthropic_continuation::{AnthropicThinkingBlock, ChatMessageExtensions};
 use crate::core::types::chat::ChatRequest;
+use crate::core::types::message::MessageRole;
+use crate::core::types::thinking::ThinkingEffort;
 
 use super::AnthropicClient;
 
 impl AnthropicClient {
-    pub(super) fn transform_chat_request(
+    pub(crate) async fn chat_with_continuation(
+        &self,
+        envelope: ChatContinuationRequest,
+    ) -> Result<ChatContinuationResponse, ProviderError> {
+        let (request, extensions) = envelope.into_parts();
+        let tool_name_map = self.anthropic_tool_name_map_for_request(&request)?;
+        let body = self.transform_chat_request_with_extensions(&request, &extensions)?;
+        let mut headers = self.get_request_headers();
+        headers.extend(self.compute_beta_headers(&request));
+        let response = self.send_request("/v1/messages", body, headers).await?;
+        self.transform_chat_response_with_continuation(response, &tool_name_map)
+    }
+
+    pub(crate) fn transform_chat_request(
         &self,
         request: &ChatRequest,
     ) -> Result<Value, ProviderError> {
@@ -24,19 +41,33 @@ impl AnthropicClient {
         }
 
         let registry = get_anthropic_registry();
+        let claude_5 = !self.config.uses_compatible_model_allow_list()
+            && Self::is_claude_5_protocol_model(&request.model);
 
         let model_spec = if self.config.uses_compatible_model_allow_list() {
             None
         } else {
             registry.get_model_spec(&request.model)
         };
-        if model_spec.is_none() && !self.config.allows_unknown_model(&request.model) {
+        if model_spec.is_none() && !claude_5 && !self.config.allows_unknown_model(&request.model) {
             return Err(anthropic_api_error(
                 400,
                 format!("Unsupported model: {}", request.model),
             ));
         }
+        if claude_5 {
+            Self::validate_claude_5_legacy_functions(request)?;
+        } else if request.reasoning_effort.is_some() {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} does not support reasoning_effort; exact Claude 5 models are required",
+                    request.model
+                ),
+            ));
+        }
         if model_spec.is_none()
+            && !claude_5
             && (request
                 .tools
                 .as_ref()
@@ -53,7 +84,8 @@ impl AnthropicClient {
                 ),
             ));
         }
-        if model_spec.is_none() && Self::has_unsupported_unknown_model_content(request) {
+        if model_spec.is_none() && !claude_5 && Self::has_unsupported_unknown_model_content(request)
+        {
             return Err(ProviderError::not_supported(
                 "anthropic",
                 format!(
@@ -63,6 +95,7 @@ impl AnthropicClient {
             ));
         }
         if model_spec.is_none()
+            && !claude_5
             && Self::has_image_content(request)
             && !self.config.allows_unknown_model_image_input(&request.model)
         {
@@ -152,7 +185,7 @@ impl AnthropicClient {
         if let Some(tools) = &request.tools
             && !tools.is_empty()
         {
-            let Some(model_spec) = model_spec else {
+            if model_spec.is_none() && !claude_5 {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!(
@@ -160,8 +193,8 @@ impl AnthropicClient {
                         request.model
                     ),
                 ));
-            };
-            if !model_spec.features.contains(&ModelFeature::ToolCalling) {
+            }
+            if model_spec.is_some_and(|spec| !spec.features.contains(&ModelFeature::ToolCalling)) {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!("Model {} does not support tool calling", request.model),
@@ -176,8 +209,16 @@ impl AnthropicClient {
             }
         }
 
-        // Add thinking configuration
-        if let Some(thinking) = &request.thinking
+        // Add thinking configuration. Claude 5 reasoning_effort and typed
+        // thinking are normalized here so Chat and Responses share one rule.
+        if claude_5 {
+            if let Some((thinking, effort)) = Self::claude_5_thinking_config(request)? {
+                anthropic_request["thinking"] = thinking;
+                if let Some(effort) = effort {
+                    anthropic_request["output_config"] = json!({"effort": effort.as_str()});
+                }
+            }
+        } else if let Some(thinking) = &request.thinking
             && thinking.enabled
         {
             let Some(model_spec) = model_spec else {
@@ -237,5 +278,167 @@ impl AnthropicClient {
         }
 
         Ok(anthropic_request)
+    }
+
+    pub(crate) fn transform_chat_request_with_extensions(
+        &self,
+        request: &ChatRequest,
+        extensions: &[ChatMessageExtensions],
+    ) -> Result<Value, ProviderError> {
+        if request.messages.len() != extensions.len() {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "message extension length mismatch",
+            ));
+        }
+        let mut transformed = self.transform_chat_request(request)?;
+        let messages = transformed["messages"].as_array_mut().ok_or_else(|| {
+            anthropic_api_error(500, "Anthropic request messages must be an array")
+        })?;
+        let mut wire_index = 0;
+        for (message, extension) in request.messages.iter().zip(extensions) {
+            if matches!(message.role, MessageRole::System | MessageRole::Developer) {
+                if !extension.is_empty() {
+                    return Err(ProviderError::invalid_request(
+                        "anthropic",
+                        "Anthropic continuation is only valid on assistant messages",
+                    ));
+                }
+                continue;
+            }
+            let wire_message = messages.get_mut(wire_index).ok_or_else(|| {
+                anthropic_api_error(500, "Anthropic message extension index drift")
+            })?;
+            wire_index += 1;
+            let Some(thinking) = extension.anthropic_thinking() else {
+                continue;
+            };
+            if message.role != MessageRole::Assistant {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "Anthropic continuation is only valid on assistant messages",
+                ));
+            }
+            let content = wire_message["content"].as_array_mut().ok_or_else(|| {
+                anthropic_api_error(500, "Anthropic message content must be an array")
+            })?;
+            let blocks = thinking.blocks().iter().map(|block| match block {
+                AnthropicThinkingBlock::Thinking {
+                    thinking,
+                    signature,
+                } => json!({
+                    "type": "thinking",
+                    "thinking": thinking,
+                    "signature": signature.expose(),
+                }),
+                AnthropicThinkingBlock::RedactedThinking { data } => json!({
+                    "type": "redacted_thinking",
+                    "data": data.expose(),
+                }),
+            });
+            content.splice(0..0, blocks);
+        }
+        Ok(transformed)
+    }
+
+    pub(crate) fn is_claude_5_protocol_model(model: &str) -> bool {
+        matches!(
+            model,
+            "claude-fable-5" | "claude-opus-5" | "claude-sonnet-5"
+        )
+    }
+
+    fn validate_claude_5_legacy_functions(request: &ChatRequest) -> Result<(), ProviderError> {
+        if request
+            .functions
+            .as_ref()
+            .is_some_and(|functions| !functions.is_empty())
+            || request.function_call.is_some()
+            || request
+                .messages
+                .iter()
+                .any(|message| message.function_call.is_some())
+        {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} does not support legacy functions/function_call; use tools/tool_choice",
+                    request.model
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn claude_5_thinking_config(
+        request: &ChatRequest,
+    ) -> Result<Option<(Value, Option<ThinkingEffort>)>, ProviderError> {
+        let requested_effort = request
+            .reasoning_effort
+            .as_deref()
+            .map(Self::parse_reasoning_effort)
+            .transpose()?;
+        let Some(thinking) = request.thinking.as_ref() else {
+            return Ok(requested_effort.map(|effort| {
+                (
+                    json!({"type": "adaptive", "display": "summarized"}),
+                    Some(effort),
+                )
+            }));
+        };
+
+        if !thinking.enabled {
+            if request.model == "claude-fable-5" {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "claude-fable-5 cannot disable thinking",
+                ));
+            }
+            if requested_effort.is_some() {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "reasoning_effort conflicts with thinking.enabled=false",
+                ));
+            }
+            return Ok(Some((json!({"type": "disabled"}), None)));
+        }
+        if thinking.budget_tokens.is_some() {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Claude 5 adaptive thinking does not support budget_tokens",
+            ));
+        }
+        if let (Some(typed), Some(requested)) = (thinking.effort, requested_effort)
+            && typed != requested
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Conflicting thinking effort values: thinking.effort={}, reasoning_effort={}",
+                    typed.as_str(),
+                    requested.as_str()
+                ),
+            ));
+        }
+        let effort = thinking.effort.or(requested_effort);
+        Ok(Some((
+            json!({
+                "type": "adaptive",
+                "display": if thinking.include_thinking { "summarized" } else { "omitted" }
+            }),
+            effort,
+        )))
+    }
+
+    fn parse_reasoning_effort(value: &str) -> Result<ThinkingEffort, ProviderError> {
+        match value {
+            "low" => Ok(ThinkingEffort::Low),
+            "medium" => Ok(ThinkingEffort::Medium),
+            "high" => Ok(ThinkingEffort::High),
+            other => Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Unsupported reasoning_effort '{other}'; expected low, medium, or high"),
+            )),
+        }
     }
 }

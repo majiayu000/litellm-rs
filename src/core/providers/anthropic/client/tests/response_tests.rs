@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
 
 // ==================== Chat Response Transformation Tests ====================
 
@@ -30,6 +31,49 @@ fn test_transform_chat_response_text() {
     } else {
         panic!("Expected text content");
     }
+}
+
+#[test]
+fn response_parser_returns_validated_secret_safe_sidecar() {
+    let config = AnthropicConfig::new_test("test-key");
+    let client = AnthropicClient::new(config).unwrap();
+    let response = json!({
+        "id": "msg_123",
+        "model": "claude-opus-5",
+        "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "opaque-signature"},
+            {"type": "redacted_thinking", "data": "opaque-redacted"},
+            {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}}
+        ],
+        "stop_reason": "tool_use"
+    });
+
+    let result = client
+        .transform_chat_response_with_continuation(response, &std::collections::HashMap::new())
+        .expect("valid continuation response");
+    let extension = &result.choice_extensions()[0];
+    let blocks = extension
+        .anthropic_thinking()
+        .expect("thinking sidecar")
+        .blocks();
+    assert!(matches!(blocks[0], AnthropicThinkingBlock::Thinking { .. }));
+    assert!(matches!(
+        blocks[1],
+        AnthropicThinkingBlock::RedactedThinking { .. }
+    ));
+    let rendered = format!("{result:?}");
+    assert!(!rendered.contains("opaque-signature"));
+    assert!(!rendered.contains("opaque-redacted"));
+
+    let invalid = json!({
+        "id": "msg_bad",
+        "model": "claude-opus-5",
+        "content": [{"type": "thinking", "thinking": "plan"}]
+    });
+    let error = client
+        .transform_chat_response_with_continuation(invalid, &std::collections::HashMap::new())
+        .expect_err("missing signature must fail");
+    assert!(error.to_string().contains("choice 0 block 0"));
 }
 
 #[test]
@@ -99,7 +143,8 @@ fn test_anthropic_client_preserves_thinking_blocks() {
             },
             {
                 "type": "thinking",
-                "thinking": "Second thought."
+                "thinking": "Second thought.",
+                "signature": "sig_456"
             },
             {"type": "text", "text": "Answer."}
         ],
@@ -122,7 +167,7 @@ fn test_anthropic_client_preserves_thinking_blocks() {
         result.choices.first().unwrap().message.thinking.as_ref(),
         Some(&ThinkingContent::Text {
             text: "First thought. Second thought.".to_string(),
-            signature: Some("sig_123".to_string()),
+            signature: None,
         })
     );
 }

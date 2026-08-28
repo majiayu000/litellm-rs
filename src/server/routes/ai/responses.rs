@@ -1,8 +1,9 @@
-//! POST /v1/responses — OpenAI Responses API endpoint
-//!
-//! Accepts Responses API requests, converts to internal chat-completion format,
-//! forwards to the selected provider, and converts results back.
+//! OpenAI-compatible Responses API endpoint.
 
+use crate::core::models::openai::continuation::{
+    ResponsesApiRequestWithExtensions, ResponsesApiResponseWithExtensions,
+    build_responses_continuation_turn,
+};
 use crate::core::models::openai::messages::{
     ChatMessage, ContentPart, ImageUrl, MessageContent, MessageRole,
 };
@@ -13,10 +14,13 @@ use crate::core::models::openai::responses_api::{
     ResponseTool, ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::core::models::openai::tools::{Function, FunctionCall, Tool, ToolCall};
+use crate::core::types::anthropic_continuation::ChatMessageExtensions;
 use crate::core::types::codex::domain::{CodexTurn, CodexTurnError, CodexTurnItem};
 use crate::core::types::codex::wire::{CodexCustomToolCall, CodexToolOutput};
 use crate::core::types::responses::FinishReason;
-use crate::server::routes::ai::chat::handle_chat_completion_with_state;
+use crate::server::routes::ai::chat::{
+    handle_chat_completion_with_extensions, handle_chat_completion_with_state,
+};
 use crate::server::state::AppState;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use tracing::{error, info};
@@ -34,20 +38,35 @@ static PROVIDER_DISPATCH_COUNT: std::sync::atomic::AtomicUsize =
 #[cfg(test)]
 static CODEX_DISPATCH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// POST /v1/responses handler
 pub async fn create_response(
     state: web::Data<AppState>,
     req: HttpRequest,
-    payload: web::Json<ResponsesApiRequest>,
+    payload: web::Json<ResponsesApiRequestWithExtensions>,
 ) -> ActixResult<HttpResponse> {
-    info!("Responses API request for model: {}", payload.model);
+    info!(
+        "Responses API request for model: {}",
+        payload.legacy().model
+    );
 
     let context = match super::token_policy::shared_request_context_with_api_key_token_limit(&req) {
         Ok(context) => context,
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
     let owner = lifecycle::response_owner(context.as_ref());
-    let request = payload.into_inner();
+    let typed_request = payload.into_inner();
+    let has_continuation = typed_request.has_continuation();
+    let (request, input_extensions) = typed_request.into_parts();
+
+    if has_continuation
+        && (request.stream.unwrap_or(false)
+            || request.background.unwrap_or(false)
+            || request.store == Some(true)
+            || request.previous_response_id.is_some())
+    {
+        return Ok(openai_errors::validation_error(
+            "Anthropic continuation does not yet support stream, background, store, or previous_response_id",
+        ));
+    }
 
     if request.model.trim().is_empty() {
         return Ok(openai_errors::validation_error("model must not be empty"));
@@ -83,7 +102,7 @@ pub async fn create_response(
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
 
-    let turn = match CodexTurn::try_from(&request) {
+    let turn = match build_responses_continuation_turn(&request, &input_extensions) {
         Ok(turn) => turn,
         Err(CodexTurnError::UnsupportedFeature(feature)) => {
             return Ok(openai_errors::unsupported_codex_feature(
@@ -96,6 +115,10 @@ pub async fn create_response(
     let chat_request = match build_chat_request_from_turn(&request, &turn) {
         Ok(r) => r,
         Err(e) => return Ok(openai_errors::validation_error(e)),
+    };
+    let chat_extensions = match map_input_extensions(&request, &chat_request, input_extensions) {
+        Ok(extensions) => extensions,
+        Err(error) => return Ok(openai_errors::validation_error(error)),
     };
     #[cfg(test)]
     if req.headers().contains_key("x-codex-upstream-counter") {
@@ -128,6 +151,8 @@ pub async fn create_response(
         handle_sync_response(
             state.get_ref(),
             chat_request,
+            chat_extensions,
+            has_continuation,
             request,
             context.as_ref().clone(),
             owner,
@@ -136,21 +161,54 @@ pub async fn create_response(
     }
 }
 
-// ── Non-streaming path ────────────────────────────────────────────────────────
-
 async fn handle_sync_response(
     state: &AppState,
     chat_request: ChatCompletionRequest,
+    chat_extensions: Vec<ChatMessageExtensions>,
+    has_continuation: bool,
     original: ResponsesApiRequest,
     mut context: crate::core::types::context::RequestContext,
     owner: Option<lifecycle::ResponseOwner>,
 ) -> ActixResult<HttpResponse> {
     super::response_cache::bypass_chat_response_cache(&mut context);
-    match handle_chat_completion_with_state(state, chat_request, context).await {
-        Ok(chat_resp) => {
-            let resp = convert_to_responses_api(chat_resp, &original);
+    let result = if has_continuation {
+        handle_chat_completion_with_extensions(
+            state,
+            std::sync::Arc::new(chat_request),
+            std::sync::Arc::new(context),
+            chat_extensions,
+            true,
+        )
+        .await
+        .map(|response| response.into_parts())
+    } else {
+        handle_chat_completion_with_state(state, chat_request, context)
+            .await
+            .map(|response| (response, Vec::new()))
+    };
+    match result {
+        Ok((chat_resp, choice_extensions)) => {
+            let mut resp = convert_to_responses_api(chat_resp, &original);
+            let mut output_extensions = vec![None; resp.output.len()];
+            if let Some(extension) = choice_extensions.into_iter().next()
+                && !extension.is_empty()
+            {
+                let index = resp
+                    .output
+                    .iter()
+                    .position(|item| matches!(item, ResponseOutputItem::Message(_)))
+                    .unwrap_or_else(|| {
+                        resp.output.insert(0, empty_output_message());
+                        output_extensions.insert(0, None);
+                        0
+                    });
+                output_extensions[index] = Some(extension);
+            }
             lifecycle::store_response_if_requested(&original, &resp, owner);
-            Ok(HttpResponse::Ok().json(resp))
+            match ResponsesApiResponseWithExtensions::from_parts(resp, output_extensions) {
+                Ok(response) => Ok(HttpResponse::Ok().json(response)),
+                Err(error) => Ok(openai_errors::validation_error(error)),
+            }
         }
         Err(e) => {
             error!("Responses API error: {}", e);
@@ -159,9 +217,49 @@ async fn handle_sync_response(
     }
 }
 
-// ── Request conversion ────────────────────────────────────────────────────────
+fn map_input_extensions(
+    request: &ResponsesApiRequest,
+    chat: &ChatCompletionRequest,
+    input: Vec<Option<ChatMessageExtensions>>,
+) -> Result<Vec<ChatMessageExtensions>, String> {
+    let mut mapped = Vec::with_capacity(chat.messages.len());
+    if request.instructions.is_some() {
+        mapped.push(ChatMessageExtensions::new());
+    }
+    match &request.input {
+        ResponseInput::Text(_) => mapped.push(ChatMessageExtensions::new()),
+        ResponseInput::Items(items) => {
+            if items.len() != input.len() {
+                return Err("Responses input extension length mismatch".to_string());
+            }
+            for (item, extension) in items.iter().zip(input) {
+                match item {
+                    ResponseInputItem::Message(_) => mapped.push(extension.unwrap_or_default()),
+                    ResponseInputItem::FunctionCall(_) | ResponseInputItem::CustomToolCall(_) => {
+                        if chat.messages.get(mapped.len()).is_some() {
+                            mapped.push(ChatMessageExtensions::new());
+                        }
+                    }
+                    _ => mapped.push(ChatMessageExtensions::new()),
+                }
+            }
+        }
+    }
+    if mapped.len() != chat.messages.len() {
+        return Err("Responses continuation mapping did not match chat messages".to_string());
+    }
+    Ok(mapped)
+}
 
-/// Convert a `ResponsesApiRequest` to a `ChatCompletionRequest`.
+fn empty_output_message() -> ResponseOutputItem {
+    ResponseOutputItem::Message(ResponseOutputMessage {
+        id: format!("msg_{}", uuid_v4_hex()),
+        role: "assistant".to_string(),
+        status: "completed".to_string(),
+        content: vec![],
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn build_chat_request(
     req: &ResponsesApiRequest,
@@ -297,7 +395,7 @@ fn response_message_to_chat(
     message: &crate::core::models::openai::responses_api::ResponseInputMessage,
 ) -> Result<ChatMessage, String> {
     let content = match &message.content {
-        ResponseInputContent::Text(text) => MessageContent::Text(text.clone()),
+        ResponseInputContent::Text(text) => Some(MessageContent::Text(text.clone())),
         ResponseInputContent::Parts(parts) => {
             let mut converted = Vec::with_capacity(parts.len());
             for part in parts {
@@ -323,14 +421,15 @@ fn response_message_to_chat(
                 }
             }
             match converted.as_slice() {
-                [ContentPart::Text { text }] => MessageContent::Text(text.clone()),
-                _ => MessageContent::Parts(converted),
+                [] => None,
+                [ContentPart::Text { text }] => Some(MessageContent::Text(text.clone())),
+                _ => Some(MessageContent::Parts(converted)),
             }
         }
     };
     Ok(ChatMessage {
         role: parse_role(&message.role)?,
-        content: Some(content),
+        content,
         name: None,
         function_call: None,
         tool_calls: None,
@@ -351,9 +450,8 @@ fn push_tool_call(messages: &mut Vec<ChatMessage>, call_id: &str, name: &str, ar
     if let Some(message) = messages.last_mut()
         && message.role == MessageRole::Assistant
         && message.content.is_none()
-        && let Some(tool_calls) = message.tool_calls.as_mut()
     {
-        tool_calls.push(tool_call);
+        message.tool_calls.get_or_insert_default().push(tool_call);
         return;
     }
     messages.push(ChatMessage {
@@ -388,16 +486,12 @@ fn tool_output_text(output: &CodexToolOutput) -> Result<String, String> {
     }
 }
 
-// ── Response conversion ───────────────────────────────────────────────────────
-
-/// Convert a `ChatCompletionResponse` to a `ResponsesApiResponse`.
 pub(crate) fn convert_to_responses_api(
     chat: crate::core::models::openai::responses::ChatCompletionResponse,
     original: &ResponsesApiRequest,
 ) -> ResponsesApiResponse {
     let resp_id = format!("resp_{}", &chat.id);
 
-    // Determine overall status from the first choice's finish_reason.
     let overall_status = chat
         .choices
         .first()
@@ -412,7 +506,6 @@ pub(crate) fn convert_to_responses_api(
             let finish_status = finish_reason_to_status(choice.finish_reason.as_deref());
             let mut items: Vec<ResponseOutputItem> = Vec::new();
 
-            // Text content → message output item
             let text_content: Vec<ResponseOutputContent> = match &choice.message.content {
                 Some(MessageContent::Text(t)) if !t.is_empty() => {
                     vec![ResponseOutputContent::OutputText {
@@ -447,7 +540,6 @@ pub(crate) fn convert_to_responses_api(
                 }));
             }
 
-            // Tool calls → function or Codex custom-tool output items.
             if let Some(tool_calls) = choice.message.tool_calls {
                 for tc in tool_calls {
                     if is_custom_tool(original, &tc.function.name) {
@@ -472,7 +564,6 @@ pub(crate) fn convert_to_responses_api(
                 }
             }
 
-            // Ensure at least one output item per choice
             if items.is_empty() {
                 items.push(ResponseOutputItem::Message(ResponseOutputMessage {
                     id: format!("msg_{}", uuid_v4_hex()),
@@ -536,11 +627,6 @@ pub(crate) fn custom_tool_input(arguments: &str) -> String {
         .unwrap_or_else(|| arguments.to_string())
 }
 
-/// Map a chat-completion `finish_reason` to a Responses API item/response status.
-///
-/// - `"stop"` / `"tool_calls"` / `None` → `"completed"` (normal completion)
-/// - `"length"` → `"incomplete"` (truncated by token limit)
-/// - `"content_filter"` → `"failed"` (safety filter triggered)
 pub(crate) fn finish_reason_to_status(reason: Option<&str>) -> &'static str {
     match reason {
         Some("length") => "incomplete",
@@ -549,8 +635,6 @@ pub(crate) fn finish_reason_to_status(reason: Option<&str>) -> &'static str {
     }
 }
 
-/// Same mapping as [`finish_reason_to_status`] but for the typed `FinishReason` enum
-/// used by the internal streaming types.
 pub(crate) fn finish_reason_enum_to_status(reason: Option<&FinishReason>) -> &'static str {
     match reason {
         Some(FinishReason::Length) => "incomplete",
@@ -569,10 +653,6 @@ pub(crate) fn parse_role(role: &str) -> Result<MessageRole, String> {
     }
 }
 
-/// Generate a collision-resistant hex identifier for response/message IDs.
-///
-/// Combines full nanoseconds since epoch with a process-global atomic counter
-/// so IDs remain unique across concurrent calls within the same second.
 pub(crate) fn uuid_v4_hex() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -585,7 +665,6 @@ pub(crate) fn uuid_v4_hex() -> String {
     format!("{nanos:016x}{seq:08x}")
 }
 
-/// Current Unix timestamp in seconds.
 pub(crate) fn current_unix_ts() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -594,12 +673,13 @@ pub(crate) fn current_unix_ts() -> i64 {
         .as_secs() as i64
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::models::openai::responses_api::{ResponseInput, ResponsesApiRequest};
+    use crate::core::types::anthropic_continuation::{
+        AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+    };
 
     fn minimal_request(input: &str) -> ResponsesApiRequest {
         ResponsesApiRequest {
@@ -668,6 +748,31 @@ mod tests {
         );
         let chat = build_chat_request(&req).unwrap();
         assert_eq!(chat.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn continuation_message_stays_attached_to_following_tool_call() {
+        let request: ResponsesApiRequest = serde_json::from_value(serde_json::json!({
+            "model":"claude-opus-5", "input":[
+                {"type":"message","role":"assistant","content":[]},
+                {"type":"function_call","id":"fc_1","call_id":"toolu_1","name":"lookup","arguments":"{}"}]
+        })).unwrap();
+        let extension = ChatMessageExtensions::new().with_anthropic_thinking(
+            AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
+                thinking: "plan".into(),
+                signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
+            }]),
+        );
+        let input = vec![Some(extension), None];
+        let turn = build_responses_continuation_turn(&request, &input).unwrap();
+        let chat = build_chat_request_from_turn(&request, &turn).unwrap();
+        let mapped = map_input_extensions(&request, &chat, input).unwrap();
+        assert_eq!((chat.messages.len(), mapped.len()), (1, 1));
+        assert!(!mapped[0].is_empty());
+        assert_eq!(
+            chat.messages[0].tool_calls.as_ref().unwrap()[0].id,
+            "toolu_1"
+        );
     }
 
     #[test]

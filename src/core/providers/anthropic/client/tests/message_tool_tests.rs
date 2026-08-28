@@ -1,4 +1,8 @@
 use super::*;
+use crate::core::types::anthropic_continuation::{
+    AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+    ChatMessageExtensions,
+};
 
 // ==================== System Message Separation Tests ====================
 
@@ -21,6 +25,49 @@ fn test_separate_system_messages_no_system() {
     let (system, user_msgs) = client.separate_system_messages(&messages).unwrap();
     assert!(system.is_none());
     assert_eq!(user_msgs.len(), 1);
+}
+
+#[test]
+fn message_carrier_preserves_signed_redacted_and_tool_order() {
+    let config = AnthropicConfig::new_test("test-key");
+    let client = AnthropicClient::new(config).unwrap();
+    let mut request = ChatRequest::new("claude-opus-5");
+    request.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: None,
+        tool_calls: Some(vec![crate::core::types::tools::ToolCall {
+            id: "toolu_1".to_string(),
+            tool_type: "function".to_string(),
+            function: crate::core::types::tools::FunctionCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }]),
+        ..Default::default()
+    });
+    let extension =
+        ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "plan".to_string(),
+                signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: AnthropicRedactedData::try_from("opaque-redacted").unwrap(),
+            },
+        ]));
+
+    let transformed = client
+        .transform_chat_request_with_extensions(&request, &[extension])
+        .expect("typed continuation should transform");
+    let content = transformed["messages"][0]["content"]
+        .as_array()
+        .expect("assistant content blocks");
+    assert_eq!(content[0]["type"], "thinking");
+    assert_eq!(content[0]["signature"], "opaque-signature");
+    assert_eq!(content[1]["type"], "redacted_thinking");
+    assert_eq!(content[1]["data"], "opaque-redacted");
+    assert_eq!(content[2]["type"], "tool_use");
+    assert_eq!(content[2]["id"], "toolu_1");
 }
 
 #[test]

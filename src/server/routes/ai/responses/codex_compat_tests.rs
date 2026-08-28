@@ -119,6 +119,11 @@ async fn codex_wire_http_rejects_before_provider_dispatch() {
         let req = actix_test::TestRequest::post()
             .insert_header(("x-codex-upstream-counter", "1"))
             .to_http_request();
+        let extensions = match &payload.input {
+            super::ResponseInput::Text(_) => vec![],
+            super::ResponseInput::Items(items) => vec![None; items.len()],
+        };
+        let payload = crate::core::models::openai::continuation::ResponsesApiRequestWithExtensions::from_parts(payload, extensions).unwrap();
         let response = super::create_response(state.clone(), req, web::Json(payload))
             .await
             .unwrap();
@@ -162,6 +167,15 @@ async fn codex_tier_one_reaches_provider_dispatch() {
     let req = actix_test::TestRequest::post()
         .insert_header(("x-codex-upstream-counter", "1"))
         .to_http_request();
+    let extensions = match &payload.input {
+        super::ResponseInput::Text(_) => vec![],
+        super::ResponseInput::Items(items) => vec![None; items.len()],
+    };
+    let payload =
+        crate::core::models::openai::continuation::ResponsesApiRequestWithExtensions::from_parts(
+            payload, extensions,
+        )
+        .unwrap();
     let _ = super::create_response(state, req, web::Json(payload))
         .await
         .unwrap();

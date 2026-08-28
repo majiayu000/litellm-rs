@@ -1,6 +1,9 @@
 use super::*;
 use crate::core::models::openai::{
-    ChatMessage, ContentPart, ImageUrl, MessageContent, MessageRole,
+    ChatMessage, ContentPart, FunctionCall, ImageUrl, MessageContent, MessageRole, ToolCall,
+};
+use crate::core::types::anthropic_continuation::{
+    AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent, ChatMessageExtensions,
 };
 
 // ==================== Helper Functions ====================
@@ -72,6 +75,93 @@ fn test_validate_chat_completion_multiple_messages() {
     ];
     let result = RequestValidator::validate_chat_completion_request("gpt-4", &messages, None, None);
     assert!(result.is_ok());
+}
+
+#[test]
+fn assistant_tool_only_is_meaningful_but_truly_empty_stays_rejected() {
+    let tool_only = ChatMessage {
+        role: MessageRole::Assistant,
+        content: None,
+        name: None,
+        function_call: None,
+        tool_calls: Some(vec![ToolCall {
+            id: "toolu_1".to_string(),
+            tool_type: "function".to_string(),
+            function: FunctionCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }]),
+        tool_call_id: None,
+        audio: None,
+    };
+    assert!(
+        RequestValidator::validate_chat_completion_request(
+            "claude-opus-5",
+            &[tool_only],
+            None,
+            None,
+        )
+        .is_ok()
+    );
+
+    let empty = ChatMessage {
+        role: MessageRole::Assistant,
+        content: None,
+        name: None,
+        function_call: None,
+        tool_calls: Some(Vec::new()),
+        tool_call_id: None,
+        audio: None,
+    };
+    assert!(
+        RequestValidator::validate_chat_completion_request("claude-opus-5", &[empty], None, None,)
+            .is_err()
+    );
+}
+
+#[test]
+fn assistant_extension_only_is_meaningful_and_role_bounded() {
+    let message = ChatMessage {
+        role: MessageRole::Assistant,
+        content: None,
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    };
+    let extension =
+        ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "plan".to_string(),
+                signature: AnthropicSignature::try_from("opaque-signature")
+                    .expect("fixture signature is non-empty"),
+            },
+        ]));
+    assert!(
+        RequestValidator::validate_chat_completion_request_with_extensions(
+            "claude-opus-5",
+            &[message.clone()],
+            &[extension.clone()],
+            None,
+            None,
+        )
+        .is_ok()
+    );
+
+    let mut user = message;
+    user.role = MessageRole::User;
+    assert!(
+        RequestValidator::validate_chat_completion_request_with_extensions(
+            "claude-opus-5",
+            &[user],
+            &[extension],
+            None,
+            None,
+        )
+        .is_err()
+    );
 }
 
 // ==================== Max Tokens Validation Tests ====================
