@@ -100,11 +100,11 @@ fn test_model_support() {
 }
 
 #[test]
-fn vertex_provider_does_not_assume_developer_only_models() {
+fn vertex_provider_supports_only_documented_current_models() {
     let provider = GeminiProvider::new(GeminiConfig::new_vertex_ai("project", "location")).unwrap();
 
     assert!(!provider.supports_model("gemini-3.6-flash"));
-    assert!(!provider.supports_model("gemini-3.7-flash"));
+    assert!(provider.supports_model("gemini-3.7-flash"));
     assert!(!provider.supports_model("gemini-3.5-flash-lite"));
     assert!(provider.supports_model("gemini-3.5-flash"));
 }

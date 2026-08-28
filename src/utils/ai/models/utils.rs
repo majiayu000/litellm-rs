@@ -426,6 +426,7 @@ impl ModelUtils {
             "claude-3",
             "claude-2",
             "gemini",
+            "gemini-3.7-flash",
             "gemini-3.6-flash",
             "gemini-3.5-flash",
             "gemini-3.5-flash-lite",
@@ -546,6 +547,7 @@ impl ModelUtils {
                 "claude-instant".to_string(),
             ],
             "google" => vec![
+                "gemini-3.7-flash".to_string(),
                 "gemini-3.6-flash".to_string(),
                 "gemini-3.5-flash-lite".to_string(),
                 "gemini-3.5-flash".to_string(),

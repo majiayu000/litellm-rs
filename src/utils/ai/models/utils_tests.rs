@@ -476,6 +476,7 @@ fn test_validate_model_with_provider_valid() {
     assert!(ModelUtils::validate_model_with_provider("gpt-4", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "anthropic").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gemini-3.1-pro-preview", "google").is_ok());
+    assert!(ModelUtils::validate_model_with_provider("gemini-3.7-flash", "google").is_ok());
 }
 
 #[test]
@@ -511,6 +512,7 @@ fn test_get_compatible_models_anthropic() {
 #[test]
 fn test_get_compatible_models_google() {
     let models = ModelUtils::get_compatible_models_for_provider("google");
+    assert!(models.contains(&"gemini-3.7-flash".to_string()));
     assert!(models.contains(&"gemini-3.5-flash".to_string()));
     assert!(models.contains(&"gemini-3.1-flash-lite".to_string()));
     assert!(models.contains(&"gemini-pro".to_string()));

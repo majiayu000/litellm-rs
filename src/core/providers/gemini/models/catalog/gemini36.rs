@@ -1,7 +1,8 @@
 use super::{
     super::{GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec},
-    advanced_text_capabilities, promotional_flash_pricing, promotional_flash_pricing_metadata,
+    advanced_text_capabilities, promotional_flash_pricing_metadata,
 };
+use crate::core::providers::gemini::models::pricing::current_flash_pricing;
 use crate::core::types::model::ModelInfo;
 
 pub(super) fn register(registry: &mut GeminiModelRegistry) {
@@ -40,7 +41,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 ModelFeature::VideoUnderstanding,
                 ModelFeature::AudioUnderstanding,
             ],
-            pricing: promotional_flash_pricing(),
+            pricing: current_flash_pricing(),
             limits: ModelLimits {
                 max_context_length: 1_048_576,
                 max_output_tokens: 65_536,

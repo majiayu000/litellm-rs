@@ -9,6 +9,7 @@ mod catalog;
 mod contract;
 #[cfg(test)]
 mod current_tests;
+mod pricing;
 mod surface;
 
 pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
@@ -178,11 +179,15 @@ impl GeminiModelRegistry {
 
     /// List model metadata for a concrete Google API surface.
     pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
+        let pricing_date = chrono::Utc::now().date_naive();
         let mut models = self
             .models
             .values()
             .filter(|spec| surface.includes(spec))
-            .map(|spec| surface.overlay_model_info(spec))
+            .map(|spec| {
+                let pricing = pricing::pricing_for_spec_at(spec, pricing_date);
+                surface.overlay_model_info(spec, &pricing)
+            })
             .collect::<Vec<_>>();
         models.sort_by(|left, right| left.id.cmp(&right.id));
         models
@@ -202,13 +207,22 @@ impl GeminiModelRegistry {
 
     /// Model
     pub fn get_model_pricing(&self, model_id: &str) -> Option<&ModelPricing> {
-        self.get_model_spec(model_id).map(|spec| &spec.pricing)
+        self.get_model_spec(model_id)
+            .and_then(pricing::current_pricing_for_spec)
     }
 
     /// Get model pricing in the shared core cost model shape.
     pub fn get_core_model_pricing(&self, model_id: &str) -> Option<ModelPricing> {
+        self.get_model_pricing(model_id).cloned()
+    }
+
+    pub(crate) fn get_core_model_pricing_at(
+        &self,
+        model_id: &str,
+        date: chrono::NaiveDate,
+    ) -> Option<ModelPricing> {
         self.get_model_spec(model_id)
-            .map(|spec| spec.pricing.clone())
+            .map(|spec| pricing::pricing_for_spec_at(spec, date))
     }
 
     /// Model
@@ -323,55 +337,39 @@ impl CostCalculator {
         video_seconds: Option<u32>,
         audio_seconds: Option<u32>,
     ) -> Option<f64> {
-        let registry = get_gemini_registry();
-        let pricing = registry.get_core_model_pricing(model_id)?;
+        Self::calculate_multimodal_cost_at(
+            model_id,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            images,
+            video_seconds,
+            audio_seconds,
+            chrono::Utc::now().date_naive(),
+        )
+    }
 
-        let mut total_cost = 0.0;
-        let mut remaining_prompt_tokens = prompt_tokens;
-
-        // Handle
-        if let (Some(cached), Some(cached_price)) =
-            (cached_tokens, pricing.cache_read_input_token_cost)
-        {
-            let cached_cost = (cached as f64 / 1000.0) * cached_price;
-            total_cost += cached_cost;
-            remaining_prompt_tokens = remaining_prompt_tokens.saturating_sub(cached);
-        }
-
-        // Regular input tokens
-        let input_cost =
-            (remaining_prompt_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
-        total_cost += input_cost;
-
-        // Output tokens
-        let output_cost = (completion_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
-        total_cost += output_cost;
-
-        // Image cost
-        let image_price = pricing
-            .cost_per_image
-            .as_ref()
-            .and_then(|costs| costs.get("default"))
-            .copied();
-        if let (Some(img_count), Some(img_price)) = (images, image_price) {
-            total_cost += img_count as f64 * img_price;
-        }
-
-        // Video cost
-        if let (Some(video_secs), Some(video_price)) =
-            (video_seconds, pricing.video_cost_per_second)
-        {
-            total_cost += video_secs as f64 * video_price;
-        }
-
-        // Audio cost
-        if let (Some(audio_secs), Some(audio_price)) =
-            (audio_seconds, pricing.audio_cost_per_second)
-        {
-            total_cost += audio_secs as f64 * audio_price;
-        }
-
-        Some(total_cost)
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn calculate_multimodal_cost_at(
+        model_id: &str,
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        cached_tokens: Option<u32>,
+        images: Option<u32>,
+        video_seconds: Option<u32>,
+        audio_seconds: Option<u32>,
+        date: chrono::NaiveDate,
+    ) -> Option<f64> {
+        let pricing = get_gemini_registry().get_core_model_pricing_at(model_id, date)?;
+        Some(pricing::calculate_multimodal_cost(
+            &pricing,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            images,
+            video_seconds,
+            audio_seconds,
+        ))
     }
 
     /// Estimate token count

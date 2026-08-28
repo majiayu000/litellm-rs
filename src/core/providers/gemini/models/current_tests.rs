@@ -143,3 +143,70 @@ fn gemini_36_static_fallback_uses_current_promotional_price() {
     assert_eq!(spec.pricing.cache_read_input_token_cost, Some(0.000075));
     assert_eq!(spec.pricing.batch_discount, Some(0.5));
 }
+
+#[test]
+fn flash_static_pricing_switches_at_the_documented_2027_boundary() {
+    let registry = get_gemini_registry();
+    let promotional_date = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+    let standard_date = chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
+
+    for model in ["gemini-3.7-flash", "gemini-3.6-flash"] {
+        let promotional = registry
+            .get_core_model_pricing_at(model, promotional_date)
+            .expect("current Flash model should have promotional pricing");
+        assert_eq!(promotional.input_cost_per_1k_tokens, 0.00075);
+        assert_eq!(promotional.output_cost_per_1k_tokens, 0.00375);
+        assert_eq!(promotional.cache_read_input_token_cost, Some(0.000075));
+        assert_eq!(promotional.batch_discount, Some(0.5));
+
+        let standard = registry
+            .get_core_model_pricing_at(model, standard_date)
+            .expect("current Flash model should have standard pricing");
+        assert_eq!(standard.input_cost_per_1k_tokens, 0.0015);
+        assert_eq!(standard.output_cost_per_1k_tokens, 0.0075);
+        assert_eq!(standard.cache_read_input_token_cost, Some(0.00015));
+        assert_eq!(standard.batch_discount, Some(0.5));
+    }
+
+    let promotional_cost = CostCalculator::calculate_multimodal_cost_at(
+        "gemini-3.7-flash",
+        1_000,
+        1_000,
+        Some(1_000),
+        None,
+        None,
+        None,
+        promotional_date,
+    )
+    .expect("promotional cost");
+    let standard_cost = CostCalculator::calculate_multimodal_cost_at(
+        "gemini-3.7-flash",
+        1_000,
+        1_000,
+        Some(1_000),
+        None,
+        None,
+        None,
+        standard_date,
+    )
+    .expect("standard cost");
+    assert!((promotional_cost - 0.003825).abs() < 1e-12);
+    assert!((standard_cost - 0.00765).abs() < 1e-12);
+
+    let spec = registry
+        .get_model_spec("gemini-3.7-flash")
+        .expect("Gemini 3.7 Flash spec");
+    let promotional = registry
+        .get_core_model_pricing_at("gemini-3.7-flash", promotional_date)
+        .unwrap();
+    let standard = registry
+        .get_core_model_pricing_at("gemini-3.7-flash", standard_date)
+        .unwrap();
+    let promotional_info =
+        GoogleGeminiApiSurface::DeveloperApi.overlay_model_info(spec, &promotional);
+    let standard_info = GoogleGeminiApiSurface::DeveloperApi.overlay_model_info(spec, &standard);
+    assert_eq!(promotional_info.input_cost_per_1k_tokens, Some(0.00075));
+    assert_eq!(promotional_info.output_cost_per_1k_tokens, Some(0.00375));
+    assert_eq!(standard_info.input_cost_per_1k_tokens, Some(0.0015));
+    assert_eq!(standard_info.output_cost_per_1k_tokens, Some(0.0075));
+}

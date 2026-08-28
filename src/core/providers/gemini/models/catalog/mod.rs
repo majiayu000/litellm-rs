@@ -50,12 +50,6 @@ pub(super) fn promotional_flash_pricing_metadata() -> HashMap<String, Value> {
     ])
 }
 
-pub(super) fn promotional_flash_pricing() -> super::ModelPricing {
-    let mut pricing = super::pricing_per_million(0.75, 3.75, Some(0.075), None, None, None);
-    pricing.batch_discount = Some(0.5);
-    pricing
-}
-
 pub(super) fn advanced_text_capabilities() -> Vec<ProviderCapability> {
     vec![
         ProviderCapability::ChatCompletion,

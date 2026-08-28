@@ -1,4 +1,4 @@
-use super::{GeminiModelFamily, ModelInfo, ModelSpec};
+use super::{GeminiModelFamily, ModelInfo, ModelPricing, ModelSpec};
 
 const OFFICIAL_LIFECYCLE_SOURCE: &str = "https://ai.google.dev/gemini-api/docs/deprecations";
 
@@ -115,8 +115,7 @@ impl GoogleGeminiApiSurface {
             Self::VertexAi => {
                 !matches!(
                     spec.family,
-                    GeminiModelFamily::Gemini37Flash
-                        | GeminiModelFamily::Gemini36Flash
+                    GeminiModelFamily::Gemini36Flash
                         | GeminiModelFamily::Gemini35FlashLite
                         | GeminiModelFamily::Gemini10Pro
                         | GeminiModelFamily::Gemini10ProVision
@@ -126,8 +125,7 @@ impl GoogleGeminiApiSurface {
             }
             Self::VertexAiExperimental => !matches!(
                 spec.family,
-                GeminiModelFamily::Gemini37Flash
-                    | GeminiModelFamily::Gemini36Flash
+                GeminiModelFamily::Gemini36Flash
                     | GeminiModelFamily::Gemini35FlashLite
                     | GeminiModelFamily::Gemini10Pro
                     | GeminiModelFamily::Gemini10ProVision
@@ -135,9 +133,11 @@ impl GoogleGeminiApiSurface {
         }
     }
 
-    pub(super) fn overlay_model_info(self, spec: &ModelSpec) -> ModelInfo {
+    pub(super) fn overlay_model_info(self, spec: &ModelSpec, pricing: &ModelPricing) -> ModelInfo {
         let mut model_info = spec.model_info.clone();
         model_info.provider = self.provider_name().to_string();
+        model_info.input_cost_per_1k_tokens = Some(pricing.input_cost_per_1k_tokens);
+        model_info.output_cost_per_1k_tokens = Some(pricing.output_cost_per_1k_tokens);
         model_info.metadata.insert(
             "google_model_catalog_surface".to_string(),
             serde_json::json!(self.surface_name()),
@@ -207,11 +207,17 @@ mod tests {
                 .iter()
                 .any(|model| model.id == "gemini-3.5-flash")
         );
-        for developer_only_id in [
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash-lite",
-        ] {
+        assert!(
+            vertex_models
+                .iter()
+                .any(|model| model.id == "gemini-3.7-flash")
+        );
+        assert!(
+            experimental_vertex_models
+                .iter()
+                .any(|model| model.id == "gemini-3.7-flash")
+        );
+        for developer_only_id in ["gemini-3.6-flash", "gemini-3.5-flash-lite"] {
             assert!(developer_ids.contains(&developer_only_id));
             assert!(
                 !vertex_models
