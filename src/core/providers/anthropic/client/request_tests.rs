@@ -9,6 +9,7 @@ use crate::core::types::content::{
 use crate::core::types::message::{MessageContent, MessageRole};
 use crate::core::types::thinking::{
     AnthropicThinkingBlock, AnthropicThinkingContent, ThinkingConfig, ThinkingContent,
+    ThinkingEffort,
 };
 use crate::core::types::tools::{
     FunctionCall, FunctionChoice, FunctionDefinition, Tool, ToolCall, ToolChoice, ToolType,
@@ -82,12 +83,40 @@ fn current_claude_5_protocol_serializes_adaptive_disabled_and_sampling_rules() {
 
     for model in ["claude-opus-5", "claude-sonnet-5"] {
         let mut disabled = ChatRequest::new(model).add_user_message("Hello");
-        disabled.thinking = Some(ThinkingConfig::default());
+        disabled.thinking = Some(ThinkingConfig::new().with_effort(ThinkingEffort::High));
         let transformed = anthropic_client()
             .transform_chat_request(&disabled)
             .expect("Opus and Sonnet can disable thinking");
         assert_eq!(transformed["thinking"], json!({"type": "disabled"}));
+        assert!(transformed.get("output_config").is_none());
     }
+}
+
+#[test]
+fn thinking_history_rejects_models_without_thinking_support() {
+    let content = AnthropicThinkingContent::try_from(vec![AnthropicThinkingBlock::Thinking {
+        thinking: "history".to_string(),
+        signature: "sig-history".to_string(),
+    }])
+    .expect("valid signed history");
+    let mut request = ChatRequest::new("claude-3-haiku-20240307");
+    request.messages = vec![
+        ChatMessage {
+            role: MessageRole::Assistant,
+            thinking: Some(ThinkingContent::AnthropicBlocks { content }),
+            ..Default::default()
+        },
+        ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("Continue".to_string())),
+            ..Default::default()
+        },
+    ];
+
+    let error = anthropic_client()
+        .transform_chat_request(&request)
+        .expect_err("thinking history must not cross into a non-thinking model");
+    assert!(error.to_string().contains("thinking history"));
 }
 
 #[test]
