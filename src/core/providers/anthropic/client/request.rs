@@ -319,9 +319,21 @@ impl AnthropicClient {
                     "Anthropic continuation is only valid on assistant messages",
                 ));
             }
-            let content = wire_message["content"].as_array_mut().ok_or_else(|| {
-                anthropic_api_error(500, "Anthropic message content must be an array")
-            })?;
+            let wire_content = wire_message
+                .get_mut("content")
+                .ok_or_else(|| anthropic_api_error(500, "Anthropic message content is missing"))?;
+            let mut content = match std::mem::take(wire_content) {
+                Value::Array(blocks) => blocks,
+                Value::String(text) if text.is_empty() => Vec::new(),
+                Value::String(text) => vec![json!({"type": "text", "text": text})],
+                Value::Null => Vec::new(),
+                _ => {
+                    return Err(anthropic_api_error(
+                        500,
+                        "Anthropic message content must be text or an array",
+                    ));
+                }
+            };
             let blocks = thinking.blocks().iter().map(|block| match block {
                 AnthropicThinkingBlock::Thinking {
                     thinking,
@@ -337,6 +349,7 @@ impl AnthropicClient {
                 }),
             });
             content.splice(0..0, blocks);
+            *wire_content = Value::Array(content);
         }
         Ok(transformed)
     }
@@ -379,12 +392,16 @@ impl AnthropicClient {
             .map(Self::parse_reasoning_effort)
             .transpose()?;
         let Some(thinking) = request.thinking.as_ref() else {
-            return Ok(requested_effort.map(|effort| {
-                (
+            return Ok(match requested_effort {
+                Some(effort) => Some((
                     json!({"type": "adaptive", "display": "summarized"}),
                     Some(effort),
-                )
-            }));
+                )),
+                None if request.model == "claude-fable-5" => {
+                    Some((json!({"type": "adaptive", "display": "summarized"}), None))
+                }
+                None => None,
+            });
         };
 
         if !thinking.enabled {

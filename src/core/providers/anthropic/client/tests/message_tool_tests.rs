@@ -71,6 +71,40 @@ fn message_carrier_preserves_signed_redacted_and_tool_order() {
 }
 
 #[test]
+fn message_carrier_normalizes_visible_and_empty_string_content() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+    for (content, expected_len) in [(Some("visible answer"), 2), (None, 1)] {
+        let mut request = ChatRequest::new("claude-opus-5");
+        request.messages.push(ChatMessage {
+            role: MessageRole::Assistant,
+            content: content.map(|text| MessageContent::Text(text.to_string())),
+            ..Default::default()
+        });
+        let extension = ChatMessageExtensions::new().with_anthropic_thinking(
+            AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
+                thinking: "plan".to_string(),
+                signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
+            }]),
+        );
+
+        let transformed = client
+            .transform_chat_request_with_extensions(&request, &[extension])
+            .expect("string content must normalize to Anthropic content blocks");
+        let blocks = transformed["messages"][0]["content"]
+            .as_array()
+            .expect("normalized content block array");
+        assert_eq!(blocks.len(), expected_len);
+        assert_eq!(blocks[0]["type"], "thinking");
+        if content.is_some() {
+            assert_eq!(
+                blocks[1],
+                serde_json::json!({"type": "text", "text": "visible answer"})
+            );
+        }
+    }
+}
+
+#[test]
 fn test_separate_system_messages_with_system() {
     let config = AnthropicConfig::new_test("test-key");
     let client = AnthropicClient::new(config).unwrap();

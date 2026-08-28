@@ -50,6 +50,31 @@ fn reasoning_effort_maps_once_to_adaptive_output_config() {
 }
 
 #[test]
+fn fable_defaults_to_always_on_adaptive_while_opus_and_sonnet_remain_optional() {
+    let client = anthropic_client();
+
+    let fable = client
+        .transform_chat_request(&ChatRequest::new("claude-fable-5").add_user_message("solve"))
+        .expect("Fable must default to adaptive thinking");
+    assert_eq!(
+        fable["thinking"],
+        json!({"type": "adaptive", "display": "summarized"})
+    );
+
+    for model in ["claude-opus-5", "claude-sonnet-5"] {
+        let transformed = client
+            .transform_chat_request(&ChatRequest::new(model).add_user_message("solve"))
+            .expect("optional-thinking Claude 5 model should remain valid");
+        assert!(transformed.get("thinking").is_none());
+        assert!(transformed.get("output_config").is_none());
+    }
+
+    let mut disabled = ChatRequest::new("claude-fable-5").add_user_message("solve");
+    disabled.thinking = Some(ThinkingConfig::new());
+    assert!(client.transform_chat_request(&disabled).is_err());
+}
+
+#[test]
 fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
     let client = anthropic_client();
 

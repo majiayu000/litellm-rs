@@ -2,7 +2,8 @@
 
 use crate::core::models::openai::continuation::{
     ResponsesApiRequestWithExtensions, ResponsesApiResponseWithExtensions,
-    build_responses_continuation_turn,
+    attach_responses_choice_extensions, build_responses_continuation_turn,
+    map_responses_input_extensions,
 };
 use crate::core::models::openai::messages::{
     ChatMessage, ContentPart, ImageUrl, MessageContent, MessageRole,
@@ -54,10 +55,14 @@ pub async fn create_response(
     };
     let owner = lifecycle::response_owner(context.as_ref());
     let typed_request = payload.into_inner();
-    let has_continuation = typed_request.has_continuation();
+    let continuation_requested =
+        match super::chat::continuation_opt_in(&req, typed_request.has_continuation()) {
+            Ok(opt_in) => opt_in,
+            Err(error) => return Ok(openai_errors::validation_error(error)),
+        };
     let (request, input_extensions) = typed_request.into_parts();
 
-    if has_continuation
+    if continuation_requested
         && (request.stream.unwrap_or(false)
             || request.background.unwrap_or(false)
             || request.store == Some(true)
@@ -116,10 +121,11 @@ pub async fn create_response(
         Ok(r) => r,
         Err(e) => return Ok(openai_errors::validation_error(e)),
     };
-    let chat_extensions = match map_input_extensions(&request, &chat_request, input_extensions) {
-        Ok(extensions) => extensions,
-        Err(error) => return Ok(openai_errors::validation_error(error)),
-    };
+    let chat_extensions =
+        match map_responses_input_extensions(&request, &chat_request, input_extensions) {
+            Ok(extensions) => extensions,
+            Err(error) => return Ok(openai_errors::validation_error(error)),
+        };
     #[cfg(test)]
     if req.headers().contains_key("x-codex-upstream-counter") {
         PROVIDER_DISPATCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -152,7 +158,7 @@ pub async fn create_response(
             state.get_ref(),
             chat_request,
             chat_extensions,
-            has_continuation,
+            continuation_requested,
             request,
             context.as_ref().clone(),
             owner,
@@ -189,21 +195,14 @@ async fn handle_sync_response(
     match result {
         Ok((chat_resp, choice_extensions)) => {
             let mut resp = convert_to_responses_api(chat_resp, &original);
-            let mut output_extensions = vec![None; resp.output.len()];
-            if let Some(extension) = choice_extensions.into_iter().next()
-                && !extension.is_empty()
-            {
-                let index = resp
-                    .output
-                    .iter()
-                    .position(|item| matches!(item, ResponseOutputItem::Message(_)))
-                    .unwrap_or_else(|| {
-                        resp.output.insert(0, empty_output_message());
-                        output_extensions.insert(0, None);
-                        0
-                    });
-                output_extensions[index] = Some(extension);
-            }
+            let output_extensions = match attach_responses_choice_extensions(
+                &mut resp,
+                choice_extensions,
+                empty_output_message(),
+            ) {
+                Ok(extensions) => extensions,
+                Err(error) => return Ok(openai_errors::validation_error(error)),
+            };
             lifecycle::store_response_if_requested(&original, &resp, owner);
             match ResponsesApiResponseWithExtensions::from_parts(resp, output_extensions) {
                 Ok(response) => Ok(HttpResponse::Ok().json(response)),
@@ -215,40 +214,6 @@ async fn handle_sync_response(
             Ok(openai_errors::gateway_error_response(&e))
         }
     }
-}
-
-fn map_input_extensions(
-    request: &ResponsesApiRequest,
-    chat: &ChatCompletionRequest,
-    input: Vec<Option<ChatMessageExtensions>>,
-) -> Result<Vec<ChatMessageExtensions>, String> {
-    let mut mapped = Vec::with_capacity(chat.messages.len());
-    if request.instructions.is_some() {
-        mapped.push(ChatMessageExtensions::new());
-    }
-    match &request.input {
-        ResponseInput::Text(_) => mapped.push(ChatMessageExtensions::new()),
-        ResponseInput::Items(items) => {
-            if items.len() != input.len() {
-                return Err("Responses input extension length mismatch".to_string());
-            }
-            for (item, extension) in items.iter().zip(input) {
-                match item {
-                    ResponseInputItem::Message(_) => mapped.push(extension.unwrap_or_default()),
-                    ResponseInputItem::FunctionCall(_) | ResponseInputItem::CustomToolCall(_) => {
-                        if chat.messages.get(mapped.len()).is_some() {
-                            mapped.push(ChatMessageExtensions::new());
-                        }
-                    }
-                    _ => mapped.push(ChatMessageExtensions::new()),
-                }
-            }
-        }
-    }
-    if mapped.len() != chat.messages.len() {
-        return Err("Responses continuation mapping did not match chat messages".to_string());
-    }
-    Ok(mapped)
 }
 
 fn empty_output_message() -> ResponseOutputItem {
@@ -751,11 +716,12 @@ mod tests {
     }
 
     #[test]
-    fn continuation_message_stays_attached_to_following_tool_call() {
+    fn continuation_message_stays_attached_to_following_tool_call_and_result() {
         let request: ResponsesApiRequest = serde_json::from_value(serde_json::json!({
             "model":"claude-opus-5", "input":[
                 {"type":"message","role":"assistant","content":[]},
-                {"type":"function_call","id":"fc_1","call_id":"toolu_1","name":"lookup","arguments":"{}"}]
+                {"type":"function_call","id":"fc_1","call_id":"toolu_1","name":"lookup","arguments":"{}"},
+                {"type":"function_call_output","call_id":"toolu_1","output":"result"}]
         })).unwrap();
         let extension = ChatMessageExtensions::new().with_anthropic_thinking(
             AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
@@ -763,16 +729,22 @@ mod tests {
                 signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
             }]),
         );
-        let input = vec![Some(extension), None];
+        let input = vec![Some(extension), None, None];
         let turn = build_responses_continuation_turn(&request, &input).unwrap();
         let chat = build_chat_request_from_turn(&request, &turn).unwrap();
-        let mapped = map_input_extensions(&request, &chat, input).unwrap();
-        assert_eq!((chat.messages.len(), mapped.len()), (1, 1));
+        let mapped = map_responses_input_extensions(&request, &chat, input).unwrap();
+        assert_eq!((chat.messages.len(), mapped.len()), (2, 2));
         assert!(!mapped[0].is_empty());
+        assert!(mapped[1].is_empty());
         assert_eq!(
             chat.messages[0].tool_calls.as_ref().unwrap()[0].id,
             "toolu_1"
         );
+        assert_eq!(chat.messages[1].tool_call_id.as_deref(), Some("toolu_1"));
+        assert!(matches!(
+            chat.messages[1].content.as_ref(),
+            Some(MessageContent::Text(text)) if text == "result"
+        ));
     }
 
     #[test]

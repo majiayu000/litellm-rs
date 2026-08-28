@@ -4,9 +4,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _, se
 use serde_json::Value;
 
 use super::{
+    messages::MessageRole,
     requests::ChatCompletionRequest,
     responses::ChatCompletionResponse,
-    responses_api::{ResponsesApiRequest, ResponsesApiResponse},
+    responses_api::{
+        ResponseInput, ResponseInputItem, ResponseOutputItem, ResponsesApiRequest,
+        ResponsesApiResponse,
+    },
 };
 use crate::core::types::anthropic_continuation::ChatMessageExtensions;
 use crate::core::types::codex::domain::{CodexTurn, CodexTurnError, CodexTurnItem};
@@ -304,6 +308,135 @@ impl<'de> Deserialize<'de> for ResponsesApiResponseWithExtensions {
             serde_json::from_value::<ResponsesApiResponse>(value).map_err(D::Error::custom)?;
         Self::from_parts(response, output_extensions).map_err(D::Error::custom)
     }
+}
+
+pub(crate) fn attach_responses_choice_extensions(
+    response: &mut ResponsesApiResponse,
+    choice_extensions: Vec<ChatMessageExtensions>,
+    empty_message: ResponseOutputItem,
+) -> Result<Vec<Option<ChatMessageExtensions>>, String> {
+    if choice_extensions.len() > 1 {
+        return Err("Anthropic continuation requires exactly one response choice".to_string());
+    }
+    let mut output_extensions = vec![None; response.output.len()];
+    if let Some(extension) = choice_extensions.into_iter().next()
+        && !extension.is_empty()
+    {
+        let index = response
+            .output
+            .iter()
+            .position(|item| matches!(item, ResponseOutputItem::Message(_)))
+            .unwrap_or_else(|| {
+                response.output.insert(0, empty_message);
+                output_extensions.insert(0, None);
+                0
+            });
+        output_extensions[index] = Some(extension);
+    }
+    Ok(output_extensions)
+}
+
+pub(crate) fn map_responses_input_extensions(
+    request: &ResponsesApiRequest,
+    chat: &ChatCompletionRequest,
+    input: Vec<Option<ChatMessageExtensions>>,
+) -> Result<Vec<ChatMessageExtensions>, String> {
+    let mut mapped = Vec::with_capacity(chat.messages.len());
+    let mut chat_index = 0;
+    if request.instructions.is_some() {
+        mapped.push(ChatMessageExtensions::new());
+        chat_index += 1;
+    }
+    match &request.input {
+        ResponseInput::Text(_) => {
+            mapped.push(ChatMessageExtensions::new());
+            chat_index += 1;
+        }
+        ResponseInput::Items(items) => {
+            ensure_len("Responses input extensions", items.len(), input.len())?;
+            for (item, extension) in items.iter().zip(input) {
+                match item {
+                    ResponseInputItem::Message(_) => {
+                        if chat.messages.get(chat_index).is_none() {
+                            return Err("Responses message mapping drifted".to_string());
+                        }
+                        mapped.push(extension.unwrap_or_default());
+                        chat_index += 1;
+                    }
+                    ResponseInputItem::FunctionCall(call) => {
+                        map_tool_call(&mut mapped, chat, &mut chat_index, &call.call_id)?;
+                    }
+                    ResponseInputItem::CustomToolCall(call) => {
+                        map_tool_call(&mut mapped, chat, &mut chat_index, &call.call_id)?;
+                    }
+                    ResponseInputItem::FunctionCallOutput(output) => {
+                        map_tool_output(&mut mapped, chat, &mut chat_index, &output.call_id)?;
+                    }
+                    ResponseInputItem::CustomToolCallOutput(output) => {
+                        map_tool_output(&mut mapped, chat, &mut chat_index, &output.call_id)?;
+                    }
+                    item => {
+                        return Err(format!(
+                            "unsupported Responses continuation item: {}",
+                            item.feature_name()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    ensure_len(
+        "Responses continuation mapping",
+        chat.messages.len(),
+        mapped.len(),
+    )?;
+    ensure_len(
+        "Responses continuation cursor",
+        chat.messages.len(),
+        chat_index,
+    )?;
+    Ok(mapped)
+}
+
+fn map_tool_call(
+    mapped: &mut Vec<ChatMessageExtensions>,
+    chat: &ChatCompletionRequest,
+    chat_index: &mut usize,
+    call_id: &str,
+) -> Result<(), String> {
+    let contains_call = |index: usize| {
+        chat.messages
+            .get(index)
+            .and_then(|message| message.tool_calls.as_ref())
+            .is_some_and(|calls| calls.iter().any(|call| call.id == call_id))
+    };
+    if *chat_index > 0 && contains_call(*chat_index - 1) {
+        return Ok(());
+    }
+    if !contains_call(*chat_index) {
+        return Err("Responses tool-call mapping drifted".to_string());
+    }
+    mapped.push(ChatMessageExtensions::new());
+    *chat_index += 1;
+    Ok(())
+}
+
+fn map_tool_output(
+    mapped: &mut Vec<ChatMessageExtensions>,
+    chat: &ChatCompletionRequest,
+    chat_index: &mut usize,
+    call_id: &str,
+) -> Result<(), String> {
+    let message = chat
+        .messages
+        .get(*chat_index)
+        .ok_or_else(|| "Responses tool-output mapping drifted".to_string())?;
+    if message.role != MessageRole::Tool || message.tool_call_id.as_deref() != Some(call_id) {
+        return Err("Responses tool-output mapping drifted".to_string());
+    }
+    mapped.push(ChatMessageExtensions::new());
+    *chat_index += 1;
+    Ok(())
 }
 
 fn ensure_len(label: &str, expected: usize, actual: usize) -> Result<(), String> {

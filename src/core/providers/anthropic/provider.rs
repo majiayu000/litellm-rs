@@ -271,7 +271,45 @@ impl LLMProvider for AnthropicProvider {
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
         self.validate_request(&request)?;
-        self.client.transform_chat_request(&request)
+
+        // Preserve the provider-trait core wire contract. The execution client
+        // performs Anthropic-native block conversion at the HTTP boundary.
+        let mut transformed = serde_json::json!({
+            "model": request.model,
+            "messages": request.messages,
+        });
+        if let Some(max_tokens) = request.max_tokens {
+            transformed["max_tokens"] = Value::Number(max_tokens.into());
+        }
+        if let Some(temperature) = request.temperature {
+            let value = f64::from(temperature);
+            transformed["temperature"] =
+                Value::Number(serde_json::Number::from_f64(value).ok_or_else(|| {
+                    ProviderError::invalid_request(
+                        "anthropic",
+                        format!("invalid temperature value: {value}"),
+                    )
+                })?);
+        }
+        if let Some(top_p) = request.top_p {
+            let value = f64::from(top_p);
+            transformed["top_p"] =
+                Value::Number(serde_json::Number::from_f64(value).ok_or_else(|| {
+                    ProviderError::invalid_request(
+                        "anthropic",
+                        format!("invalid top_p value: {value}"),
+                    )
+                })?);
+        }
+        if request.stream {
+            transformed["stream"] = Value::Bool(true);
+        }
+        if let Some(tools) = request.tools
+            && !tools.is_empty()
+        {
+            transformed["tools"] = serde_json::to_value(tools)?;
+        }
+        Ok(transformed)
     }
 
     async fn transform_response(

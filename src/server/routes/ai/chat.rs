@@ -76,18 +76,10 @@ pub async fn chat_completions(
     }
 
     let typed = request.into_inner();
-    let opt_in = typed.has_continuation()
-        || req
-            .headers()
-            .get("x-litellm-anthropic-continuation")
-            .is_some_and(|value| value == "v1");
-    if let Some(value) = req.headers().get("x-litellm-anthropic-continuation")
-        && value != "v1"
-    {
-        return Ok(openai_errors::validation_error(
-            "x-litellm-anthropic-continuation must equal v1",
-        ));
-    }
+    let opt_in = match continuation_opt_in(&req, typed.has_continuation()) {
+        Ok(opt_in) => opt_in,
+        Err(error) => return Ok(openai_errors::validation_error(error)),
+    };
     let (legacy, extensions) = typed.into_parts();
     let request = Arc::new(legacy);
 
@@ -114,6 +106,17 @@ pub async fn chat_completions(
                 Ok(openai_errors::gateway_error_response(&e))
             }
         }
+    }
+}
+
+pub(super) fn continuation_opt_in(
+    req: &HttpRequest,
+    has_carrier: bool,
+) -> Result<bool, &'static str> {
+    match req.headers().get("x-litellm-anthropic-continuation") {
+        Some(value) if value != "v1" => Err("x-litellm-anthropic-continuation must equal v1"),
+        Some(_) => Ok(true),
+        None => Ok(has_carrier),
     }
 }
 

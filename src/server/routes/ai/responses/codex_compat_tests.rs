@@ -6,6 +6,10 @@ use crate::core::models::openai::{
     responses::{ChatChoice, ChatCompletionResponse},
     tools::{FunctionCall, ToolCall},
 };
+use crate::core::types::anthropic_continuation::{
+    AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+    ChatMessageExtensions,
+};
 use crate::core::types::codex::domain::{CodexCallKind, CodexTurn, CodexTurnError, CodexTurnItem};
 use crate::core::types::codex::wire::CODEX_PROTOCOL_BASELINE;
 use actix_web::{body::to_bytes, http::StatusCode, test as actix_test, web};
@@ -16,6 +20,136 @@ fn codex_request(value: Value) -> ResponsesApiRequest {
 fn codex_turn_json(input: &str) -> Result<CodexTurn, CodexTurnError> {
     let input: Value = serde_json::from_str(input).unwrap();
     CodexTurn::try_from(&codex_request(json!({"model":"m","input":input})))
+}
+
+#[test]
+fn responses_header_explicitly_opts_in_the_first_turn() {
+    let valid = actix_test::TestRequest::post()
+        .insert_header(("x-litellm-anthropic-continuation", "v1"))
+        .to_http_request();
+    assert!(super::super::chat::continuation_opt_in(&valid, false).unwrap());
+
+    let invalid = actix_test::TestRequest::post()
+        .insert_header(("x-litellm-anthropic-continuation", "future"))
+        .to_http_request();
+    assert!(super::super::chat::continuation_opt_in(&invalid, false).is_err());
+}
+
+#[test]
+fn first_turn_response_preserves_signed_and_redacted_continuation() {
+    let request = codex_request(json!({"model":"claude-opus-5","input":"run"}));
+    let chat = ChatCompletionResponse {
+        id: "chat_1".into(),
+        object: "chat.completion".into(),
+        created: 1,
+        model: "claude-opus-5".into(),
+        system_fingerprint: None,
+        choices: vec![ChatChoice {
+            index: 0,
+            message: ChatMessage {
+                role: MessageRole::Assistant,
+                content: None,
+                name: None,
+                function_call: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "toolu_1".into(),
+                    tool_type: "function".into(),
+                    function: FunctionCall {
+                        name: "lookup".into(),
+                        arguments: "{}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                audio: None,
+            },
+            logprobs: None,
+            finish_reason: Some("tool_calls".into()),
+        }],
+        usage: None,
+    };
+    let extension =
+        ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "plan".into(),
+                signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: AnthropicRedactedData::try_from("opaque-redacted").unwrap(),
+            },
+        ]));
+
+    let mut response = super::convert_to_responses_api(chat, &request);
+    let extensions = crate::core::models::openai::continuation::attach_responses_choice_extensions(
+        &mut response,
+        vec![extension],
+        super::empty_output_message(),
+    )
+    .expect("first turn continuation response");
+    let response =
+        crate::core::models::openai::continuation::ResponsesApiResponseWithExtensions::from_parts(
+            response, extensions,
+        )
+        .expect("matching response extensions");
+    let encoded = serde_json::to_value(response).unwrap();
+    assert_eq!(encoded["output"][0]["type"], "message");
+    assert_eq!(
+        encoded["output"][0]["extensions"]["anthropic_thinking"][0]["signature"],
+        "opaque-signature"
+    );
+    assert_eq!(
+        encoded["output"][0]["extensions"]["anthropic_thinking"][1]["data"],
+        "opaque-redacted"
+    );
+    assert_eq!(encoded["output"][1]["type"], "function_call");
+}
+
+#[actix_web::test]
+async fn first_turn_opt_in_rejects_unsupported_responses_modes_before_dispatch() {
+    let _guard = super::CODEX_DISPATCH_TEST_LOCK.lock().await;
+    let mut config = crate::server::valid_test_config();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    let server = crate::server::HttpServer::new(&config).await.unwrap();
+    let state = web::Data::new(server.state().clone());
+
+    for mode in [
+        json!({"stream":true}),
+        json!({"background":true}),
+        json!({"store":true}),
+        json!({"previous_response_id":"resp_previous"}),
+    ] {
+        super::PROVIDER_DISPATCH_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+        let mut value = json!({"model":"m","input":"run"});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(mode.as_object().unwrap().clone());
+        let payload = crate::core::models::openai::continuation::ResponsesApiRequestWithExtensions::from_parts(
+            codex_request(value),
+            vec![],
+        )
+        .unwrap();
+        let req = actix_test::TestRequest::post()
+            .insert_header(("x-litellm-anthropic-continuation", "v1"))
+            .insert_header(("x-codex-upstream-counter", "1"))
+            .to_http_request();
+        let response = super::create_response(state.clone(), req, web::Json(payload))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body()).await.unwrap()).unwrap();
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("continuation does not yet support")
+        );
+        assert_eq!(
+            super::PROVIDER_DISPATCH_COUNT.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
 }
 fn tier_two_items() -> [Value; 10] {
     serde_json::from_str(r#"[{"type":"additional_tools","role":"developer","tools":[]},{"type":"local_shell_call","call_id":"c1","status":"completed","action":{}},{"type":"mcp_tool_call_output","call_id":"c1","output":{"content":[]}},{"type":"tool_search_call","call_id":"c1","status":"completed","execution":"client","arguments":{}},{"type":"tool_search_output","call_id":"c1","status":"completed","execution":"client","tools":[]},{"type":"web_search_call","id":"i1","status":"completed"},{"type":"image_generation_call","id":"i1","status":"completed","result":"data"},{"type":"compaction","id":"i1","encrypted_content":"opaque"},{"type":"compaction_trigger"},{"type":"context_compaction","id":"i1","encrypted_content":"opaque"}]"#).unwrap()
