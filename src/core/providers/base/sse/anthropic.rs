@@ -224,9 +224,28 @@ impl SSETransformer for AnthropicTransformer {
 
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
-                    "thinking" | "redacted_thinking" => {
+                    "thinking" => {
                         let mut delta = Self::empty_delta();
                         delta.thinking = Some(ThinkingDelta::start());
+                        Ok(Some(self.chunk_with_choice(created, delta, None, None)))
+                    }
+                    "redacted_thinking" => {
+                        let data = content_block
+                            .get("data")
+                            .and_then(Value::as_str)
+                            .filter(|data| !data.is_empty())
+                            .ok_or_else(|| {
+                                ProviderError::response_parsing(
+                                    "anthropic",
+                                    "Redacted thinking block missing data".to_string(),
+                                )
+                            })?;
+                        let mut delta = Self::empty_delta();
+                        delta.thinking = Some(ThinkingDelta {
+                            redacted_data: Some(data.to_string()),
+                            is_start: Some(true),
+                            ..Default::default()
+                        });
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
                     "text" => Ok(None),
@@ -444,6 +463,31 @@ mod tests {
         let chunk = t.transform_chunk(&event.to_string()).unwrap().unwrap();
         let usage = chunk.usage.as_ref().unwrap();
         assert!(usage.prompt_tokens_details.is_none());
+    }
+
+    #[test]
+    fn streamed_redacted_thinking_preserves_opaque_data() {
+        let transformer = AnthropicTransformer::new("claude-opus-5");
+        let chunk = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "redacted_thinking",
+                    "data": "opaque-stream-data"
+                }
+            }),
+        );
+
+        assert_eq!(
+            chunk.choices[0]
+                .delta
+                .thinking
+                .as_ref()
+                .and_then(|thinking| thinking.redacted_data.as_deref()),
+            Some("opaque-stream-data")
+        );
     }
 
     #[test]

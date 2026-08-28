@@ -6,11 +6,18 @@ use crate::core::providers::anthropic::error::anthropic_api_error;
 use crate::core::providers::anthropic::models::{ModelFeature, get_anthropic_registry};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
+use crate::core::types::message::MessageRole;
+use crate::core::types::tools::ToolChoice;
 
 use super::AnthropicClient;
 
+#[derive(Debug, Clone, Copy)]
+struct Claude5Protocol {
+    thinking_always_on: bool,
+}
+
 impl AnthropicClient {
-    pub(super) fn transform_chat_request(
+    pub(in crate::core::providers::anthropic) fn transform_chat_request(
         &self,
         request: &ChatRequest,
     ) -> Result<Value, ProviderError> {
@@ -24,19 +31,31 @@ impl AnthropicClient {
         }
 
         let registry = get_anthropic_registry();
+        let claude_5_protocol = if self.config.uses_compatible_model_allow_list() {
+            None
+        } else {
+            Self::claude_5_protocol(&request.model)
+        };
 
         let model_spec = if self.config.uses_compatible_model_allow_list() {
             None
         } else {
             registry.get_model_spec(&request.model)
         };
-        if model_spec.is_none() && !self.config.allows_unknown_model(&request.model) {
+        if model_spec.is_none()
+            && claude_5_protocol.is_none()
+            && !self.config.allows_unknown_model(&request.model)
+        {
             return Err(anthropic_api_error(
                 400,
                 format!("Unsupported model: {}", request.model),
             ));
         }
+        if let Some(protocol) = claude_5_protocol {
+            Self::validate_claude_5_request(request, protocol)?;
+        }
         if model_spec.is_none()
+            && claude_5_protocol.is_none()
             && (request
                 .tools
                 .as_ref()
@@ -53,7 +72,10 @@ impl AnthropicClient {
                 ),
             ));
         }
-        if model_spec.is_none() && Self::has_unsupported_unknown_model_content(request) {
+        if model_spec.is_none()
+            && claude_5_protocol.is_none()
+            && Self::has_unsupported_unknown_model_content(request)
+        {
             return Err(ProviderError::not_supported(
                 "anthropic",
                 format!(
@@ -148,11 +170,15 @@ impl AnthropicClient {
             anthropic_request["stop_sequences"] = json!(stop);
         }
 
+        if request.stream {
+            anthropic_request["stream"] = json!(true);
+        }
+
         // Add tool support
         if let Some(tools) = &request.tools
             && !tools.is_empty()
         {
-            let Some(model_spec) = model_spec else {
+            if model_spec.is_none() && claude_5_protocol.is_none() {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!(
@@ -160,8 +186,10 @@ impl AnthropicClient {
                         request.model
                     ),
                 ));
-            };
-            if !model_spec.features.contains(&ModelFeature::ToolCalling) {
+            }
+            if model_spec
+                .is_some_and(|model_spec| !model_spec.features.contains(&ModelFeature::ToolCalling))
+            {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!("Model {} does not support tool calling", request.model),
@@ -176,11 +204,37 @@ impl AnthropicClient {
             }
         }
 
-        // Add thinking configuration
-        if let Some(thinking) = &request.thinking
-            && thinking.enabled
+        if request
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| thinking.enabled)
+            && claude_5_protocol.is_none()
+            && request
+                .tool_choice
+                .as_ref()
+                .is_some_and(Self::is_forced_tool_choice)
         {
-            let Some(model_spec) = model_spec else {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Manual extended thinking only supports auto or none tool_choice",
+            ));
+        }
+
+        // Add thinking configuration
+        if let Some(thinking) = &request.thinking {
+            if claude_5_protocol.is_some() {
+                if thinking.enabled {
+                    anthropic_request["thinking"] = json!({
+                        "type": "adaptive",
+                        "display": if thinking.include_thinking { "summarized" } else { "omitted" }
+                    });
+                } else {
+                    anthropic_request["thinking"] = json!({"type": "disabled"});
+                }
+                if let Some(effort) = thinking.effort {
+                    anthropic_request["output_config"] = json!({"effort": effort.as_str()});
+                }
+            } else if model_spec.is_none() {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!(
@@ -188,24 +242,28 @@ impl AnthropicClient {
                         request.model
                     ),
                 ));
-            };
-            if !model_spec.features.contains(&ModelFeature::ThinkingMode) {
+            } else if thinking.enabled
+                && model_spec.is_some_and(|model_spec| {
+                    !model_spec.features.contains(&ModelFeature::ThinkingMode)
+                })
+            {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!("Model {} does not support thinking", request.model),
                 ));
+            } else if thinking.enabled {
+                let budget = thinking.budget_tokens.unwrap_or(10_000);
+                // Anthropic requires max_tokens > budget_tokens. If the default (4096)
+                // is not greater than budget_tokens, raise max_tokens to budget + 1.
+                let current_max = request.max_tokens.unwrap_or(4096);
+                if current_max <= budget {
+                    anthropic_request["max_tokens"] = json!(budget + 1);
+                }
+                anthropic_request["thinking"] = json!({
+                    "type": "enabled",
+                    "budget_tokens": budget
+                });
             }
-            let budget = thinking.budget_tokens.unwrap_or(10_000);
-            // Anthropic requires max_tokens > budget_tokens. If the default (4096)
-            // is not greater than budget_tokens, raise max_tokens to budget + 1.
-            let current_max = request.max_tokens.unwrap_or(4096);
-            if current_max <= budget {
-                anthropic_request["max_tokens"] = json!(budget + 1);
-            }
-            anthropic_request["thinking"] = json!({
-                "type": "enabled",
-                "budget_tokens": budget
-            });
         }
 
         // Structured outputs: pass json_schema response_format to Anthropic.
@@ -237,5 +295,110 @@ impl AnthropicClient {
         }
 
         Ok(anthropic_request)
+    }
+
+    pub(in crate::core::providers::anthropic) fn is_claude_5_protocol_model(model: &str) -> bool {
+        Self::claude_5_protocol(model).is_some()
+    }
+
+    fn claude_5_protocol(model: &str) -> Option<Claude5Protocol> {
+        match model {
+            "claude-fable-5" => Some(Claude5Protocol {
+                thinking_always_on: true,
+            }),
+            "claude-opus-5" | "claude-sonnet-5" => Some(Claude5Protocol {
+                thinking_always_on: false,
+            }),
+            _ => None,
+        }
+    }
+
+    fn validate_claude_5_request(
+        request: &ChatRequest,
+        protocol: Claude5Protocol,
+    ) -> Result<(), ProviderError> {
+        if request
+            .temperature
+            .is_some_and(|temperature| temperature != 1.0)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Model {} does not support non-default temperature",
+                    request.model
+                ),
+            ));
+        }
+        if request.top_p.is_some_and(|top_p| top_p < 0.99) {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support non-default top_p", request.model),
+            ));
+        }
+        if request.extra_params.contains_key("top_k") {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support top_k", request.model),
+            ));
+        }
+        if request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| !matches!(message.role, MessageRole::System | MessageRole::Developer))
+            .is_some_and(|message| message.role == MessageRole::Assistant)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support assistant prefill", request.model),
+            ));
+        }
+        if protocol.thinking_always_on
+            && request
+                .thinking
+                .as_ref()
+                .is_some_and(|thinking| !thinking.enabled)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} cannot disable thinking", request.model),
+            ));
+        }
+        if request
+            .functions
+            .as_ref()
+            .is_some_and(|functions| !functions.is_empty())
+            || request.function_call.is_some()
+        {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} does not support legacy functions/function_call; use tools/tool_choice",
+                    request.model
+                ),
+            ));
+        }
+        if request
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| thinking.enabled && thinking.budget_tokens.is_some())
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Model {} uses adaptive thinking and does not support budget_tokens",
+                    request.model
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn is_forced_tool_choice(tool_choice: &ToolChoice) -> bool {
+        match tool_choice {
+            ToolChoice::String(choice) => choice == "required",
+            ToolChoice::Specific { function, .. } => function.is_some(),
+        }
     }
 }

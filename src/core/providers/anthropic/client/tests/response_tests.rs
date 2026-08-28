@@ -1,4 +1,6 @@
 use super::*;
+use crate::core::types::chat::ChatRequest;
+use crate::core::types::thinking::{AnthropicThinkingBlock, AnthropicThinkingContent};
 
 // ==================== Chat Response Transformation Tests ====================
 
@@ -100,7 +102,9 @@ fn test_anthropic_client_preserves_thinking_blocks() {
             {
                 "type": "thinking",
                 "thinking": "Second thought."
+                ,"signature": "sig_456"
             },
+            {"type": "redacted_thinking", "data": "opaque-data"},
             {"type": "text", "text": "Answer."}
         ],
         "stop_reason": "end_turn"
@@ -115,16 +119,68 @@ fn test_anthropic_client_preserves_thinking_blocks() {
             .message
             .thinking
             .as_ref()
-            .and_then(|thinking| thinking.as_text()),
+            .and_then(|thinking| thinking.as_text())
+            .as_deref(),
         Some("First thought. Second thought.")
     );
+    let content = AnthropicThinkingContent::try_from(vec![
+        AnthropicThinkingBlock::Thinking {
+            thinking: "First thought. ".to_string(),
+            signature: "sig_123".to_string(),
+        },
+        AnthropicThinkingBlock::Thinking {
+            thinking: "Second thought.".to_string(),
+            signature: "sig_456".to_string(),
+        },
+        AnthropicThinkingBlock::RedactedThinking {
+            data: "opaque-data".to_string(),
+        },
+    ])
+    .expect("valid Anthropic thinking history");
     assert_eq!(
         result.choices.first().unwrap().message.thinking.as_ref(),
-        Some(&ThinkingContent::Text {
-            text: "First thought. Second thought.".to_string(),
-            signature: Some("sig_123".to_string()),
-        })
+        Some(&ThinkingContent::AnthropicBlocks { content })
     );
+    assert!(
+        result.choices[0]
+            .message
+            .thinking
+            .as_ref()
+            .is_some_and(ThinkingContent::is_redacted)
+    );
+
+    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    request.messages = vec![
+        result.choices[0].message.clone(),
+        ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("Continue".to_string())),
+            ..Default::default()
+        },
+    ];
+    let replay = client
+        .transform_chat_request(&request)
+        .expect("non-tool thinking responses must remain replayable");
+    assert_eq!(
+        replay["messages"][0]["content"][2],
+        json!({"type":"redacted_thinking","data":"opaque-data"})
+    );
+}
+
+#[test]
+fn anthropic_response_rejects_thinking_without_signature() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+    let response = json!({
+        "id": "msg_missing_signature",
+        "model": "claude-opus-5",
+        "content": [{"type":"thinking","thinking":"unverifiable"}],
+        "stop_reason": "end_turn"
+    });
+
+    let error = client
+        .transform_chat_response(response)
+        .expect_err("thinking signatures are required for lossless replay");
+    assert!(error.to_string().contains("signature"));
 }
 
 #[test]

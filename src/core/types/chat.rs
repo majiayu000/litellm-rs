@@ -5,6 +5,7 @@ use super::message::{MessageContent, MessageRole};
 use super::thinking::{ThinkingConfig, ThinkingContent};
 use super::tools::{FunctionCall, ResponseFormat, Tool, ToolCall, ToolChoice};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Stream options for controlling streaming behavior
@@ -74,7 +75,7 @@ impl ChatMessage {
     }
 
     /// Get thinking content as text (if available)
-    pub fn thinking_text(&self) -> Option<&str> {
+    pub fn thinking_text(&self) -> Option<Cow<'_, str>> {
         self.thinking.as_ref().and_then(|t| t.as_text())
     }
 }

@@ -88,7 +88,7 @@ mod tests {
         assert!(msg.thinking_text().is_none());
 
         msg.thinking = Some(ThinkingContent::text("Step 1: Analyze"));
-        assert_eq!(msg.thinking_text(), Some("Step 1: Analyze"));
+        assert_eq!(msg.thinking_text().as_deref(), Some("Step 1: Analyze"));
     }
 
     // ==================== ChatRequest Tests ====================
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn test_thinking_content_text() {
         let content = ThinkingContent::text("Let me think...");
-        assert_eq!(content.as_text(), Some("Let me think..."));
+        assert_eq!(content.as_text().as_deref(), Some("Let me think..."));
         assert!(!content.is_redacted());
     }
 
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn test_thinking_content_block() {
         let content = ThinkingContent::block("Analyzing the problem");
-        assert_eq!(content.as_text(), Some("Analyzing the problem"));
+        assert_eq!(content.as_text().as_deref(), Some("Analyzing the problem"));
     }
 
     /// Test thinking content redacted
