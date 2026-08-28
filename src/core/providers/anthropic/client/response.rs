@@ -7,7 +7,7 @@ use crate::core::types::{
     chat::ChatMessage,
     message::{MessageContent, MessageRole},
     responses::{ChatChoice, ChatResponse, FinishReason},
-    thinking::ThinkingContent,
+    thinking::{AnthropicThinkingBlock, ThinkingContent},
     tools::{FunctionCall, ToolCall},
 };
 
@@ -68,6 +68,7 @@ impl AnthropicClient {
         let mut thinking_parts = Vec::new();
         let mut thinking_signature = None;
         let mut has_redacted_thinking = false;
+        let mut anthropic_thinking_blocks = Vec::new();
         let mut tool_calls = Vec::new();
 
         for item in content {
@@ -94,15 +95,34 @@ impl AnthropicClient {
                     }
                 }
                 Some("thinking") => {
-                    if let Some(thinking) = item.get("thinking").and_then(|t| t.as_str()) {
-                        thinking_parts.push(thinking.to_string());
+                    let thinking = item
+                        .get("thinking")
+                        .and_then(|value| value.as_str())
+                        .ok_or_else(|| anthropic_parse_error("Thinking block missing thinking"))?;
+                    let signature = item
+                        .get("signature")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    thinking_parts.push(thinking.to_string());
+                    if signature.is_some() {
+                        thinking_signature = signature.clone();
                     }
-                    if let Some(signature) = item.get("signature").and_then(|s| s.as_str()) {
-                        thinking_signature = Some(signature.to_string());
-                    }
+                    anthropic_thinking_blocks.push(AnthropicThinkingBlock::Thinking {
+                        thinking: thinking.to_string(),
+                        signature,
+                    });
                 }
                 Some("redacted_thinking") => {
+                    let data = item
+                        .get("data")
+                        .and_then(|value| value.as_str())
+                        .ok_or_else(|| {
+                            anthropic_parse_error("Redacted thinking block missing data")
+                        })?;
                     has_redacted_thinking = true;
+                    anthropic_thinking_blocks.push(AnthropicThinkingBlock::RedactedThinking {
+                        data: data.to_string(),
+                    });
                 }
                 Some("refusal") => {
                     if let Some(refusal) = item.get("refusal").and_then(|r| r.as_str()) {
@@ -113,7 +133,11 @@ impl AnthropicClient {
             }
         }
 
-        let thinking = if !thinking_parts.is_empty() {
+        let thinking = if !tool_calls.is_empty() && !anthropic_thinking_blocks.is_empty() {
+            Some(ThinkingContent::AnthropicBlocks {
+                blocks: anthropic_thinking_blocks,
+            })
+        } else if !thinking_parts.is_empty() {
             Some(ThinkingContent::Text {
                 text: thinking_parts.join(""),
                 signature: thinking_signature,

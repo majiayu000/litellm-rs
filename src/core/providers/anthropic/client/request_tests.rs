@@ -7,7 +7,7 @@ use crate::core::types::content::{
     AudioData, CacheControl, ContentPart, DocumentSource, ImageSource,
 };
 use crate::core::types::message::{MessageContent, MessageRole};
-use crate::core::types::thinking::ThinkingConfig;
+use crate::core::types::thinking::{AnthropicThinkingBlock, ThinkingConfig, ThinkingContent};
 use crate::core::types::tools::{
     FunctionCall, FunctionChoice, FunctionDefinition, Tool, ToolCall, ToolChoice, ToolType,
 };
@@ -48,23 +48,25 @@ fn current_claude_5_rejects_non_default_sampling_parameters() {
 
 #[test]
 fn current_claude_5_accepts_sampling_compatibility_defaults() {
-    let mut request = ChatRequest::new("claude-opus-5").add_user_message("Hello");
-    request.temperature = Some(1.0);
-    request.top_p = Some(0.99);
+    for top_p in [0.99, 1.0] {
+        let mut request = ChatRequest::new("claude-opus-5").add_user_message("Hello");
+        request.temperature = Some(1.0);
+        request.top_p = Some(top_p);
 
-    let transformed = anthropic_client()
-        .transform_chat_request(&request)
-        .expect("Anthropic documents compatibility defaults for Claude 5");
+        let transformed = anthropic_client()
+            .transform_chat_request(&request)
+            .expect("Anthropic accepts top_p values at or above 0.99 for Claude 5");
 
-    assert_eq!(transformed["temperature"], json!(1.0));
-    assert!(
-        (transformed["top_p"]
-            .as_f64()
-            .expect("top_p must be numeric")
-            - 0.99)
+        assert_eq!(transformed["temperature"], json!(1.0));
+        assert!(
+            (transformed["top_p"]
+                .as_f64()
+                .expect("top_p must be numeric")
+                - f64::from(top_p))
             .abs()
-            < 1e-6
-    );
+                < 1e-6
+        );
+    }
 }
 
 #[test]
@@ -97,6 +99,13 @@ fn current_claude_5_serializes_adaptive_thinking_and_effort() {
         assert_eq!(transformed["output_config"]["effort"], "medium");
         assert!(transformed["thinking"].get("budget_tokens").is_none());
     }
+
+    let mut omitted = ChatRequest::new("claude-opus-5").add_user_message("Solve this");
+    omitted.thinking = Some(ThinkingConfig::medium_effort().include_in_response(false));
+    let transformed = anthropic_client()
+        .transform_chat_request(&omitted)
+        .expect("Claude 5 supports omitted adaptive thinking display");
+    assert_eq!(transformed["thinking"]["display"], "omitted");
 }
 
 #[test]
@@ -126,6 +135,156 @@ fn current_claude_5_rejects_legacy_function_fields() {
         .transform_chat_request(&function_call_request)
         .expect_err("Claude 5 must not silently drop legacy function_call");
     assert!(function_call_error.to_string().contains("legacy functions"));
+}
+
+#[test]
+fn current_claude_5_preserves_thinking_blocks_in_tool_continuations() {
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let client = anthropic_client();
+        let response = json!({
+            "id": "msg_tool_loop",
+            "model": model,
+            "content": [
+                {"type": "thinking", "thinking": "first", "signature": "sig-first"},
+                {"type": "redacted_thinking", "data": "encrypted-payload"},
+                {"type": "thinking", "thinking": "second", "signature": "sig-second"},
+                {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"id": 7}}
+            ],
+            "stop_reason": "tool_use"
+        });
+        let response = client
+            .transform_chat_response(response)
+            .expect("Claude 5 tool response should parse");
+        let assistant = response.choices[0].message.clone();
+        assert_eq!(
+            assistant.thinking,
+            Some(ThinkingContent::AnthropicBlocks {
+                blocks: vec![
+                    AnthropicThinkingBlock::Thinking {
+                        thinking: "first".to_string(),
+                        signature: Some("sig-first".to_string()),
+                    },
+                    AnthropicThinkingBlock::RedactedThinking {
+                        data: "encrypted-payload".to_string(),
+                    },
+                    AnthropicThinkingBlock::Thinking {
+                        thinking: "second".to_string(),
+                        signature: Some("sig-second".to_string()),
+                    },
+                ],
+            })
+        );
+
+        let tool_result = ChatMessage {
+            role: MessageRole::Tool,
+            content: Some(MessageContent::Text("done".to_string())),
+            tool_call_id: Some("toolu_1".to_string()),
+            ..Default::default()
+        };
+        let mut request = ChatRequest::new(model).with_tools(vec![tool("lookup")]);
+        request.messages = vec![assistant, tool_result];
+
+        let transformed = client
+            .transform_chat_request(&request)
+            .expect("Claude 5 tool continuation should preserve thinking blocks");
+        let blocks = transformed["messages"][0]["content"]
+            .as_array()
+            .expect("assistant content must be blocks");
+
+        assert_eq!(
+            blocks[0],
+            json!({"type": "thinking", "thinking": "first", "signature": "sig-first"})
+        );
+        assert_eq!(
+            blocks[1],
+            json!({"type": "redacted_thinking", "data": "encrypted-payload"})
+        );
+        assert_eq!(
+            blocks[2],
+            json!({"type": "thinking", "thinking": "second", "signature": "sig-second"})
+        );
+        assert_eq!(blocks[3]["type"], "tool_use");
+    }
+}
+
+#[test]
+fn current_claude_5_serializes_or_rejects_explicit_disabled_thinking() {
+    let mut fable = ChatRequest::new("claude-fable-5").add_user_message("Hello");
+    fable.thinking = Some(ThinkingConfig::default());
+    let error = anthropic_client()
+        .transform_chat_request(&fable)
+        .expect_err("Fable 5 thinking is always on");
+    assert!(error.to_string().contains("cannot disable thinking"));
+
+    for model in ["claude-opus-5", "claude-sonnet-5"] {
+        let mut request = ChatRequest::new(model).add_user_message("Hello");
+        request.thinking = Some(ThinkingConfig::default());
+        let transformed = anthropic_client()
+            .transform_chat_request(&request)
+            .expect("Opus and Sonnet 5 can explicitly disable thinking");
+        assert_eq!(transformed["thinking"], json!({"type": "disabled"}));
+    }
+}
+
+#[test]
+fn current_claude_5_rejects_every_top_k_value() {
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let mut request = ChatRequest::new(model).add_user_message("Hello");
+        request.extra_params.insert("top_k".to_string(), json!(1));
+        let error = anthropic_client()
+            .transform_chat_request(&request)
+            .expect_err("Claude 5 does not accept top_k");
+        assert!(error.to_string().contains("top_k"));
+    }
+}
+
+#[test]
+fn current_claude_5_rejects_forced_tools_only_while_thinking_is_active() {
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let mut required = ChatRequest::new(model)
+            .add_user_message("lookup")
+            .with_tools(vec![tool("lookup")]);
+        required.tool_choice = Some(ToolChoice::String("required".to_string()));
+        let error = anthropic_client()
+            .transform_chat_request(&required)
+            .expect_err("default Claude 5 thinking forbids forced tools");
+        assert!(error.to_string().contains("tool_choice"));
+
+        let mut specific = ChatRequest::new(model)
+            .add_user_message("lookup")
+            .with_tools(vec![tool("lookup")]);
+        specific.tool_choice = Some(ToolChoice::Specific {
+            choice_type: "function".to_string(),
+            function: Some(FunctionChoice {
+                name: "lookup".to_string(),
+            }),
+        });
+        let error = anthropic_client()
+            .transform_chat_request(&specific)
+            .expect_err("default Claude 5 thinking forbids specific tools");
+        assert!(error.to_string().contains("tool_choice"));
+    }
+
+    let mut disabled = ChatRequest::new("claude-opus-5")
+        .add_user_message("lookup")
+        .with_tools(vec![tool("lookup")]);
+    disabled.thinking = Some(ThinkingConfig::default());
+    disabled.tool_choice = Some(ToolChoice::String("required".to_string()));
+    let transformed = anthropic_client()
+        .transform_chat_request(&disabled)
+        .expect("forced tools are valid when Opus 5 thinking is explicitly disabled");
+    assert_eq!(transformed["tool_choice"]["type"], "any");
+
+    for choice in ["auto", "none"] {
+        let mut request = ChatRequest::new("claude-sonnet-5")
+            .add_user_message("lookup")
+            .with_tools(vec![tool("lookup")]);
+        request.tool_choice = Some(ToolChoice::String(choice.to_string()));
+        let transformed = anthropic_client()
+            .transform_chat_request(&request)
+            .expect("default Claude 5 thinking supports auto and none tool choice");
+        assert_eq!(transformed["tool_choice"]["type"], choice);
+    }
 }
 
 #[test]

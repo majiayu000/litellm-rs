@@ -6,6 +6,28 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Lossless Anthropic thinking block used when a signed tool-use turn must be replayed.
+///
+/// These fields are owned by the Anthropic Messages API wire contract. Generic callers should
+/// keep the blocks opaque; only the Anthropic adapter serializes them back to upstream requests.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AnthropicThinkingBlock {
+    /// A visible thinking block and its verification signature.
+    Thinking {
+        /// Thinking text returned by Anthropic.
+        thinking: String,
+        /// Signature that must be replayed unchanged in tool continuations.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    /// An encrypted thinking block whose payload must be replayed unchanged.
+    RedactedThinking {
+        /// Opaque encrypted payload returned by Anthropic.
+        data: String,
+    },
+}
+
 /// Unified thinking content - provider agnostic
 ///
 /// Different providers return thinking/reasoning in different formats:
@@ -39,6 +61,11 @@ pub enum ThinkingContent {
         /// Number of tokens used for thinking (if available)
         #[serde(skip_serializing_if = "Option::is_none")]
         token_count: Option<u32>,
+    },
+    /// Ordered Anthropic blocks retained losslessly for signed tool continuations.
+    AnthropicBlocks {
+        /// Thinking and redacted-thinking blocks in upstream response order.
+        blocks: Vec<AnthropicThinkingBlock>,
     },
 }
 
@@ -78,12 +105,24 @@ impl ThinkingContent {
             Self::Text { text, .. } => Some(text),
             Self::Block { thinking, .. } => Some(thinking),
             Self::Redacted { .. } => None,
+            Self::AnthropicBlocks { blocks } => blocks.iter().find_map(|block| match block {
+                AnthropicThinkingBlock::Thinking { thinking, .. } => Some(thinking.as_str()),
+                AnthropicThinkingBlock::RedactedThinking { .. } => None,
+            }),
         }
     }
 
     /// Check if thinking is redacted
     pub fn is_redacted(&self) -> bool {
         matches!(self, Self::Redacted { .. })
+            || matches!(
+                self,
+                Self::AnthropicBlocks { blocks }
+                    if blocks.iter().any(|block| matches!(
+                        block,
+                        AnthropicThinkingBlock::RedactedThinking { .. }
+                    ))
+            )
     }
 }
 
@@ -543,6 +582,34 @@ mod tests {
             }
             _ => panic!("Expected Text variant"),
         }
+    }
+
+    #[test]
+    fn test_anthropic_thinking_blocks_round_trip_losslessly() {
+        let content = ThinkingContent::AnthropicBlocks {
+            blocks: vec![
+                AnthropicThinkingBlock::Thinking {
+                    thinking: "first".to_string(),
+                    signature: Some("sig-first".to_string()),
+                },
+                AnthropicThinkingBlock::RedactedThinking {
+                    data: "encrypted-payload".to_string(),
+                },
+                AnthropicThinkingBlock::Thinking {
+                    thinking: "second".to_string(),
+                    signature: Some("sig-second".to_string()),
+                },
+            ],
+        };
+
+        let serialized = serde_json::to_string(&content).expect("thinking blocks serialize");
+        let parsed: ThinkingContent =
+            serde_json::from_str(&serialized).expect("thinking blocks deserialize");
+
+        assert_eq!(parsed, content);
+        assert!(serialized.contains("sig-first"));
+        assert!(serialized.contains("encrypted-payload"));
+        assert!(serialized.contains("sig-second"));
     }
 
     #[test]

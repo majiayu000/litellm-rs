@@ -4,9 +4,14 @@ use crate::core::types::{
     chat::{ChatMessage, ChatRequest},
     context::RequestContext,
     message::{MessageContent, MessageRole},
-    thinking::ThinkingContent,
+    thinking::{ThinkingConfig, ThinkingContent},
     tools::FunctionCall,
 };
+
+fn first_party_provider() -> AnthropicProvider {
+    AnthropicProvider::new(AnthropicConfig::new_test("test-key"))
+        .unwrap_or_else(|err| panic!("provider should build: {err}"))
+}
 
 fn compatible_provider() -> AnthropicProvider {
     let config = AnthropicConfig::new_test("test-key")
@@ -111,4 +116,47 @@ async fn compatible_models_reject_message_thinking() {
     };
 
     assert!(format!("{err}").contains("only supports text and image content"));
+}
+
+#[test]
+fn current_claude_5_supported_params_exclude_top_k() {
+    let provider = first_party_provider();
+
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        assert!(
+            !provider
+                .get_supported_openai_params(model)
+                .contains(&"top_k")
+        );
+    }
+    assert!(
+        provider
+            .get_supported_openai_params("claude-3-opus-20240229")
+            .contains(&"top_k")
+    );
+}
+
+#[tokio::test]
+async fn current_claude_5_public_transform_uses_client_contract() {
+    let provider = first_party_provider();
+    let mut request = ChatRequest::new("claude-opus-5").add_user_message("Solve this");
+    request.thinking = Some(ThinkingConfig::medium_effort());
+
+    let transformed = provider
+        .transform_request(request, RequestContext::new())
+        .await
+        .expect("public transformer should accept adaptive thinking");
+
+    assert_eq!(transformed["thinking"]["type"], "adaptive");
+    assert_eq!(transformed["output_config"]["effort"], "medium");
+
+    let mut top_k = ChatRequest::new("claude-opus-5").add_user_message("Hello");
+    top_k
+        .extra_params
+        .insert("top_k".to_string(), serde_json::json!(1));
+    let error = provider
+        .transform_request(top_k, RequestContext::new())
+        .await
+        .expect_err("public transformer must share Claude 5 validation");
+    assert!(error.to_string().contains("top_k"));
 }

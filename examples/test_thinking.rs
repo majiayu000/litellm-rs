@@ -8,7 +8,9 @@ use litellm_rs::core::providers::thinking::{
 };
 use litellm_rs::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use litellm_rs::core::types::context::RequestContext;
-use litellm_rs::core::types::thinking::{ThinkingConfig, ThinkingContent, ThinkingEffort};
+use litellm_rs::core::types::thinking::{
+    AnthropicThinkingBlock, ThinkingConfig, ThinkingContent, ThinkingEffort,
+};
 use litellm_rs::core::types::{
     chat::ChatMessage, chat::ChatRequest, message::MessageContent, message::MessageRole,
 };
@@ -173,6 +175,23 @@ async fn test_deepseek_r1(provider: &OpenAILikeProvider) -> Result<(), Box<dyn s
                 ThinkingContent::Redacted { token_count } => {
                     println!("Type: Redacted");
                     println!("Token Count: {:?}", token_count);
+                }
+                ThinkingContent::AnthropicBlocks { blocks } => {
+                    println!("Type: AnthropicBlocks");
+                    for block in blocks {
+                        match block {
+                            AnthropicThinkingBlock::Thinking {
+                                thinking,
+                                signature,
+                            } => {
+                                println!("Thinking:\n{}", thinking);
+                                println!("Signature: {:?}", signature);
+                            }
+                            AnthropicThinkingBlock::RedactedThinking { data } => {
+                                println!("Redacted Data: {}", data);
+                            }
+                        }
+                    }
                 }
             }
         } else {

@@ -234,7 +234,22 @@ impl LLMProvider for AnthropicProvider {
             || self.client.allows_unknown_model(model)
     }
 
-    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        if matches!(
+            model,
+            "claude-fable-5" | "claude-opus-5" | "claude-sonnet-5"
+        ) {
+            return &[
+                "temperature",
+                "max_tokens",
+                "top_p",
+                "tools",
+                "tool_choice",
+                "stream",
+                "stop",
+            ];
+        }
+
         &[
             "temperature",
             "max_tokens",
@@ -266,54 +281,7 @@ impl LLMProvider for AnthropicProvider {
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
         self.validate_request(&request)?;
-
-        // Request
-        let mut anthropic_request = serde_json::json!({
-            "model": request.model,
-            "messages": request.messages,
-        });
-
-        // Add optional parameters
-        if let Some(max_tokens) = request.max_tokens {
-            anthropic_request["max_tokens"] = Value::Number(max_tokens.into());
-        }
-
-        if let Some(temperature) = request.temperature {
-            let temp_f64: f64 = temperature.into();
-            anthropic_request["temperature"] = Value::Number(
-                serde_json::Number::from_f64(temp_f64).ok_or_else(|| {
-                    ProviderError::invalid_request(
-                        "anthropic",
-                        format!("invalid temperature value: {temp_f64} (NaN and Infinity are not allowed)"),
-                    )
-                })?,
-            );
-        }
-
-        if let Some(top_p) = request.top_p {
-            let top_p_f64: f64 = top_p.into();
-            anthropic_request["top_p"] =
-                Value::Number(serde_json::Number::from_f64(top_p_f64).ok_or_else(|| {
-                    ProviderError::invalid_request(
-                        "anthropic",
-                        format!(
-                            "invalid top_p value: {top_p_f64} (NaN and Infinity are not allowed)"
-                        ),
-                    )
-                })?);
-        }
-
-        if request.stream {
-            anthropic_request["stream"] = Value::Bool(request.stream);
-        }
-
-        if let Some(tools) = request.tools
-            && !tools.is_empty()
-        {
-            anthropic_request["tools"] = serde_json::to_value(tools)?;
-        }
-
-        Ok(anthropic_request)
+        self.client.transform_chat_request(&request)
     }
 
     async fn transform_response(
@@ -672,9 +640,10 @@ mod tests {
         };
 
         assert_eq!(transformed["model"], "mimo-v2.5");
+        assert_eq!(transformed["messages"][0]["content"][1]["type"], "image");
         assert_eq!(
-            transformed["messages"][0]["content"][1]["type"],
-            "image_url"
+            transformed["messages"][0]["content"][1]["source"]["type"],
+            "base64"
         );
     }
 

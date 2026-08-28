@@ -11,7 +11,7 @@ use crate::core::types::message::MessageRole;
 use super::AnthropicClient;
 
 impl AnthropicClient {
-    pub(super) fn transform_chat_request(
+    pub(in crate::core::providers::anthropic) fn transform_chat_request(
         &self,
         request: &ChatRequest,
     ) -> Result<Value, ProviderError> {
@@ -152,6 +152,10 @@ impl AnthropicClient {
             anthropic_request["stop_sequences"] = json!(stop);
         }
 
+        if request.stream {
+            anthropic_request["stream"] = json!(true);
+        }
+
         // Add tool support
         if let Some(tools) = &request.tools
             && !tools.is_empty()
@@ -181,9 +185,7 @@ impl AnthropicClient {
         }
 
         // Add thinking configuration
-        if let Some(thinking) = &request.thinking
-            && thinking.enabled
-        {
+        if let Some(thinking) = &request.thinking {
             let Some(model_spec) = model_spec else {
                 return Err(ProviderError::not_supported(
                     "anthropic",
@@ -196,22 +198,29 @@ impl AnthropicClient {
             let supports_adaptive_thinking =
                 Self::model_metadata_flag(model_spec, "supports_adaptive_thinking");
             if supports_adaptive_thinking {
-                let mut adaptive = json!({ "type": "adaptive" });
-                if thinking.include_thinking {
-                    adaptive["display"] = json!("summarized");
+                if thinking.enabled {
+                    let mut adaptive = json!({ "type": "adaptive" });
+                    if thinking.include_thinking {
+                        adaptive["display"] = json!("summarized");
+                    } else {
+                        adaptive["display"] = json!("omitted");
+                    }
+                    anthropic_request["thinking"] = adaptive;
+                } else {
+                    anthropic_request["thinking"] = json!({ "type": "disabled" });
                 }
-                anthropic_request["thinking"] = adaptive;
                 if let Some(effort) = thinking.effort {
                     anthropic_request["output_config"] = json!({
                         "effort": effort.as_str()
                     });
                 }
-            } else if !model_spec.features.contains(&ModelFeature::ThinkingMode) {
+            } else if thinking.enabled && !model_spec.features.contains(&ModelFeature::ThinkingMode)
+            {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!("Model {} does not support thinking", request.model),
                 ));
-            } else {
+            } else if thinking.enabled {
                 let budget = thinking.budget_tokens.unwrap_or(10_000);
                 // Anthropic requires max_tokens > budget_tokens. If the default (4096)
                 // is not greater than budget_tokens, raise max_tokens to budget + 1.
@@ -283,6 +292,12 @@ impl AnthropicClient {
                 format!("Model {} does not support non-default top_p", request.model),
             ));
         }
+        if request.extra_params.contains_key("top_k") {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support top_k", request.model),
+            ));
+        }
         if request
             .messages
             .iter()
@@ -293,6 +308,35 @@ impl AnthropicClient {
             return Err(ProviderError::invalid_request(
                 "anthropic",
                 format!("Model {} does not support assistant prefill", request.model),
+            ));
+        }
+        if request
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| !thinking.enabled)
+            && Self::model_metadata_flag(model_spec, "adaptive_thinking_always_on")
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} cannot disable thinking", request.model),
+            ));
+        }
+        let thinking_is_active = request
+            .thinking
+            .as_ref()
+            .is_none_or(|thinking| thinking.enabled);
+        if thinking_is_active
+            && request
+                .tool_choice
+                .as_ref()
+                .is_some_and(Self::is_forced_tool_choice)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Model {} only supports auto or none tool_choice while thinking is active",
+                    request.model
+                ),
             ));
         }
         if request
@@ -324,6 +368,13 @@ impl AnthropicClient {
         }
 
         Ok(())
+    }
+
+    fn is_forced_tool_choice(tool_choice: &crate::core::types::tools::ToolChoice) -> bool {
+        match tool_choice {
+            crate::core::types::tools::ToolChoice::String(choice) => choice == "required",
+            crate::core::types::tools::ToolChoice::Specific { function, .. } => function.is_some(),
+        }
     }
 
     fn model_metadata_flag(
