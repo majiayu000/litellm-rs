@@ -356,6 +356,25 @@ impl CatalogAuthority {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn inject_catalog_shadow_for_test(
+        &mut self,
+        provider: &str,
+        raw_pricing_key: &str,
+        shadow_owner_pricing_key: &str,
+    ) -> bool {
+        let Some(index) = self.callable_models.iter().position(|model| {
+            model.provider == provider && model.pricing_key == shadow_owner_pricing_key
+        }) else {
+            return false;
+        };
+        self.catalog_by_provider
+            .entry(provider.to_owned())
+            .or_default()
+            .insert(raw_pricing_key.to_owned(), index);
+        true
+    }
+
     fn canonical_provider<'a>(&'a self, provider: &'a str) -> Option<&'a str> {
         if self.canonical_providers.contains(provider) {
             Some(provider)
@@ -365,25 +384,25 @@ impl CatalogAuthority {
     }
 
     fn resolve_exact<'a>(&'a self, provider: &str, model: &str) -> Option<CatalogResolution<'a>> {
-        if let Some(index) = self
-            .catalog_by_provider
+        if let Some(lookup) = self
+            .pricing_by_provider
             .get(provider)
             .and_then(|models| models.get(model))
         {
-            return Some(CatalogResolution::Callable(&self.callable_models[*index]));
+            return Some(match (lookup.decision, lookup.callable_index) {
+                (CatalogDecision::Callable, Some(index)) => {
+                    CatalogResolution::Callable(&self.callable_models[index])
+                }
+                (CatalogDecision::PricingOnly, _) => CatalogResolution::PricingOnly,
+                (CatalogDecision::Unreviewed, _) => CatalogResolution::Unreviewed,
+                (CatalogDecision::Callable, None) => CatalogResolution::Unknown,
+            });
         }
-        let lookup = self
-            .pricing_by_provider
+        let index = self
+            .catalog_by_provider
             .get(provider)
             .and_then(|models| models.get(model))?;
-        Some(match (lookup.decision, lookup.callable_index) {
-            (CatalogDecision::Callable, Some(index)) => {
-                CatalogResolution::Callable(&self.callable_models[index])
-            }
-            (CatalogDecision::PricingOnly, _) => CatalogResolution::PricingOnly,
-            (CatalogDecision::Unreviewed, _) => CatalogResolution::Unreviewed,
-            (CatalogDecision::Callable, None) => CatalogResolution::Unknown,
-        })
+        Some(CatalogResolution::Callable(&self.callable_models[*index]))
     }
 }
 
@@ -418,16 +437,16 @@ fn validate_callable_ledger_collisions(
     entries: &[AuthorityEntry],
 ) -> Result<(), CatalogAuthorityError> {
     let mut ledger = HashMap::new();
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
         let identity = (entry.provider(), entry.pricing_key());
-        if ledger.insert(identity, entry.decision()).is_some() {
+        if ledger.insert(identity, index).is_some() {
             return Err(invalid(format!(
                 "duplicate pricing classification for {:?}/{:?}",
                 identity.0, identity.1
             )));
         }
     }
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
         let AuthorityEntry::Callable {
             provider,
             catalog_model_id,
@@ -437,15 +456,26 @@ fn validate_callable_ledger_collisions(
         else {
             continue;
         };
-        for candidate in std::iter::once(catalog_model_id).chain(aliases) {
-            if ledger
-                .get(&(provider.as_str(), candidate.as_str()))
-                .is_some_and(|decision| *decision != CatalogDecision::Callable)
-            {
-                return Err(invalid(format!(
-                    "callable identity {provider:?}/{candidate:?} collides with a non-callable pricing key"
-                )));
-            }
+        if ledger
+            .get(&(provider.as_str(), catalog_model_id.as_str()))
+            .is_some_and(|owner| *owner != index)
+        {
+            return Err(invalid(format!(
+                "callable identity {provider:?}/{catalog_model_id:?} collides with a different pricing row"
+            )));
+        }
+        for alias in aliases {
+            let Some(owner) = ledger.get(&(provider.as_str(), alias.as_str())) else {
+                continue;
+            };
+            let ownership = if *owner == index {
+                "its own exact pricing row"
+            } else {
+                "a different pricing row"
+            };
+            return Err(invalid(format!(
+                "callable alias {provider:?}/{alias:?} collides with {ownership}"
+            )));
         }
     }
     Ok(())

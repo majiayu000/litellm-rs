@@ -289,11 +289,21 @@ fn strict_schema_and_exact_collisions_fail_closed() {
         .expect("callable entry must be an object")
         .remove("aliases");
     assert!(CatalogAuthority::from_json(&missing_aliases.to_string()).is_err());
+
+    let self_alias = cross_class_authority_json(
+        "other",
+        "restricted",
+        "unreviewed",
+        "catalog-only",
+        &["source-price"],
+    );
+    let error = CatalogAuthority::from_json(&self_alias).expect_err("self alias must fail");
+    assert!(error.to_string().contains("own exact pricing row"));
 }
 
 #[test]
 fn callable_identities_cannot_upgrade_non_callable_exact_ledger_keys() {
-    for target_decision in ["pricing_only", "unreviewed"] {
+    for target_decision in ["callable", "pricing_only", "unreviewed"] {
         for target_key in ["restricted", "BAAI/restricted-model"] {
             for alias_collision in [false, true] {
                 let catalog_model_id = if alias_collision {
@@ -314,9 +324,9 @@ fn callable_identities_cannot_upgrade_non_callable_exact_ledger_keys() {
                     &aliases,
                 );
                 let error = CatalogAuthority::from_json(&content)
-                    .expect_err("non-callable exact key must not be upgraded");
+                    .expect_err("a different exact pricing key must not be shadowed");
                 assert!(
-                    error.to_string().contains("non-callable"),
+                    error.to_string().contains("different pricing row"),
                     "{target_decision}/{target_key}/{alias_collision}: {error}"
                 );
             }
@@ -329,16 +339,38 @@ fn callable_identity_ledger_checks_are_provider_and_case_sensitive() {
     for content in [
         cross_class_authority_json("other", "restricted", "unreviewed", "restricted", &[]),
         cross_class_authority_json("openai", "Restricted", "unreviewed", "restricted", &[]),
-        cross_class_authority_json(
-            "openai",
-            "callable-target",
-            "callable",
-            "source-model",
-            &["callable-target"],
-        ),
     ] {
         CatalogAuthority::from_json(&content).expect("exact non-conflicting identity must load");
     }
+
+    let content = cross_class_authority_json(
+        "other",
+        "restricted",
+        "unreviewed",
+        "catalog-only",
+        &["friendly-alias"],
+    );
+    let authority = CatalogAuthority::from_json(&content).expect("valid non-key identities");
+    for identity in ["source-price", "catalog-only", "friendly-alias"] {
+        let CatalogResolution::Callable(model) = authority.resolve_model("openai", identity) else {
+            panic!("{identity} must resolve to its sole owner");
+        };
+        assert_eq!(model.pricing_key(), "source-price");
+    }
+}
+
+#[test]
+fn raw_pricing_identity_precedes_catalog_alias_index_defense_in_depth() {
+    let content =
+        cross_class_authority_json("openai", "callable-target", "callable", "source-model", &[]);
+    let mut authority = CatalogAuthority::from_json(&content).expect("valid callable rows");
+    assert!(authority.inject_catalog_shadow_for_test("openai", "callable-target", "source-price"));
+
+    let CatalogResolution::Callable(model) = authority.resolve_model("openai", "callable-target")
+    else {
+        panic!("raw callable pricing identity must resolve");
+    };
+    assert_eq!(model.pricing_key(), "callable-target");
 }
 
 #[test]

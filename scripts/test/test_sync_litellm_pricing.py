@@ -339,6 +339,22 @@ class CatalogAuthorityTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "aliases.*string list"):
             sync.build_catalog_authority(prices, missing_aliases)
 
+    def test_callable_alias_cannot_repeat_its_own_exact_pricing_key(self) -> None:
+        prices = {"gpt-test": {"litellm_provider": "openai"}}
+        self_alias = self.document(
+            [
+                self.decision(
+                    "openai",
+                    "gpt-test",
+                    "callable",
+                    catalog_model_id="catalog-only",
+                    aliases=["gpt-test"],
+                )
+            ]
+        )
+        with self.assertRaisesRegex(SystemExit, "alias.*own exact pricing row"):
+            sync.build_catalog_authority(prices, self_alias)
+
     def test_exact_case_and_native_slash_keys_are_preserved_deterministically(self) -> None:
         prices = {
             "together_ai/BAAI/bge-base-en-v1.5": {
@@ -408,7 +424,7 @@ class CatalogAuthorityTests(unittest.TestCase):
 
     def test_callable_identities_cannot_upgrade_non_callable_exact_ledger_keys(self) -> None:
         for field in ("catalog_model_id", "aliases"):
-            for target_decision in ("pricing_only", "unreviewed"):
+            for target_decision in ("callable", "pricing_only", "unreviewed"):
                 for target_key in ("restricted", "BAAI/restricted-model"):
                     with self.subTest(
                         field=field,
@@ -426,11 +442,14 @@ class CatalogAuthorityTests(unittest.TestCase):
                         callable_fields[field] = (
                             [target_key] if field == "aliases" else target_key
                         )
-                        target_fields = (
-                            {"reason": "non_callable_charge"}
-                            if target_decision == "pricing_only"
-                            else {}
-                        )
+                        target_fields = {
+                            "callable": {
+                                "catalog_model_id": f"target/{target_key}",
+                                "aliases": [],
+                            },
+                            "pricing_only": {"reason": "non_callable_charge"},
+                            "unreviewed": {},
+                        }[target_decision]
                         document = self.document(
                             [
                                 self.decision(
@@ -448,7 +467,7 @@ class CatalogAuthorityTests(unittest.TestCase):
                             ]
                         )
                         with self.assertRaisesRegex(
-                            SystemExit, "callable identity.*non-callable"
+                            SystemExit, "callable (?:identity|alias).*different pricing row"
                         ):
                             sync.build_catalog_authority(prices, document)
 
@@ -465,8 +484,8 @@ class CatalogAuthorityTests(unittest.TestCase):
                     "openai",
                     "source-price",
                     "callable",
-                    catalog_model_id="restricted",
-                    aliases=["callable-target"],
+                    catalog_model_id="source-price",
+                    aliases=["friendly-alias"],
                 ),
                 self.decision("other", "restricted", "unreviewed"),
                 self.decision("openai", "Restricted", "unreviewed"),
@@ -482,6 +501,12 @@ class CatalogAuthorityTests(unittest.TestCase):
 
         authority = sync.build_catalog_authority(prices, document)
         self.assertEqual(len(authority["entries"]), 4)
+        source = next(
+            entry
+            for entry in authority["entries"]
+            if entry["pricing_key"] == "source-price"
+        )
+        self.assertEqual(source["aliases"], ["friendly-alias"])
 
     def test_repository_ledger_has_reviewed_target_counts_without_inferred_capabilities(self) -> None:
         prices = sync.model_entries(sync.load_json(CATALOG_PATH))

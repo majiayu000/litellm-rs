@@ -308,12 +308,25 @@ def build_catalog_authority(
             continue
         provider = entry["provider"]
         catalog_id = entry["catalog_model_id"]
-        for candidate in (catalog_id, *entry["aliases"]):
-            ledger_entry = by_tuple.get((provider, candidate))
-            if ledger_entry is not None and ledger_entry["decision"] != "callable":
+        catalog_ledger_entry = by_tuple.get((provider, catalog_id))
+        if (
+            catalog_ledger_entry is not None
+            and catalog_id != entry["pricing_key"]
+        ):
+            raise SystemExit(
+                f"callable identity {provider!r}/{catalog_id!r} collides with "
+                "a different pricing row"
+            )
+        for alias in entry["aliases"]:
+            ledger_entry = by_tuple.get((provider, alias))
+            if ledger_entry is not None:
+                ownership = (
+                    "its own exact pricing row"
+                    if alias == entry["pricing_key"]
+                    else "a different pricing row"
+                )
                 raise SystemExit(
-                    f"callable identity {provider!r}/{candidate!r} collides with "
-                    f"non-callable {ledger_entry['decision']!r} pricing key"
+                    f"callable alias {provider!r}/{alias!r} collides with {ownership}"
                 )
         identity = (provider, catalog_id)
         if identity in alias_owners:
