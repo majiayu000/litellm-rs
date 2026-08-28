@@ -688,6 +688,51 @@ async fn test_xai_current_model_cost_fails_closed_until_tiered_authority() {
 }
 
 #[tokio::test]
+async fn test_xai_custom_prefix_uses_one_effective_identity_for_wire_and_cost() {
+    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+
+    let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+        .with_provider_name("xai")
+        .with_model_prefix("custom/")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    let request = ChatRequest {
+        model: "custom/grok-4.6".to_string(),
+        messages: vec![],
+        ..Default::default()
+    };
+    let json = provider.transform_chat_request(request).unwrap();
+    assert_eq!(json["model"], "grok-4.6");
+    let error = LLMProvider::calculate_cost(&provider, "custom/grok-4.6", 1, 1)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("pricing is unavailable"));
+
+    for (model, effective) in [
+        ("custom/unknown-model", "unknown-model"),
+        ("custom/custom/grok-4.6", "custom/grok-4.6"),
+        ("custom/xai/grok-4.6", "xai/grok-4.6"),
+        ("customized/grok-4.6", "customized/grok-4.6"),
+        ("wrong/grok-4.6", "wrong/grok-4.6"),
+    ] {
+        let request = ChatRequest {
+            model: model.to_string(),
+            messages: vec![],
+            ..Default::default()
+        };
+        let json = provider.transform_chat_request(request).unwrap();
+        assert_eq!(json["model"], effective);
+        assert_eq!(
+            LLMProvider::calculate_cost(&provider, model, 1, 1)
+                .await
+                .unwrap(),
+            0.0
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_non_xai_provider_does_not_use_xai_pricing() {
     use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 

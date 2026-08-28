@@ -304,12 +304,17 @@ impl OpenAILikeProvider {
         )))
     }
 
-    /// Transform ChatRequest to OpenAI API format
+    fn effective_model(&self, model: &str) -> String {
+        let configured = self.config.get_effective_model(model);
+        if self.config.model_prefix.is_some() {
+            configured
+        } else {
+            super::models::xai_native_wire_model(&self.config.provider_name, configured)
+        }
+    }
+
     fn transform_chat_request(&self, request: ChatRequest) -> Result<Value, OpenAILikeError> {
-        let model = super::models::xai_native_wire_model(
-            &self.config.provider_name,
-            self.config.get_effective_model(&request.model),
-        );
+        let model = self.effective_model(&request.model);
 
         let mut openai_request = serde_json::json!({
             "model": model,
@@ -707,6 +712,8 @@ impl LLMProvider for OpenAILikeProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
+        let model = self.effective_model(model);
+        let model = model.as_str();
         if self.config.provider_name != "xai" && super::models::is_xai_priced_model(model) {
             return Ok(0.0);
         }
@@ -717,7 +724,8 @@ impl LLMProvider for OpenAILikeProvider {
                 model,
             )
             .is_some())
-            || (self.config.provider_name == "xai" && super::models::is_xai_current_model(model)))
+            || (self.config.provider_name == "xai"
+                && super::models::is_xai_current_effective_model(model)))
             && (model_info.input_cost_per_1k_tokens.is_none()
                 || model_info.output_cost_per_1k_tokens.is_none())
         {

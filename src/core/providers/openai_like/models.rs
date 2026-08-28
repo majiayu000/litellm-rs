@@ -459,7 +459,10 @@ pub fn is_xai_priced_model(model_id: &str) -> bool {
 
 pub fn is_xai_current_model(model_id: &str) -> bool {
     let model_id = model_id.strip_prefix("xai/").unwrap_or(model_id);
+    is_xai_current_effective_model(model_id)
+}
 
+pub fn is_xai_current_effective_model(model_id: &str) -> bool {
     XAI_GROK_45_MODEL_IDS.contains(&model_id) || XAI_GROK_46_MODEL_IDS.contains(&model_id)
 }
 
