@@ -165,7 +165,7 @@ impl fmt::Display for AnthropicRedactedData {
 /// `ThinkingContent` enum, preserving exhaustive-match source compatibility.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AnthropicThinkingBlock {
     /// Visible or omitted thinking with its required verification signature.
     Thinking {
@@ -242,6 +242,7 @@ impl AnthropicThinkingContent {
 /// literals. Callers opt in through constructors and accessors.
 #[non_exhaustive]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ChatMessageExtensions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_thinking: Option<AnthropicThinkingContent>,

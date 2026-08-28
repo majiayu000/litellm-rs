@@ -245,6 +245,29 @@ mod tests {
         );
         assert!(AnthropicSignature::try_from("").is_err());
         assert!(AnthropicRedactedData::try_from("").is_err());
+
+        let unknown_block_integrity = serde_json::from_str::<AnthropicThinkingContent>(
+            r#"[{"type":"thinking","thinking":"visible","signature":"opaque","future_integrity":"must-not-drop"}]"#,
+        );
+        assert!(unknown_block_integrity.is_err());
+
+        let unknown_provider_extension =
+            serde_json::from_value::<ChatMessageWithExtensions>(serde_json::json!({
+                "role": "assistant",
+                "content": null,
+                "extensions": {
+                    "future_provider": {"opaque": "must-not-drop"}
+                }
+            }));
+        assert!(unknown_provider_extension.is_err());
+
+        let legacy_with_unknown_top_level =
+            serde_json::from_value::<OpenAiChatMessage>(serde_json::json!({
+                "role": "assistant",
+                "content": "done",
+                "future_top_level": "legacy-compatible"
+            }));
+        assert!(legacy_with_unknown_top_level.is_ok());
     }
 
     // ==================== ChatRequest Tests ====================
