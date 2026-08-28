@@ -280,6 +280,7 @@ fn test_build_core_chat_request_minimal() {
     let request = ChatCompletionRequest {
         model: "gpt-4".to_string(),
         messages: vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             name: None,
@@ -304,6 +305,7 @@ fn test_build_core_chat_request_preserves_transport_fields() {
     let request = ChatCompletionRequest {
         model: "gpt-4".to_string(),
         messages: vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             name: None,
@@ -444,6 +446,7 @@ fn test_build_core_chat_request_usage_override_does_not_mutate_original() {
     let request = ChatCompletionRequest {
         model: "gpt-4".to_string(),
         messages: vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             name: None,
@@ -489,6 +492,7 @@ fn test_build_core_chat_request_rejects_seed_overflow() {
     let request = ChatCompletionRequest {
         model: "gpt-4".to_string(),
         messages: vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             name: None,

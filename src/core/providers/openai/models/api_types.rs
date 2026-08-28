@@ -241,6 +241,7 @@ impl OpenAIMessage {
         Ok(crate::core::models::openai::ChatMessage {
             role,
             content,
+            thinking: None,
             name: self.name,
             function_call: self.function_call.map(|call| {
                 crate::core::models::openai::FunctionCall {

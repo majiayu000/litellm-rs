@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 
 use super::audio::AudioContent;
 use super::tools::{FunctionCall, ToolCall};
+use crate::core::types::thinking::ThinkingContent;
 
 /// Chat message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +17,9 @@ pub struct ChatMessage {
     pub role: MessageRole,
     /// Message content
     pub content: Option<MessageContent>,
+    /// Provider thinking/reasoning content preserved for continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingContent>,
     /// Message name (for function/tool messages)
     pub name: Option<String>,
     /// Function call (legacy)
@@ -401,7 +405,7 @@ impl From<ChatMessage> for crate::core::types::chat::ChatMessage {
         Self {
             role: value.role.into(),
             content: value.content.map(Into::into),
-            thinking: None,
+            thinking: value.thinking,
             audio: value
                 .audio
                 .map(|audio| crate::core::types::content::AudioData {
@@ -423,6 +427,7 @@ impl From<crate::core::types::chat::ChatMessage> for ChatMessage {
         Self {
             role: value.role.into(),
             content: value.content.map(Into::into),
+            thinking: value.thinking,
             name: value.name,
             function_call: value.function_call.map(Into::into),
             tool_calls: value
@@ -446,6 +451,7 @@ mod tests {
         let msg = ChatMessage {
             role: MessageRole::Assistant,
             content: Some(MessageContent::Text("hello".to_string())),
+            thinking: None,
             name: Some("assistant".to_string()),
             function_call: Some(FunctionCall {
                 name: "sum".to_string(),
@@ -496,10 +502,44 @@ mod tests {
     }
 
     #[test]
+    fn test_chat_message_anthropic_thinking_roundtrip() {
+        use crate::core::types::thinking::{
+            AnthropicThinkingBlock, AnthropicThinkingContent, ThinkingContent,
+        };
+
+        let content = AnthropicThinkingContent::try_from(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "plan".to_string(),
+                signature: "opaque-signature".to_string(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: "opaque-redacted-data".to_string(),
+            },
+        ])
+        .expect("valid Anthropic thinking blocks");
+        let expected = ThinkingContent::AnthropicBlocks { content };
+        let core_msg = crate::core::types::chat::ChatMessage {
+            role: crate::core::types::message::MessageRole::Assistant,
+            thinking: Some(expected.clone()),
+            ..Default::default()
+        };
+
+        let wire_msg: ChatMessage = core_msg.into();
+        let encoded = serde_json::to_value(&wire_msg).expect("serialize HTTP message DTO");
+        assert_eq!(encoded["thinking"]["type"], "anthropic_blocks");
+        let decoded: ChatMessage =
+            serde_json::from_value(encoded).expect("deserialize HTTP message DTO");
+        let roundtripped: crate::core::types::chat::ChatMessage = decoded.into();
+
+        assert_eq!(roundtripped.thinking, Some(expected));
+    }
+
+    #[test]
     fn test_chat_message_audio_roundtrip() {
         let msg = ChatMessage {
             role: MessageRole::Assistant,
             content: Some(MessageContent::Text("audio response".to_string())),
+            thinking: None,
             name: None,
             function_call: None,
             tool_calls: None,

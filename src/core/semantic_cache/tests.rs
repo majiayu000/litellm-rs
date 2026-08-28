@@ -19,6 +19,7 @@ fn test_semantic_cache_config_default() {
 async fn test_extract_prompt_text() {
     let messages = vec![
         ChatMessage {
+            thinking: None,
             role: MessageRole::System,
             content: Some(MessageContent::Text(
                 "You are a helpful assistant".to_string(),
@@ -30,6 +31,7 @@ async fn test_extract_prompt_text() {
             audio: None,
         },
         ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello world".to_string())),
             name: None,

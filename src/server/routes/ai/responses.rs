@@ -180,6 +180,7 @@ fn build_chat_request_from_turn(
         messages.push(ChatMessage {
             role: MessageRole::System,
             content: Some(MessageContent::Text(instructions.to_string())),
+            thinking: None,
             name: None,
             function_call: None,
             tool_calls: None,
@@ -193,6 +194,7 @@ fn build_chat_request_from_turn(
             CodexTurnItem::Text(text) => ChatMessage {
                 role: MessageRole::User,
                 content: Some(MessageContent::Text(text.clone())),
+                thinking: None,
                 name: None,
                 function_call: None,
                 tool_calls: None,
@@ -331,6 +333,7 @@ fn response_message_to_chat(
     Ok(ChatMessage {
         role: parse_role(&message.role)?,
         content: Some(content),
+        thinking: None,
         name: None,
         function_call: None,
         tool_calls: None,
@@ -359,6 +362,7 @@ fn push_tool_call(messages: &mut Vec<ChatMessage>, call_id: &str, name: &str, ar
     messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: None,
+        thinking: None,
         name: None,
         function_call: None,
         tool_calls: Some(vec![tool_call]),
@@ -371,6 +375,7 @@ fn tool_output_message(call_id: &str, output: String) -> ChatMessage {
     ChatMessage {
         role: MessageRole::Tool,
         content: Some(MessageContent::Text(output)),
+        thinking: None,
         name: None,
         function_call: None,
         tool_calls: None,

@@ -7,6 +7,7 @@ use crate::core::models::openai::{
 
 fn create_user_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,
@@ -19,6 +20,7 @@ fn create_user_message(content: &str) -> ChatMessage {
 
 fn create_system_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::System,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,
@@ -31,6 +33,7 @@ fn create_system_message(content: &str) -> ChatMessage {
 
 fn create_assistant_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,
@@ -297,6 +300,7 @@ fn test_validate_audio_data_invalid() {
 #[test]
 fn test_validate_message_content_empty_text() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text("   ".to_string())),
         name: None,
@@ -314,6 +318,7 @@ fn test_validate_message_content_empty_text() {
 fn test_validate_message_content_too_long() {
     let long_text = "a".repeat(1_000_001);
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text(long_text)),
         name: None,
@@ -330,6 +335,7 @@ fn test_validate_message_content_too_long() {
 #[test]
 fn test_validate_message_content_parts_empty() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Parts(vec![])),
         name: None,
@@ -407,6 +413,7 @@ fn test_validate_content_part_image_valid_details() {
 #[test]
 fn test_validate_function_message_without_name() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Function,
         content: Some(MessageContent::Text("result".to_string())),
         name: None,
@@ -423,6 +430,7 @@ fn test_validate_function_message_without_name() {
 #[test]
 fn test_validate_function_message_without_content() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Function,
         content: None,
         name: Some("get_weather".to_string()),
@@ -439,6 +447,7 @@ fn test_validate_function_message_without_content() {
 #[test]
 fn test_validate_tool_message_without_tool_call_id() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Tool,
         content: Some(MessageContent::Text("result".to_string())),
         name: None,
@@ -455,6 +464,7 @@ fn test_validate_tool_message_without_tool_call_id() {
 #[test]
 fn test_validate_tool_message_valid() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Tool,
         content: Some(MessageContent::Text("result".to_string())),
         name: None,
@@ -470,6 +480,7 @@ fn test_validate_tool_message_valid() {
 #[test]
 fn test_validate_user_message_without_content() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: None,
         name: None,
@@ -486,6 +497,7 @@ fn test_validate_user_message_without_content() {
 #[test]
 fn test_validate_assistant_message_without_content() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Assistant,
         content: None,
         name: None,

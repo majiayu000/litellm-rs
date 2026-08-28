@@ -218,6 +218,7 @@ mod tests {
     // Helper to create a test chat message
     fn create_user_message(content: &str) -> ChatMessage {
         ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text(content.to_string())),
             name: None,

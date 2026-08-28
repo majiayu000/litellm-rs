@@ -20,6 +20,7 @@ fn test_text_token_estimation() {
 fn test_chat_token_counting() {
     let counter = TokenCounter::new();
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text("Hello, how are you?".to_string())),
         name: None,
@@ -55,6 +56,7 @@ fn test_openai_completion_token_count_uses_tiktoken() {
 fn test_openai_chat_system_message_uses_tiktoken() {
     let counter = TokenCounter::new();
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::System,
         content: Some(MessageContent::Text("You are a bot.".to_string())),
         name: None,
@@ -76,6 +78,7 @@ fn test_openai_chat_system_message_uses_tiktoken() {
 fn test_multimodal_chat_token_count_remains_marked_approximate() {
     let counter = TokenCounter::new();
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Parts(vec![ContentPart::ImageUrl {
             image_url: ImageUrl {
@@ -100,6 +103,7 @@ fn test_multimodal_chat_token_count_remains_marked_approximate() {
 fn test_text_part_chat_token_count_remains_marked_approximate() {
     let counter = TokenCounter::new();
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Parts(vec![ContentPart::Text {
             text: "Hello".to_string(),
@@ -145,6 +149,7 @@ fn test_unknown_openai_like_model_remains_marked_approximate() {
 fn test_tool_call_chat_token_count_remains_marked_approximate() {
     let counter = TokenCounter::new();
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::Assistant,
         content: None,
         name: None,
@@ -171,6 +176,7 @@ fn test_tool_call_chat_token_count_remains_marked_approximate() {
 fn test_tool_result_chat_token_count_remains_marked_approximate() {
     let counter = TokenCounter::new();
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::Tool,
         content: Some(MessageContent::Text("done".to_string())),
         name: None,

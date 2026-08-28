@@ -113,6 +113,7 @@ mod tests {
         ChatCompletionRequest {
             model: "test-model".to_string(),
             messages: vec![ChatMessage {
+                thinking: None,
                 role: MessageRole::User,
                 content: Some(MessageContent::Text(content.to_string())),
                 name: None,
@@ -135,6 +136,7 @@ mod tests {
             choices: vec![ChatChoice {
                 index: 0,
                 message: ChatMessage {
+                    thinking: None,
                     role: MessageRole::Assistant,
                     content: Some(MessageContent::Text(content.to_string())),
                     name: None,

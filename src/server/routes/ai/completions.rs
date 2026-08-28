@@ -159,6 +159,7 @@ fn completion_request_from_value(
             messages: vec![ChatMessage {
                 role: MessageRole::User,
                 content: Some(MessageContent::Text(prompt)),
+                thinking: None,
                 name: None,
                 function_call: None,
                 tool_calls: None,

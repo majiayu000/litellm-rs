@@ -23,6 +23,7 @@ fn usage(prompt: u32, completion: u32) -> Usage {
 
 fn user_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,
@@ -383,6 +384,7 @@ fn chat_reservation_multiplies_output_budget_by_choice_count() {
 #[test]
 fn chat_reservation_uses_conservative_multimodal_prompt_floor() {
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Parts(vec![ContentPart::ImageUrl {
             image_url: ImageUrl {
@@ -405,6 +407,7 @@ fn chat_reservation_uses_conservative_multimodal_prompt_floor() {
 fn chat_reservation_uses_encoded_audio_prompt_floor() {
     let encoded_audio = "a".repeat(8_000);
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Parts(vec![ContentPart::Audio {
             audio: AudioContent {

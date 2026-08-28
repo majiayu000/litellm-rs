@@ -118,6 +118,7 @@ mod tests {
             choices: vec![ChatChoice {
                 index: 0,
                 message: ChatMessage {
+                    thinking: None,
                     role: MessageRole::Assistant,
                     content: Some(MessageContent::Text("Test response".to_string())),
                     name: None,

@@ -403,6 +403,7 @@ mod tests {
 
     fn message(content: Option<MessageContent>) -> ChatMessage {
         ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content,
             name: None,

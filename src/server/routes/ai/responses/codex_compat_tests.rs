@@ -229,6 +229,7 @@ fn codex_non_streaming_reconstructs_custom_tool_output() {
         choices: vec![ChatChoice {
             index: 0,
             message: ChatMessage {
+                thinking: None,
                 role: MessageRole::Assistant,
                 content: None,
                 name: None,

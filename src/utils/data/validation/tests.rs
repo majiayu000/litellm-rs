@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 fn create_user_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,
@@ -21,6 +22,7 @@ fn create_user_message(content: &str) -> ChatMessage {
 
 fn create_system_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::System,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,
@@ -33,6 +35,7 @@ fn create_system_message(content: &str) -> ChatMessage {
 
 fn create_assistant_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,
@@ -272,6 +275,7 @@ fn test_multiple_messages() {
 #[test]
 fn test_message_without_content() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: None,
         name: None,
@@ -295,6 +299,7 @@ fn test_message_without_content() {
 #[test]
 fn test_empty_text_content() {
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text("   ".to_string())),
         name: None,
@@ -319,6 +324,7 @@ fn test_empty_text_content() {
 fn test_function_message_validation() {
     // Function message without name
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Function,
         content: Some(MessageContent::Text("result".to_string())),
         name: None,
@@ -340,6 +346,7 @@ fn test_function_message_validation() {
 
     // Function message with name
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Function,
         content: Some(MessageContent::Text("result".to_string())),
         name: Some("get_weather".to_string()),
@@ -364,6 +371,7 @@ fn test_function_message_validation() {
 fn test_tool_message_validation() {
     // Tool message without tool_call_id
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Tool,
         content: Some(MessageContent::Text("result".to_string())),
         name: None,
@@ -385,6 +393,7 @@ fn test_tool_message_validation() {
 
     // Tool message with tool_call_id
     let message = ChatMessage {
+        thinking: None,
         role: MessageRole::Tool,
         content: Some(MessageContent::Text("result".to_string())),
         name: None,

@@ -58,7 +58,9 @@ impl AnthropicThinkingContent {
 
     fn visible_text(&self) -> Option<Cow<'_, str>> {
         let mut visible = self.blocks.iter().filter_map(|block| match block {
-            AnthropicThinkingBlock::Thinking { thinking, .. } => Some(thinking.as_str()),
+            AnthropicThinkingBlock::Thinking { thinking, .. } => {
+                (!thinking.is_empty()).then_some(thinking.as_str())
+            }
             AnthropicThinkingBlock::RedactedThinking { .. } => None,
         });
         let first = visible.next()?;
@@ -758,6 +760,22 @@ mod tests {
         let decoded: ThinkingContent =
             serde_json::from_str(&encoded).expect("deserialize typed blocks");
         assert_eq!(decoded, thinking);
+    }
+
+    #[test]
+    fn anthropic_omitted_blocks_have_no_visible_text() {
+        let content = AnthropicThinkingContent::try_from(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: String::new(),
+                signature: "sig-omitted".to_string(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: "opaque-data".to_string(),
+            },
+        ])
+        .expect("omitted thinking still has a valid signature");
+
+        assert_eq!(ThinkingContent::AnthropicBlocks { content }.as_text(), None);
     }
 
     #[test]

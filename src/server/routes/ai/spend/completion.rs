@@ -526,6 +526,7 @@ mod budget_request_tests {
     fn budget_request_view_borrows_large_request_parts() {
         let request = ChatCompletionRequest {
             messages: vec![ChatMessage {
+                thinking: None,
                 role: crate::core::models::openai::MessageRole::User,
                 content: Some(MessageContent::Text("x".repeat(64 * 1024))),
                 name: None,

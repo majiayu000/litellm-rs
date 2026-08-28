@@ -210,6 +210,7 @@ fn test_chat_choice_creation() {
     let choice = ChatChoice {
         index: 0,
         message: ChatMessage {
+            thinking: None,
             role: MessageRole::Assistant,
             content: Some(MessageContent::Text("Hello!".to_string())),
             name: None,
@@ -231,6 +232,7 @@ fn test_chat_choice_serialize() {
     let choice = ChatChoice {
         index: 1,
         message: ChatMessage {
+            thinking: None,
             role: MessageRole::Assistant,
             content: Some(MessageContent::Text("Test response".to_string())),
             name: None,

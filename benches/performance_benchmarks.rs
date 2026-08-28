@@ -328,6 +328,7 @@ fn bench_serialization(c: &mut Criterion) {
                 content: Some(MessageContent::Text(
                     "You are a helpful assistant.".to_string(),
                 )),
+                thinking: None,
                 name: None,
                 function_call: None,
                 tool_calls: None,
@@ -337,6 +338,7 @@ fn bench_serialization(c: &mut Criterion) {
             ChatMessage {
                 role: MessageRole::User,
                 content: Some(MessageContent::Text("Hello, how are you?".to_string())),
+                thinking: None,
                 name: None,
                 function_call: None,
                 tool_calls: None,

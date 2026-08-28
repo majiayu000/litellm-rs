@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 fn create_user_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,
@@ -17,6 +18,7 @@ fn create_user_message(content: &str) -> ChatMessage {
 
 fn create_assistant_message(content: &str) -> ChatMessage {
     ChatMessage {
+        thinking: None,
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text(content.to_string())),
         name: None,

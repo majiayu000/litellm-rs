@@ -102,6 +102,7 @@ impl AnthropicClient {
             ));
         }
         if model_spec.is_none()
+            && claude_5_protocol.is_none()
             && Self::has_image_content(request)
             && !self.config.allows_unknown_model_image_input(&request.model)
         {
@@ -391,6 +392,10 @@ impl AnthropicClient {
             .as_ref()
             .is_some_and(|functions| !functions.is_empty())
             || request.function_call.is_some()
+            || request
+                .messages
+                .iter()
+                .any(|message| message.function_call.is_some())
         {
             return Err(ProviderError::not_supported(
                 "anthropic",

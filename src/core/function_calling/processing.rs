@@ -43,6 +43,7 @@ impl FunctionCallingHandler {
                 match executor.execute(arguments).await {
                     Ok(result) => {
                         let tool_message = ChatMessage {
+                            thinking: None,
                             role: MessageRole::Tool,
                             content: Some(MessageContent::Text(result.to_string())),
                             name: Some(function_name.clone()),
@@ -56,6 +57,7 @@ impl FunctionCallingHandler {
                     Err(e) => {
                         error!("Function execution failed: {}", e);
                         let error_message = ChatMessage {
+                            thinking: None,
                             role: MessageRole::Tool,
                             content: Some(MessageContent::Text(format!("Error: {}", e))),
                             name: Some(function_name.clone()),
@@ -70,6 +72,7 @@ impl FunctionCallingHandler {
             } else {
                 warn!("Unknown function: {}", function_name);
                 let error_message = ChatMessage {
+                    thinking: None,
                     role: MessageRole::Tool,
                     content: Some(MessageContent::Text(format!(
                         "Unknown function: {}",

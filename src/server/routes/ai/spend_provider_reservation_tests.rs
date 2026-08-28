@@ -11,6 +11,7 @@ fn reserve_with_provider_limit(
 ) -> UnifiedBudgetReservation {
     let budget = UnifiedBudgetLimits::new();
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text("hello".to_string())),
         name: None,
@@ -66,6 +67,7 @@ fn openai_like_prefixed_chat_reservation_uses_provider_pricing() {
 fn openai_chat_reservation_uses_exact_tiktoken_prompt_count() {
     let budget = UnifiedBudgetLimits::new();
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Text("Hello, how are you?".to_string())),
         name: None,
@@ -104,6 +106,7 @@ fn openai_chat_reservation_uses_exact_tiktoken_prompt_count() {
 fn chat_prompt_estimate_accounts_for_serialized_tool_parts() {
     let payload = "x".repeat(4_000);
     let messages = vec![ChatMessage {
+        thinking: None,
         role: MessageRole::User,
         content: Some(MessageContent::Parts(vec![
             ContentPart::ToolResult {

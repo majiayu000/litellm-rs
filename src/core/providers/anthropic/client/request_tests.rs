@@ -105,6 +105,28 @@ fn current_claude_5_protocol_serializes_adaptive_disabled_and_sampling_rules() {
 }
 
 #[test]
+fn current_claude_5_protocol_accepts_image_input_without_catalog_metadata() {
+    let mut request = ChatRequest::new("claude-opus-5");
+    request.messages.push(ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Parts(vec![ContentPart::Image {
+            source: ImageSource {
+                media_type: "image/png".to_string(),
+                data: "iVBORw0KGgo=".to_string(),
+            },
+            detail: None,
+            image_url: None,
+        }])),
+        ..Default::default()
+    });
+
+    let transformed = anthropic_client()
+        .transform_chat_request(&request)
+        .expect("exact Claude 5 protocol IDs support Anthropic image blocks");
+    assert_eq!(transformed["messages"][0]["content"][0]["type"], "image");
+}
+
+#[test]
 fn thinking_history_rejects_models_without_thinking_support() {
     let content = AnthropicThinkingContent::try_from(vec![AnthropicThinkingBlock::Thinking {
         thinking: "history".to_string(),
@@ -170,6 +192,30 @@ fn current_claude_5_protocol_fails_closed_on_unsupported_request_shapes() {
         anthropic_client()
             .transform_chat_request(&legacy)
             .expect_err("legacy function fields must fail")
+            .to_string()
+            .contains("legacy functions")
+    );
+
+    let mut message_legacy = ChatRequest::new("claude-opus-5");
+    message_legacy.messages = vec![
+        ChatMessage {
+            role: MessageRole::Assistant,
+            function_call: Some(FunctionCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            }),
+            ..Default::default()
+        },
+        ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("continue".to_string())),
+            ..Default::default()
+        },
+    ];
+    assert!(
+        anthropic_client()
+            .transform_chat_request(&message_legacy)
+            .expect_err("message-level legacy function calls must fail")
             .to_string()
             .contains("legacy functions")
     );

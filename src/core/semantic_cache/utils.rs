@@ -113,6 +113,7 @@ mod tests {
     #[test]
     fn test_extract_prompt_text_single_text_message() {
         let messages = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             name: None,
@@ -130,6 +131,7 @@ mod tests {
     fn test_extract_prompt_text_multiple_messages() {
         let messages = vec![
             ChatMessage {
+                thinking: None,
                 role: MessageRole::System,
                 content: Some(MessageContent::Text("You are a helper.".to_string())),
                 name: None,
@@ -139,6 +141,7 @@ mod tests {
                 audio: None,
             },
             ChatMessage {
+                thinking: None,
                 role: MessageRole::User,
                 content: Some(MessageContent::Text("Help me.".to_string())),
                 name: None,
@@ -157,6 +160,7 @@ mod tests {
     fn test_extract_prompt_text_with_none_content() {
         let messages = vec![
             ChatMessage {
+                thinking: None,
                 role: MessageRole::User,
                 content: Some(MessageContent::Text("Hello".to_string())),
                 name: None,
@@ -166,6 +170,7 @@ mod tests {
                 audio: None,
             },
             ChatMessage {
+                thinking: None,
                 role: MessageRole::Assistant,
                 content: None,
                 name: None,
@@ -183,6 +188,7 @@ mod tests {
     #[test]
     fn test_extract_prompt_text_with_parts() {
         let messages = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Parts(vec![
                 ContentPart::Text {
@@ -206,6 +212,7 @@ mod tests {
     #[test]
     fn test_extract_prompt_text_with_image_parts() {
         let messages = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Parts(vec![
                 ContentPart::Text {
@@ -233,6 +240,7 @@ mod tests {
     #[test]
     fn test_extract_prompt_text_empty_parts() {
         let messages = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Parts(vec![])),
             name: None,
@@ -249,6 +257,7 @@ mod tests {
     #[test]
     fn test_extract_prompt_text_only_image_parts() {
         let messages = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Parts(vec![ContentPart::ImageUrl {
                 image_url: ImageUrl {
@@ -271,6 +280,7 @@ mod tests {
     fn test_extract_prompt_text_mixed_content() {
         let messages = vec![
             ChatMessage {
+                thinking: None,
                 role: MessageRole::System,
                 content: Some(MessageContent::Text("System prompt".to_string())),
                 name: None,
@@ -280,6 +290,7 @@ mod tests {
                 audio: None,
             },
             ChatMessage {
+                thinking: None,
                 role: MessageRole::User,
                 content: Some(MessageContent::Parts(vec![ContentPart::Text {
                     text: "User text".to_string(),
@@ -301,6 +312,7 @@ mod tests {
     #[test]
     fn test_extract_and_hash() {
         let messages = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("What is 2+2?".to_string())),
             name: None,
@@ -320,6 +332,7 @@ mod tests {
     #[test]
     fn test_same_messages_same_hash() {
         let messages1 = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             name: None,
@@ -330,6 +343,7 @@ mod tests {
         }];
 
         let messages2 = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             name: None,
@@ -348,6 +362,7 @@ mod tests {
     #[test]
     fn test_different_messages_different_hash() {
         let messages1 = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
             name: None,
@@ -358,6 +373,7 @@ mod tests {
         }];
 
         let messages2 = vec![ChatMessage {
+            thinking: None,
             role: MessageRole::User,
             content: Some(MessageContent::Text("Goodbye".to_string())),
             name: None,

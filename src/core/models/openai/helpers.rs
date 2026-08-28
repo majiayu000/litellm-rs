@@ -32,6 +32,7 @@ mod tests {
         let request = ChatCompletionRequest {
             model: "gpt-4".to_string(),
             messages: vec![ChatMessage {
+                thinking: None,
                 role: MessageRole::User,
                 content: Some(MessageContent::Text("Hello".to_string())),
                 name: None,
