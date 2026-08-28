@@ -2,8 +2,10 @@
 
 use super::service::PricingService;
 use super::types::{
-    CostResult, CostType, LiteLLMModelInfo, PricingCostBreakdown, PricingCostEstimate, PricingUsage,
+    CostResult, CostType, LiteLLMModelInfo, PricingCostBreakdown, PricingCostEstimate, PricingData,
+    PricingUsage,
 };
+use crate::core::types::model_id::ModelIdRef;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -19,10 +21,10 @@ impl PricingService {
     pub fn with_embedded_default() -> Result<Self> {
         let service = Self::new(Some(super::DEFAULT_PRICING_SOURCE.to_string()));
         let models = service.load_from_embedded_default()?;
+        let next = super::service::build_pricing_data(models, SystemTime::now());
         {
-            let mut data = service.pricing_data.write();
-            data.models = models;
-            data.last_updated = SystemTime::now();
+            let _write_guard = service.pricing_write_lock.lock();
+            service.pricing_data.store(std::sync::Arc::new(next));
         }
         Ok(service)
     }
@@ -49,8 +51,8 @@ impl PricingService {
         provider: &str,
         model: &str,
     ) -> Option<(String, LiteLLMModelInfo)> {
-        let data = self.pricing_data.read();
-        resolve_model_info_for_provider(&data.models, provider, model)
+        let data = self.pricing_data.load();
+        resolve_model_info_for_provider(&data, provider, model)
     }
 
     /// Calculate a completion cost from already-loaded pricing data.
@@ -276,7 +278,7 @@ impl PricingService {
 }
 
 fn resolve_model_info_for_provider(
-    models: &HashMap<String, LiteLLMModelInfo>,
+    data: &PricingData,
     provider: &str,
     model: &str,
 ) -> Option<(String, LiteLLMModelInfo)> {
@@ -284,66 +286,86 @@ fn resolve_model_info_for_provider(
     if normalized_provider == "amazon_nova" {
         return amazon_nova_pricing_model_info(model);
     }
-    if normalized_provider == "openai_like"
-        && let Some((prefixed_provider, stripped_model)) = provider_prefixed_model(model)
-    {
-        let prefixed_provider = crate::core::pricing::normalize_pricing_provider(prefixed_provider);
-        if prefixed_provider != "openai_like"
-            && let Some(resolved) =
-                resolve_model_info_for_provider(models, &prefixed_provider, stripped_model)
-                    .or_else(|| resolve_model_info_for_provider(models, &prefixed_provider, model))
+    if normalized_provider == "openai_like" {
+        let parsed = ModelIdRef::parse(model);
+        if let Some(prefix) = parsed.provider()
+            && crate::core::providers::registry::selector_has_matrix_entry(prefix)
         {
-            return Some(resolved);
+            let prefixed_provider = crate::core::pricing::normalize_pricing_provider(prefix);
+            if prefixed_provider != "openai_like" {
+                return resolve_model_info_for_provider(data, &prefixed_provider, parsed.model());
+            }
         }
     }
 
     let provider_aliases = pricing_provider_aliases(provider, model);
-    if let Some((prefixed_provider, _)) = provider_prefixed_model(model)
-        && crate::core::providers::registry::selector_has_matrix_entry(prefixed_provider)
-        && !super::google::is_vertex_publisher_prefix(&normalized_provider, prefixed_provider)
-        && !provider_name_matches(prefixed_provider, &provider_aliases)
-    {
+    let candidates = exact_pricing_candidates(&normalized_provider, model, &provider_aliases);
+    if let Some(resolved) = exact_provider_model(data, &provider_aliases, &candidates) {
+        return Some(resolved);
+    }
+    if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
         return None;
     }
+    provider_catalog_model_info(&normalized_provider, model)
+}
 
-    if let Some(info) = models
-        .get(model)
-        .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
-    {
-        return Some((model.to_string(), info.clone()));
+fn exact_pricing_candidates(
+    provider: &str,
+    model: &str,
+    provider_aliases: &[String],
+) -> Vec<String> {
+    let parsed = ModelIdRef::parse(model);
+    let mut candidates = Vec::with_capacity(5);
+    push_unique(&mut candidates, parsed.raw());
+    push_unique(&mut candidates, &format!("{provider}/{}", parsed.raw()));
+    if parsed.provider().is_some_and(|prefix| {
+        let prefix = crate::core::pricing::normalize_pricing_provider(prefix);
+        prefix == provider || provider_aliases.iter().any(|alias| alias == &prefix)
+    }) {
+        push_unique(&mut candidates, parsed.model());
+        push_unique(&mut candidates, &format!("{provider}/{}", parsed.model()));
     }
-
-    let normalized_model = crate::core::pricing::normalize_model_key(model);
-    if normalized_model != model
-        && let Some(info) = models
-            .get(normalized_model)
-            .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
-    {
-        return Some((normalized_model.to_string(), info.clone()));
+    if let Some(alias) = super::google::explicit_pricing_alias(provider, model) {
+        push_unique(&mut candidates, alias);
     }
+    candidates
+}
 
-    if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
-        for candidate in
-            super::google::exact_pricing_candidates(&normalized_provider, model, normalized_model)
+fn push_unique(candidates: &mut Vec<String>, candidate: &str) {
+    if !candidate.is_empty() && !candidates.iter().any(|existing| existing == candidate) {
+        candidates.push(candidate.to_string());
+    }
+}
+
+fn exact_provider_model(
+    data: &PricingData,
+    providers: &[String],
+    candidates: &[String],
+) -> Option<(String, LiteLLMModelInfo)> {
+    for candidate in candidates {
+        if let Some(info) = data
+            .models
+            .get(candidate)
+            .filter(|info| provider_name_matches(&info.litellm_provider, providers))
         {
-            if let Some(info) = models
-                .get(&candidate)
-                .filter(|info| provider_name_matches(&info.litellm_provider, &provider_aliases))
+            return Some((candidate.clone(), info.clone()));
+        }
+    }
+    for provider in providers {
+        let Some(index) = data.exact_by_provider.get(provider) else {
+            continue;
+        };
+        for candidate in candidates {
+            if let Some(canonical) = index
+                .get(&candidate.to_ascii_lowercase())
+                .and_then(|collisions| collisions.first())
+                && let Some(info) = data.models.get(canonical)
             {
-                return Some((candidate, info.clone()));
+                return Some((canonical.clone(), info.clone()));
             }
         }
-        return None;
     }
-
-    let requested = normalized_model.to_lowercase();
-    models
-        .iter()
-        .filter(|(_, info)| provider_name_matches(&info.litellm_provider, &provider_aliases))
-        .filter(|(candidate, _)| is_shared_model_match(&candidate.to_lowercase(), &requested))
-        .max_by_key(|(candidate, _)| candidate.len())
-        .map(|(candidate, info)| (candidate.clone(), info.clone()))
-        .or_else(|| provider_catalog_model_info(&normalized_provider, model))
+    None
 }
 
 fn provider_catalog_model_info(
@@ -351,15 +373,6 @@ fn provider_catalog_model_info(
     model: &str,
 ) -> Option<(String, LiteLLMModelInfo)> {
     match normalized_provider {
-        "azure" | "azure_ai" => crate::core::cost::calculator::pricing::get_azure_pricing(model)
-            .ok()
-            .map(|pricing| {
-                let resolved_model = pricing.model.clone();
-                (
-                    resolved_model,
-                    core_pricing_to_litellm_model_info(normalized_provider, pricing),
-                )
-            }),
         "bedrock" => crate::core::providers::bedrock::CostCalculator::get_core_model_pricing(model)
             .map(|pricing| {
                 let resolved_model = pricing.model.clone();
@@ -540,16 +553,16 @@ fn pricing_provider_aliases(provider: &str, model: &str) -> Vec<String> {
         })
 }
 
-fn provider_prefixed_model(model: &str) -> Option<(&str, &str)> {
-    let (provider, stripped_model) = model.split_once('/')?;
-    if provider.is_empty() || stripped_model.is_empty() {
-        return None;
-    }
-    Some((provider, stripped_model))
-}
-
 fn is_xiaomi_mimo_model(model: &str) -> bool {
-    crate::core::pricing::normalize_model_key(model).starts_with("mimo-")
+    let parsed = ModelIdRef::parse(model);
+    let local = if parsed.provider().is_some_and(|prefix| {
+        crate::core::pricing::normalize_pricing_provider(prefix) == "anthropic"
+    }) {
+        parsed.model()
+    } else {
+        parsed.raw()
+    };
+    local.to_ascii_lowercase().starts_with("mimo-")
 }
 
 fn provider_name_matches(provider: &str, aliases: &[String]) -> bool {
@@ -557,44 +570,6 @@ fn provider_name_matches(provider: &str, aliases: &[String]) -> bool {
     aliases
         .iter()
         .any(|alias| crate::core::pricing::normalize_pricing_provider(alias) == provider)
-}
-
-fn is_shared_model_match(candidate: &str, requested: &str) -> bool {
-    fn model_id_matches(candidate: &str, requested: &str) -> bool {
-        if candidate == requested {
-            return true;
-        }
-
-        candidate
-            .strip_prefix(requested)
-            .and_then(|suffix| suffix.strip_prefix('-'))
-            .is_some_and(alias_suffix_matches)
-    }
-
-    if candidate == requested {
-        return true;
-    }
-
-    model_id_matches(candidate, requested)
-        || model_id_matches(requested, candidate)
-        || candidate
-            .rsplit_once('/')
-            .map(|(_, model_id)| {
-                model_id_matches(model_id, requested) || model_id_matches(requested, model_id)
-            })
-            .unwrap_or(false)
-}
-
-fn alias_suffix_matches(suffix: &str) -> bool {
-    if suffix == "latest" {
-        return true;
-    }
-
-    let digit_prefix_len = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
-    digit_prefix_len >= 4
-        && suffix
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 fn text_only_usage_for_modal_settlement(usage: &PricingUsage) -> Option<PricingUsage> {
