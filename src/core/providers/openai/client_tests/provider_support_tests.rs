@@ -257,8 +257,18 @@ fn test_get_supported_openai_params_unknown() {
     let provider = create_test_provider();
     let params = provider.get_supported_openai_params("unknown-model");
 
-    // Should return default params
-    assert!(params.contains(&"messages"));
-    assert!(params.contains(&"model"));
-    assert!(params.contains(&"temperature"));
+    assert!(params.is_empty());
+    for model in [
+        "1024-x-1024/dall-e-2",
+        "openai/fake-gpt-5",
+        "openai/openai/gpt-4",
+        "anthropic/gpt-4",
+        "unknown/a/b",
+        "custom deployment",
+    ] {
+        assert!(
+            provider.get_supported_openai_params(model).is_empty(),
+            "{model} must not inherit provider-wide params"
+        );
+    }
 }

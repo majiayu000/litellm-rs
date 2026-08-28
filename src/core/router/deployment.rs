@@ -21,6 +21,8 @@
 
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
+use crate::core::providers::model_identity::{DeploymentModelIdentity, ModelIdentity};
+use crate::core::types::model::ProviderCapability;
 use crate::utils::auth::crypto::hmac::CredentialDigest;
 use parking_lot::RwLock;
 use std::fmt;
@@ -467,6 +469,9 @@ pub struct Deployment {
     /// User-facing model name / model group (e.g., "gpt-4")
     pub model_name: String,
 
+    /// Immutable transport, capability-catalog, and pricing identities.
+    model_identity: DeploymentModelIdentity,
+
     /// Configuration
     pub config: DeploymentConfig,
 
@@ -503,11 +508,13 @@ impl Deployment {
         model_name: String,
         provider_instance_identity: ProviderInstanceIdentity,
     ) -> Self {
+        let model_identity = DeploymentModelIdentity::new(model.clone(), None, None);
         Self {
             id,
             provider,
             model,
             model_name,
+            model_identity,
             config: DeploymentConfig::default(),
             state: DeploymentState::new_for_provider_instance(provider_instance_identity),
             tags: Vec::new(),
@@ -524,6 +531,55 @@ impl Deployment {
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
+    }
+
+    /// Attach validated semantic identities while preserving the exact wire model.
+    pub fn with_model_identity(
+        mut self,
+        capability_catalog_model: Option<String>,
+        pricing_model: Option<String>,
+    ) -> Self {
+        self.model_identity = DeploymentModelIdentity::new(
+            self.model.clone(),
+            capability_catalog_model,
+            pricing_model,
+        );
+        self
+    }
+
+    pub fn model_identity(&self) -> &DeploymentModelIdentity {
+        &self.model_identity
+    }
+
+    /// Build an owned provider clone bound to this selected deployment.
+    pub fn provider_for_request(&self) -> Provider {
+        let mut provider = self.provider.clone();
+        provider.bind_deployment_identity(self.model_identity.clone());
+        provider
+    }
+
+    /// Resolve model-specific capability from this deployment's identity.
+    pub fn supports_capability(&self, capability: &ProviderCapability) -> bool {
+        self.provider_for_request()
+            .supports_capability_for_deployment(&self.model, capability)
+    }
+
+    pub fn requires_capability_mapping(&self) -> bool {
+        let managed_provider = match self.provider {
+            Provider::OpenAI(_) => true,
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(_) | Provider::AzureAI(_) => true,
+            _ => false,
+        };
+        managed_provider
+            && matches!(
+                self.provider_for_request()
+                    .resolve_model_identity(&self.model),
+                ModelIdentity::ConfiguredDeployment {
+                    capability_catalog_model: None,
+                    ..
+                }
+            )
     }
 
     /// Check if deployment is healthy

@@ -70,10 +70,7 @@ fn gemini_runtime_model_supported(
                 && deployment.model == model
                 && deployment.model_name == model;
             (exact_requested_key || empty_model_alias)
-                && deployment.provider.supports_capability_for_model(
-                    &deployment.model,
-                    &ProviderCapability::GeminiGenerateContent,
-                )
+                && deployment.supports_capability(&ProviderCapability::GeminiGenerateContent)
         })
 }
 

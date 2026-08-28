@@ -1,4 +1,5 @@
 use crate::core::providers::Provider;
+use crate::core::providers::model_identity::ModelIdentity;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::model::ProviderCapability;
 
@@ -8,20 +9,90 @@ impl Provider {
     /// Provider-level capabilities answer whether a provider family has an
     /// implementation. When the provider has a registry entry for the concrete
     /// deployment model, route selection also respects that model-specific
-    /// capability list.
+    /// capability list. This provider-only API intentionally has no deployment
+    /// configuration context; router callers must use `Deployment` instead.
     pub fn supports_capability_for_model(
         &self,
         model: &str,
         capability: &ProviderCapability,
     ) -> bool {
-        match self {
-            Provider::OpenAI(provider) => {
-                if provider.get_model_config(model).is_some() {
-                    provider.model_supports_capability(model, capability)
-                } else {
-                    LLMProvider::supports_capability(provider, capability)
-                }
+        self.supports_capability_for_identity(model, capability, false)
+    }
+
+    pub(crate) fn supports_capability_for_deployment(
+        &self,
+        model: &str,
+        capability: &ProviderCapability,
+    ) -> bool {
+        self.supports_capability_for_identity(model, capability, true)
+    }
+
+    fn supports_capability_for_identity(
+        &self,
+        model: &str,
+        capability: &ProviderCapability,
+        deployment_context: bool,
+    ) -> bool {
+        let identity = || {
+            if deployment_context {
+                self.resolve_model_identity(model)
+            } else {
+                self.resolve_exact_model_identity(model)
             }
+        };
+        match self {
+            Provider::OpenAI(provider) => match identity() {
+                ModelIdentity::CatalogCallable {
+                    capability_catalog_model: catalog_model,
+                    ..
+                }
+                | ModelIdentity::ConfiguredDeployment {
+                    capability_catalog_model: Some(catalog_model),
+                    ..
+                } => provider.model_supports_capability(catalog_model, capability),
+                ModelIdentity::ConfiguredDeployment {
+                    capability_catalog_model: None,
+                    ..
+                }
+                | ModelIdentity::PricingOnly { .. }
+                | ModelIdentity::Invalid { .. } => false,
+            },
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(_provider) => match identity() {
+                ModelIdentity::CatalogCallable {
+                    capability_catalog_model: catalog_model,
+                    ..
+                }
+                | ModelIdentity::ConfiguredDeployment {
+                    capability_catalog_model: Some(catalog_model),
+                    ..
+                } => crate::core::providers::openai::models::get_openai_registry()
+                    .get_model_spec(catalog_model)
+                    .is_some_and(|spec| spec.model_info.capabilities.contains(capability)),
+                ModelIdentity::ConfiguredDeployment {
+                    capability_catalog_model: None,
+                    ..
+                } => false,
+                ModelIdentity::PricingOnly { .. } | ModelIdentity::Invalid { .. } => false,
+            },
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => match identity() {
+                ModelIdentity::CatalogCallable {
+                    capability_catalog_model: catalog_model,
+                    ..
+                }
+                | ModelIdentity::ConfiguredDeployment {
+                    capability_catalog_model: Some(catalog_model),
+                    ..
+                } => provider
+                    .get_model_registry()
+                    .supports_capability(catalog_model, capability),
+                ModelIdentity::ConfiguredDeployment {
+                    capability_catalog_model: None,
+                    ..
+                } => false,
+                ModelIdentity::PricingOnly { .. } | ModelIdentity::Invalid { .. } => false,
+            },
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
             }
@@ -65,8 +136,12 @@ fn normalize_provider_name(provider_name: &str) -> String {
 mod tests {
     use super::{openai_like_provider_supports_gemini, openai_like_provider_supports_rerank};
     use crate::core::net::ProviderEndpointAccess;
+    use crate::core::providers::Provider;
+    use crate::core::providers::openai::{OpenAIConfig, OpenAIProvider};
     use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
     use crate::core::providers::{GeminiNativeRequest, ProviderError};
+    use crate::core::router::Deployment;
+    use crate::core::types::model::ProviderCapability;
 
     #[test]
     fn gemini_compatibility_name_set_is_closed_and_normalized() {
@@ -88,6 +163,51 @@ mod tests {
             assert_eq!(matches!(error, ProviderError::Timeout { .. }), is_timeout);
             let text = format!("{error:?} {error}");
             assert!(!text.contains("raw/key+value") && !text.contains("raw%2Fkey%2Bvalue"));
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_routing_uses_exact_config_backed_identity() {
+        async fn provider() -> Provider {
+            let mut config = OpenAIConfig::default();
+            config.base.api_key = Some("sk-test-identity".to_string());
+            Provider::OpenAI(OpenAIProvider::new(config).await.unwrap())
+        }
+
+        let provider = provider().await;
+        let chat = Deployment::new(
+            "chat".into(),
+            provider.clone(),
+            "shared-deployment".into(),
+            "shared".into(),
+        )
+        .with_model_identity(Some("gpt-4".into()), None);
+        let embedding = Deployment::new(
+            "embedding".into(),
+            provider.clone(),
+            "shared-deployment".into(),
+            "shared".into(),
+        )
+        .with_model_identity(Some("text-embedding-3-small".into()), None);
+
+        assert!(chat.supports_capability(&ProviderCapability::ChatCompletion));
+        assert!(!embedding.supports_capability(&ProviderCapability::ChatCompletion));
+        assert!(embedding.supports_capability(&ProviderCapability::Embeddings));
+        assert!(!provider.supports_capability_for_model(
+            "shared-deployment",
+            &ProviderCapability::ChatCompletion
+        ));
+        for model in [
+            "shared-deployment",
+            "1024-x-1024/dall-e-2",
+            "openai/fake-gpt-5",
+            "openai/openai/gpt-4",
+            "anthropic/gpt-4",
+            "unknown/a/b",
+        ] {
+            assert!(
+                !provider.supports_capability_for_model(model, &ProviderCapability::ChatCompletion)
+            );
         }
     }
     #[tokio::test]

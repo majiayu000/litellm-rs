@@ -3,6 +3,9 @@ use crate::config::models::gateway::{GatewayConfig, GatewayPricingConfig, Unpric
 use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
 use crate::core::keys::InMemoryKeyRepository;
 use crate::core::pricing_service::LiteLLMModelInfo;
+use crate::core::providers::Provider;
+use crate::core::providers::openai::OpenAIProvider;
+use crate::core::router::Deployment;
 use crate::core::types::responses::{PromptTokensDetails, Usage};
 use std::collections::HashMap;
 
@@ -41,6 +44,38 @@ fn runtime_test_pricing_service(provider: &str) -> PricingService {
         },
     );
     service
+}
+
+#[tokio::test]
+async fn pricing_identity_consumes_the_shared_config_backed_result() {
+    let pricing =
+        PricingService::with_embedded_default().expect("embedded pricing should load offline");
+    let provider = Provider::OpenAI(
+        OpenAIProvider::with_api_key("sk-test-pricing-identity")
+            .await
+            .expect("test OpenAI provider should build"),
+    );
+    let deployment = Deployment::new(
+        "prod".into(),
+        provider,
+        "prod-chat".into(),
+        "public-chat".into(),
+    )
+    .with_model_identity(Some("gpt-4".into()), Some("gpt-4".into()));
+    let provider = deployment.provider_for_request();
+
+    assert_eq!(
+        pricing_identity_for_provider(&pricing, &provider, "prod-chat"),
+        ("openai".to_string(), "gpt-4".to_string())
+    );
+    assert_eq!(
+        pricing_identity_for_provider(&pricing, &provider, "1024-x-1024/dall-e-2"),
+        ("openai".to_string(), "1024-x-1024/dall-e-2".to_string())
+    );
+    assert_eq!(
+        pricing_identity_for_provider(&pricing, &provider, "fake-gpt-5"),
+        ("openai".to_string(), "fake-gpt-5".to_string())
+    );
 }
 
 fn dev_gateway_config() -> GatewayConfig {

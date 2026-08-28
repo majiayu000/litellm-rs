@@ -51,7 +51,7 @@ impl LLMClient {
                 async move {
                     request.model = deployment.model.clone();
                     let response = deployment
-                        .provider
+                        .provider_for_request()
                         .chat_completion(request, context)
                         .await?;
                     let tokens = response
@@ -91,7 +91,7 @@ impl LLMClient {
         let mut core_request = core_request;
         core_request.model = deployment.model.clone();
         let stream = deployment
-            .provider
+            .provider_for_request()
             .chat_completion_stream(core_request, context)
             .await
             .map_err(SDKError::from)?;

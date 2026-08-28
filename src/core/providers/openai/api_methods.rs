@@ -40,13 +40,12 @@ impl OpenAIProvider {
         &self,
         request: EmbeddingRequest,
     ) -> Result<EmbeddingResponse, OpenAIError> {
-        // Like Python LiteLLM, we don't validate models locally
-        // OpenAI API will handle invalid models
+        let wire_model = self.callable_wire_model(&request.model)?;
 
         // Transform to OpenAI format
         let openai_request = serde_json::json!({
             "input": request.input,
-            "model": request.model,
+            "model": wire_model,
             "encoding_format": request.encoding_format,
             "dimensions": request.dimensions,
             "user": request.user

@@ -15,6 +15,10 @@ use crate::core::audio::types::{
 use crate::core::providers::base::{
     GlobalPoolManager, HeaderPair, HttpMethod, header, header_owned, read_streaming_error_body,
 };
+use crate::core::providers::model_identity::{
+    ConfiguredModelRef, DeploymentModelIdentity, ModelIdentity, ModelIdentityProvider,
+    resolve_model_identity,
+};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::{
@@ -43,9 +47,70 @@ pub struct OpenAIProvider {
     pub(crate) config: OpenAIConfig,
     /// Model registry
     pub(crate) model_registry: &'static OpenAIModelRegistry,
+    /// Per-request deployment identity carried only by a bound provider clone.
+    pub(crate) deployment_identity: Option<DeploymentModelIdentity>,
 }
 
 impl OpenAIProvider {
+    pub(crate) fn bind_deployment_identity(&mut self, identity: DeploymentModelIdentity) {
+        self.deployment_identity = Some(identity);
+    }
+
+    pub(crate) fn resolve_model_identity<'a>(&'a self, model: &'a str) -> ModelIdentity<'a> {
+        let configured = self
+            .deployment_identity
+            .as_ref()
+            .filter(|identity| identity.wire_model() == model)
+            .map(DeploymentModelIdentity::as_ref)
+            .or_else(|| {
+                self.config
+                    .model_mappings
+                    .get(model)
+                    .map(|target| ConfiguredModelRef {
+                        wire_model: target,
+                        capability_catalog_model: Some(target),
+                        pricing_model: Some(target),
+                    })
+            });
+        resolve_model_identity(
+            ModelIdentityProvider::OpenAI,
+            model,
+            configured,
+            self.model_registry,
+        )
+    }
+
+    pub(crate) fn callable_wire_model<'a>(
+        &'a self,
+        model: &'a str,
+    ) -> Result<&'a str, ProviderError> {
+        match self.resolve_model_identity(model) {
+            ModelIdentity::CatalogCallable { raw_model, .. } => Ok(raw_model),
+            ModelIdentity::ConfiguredDeployment {
+                wire_model,
+                capability_catalog_model: Some(_),
+                ..
+            } => Ok(wire_model),
+            ModelIdentity::ConfiguredDeployment {
+                capability_catalog_model: None,
+                ..
+            } => Err(ProviderError::not_supported(
+                "openai",
+                format!(
+                    "deployment '{model}' requires an explicit capability_catalog_model mapping"
+                ),
+            )),
+            ModelIdentity::PricingOnly { .. } => Err(ProviderError::not_supported(
+                "openai",
+                format!("pricing-only identity '{model}' is not callable"),
+            )),
+            ModelIdentity::Invalid { reason, .. } => Err(ProviderError::model_not_found(
+                "openai",
+                format!("{model}' ({reason:?})"),
+            )),
+        }
+    }
+
     /// Generate headers for OpenAI API requests
     ///
     /// Uses `HeaderPair` with Cow for static keys to avoid allocations.
@@ -95,6 +160,7 @@ impl OpenAIProvider {
             pool_manager,
             config,
             model_registry,
+            deployment_identity: None,
         })
     }
 
@@ -183,8 +249,9 @@ impl OpenAIProvider {
         &self,
         request: ChatRequest,
     ) -> Result<Value, ProviderError> {
+        let wire_model = self.callable_wire_model(&request.model)?;
         let mut openai_request = serde_json::json!({
-            "model": self.config.get_model_mapping(&request.model),
+            "model": wire_model,
             "messages": request.messages
         });
 
@@ -504,7 +571,12 @@ impl LLMProvider for OpenAIProvider {
     // ==================== Python LiteLLM Compatible Interface ====================
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        let model = model.strip_prefix("openai/").unwrap_or(model);
+        let Some(model) = self
+            .resolve_model_identity(model)
+            .capability_catalog_model()
+        else {
+            return &[];
+        };
 
         // Return parameters based on model capabilities
         if let Some(model_spec) = self.model_registry.get_model_spec(model) {
@@ -664,9 +736,9 @@ impl LLMProvider for OpenAIProvider {
     async fn map_openai_params(
         &self,
         params: HashMap<String, Value>,
-        _model: &str,
+        model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
-        // OpenAI provider uses standard OpenAI parameters, no mapping needed
+        self.callable_wire_model(model)?;
         Ok(params)
     }
 

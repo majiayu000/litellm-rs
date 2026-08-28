@@ -45,7 +45,7 @@ pub(super) async fn complete_with_runtime_handle(
             async move {
                 request.model = deployment.model.clone();
                 let response = deployment
-                    .provider
+                    .provider_for_request()
                     .chat_completion(request, context)
                     .await?;
                 let tokens = response
@@ -79,7 +79,7 @@ pub(super) async fn complete_stream_with_runtime_handle(
     let deployment = lease.clone_deployment();
     chat_request.model = deployment.model.clone();
     let stream = deployment
-        .provider
+        .provider_for_request()
         .chat_completion_stream(chat_request, context)
         .await
         .map_err(GatewayError::from)?;

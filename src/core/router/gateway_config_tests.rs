@@ -234,6 +234,199 @@ fn credential_resolver_and_construction_source_guards() {
     assert_eq!(construction.matches("create_provider(").count(), 1);
 }
 
+mod model_identity {
+    use super::super::*;
+    use crate::core::providers::openai::OpenAIProvider;
+    use crate::core::router::RuntimeBinding;
+    use crate::core::types::model::ProviderCapability;
+    use std::sync::Arc;
+
+    fn openai_config(models: &[&str], mappings: serde_json::Value) -> ProviderConfig {
+        let mut config = ProviderConfig {
+            name: "identity-openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-identity-test".to_string(),
+            models: models.iter().map(|model| (*model).to_string()).collect(),
+            ..ProviderConfig::default()
+        };
+        if !mappings.is_null() {
+            config
+                .settings
+                .insert(MODEL_IDENTITY_MAPPINGS_KEY.to_string(), mappings);
+        }
+        config
+    }
+
+    #[tokio::test]
+    async fn gateway_mapping_preserves_wire_and_routes_by_catalog_identity() {
+        let router = Router::from_gateway_config(
+            &[openai_config(
+                &["customer-chat", "gpt-4"],
+                serde_json::json!({
+                    "customer-chat": {
+                        "capability_catalog_model": "gpt-4",
+                        "pricing_model": "gpt-4"
+                    }
+                }),
+            )],
+            None,
+        )
+        .await
+        .expect("valid mapping should load");
+        let custom = router
+            .get_deployment("identity-openai-customer-chat")
+            .expect("custom deployment should exist");
+        assert_eq!(custom.model_identity().wire_model(), "customer-chat");
+        assert!(custom.supports_capability(&ProviderCapability::ChatCompletion));
+        assert_eq!(
+            custom
+                .provider_for_request()
+                .resolve_model_identity("customer-chat")
+                .pricing_model(),
+            Some("gpt-4")
+        );
+        let exact = router
+            .get_deployment("identity-openai-gpt-4")
+            .expect("exact catalog deployment should exist");
+        assert!(exact.supports_capability(&ProviderCapability::ChatCompletion));
+    }
+
+    #[tokio::test]
+    async fn malformed_or_unsafe_gateway_mappings_fail_loading() {
+        for (name, mappings) in [
+            (
+                "unknown-key",
+                serde_json::json!({"missing": {"capability_catalog_model": "gpt-4"}}),
+            ),
+            (
+                "unknown-catalog",
+                serde_json::json!({"custom": {"capability_catalog_model": "fake-gpt-5"}}),
+            ),
+            (
+                "wrong-provider",
+                serde_json::json!({"custom": {"capability_catalog_model": "anthropic/gpt-4"}}),
+            ),
+            (
+                "pricing-only-capability",
+                serde_json::json!({"custom": {"capability_catalog_model": "1024-x-1024/dall-e-2"}}),
+            ),
+            (
+                "unknown-field",
+                serde_json::json!({"custom": {"catalog_model": "gpt-4"}}),
+            ),
+            ("empty", serde_json::json!({"custom": {}})),
+        ] {
+            let error = Router::from_gateway_config(&[openai_config(&["custom"], mappings)], None)
+                .await
+                .expect_err(name);
+            assert!(
+                matches!(error, RouterError::InvalidConfiguration(_)),
+                "{name}: {error}"
+            );
+        }
+        for model in [
+            "anthropic/gpt-4",
+            "openai/openai/gpt-4",
+            "unknown/native/slash",
+        ] {
+            let mappings = serde_json::json!({
+                (model): {"capability_catalog_model": "gpt-4"}
+            });
+            let error = Router::from_gateway_config(&[openai_config(&[model], mappings)], None)
+                .await
+                .expect_err("qualified custom deployment must fail closed");
+            assert!(
+                matches!(error, RouterError::InvalidConfiguration(_)),
+                "{model}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unmapped_custom_deployment_has_actionable_capability_error() {
+        let router = Router::from_gateway_config(
+            &[openai_config(
+                &["custom", "1024-x-1024/dall-e-2"],
+                serde_json::Value::Null,
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+        let error = match router
+            .select_deployment_lease_for_capability("custom", &ProviderCapability::ChatCompletion)
+        {
+            Err(error) => error,
+            Ok(_) => panic!("unmapped custom deployment must not route"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("model_identity_mappings.<deployment>.capability_catalog_model")
+        );
+        let pricing_only = match router.select_deployment_lease_for_capability(
+            "1024-x-1024/dall-e-2",
+            &ProviderCapability::ChatCompletion,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("pricing-only identity must not route"),
+        };
+        assert!(matches!(
+            pricing_only,
+            RouterError::UnsupportedCapability { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn bound_provider_clones_and_snapshot_replacement_are_isolated() {
+        let provider =
+            Provider::OpenAI(OpenAIProvider::with_api_key("sk-isolation").await.unwrap());
+        let chat = Deployment::new(
+            "chat".into(),
+            provider.clone(),
+            "customer".into(),
+            "public".into(),
+        )
+        .with_model_identity(Some("gpt-4".into()), None);
+        let embedding = Deployment::new(
+            "embedding".into(),
+            provider.clone(),
+            "customer".into(),
+            "public".into(),
+        )
+        .with_model_identity(Some("text-embedding-3-small".into()), None);
+
+        let (chat_ok, embedding_ok) = tokio::join!(
+            async { chat.supports_capability(&ProviderCapability::ChatCompletion) },
+            async { embedding.supports_capability(&ProviderCapability::Embeddings) }
+        );
+        assert!(chat_ok && embedding_ok);
+        assert!(
+            !provider
+                .supports_capability_for_model("customer", &ProviderCapability::ChatCompletion)
+        );
+
+        let router = Arc::new(Router::default());
+        let binding = RuntimeBinding::new(router.clone());
+        router.set_model_list(vec![chat]);
+        let old = binding.bind();
+        router.set_model_list(vec![embedding]);
+        assert!(
+            old.select_deployment_lease_for_capability(
+                "public",
+                &ProviderCapability::ChatCompletion
+            )
+            .is_ok()
+        );
+        assert!(
+            binding
+                .bind()
+                .select_deployment_lease_for_capability("public", &ProviderCapability::Embeddings)
+                .is_ok()
+        );
+    }
+}
+
 #[test]
 fn ambiguous_native_probe_capabilities_require_custom_endpoint_at_config_boundaries() {
     for provider_type in [

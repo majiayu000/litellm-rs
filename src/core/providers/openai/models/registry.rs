@@ -3,7 +3,7 @@
 //! Dynamic model discovery and capability detection system.
 //! Types are defined in `registry_types`, static model data in `static_models`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use crate::core::pricing::get_pricing_db;
@@ -18,6 +18,7 @@ use super::static_models::static_model_entries;
 #[derive(Debug)]
 pub struct OpenAIModelRegistry {
     models: HashMap<String, OpenAIModelSpec>,
+    callable_models: HashSet<String>,
 }
 
 impl Default for OpenAIModelRegistry {
@@ -31,6 +32,7 @@ impl OpenAIModelRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             models: HashMap::new(),
+            callable_models: HashSet::new(),
         };
         registry.load_models();
         registry
@@ -307,6 +309,7 @@ impl OpenAIModelRegistry {
         for (id, name, family, max_context, max_output, input_cost, output_cost) in
             static_model_entries()
         {
+            self.callable_models.insert(id.to_string());
             let mut model_info = ModelInfo {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -425,6 +428,14 @@ impl OpenAIModelRegistry {
                 },
             );
         }
+    }
+
+    /// Return whether an exact registry key is a callable catalog model.
+    ///
+    /// Pricing rows may contain composite keys (for example image dimensions)
+    /// that are valid for cost lookup but are not model IDs.
+    pub fn is_callable_model(&self, model: &str) -> bool {
+        self.callable_models.contains(model)
     }
 
     /// Get all model information

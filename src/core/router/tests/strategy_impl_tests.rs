@@ -2,7 +2,7 @@
 
 use crate::core::providers::Provider;
 use crate::core::providers::openai::OpenAIProvider;
-use crate::core::router::deployment::{Deployment, DeploymentConfig, DeploymentState};
+use crate::core::router::deployment::{Deployment, DeploymentConfig};
 use crate::core::router::strategy_impl::*;
 use dashmap::DashMap;
 use std::sync::atomic::AtomicUsize;
@@ -18,15 +18,13 @@ async fn create_test_provider() -> Provider {
 
 // Helper to create a test deployment
 async fn create_test_deployment(id: &str, config: DeploymentConfig) -> Deployment {
-    Deployment {
-        id: id.to_string(),
-        provider: create_test_provider().await,
-        model: "gpt-4".to_string(),
-        model_name: "gpt-4".to_string(),
-        config,
-        state: DeploymentState::new(),
-        tags: vec![],
-    }
+    Deployment::new(
+        id.to_string(),
+        create_test_provider().await,
+        "gpt-4".to_string(),
+        "gpt-4".to_string(),
+    )
+    .with_config(config)
 }
 
 mod context_tests;

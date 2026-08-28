@@ -143,7 +143,9 @@ async fn test_simple_shuffle_increments_active_requests() {
 #[tokio::test]
 async fn test_capability_selection_reports_unsupported_capability() {
     let router = Router::default();
-    let d = create_test_deployment("chat-only", "shared-model").await;
+    let d = create_test_deployment("chat-only", "shared-model")
+        .await
+        .with_model_identity(Some("gpt-4".to_string()), None);
     d.state.health.store(HealthStatus::Healthy as u8, Relaxed);
     router.add_deployment(d);
 
@@ -204,7 +206,9 @@ async fn openai_like_route_selection_rejects_unimplemented_surfaces() {
 #[tokio::test]
 async fn test_capability_selection_reports_unavailable_when_capable_deployment_is_unhealthy() {
     let router = Router::default();
-    let d = create_test_deployment("chat-capable", "shared-model").await;
+    let d = create_test_deployment("chat-capable", "shared-model")
+        .await
+        .with_model_identity(Some("gpt-4".to_string()), None);
     d.state.health.store(HealthStatus::Unhealthy as u8, Relaxed);
     router.add_deployment(d);
 

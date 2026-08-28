@@ -64,6 +64,9 @@ use crate::core::types::{
     responses::{ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse},
 };
 
+use crate::core::providers::model_identity::{
+    DeploymentModelIdentity, ModelIdentity, ModelIdentityProvider, resolve_model_identity,
+};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 
@@ -75,9 +78,47 @@ pub struct AzureOpenAIProvider {
     embedding_handler: AzureEmbeddingHandler,
     image_handler: AzureImageHandler,
     cost_calculator: AzureCostCalculator,
+    deployment_identity: Option<DeploymentModelIdentity>,
 }
 
 impl AzureOpenAIProvider {
+    fn resolve_identity<'a>(&'a self, model: &'a str) -> ModelIdentity<'a> {
+        let configured = self
+            .deployment_identity
+            .as_ref()
+            .filter(|identity| identity.wire_model() == model)
+            .map(DeploymentModelIdentity::as_ref);
+        resolve_model_identity(
+            ModelIdentityProvider::Azure,
+            model,
+            configured,
+            crate::core::providers::openai::models::get_openai_registry(),
+        )
+    }
+
+    fn require_callable(&self, model: &str) -> Result<(), ProviderError> {
+        match self.resolve_identity(model) {
+            ModelIdentity::CatalogCallable { .. }
+            | ModelIdentity::ConfiguredDeployment {
+                capability_catalog_model: Some(_),
+                ..
+            } => Ok(()),
+            ModelIdentity::ConfiguredDeployment {
+                capability_catalog_model: None,
+                ..
+            } => Err(ProviderError::not_supported(
+                "azure",
+                format!(
+                    "deployment '{model}' requires an explicit capability_catalog_model mapping"
+                ),
+            )),
+            ModelIdentity::PricingOnly { .. } => Err(ProviderError::not_supported(
+                "azure",
+                format!("pricing-only identity '{model}' is not callable"),
+            )),
+            ModelIdentity::Invalid { .. } => Err(ProviderError::model_not_found("azure", model)),
+        }
+    }
     /// Create new Azure OpenAI provider
     pub fn new(config: AzureConfig) -> Result<Self, ProviderError> {
         let chat_handler = AzureChatHandler::new(config)?;
@@ -92,6 +133,7 @@ impl AzureOpenAIProvider {
             embedding_handler,
             image_handler,
             cost_calculator,
+            deployment_identity: None,
         })
     }
 
@@ -103,6 +145,14 @@ impl AzureOpenAIProvider {
     /// Get Azure configuration
     pub fn get_azure_config(&self) -> &AzureConfig {
         &self.config
+    }
+
+    pub(crate) fn bind_deployment_identity(&mut self, identity: DeploymentModelIdentity) {
+        self.deployment_identity = Some(identity);
+    }
+
+    pub(crate) fn model_identity<'a>(&'a self, model: &'a str) -> ModelIdentity<'a> {
+        self.resolve_identity(model)
     }
 
     /// Get cost calculator
@@ -171,10 +221,24 @@ impl LLMProvider for AzureOpenAIProvider {
     }
 
     fn supports_model(&self, model: &str) -> bool {
-        !model.trim().is_empty()
+        matches!(
+            self.resolve_identity(model),
+            ModelIdentity::CatalogCallable { .. }
+                | ModelIdentity::ConfiguredDeployment {
+                    capability_catalog_model: Some(_),
+                    ..
+                }
+        )
     }
 
-    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        if self
+            .resolve_identity(model)
+            .capability_catalog_model()
+            .is_none()
+        {
+            return &[];
+        }
         &[
             "temperature",
             "max_tokens",
@@ -193,9 +257,9 @@ impl LLMProvider for AzureOpenAIProvider {
     async fn map_openai_params(
         &self,
         params: std::collections::HashMap<String, serde_json::Value>,
-        _model: &str,
+        model: &str,
     ) -> Result<std::collections::HashMap<String, serde_json::Value>, ProviderError> {
-        // Azure OpenAI API is largely compatible with OpenAI, minimal mapping needed
+        self.require_callable(model)?;
         Ok(params)
     }
 
@@ -204,6 +268,7 @@ impl LLMProvider for AzureOpenAIProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
+        self.require_callable(&request.model)?;
         self.chat_handler.transform_request(&request)
     }
 
@@ -244,6 +309,7 @@ impl LLMProvider for AzureOpenAIProvider {
         request: ChatRequest,
         context: RequestContext,
     ) -> Result<ChatResponse, ProviderError> {
+        self.require_callable(&request.model)?;
         self.chat_handler
             .create_chat_completion(request, context)
             .await
@@ -255,6 +321,7 @@ impl LLMProvider for AzureOpenAIProvider {
         context: RequestContext,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
     {
+        self.require_callable(&request.model)?;
         self.chat_handler
             .create_chat_completion_stream(request, context)
             .await
@@ -265,6 +332,7 @@ impl LLMProvider for AzureOpenAIProvider {
         request: EmbeddingRequest,
         context: RequestContext,
     ) -> Result<EmbeddingResponse, ProviderError> {
+        self.require_callable(&request.model)?;
         self.embedding_handler
             .create_embeddings(request, context)
             .await
@@ -388,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn test_supports_dynamic_deployment_names() {
+    fn test_supports_only_exact_configured_deployment_names() {
         let provider = match AzureOpenAIProvider::new(test_config(
             "https://test.openai.azure.com".to_string(),
         )) {
@@ -396,8 +464,18 @@ mod tests {
             Err(error) => panic!("provider should be created: {error}"),
         };
 
-        assert!(provider.supports_model("customer-gpt4o-prod"));
+        assert!(!provider.supports_model("customer-gpt4o-prod"));
         assert!(!provider.supports_model("   "));
+
+        let config = test_config("https://test.openai.azure.com".to_string());
+        let mut configured = AzureOpenAIProvider::new(config).unwrap();
+        configured.bind_deployment_identity(DeploymentModelIdentity::new(
+            "customer-gpt4o-prod",
+            Some("gpt-4o".to_string()),
+            None,
+        ));
+        assert!(configured.supports_model("customer-gpt4o-prod"));
+        assert!(!configured.supports_model("customer-gpt4o-prod-suffix"));
     }
 
     #[test]

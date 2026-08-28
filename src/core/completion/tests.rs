@@ -97,12 +97,15 @@ async fn explicit_completion_facade_executes_selected_runtime_deployment() {
     .await
     .expect("provider should build");
     let runtime = Arc::new(UnifiedRouter::default());
-    runtime.add_deployment(Deployment::new(
-        "canonical-deployment".to_string(),
-        Provider::OpenAI(provider),
-        "canonical-model".to_string(),
-        "facade-model".to_string(),
-    ));
+    runtime.add_deployment(
+        Deployment::new(
+            "canonical-deployment".to_string(),
+            Provider::OpenAI(provider),
+            "canonical-model".to_string(),
+            "facade-model".to_string(),
+        )
+        .with_model_identity(Some("gpt-4".to_string()), None),
+    );
     runtime
         .add_model_alias("google/facade-alias", "facade-model")
         .expect("prefix-looking alias should publish");
@@ -167,12 +170,15 @@ async fn explicit_completion_stream_executes_selected_runtime_deployment() {
     .await
     .expect("provider should build");
     let runtime = Arc::new(UnifiedRouter::default());
-    runtime.add_deployment(Deployment::new(
-        "canonical-stream-deployment".to_string(),
-        Provider::OpenAI(provider),
-        "canonical-stream-model".to_string(),
-        "stream-facade-model".to_string(),
-    ));
+    runtime.add_deployment(
+        Deployment::new(
+            "canonical-stream-deployment".to_string(),
+            Provider::OpenAI(provider),
+            "canonical-stream-model".to_string(),
+            "stream-facade-model".to_string(),
+        )
+        .with_model_identity(Some("gpt-4".to_string()), None),
+    );
     let deployment = runtime
         .get_deployment("canonical-stream-deployment")
         .expect("stream deployment should exist");
@@ -258,12 +264,15 @@ async fn completion_and_sdk_facades_share_runtime_selection_and_error_categories
     .await
     .expect("provider should build");
     let runtime = Arc::new(UnifiedRouter::default());
-    runtime.add_deployment(Deployment::new(
-        "shared-runtime-deployment".to_string(),
-        Provider::OpenAI(provider),
-        "shared-runtime-model".to_string(),
-        "public-runtime-model".to_string(),
-    ));
+    runtime.add_deployment(
+        Deployment::new(
+            "shared-runtime-deployment".to_string(),
+            Provider::OpenAI(provider),
+            "shared-runtime-model".to_string(),
+            "public-runtime-model".to_string(),
+        )
+        .with_model_identity(Some("gpt-4".to_string()), None),
+    );
     let binding = RuntimeBinding::new(runtime);
     let completion_facade = DefaultRouter::from_runtime(binding.clone());
     let sdk_facade = LLMClient::from_runtime(binding, "public-runtime-model")

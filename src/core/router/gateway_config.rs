@@ -1,8 +1,3 @@
-//! Gateway configuration integration
-//!
-//! This module contains the from_gateway_config method for creating
-//! a Router from gateway configuration.
-
 #[cfg(test)]
 #[path = "gateway_config_tests.rs"]
 mod gateway_config_tests;
@@ -23,6 +18,9 @@ use crate::config::Validate;
 use crate::config::models::gateway::GatewayConfig;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
+use crate::core::providers::model_identity::{
+    DeploymentModelIdentity, MODEL_IDENTITY_MAPPINGS_KEY, take_validated_identity_mappings,
+};
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::{
     self as provider_registry, ProviderDispatchKind, catalog_policy,
@@ -171,10 +169,6 @@ pub fn runtime_router_config_from_gateway(
 }
 
 impl Router {
-    /// Create a Router from gateway configuration
-    ///
-    /// This method initializes a Router with deployments created from provider configurations.
-    /// Each provider in the config becomes a deployment in the router.
     pub async fn from_gateway_config(
         providers: &[ProviderConfig],
         router_config: Option<RouterConfig>,
@@ -213,12 +207,18 @@ impl Router {
             }
 
             let construction = normalize_provider_construction(provider_config);
-            let normalized_config = construction.config;
+            let mut normalized_config = construction.config;
+            let mut identity_settings = HashMap::new();
+            if let Some(value) = normalized_config
+                .settings
+                .remove(MODEL_IDENTITY_MAPPINGS_KEY)
+            {
+                identity_settings.insert(MODEL_IDENTITY_MAPPINGS_KEY.to_string(), value);
+            }
             let provider_name = normalized_config.name.clone();
             let configured_models = normalized_config.models.clone();
             let tags = normalized_config.tags.clone();
             let deployment_config = deployment_config_from_provider(&normalized_config)?;
-            // Create provider instance via the single canonical factory.
             let provider = create_provider(normalized_config).await.map_err(|e| {
                 RouterError::DeploymentNotFound(format!(
                     "Failed to create provider {}: {}",
@@ -227,8 +227,14 @@ impl Router {
             })?;
             let provider_instance_identity = ProviderInstanceIdentity::new();
             let legacy_metadata = construction.legacy_metadata;
+            let mut identity_mappings = take_validated_identity_mappings(
+                &provider_name,
+                &provider,
+                &configured_models,
+                &mut identity_settings,
+            )
+            .map_err(RouterError::InvalidConfiguration)?;
 
-            // Determine which models this deployment serves.
             let uses_configured_models = !configured_models.is_empty();
             let mut models: Vec<String> = if uses_configured_models {
                 configured_models
@@ -275,6 +281,9 @@ impl Router {
                     )));
                 }
                 canonical_models.insert(model.clone());
+                let identity = identity_mappings
+                    .remove(&model)
+                    .unwrap_or_else(|| DeploymentModelIdentity::new(model.clone(), None, None));
                 staged.push((
                     create_deployment_from_config(
                         &deployment_id,
@@ -283,6 +292,10 @@ impl Router {
                         deployment_config.clone(),
                         tags.clone(),
                         provider_instance_identity.clone(),
+                    )
+                    .with_model_identity(
+                        identity.capability_catalog_model().map(str::to_owned),
+                        identity.pricing_model().map(str::to_owned),
                     ),
                     legacy_metadata.clone(),
                     provider_name.clone(),
@@ -332,7 +345,6 @@ impl Router {
     }
 }
 
-/// Helper function to create deployment from provider config
 fn create_deployment_from_config(
     deployment_id: &str,
     provider: Provider,

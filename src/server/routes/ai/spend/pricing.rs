@@ -40,11 +40,15 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
             });
 
     let mut model_candidates = vec![model.to_string()];
-    if let Provider::OpenAI(provider) = provider {
-        let mapped = provider.config.get_model_mapping(model);
-        if !model_candidates.contains(&mapped) {
-            model_candidates.insert(0, mapped);
-        }
+    if matches!(
+        provider.provider_type(),
+        ProviderType::OpenAI | ProviderType::Azure | ProviderType::AzureAI
+    ) && let Some(resolved) = provider.resolve_model_identity(model).pricing_model()
+        && !model_candidates
+            .iter()
+            .any(|candidate| candidate == resolved)
+    {
+        model_candidates.insert(0, resolved.to_string());
     }
 
     for pricing_provider in &provider_candidates {

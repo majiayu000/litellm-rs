@@ -413,6 +413,7 @@ macro_rules! dispatch_provider_selective {
 mod audio_dispatch;
 mod capability_dispatch;
 mod model_health_check;
+pub mod model_identity;
 
 /// Unified built-in Provider enum (Rust-idiomatic design).
 ///
@@ -532,6 +533,74 @@ impl Provider {
         }
     }
 
+    /// Resolve a request model using this provider instance's exact catalog
+    /// and immutable runtime configuration.
+    pub fn resolve_model_identity<'a>(
+        &'a self,
+        model: &'a str,
+    ) -> model_identity::ModelIdentity<'a> {
+        match self {
+            Provider::OpenAI(provider) => provider.resolve_model_identity(model),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(provider) => provider.model_identity(model),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => provider.model_identity(model),
+            _ => model_identity::ModelIdentity::Invalid {
+                raw_model: model,
+                reason: model_identity::ModelIdentityError::WrongProvider,
+            },
+        }
+    }
+
+    /// Resolve only exact catalog/qualified aliases, without deployment context.
+    pub(crate) fn resolve_exact_model_identity<'a>(
+        &'a self,
+        model: &'a str,
+    ) -> model_identity::ModelIdentity<'a> {
+        use model_identity::{ModelIdentityProvider, resolve_model_identity};
+        match self {
+            Provider::OpenAI(provider) => resolve_model_identity(
+                ModelIdentityProvider::OpenAI,
+                model,
+                None,
+                provider.model_registry,
+            ),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(_) => resolve_model_identity(
+                ModelIdentityProvider::Azure,
+                model,
+                None,
+                openai::models::get_openai_registry(),
+            ),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => resolve_model_identity(
+                ModelIdentityProvider::AzureAI,
+                model,
+                None,
+                provider.get_model_registry(),
+            ),
+            _ => model_identity::ModelIdentity::Invalid {
+                raw_model: model,
+                reason: model_identity::ModelIdentityError::WrongProvider,
+            },
+        }
+    }
+
+    /// Bind one selected deployment identity to an owned provider clone.
+    pub(crate) fn bind_deployment_identity(
+        &mut self,
+        identity: model_identity::DeploymentModelIdentity,
+    ) {
+        match self {
+            Provider::OpenAI(provider) => provider.bind_deployment_identity(identity),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(provider) => provider.bind_deployment_identity(identity),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => provider.bind_deployment_identity(identity),
+            _ => {}
+        }
+    }
+
     /// Single source of truth for factory branches currently wired in `from_config_async`.
     pub fn factory_supported_provider_types() -> &'static [ProviderType] {
         registry::dispatchable_provider_types_slice()
@@ -584,7 +653,24 @@ impl Provider {
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
         use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-        let model = self.strip_provider_prefix(model);
+        let exact_model;
+        let model = if matches!(
+            self.provider_type(),
+            ProviderType::OpenAI | ProviderType::Azure | ProviderType::AzureAI
+        ) {
+            exact_model = self
+                .resolve_model_identity(model)
+                .pricing_model()
+                .ok_or_else(|| {
+                    ProviderError::model_not_found(
+                        "model_identity",
+                        format!("no configured pricing identity for '{model}'"),
+                    )
+                })?;
+            exact_model
+        } else {
+            self.strip_provider_prefix(model)
+        };
         dispatch_provider!(
             async_err,
             self,
