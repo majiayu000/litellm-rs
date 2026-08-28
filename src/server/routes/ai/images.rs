@@ -187,7 +187,7 @@ async fn proxy_image_multipart_endpoint(
                         let mut request_pricing = super::spend::request_pricing_for_provider(
                             &pricing_service,
                             &selected_provider,
-                            &selected_model,
+                            requested_model,
                         )?;
                         if let Some(variant) = pricing_keys::resolve_image_request_pricing(
                             &request_pricing,
@@ -201,13 +201,13 @@ async fn proxy_image_multipart_endpoint(
                             &request_pricing,
                             &pricing_config,
                             selected_provider.name(),
-                            &selected_model,
+                            requested_model,
                             &usage,
                         )?;
                         if estimated_cost <= 0.0 && !unpriced {
                             return Err(ProviderError::configuration(
                                 "image_proxy",
-                                format!("Image model '{selected_model}' has non-positive pricing"),
+                                format!("Image model '{requested_model}' has non-positive pricing"),
                             ));
                         }
                         let provider = selected_image_proxy_provider(
