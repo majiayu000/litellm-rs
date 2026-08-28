@@ -7,8 +7,14 @@ use crate::core::providers::anthropic::models::{ModelFeature, get_anthropic_regi
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
 use crate::core::types::message::MessageRole;
+use crate::core::types::tools::ToolChoice;
 
 use super::AnthropicClient;
+
+#[derive(Debug, Clone, Copy)]
+struct Claude5Protocol {
+    thinking_always_on: bool,
+}
 
 impl AnthropicClient {
     pub(in crate::core::providers::anthropic) fn transform_chat_request(
@@ -25,22 +31,31 @@ impl AnthropicClient {
         }
 
         let registry = get_anthropic_registry();
+        let claude_5_protocol = if self.config.uses_compatible_model_allow_list() {
+            None
+        } else {
+            Self::claude_5_protocol(&request.model)
+        };
 
         let model_spec = if self.config.uses_compatible_model_allow_list() {
             None
         } else {
             registry.get_model_spec(&request.model)
         };
-        if model_spec.is_none() && !self.config.allows_unknown_model(&request.model) {
+        if model_spec.is_none()
+            && claude_5_protocol.is_none()
+            && !self.config.allows_unknown_model(&request.model)
+        {
             return Err(anthropic_api_error(
                 400,
                 format!("Unsupported model: {}", request.model),
             ));
         }
-        if let Some(model_spec) = model_spec {
-            Self::validate_current_claude_5_request(request, model_spec)?;
+        if let Some(protocol) = claude_5_protocol {
+            Self::validate_claude_5_request(request, protocol)?;
         }
         if model_spec.is_none()
+            && claude_5_protocol.is_none()
             && (request
                 .tools
                 .as_ref()
@@ -57,7 +72,10 @@ impl AnthropicClient {
                 ),
             ));
         }
-        if model_spec.is_none() && Self::has_unsupported_unknown_model_content(request) {
+        if model_spec.is_none()
+            && claude_5_protocol.is_none()
+            && Self::has_unsupported_unknown_model_content(request)
+        {
             return Err(ProviderError::not_supported(
                 "anthropic",
                 format!(
@@ -160,7 +178,7 @@ impl AnthropicClient {
         if let Some(tools) = &request.tools
             && !tools.is_empty()
         {
-            let Some(model_spec) = model_spec else {
+            if model_spec.is_none() && claude_5_protocol.is_none() {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!(
@@ -168,8 +186,10 @@ impl AnthropicClient {
                         request.model
                     ),
                 ));
-            };
-            if !model_spec.features.contains(&ModelFeature::ToolCalling) {
+            }
+            if model_spec
+                .is_some_and(|model_spec| !model_spec.features.contains(&ModelFeature::ToolCalling))
+            {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!("Model {} does not support tool calling", request.model),
@@ -184,9 +204,37 @@ impl AnthropicClient {
             }
         }
 
+        if request
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| thinking.enabled)
+            && claude_5_protocol.is_none()
+            && request
+                .tool_choice
+                .as_ref()
+                .is_some_and(Self::is_forced_tool_choice)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Manual extended thinking only supports auto or none tool_choice",
+            ));
+        }
+
         // Add thinking configuration
         if let Some(thinking) = &request.thinking {
-            let Some(model_spec) = model_spec else {
+            if claude_5_protocol.is_some() {
+                if thinking.enabled {
+                    anthropic_request["thinking"] = json!({
+                        "type": "adaptive",
+                        "display": if thinking.include_thinking { "summarized" } else { "omitted" }
+                    });
+                } else {
+                    anthropic_request["thinking"] = json!({"type": "disabled"});
+                }
+                if let Some(effort) = thinking.effort {
+                    anthropic_request["output_config"] = json!({"effort": effort.as_str()});
+                }
+            } else if model_spec.is_none() {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!(
@@ -194,27 +242,10 @@ impl AnthropicClient {
                         request.model
                     ),
                 ));
-            };
-            let supports_adaptive_thinking =
-                Self::model_metadata_flag(model_spec, "supports_adaptive_thinking");
-            if supports_adaptive_thinking {
-                if thinking.enabled {
-                    let mut adaptive = json!({ "type": "adaptive" });
-                    if thinking.include_thinking {
-                        adaptive["display"] = json!("summarized");
-                    } else {
-                        adaptive["display"] = json!("omitted");
-                    }
-                    anthropic_request["thinking"] = adaptive;
-                } else {
-                    anthropic_request["thinking"] = json!({ "type": "disabled" });
-                }
-                if let Some(effort) = thinking.effort {
-                    anthropic_request["output_config"] = json!({
-                        "effort": effort.as_str()
-                    });
-                }
-            } else if thinking.enabled && !model_spec.features.contains(&ModelFeature::ThinkingMode)
+            } else if thinking.enabled
+                && model_spec.is_some_and(|model_spec| {
+                    !model_spec.features.contains(&ModelFeature::ThinkingMode)
+                })
             {
                 return Err(ProviderError::not_supported(
                     "anthropic",
@@ -266,14 +297,26 @@ impl AnthropicClient {
         Ok(anthropic_request)
     }
 
-    fn validate_current_claude_5_request(
-        request: &ChatRequest,
-        model_spec: &crate::core::providers::anthropic::models::ModelSpec,
-    ) -> Result<(), ProviderError> {
-        if !Self::model_metadata_flag(model_spec, "supports_adaptive_thinking") {
-            return Ok(());
-        }
+    pub(in crate::core::providers::anthropic) fn is_claude_5_protocol_model(model: &str) -> bool {
+        Self::claude_5_protocol(model).is_some()
+    }
 
+    fn claude_5_protocol(model: &str) -> Option<Claude5Protocol> {
+        match model {
+            "claude-fable-5" => Some(Claude5Protocol {
+                thinking_always_on: true,
+            }),
+            "claude-opus-5" | "claude-sonnet-5" => Some(Claude5Protocol {
+                thinking_always_on: false,
+            }),
+            _ => None,
+        }
+    }
+
+    fn validate_claude_5_request(
+        request: &ChatRequest,
+        protocol: Claude5Protocol,
+    ) -> Result<(), ProviderError> {
         if request
             .temperature
             .is_some_and(|temperature| temperature != 1.0)
@@ -310,33 +353,15 @@ impl AnthropicClient {
                 format!("Model {} does not support assistant prefill", request.model),
             ));
         }
-        if request
-            .thinking
-            .as_ref()
-            .is_some_and(|thinking| !thinking.enabled)
-            && Self::model_metadata_flag(model_spec, "adaptive_thinking_always_on")
+        if protocol.thinking_always_on
+            && request
+                .thinking
+                .as_ref()
+                .is_some_and(|thinking| !thinking.enabled)
         {
             return Err(ProviderError::invalid_request(
                 "anthropic",
                 format!("Model {} cannot disable thinking", request.model),
-            ));
-        }
-        let thinking_is_active = request
-            .thinking
-            .as_ref()
-            .is_none_or(|thinking| thinking.enabled);
-        if thinking_is_active
-            && request
-                .tool_choice
-                .as_ref()
-                .is_some_and(Self::is_forced_tool_choice)
-        {
-            return Err(ProviderError::invalid_request(
-                "anthropic",
-                format!(
-                    "Model {} only supports auto or none tool_choice while thinking is active",
-                    request.model
-                ),
             ));
         }
         if request
@@ -370,17 +395,10 @@ impl AnthropicClient {
         Ok(())
     }
 
-    fn is_forced_tool_choice(tool_choice: &crate::core::types::tools::ToolChoice) -> bool {
+    fn is_forced_tool_choice(tool_choice: &ToolChoice) -> bool {
         match tool_choice {
-            crate::core::types::tools::ToolChoice::String(choice) => choice == "required",
-            crate::core::types::tools::ToolChoice::Specific { function, .. } => function.is_some(),
+            ToolChoice::String(choice) => choice == "required",
+            ToolChoice::Specific { function, .. } => function.is_some(),
         }
-    }
-
-    fn model_metadata_flag(
-        model_spec: &crate::core::providers::anthropic::models::ModelSpec,
-        key: &str,
-    ) -> bool {
-        model_spec.model_info.metadata.get(key) == Some(&Value::Bool(true))
     }
 }

@@ -10,7 +10,7 @@ use crate::core::types::{
 
 fn first_party_provider() -> AnthropicProvider {
     AnthropicProvider::new(AnthropicConfig::new_test("test-key"))
-        .unwrap_or_else(|err| panic!("provider should build: {err}"))
+        .unwrap_or_else(|error| panic!("provider should build: {error}"))
 }
 
 fn compatible_provider() -> AnthropicProvider {
@@ -119,7 +119,7 @@ async fn compatible_models_reject_message_thinking() {
 }
 
 #[test]
-fn current_claude_5_supported_params_exclude_top_k() {
+fn claude_5_protocol_supported_params_exclude_top_k() {
     let provider = first_party_provider();
 
     for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
@@ -137,18 +137,19 @@ fn current_claude_5_supported_params_exclude_top_k() {
 }
 
 #[tokio::test]
-async fn current_claude_5_public_transform_uses_client_contract() {
+async fn claude_5_public_transform_shares_production_protocol() {
     let provider = first_party_provider();
     let mut request = ChatRequest::new("claude-opus-5").add_user_message("Solve this");
     request.thinking = Some(ThinkingConfig::medium_effort());
+    request.stream = true;
 
     let transformed = provider
         .transform_request(request, RequestContext::new())
         .await
-        .expect("public transformer should accept adaptive thinking");
-
+        .expect("public transformer should use adaptive production serialization");
     assert_eq!(transformed["thinking"]["type"], "adaptive");
     assert_eq!(transformed["output_config"]["effort"], "medium");
+    assert_eq!(transformed["stream"], true);
 
     let mut top_k = ChatRequest::new("claude-opus-5").add_user_message("Hello");
     top_k

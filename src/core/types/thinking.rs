@@ -3,29 +3,130 @@
 //! This module provides a unified abstraction for thinking/reasoning features
 //! across all AI providers (OpenAI o-series, Anthropic Claude, DeepSeek R1, Gemini).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+use std::borrow::Cow;
 use std::collections::HashMap;
+use thiserror::Error;
 
-/// Lossless Anthropic thinking block used when a signed tool-use turn must be replayed.
+/// A lossless Anthropic Messages API thinking block.
 ///
-/// These fields are owned by the Anthropic Messages API wire contract. Generic callers should
-/// keep the blocks opaque; only the Anthropic adapter serializes them back to upstream requests.
+/// The Anthropic adapter owns this wire-specific representation. Generic callers should keep
+/// these blocks opaque and pass them back unchanged when continuing a tool-use turn.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AnthropicThinkingBlock {
-    /// A visible thinking block and its verification signature.
+    /// Visible or omitted thinking plus its required verification signature.
     Thinking {
-        /// Thinking text returned by Anthropic.
+        /// Thinking text returned by Anthropic. This is empty when display is omitted.
         thinking: String,
-        /// Signature that must be replayed unchanged in tool continuations.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        signature: Option<String>,
+        /// Opaque signature used by Anthropic to validate replayed thinking.
+        signature: String,
     },
-    /// An encrypted thinking block whose payload must be replayed unchanged.
+    /// Safety-redacted thinking with an opaque encrypted payload.
     RedactedThinking {
-        /// Opaque encrypted payload returned by Anthropic.
+        /// Opaque encrypted data that must be replayed unchanged.
         data: String,
     },
+}
+
+/// Invalid Anthropic thinking history.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum AnthropicThinkingContentError {
+    /// A thinking block did not include its required verification signature.
+    #[error("Anthropic thinking block requires a non-empty verification signature")]
+    MissingSignature,
+    /// A redacted block did not include its required encrypted payload.
+    #[error("Anthropic redacted thinking block requires a non-empty data payload")]
+    MissingRedactedData,
+}
+
+/// Ordered Anthropic thinking history.
+///
+/// Construction and deserialization validate required integrity fields, while serialization
+/// exposes only the canonical block sequence. This keeps invalid replay state out of the public
+/// typed representation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnthropicThinkingContent {
+    blocks: Vec<AnthropicThinkingBlock>,
+}
+
+impl AnthropicThinkingContent {
+    /// Return the complete ordered block sequence.
+    pub fn blocks(&self) -> &[AnthropicThinkingBlock] {
+        &self.blocks
+    }
+
+    fn visible_text(&self) -> Cow<'_, str> {
+        let mut visible = self.blocks.iter().filter_map(|block| match block {
+            AnthropicThinkingBlock::Thinking { thinking, .. } => Some(thinking.as_str()),
+            AnthropicThinkingBlock::RedactedThinking { .. } => None,
+        });
+        let Some(first) = visible.next() else {
+            return Cow::Borrowed("");
+        };
+        let Some(second) = visible.next() else {
+            return Cow::Borrowed(first);
+        };
+
+        let mut joined = String::with_capacity(first.len() + second.len());
+        joined.push_str(first);
+        joined.push_str(second);
+        for text in visible {
+            joined.push_str(text);
+        }
+        Cow::Owned(joined)
+    }
+
+    fn has_redacted_block(&self) -> bool {
+        self.blocks
+            .iter()
+            .any(|block| matches!(block, AnthropicThinkingBlock::RedactedThinking { .. }))
+    }
+}
+
+impl TryFrom<Vec<AnthropicThinkingBlock>> for AnthropicThinkingContent {
+    type Error = AnthropicThinkingContentError;
+
+    fn try_from(blocks: Vec<AnthropicThinkingBlock>) -> Result<Self, Self::Error> {
+        for block in &blocks {
+            match block {
+                AnthropicThinkingBlock::Thinking {
+                    thinking: _,
+                    signature,
+                } => {
+                    if signature.is_empty() {
+                        return Err(AnthropicThinkingContentError::MissingSignature);
+                    }
+                }
+                AnthropicThinkingBlock::RedactedThinking { data } => {
+                    if data.is_empty() {
+                        return Err(AnthropicThinkingContentError::MissingRedactedData);
+                    }
+                }
+            }
+        }
+
+        Ok(Self { blocks })
+    }
+}
+
+impl Serialize for AnthropicThinkingContent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.blocks.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AnthropicThinkingContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let blocks = Vec::<AnthropicThinkingBlock>::deserialize(deserializer)?;
+        Self::try_from(blocks).map_err(D::Error::custom)
+    }
 }
 
 /// Unified thinking content - provider agnostic
@@ -62,10 +163,13 @@ pub enum ThinkingContent {
         #[serde(skip_serializing_if = "Option::is_none")]
         token_count: Option<u32>,
     },
-    /// Ordered Anthropic blocks retained losslessly for signed tool continuations.
+    /// Ordered Anthropic blocks retained losslessly for multi-turn replay.
+    ///
+    /// This provider-owned variant is an additive public API change. Existing variants remain
+    /// wire-compatible; exhaustive callers must handle this variant when upgrading.
     AnthropicBlocks {
-        /// Thinking and redacted-thinking blocks in upstream response order.
-        blocks: Vec<AnthropicThinkingBlock>,
+        /// Validated signed and redacted blocks in upstream order.
+        content: AnthropicThinkingContent,
     },
 }
 
@@ -100,29 +204,19 @@ impl ThinkingContent {
     }
 
     /// Get the thinking text content (if available)
-    pub fn as_text(&self) -> Option<&str> {
+    pub fn as_text(&self) -> Option<Cow<'_, str>> {
         match self {
-            Self::Text { text, .. } => Some(text),
-            Self::Block { thinking, .. } => Some(thinking),
+            Self::Text { text, .. } => Some(Cow::Borrowed(text)),
+            Self::Block { thinking, .. } => Some(Cow::Borrowed(thinking)),
             Self::Redacted { .. } => None,
-            Self::AnthropicBlocks { blocks } => blocks.iter().find_map(|block| match block {
-                AnthropicThinkingBlock::Thinking { thinking, .. } => Some(thinking.as_str()),
-                AnthropicThinkingBlock::RedactedThinking { .. } => None,
-            }),
+            Self::AnthropicBlocks { content } => Some(content.visible_text()),
         }
     }
 
     /// Check if thinking is redacted
     pub fn is_redacted(&self) -> bool {
         matches!(self, Self::Redacted { .. })
-            || matches!(
-                self,
-                Self::AnthropicBlocks { blocks }
-                    if blocks.iter().any(|block| matches!(
-                        block,
-                        AnthropicThinkingBlock::RedactedThinking { .. }
-                    ))
-            )
+            || matches!(self, Self::AnthropicBlocks { content } if content.has_redacted_block())
     }
 }
 
@@ -427,6 +521,10 @@ pub struct ThinkingDelta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
 
+    /// Opaque payload for a streamed Anthropic `redacted_thinking` block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted_data: Option<String>,
+
     /// Whether this is the start of thinking
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_start: Option<bool>,
@@ -442,6 +540,7 @@ impl ThinkingDelta {
         Self {
             content: Some(content.into()),
             signature: None,
+            redacted_data: None,
             is_start: None,
             is_complete: None,
         }
@@ -452,6 +551,7 @@ impl ThinkingDelta {
         Self {
             content: None,
             signature: None,
+            redacted_data: None,
             is_start: Some(true),
             is_complete: None,
         }
@@ -462,6 +562,7 @@ impl ThinkingDelta {
         Self {
             content: None,
             signature: None,
+            redacted_data: None,
             is_start: None,
             is_complete: Some(true),
         }
@@ -475,14 +576,20 @@ mod tests {
     #[test]
     fn test_thinking_content_text() {
         let content = ThinkingContent::text("Let me think about this...");
-        assert_eq!(content.as_text(), Some("Let me think about this..."));
+        assert_eq!(
+            content.as_text().as_deref(),
+            Some("Let me think about this...")
+        );
         assert!(!content.is_redacted());
     }
 
     #[test]
     fn test_thinking_content_block() {
         let content = ThinkingContent::block("Step 1: Analyze the problem");
-        assert_eq!(content.as_text(), Some("Step 1: Analyze the problem"));
+        assert_eq!(
+            content.as_text().as_deref(),
+            Some("Step 1: Analyze the problem")
+        );
     }
 
     #[test]
@@ -585,34 +692,6 @@ mod tests {
     }
 
     #[test]
-    fn test_anthropic_thinking_blocks_round_trip_losslessly() {
-        let content = ThinkingContent::AnthropicBlocks {
-            blocks: vec![
-                AnthropicThinkingBlock::Thinking {
-                    thinking: "first".to_string(),
-                    signature: Some("sig-first".to_string()),
-                },
-                AnthropicThinkingBlock::RedactedThinking {
-                    data: "encrypted-payload".to_string(),
-                },
-                AnthropicThinkingBlock::Thinking {
-                    thinking: "second".to_string(),
-                    signature: Some("sig-second".to_string()),
-                },
-            ],
-        };
-
-        let serialized = serde_json::to_string(&content).expect("thinking blocks serialize");
-        let parsed: ThinkingContent =
-            serde_json::from_str(&serialized).expect("thinking blocks deserialize");
-
-        assert_eq!(parsed, content);
-        assert!(serialized.contains("sig-first"));
-        assert!(serialized.contains("encrypted-payload"));
-        assert!(serialized.contains("sig-second"));
-    }
-
-    #[test]
     fn test_thinking_config_with_param() {
         let config =
             ThinkingConfig::new().with_param("custom_key", serde_json::json!("custom_value"));
@@ -655,5 +734,47 @@ mod tests {
         let json = r#"{"enabled": true}"#;
         let config: ThinkingConfig = serde_json::from_str(json).unwrap();
         assert!(config.include_thinking); // default should be true
+    }
+
+    #[test]
+    fn anthropic_blocks_are_lossless_and_join_all_visible_text() {
+        let content = AnthropicThinkingContent::try_from(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "first ".to_string(),
+                signature: "sig-1".to_string(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: "opaque-data".to_string(),
+            },
+            AnthropicThinkingBlock::Thinking {
+                thinking: "second".to_string(),
+                signature: "sig-2".to_string(),
+            },
+        ])
+        .expect("valid Anthropic blocks");
+        let thinking = ThinkingContent::AnthropicBlocks { content };
+
+        assert_eq!(thinking.as_text().as_deref(), Some("first second"));
+        assert!(thinking.is_redacted());
+        let encoded = serde_json::to_string(&thinking).expect("serialize typed blocks");
+        let decoded: ThinkingContent =
+            serde_json::from_str(&encoded).expect("deserialize typed blocks");
+        assert_eq!(decoded, thinking);
+    }
+
+    #[test]
+    fn anthropic_blocks_reject_empty_integrity_fields() {
+        let missing_signature =
+            AnthropicThinkingContent::try_from(vec![AnthropicThinkingBlock::Thinking {
+                thinking: "visible".to_string(),
+                signature: String::new(),
+            }]);
+        assert!(missing_signature.is_err());
+
+        let missing_data =
+            AnthropicThinkingContent::try_from(vec![AnthropicThinkingBlock::RedactedThinking {
+                data: String::new(),
+            }]);
+        assert!(missing_data.is_err());
     }
 }

@@ -176,16 +176,16 @@ async fn test_deepseek_r1(provider: &OpenAILikeProvider) -> Result<(), Box<dyn s
                     println!("Type: Redacted");
                     println!("Token Count: {:?}", token_count);
                 }
-                ThinkingContent::AnthropicBlocks { blocks } => {
+                ThinkingContent::AnthropicBlocks { content } => {
                     println!("Type: AnthropicBlocks");
-                    for block in blocks {
+                    for block in content.blocks() {
                         match block {
                             AnthropicThinkingBlock::Thinking {
                                 thinking,
                                 signature,
                             } => {
                                 println!("Thinking:\n{}", thinking);
-                                println!("Signature: {:?}", signature);
+                                println!("Signature: {}", signature);
                             }
                             AnthropicThinkingBlock::RedactedThinking { data } => {
                                 println!("Redacted Data: {}", data);

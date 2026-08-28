@@ -661,21 +661,18 @@ impl AnthropicClient {
 
     fn thinking_content_to_blocks(thinking: &ThinkingContent) -> Result<Vec<Value>, ProviderError> {
         let blocks = match thinking {
-            ThinkingContent::AnthropicBlocks { blocks } => blocks.clone(),
+            ThinkingContent::AnthropicBlocks { content } => content.blocks().to_vec(),
             ThinkingContent::Text {
                 text,
                 signature: Some(signature),
-            } => vec![AnthropicThinkingBlock::Thinking {
+            } if !signature.is_empty() => vec![AnthropicThinkingBlock::Thinking {
                 thinking: text.clone(),
-                signature: Some(signature.clone()),
+                signature: signature.clone(),
             }],
-            ThinkingContent::Text {
-                signature: None, ..
-            }
-            | ThinkingContent::Block { .. } => {
+            ThinkingContent::Text { .. } | ThinkingContent::Block { .. } => {
                 return Err(ProviderError::invalid_request(
                     "anthropic",
-                    "Anthropic thinking history requires a verification signature",
+                    "Anthropic thinking history requires a non-empty verification signature",
                 ));
             }
             ThinkingContent::Redacted { .. } => {

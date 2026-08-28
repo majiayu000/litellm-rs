@@ -235,10 +235,7 @@ impl LLMProvider for AnthropicProvider {
     }
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        if matches!(
-            model,
-            "claude-fable-5" | "claude-opus-5" | "claude-sonnet-5"
-        ) {
+        if AnthropicClient::is_claude_5_protocol_model(model) {
             return &[
                 "temperature",
                 "max_tokens",
@@ -280,7 +277,9 @@ impl LLMProvider for AnthropicProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
-        self.validate_request(&request)?;
+        if !AnthropicClient::is_claude_5_protocol_model(&request.model) {
+            self.validate_request(&request)?;
+        }
         self.client.transform_chat_request(&request)
     }
 
