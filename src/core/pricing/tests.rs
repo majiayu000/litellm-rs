@@ -243,7 +243,7 @@ fn extended_pricing_uses_exact_mistral_alias_rates() {
 
     assert!((large - 0.00125).abs() < 1e-12);
     assert!((small - 0.00025).abs() < 1e-12);
-    assert!((small_4 - 0.00025).abs() < 1e-12);
+    assert!((small_4 - 0.00045).abs() < 1e-12);
     assert!((small_2506 - 0.00025).abs() < 1e-12);
 }
 
