@@ -39,6 +39,8 @@ pub struct ProviderConfigBuilder {
     pub(super) timeout: Option<Duration>,
     pub(super) enabled: bool,
     pub(super) weight: Option<PositiveF64>,
+    pub(super) model_identity_mappings:
+        HashMap<String, crate::core::providers::model_identity::ModelIdentityMapping>,
 }
 
 /// Backward-compatible alias.

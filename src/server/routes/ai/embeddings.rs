@@ -146,7 +146,8 @@ async fn handle_embedding_internal(
                     pricing_service.as_ref(),
                     &provider,
                     &selected_model,
-                );
+                )
+                .into_lookup_parts();
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model.clone();
                 let reserve_pricing_service = pricing_service.clone();

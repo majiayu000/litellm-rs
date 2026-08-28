@@ -73,6 +73,21 @@ providers:
     tags: ["fallback", "production"]
     enabled: true
 
+  # Custom OpenAI/Azure/Azure AI deployment names need explicit semantic
+  # identities. The wire model remains "customer-chat"; capability and pricing
+  # lookups use only the exact values below. Omit pricing_model deliberately to
+  # keep a deployment subject to the configured unpriced-model policy.
+  # - name: "azure-custom"
+  #   provider_type: "azure"
+  #   api_key: "${AZURE_OPENAI_API_KEY}"
+  #   base_url: "${AZURE_OPENAI_ENDPOINT}"
+  #   models: ["customer-chat"]
+  #   settings:
+  #     model_identity_mappings:
+  #       customer-chat:
+  #         capability_catalog_model: "gpt-4o"
+  #         pricing_model: "azure/global-standard/gpt-4o-2024-08-06"
+
   - name: "anthropic-backup"
     provider_type: "anthropic"
     api_key: "${ANTHROPIC_API_KEY}"

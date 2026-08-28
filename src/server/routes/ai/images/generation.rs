@@ -58,7 +58,8 @@ pub async fn handle_image_generation_with_state(
                         pricing_service.as_ref(),
                         &provider,
                         &selected_model,
-                    );
+                    )
+                    .into_lookup_parts();
                 let mut usage_pricing_model =
                     if super::pricing_keys::is_variant_image_pricing_key(&pricing_model) {
                         selected_model.clone()

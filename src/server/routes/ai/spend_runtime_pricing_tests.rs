@@ -1,3 +1,4 @@
+use super::pricing::PricingIdentity;
 use super::*;
 use crate::config::models::gateway::{GatewayConfig, GatewayPricingConfig, UnpricedModelPolicy};
 use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
@@ -66,15 +67,41 @@ async fn pricing_identity_consumes_the_shared_config_backed_result() {
 
     assert_eq!(
         pricing_identity_for_provider(&pricing, &provider, "prod-chat"),
-        ("openai".to_string(), "gpt-4".to_string())
+        PricingIdentity::Priced {
+            provider: "openai".to_string(),
+            model: "gpt-4".to_string()
+        }
     );
     assert_eq!(
         pricing_identity_for_provider(&pricing, &provider, "1024-x-1024/dall-e-2"),
-        ("openai".to_string(), "1024-x-1024/dall-e-2".to_string())
+        PricingIdentity::Priced {
+            provider: "openai".to_string(),
+            model: "1024-x-1024/dall-e-2".to_string()
+        }
     );
     assert_eq!(
         pricing_identity_for_provider(&pricing, &provider, "fake-gpt-5"),
-        ("openai".to_string(), "fake-gpt-5".to_string())
+        PricingIdentity::Unpriced {
+            provider: "openai".to_string()
+        }
+    );
+
+    let unpriced_collision = Deployment::new(
+        "unpriced-collision".into(),
+        provider.clone(),
+        "gpt-4".into(),
+        "public-unpriced".into(),
+    )
+    .with_model_identity(Some("gpt-4".into()), None);
+    assert_eq!(
+        pricing_identity_for_provider(
+            &pricing,
+            &unpriced_collision.provider_for_request(),
+            "gpt-4"
+        ),
+        PricingIdentity::Unpriced {
+            provider: "openai".to_string()
+        }
     );
 }
 

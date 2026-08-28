@@ -148,7 +148,7 @@ pub(super) fn ensure_chat_cache_pricing_gate(
         .or(request.max_tokens)
         .or(Some(1));
     ensure_cache_pricing_gate(
-        state,
+        state.unified_router.as_ref(),
         &request.model,
         ProviderCapability::ChatCompletion,
         |provider, selected_model| {
@@ -156,7 +156,8 @@ pub(super) fn ensure_chat_cache_pricing_gate(
                 pricing.as_ref(),
                 provider,
                 selected_model,
-            );
+            )
+            .into_lookup_parts();
             pricing
                 .estimate_loaded_completion_cost_for_provider(
                     &pricing_provider,
@@ -179,7 +180,7 @@ pub(super) fn ensure_embedding_cache_pricing_gate(
     let pricing = state.budgeted.pricing();
     let usage = PricingUsage::new(1, 0);
     ensure_cache_pricing_gate(
-        state,
+        state.unified_router.as_ref(),
         &request.model,
         ProviderCapability::Embeddings,
         |provider, selected_model| {
@@ -187,7 +188,8 @@ pub(super) fn ensure_embedding_cache_pricing_gate(
                 pricing.as_ref(),
                 provider,
                 selected_model,
-            );
+            )
+            .into_lookup_parts();
             pricing
                 .calculate_loaded_usage_cost_for_provider(&pricing_provider, &pricing_model, &usage)
                 .map(|_| ())
@@ -199,7 +201,7 @@ pub(super) fn ensure_embedding_cache_pricing_gate(
 }
 
 fn ensure_cache_pricing_gate<F>(
-    state: &AppState,
+    router: &crate::core::router::UnifiedRouter,
     requested_model: &str,
     capability: ProviderCapability,
     mut check: F,
@@ -211,13 +213,11 @@ where
     let mut last_error = None;
 
     loop {
-        let lease = match state
-            .unified_router
-            .select_deployment_lease_for_capability_matching(
-                requested_model,
-                &capability,
-                |deployment| !excluded_deployments.contains(deployment.id.as_str()),
-            ) {
+        let lease = match router.select_deployment_lease_for_capability_matching(
+            requested_model,
+            &capability,
+            |deployment| !excluded_deployments.contains(deployment.id.as_str()),
+        ) {
             Ok(lease) => lease,
             Err(router_error) => {
                 if let Some(error) = last_error {
@@ -230,7 +230,8 @@ where
         };
 
         let deployment = lease.deployment();
-        match check(&deployment.provider, &deployment.model) {
+        let provider = deployment.provider_for_request();
+        match check(&provider, &deployment.model) {
             Ok(()) => return Ok(()),
             Err(error) if super::spend::is_model_not_priced_error(&error) => {
                 super::execution::observability::record_candidate_exclusion(
@@ -314,5 +315,46 @@ mod tests {
             cache_request.user.as_deref(),
             Some("api_key:00000000-0000-0000-0000-00000000002a")
         );
+    }
+
+    #[tokio::test]
+    async fn cache_gate_uses_identity_bound_to_the_selected_deployment() {
+        use crate::core::providers::openai::OpenAIProvider;
+        use crate::core::router::Deployment;
+
+        let provider = Provider::OpenAI(
+            OpenAIProvider::with_api_key("sk-cache-identity-test")
+                .await
+                .expect("provider"),
+        );
+        let router = crate::core::router::UnifiedRouter::default();
+        router.set_model_list(vec![
+            Deployment::new(
+                "cache-chat".into(),
+                provider,
+                "gpt-4".into(),
+                "public-cache-chat".into(),
+            )
+            .with_model_identity(Some("gpt-4".into()), None),
+        ]);
+
+        ensure_cache_pricing_gate(
+            &router,
+            "public-cache-chat",
+            ProviderCapability::ChatCompletion,
+            |bound, selected_model| {
+                assert_eq!(selected_model, "gpt-4");
+                assert!(matches!(
+                    bound.resolve_model_identity(selected_model),
+                    crate::core::providers::model_identity::ModelIdentity::ConfiguredDeployment {
+                        capability_catalog_model: Some("gpt-4"),
+                        pricing_model: None,
+                        ..
+                    }
+                ));
+                Ok(())
+            },
+        )
+        .expect("cache gate should observe the bound provider");
     }
 }

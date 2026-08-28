@@ -113,7 +113,8 @@ pub(crate) async fn handle_streaming_response(
                     pricing_service.as_ref(),
                     &provider,
                     &selected_model,
-                );
+                )
+                .into_lookup_parts();
                 let req = super::token_policy::prepare_chat_request_for_provider(
                     ctx.api_key_max_tokens_per_request(),
                     &provider_name,

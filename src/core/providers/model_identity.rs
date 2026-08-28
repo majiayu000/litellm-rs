@@ -2,18 +2,27 @@
 
 use crate::core::providers::openai::models::OpenAIModelRegistry;
 use crate::core::types::model_id::ModelIdRef;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const MODEL_IDENTITY_MAPPINGS_KEY: &str = "model_identity_mappings";
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ModelIdentityMapping {
+pub struct ModelIdentityMapping {
     #[serde(default)]
-    capability_catalog_model: Option<String>,
+    pub capability_catalog_model: Option<String>,
     #[serde(default)]
-    pricing_model: Option<String>,
+    pub pricing_model: Option<String>,
+}
+
+impl ModelIdentityMapping {
+    pub fn new(capability_catalog_model: Option<String>, pricing_model: Option<String>) -> Self {
+        Self {
+            capability_catalog_model,
+            pricing_model,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,8 +239,57 @@ pub fn resolve_model_identity<'a>(
     configured: Option<ConfiguredModelRef<'a>>,
     catalog: &dyn ExactModelCatalog,
 ) -> ModelIdentity<'a> {
+    let raw_exact = exact_catalog(catalog, raw_model, raw_model);
+    // A deployment mapping is an explicit override, including when its wire ID
+    // collides with an exact catalog or pricing-only key.
+    if let Some(configured) = configured {
+        if raw_exact.is_none() {
+            let parsed = ModelIdRef::parse(raw_model);
+            if let Some(provider_text) = parsed.provider() {
+                let Some(qualifier) = qualifier_provider(provider_text) else {
+                    let reason = if known_provider_qualifier(provider_text) {
+                        ModelIdentityError::WrongProvider
+                    } else {
+                        ModelIdentityError::UnknownModel
+                    };
+                    return ModelIdentity::Invalid { raw_model, reason };
+                };
+                if !qualifier_matches(selected, qualifier) {
+                    return ModelIdentity::Invalid {
+                        raw_model,
+                        reason: ModelIdentityError::WrongProvider,
+                    };
+                }
+                if ModelIdRef::parse(parsed.model())
+                    .provider()
+                    .is_some_and(known_provider_qualifier)
+                {
+                    return ModelIdentity::Invalid {
+                        raw_model,
+                        reason: ModelIdentityError::DoubleQualification,
+                    };
+                }
+            }
+        }
+        let bad_capability = configured
+            .capability_catalog_model
+            .is_some_and(|model| catalog.model_kind(model) != Some(CatalogModelKind::Callable));
+        if bad_capability {
+            return ModelIdentity::Invalid {
+                raw_model,
+                reason: ModelIdentityError::InvalidConfiguration,
+            };
+        }
+        return ModelIdentity::ConfiguredDeployment {
+            raw_model,
+            wire_model: configured.wire_model,
+            capability_catalog_model: configured.capability_catalog_model,
+            pricing_model: configured.pricing_model,
+        };
+    }
+
     // Full-key lookup precedes parsing because legitimate pricing keys contain `/`.
-    if let Some(exact) = exact_catalog(catalog, raw_model, raw_model) {
+    if let Some(exact) = raw_exact {
         return exact;
     }
     let parsed = ModelIdRef::parse(raw_model);
@@ -263,27 +321,6 @@ pub fn resolve_model_identity<'a>(
     } else {
         None
     };
-
-    if let Some(configured) = configured {
-        let bad_capability = configured
-            .capability_catalog_model
-            .is_some_and(|model| catalog.model_kind(model) != Some(CatalogModelKind::Callable));
-        let bad_pricing = configured
-            .pricing_model
-            .is_some_and(|model| catalog.model_kind(model).is_none());
-        if bad_capability || bad_pricing {
-            return ModelIdentity::Invalid {
-                raw_model,
-                reason: ModelIdentityError::InvalidConfiguration,
-            };
-        }
-        return ModelIdentity::ConfiguredDeployment {
-            raw_model,
-            wire_model: configured.wire_model,
-            capability_catalog_model: configured.capability_catalog_model,
-            pricing_model: configured.pricing_model,
-        };
-    }
 
     let Some(catalog_model) = qualified_catalog_model else {
         return ModelIdentity::Invalid {
@@ -345,6 +382,32 @@ pub fn take_validated_identity_mappings(
                 "provider '{provider_name}': identity mapping '{wire_model}' must contain at least one non-empty semantic identity"
             ));
         }
+        if let Some(target) = mapping.capability_catalog_model.as_deref() {
+            match provider.resolve_exact_model_identity(target) {
+                ModelIdentity::CatalogCallable { .. } => {}
+                ModelIdentity::PricingOnly { .. } => {
+                    return Err(format!(
+                        "provider '{provider_name}': identity mapping '{wire_model}' field \
+                         'capability_catalog_model' value '{target}' is pricing-only and not callable"
+                    ));
+                }
+                ModelIdentity::Invalid { reason, .. } => {
+                    return Err(format!(
+                        "provider '{provider_name}': identity mapping '{wire_model}' field \
+                         'capability_catalog_model' value '{target}' is invalid: {reason:?}"
+                    ));
+                }
+                ModelIdentity::ConfiguredDeployment { .. } => {
+                    return Err(format!(
+                        "provider '{provider_name}': identity mapping '{wire_model}' field \
+                         'capability_catalog_model' value '{target}' unexpectedly resolved as a deployment"
+                    ));
+                }
+            }
+        }
+        if let Some(target) = mapping.pricing_model.as_deref() {
+            validate_pricing_target(provider_name, provider, &wire_model, target)?;
+        }
         let identity = DeploymentModelIdentity::new(
             &wire_model,
             mapping.capability_catalog_model,
@@ -354,12 +417,50 @@ pub fn take_validated_identity_mappings(
         bound.bind_deployment_identity(identity.clone());
         if let ModelIdentity::Invalid { reason, .. } = bound.resolve_model_identity(&wire_model) {
             return Err(format!(
-                "provider '{provider_name}': invalid identity mapping for '{wire_model}': {reason:?}"
+                "provider '{provider_name}': identity mapping key '{wire_model}' is invalid for \
+                 selected provider '{}': {reason:?}",
+                provider.provider_type()
             ));
         }
         validated.insert(wire_model, identity);
     }
     Ok(validated)
+}
+
+fn validate_pricing_target(
+    provider_name: &str,
+    provider: &crate::core::providers::Provider,
+    wire_model: &str,
+    target: &str,
+) -> Result<(), String> {
+    let pricing_provider = match provider.provider_type() {
+        crate::core::providers::ProviderType::OpenAI => "openai",
+        crate::core::providers::ProviderType::Azure => "azure",
+        crate::core::providers::ProviderType::AzureAI => "azure_ai",
+        other => {
+            return Err(format!(
+                "provider '{provider_name}': identity mapping '{wire_model}' field 'pricing_model' \
+                 value '{target}' is unsupported for provider type '{other}'"
+            ));
+        }
+    };
+    let pricing =
+        crate::core::pricing_service::PricingService::with_embedded_default().map_err(|error| {
+            format!(
+                "provider '{provider_name}': identity mapping '{wire_model}' field 'pricing_model' \
+                 value '{target}' could not be validated: {error}"
+            )
+        })?;
+    if pricing
+        .get_model_info_for_provider(pricing_provider, target)
+        .is_none()
+    {
+        return Err(format!(
+            "provider '{provider_name}': identity mapping '{wire_model}' field 'pricing_model' \
+             value '{target}' is not an exact pricing identity for provider '{pricing_provider}'"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -450,6 +551,48 @@ mod tests {
                 ..
             }
         ));
+
+        let colliding =
+            DeploymentModelIdentity::new("wire-gpt-4", Some("text-embedding-3-small".into()), None);
+        assert!(matches!(
+            resolve_model_identity(
+                ModelIdentityProvider::OpenAI,
+                "gpt-4",
+                Some(colliding.as_ref()),
+                registry
+            ),
+            ModelIdentity::ConfiguredDeployment {
+                wire_model: "wire-gpt-4",
+                capability_catalog_model: Some("text-embedding-3-small"),
+                pricing_model: None,
+                ..
+            }
+        ));
+
+        let invalid_collision =
+            DeploymentModelIdentity::new("gpt-4", Some("fake-gpt-5".into()), Some("gpt-4".into()));
+        assert_eq!(
+            resolve_model_identity(
+                ModelIdentityProvider::OpenAI,
+                "gpt-4",
+                Some(invalid_collision.as_ref()),
+                registry
+            )
+            .invalid_reason(),
+            Some(ModelIdentityError::InvalidConfiguration)
+        );
+    }
+
+    #[test]
+    fn mapping_schema_round_trips_without_losing_explicit_none() {
+        let mapping = ModelIdentityMapping::new(Some("gpt-4".into()), None);
+        let value = serde_json::to_value(&mapping).unwrap();
+        assert_eq!(value["capability_catalog_model"], "gpt-4");
+        assert!(value["pricing_model"].is_null());
+        assert_eq!(
+            serde_json::from_value::<ModelIdentityMapping>(value).unwrap(),
+            mapping
+        );
     }
 
     #[test]

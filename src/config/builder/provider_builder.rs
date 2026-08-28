@@ -21,6 +21,7 @@ impl ProviderConfigBuilder {
             timeout: None,
             enabled: true,
             weight: None,
+            model_identity_mappings: std::collections::HashMap::new(),
         }
     }
 
@@ -67,6 +68,17 @@ impl ProviderConfigBuilder {
         self
     }
 
+    /// Attach exact capability and pricing identities to a configured deployment.
+    pub fn model_identity_mapping(
+        mut self,
+        wire_model: impl Into<String>,
+        mapping: crate::core::providers::model_identity::ModelIdentityMapping,
+    ) -> Self {
+        self.model_identity_mappings
+            .insert(wire_model.into(), mapping);
+        self
+    }
+
     /// Set the rate limit
     pub fn rate_limit(mut self, requests_per_minute: u32) -> Self {
         self.max_requests_per_minute = Some(requests_per_minute);
@@ -110,6 +122,17 @@ impl ProviderConfigBuilder {
             .provider_type
             .ok_or_else(|| GatewayError::Config("Provider type is required".to_string()))?;
 
+        let mut settings = std::collections::HashMap::new();
+        if !self.model_identity_mappings.is_empty() {
+            settings.insert(
+                crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+                serde_json::to_value(self.model_identity_mappings).map_err(|error| {
+                    GatewayError::Config(format!(
+                        "failed to serialize provider model identity mappings: {error}"
+                    ))
+                })?,
+            );
+        }
         Ok(ProviderConfig {
             name: name.into_string(),
             provider_type: provider_type.into_string(),
@@ -128,7 +151,7 @@ impl ProviderConfigBuilder {
             max_retries: 3,
             retry: crate::config::models::provider::RetryConfig::default(),
             health_check: crate::config::models::provider::ProviderHealthCheckConfig::default(),
-            settings: std::collections::HashMap::new(),
+            settings,
             models: self.models,
             enabled: self.enabled,
             tags: Vec::new(),
@@ -223,6 +246,38 @@ mod tests {
     fn test_provider_config_builder_add_model() {
         let builder = ProviderConfigBuilder::new().add_model("gpt-4");
         assert_eq!(builder.models, vec!["gpt-4"]);
+    }
+
+    #[test]
+    fn model_identity_mapping_builder_uses_typed_round_trip_schema() {
+        use crate::core::providers::model_identity::{
+            MODEL_IDENTITY_MAPPINGS_KEY, ModelIdentityMapping,
+        };
+
+        let config = ProviderConfigBuilder::new()
+            .name("azure-prod")
+            .unwrap()
+            .provider_type("azure")
+            .unwrap()
+            .add_model("chat-west")
+            .model_identity_mapping(
+                "chat-west",
+                ModelIdentityMapping::new(
+                    Some("gpt-4".to_string()),
+                    Some("azure/eu/gpt-4o-2024-08-06".to_string()),
+                ),
+            )
+            .build()
+            .unwrap();
+        let mappings: std::collections::HashMap<String, ModelIdentityMapping> =
+            serde_json::from_value(config.settings[MODEL_IDENTITY_MAPPINGS_KEY].clone()).unwrap();
+        assert_eq!(
+            mappings["chat-west"],
+            ModelIdentityMapping::new(
+                Some("gpt-4".to_string()),
+                Some("azure/eu/gpt-4o-2024-08-06".to_string())
+            )
+        );
     }
 
     #[test]

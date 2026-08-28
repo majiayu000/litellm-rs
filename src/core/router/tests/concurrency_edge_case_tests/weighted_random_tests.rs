@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::router::DeploymentState;
 
 // ====================================================================================
 // 3. Weighted random statistical distribution verification
@@ -18,19 +19,21 @@ async fn test_weighted_random_statistical_distribution() {
             weight: *weight,
             ..Default::default()
         };
-        let d = Deployment::new(
-            id.to_string(),
-            crate::core::providers::Provider::OpenAI(
+        let d = Deployment {
+            id: id.to_string(),
+            provider: crate::core::providers::Provider::OpenAI(
                 crate::core::providers::openai::OpenAIProvider::with_api_key(
                     "sk-test-key-for-unit-testing-only",
                 )
                 .await
                 .unwrap(),
             ),
-            "gpt-4".to_string(),
-            "gpt-4".to_string(),
-        )
-        .with_config(config);
+            model: "gpt-4".to_string(),
+            model_name: "gpt-4".to_string(),
+            config,
+            state: DeploymentState::new(),
+            tags: vec![],
+        };
         deployments.insert(id.to_string(), d);
     }
 

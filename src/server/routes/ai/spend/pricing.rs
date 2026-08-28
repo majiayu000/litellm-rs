@@ -10,11 +10,28 @@ use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::embedding::EmbeddingInput;
 use crate::utils::ai::counter::token_counter::TokenCounter;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::server::routes::ai) enum PricingIdentity {
+    Priced { provider: String, model: String },
+    Unpriced { provider: String },
+}
+
+impl PricingIdentity {
+    /// Convert to the existing pricing-call boundary. An absent model is
+    /// represented by the catalog-invalid empty key, never by the wire model.
+    pub(in crate::server::routes::ai) fn into_lookup_parts(self) -> (String, String) {
+        match self {
+            Self::Priced { provider, model } => (provider, model),
+            Self::Unpriced { provider } => (provider, String::new()),
+        }
+    }
+}
+
 pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     pricing_service: &PricingService,
     provider: &Provider,
     model: &str,
-) -> (String, String) {
+) -> PricingIdentity {
     let provider_name = provider.name();
     let mut provider_candidates = vec![provider_name.to_string()];
 
@@ -39,25 +56,36 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
                 unique
             });
 
-    let mut model_candidates = vec![model.to_string()];
-    if matches!(
+    let managed = matches!(
         provider.provider_type(),
         ProviderType::OpenAI | ProviderType::Azure | ProviderType::AzureAI
-    ) && let Some(resolved) = provider.resolve_model_identity(model).pricing_model()
-        && !model_candidates
-            .iter()
-            .any(|candidate| candidate == resolved)
-    {
-        model_candidates.insert(0, resolved.to_string());
-    }
-    let mapped_model = if let Provider::OpenAI(provider) = provider {
-        let mapped = provider.config.get_model_mapping(model);
-        if !model_candidates.contains(&mapped) {
-            model_candidates.insert(0, mapped.clone());
+    );
+    let model_candidates = if managed {
+        match provider.resolve_model_identity(model) {
+            crate::core::providers::model_identity::ModelIdentity::CatalogCallable {
+                pricing_model,
+                ..
+            }
+            | crate::core::providers::model_identity::ModelIdentity::PricingOnly {
+                pricing_model,
+                ..
+            } => vec![pricing_model.to_string()],
+            crate::core::providers::model_identity::ModelIdentity::ConfiguredDeployment {
+                pricing_model: Some(pricing_model),
+                ..
+            } => vec![pricing_model.to_string()],
+            crate::core::providers::model_identity::ModelIdentity::ConfiguredDeployment {
+                pricing_model: None,
+                ..
+            }
+            | crate::core::providers::model_identity::ModelIdentity::Invalid { .. } => {
+                return PricingIdentity::Unpriced {
+                    provider: provider_name.to_string(),
+                };
+            }
         }
-        Some(mapped)
     } else {
-        None
+        vec![model.to_string()]
     };
 
     for pricing_provider in &provider_candidates {
@@ -65,31 +93,16 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
             if let Some((resolved_model, _)) =
                 pricing_service.get_model_info_for_provider(pricing_provider, pricing_model)
             {
-                return (pricing_provider.clone(), resolved_model);
+                return PricingIdentity::Priced {
+                    provider: pricing_provider.clone(),
+                    model: resolved_model,
+                };
             }
         }
     }
-
-    if let Some(identity) = mapped_model.as_deref().and_then(|mapped| {
-        unpriced_openai_mapping_identity(&provider.provider_type(), model, mapped)
-    }) {
-        return identity;
+    PricingIdentity::Unpriced {
+        provider: provider_name.to_string(),
     }
-
-    (provider_name.to_string(), model.to_string())
-}
-
-fn unpriced_openai_mapping_identity(
-    provider_type: &ProviderType,
-    requested_model: &str,
-    mapped_model: &str,
-) -> Option<(String, String)> {
-    (mapped_model != requested_model
-        && matches!(
-            provider_type,
-            ProviderType::OpenAI | ProviderType::OpenAICompatible
-        ))
-    .then(|| ("openai".to_string(), mapped_model.to_string()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -298,53 +311,4 @@ fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
             });
         total.saturating_add(tokens)
     })
-}
-
-#[cfg(test)]
-mod mapped_identity_tests {
-    use super::*;
-
-    #[test]
-    fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {
-        assert_eq!(
-            unpriced_openai_mapping_identity(
-                &ProviderType::OpenAICompatible,
-                "public-alias",
-                "canonical-model",
-            ),
-            Some(("openai".to_string(), "canonical-model".to_string()))
-        );
-        assert_eq!(
-            unpriced_openai_mapping_identity(
-                &ProviderType::OpenAICompatible,
-                "same-model",
-                "same-model",
-            ),
-            None
-        );
-        assert_eq!(
-            unpriced_openai_mapping_identity(
-                &ProviderType::Anthropic,
-                "public-alias",
-                "canonical-model",
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn retained_mapping_identity_does_not_price_non_image_requests() {
-        let pricing = PricingService::new(None);
-        let (provider, model) = unpriced_openai_mapping_identity(
-            &ProviderType::OpenAICompatible,
-            "public-alias",
-            "canonical-model",
-        )
-        .expect("real mapping should retain canonical identity");
-
-        let error = pricing
-            .calculate_loaded_usage_cost_for_provider(&provider, &model, &PricingUsage::new(10, 5))
-            .expect_err("identity retention must not invent a non-image price");
-        assert!(error.to_string().contains("Model not found"));
-    }
 }

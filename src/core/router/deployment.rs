@@ -469,9 +469,6 @@ pub struct Deployment {
     /// User-facing model name / model group (e.g., "gpt-4")
     pub model_name: String,
 
-    /// Immutable transport, capability-catalog, and pricing identities.
-    model_identity: DeploymentModelIdentity,
-
     /// Configuration
     pub config: DeploymentConfig,
 
@@ -508,13 +505,11 @@ impl Deployment {
         model_name: String,
         provider_instance_identity: ProviderInstanceIdentity,
     ) -> Self {
-        let model_identity = DeploymentModelIdentity::new(model.clone(), None, None);
         Self {
             id,
             provider,
             model,
             model_name,
-            model_identity,
             config: DeploymentConfig::default(),
             state: DeploymentState::new_for_provider_instance(provider_instance_identity),
             tags: Vec::new(),
@@ -539,23 +534,26 @@ impl Deployment {
         capability_catalog_model: Option<String>,
         pricing_model: Option<String>,
     ) -> Self {
-        self.model_identity = DeploymentModelIdentity::new(
-            self.model.clone(),
-            capability_catalog_model,
-            pricing_model,
-        );
+        let should_bind = capability_catalog_model.is_some()
+            || pricing_model.is_some()
+            || matches!(
+                self.provider.resolve_exact_model_identity(&self.model),
+                ModelIdentity::Invalid { .. }
+            );
+        if should_bind {
+            self.provider
+                .bind_deployment_identity(DeploymentModelIdentity::new(
+                    self.model.clone(),
+                    capability_catalog_model,
+                    pricing_model,
+                ));
+        }
         self
-    }
-
-    pub fn model_identity(&self) -> &DeploymentModelIdentity {
-        &self.model_identity
     }
 
     /// Build an owned provider clone bound to this selected deployment.
     pub fn provider_for_request(&self) -> Provider {
-        let mut provider = self.provider.clone();
-        provider.bind_deployment_identity(self.model_identity.clone());
-        provider
+        self.provider.clone()
     }
 
     /// Resolve model-specific capability from this deployment's identity.

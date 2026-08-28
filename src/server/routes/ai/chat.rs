@@ -150,11 +150,13 @@ async fn handle_chat_completion_internal(
             let callback = callback_for_execution.clone();
             async move {
                 let provider_name = provider.name().to_string();
-                let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
-                    pricing_service.as_ref(),
-                    &provider,
-                    &selected_model,
-                );
+                let (pricing_provider, pricing_model) =
+                    super::spend::pricing_identity_for_provider(
+                        pricing_service.as_ref(),
+                        &provider,
+                        &selected_model,
+                    )
+                    .into_lookup_parts();
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
                     &provider_name,

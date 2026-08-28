@@ -261,11 +261,15 @@ mod model_identity {
     async fn gateway_mapping_preserves_wire_and_routes_by_catalog_identity() {
         let router = Router::from_gateway_config(
             &[openai_config(
-                &["customer-chat", "gpt-4"],
+                &["customer-chat", "gpt-4", "1024-x-1024/dall-e-2"],
                 serde_json::json!({
                     "customer-chat": {
                         "capability_catalog_model": "gpt-4",
                         "pricing_model": "gpt-4"
+                    },
+                    "1024-x-1024/dall-e-2": {
+                        "capability_catalog_model": "gpt-4",
+                        "pricing_model": "1024-x-1024/dall-e-2"
                     }
                 }),
             )],
@@ -276,7 +280,13 @@ mod model_identity {
         let custom = router
             .get_deployment("identity-openai-customer-chat")
             .expect("custom deployment should exist");
-        assert_eq!(custom.model_identity().wire_model(), "customer-chat");
+        assert_eq!(
+            custom
+                .provider_for_request()
+                .resolve_model_identity("customer-chat")
+                .wire_model(),
+            Some("customer-chat")
+        );
         assert!(custom.supports_capability(&ProviderCapability::ChatCompletion));
         assert_eq!(
             custom
@@ -289,6 +299,10 @@ mod model_identity {
             .get_deployment("identity-openai-gpt-4")
             .expect("exact catalog deployment should exist");
         assert!(exact.supports_capability(&ProviderCapability::ChatCompletion));
+        let pricing_collision = router
+            .get_deployment("identity-openai-1024-x-1024/dall-e-2")
+            .expect("explicit mapping must override the pricing-only raw key");
+        assert!(pricing_collision.supports_capability(&ProviderCapability::ChatCompletion));
     }
 
     #[tokio::test]
@@ -324,6 +338,17 @@ mod model_identity {
                 "{name}: {error}"
             );
         }
+
+        let mappings = serde_json::json!({
+            "gpt-4": {"capability_catalog_model": "fake-gpt-5", "pricing_model": "gpt-4"}
+        });
+        let error = Router::from_gateway_config(&[openai_config(&["gpt-4"], mappings)], None)
+            .await
+            .expect_err("explicit invalid mapping must override a raw catalog collision");
+        let text = error.to_string();
+        assert!(text.contains("capability_catalog_model"), "{text}");
+        assert!(text.contains("fake-gpt-5"), "{text}");
+        assert!(text.contains("identity-openai"), "{text}");
         for model in [
             "anthropic/gpt-4",
             "openai/openai/gpt-4",
@@ -340,6 +365,87 @@ mod model_identity {
                 "{model}: {error}"
             );
         }
+    }
+
+    #[cfg(feature = "providers-extra")]
+    #[tokio::test]
+    async fn azure_and_azure_ai_mappings_use_separate_exact_authorities() {
+        fn config(
+            provider_type: &str,
+            model: &str,
+            capability: &str,
+            pricing: &str,
+        ) -> ProviderConfig {
+            let mut config = ProviderConfig {
+                name: format!("identity-{provider_type}"),
+                provider_type: provider_type.to_string(),
+                api_key: "identity-test-key".to_string(),
+                base_url: Some("https://identity-test.services.ai.azure.com".to_string()),
+                api_version: Some("2024-05-01-preview".to_string()),
+                models: vec![model.to_string()],
+                ..ProviderConfig::default()
+            };
+            config.settings.insert(
+                MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+                serde_json::json!({
+                    (model): {
+                        "capability_catalog_model": capability,
+                        "pricing_model": pricing
+                    }
+                }),
+            );
+            config
+        }
+
+        for pricing in [
+            "azure/eu/gpt-4o-2024-08-06",
+            "azure/global-standard/gpt-4o-2024-08-06",
+        ] {
+            Router::from_gateway_config(
+                &[config("azure", "regional-chat", "gpt-4", pricing)],
+                None,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{pricing}: {error}"));
+        }
+
+        let router = Router::from_gateway_config(
+            &[config(
+                "azure_ai",
+                "phi-production",
+                "Phi-4",
+                "azure_ai/Phi-4",
+            )],
+            None,
+        )
+        .await
+        .expect("real Phi-4 mapping should load");
+        let phi = router
+            .get_deployment("identity-azure_ai-phi-production")
+            .expect("Phi deployment");
+        assert!(phi.supports_capability(&ProviderCapability::ChatCompletion));
+        assert_eq!(
+            phi.provider_for_request()
+                .resolve_model_identity("phi-production")
+                .pricing_model(),
+            Some("azure_ai/Phi-4")
+        );
+
+        let error = Router::from_gateway_config(
+            &[config(
+                "azure",
+                "wrong-provider-price",
+                "gpt-4",
+                "azure_ai/Phi-4",
+            )],
+            None,
+        )
+        .await
+        .expect_err("Azure must not accept an Azure AI pricing identity");
+        let text = error.to_string();
+        assert!(text.contains("pricing_model"), "{text}");
+        assert!(text.contains("azure_ai/Phi-4"), "{text}");
+        assert!(text.contains("identity-azure"), "{text}");
     }
 
     #[tokio::test]
