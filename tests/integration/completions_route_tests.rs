@@ -15,6 +15,7 @@ mod tests {
         CallbackRuntime, Integration, IntegrationManager, IntegrationResult, LlmEndEvent,
         LlmErrorEvent, LlmStartEvent,
     };
+    use litellm_rs::core::models::openai::{ChatCompletionRequest, ChatCompletionResponse};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::core::types::context::RequestContext;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
@@ -250,6 +251,25 @@ mod tests {
         server.state().clone()
     }
 
+    async fn build_test_app_state_for_model(
+        base_url: &str,
+        model: &str,
+        cache_enabled: bool,
+    ) -> AppState {
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.cache.enabled = cache_enabled;
+        let mut provider = build_provider_config(base_url);
+        provider.models = vec![model.to_string()];
+        config.gateway.providers = vec![provider];
+
+        let server = GatewayHttpServer::new(&config)
+            .await
+            .expect("gateway server should initialize for tokenizer tests");
+        server.state().clone()
+    }
+
     async fn build_test_app_state_with_idle_timeout(
         base_url: &str,
         stream_idle_timeout: Option<u64>,
@@ -454,6 +474,81 @@ mod tests {
             "second identical request should hit cache"
         );
 
+        mock_server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_explicit_openai_unknown_chat_fails_on_cache_hit_and_miss() {
+        let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
+        let request_json = json!({
+            "model": "gpt-5-definitely-fake",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 16
+        });
+
+        for cache_enabled in [false, true] {
+            let state = build_test_app_state_for_model(
+                &mock_server.base_url,
+                "gpt-5-definitely-fake",
+                cache_enabled,
+            )
+            .await;
+            if cache_enabled {
+                let cache_request: ChatCompletionRequest =
+                    serde_json::from_value(request_json.clone()).expect("valid cache request");
+                let cached_response: ChatCompletionResponse = serde_json::from_value(json!({
+                    "id": "chatcmpl-cached-fake",
+                    "object": "chat.completion",
+                    "created": 1_707_000_000_u64,
+                    "model": "gpt-5-definitely-fake",
+                    "choices": [],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                }))
+                .expect("valid cached response");
+                state
+                    .response_cache
+                    .as_ref()
+                    .expect("cache enabled")
+                    .cache_chat_response(&cache_request, cached_response)
+                    .await
+                    .expect("cache seed should succeed");
+                assert!(
+                    state
+                        .response_cache
+                        .as_ref()
+                        .expect("cache enabled")
+                        .get_chat_response(&cache_request)
+                        .await
+                        .expect("cache lookup should succeed")
+                        .is_some()
+                );
+            }
+
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let request = test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(&request_json)
+                .to_request();
+            let response = test::call_service(&app, request).await;
+
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "cache={cache_enabled}"
+            );
+            let body: Value = test::read_body_json(response).await;
+            assert!(
+                body.to_string().contains("unknown OpenAI catalog model"),
+                "cache={cache_enabled}: {body}"
+            );
+        }
+
+        assert!(mock_server.requests().is_empty());
         mock_server.shutdown().await;
     }
 

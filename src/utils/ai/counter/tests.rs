@@ -150,8 +150,44 @@ fn test_explicit_unknown_openai_model_returns_tokenizer_error() {
         .expect_err("an explicit unknown OpenAI tokenizer must not be approximated");
 
     let message = error.to_string();
-    assert!(message.contains("explicit OpenAI model"));
+    assert!(message.contains("unknown OpenAI catalog model"));
     assert!(message.contains("openai/gpt-future-unknown"));
+}
+
+#[test]
+fn test_fake_gpt5_prefix_is_rejected_as_unknown_catalog_model() {
+    let counter = TokenCounter::new();
+
+    let error = counter
+        .count_completion_tokens("openai/gpt-5-definitely-fake", "Hello world")
+        .expect_err("a tokenizer family prefix must not establish catalog identity");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("unknown OpenAI catalog model"),
+        "{message}"
+    );
+    assert!(
+        message.contains("openai/gpt-5-definitely-fake"),
+        "{message}"
+    );
+}
+
+#[test]
+fn test_catalog_audio_models_report_tokenizer_unavailable() {
+    let counter = TokenCounter::new();
+
+    for model in ["openai/gpt-audio-1.5", "openai/gpt-realtime-1.5"] {
+        let error = counter
+            .count_completion_tokens(model, "Hello world")
+            .expect_err("catalog audio/realtime models without a BPE must fail clearly");
+        let message = error.to_string();
+        assert!(
+            message.contains("tokenizer unavailable"),
+            "{model}: {message}"
+        );
+        assert!(message.contains(model), "{model}: {message}");
+    }
 }
 
 #[test]
@@ -202,7 +238,7 @@ fn test_explicit_unknown_openai_output_estimation_returns_error() {
         .estimate_output_tokens(None, 10, "openai/gpt-future-unknown")
         .expect_err("output reservation must not hide an explicit tokenizer error");
 
-    assert!(error.to_string().contains("tokenizer resolution failed"));
+    assert!(error.to_string().contains("unknown OpenAI catalog model"));
 }
 
 #[test]

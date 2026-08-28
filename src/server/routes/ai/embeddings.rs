@@ -97,7 +97,7 @@ async fn handle_embedding_internal(
     }
     if let Some(cached) = super::response_cache::lookup_embedding(state, &request, &context).await?
     {
-        super::response_cache::ensure_embedding_cache_pricing_gate(state, &request)?;
+        super::response_cache::ensure_embedding_cache_pricing_gate(state, &request, &input)?;
         return Ok(cached);
     }
     let request_for_cache = request.clone();

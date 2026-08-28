@@ -2,6 +2,7 @@
 
 use super::types::{ModelTokenConfig, TokenEstimate};
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent};
+use crate::core::providers::openai::models::get_openai_registry;
 use crate::core::types::model_id::ModelIdRef;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
@@ -340,9 +341,6 @@ impl TokenCounter {
         }
         match num_tokens_from_messages(tokenizer_model_name(model), &tiktoken_messages) {
             Ok(tokens) => Ok(Some(usize_to_u32(tokens)?)),
-            Err(_) if requires_exact_openai_tokenizer(model) => {
-                Err(explicit_openai_tokenizer_error(model))
-            }
             Err(_) => Ok(None),
         }
     }
@@ -357,9 +355,6 @@ impl Default for TokenCounter {
 fn exact_text_tokens(model: &str, text: &str) -> Result<Option<u32>> {
     match exact_bpe_for_model(model) {
         Ok(bpe) => Ok(Some(usize_to_u32(bpe.count_with_special_tokens(text))?)),
-        Err(_) if requires_exact_openai_tokenizer(model) => {
-            Err(explicit_openai_tokenizer_error(model))
-        }
         Err(_) => Ok(None),
     }
 }
@@ -368,22 +363,38 @@ fn exact_bpe_for_model(model: &str) -> std::result::Result<&'static tiktoken_rs:
     bpe_for_model(tokenizer_model_name(model)).map_err(|_| ())
 }
 
-fn requires_exact_openai_tokenizer(model: &str) -> bool {
-    ModelIdRef::parse(model)
+fn explicit_openai_catalog_model(model: &str) -> Option<&str> {
+    let parsed = ModelIdRef::parse(model);
+    parsed
         .provider()
         .is_some_and(|provider| provider.eq_ignore_ascii_case("openai"))
+        .then(|| parsed.model())
 }
 
-fn explicit_openai_tokenizer_error(model: &str) -> GatewayError {
+fn unknown_openai_catalog_model_error(model: &str) -> GatewayError {
+    GatewayError::Config(format!("unknown OpenAI catalog model '{model}'"))
+}
+
+fn openai_tokenizer_unavailable_error(model: &str) -> GatewayError {
     GatewayError::Config(format!(
-        "tokenizer resolution failed for explicit OpenAI model '{model}'"
+        "tokenizer unavailable for OpenAI catalog model '{model}'"
     ))
 }
 
 fn ensure_explicit_openai_tokenizer(model: &str) -> Result<()> {
-    if requires_exact_openai_tokenizer(model) && exact_bpe_for_model(model).is_err() {
-        return Err(explicit_openai_tokenizer_error(model));
+    let Some(catalog_model) = explicit_openai_catalog_model(model) else {
+        return Ok(());
+    };
+    if get_openai_registry()
+        .get_model_spec(catalog_model)
+        .is_none()
+    {
+        return Err(unknown_openai_catalog_model_error(model));
     }
+    if exact_bpe_for_model(catalog_model).is_err() {
+        return Err(openai_tokenizer_unavailable_error(model));
+    }
+
     Ok(())
 }
 

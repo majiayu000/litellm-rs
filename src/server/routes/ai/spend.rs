@@ -25,12 +25,12 @@ use crate::core::types::responses::{ChatChunk, Usage};
 use std::sync::LazyLock;
 
 pub(super) use completion::{
-    ChatCompletionBudgetRequest, estimate_chat_prompt_tokens,
-    reserve_chat_completion_budget_with_split_pricing,
+    ChatCompletionBudgetRequest, reserve_chat_completion_budget_with_split_pricing,
+    try_estimate_chat_prompt_tokens,
 };
 #[cfg(test)]
 pub(super) use completion::{
-    IMAGE_HIGH_DETAIL_PROMPT_TOKENS, catalog_max_output_tokens,
+    IMAGE_HIGH_DETAIL_PROMPT_TOKENS, catalog_max_output_tokens, estimate_chat_prompt_tokens,
     provider_effective_max_output_tokens, reserve_chat_completion_budget,
     reserve_completion_budget, reserve_completion_budget_with_policy,
     reserve_completion_budget_with_pricing,
@@ -40,8 +40,9 @@ pub(in crate::server::routes::ai) use key_budget::{
     settle_api_key_budget_reservation,
 };
 pub(super) use pricing::{
-    pricing_identity_for_provider, record_pricing_usage_spend_with_reservation_with_policy,
-    reserve_embedding_budget_with_policy, reserve_pricing_usage_budget_with_policy,
+    estimate_embedding_input_tokens, pricing_identity_for_provider,
+    record_pricing_usage_spend_with_reservation_with_policy, reserve_embedding_budget_with_policy,
+    reserve_pricing_usage_budget_with_policy,
 };
 pub(super) use unpriced::{
     fallback_cost_for_usage, is_model_not_priced_error, model_not_priced_error,
@@ -52,7 +53,7 @@ pub(super) fn stream_chunk_has_candidate_output(chunk: &ChatChunk) -> bool {
     !chunk.choices.is_empty()
 }
 
-fn token_count_model_id<'a>(provider: &str, model: &'a str) -> Cow<'a, str> {
+pub(super) fn token_count_model_id<'a>(provider: &str, model: &'a str) -> Cow<'a, str> {
     let parsed = ModelIdRef::parse(model);
     if parsed
         .provider()
@@ -64,7 +65,7 @@ fn token_count_model_id<'a>(provider: &str, model: &'a str) -> Cow<'a, str> {
     }
 }
 
-fn token_count_error(
+pub(super) fn token_count_error(
     budget_provider: &str,
     budget_model: &str,
     pricing_provider: &str,

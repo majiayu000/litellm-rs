@@ -282,6 +282,7 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_p
     )
 }
 
+#[cfg(test)]
 pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
     model: &str,
     messages: &[ChatMessage],
@@ -309,7 +310,7 @@ pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
     })
 }
 
-fn try_estimate_chat_prompt_tokens(
+pub(in crate::server::routes::ai) fn try_estimate_chat_prompt_tokens(
     model: &str,
     messages: &[ChatMessage],
     tools: Option<&[Tool]>,
@@ -602,7 +603,7 @@ mod budget_request_tests {
                 ..
             }
         ));
-        assert!(message.contains("tokenizer resolution failed"));
+        assert!(message.contains("unknown OpenAI catalog model"));
         assert!(message.contains("gpt-future-unknown"));
     }
 

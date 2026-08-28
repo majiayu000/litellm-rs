@@ -282,7 +282,7 @@ fn reserve_completion_budget_with_split_pricing(
         })
 }
 
-fn estimate_embedding_input_tokens(
+pub(in crate::server::routes::ai) fn estimate_embedding_input_tokens(
     provider: &str,
     model: &str,
     input: &EmbeddingInput,
@@ -328,7 +328,7 @@ mod mapped_identity_tests {
             Ok(_) => panic!("explicit OpenAI tokenizer failure must stop embedding reservation"),
         };
 
-        assert!(error.to_string().contains("tokenizer resolution failed"));
+        assert!(error.to_string().contains("unknown OpenAI catalog model"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::router::execution::router_error_to_provider_error;
 use crate::core::types::context::RequestContext;
+use crate::core::types::embedding::EmbeddingInput;
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
@@ -135,14 +136,6 @@ pub(super) fn ensure_chat_cache_pricing_gate(
     request: &ChatCompletionRequest,
 ) -> Result<(), GatewayError> {
     let pricing = state.budgeted.pricing();
-    let prompt_tokens = super::spend::estimate_chat_prompt_tokens(
-        &request.model,
-        &request.messages,
-        request.tools.as_deref(),
-        request.functions.as_deref(),
-        request.function_call.as_ref(),
-        request.response_format.as_ref(),
-    );
     let output_tokens = request
         .max_completion_tokens
         .or(request.max_tokens)
@@ -157,6 +150,24 @@ pub(super) fn ensure_chat_cache_pricing_gate(
                 provider,
                 selected_model,
             );
+            let token_model = super::spend::token_count_model_id(&pricing_provider, &pricing_model);
+            let prompt_tokens = super::spend::try_estimate_chat_prompt_tokens(
+                &token_model,
+                &request.messages,
+                request.tools.as_deref(),
+                request.functions.as_deref(),
+                request.function_call.as_ref(),
+                request.response_format.as_ref(),
+            )
+            .map_err(|error| {
+                super::spend::token_count_error(
+                    provider.name(),
+                    selected_model,
+                    &pricing_provider,
+                    &pricing_model,
+                    error,
+                )
+            })?;
             pricing
                 .estimate_loaded_completion_cost_for_provider(
                     &pricing_provider,
@@ -175,9 +186,9 @@ pub(super) fn ensure_chat_cache_pricing_gate(
 pub(super) fn ensure_embedding_cache_pricing_gate(
     state: &AppState,
     request: &EmbeddingRequest,
+    input: &EmbeddingInput,
 ) -> Result<(), GatewayError> {
     let pricing = state.budgeted.pricing();
-    let usage = PricingUsage::new(1, 0);
     ensure_cache_pricing_gate(
         state,
         &request.model,
@@ -188,6 +199,21 @@ pub(super) fn ensure_embedding_cache_pricing_gate(
                 provider,
                 selected_model,
             );
+            let prompt_tokens = super::spend::estimate_embedding_input_tokens(
+                &pricing_provider,
+                &pricing_model,
+                input,
+            )
+            .map_err(|error| {
+                super::spend::token_count_error(
+                    provider.name(),
+                    selected_model,
+                    &pricing_provider,
+                    &pricing_model,
+                    error,
+                )
+            })?;
+            let usage = PricingUsage::new(prompt_tokens, 0);
             pricing
                 .calculate_loaded_usage_cost_for_provider(&pricing_provider, &pricing_model, &usage)
                 .map(|_| ())
