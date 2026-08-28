@@ -506,7 +506,12 @@ impl OpenAIModelRegistry {
                 Some(spec) => OpenAICatalogRuntimeResolution::Callable(spec),
                 None => OpenAICatalogRuntimeResolution::PricingOnly(identity.catalog_spec()),
             },
-            Err(error) => OpenAICatalogRuntimeResolution::Unresolved(error),
+            Err(OpenAICatalogResolveError::UnknownModel { model_id })
+                if ModelIdRef::parse(model_id).provider().is_none() && !model_id.is_empty() =>
+            {
+                OpenAICatalogRuntimeResolution::UnregisteredDeployment { model_id }
+            }
+            Err(error) => OpenAICatalogRuntimeResolution::Invalid(error),
         }
     }
 

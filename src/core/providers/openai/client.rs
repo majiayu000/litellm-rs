@@ -335,7 +335,8 @@ impl OpenAIProvider {
                 model_spec.model_info.capabilities.contains(capability)
             }
             OpenAICatalogRuntimeResolution::PricingOnly(_)
-            | OpenAICatalogRuntimeResolution::Unresolved(_) => false,
+            | OpenAICatalogRuntimeResolution::UnregisteredDeployment { .. }
+            | OpenAICatalogRuntimeResolution::Invalid(_) => false,
         }
     }
 
@@ -344,7 +345,8 @@ impl OpenAIProvider {
         match self.resolve_model_runtime(model_id) {
             OpenAICatalogRuntimeResolution::Callable(model_spec) => Some(&model_spec.config),
             OpenAICatalogRuntimeResolution::PricingOnly(_)
-            | OpenAICatalogRuntimeResolution::Unresolved(_) => None,
+            | OpenAICatalogRuntimeResolution::UnregisteredDeployment { .. }
+            | OpenAICatalogRuntimeResolution::Invalid(_) => None,
         }
     }
 
@@ -657,9 +659,10 @@ impl LLMProvider for OpenAIProvider {
                     "user",
                 ],
             }
-        } else if matches!(resolution, OpenAICatalogRuntimeResolution::PricingOnly(_)) {
-            &[]
-        } else {
+        } else if matches!(
+            resolution,
+            OpenAICatalogRuntimeResolution::UnregisteredDeployment { .. }
+        ) {
             &[
                 "messages",
                 "model",
@@ -669,6 +672,8 @@ impl LLMProvider for OpenAIProvider {
                 "stream",
                 "user",
             ]
+        } else {
+            &[]
         }
     }
 

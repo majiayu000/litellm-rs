@@ -162,6 +162,27 @@ fn test_pricing_only_params_are_not_promoted_but_unknown_models_pass_through() {
 }
 
 #[test]
+fn test_invalid_qualified_model_ids_do_not_advertise_openai_params() {
+    let provider = create_test_provider();
+
+    for model in [
+        "anthropic/gpt-4",
+        "openai/openai/gpt-4",
+        "openai/fake-gpt-5",
+        "unknown/a/b",
+    ] {
+        assert!(
+            provider.get_supported_openai_params(model).is_empty(),
+            "invalid model identity {model} must fail closed"
+        );
+    }
+
+    let deployment_params = provider.get_supported_openai_params("custom-openai-deployment");
+    assert!(deployment_params.contains(&"messages"));
+    assert!(deployment_params.contains(&"stream"));
+}
+
+#[test]
 fn test_get_model_info() {
     let provider = create_test_provider();
 

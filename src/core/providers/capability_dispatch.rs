@@ -21,9 +21,10 @@ impl Provider {
                     model_spec.model_info.capabilities.contains(capability)
                 }
                 OpenAICatalogRuntimeResolution::PricingOnly(_) => false,
-                OpenAICatalogRuntimeResolution::Unresolved(_) => {
+                OpenAICatalogRuntimeResolution::UnregisteredDeployment { .. } => {
                     LLMProvider::supports_capability(provider, capability)
                 }
+                OpenAICatalogRuntimeResolution::Invalid(_) => false,
             },
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
@@ -129,6 +130,29 @@ mod tests {
                 provider.supports_capability_for_model("custom-openai-deployment", &capability),
                 "unresolved OpenAI deployments retain provider-level pass-through"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_openai_identities_fail_closed_for_all_production_routes() {
+        let provider = openai_provider().await;
+
+        for model in [
+            "anthropic/gpt-4",
+            "openai/openai/gpt-4",
+            "openai/fake-gpt-5",
+            "unknown/a/b",
+        ] {
+            for capability in [
+                ProviderCapability::ChatCompletion,
+                ProviderCapability::ChatCompletionStream,
+                ProviderCapability::Embeddings,
+            ] {
+                assert!(
+                    !provider.supports_capability_for_model(model, &capability),
+                    "invalid model identity {model} must not inherit {capability:?}"
+                );
+            }
         }
     }
 

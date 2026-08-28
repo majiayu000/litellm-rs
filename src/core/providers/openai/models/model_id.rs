@@ -63,8 +63,13 @@ pub enum OpenAICatalogRuntimeResolution<'registry, 'input> {
     Callable(&'registry OpenAIModelSpec),
     /// An exact catalog row used only for pricing/metadata.
     PricingOnly(&'registry OpenAIModelSpec),
-    /// No exact OpenAI catalog identity was resolved.
-    Unresolved(OpenAICatalogResolveError<'input>),
+    /// A syntactically unqualified deployment absent from the static catalog.
+    ///
+    /// Provider dispatch preserves the existing pass-through behavior for this
+    /// state until deployment-aware identity is introduced by issue #1207.
+    UnregisteredDeployment { model_id: &'input str },
+    /// A qualified, slash-bearing, or otherwise invalid OpenAI runtime identity.
+    Invalid(OpenAICatalogResolveError<'input>),
 }
 
 /// An exact OpenAI catalog entry and its optional runnable-model identity.
@@ -159,10 +164,37 @@ mod tests {
         ));
         assert!(matches!(
             registry.resolve_runtime_identity("custom-openai-deployment"),
-            OpenAICatalogRuntimeResolution::Unresolved(
-                OpenAICatalogResolveError::UnknownModel { .. }
-            )
+            OpenAICatalogRuntimeResolution::UnregisteredDeployment { .. }
         ));
+    }
+
+    #[test]
+    fn runtime_resolution_passes_through_only_unqualified_deployments() {
+        let registry = OpenAIModelRegistry::new();
+
+        assert!(matches!(
+            registry.resolve_runtime_identity("custom-openai-deployment"),
+            OpenAICatalogRuntimeResolution::UnregisteredDeployment {
+                model_id: "custom-openai-deployment"
+            }
+        ));
+
+        for model in [
+            "anthropic/gpt-4",
+            "openai/openai/gpt-4",
+            "openai/fake-gpt-5",
+            "unknown/a/b",
+            "BAAI/unregistered-native-key",
+            "",
+        ] {
+            assert!(
+                matches!(
+                    registry.resolve_runtime_identity(model),
+                    OpenAICatalogRuntimeResolution::Invalid(_)
+                ),
+                "{model:?} must fail closed rather than inherit provider behavior"
+            );
+        }
     }
 
     #[test]
