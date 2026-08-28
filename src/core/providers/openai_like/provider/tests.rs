@@ -522,6 +522,94 @@ async fn test_xai_extra_reasoning_effort_uses_the_same_validation_path() {
 }
 
 #[tokio::test]
+async fn test_xai_duplicate_reasoning_effort_requires_identical_strings() {
+    let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+        .with_provider_name("xai")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    for (extra, expected_error) in [
+        (serde_json::json!("high"), None),
+        (serde_json::json!("low"), Some("conflicting")),
+        (serde_json::json!(7), Some("must be a string")),
+    ] {
+        let request = ChatRequest {
+            model: "grok-4.6".to_string(),
+            messages: vec![],
+            reasoning_effort: Some("high".to_string()),
+            extra_params: std::collections::HashMap::from([(
+                "reasoning_effort".to_string(),
+                extra,
+            )]),
+            ..Default::default()
+        };
+
+        match expected_error {
+            Some(expected) => assert!(
+                provider
+                    .transform_chat_request(request)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            ),
+            None => {
+                let json = provider.transform_chat_request(request).unwrap();
+                assert_eq!(json["reasoning_effort"], "high");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_xai_reasoning_validates_incompatible_fields_after_extra_merge() {
+    let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+        .with_provider_name("xai")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    for (typed, field, value) in [
+        (None, "stop", serde_json::json!(["done"])),
+        (None, "presence_penalty", serde_json::json!(0.1)),
+        (None, "frequency_penalty", serde_json::json!(0.1)),
+        (Some("high"), "stop", serde_json::json!(["done"])),
+        (Some("high"), "presence_penalty", serde_json::json!(0.1)),
+        (Some("high"), "frequency_penalty", serde_json::json!(0.1)),
+    ] {
+        let mut extra_params = std::collections::HashMap::from([(field.to_string(), value)]);
+        if typed.is_none() {
+            extra_params.insert("reasoning_effort".to_string(), serde_json::json!("high"));
+        }
+        let request = ChatRequest {
+            model: "grok-4.6".to_string(),
+            messages: vec![],
+            reasoning_effort: typed.map(str::to_string),
+            extra_params,
+            ..Default::default()
+        };
+
+        let error = provider.transform_chat_request(request).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("reasoning_effort is incompatible"));
+        assert!(message.contains(field));
+    }
+
+    let allowed_without_reasoning = ChatRequest {
+        model: "grok-4.6".to_string(),
+        messages: vec![],
+        extra_params: std::collections::HashMap::from([(
+            "stop".to_string(),
+            serde_json::json!(["done"]),
+        )]),
+        ..Default::default()
+    };
+    let json = provider
+        .transform_chat_request(allowed_without_reasoning)
+        .unwrap();
+    assert_eq!(json["stop"], serde_json::json!(["done"]));
+    assert!(json.get("reasoning_effort").is_none());
+}
+
+#[tokio::test]
 async fn test_xai_multi_agent_reasoning_effort_is_nested() {
     let config = OpenAILikeConfig::new("https://api.x.ai/v1")
         .with_provider_name("xai")

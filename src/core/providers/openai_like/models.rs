@@ -401,12 +401,19 @@ pub fn take_xai_reasoning_effort(
 
     let extra = extra_params.remove("reasoning_effort");
     match (typed, extra) {
-        (Some(effort), _) => Ok(Some(effort)),
+        (Some(typed), Some(Value::String(extra))) if typed == extra => Ok(Some(typed)),
+        (Some(typed), Some(Value::String(extra))) => Err(OpenAILikeError::configuration(
+            PROVIDER_NAME,
+            format!(
+                "conflicting xAI reasoning_effort values: typed '{typed}' and extra_body '{extra}'"
+            ),
+        )),
         (None, Some(Value::String(effort))) => Ok(Some(effort)),
-        (None, Some(_)) => Err(OpenAILikeError::configuration(
+        (Some(_), Some(_)) | (None, Some(_)) => Err(OpenAILikeError::configuration(
             PROVIDER_NAME,
             "xAI reasoning_effort must be a string",
         )),
+        (Some(effort), None) => Ok(Some(effort)),
         (None, None) => Ok(None),
     }
 }

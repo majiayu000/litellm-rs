@@ -376,6 +376,7 @@ impl OpenAILikeProvider {
             request.reasoning_effort,
             &mut extra_params,
         )?;
+        let has_reasoning_effort = reasoning_effort.is_some();
 
         let openrouter_thinking_params = if self.config.provider_name == "openrouter" {
             if let Some(thinking_config) = &request.thinking {
@@ -443,6 +444,10 @@ impl OpenAILikeProvider {
             }
         }
 
+        if self.config.provider_name == "xai" && has_reasoning_effort {
+            super::models::reject_xai_reasoning_incompatible_params(&openai_request)?;
+        }
+
         crate::core::providers::registry::catalog_policy::filter_request(
             &self.provider_name,
             &mut openai_request,
@@ -462,7 +467,6 @@ impl OpenAILikeProvider {
             return Ok(());
         }
 
-        super::models::reject_xai_reasoning_incompatible_params(request)?;
         if let Some(allowed) = super::models::xai_reasoning_efforts_for_model(model)
             && !allowed.contains(&effort.as_str())
         {
