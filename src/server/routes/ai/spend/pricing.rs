@@ -8,12 +8,14 @@ use crate::core::providers::Provider;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::embedding::EmbeddingInput;
+use crate::core::types::model::ProviderCapability;
 use crate::utils::ai::counter::token_counter::TokenCounter;
 
 pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     pricing_service: &PricingService,
     provider: &Provider,
     model: &str,
+    surface: ProviderCapability,
 ) -> (String, String) {
     let provider_name = provider.name();
     let mut provider_candidates = vec![provider_name.to_string()];
@@ -39,8 +41,15 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
                 unique
             });
 
-    let mapped_model = if let Provider::OpenAI(provider) = provider {
-        Some(provider.config.get_model_mapping(model))
+    let mapped_model = if matches!(
+        surface,
+        ProviderCapability::ChatCompletion | ProviderCapability::ChatCompletionStream
+    ) {
+        if let Provider::OpenAI(provider) = provider {
+            Some(provider.config.get_model_mapping(model))
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -60,7 +69,7 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     }
 
     if let Some(identity) = mapped_model.as_deref().and_then(|mapped| {
-        unpriced_openai_mapping_identity(&provider.provider_type(), model, mapped)
+        unpriced_openai_mapping_identity(&provider.provider_type(), provider_name, model, mapped)
     }) {
         return identity;
     }
@@ -70,6 +79,7 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
 
 fn unpriced_openai_mapping_identity(
     provider_type: &ProviderType,
+    pricing_provider: &str,
     requested_model: &str,
     mapped_model: &str,
 ) -> Option<(String, String)> {
@@ -78,7 +88,7 @@ fn unpriced_openai_mapping_identity(
             provider_type,
             ProviderType::OpenAI | ProviderType::OpenAICompatible
         ))
-    .then(|| ("openai".to_string(), mapped_model.to_string()))
+    .then(|| (pricing_provider.to_string(), mapped_model.to_string()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -292,6 +302,7 @@ fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
 #[cfg(test)]
 mod mapped_identity_tests {
     use super::*;
+    use crate::core::types::model::ProviderCapability;
 
     fn priced_model_info() -> crate::core::pricing_service::LiteLLMModelInfo {
         crate::core::pricing_service::LiteLLMModelInfo {
@@ -319,6 +330,7 @@ mod mapped_identity_tests {
         assert_eq!(
             unpriced_openai_mapping_identity(
                 &ProviderType::OpenAICompatible,
+                "openai",
                 "public-alias",
                 "canonical-model",
             ),
@@ -327,6 +339,7 @@ mod mapped_identity_tests {
         assert_eq!(
             unpriced_openai_mapping_identity(
                 &ProviderType::OpenAICompatible,
+                "openai",
                 "same-model",
                 "same-model",
             ),
@@ -335,6 +348,7 @@ mod mapped_identity_tests {
         assert_eq!(
             unpriced_openai_mapping_identity(
                 &ProviderType::Anthropic,
+                "anthropic",
                 "public-alias",
                 "canonical-model",
             ),
@@ -347,6 +361,7 @@ mod mapped_identity_tests {
         let pricing = PricingService::new(None);
         let (provider, model) = unpriced_openai_mapping_identity(
             &ProviderType::OpenAICompatible,
+            "openai",
             "public-alias",
             "canonical-model",
         )
@@ -374,7 +389,12 @@ mod mapped_identity_tests {
                 .expect("test provider should build"),
         );
 
-        let identity = pricing_identity_for_provider(&pricing, &provider, "review-public-alias");
+        let identity = pricing_identity_for_provider(
+            &pricing,
+            &provider,
+            "review-public-alias",
+            ProviderCapability::ChatCompletion,
+        );
 
         assert_eq!(
             identity,
@@ -383,5 +403,75 @@ mod mapped_identity_tests {
                 "review-canonical-unpriced".to_string()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn chat_mapping_preserves_configured_provider_when_target_is_unpriced() {
+        let pricing = PricingService::new(None);
+        let mut config = crate::core::providers::openai::OpenAIConfig {
+            provider_name: "review-custom-openai".to_string(),
+            ..Default::default()
+        };
+        config.base.api_key = Some("sk-test".to_string());
+        config.model_mappings.insert(
+            "review-public-alias".to_string(),
+            "review-canonical-unpriced".to_string(),
+        );
+        let provider = Provider::OpenAI(
+            crate::core::providers::openai::OpenAIProvider::new(config)
+                .await
+                .expect("test provider should build"),
+        );
+
+        let identity = pricing_identity_for_provider(
+            &pricing,
+            &provider,
+            "review-public-alias",
+            ProviderCapability::ChatCompletion,
+        );
+
+        assert_eq!(
+            identity,
+            (
+                "review-custom-openai".to_string(),
+                "review-canonical-unpriced".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_only_mapping_does_not_change_non_chat_pricing_identity() {
+        let pricing = PricingService::new(None);
+        let mut raw_info = priced_model_info();
+        raw_info.litellm_provider = "review-custom-openai".to_string();
+        pricing.add_custom_model("review-public-alias".to_string(), raw_info);
+        let mut config = crate::core::providers::openai::OpenAIConfig {
+            provider_name: "review-custom-openai".to_string(),
+            ..Default::default()
+        };
+        config.base.api_key = Some("sk-test".to_string());
+        config.model_mappings.insert(
+            "review-public-alias".to_string(),
+            "review-canonical-unpriced".to_string(),
+        );
+        let provider = Provider::OpenAI(
+            crate::core::providers::openai::OpenAIProvider::new(config)
+                .await
+                .expect("test provider should build"),
+        );
+
+        for surface in [
+            ProviderCapability::Embeddings,
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::AudioTranscription,
+        ] {
+            assert_eq!(
+                pricing_identity_for_provider(&pricing, &provider, "review-public-alias", surface,),
+                (
+                    "review-custom-openai".to_string(),
+                    "review-public-alias".to_string()
+                )
+            );
+        }
     }
 }
