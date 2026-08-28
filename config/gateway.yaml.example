@@ -53,6 +53,14 @@ providers:
       recovery_timeout: 60
       endpoint: null
       expected_codes: [200]
+    # Exact catalog model IDs need no mapping. Custom OpenAI/Azure/AzureAI
+    # deployment names must bind wire, callable, and pricing identities explicitly:
+    # settings:
+    #   model_identity_mappings:
+    #     my-deployment:
+    #       capability_catalog_model: gpt-4o
+    #       pricing_model: gpt-4o
+    # Set pricing_model: null deliberately to apply the configured unpriced policy.
     settings: {}
     models:
       - "gpt-4o"

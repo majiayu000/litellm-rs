@@ -3,12 +3,235 @@ use uuid::Uuid;
 use crate::config::models::gateway::GatewayPricingConfig;
 use crate::core::budget::{BudgetReservation, UnifiedBudgetLimits, UnifiedBudgetReservation};
 use crate::core::keys::KeyManager;
-use crate::core::pricing_service::{PricingService, PricingUsage};
+use crate::core::pricing_service::{
+    CostResult, CostType, PricingCostBreakdown, PricingCostEstimate, PricingService,
+    PricingSnapshot, PricingUsage,
+};
 use crate::core::providers::Provider;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::embedding::EmbeddingInput;
 use crate::utils::ai::counter::token_counter::TokenCounter;
+use std::sync::Arc;
+
+#[derive(Clone, Debug)]
+pub(in crate::server::routes::ai) enum PricingIdentity {
+    Priced { provider: String, model: String },
+    Unpriced { provider: String },
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::server::routes::ai) struct RequestPricing {
+    snapshot: PricingSnapshot,
+    identity: PricingIdentity,
+}
+
+impl RequestPricing {
+    #[cfg(test)]
+    pub(in crate::server::routes::ai) fn from_exact(
+        pricing: &PricingService,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        let provider = provider.into();
+        let model = model.into();
+        let snapshot = pricing.snapshot();
+        let identity = snapshot
+            .get_model_info_for_provider(&provider, &model)
+            .map_or_else(
+                || PricingIdentity::Unpriced {
+                    provider: provider.clone(),
+                },
+                |(resolved, _)| PricingIdentity::Priced {
+                    provider: provider.clone(),
+                    model: resolved,
+                },
+            );
+        Self { snapshot, identity }
+    }
+
+    pub(in crate::server::routes::ai) fn priced_parts(&self) -> Option<(&str, &str)> {
+        match &self.identity {
+            PricingIdentity::Priced { provider, model } => Some((provider, model)),
+            PricingIdentity::Unpriced { .. } => None,
+        }
+    }
+
+    pub(in crate::server::routes::ai) fn estimation_model<'a>(
+        &'a self,
+        fallback: &'a str,
+    ) -> &'a str {
+        self.priced_parts().map_or(fallback, |(_, model)| model)
+    }
+
+    pub(in crate::server::routes::ai) fn with_exact_priced_model(
+        &self,
+        model: &str,
+    ) -> Option<Self> {
+        let (provider, _) = self.priced_parts()?;
+        let (resolved, _) = self.snapshot.get_model_info_for_provider(provider, model)?;
+        (resolved == model).then(|| Self {
+            snapshot: self.snapshot.clone(),
+            identity: PricingIdentity::Priced {
+                provider: provider.to_string(),
+                model: resolved,
+            },
+        })
+    }
+
+    pub(in crate::server::routes::ai) fn model_info(
+        &self,
+    ) -> Option<crate::core::pricing_service::LiteLLMModelInfo> {
+        let (provider, model) = self.priced_parts()?;
+        self.snapshot
+            .get_model_info_for_provider(provider, model)
+            .map(|(_, info)| info)
+    }
+
+    fn pricing_error(&self) -> crate::utils::error::gateway_error::GatewayError {
+        let provider = match &self.identity {
+            PricingIdentity::Priced { provider, .. } | PricingIdentity::Unpriced { provider } => {
+                provider
+            }
+        };
+        crate::utils::error::gateway_error::GatewayError::Config(format!(
+            "request pricing is explicitly unavailable for provider '{provider}'"
+        ))
+    }
+
+    pub(in crate::server::routes::ai) fn estimate_completion(
+        &self,
+        input_tokens: u32,
+        max_output_tokens: Option<u32>,
+    ) -> crate::utils::error::gateway_error::Result<PricingCostEstimate> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        self.snapshot.estimate_loaded_completion_cost_for_provider(
+            provider,
+            model,
+            input_tokens,
+            max_output_tokens,
+        )
+    }
+
+    pub(in crate::server::routes::ai) fn calculate_usage(
+        &self,
+        usage: &PricingUsage,
+    ) -> crate::utils::error::gateway_error::Result<PricingCostBreakdown> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        self.snapshot
+            .calculate_loaded_usage_cost_for_provider(provider, model, usage)
+    }
+
+    pub(in crate::server::routes::ai) fn calculate_settlement(
+        &self,
+        usage: &PricingUsage,
+    ) -> crate::utils::error::gateway_error::Result<PricingCostBreakdown> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        self.snapshot
+            .calculate_loaded_settlement_cost_for_provider(provider, model, usage)
+    }
+
+    pub(in crate::server::routes::ai) fn has_time_pricing(&self) -> bool {
+        self.priced_parts()
+            .and_then(|(provider, model)| {
+                self.snapshot.get_model_info_for_provider(provider, model)
+            })
+            .is_some_and(|(_, info)| info.cost_per_second.is_some())
+    }
+
+    pub(in crate::server::routes::ai) fn calculate_time(
+        &self,
+        total_time_seconds: f64,
+    ) -> crate::utils::error::gateway_error::Result<CostResult> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        let (resolved, info) = self
+            .snapshot
+            .get_model_info_for_provider(provider, model)
+            .ok_or_else(|| self.pricing_error())?;
+        let rate = info.cost_per_second.ok_or_else(|| {
+            crate::utils::error::gateway_error::GatewayError::Config(format!(
+                "time pricing is unavailable for '{provider}/{resolved}'"
+            ))
+        })?;
+        let total_cost = total_time_seconds * rate;
+        Ok(CostResult {
+            input_cost: 0.0,
+            output_cost: 0.0,
+            total_cost,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: resolved,
+            provider: info.litellm_provider,
+            cost_type: CostType::TimeBased,
+        })
+    }
+}
+
+pub(in crate::server::routes::ai) fn request_pricing_for_provider(
+    pricing_service: &Arc<PricingService>,
+    provider: &Provider,
+    model: &str,
+) -> Result<RequestPricing, ProviderError> {
+    let snapshot = pricing_service.snapshot();
+    if matches!(
+        provider.provider_type(),
+        ProviderType::OpenAI | ProviderType::Azure | ProviderType::AzureAI
+    ) {
+        let bound_pricing = provider.runtime_pricing().ok_or_else(|| {
+            ProviderError::configuration(
+                "model_identity",
+                format!(
+                    "deployment '{model}' has no validated runtime model identity; configure settings.model_identity_mappings"
+                ),
+            )
+        })?;
+        if !Arc::ptr_eq(pricing_service, &bound_pricing) {
+            return Err(ProviderError::configuration(
+                "model_identity",
+                "selected deployment is bound to a different runtime pricing authority",
+            ));
+        }
+        let identity = provider.deployment_model_identity().ok_or_else(|| {
+            ProviderError::configuration(
+                "model_identity",
+                format!("deployment '{model}' lost its validated model identity"),
+            )
+        })?;
+        let identity = match (identity.pricing_provider(), identity.pricing_model()) {
+            (Some(provider), Some(model)) => PricingIdentity::Priced {
+                provider: provider.to_string(),
+                model: model.to_string(),
+            },
+            _ => PricingIdentity::Unpriced {
+                provider: provider.name().to_string(),
+            },
+        };
+        return Ok(RequestPricing { snapshot, identity });
+    }
+
+    let (pricing_provider, pricing_model) =
+        pricing_identity_for_provider(pricing_service.as_ref(), provider, model);
+    let identity = snapshot
+        .get_model_info_for_provider(&pricing_provider, &pricing_model)
+        .map_or_else(
+            || PricingIdentity::Unpriced {
+                provider: pricing_provider.clone(),
+            },
+            |(resolved, _)| PricingIdentity::Priced {
+                provider: pricing_provider.clone(),
+                model: resolved,
+            },
+        );
+    Ok(RequestPricing { snapshot, identity })
+}
 
 pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     pricing_service: &PricingService,
@@ -82,6 +305,7 @@ fn unpriced_openai_mapping_identity(
     .then(|| ("openai".to_string(), mapped_model.to_string()))
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_policy(
     pricing_service: &PricingService,
@@ -107,6 +331,29 @@ pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_policy(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_request_pricing(
+    request_pricing: &RequestPricing,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    budget_provider: &str,
+    budget_model: &str,
+    input: &EmbeddingInput,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    let prompt_tokens =
+        estimate_embedding_input_tokens(request_pricing.estimation_model(budget_model), input);
+    reserve_completion_budget_with_request_pricing(
+        request_pricing,
+        pricing_config,
+        budget_limits,
+        budget_provider,
+        budget_model,
+        prompt_tokens,
+        Some(0),
+    )
+}
+
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_policy(
     pricing_service: &PricingService,
@@ -153,6 +400,40 @@ pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_policy(
         })
 }
 
+pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_request_pricing(
+    request_pricing: &RequestPricing,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    budget_provider: &str,
+    budget_model: &str,
+    usage: &PricingUsage,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    let cost = match request_pricing.calculate_usage(usage) {
+        Ok(breakdown) => breakdown.total_cost,
+        Err(error) => {
+            return super::unpriced::reserve_unpriced_usage_budget(
+                pricing_config,
+                budget_limits,
+                budget_provider,
+                budget_model,
+                usage,
+                error,
+            );
+        }
+    };
+    if cost <= 0.0 {
+        super::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
+        return Ok(None);
+    }
+    budget_limits
+        .reserve_spend(budget_provider, budget_model, cost)
+        .map(Some)
+        .map_err(|error| {
+            super::reservation_error_to_provider_error(error, budget_provider, budget_model)
+        })
+}
+
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reservation_with_policy(
     pricing_service: &PricingService,
@@ -225,6 +506,62 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_request_pricing(
+    request_pricing: &RequestPricing,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    key_manager: &KeyManager,
+    api_key_id: Option<Uuid>,
+    budget_provider: &str,
+    budget_model: &str,
+    usage: &PricingUsage,
+    budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
+) {
+    let cost = match request_pricing.calculate_settlement(usage) {
+        Ok(breakdown) => breakdown.total_cost,
+        Err(_) => {
+            super::unpriced::settle_unpriced_usage(
+                pricing_config,
+                budget_limits,
+                key_manager,
+                api_key_id,
+                budget_provider,
+                budget_model,
+                usage,
+                budget_reservation,
+                key_budget_reservation,
+                "request pricing unavailable",
+            )
+            .await;
+            return;
+        }
+    };
+    if let Some(reservation) = budget_reservation {
+        if let Err(error) = reservation.settle(cost) {
+            tracing::error!("failed to settle reserved budget: {error:?}");
+        }
+    } else {
+        budget_limits.record_spend(budget_provider, budget_model, cost);
+    }
+    super::settle_api_key_budget_reservation(
+        key_budget_reservation,
+        cost,
+        &format!("{budget_provider}/{budget_model}"),
+    );
+    if let Some(key_id) = api_key_id {
+        let total_tokens = super::unpriced::usage_units(usage);
+        if let Err(error) = key_manager
+            .record_usage(key_id, u64::from(total_tokens), cost)
+            .await
+        {
+            tracing::error!("failed to record usage for key {key_id}: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn reserve_completion_budget_with_split_pricing(
     pricing_service: &PricingService,
     pricing_config: &GatewayPricingConfig,
@@ -265,6 +602,42 @@ fn reserve_completion_budget_with_split_pricing(
         return Ok(None);
     }
 
+    budget_limits
+        .reserve_spend(budget_provider, budget_model, estimate.max_cost)
+        .map(Some)
+        .map_err(|error| {
+            super::reservation_error_to_provider_error(error, budget_provider, budget_model)
+        })
+}
+
+fn reserve_completion_budget_with_request_pricing(
+    request_pricing: &RequestPricing,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    budget_provider: &str,
+    budget_model: &str,
+    estimated_prompt_tokens: u32,
+    max_output_tokens: Option<u32>,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    let estimate =
+        match request_pricing.estimate_completion(estimated_prompt_tokens, max_output_tokens) {
+            Ok(estimate) => estimate,
+            Err(error) => {
+                return super::unpriced::reserve_unpriced_completion_budget(
+                    pricing_config,
+                    budget_limits,
+                    budget_provider,
+                    budget_model,
+                    estimated_prompt_tokens,
+                    max_output_tokens,
+                    error,
+                );
+            }
+        };
+    if estimate.max_cost <= 0.0 {
+        super::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
+        return Ok(None);
+    }
     budget_limits
         .reserve_spend(budget_provider, budget_model, estimate.max_cost)
         .map(Some)

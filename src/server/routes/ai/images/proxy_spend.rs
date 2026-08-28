@@ -1,8 +1,7 @@
-use crate::config::models::gateway::{GatewayPricingConfig, UnpricedModelPolicy};
+use crate::config::models::gateway::GatewayPricingConfig;
 use crate::core::budget::{BudgetReservation, UnifiedBudgetLimits, UnifiedBudgetReservation};
 use crate::core::keys::KeyManager;
-use crate::core::pricing_service::{PricingService, PricingUsage};
-use crate::utils::error::gateway_error::GatewayError;
+use crate::core::pricing_service::PricingUsage;
 use tracing::error;
 
 use super::ImageProxyProvider;
@@ -66,25 +65,4 @@ pub(super) async fn record_image_proxy_spend(
         cost,
         "image proxy",
     );
-}
-
-pub(super) fn image_proxy_cost(
-    pricing_service: &PricingService,
-    pricing_config: &GatewayPricingConfig,
-    provider: &str,
-    model: &str,
-    usage: &PricingUsage,
-) -> Result<(f64, bool), GatewayError> {
-    match pricing_service.calculate_loaded_usage_cost_for_provider(provider, model, usage) {
-        Ok(breakdown) => Ok((breakdown.total_cost, false)),
-        Err(error) => match pricing_config.unpriced_model_policy {
-            UnpricedModelPolicy::Reject => Err(GatewayError::Provider(
-                super::super::spend::model_not_priced_error(provider, model, error),
-            )),
-            UnpricedModelPolicy::AllowUnpriced => Ok((
-                super::super::spend::fallback_cost_for_usage(pricing_config, usage),
-                true,
-            )),
-        },
-    }
 }

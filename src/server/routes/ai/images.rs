@@ -28,7 +28,7 @@ use super::context::handle_ai_request;
 use super::route_http::RouteHttpClient;
 use super::{openai_errors, provider_config};
 use multipart::{extract_text_field as extract_multipart_text_field, replace_text_field};
-use proxy_spend::{image_proxy_cost, record_image_proxy_spend};
+use proxy_spend::record_image_proxy_spend;
 
 const OPENAI_IMAGE_BASE_URL: &str = "https://api.openai.com/v1";
 const MAX_IMAGE_MULTIPART_BYTES: usize = 64 * 1024 * 1024;
@@ -155,28 +155,7 @@ async fn proxy_image_multipart_endpoint(
     let key_manager = budgeted.key_manager();
     let router_models =
         image_proxy_router_models(state.config().gateway.providers.as_slice(), requested_model);
-    let pricing_model = pricing_keys::resolve_image_pricing_model(
-        pricing_service.as_ref(),
-        "openai",
-        requested_model,
-        form_fields.size.as_deref(),
-        form_fields.quality.as_deref(),
-    )
-    .unwrap_or_else(|| requested_model.to_string());
-    let usage = estimated_image_proxy_usage(&form_fields, "openai", &pricing_model);
     let pricing_config = state.config().gateway.pricing.clone();
-    let (estimated_cost, unpriced) = image_proxy_cost(
-        pricing_service.as_ref(),
-        &pricing_config,
-        "openai",
-        &pricing_model,
-        &usage,
-    )?;
-    if estimated_cost <= 0.0 && !unpriced {
-        return Err(GatewayError::Config(format!(
-            "Image model '{requested_model}' has non-positive pricing"
-        )));
-    }
     let api_key_id = super::context::get_authenticated_api_key(req).map(|key| key.metadata.id);
     let api_key_budget_id = context.api_key_budget_id();
 
@@ -193,7 +172,8 @@ async fn proxy_image_multipart_endpoint(
                 let pricing_config = pricing_config.clone();
                 let body = body.clone();
                 let content_type = content_type.clone();
-                let usage = usage.clone();
+                let pricing_service = pricing_service.clone();
+                let form_fields = form_fields.clone();
                 move |selected_provider, selected_model, _deployment_id| {
                     let budgeted = budgeted.clone();
                     let budget_limits = budget_limits.clone();
@@ -201,8 +181,39 @@ async fn proxy_image_multipart_endpoint(
                     let pricing_config = pricing_config.clone();
                     let body = body.clone();
                     let content_type = content_type.clone();
-                    let usage = usage.clone();
+                    let pricing_service = pricing_service.clone();
+                    let form_fields = form_fields.clone();
                     async move {
+                        let mut request_pricing = super::spend::request_pricing_for_provider(
+                            &pricing_service,
+                            &selected_provider,
+                            &selected_model,
+                        )?;
+                        let base_model = request_pricing
+                            .estimation_model(&selected_model)
+                            .to_string();
+                        if let Some(variant) = pricing_keys::resolve_image_request_pricing(
+                            &request_pricing,
+                            &base_model,
+                            form_fields.size.as_deref(),
+                            form_fields.quality.as_deref(),
+                        ) {
+                            request_pricing = variant;
+                        }
+                        let usage = estimated_image_proxy_usage(&form_fields, &request_pricing);
+                        let (estimated_cost, unpriced) = request_image_proxy_cost(
+                            &request_pricing,
+                            &pricing_config,
+                            selected_provider.name(),
+                            &selected_model,
+                            &usage,
+                        )?;
+                        if estimated_cost <= 0.0 && !unpriced {
+                            return Err(ProviderError::configuration(
+                                "image_proxy",
+                                format!("Image model '{selected_model}' has non-positive pricing"),
+                            ));
+                        }
                         let provider = selected_image_proxy_provider(
                             state.config().gateway.providers.as_slice(),
                             &selected_provider,
@@ -305,8 +316,7 @@ fn required_image_proxy_model(form_fields: &ImageProxyFormFields) -> Result<&str
 
 fn estimated_image_proxy_usage(
     form_fields: &ImageProxyFormFields,
-    pricing_provider: &str,
-    pricing_model: &str,
+    request_pricing: &super::spend::RequestPricing,
 ) -> PricingUsage {
     let prompt_tokens = form_fields
         .prompt
@@ -321,13 +331,39 @@ fn estimated_image_proxy_usage(
     let mut usage = PricingUsage::new(prompt_tokens, 0);
     usage.image_tokens = Some(image_tokens);
     usage.output_image_count = Some(form_fields.n.max(1));
-    usage.output_image_pricing_keys = pricing_keys::image_pricing_keys(
-        pricing_provider,
-        pricing_model,
-        form_fields.size.as_deref(),
-        form_fields.quality.as_deref(),
-    );
+    usage.output_image_pricing_keys = request_pricing
+        .priced_parts()
+        .map(|(provider, model)| {
+            pricing_keys::image_pricing_keys(
+                provider,
+                model,
+                form_fields.size.as_deref(),
+                form_fields.quality.as_deref(),
+            )
+        })
+        .unwrap_or_default();
     usage
+}
+
+fn request_image_proxy_cost(
+    request_pricing: &super::spend::RequestPricing,
+    pricing_config: &crate::config::models::gateway::GatewayPricingConfig,
+    provider: &str,
+    model: &str,
+    usage: &PricingUsage,
+) -> Result<(f64, bool), ProviderError> {
+    match request_pricing.calculate_usage(usage) {
+        Ok(cost) => Ok((cost.total_cost, false)),
+        Err(error) => match pricing_config.unpriced_model_policy {
+            crate::config::models::gateway::UnpricedModelPolicy::Reject => {
+                Err(super::spend::model_not_priced_error(provider, model, error))
+            }
+            crate::config::models::gateway::UnpricedModelPolicy::AllowUnpriced => Ok((
+                super::spend::fallback_cost_for_usage(pricing_config, usage),
+                true,
+            )),
+        },
+    }
 }
 
 fn estimated_text_tokens(text: &str) -> u32 {

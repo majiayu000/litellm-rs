@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::pricing_service::PricingUsage;
 
 fn create_test_model_info(provider: &str) -> LiteLLMModelInfo {
     LiteLLMModelInfo {
@@ -548,6 +549,68 @@ fn custom_model_overwrite_moves_provider_index_atomically() {
             .get_model_info_for_provider("provider_two", "shared-model")
             .is_some(),
         "overwriting a key must publish its new provider ownership"
+    );
+}
+
+#[test]
+fn pinned_pricing_snapshot_is_immutable_across_service_updates() {
+    let service = PricingService::new(None);
+    let mut first = create_test_model_info("openai");
+    first.input_cost_per_token = Some(0.01);
+    first.output_cost_per_token = Some(0.02);
+    service.add_custom_model("snapshot-model".to_string(), first);
+
+    let snapshot_a = service.snapshot();
+    let usage = PricingUsage::new(10, 5);
+    let cost_a = snapshot_a
+        .calculate_loaded_usage_cost_for_provider("openai", "snapshot-model", &usage)
+        .expect("snapshot A should price the model")
+        .total_cost;
+
+    let mut second = create_test_model_info("openai");
+    second.input_cost_per_token = Some(0.10);
+    second.output_cost_per_token = Some(0.20);
+    service.add_custom_model("snapshot-model".to_string(), second);
+    let snapshot_b = service.snapshot();
+
+    assert_eq!(
+        snapshot_a
+            .calculate_loaded_usage_cost_for_provider("openai", "snapshot-model", &usage)
+            .expect("snapshot A remains valid")
+            .total_cost,
+        cost_a,
+    );
+    assert_ne!(
+        snapshot_b
+            .calculate_loaded_usage_cost_for_provider("openai", "snapshot-model", &usage)
+            .expect("snapshot B should see the replacement")
+            .total_cost,
+        cost_a,
+    );
+}
+
+#[test]
+fn failed_refresh_preserves_existing_snapshot_and_future_readers() {
+    let service = PricingService::new(None);
+    service.add_custom_model(
+        "stable-snapshot-model".to_string(),
+        create_test_model_info("stable_provider"),
+    );
+    let snapshot = service.snapshot();
+
+    let replacement = create_test_model_info("replacement_provider");
+    service.add_custom_model("replacement-model".to_string(), replacement);
+
+    assert!(
+        snapshot
+            .get_model_info_for_provider("stable_provider", "stable-snapshot-model")
+            .is_some()
+    );
+    assert!(
+        snapshot
+            .get_model_info_for_provider("replacement_provider", "replacement-model")
+            .is_none(),
+        "an existing reader must not observe a later published snapshot"
     );
 }
 

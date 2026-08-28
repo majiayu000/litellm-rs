@@ -105,6 +105,13 @@ impl PricingService {
         data.models.get(model).cloned()
     }
 
+    /// Pin the currently published pricing generation without taking a writer lock.
+    pub(crate) fn snapshot(&self) -> super::types::PricingSnapshot {
+        super::types::PricingSnapshot {
+            data: self.pricing_data.load_full(),
+        }
+    }
+
     /// Calculate Google/Vertex AI cost (character or token based)
     pub(super) fn calculate_google_cost(
         &self,

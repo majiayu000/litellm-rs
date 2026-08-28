@@ -75,6 +75,8 @@ pub struct AzureOpenAIProvider {
     embedding_handler: AzureEmbeddingHandler,
     image_handler: AzureImageHandler,
     cost_calculator: AzureCostCalculator,
+    pub(crate) model_identity:
+        Option<crate::core::providers::model_identity::DeploymentProviderBinding>,
 }
 
 impl AzureOpenAIProvider {
@@ -92,6 +94,7 @@ impl AzureOpenAIProvider {
             embedding_handler,
             image_handler,
             cost_calculator,
+            model_identity: None,
         })
     }
 
@@ -175,6 +178,13 @@ impl LLMProvider for AzureOpenAIProvider {
     }
 
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+        if self
+            .model_identity
+            .as_ref()
+            .is_some_and(|binding| binding.identity().capability_catalog_model().is_none())
+        {
+            return &[];
+        }
         &[
             "temperature",
             "max_tokens",
@@ -227,16 +237,18 @@ impl LLMProvider for AzureOpenAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        // Basic cost calculation for Azure OpenAI models
-        let cost = match model {
-            "gpt-35-turbo" => {
-                (input_tokens as f64 * 0.0015 + output_tokens as f64 * 0.002) / 1000.0
-            }
-            "gpt-4" => (input_tokens as f64 * 0.03 + output_tokens as f64 * 0.06) / 1000.0,
-            "gpt-4-turbo" => (input_tokens as f64 * 0.01 + output_tokens as f64 * 0.03) / 1000.0,
-            _ => 0.0,
-        };
-        Ok(cost)
+        crate::core::providers::model_identity::calculate_managed_provider_cost(
+            &crate::core::providers::Provider::Azure(self.clone()),
+            model,
+            input_tokens,
+            output_tokens,
+        )
+        .unwrap_or_else(|| {
+            Err(ProviderError::configuration(
+                "pricing",
+                "Azure pricing authority dispatch is unavailable",
+            ))
+        })
     }
 
     async fn chat_completion(

@@ -14,6 +14,31 @@ impl Provider {
         model: &str,
         capability: &ProviderCapability,
     ) -> bool {
+        if let Some(identity) = self.deployment_model_identity() {
+            let Some(catalog_model) = identity.capability_catalog_model() else {
+                return false;
+            };
+            return match self {
+                Provider::OpenAI(provider) => {
+                    provider.model_supports_capability(catalog_model, capability)
+                }
+                #[cfg(feature = "providers-extra")]
+                Provider::Azure(provider) => {
+                    LLMProvider::supports_capability(provider, capability)
+                        && crate::core::providers::openai::models::get_openai_registry()
+                            .get_model_spec(catalog_model)
+                            .is_some_and(|model| model.model_info.capabilities.contains(capability))
+                }
+                #[cfg(feature = "providers-extra")]
+                Provider::AzureAI(provider) => {
+                    LLMProvider::supports_capability(provider, capability)
+                        && provider
+                            .get_model_registry()
+                            .supports_capability(catalog_model, capability)
+                }
+                _ => false,
+            };
+        }
         match self {
             Provider::OpenAI(provider) => {
                 if provider.get_model_config(model).is_some() {

@@ -1,4 +1,6 @@
-use crate::core::pricing_service::{LiteLLMModelInfo, PricingService};
+use crate::core::pricing_service::LiteLLMModelInfo;
+#[cfg(test)]
+use crate::core::pricing_service::PricingService;
 
 pub(super) fn image_pricing_keys(
     pricing_provider: &str,
@@ -40,6 +42,7 @@ pub(super) fn image_pricing_keys(
     keys
 }
 
+#[cfg(test)]
 pub(super) fn resolve_image_pricing_model(
     pricing_service: &PricingService,
     pricing_provider: &str,
@@ -58,6 +61,23 @@ pub(super) fn resolve_image_pricing_model(
         })
 }
 
+pub(super) fn resolve_image_request_pricing(
+    pricing: &super::super::spend::RequestPricing,
+    model: &str,
+    size: Option<&str>,
+    quality: Option<&str>,
+) -> Option<super::super::spend::RequestPricing> {
+    image_pricing_model_candidates(model, size, quality)
+        .into_iter()
+        .filter_map(|candidate| pricing.with_exact_priced_model(&candidate))
+        .find(|candidate| {
+            candidate
+                .model_info()
+                .is_some_and(|info| supports_image_output_pricing(&info))
+        })
+}
+
+#[cfg(test)]
 pub(super) fn is_variant_image_pricing_key(model: &str) -> bool {
     model
         .rsplit_once('/')

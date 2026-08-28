@@ -35,6 +35,8 @@ pub struct ProviderConfigBuilder {
     pub(super) base_url: Option<String>,
     pub(super) endpoint_access: crate::core::net::ProviderEndpointAccess,
     pub(super) models: Vec<String>,
+    pub(super) model_identity_mappings:
+        HashMap<String, crate::core::providers::model_identity::ModelIdentityMapping>,
     pub(super) max_requests_per_minute: Option<u32>,
     pub(super) timeout: Option<Duration>,
     pub(super) enabled: bool,

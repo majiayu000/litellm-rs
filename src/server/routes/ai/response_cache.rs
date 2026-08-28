@@ -152,18 +152,10 @@ pub(super) fn ensure_chat_cache_pricing_gate(
         &request.model,
         ProviderCapability::ChatCompletion,
         |provider, selected_model| {
-            let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
-                pricing.as_ref(),
-                provider,
-                selected_model,
-            );
-            pricing
-                .estimate_loaded_completion_cost_for_provider(
-                    &pricing_provider,
-                    &pricing_model,
-                    prompt_tokens,
-                    output_tokens,
-                )
+            let request_pricing =
+                super::spend::request_pricing_for_provider(&pricing, provider, selected_model)?;
+            request_pricing
+                .estimate_completion(prompt_tokens, output_tokens)
                 .map(|_| ())
                 .map_err(|error| {
                     super::spend::model_not_priced_error(provider.name(), selected_model, error)
@@ -183,13 +175,10 @@ pub(super) fn ensure_embedding_cache_pricing_gate(
         &request.model,
         ProviderCapability::Embeddings,
         |provider, selected_model| {
-            let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
-                pricing.as_ref(),
-                provider,
-                selected_model,
-            );
-            pricing
-                .calculate_loaded_usage_cost_for_provider(&pricing_provider, &pricing_model, &usage)
+            let request_pricing =
+                super::spend::request_pricing_for_provider(&pricing, provider, selected_model)?;
+            request_pricing
+                .calculate_usage(&usage)
                 .map(|_| ())
                 .map_err(|error| {
                     super::spend::model_not_priced_error(provider.name(), selected_model, error)

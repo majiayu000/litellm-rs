@@ -53,6 +53,8 @@ pub struct AzureAIProvider {
     image_handler: AzureAIImageHandler,
     rerank_handler: AzureAIRerankHandler,
     model_registry: &'static AzureAIModelRegistry,
+    pub(crate) model_identity:
+        Option<crate::core::providers::model_identity::DeploymentProviderBinding>,
 }
 
 impl AzureAIProvider {
@@ -76,6 +78,7 @@ impl AzureAIProvider {
             image_handler,
             rerank_handler,
             model_registry,
+            model_identity: None,
         })
     }
 
@@ -152,6 +155,13 @@ impl LLMProvider for AzureAIProvider {
     }
 
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+        if self
+            .model_identity
+            .as_ref()
+            .is_some_and(|binding| binding.identity().capability_catalog_model().is_none())
+        {
+            return &[];
+        }
         &[
             "temperature",
             "max_tokens",
@@ -267,18 +277,18 @@ impl LLMProvider for AzureAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        if let Some(model_spec) = self.model_registry.get_model(model) {
-            let input_cost =
-                model_spec.input_price_per_1k.unwrap_or(0.0) * (input_tokens as f64 / 1000.0);
-            let output_cost =
-                model_spec.output_price_per_1k.unwrap_or(0.0) * (output_tokens as f64 / 1000.0);
-            Ok(input_cost + output_cost)
-        } else {
-            Err(ProviderError::model_not_found(
-                "azure_ai",
-                "Model not found for cost calculation",
+        crate::core::providers::model_identity::calculate_managed_provider_cost(
+            &crate::core::providers::Provider::AzureAI(self.clone()),
+            model,
+            input_tokens,
+            output_tokens,
+        )
+        .unwrap_or_else(|| {
+            Err(ProviderError::configuration(
+                "pricing",
+                "Azure AI pricing authority dispatch is unavailable",
             ))
-        }
+        })
     }
 }
 

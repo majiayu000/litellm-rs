@@ -4,6 +4,7 @@ use crate::core::models::openai::requests::ChatCompletionRequest;
 use crate::core::models::openai::{
     ChatMessage, ContentPart, Function, FunctionCall, MessageContent, ResponseFormat, Tool,
 };
+#[cfg(test)]
 use crate::core::pricing_service::PricingService;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::utils::ai::counter::token_counter::TokenCounter;
@@ -115,6 +116,7 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget_with_policy(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::server::routes::ai) fn reserve_completion_budget_with_split_pricing(
     pricing_service: &PricingService,
@@ -220,6 +222,7 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_policy(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_pricing<'a>(
     pricing_service: &PricingService,
@@ -258,6 +261,53 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_p
             request.n.unwrap_or(1),
         ),
     )
+}
+
+pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_request_pricing<'a>(
+    request_pricing: &super::pricing::RequestPricing,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    budget_provider: &str,
+    budget_model: &str,
+    request: impl Into<ChatCompletionBudgetRequest<'a>>,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    let request = request.into();
+    let prompt_tokens = estimate_chat_prompt_tokens(
+        request_pricing.estimation_model(budget_model),
+        request.messages,
+        request.tools,
+        request.functions,
+        request.function_call,
+        request.response_format,
+    );
+    let max_output_tokens = request
+        .max_completion_tokens
+        .or(request.max_tokens)
+        .map(|tokens| tokens.saturating_mul(request.n.unwrap_or(1)));
+    let estimate = match request_pricing.estimate_completion(prompt_tokens, max_output_tokens) {
+        Ok(estimate) => estimate,
+        Err(error) => {
+            return super::unpriced::reserve_unpriced_completion_budget(
+                pricing_config,
+                budget_limits,
+                budget_provider,
+                budget_model,
+                prompt_tokens,
+                max_output_tokens,
+                error,
+            );
+        }
+    };
+    if estimate.max_cost <= 0.0 {
+        super::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
+        return Ok(None);
+    }
+    budget_limits
+        .reserve_spend(budget_provider, budget_model, estimate.max_cost)
+        .map(Some)
+        .map_err(|error| {
+            super::reservation_error_to_provider_error(error, budget_provider, budget_model)
+        })
 }
 
 pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
@@ -326,6 +376,7 @@ pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
         .saturating_add(response_format_tokens)
 }
 
+#[cfg(test)]
 fn reservation_output_tokens(
     pricing_service: &PricingService,
     provider: &str,
@@ -357,6 +408,7 @@ pub(in crate::server::routes::ai) fn catalog_max_output_tokens(
     catalog_max_output_tokens_with_pricing(super::default_spend_pricing_service(), provider, model)
 }
 
+#[cfg(test)]
 fn catalog_max_output_tokens_with_pricing(
     pricing_service: &PricingService,
     provider: &str,
@@ -374,6 +426,7 @@ pub(in crate::server::routes::ai) fn provider_effective_max_output_tokens(
     provider_effective_max_output_tokens_for_budget(provider, model, request.into())
 }
 
+#[cfg(test)]
 fn provider_effective_max_output_tokens_for_budget(
     provider: &str,
     model: &str,
@@ -393,6 +446,7 @@ fn provider_effective_max_output_tokens_for_budget(
     }
 }
 
+#[cfg(test)]
 fn bedrock_effective_max_output_tokens(
     model: &str,
     request: ChatCompletionBudgetRequest<'_>,

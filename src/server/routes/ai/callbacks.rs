@@ -9,7 +9,8 @@ use tracing::{error, warn};
 
 use crate::core::integrations::callback_runtime::CallbackMetricsPermit;
 use crate::core::integrations::{CallbackDispatcher, CallbackTerminalPermit};
-use crate::core::pricing_service::{PricingService, PricingUsage};
+use crate::core::pricing_service::PricingService;
+use crate::core::pricing_service::PricingUsage;
 use crate::core::traits::integration::{
     EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, LlmEndEvent, LlmErrorEvent,
     LlmStartEvent,
@@ -23,6 +24,7 @@ pub(super) struct CallbackLifecycle {
 
 struct CallbackLifecycleInner {
     dispatcher: CallbackDispatcher,
+    #[cfg(test)]
     pricing: Arc<PricingService>,
     request_id: String,
     user_id: Option<String>,
@@ -46,8 +48,7 @@ enum CallbackKind {
 struct CallbackTarget {
     provider: String,
     model: String,
-    pricing_provider: String,
-    pricing_model: String,
+    pricing: super::spend::RequestPricing,
 }
 
 impl CallbackLifecycle {
@@ -89,10 +90,13 @@ impl CallbackLifecycle {
         context: &RequestContext,
         kind: CallbackKind,
     ) -> Self {
+        #[cfg(not(test))]
+        drop(pricing);
         let requested_model = requested_model.into();
         Self {
             inner: Arc::new(CallbackLifecycleInner {
                 dispatcher: dispatcher.clone(),
+                #[cfg(test)]
                 pricing,
                 request_id: context.request_id.clone(),
                 user_id: context.user_id.clone(),
@@ -108,6 +112,7 @@ impl CallbackLifecycle {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn begin_provider_execution(
         &self,
         provider: impl Into<String>,
@@ -115,11 +120,24 @@ impl CallbackLifecycle {
         pricing_provider: impl Into<String>,
         pricing_model: impl Into<String>,
     ) {
+        let pricing = super::spend::RequestPricing::from_exact(
+            self.inner.pricing.as_ref(),
+            pricing_provider,
+            pricing_model,
+        );
+        self.begin_provider_execution_with_pricing(provider, model, pricing);
+    }
+
+    pub(super) fn begin_provider_execution_with_pricing(
+        &self,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        pricing: super::spend::RequestPricing,
+    ) {
         let target = CallbackTarget {
             provider: provider.into(),
             model: model.into(),
-            pricing_provider: pricing_provider.into(),
-            pricing_model: pricing_model.into(),
+            pricing,
         };
         {
             let mut current_target = self.inner.target.lock();
@@ -277,26 +295,18 @@ impl CallbackLifecycle {
             .unwrap_or(&self.inner.requested_model);
         let provider = target.as_ref().map(|target| target.provider.clone());
         let cost = target.as_ref().and_then(|target| {
-            pricing_usage.and_then(|usage| {
-                match self
-                    .inner
-                    .pricing
-                    .calculate_loaded_settlement_cost_for_provider(
-                        &target.pricing_provider,
-                        &target.pricing_model,
-                        usage,
-                    ) {
-                    Ok(cost) => Some(cost.total_cost),
-                    Err(cost_error) => {
-                        warn!(
-                            request_id = %self.inner.request_id,
-                            provider = %target.pricing_provider,
-                            model = %target.pricing_model,
-                            "Callback cost is unavailable: {}",
-                            cost_error
-                        );
-                        None
-                    }
+            pricing_usage.and_then(|usage| match target.pricing.calculate_settlement(usage) {
+                Ok(cost) => Some(cost.total_cost),
+                Err(cost_error) => {
+                    let pricing = target.pricing.priced_parts();
+                    warn!(
+                        request_id = %self.inner.request_id,
+                        provider = pricing.map_or("unpriced", |(provider, _)| provider),
+                        model = pricing.map_or("unpriced", |(_, model)| model),
+                        "Callback cost is unavailable: {}",
+                        cost_error
+                    );
+                    None
                 }
             })
         });

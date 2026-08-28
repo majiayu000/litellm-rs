@@ -94,6 +94,9 @@ async fn finished_stream_without_usage_records_reserved_key_cost_after_output() 
         .expect("reservation should succeed")
         .expect("priced model should reserve budget");
     let reserved = reservation.reserved_amount();
+    let pricing = PricingService::with_embedded_default()
+        .expect("embedded pricing should load for stream settlement");
+    let request_pricing = RequestPricing::from_exact(&pricing, "openai", "gpt-4o");
 
     record_finished_stream_spend_with_reservation(StreamSpendSettlement {
         budget_limits: &budget,
@@ -101,8 +104,7 @@ async fn finished_stream_without_usage_records_reserved_key_cost_after_output() 
         api_key_id: Some(key_id),
         provider: "openai",
         model: "gpt-4o",
-        pricing_provider: "openai",
-        pricing_model: "gpt-4o",
+        request_pricing,
         usage: None,
         saw_upstream_output: true,
         budget_reservation: Some(reservation),

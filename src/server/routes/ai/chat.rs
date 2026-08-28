@@ -150,11 +150,11 @@ async fn handle_chat_completion_internal(
             let callback = callback_for_execution.clone();
             async move {
                 let provider_name = provider.name().to_string();
-                let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
-                    pricing_service.as_ref(),
+                let request_pricing = super::spend::request_pricing_for_provider(
+                    &pricing_service,
                     &provider,
                     &selected_model,
-                );
+                )?;
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
                     &provider_name,
@@ -168,19 +168,15 @@ async fn handle_chat_completion_internal(
                             request_for_provider.max_completion_tokens,
                         );
                 let provider_context = context.as_ref().clone();
-                let reserve_pricing_service = pricing_service.clone();
                 let settle_pricing_service = pricing_service.clone();
                 let reserve_pricing_config = pricing_config.clone();
                 let settle_pricing_config = pricing_config;
-                let reserve_pricing_provider = pricing_provider.clone();
-                let reserve_pricing_model = pricing_model.clone();
-                let settle_pricing_provider = pricing_provider;
-                let settle_pricing_model = pricing_model;
+                let reserve_request_pricing = request_pricing.clone();
+                let settle_request_pricing = request_pricing.clone();
                 let settle_key_manager = key_manager.clone();
                 let callback_provider = provider_name.clone();
                 let callback_model = selected_model.clone();
-                let callback_pricing_provider = reserve_pricing_provider.clone();
-                let callback_pricing_model = reserve_pricing_model.clone();
+                let callback_request_pricing = request_pricing;
                 budgeted
                     .for_selected_with_api_key_budget(
                         provider_name.clone(),
@@ -190,23 +186,20 @@ async fn handle_chat_completion_internal(
                     )
                     .reserve_call_settle(
                         |budget| {
-                            super::spend::reserve_chat_completion_budget_with_split_pricing(
-                                reserve_pricing_service.as_ref(),
+                            super::spend::reserve_chat_completion_budget_with_request_pricing(
+                                &reserve_request_pricing,
                                 &reserve_pricing_config,
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                &reserve_pricing_provider,
-                                &reserve_pricing_model,
                                 request_for_budget,
                             )
                         },
                         || {
-                            callback.begin_provider_execution(
+                            callback.begin_provider_execution_with_pricing(
                                 callback_provider,
                                 callback_model,
-                                callback_pricing_provider,
-                                callback_pricing_model,
+                                callback_request_pricing,
                             );
                             provider.chat_completion(request_for_provider, provider_context)
                         },
@@ -222,14 +215,14 @@ async fn handle_chat_completion_internal(
                                 super::spend::record_completion_spend_with_reservation_with_policy(
                                     settle_pricing_service.as_ref(),
                                     &settle_pricing_config,
-                                    super::spend::usage_spend_settlement_with_pricing(
+                                    super::spend::usage_spend_settlement_with_request_pricing(
                                         (budget.budget_limits(), &settle_key_manager, api_key_id),
                                         (
                                             budget.provider(),
                                             budget.model(),
                                             response.usage.as_ref(),
                                         ),
-                                        (&settle_pricing_provider, &settle_pricing_model),
+                                        settle_request_pricing,
                                         budget_reservation,
                                         key_budget_reservation,
                                     ),
