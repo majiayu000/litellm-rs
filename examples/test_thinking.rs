@@ -143,8 +143,6 @@ async fn test_deepseek_r1(provider: &OpenAILikeProvider) -> Result<(), Box<dyn s
             "message.thinking is_some: {}",
             choice.message.thinking.is_some()
         );
-        println!("message.thinking: {:?}", choice.message.thinking);
-
         if let Some(thinking) = &choice.message.thinking {
             println!("\n--- Thinking Content Found! ---");
             match thinking {
@@ -161,7 +159,7 @@ async fn test_deepseek_r1(provider: &OpenAILikeProvider) -> Result<(), Box<dyn s
                     };
                     println!("Thinking:\n{}", display_text);
                     if let Some(sig) = signature {
-                        println!("Signature: {}", sig);
+                        println!("Signature: [opaque, {} bytes]", sig.len());
                     }
                 }
                 ThinkingContent::Block {
@@ -185,10 +183,10 @@ async fn test_deepseek_r1(provider: &OpenAILikeProvider) -> Result<(), Box<dyn s
                                 signature,
                             } => {
                                 println!("Thinking:\n{}", thinking);
-                                println!("Signature: {}", signature);
+                                println!("Signature: [opaque, {} bytes]", signature.len());
                             }
                             AnthropicThinkingBlock::RedactedThinking { data } => {
-                                println!("Redacted Data: {}", data);
+                                println!("Redacted Data: [redacted, {} bytes]", data.len());
                             }
                         }
                     }

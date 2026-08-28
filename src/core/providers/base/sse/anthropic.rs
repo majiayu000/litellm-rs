@@ -22,6 +22,9 @@ pub struct AnthropicTransformer {
     model: String,
     tool_name_map: HashMap<String, String>,
     message_id: Mutex<Option<String>>,
+    /// Active thinking blocks by content index. `Some` accumulates a regular block signature;
+    /// `None` denotes an already validated redacted block.
+    thinking_blocks: Mutex<HashMap<u32, Option<String>>>,
 }
 
 impl Clone for AnthropicTransformer {
@@ -30,6 +33,7 @@ impl Clone for AnthropicTransformer {
             model: self.model.clone(),
             tool_name_map: self.tool_name_map.clone(),
             message_id: Mutex::new(None),
+            thinking_blocks: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -40,6 +44,7 @@ impl AnthropicTransformer {
             model: model.into(),
             tool_name_map: HashMap::new(),
             message_id: Mutex::new(None),
+            thinking_blocks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -80,6 +85,61 @@ impl AnthropicTransformer {
             Err(poisoned) => poisoned.into_inner(),
         };
         *guard = None;
+    }
+
+    fn start_thinking_block(
+        &self,
+        index: u32,
+        signature: Option<String>,
+    ) -> Result<(), ProviderError> {
+        let mut blocks = self
+            .thinking_blocks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if blocks.insert(index, signature).is_some() {
+            return Err(ProviderError::response_parsing(
+                "anthropic",
+                format!("Duplicate thinking content block index {index}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn append_thinking_signature(&self, index: u32, signature: &str) -> Result<(), ProviderError> {
+        let mut blocks = self
+            .thinking_blocks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(Some(accumulated)) = blocks.get_mut(&index) else {
+            return Err(ProviderError::response_parsing(
+                "anthropic",
+                format!("Signature received for inactive thinking content block {index}"),
+            ));
+        };
+        if signature.is_empty() {
+            return Err(ProviderError::response_parsing(
+                "anthropic",
+                format!("Thinking content block {index} received an empty signature"),
+            ));
+        }
+        accumulated.push_str(signature);
+        Ok(())
+    }
+
+    fn complete_thinking_block(&self, index: u32) -> Result<bool, ProviderError> {
+        let state = self
+            .thinking_blocks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&index);
+        match state {
+            Some(Some(signature)) if signature.is_empty() => Err(ProviderError::response_parsing(
+                "anthropic",
+                format!("Thinking content block {index} is missing its signature"),
+            )),
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
     }
 
     fn parse_anthropic_finish_reason(reason: &str) -> FinishReason {
@@ -148,6 +208,10 @@ impl SSETransformer for AnthropicTransformer {
 
         match event_type {
             "message_start" => {
+                self.thinking_blocks
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clear();
                 let message_id = json
                     .get("message")
                     .and_then(|m| m.get("id"))
@@ -225,6 +289,7 @@ impl SSETransformer for AnthropicTransformer {
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
                     "thinking" => {
+                        self.start_thinking_block(index, Some(String::new()))?;
                         let mut delta = Self::empty_delta();
                         delta.thinking = Some(ThinkingDelta::start());
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
@@ -240,6 +305,7 @@ impl SSETransformer for AnthropicTransformer {
                                     "Redacted thinking block missing data".to_string(),
                                 )
                             })?;
+                        self.start_thinking_block(index, None)?;
                         let mut delta = Self::empty_delta();
                         delta.thinking = Some(ThinkingDelta {
                             redacted_data: Some(data.to_string()),
@@ -311,7 +377,15 @@ impl SSETransformer for AnthropicTransformer {
                         let signature = delta_json
                             .get("signature")
                             .and_then(|value| value.as_str())
-                            .unwrap_or("");
+                            .ok_or_else(|| {
+                                ProviderError::response_parsing(
+                                    "anthropic",
+                                    format!(
+                                        "Thinking content block {index} is missing its signature"
+                                    ),
+                                )
+                            })?;
+                        self.append_thinking_signature(index, signature)?;
                         let mut delta = Self::empty_delta();
                         delta.thinking = Some(ThinkingDelta {
                             signature: Some(signature.to_string()),
@@ -376,6 +450,18 @@ impl SSETransformer for AnthropicTransformer {
                 )))
             }
             "message_stop" => {
+                if !self
+                    .thinking_blocks
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .is_empty()
+                {
+                    return Err(ProviderError::response_parsing(
+                        "anthropic",
+                        "Anthropic stream ended with an incomplete thinking content block"
+                            .to_string(),
+                    ));
+                }
                 let message_id = self.current_message_id();
                 self.clear_message_id();
                 Ok(Some(ChatChunk {
@@ -402,7 +488,17 @@ impl SSETransformer for AnthropicTransformer {
                     msg.to_string(),
                 ))
             }
-            "content_block_stop" | "ping" => Ok(None),
+            "content_block_stop" => {
+                let index = json.get("index").and_then(Value::as_u64).unwrap_or(0) as u32;
+                if self.complete_thinking_block(index)? {
+                    let mut delta = Self::empty_delta();
+                    delta.thinking = Some(ThinkingDelta::complete());
+                    Ok(Some(self.chunk_with_choice(created, delta, None, None)))
+                } else {
+                    Ok(None)
+                }
+            }
+            "ping" => Ok(None),
             _ => {
                 warn!(
                     provider = "anthropic",
@@ -487,6 +583,84 @@ mod tests {
                 .as_ref()
                 .and_then(|thinking| thinking.redacted_data.as_deref()),
             Some("opaque-stream-data")
+        );
+    }
+
+    fn thinking_event(index: u32, event_type: &str, payload: Value) -> Value {
+        match event_type {
+            "start" => serde_json::json!({"type":"content_block_start","index":index,
+                "content_block":{"type":"thinking","thinking":""}}),
+            "signature" => serde_json::json!({"type":"content_block_delta","index":index,
+                "delta":{"type":"signature_delta","signature":payload}}),
+            _ => serde_json::json!({"type":"content_block_stop","index":index}),
+        }
+    }
+
+    #[test]
+    fn streamed_thinking_requires_a_non_empty_signature_before_block_stop() {
+        for signature in [None, Some("")] {
+            let t = AnthropicTransformer::new("claude-opus-5");
+            let _ = chunk_from_event(&t, thinking_event(0, "start", Value::Null));
+            let event = signature.map_or_else(
+                || thinking_event(0, "stop", Value::Null),
+                |value| thinking_event(0, "signature", Value::String(value.to_string())),
+            );
+            let error = t
+                .transform_chunk(&event.to_string())
+                .expect_err("must fail");
+            assert!(error.to_string().contains("signature"));
+        }
+    }
+
+    #[test]
+    fn streamed_thinking_emits_complete_boundaries_for_multiple_lossless_blocks() {
+        let t = AnthropicTransformer::new("claude-opus-5");
+        for index in [0, 2] {
+            let _ = chunk_from_event(&t, thinking_event(index, "start", Value::Null));
+            let signature = format!("sig-{index}");
+            let signed = chunk_from_event(
+                &t,
+                thinking_event(index, "signature", Value::String(signature.clone())),
+            );
+            assert_eq!(
+                signed.choices[0]
+                    .delta
+                    .thinking
+                    .as_ref()
+                    .and_then(|thinking| thinking.signature.as_deref()),
+                Some(signature.as_str())
+            );
+            let complete = chunk_from_event(&t, thinking_event(index, "stop", Value::Null));
+            assert_eq!(
+                complete.choices[0]
+                    .delta
+                    .thinking
+                    .as_ref()
+                    .and_then(|thinking| thinking.is_complete),
+                Some(true)
+            );
+        }
+        let redacted = chunk_from_event(
+            &t,
+            serde_json::json!({"type":"content_block_start",
+            "index":1,"content_block":{"type":"redacted_thinking","data":"opaque"}}),
+        );
+        assert_eq!(
+            redacted.choices[0]
+                .delta
+                .thinking
+                .as_ref()
+                .and_then(|thinking| thinking.redacted_data.as_deref()),
+            Some("opaque")
+        );
+        let complete = chunk_from_event(&t, thinking_event(1, "stop", Value::Null));
+        assert_eq!(
+            complete.choices[0]
+                .delta
+                .thinking
+                .as_ref()
+                .and_then(|thinking| thinking.is_complete),
+            Some(true)
         );
     }
 
