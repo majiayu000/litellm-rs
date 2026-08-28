@@ -52,6 +52,21 @@ pub enum OpenAICatalogResolveError<'input> {
     DoubleQualification { model_id: &'input str },
 }
 
+/// Runtime meaning of an OpenAI catalog lookup.
+///
+/// Keeping these states distinct prevents exact pricing rows from inheriting
+/// provider-wide capabilities while preserving pass-through for deployments
+/// that are absent from the static catalog.
+#[derive(Debug, Clone, Copy)]
+pub enum OpenAICatalogRuntimeResolution<'registry, 'input> {
+    /// An exact catalog model with callable capability metadata.
+    Callable(&'registry OpenAIModelSpec),
+    /// An exact catalog row used only for pricing/metadata.
+    PricingOnly(&'registry OpenAIModelSpec),
+    /// No exact OpenAI catalog identity was resolved.
+    Unresolved(OpenAICatalogResolveError<'input>),
+}
+
 /// An exact OpenAI catalog entry and its optional runnable-model identity.
 ///
 /// Slash-bearing raw catalog keys are conservatively treated as pricing-only.
@@ -124,7 +139,31 @@ impl<'registry, 'input> ResolvedOpenAICatalogEntry<'registry, 'input> {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::OpenAIModelRegistry, OpenAICatalogResolveError};
+    use super::{
+        super::OpenAIModelRegistry, OpenAICatalogResolveError, OpenAICatalogRuntimeResolution,
+    };
+
+    #[test]
+    fn runtime_resolution_keeps_callable_pricing_only_and_unknown_distinct() {
+        let registry = OpenAIModelRegistry::new();
+
+        assert!(matches!(
+            registry.resolve_runtime_identity("openai/gpt-4"),
+            OpenAICatalogRuntimeResolution::Callable(spec)
+                if spec.model_info.id == "gpt-4"
+        ));
+        assert!(matches!(
+            registry.resolve_runtime_identity("openai/1024-x-1024/dall-e-2"),
+            OpenAICatalogRuntimeResolution::PricingOnly(spec)
+                if spec.model_info.id == "1024-x-1024/dall-e-2"
+        ));
+        assert!(matches!(
+            registry.resolve_runtime_identity("custom-openai-deployment"),
+            OpenAICatalogRuntimeResolution::Unresolved(
+                OpenAICatalogResolveError::UnknownModel { .. }
+            )
+        ));
+    }
 
     #[test]
     fn resolves_exact_and_single_openai_qualification() {

@@ -1,4 +1,5 @@
 use crate::core::providers::Provider;
+use crate::core::providers::openai::models::OpenAICatalogRuntimeResolution;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::model::ProviderCapability;
 
@@ -15,13 +16,15 @@ impl Provider {
         capability: &ProviderCapability,
     ) -> bool {
         match self {
-            Provider::OpenAI(provider) => {
-                if provider.get_model_config(model).is_some() {
-                    provider.model_supports_capability(model, capability)
-                } else {
+            Provider::OpenAI(provider) => match provider.resolve_model_runtime(model) {
+                OpenAICatalogRuntimeResolution::Callable(model_spec) => {
+                    model_spec.model_info.capabilities.contains(capability)
+                }
+                OpenAICatalogRuntimeResolution::PricingOnly(_) => false,
+                OpenAICatalogRuntimeResolution::Unresolved(_) => {
                     LLMProvider::supports_capability(provider, capability)
                 }
-            }
+            },
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
             }
@@ -65,8 +68,69 @@ fn normalize_provider_name(provider_name: &str) -> String {
 mod tests {
     use super::{openai_like_provider_supports_gemini, openai_like_provider_supports_rerank};
     use crate::core::net::ProviderEndpointAccess;
+    use crate::core::providers::openai::OpenAIProvider;
     use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
-    use crate::core::providers::{GeminiNativeRequest, ProviderError};
+    use crate::core::providers::{GeminiNativeRequest, Provider, ProviderError};
+    use crate::core::types::model::ProviderCapability;
+
+    async fn openai_provider() -> Provider {
+        Provider::OpenAI(
+            OpenAIProvider::with_api_key("sk-test-key")
+                .await
+                .expect("test OpenAI provider should build"),
+        )
+    }
+
+    #[tokio::test]
+    async fn openai_pricing_only_catalog_entries_do_not_inherit_provider_capabilities() {
+        let provider = openai_provider().await;
+
+        for model in ["1024-x-1024/dall-e-2", "openai/1024-x-1024/dall-e-2"] {
+            for capability in [
+                ProviderCapability::ChatCompletion,
+                ProviderCapability::ChatCompletionStream,
+                ProviderCapability::Embeddings,
+            ] {
+                assert!(
+                    !provider.supports_capability_for_model(model, &capability),
+                    "pricing-only catalog key {model} must not inherit {capability:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_callable_and_unknown_models_keep_existing_route_contracts() {
+        let provider = openai_provider().await;
+
+        assert!(
+            provider
+                .supports_capability_for_model("openai/gpt-4", &ProviderCapability::ChatCompletion)
+        );
+        assert!(
+            !provider
+                .supports_capability_for_model("openai/gpt-4", &ProviderCapability::Embeddings)
+        );
+        assert!(provider.supports_capability_for_model(
+            "text-embedding-3-small",
+            &ProviderCapability::Embeddings
+        ));
+        assert!(!provider.supports_capability_for_model(
+            "text-embedding-3-small",
+            &ProviderCapability::ChatCompletion
+        ));
+
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+            ProviderCapability::Embeddings,
+        ] {
+            assert!(
+                provider.supports_capability_for_model("custom-openai-deployment", &capability),
+                "unresolved OpenAI deployments retain provider-level pass-through"
+            );
+        }
+    }
 
     #[test]
     fn gemini_compatibility_name_set_is_closed_and_normalized() {

@@ -30,7 +30,7 @@ use crate::core::types::{
 
 use super::{
     config::OpenAIConfig,
-    models::{OpenAIModelRegistry, get_openai_registry},
+    models::{OpenAICatalogRuntimeResolution, OpenAIModelRegistry, get_openai_registry},
 };
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 
@@ -330,20 +330,29 @@ impl OpenAIProvider {
         model_id: &str,
         capability: &ProviderCapability,
     ) -> bool {
-        self.model_registry
-            .resolve_catalog_identity(model_id)
-            .ok()
-            .and_then(|identity| identity.capability_spec())
-            .is_some_and(|model_spec| model_spec.model_info.capabilities.contains(capability))
+        match self.resolve_model_runtime(model_id) {
+            OpenAICatalogRuntimeResolution::Callable(model_spec) => {
+                model_spec.model_info.capabilities.contains(capability)
+            }
+            OpenAICatalogRuntimeResolution::PricingOnly(_)
+            | OpenAICatalogRuntimeResolution::Unresolved(_) => false,
+        }
     }
 
     /// Get model configuration
     pub fn get_model_config(&self, model_id: &str) -> Option<&super::models::OpenAIModelConfig> {
-        self.model_registry
-            .resolve_catalog_identity(model_id)
-            .ok()
-            .and_then(|identity| identity.capability_spec())
-            .map(|spec| &spec.config)
+        match self.resolve_model_runtime(model_id) {
+            OpenAICatalogRuntimeResolution::Callable(model_spec) => Some(&model_spec.config),
+            OpenAICatalogRuntimeResolution::PricingOnly(_)
+            | OpenAICatalogRuntimeResolution::Unresolved(_) => None,
+        }
+    }
+
+    pub(crate) fn resolve_model_runtime<'input>(
+        &self,
+        model_id: &'input str,
+    ) -> OpenAICatalogRuntimeResolution<'static, 'input> {
+        self.model_registry.resolve_runtime_identity(model_id)
     }
 }
 
@@ -506,13 +515,8 @@ impl LLMProvider for OpenAIProvider {
     // ==================== Python LiteLLM Compatible Interface ====================
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        // Return parameters based on model capabilities
-        if let Some(model_spec) = self
-            .model_registry
-            .resolve_catalog_identity(model)
-            .ok()
-            .and_then(|identity| identity.capability_spec())
-        {
+        let resolution = self.resolve_model_runtime(model);
+        if let OpenAICatalogRuntimeResolution::Callable(model_spec) = resolution {
             match model_spec.family {
                 super::models::OpenAIModelFamily::GPT5
                 | super::models::OpenAIModelFamily::GPT5Mini
@@ -653,6 +657,8 @@ impl LLMProvider for OpenAIProvider {
                     "user",
                 ],
             }
+        } else if matches!(resolution, OpenAICatalogRuntimeResolution::PricingOnly(_)) {
+            &[]
         } else {
             &[
                 "messages",

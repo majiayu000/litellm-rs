@@ -146,6 +146,22 @@ fn test_qualified_model_config_and_params_match_exact_model() {
 }
 
 #[test]
+fn test_pricing_only_params_are_not_promoted_but_unknown_models_pass_through() {
+    let provider = create_test_provider();
+
+    for model in ["1024-x-1024/dall-e-2", "openai/1024-x-1024/dall-e-2"] {
+        assert!(
+            provider.get_supported_openai_params(model).is_empty(),
+            "pricing-only catalog key {model} must not advertise callable parameters"
+        );
+    }
+
+    let unknown_params = provider.get_supported_openai_params("custom-openai-deployment");
+    assert!(unknown_params.contains(&"messages"));
+    assert!(unknown_params.contains(&"stream"));
+}
+
+#[test]
 fn test_get_model_info() {
     let provider = create_test_provider();
 

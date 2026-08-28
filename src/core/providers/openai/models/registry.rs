@@ -11,7 +11,8 @@ use crate::core::types::model::ModelInfo;
 use crate::core::types::model_id::ModelIdRef;
 
 use super::model_id::{
-    OpenAICatalogResolveError, ResolvedOpenAICatalogEntry, explicit_identity_for,
+    OpenAICatalogResolveError, OpenAICatalogRuntimeResolution, ResolvedOpenAICatalogEntry,
+    explicit_identity_for,
 };
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
@@ -478,23 +479,35 @@ impl OpenAIModelRegistry {
             return Err(OpenAICatalogResolveError::DoubleQualification { model_id: raw_id });
         }
 
-        // A stored `openai/...` key remains distinct from an unqualified key.
-        // Search by exact segments to normalize only provider casing without
-        // allocating or changing model casing.
-        if let Some((catalog_key, spec)) = self.models.iter().find(|(catalog_key, _)| {
-            catalog_key
-                .split_once('/')
-                .is_some_and(|(stored_provider, stored_model)| {
-                    stored_provider == "openai" && stored_model == model_id
-                })
-        }) {
-            return Ok(self.resolved_entry(raw_id, catalog_key, spec));
+        // The raw exact lookup above already checked canonical lowercase
+        // `openai/...` keys. Mixed-case provider input needs one normalized key
+        // allocation; both paths remain O(1) HashMap lookups and model casing is
+        // never changed.
+        if provider != "openai" {
+            let canonical_qualified_id = format!("openai/{model_id}");
+            if let Some((catalog_key, spec)) = self.models.get_key_value(&canonical_qualified_id) {
+                return Ok(self.resolved_entry(raw_id, catalog_key, spec));
+            }
         }
 
         self.models
             .get_key_value(model_id)
             .map(|(catalog_key, spec)| self.resolved_entry(raw_id, catalog_key, spec))
             .ok_or(OpenAICatalogResolveError::UnknownModel { model_id: raw_id })
+    }
+
+    /// Resolve the runtime meaning of an exact OpenAI catalog lookup.
+    pub fn resolve_runtime_identity<'registry, 'input>(
+        &'registry self,
+        raw_id: &'input str,
+    ) -> OpenAICatalogRuntimeResolution<'registry, 'input> {
+        match self.resolve_catalog_identity(raw_id) {
+            Ok(identity) => match identity.capability_spec() {
+                Some(spec) => OpenAICatalogRuntimeResolution::Callable(spec),
+                None => OpenAICatalogRuntimeResolution::PricingOnly(identity.catalog_spec()),
+            },
+            Err(error) => OpenAICatalogRuntimeResolution::Unresolved(error),
+        }
     }
 
     fn resolved_entry<'registry, 'input>(
