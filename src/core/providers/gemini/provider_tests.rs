@@ -1,5 +1,11 @@
 use super::*;
+use crate::core::providers::gemini::models::CostCalculator;
 use crate::core::types::{chat::ChatMessage, message::MessageContent, message::MessageRole};
+use chrono::{TimeZone, Utc};
+use std::sync::{
+    Arc,
+    atomic::{AtomicI64, Ordering},
+};
 
 // Helper function to create a basic valid request
 fn create_valid_request(model: &str) -> ChatRequest {
@@ -134,6 +140,75 @@ fn test_models_list() {
 
     let models = provider.models();
     assert!(!models.is_empty());
+}
+
+#[test]
+fn provider_model_metadata_tracks_utc_pricing_boundary_without_restart() {
+    let promotional_time = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+    let standard_time = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+    let timestamp = Arc::new(AtomicI64::new(promotional_time.timestamp()));
+    let clock_timestamp = Arc::clone(&timestamp);
+    let clock = GeminiUtcClock::new(move || {
+        chrono::DateTime::from_timestamp(clock_timestamp.load(Ordering::SeqCst), 0)
+            .expect("test clock timestamp")
+    });
+    let provider = GeminiProvider::new_with_clock(
+        GeminiConfig::new_google_ai("test-api-key-12345678901234567890"),
+        clock,
+    )
+    .unwrap();
+
+    let listed_prices = || {
+        let model = provider
+            .models()
+            .iter()
+            .find(|model| model.id == "gemini-3.7-flash")
+            .expect("Gemini 3.7 Flash listing");
+        (
+            model.input_cost_per_1k_tokens,
+            model.output_cost_per_1k_tokens,
+        )
+    };
+
+    assert_eq!(listed_prices(), (Some(0.00075), Some(0.00375)));
+    let promotional = get_gemini_registry()
+        .get_core_model_pricing_at("gemini-3.7-flash", promotional_time)
+        .unwrap();
+    assert_eq!(promotional.cache_read_input_token_cost, Some(0.000075));
+    assert_eq!(
+        CostCalculator::calculate_multimodal_cost_at(
+            "gemini-3.7-flash",
+            1_000,
+            1_000,
+            Some(1_000),
+            None,
+            None,
+            None,
+            promotional_time,
+        ),
+        Some(0.003825)
+    );
+
+    timestamp.store(standard_time.timestamp(), Ordering::SeqCst);
+
+    assert_eq!(listed_prices(), (Some(0.0015), Some(0.0075)));
+    let standard = get_gemini_registry()
+        .get_core_model_pricing_at("gemini-3.7-flash", standard_time)
+        .unwrap();
+    assert_eq!(standard.cache_read_input_token_cost, Some(0.00015));
+    assert_eq!(
+        CostCalculator::calculate_multimodal_cost_at(
+            "gemini-3.7-flash",
+            1_000,
+            1_000,
+            Some(1_000),
+            None,
+            None,
+            None,
+            standard_time,
+        ),
+        Some(0.00765)
+    );
 }
 
 // ==================== Request Validation Tests ====================

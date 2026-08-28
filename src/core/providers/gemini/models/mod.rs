@@ -13,6 +13,7 @@ mod pricing;
 mod surface;
 
 pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
+pub(crate) use pricing::{GeminiModelListings, GeminiUtcClock};
 pub use surface::GoogleGeminiApiSurface;
 
 pub use crate::core::cost::types::ModelPricing;
@@ -177,22 +178,6 @@ impl GeminiModelRegistry {
         self.models.values().collect()
     }
 
-    /// List model metadata for a concrete Google API surface.
-    pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
-        let pricing_date = chrono::Utc::now().date_naive();
-        let mut models = self
-            .models
-            .values()
-            .filter(|spec| surface.includes(spec))
-            .map(|spec| {
-                let pricing = pricing::pricing_for_spec_at(spec, pricing_date);
-                surface.overlay_model_info(spec, &pricing)
-            })
-            .collect::<Vec<_>>();
-        models.sort_by(|left, right| left.id.cmp(&right.id));
-        models
-    }
-
     /// Check
     pub fn supports_feature(&self, model_id: &str, feature: &ModelFeature) -> bool {
         self.get_model_spec(model_id)
@@ -219,10 +204,10 @@ impl GeminiModelRegistry {
     pub(crate) fn get_core_model_pricing_at(
         &self,
         model_id: &str,
-        date: chrono::NaiveDate,
+        now: chrono::DateTime<chrono::Utc>,
     ) -> Option<ModelPricing> {
         self.get_model_spec(model_id)
-            .map(|spec| pricing::pricing_for_spec_at(spec, date))
+            .map(|spec| pricing::pricing_for_spec_at(spec, now))
     }
 
     /// Model
@@ -345,7 +330,7 @@ impl CostCalculator {
             images,
             video_seconds,
             audio_seconds,
-            chrono::Utc::now().date_naive(),
+            chrono::Utc::now(),
         )
     }
 
@@ -358,9 +343,9 @@ impl CostCalculator {
         images: Option<u32>,
         video_seconds: Option<u32>,
         audio_seconds: Option<u32>,
-        date: chrono::NaiveDate,
+        now: chrono::DateTime<chrono::Utc>,
     ) -> Option<f64> {
-        let pricing = get_gemini_registry().get_core_model_pricing_at(model_id, date)?;
+        let pricing = get_gemini_registry().get_core_model_pricing_at(model_id, now)?;
         Some(pricing::calculate_multimodal_cost(
             &pricing,
             prompt_tokens,

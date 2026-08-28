@@ -27,8 +27,8 @@ use super::client::GeminiClient;
 use super::config::GeminiConfig;
 use super::error::{GeminiErrorMapper, gemini_model_error, gemini_validation_error};
 use super::models::{
-    GoogleGeminiApiSurface, ModelFeature, get_gemini_registry, has_trailing_assistant_prefill,
-    uses_fixed_sampling_contract,
+    GeminiModelListings, GeminiUtcClock, GoogleGeminiApiSurface, ModelFeature, get_gemini_registry,
+    has_trailing_assistant_prefill, uses_fixed_sampling_contract,
 };
 use super::streaming::GeminiStream;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
@@ -38,12 +38,20 @@ use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 pub struct GeminiProvider {
     client: GeminiClient,
     surface: GoogleGeminiApiSurface,
-    supported_models: Vec<ModelInfo>,
+    supported_models: GeminiModelListings,
+    clock: GeminiUtcClock,
 }
 
 impl GeminiProvider {
     /// Create
     pub fn new(config: GeminiConfig) -> Result<Self, ProviderError> {
+        Self::new_with_clock(config, GeminiUtcClock::system())
+    }
+
+    pub(crate) fn new_with_clock(
+        config: GeminiConfig,
+        clock: GeminiUtcClock,
+    ) -> Result<Self, ProviderError> {
         // Configuration
         config
             .validate()
@@ -59,12 +67,13 @@ impl GeminiProvider {
         } else {
             GoogleGeminiApiSurface::DeveloperApi
         };
-        let supported_models = registry.list_model_infos_for_surface(surface);
+        let supported_models = GeminiModelListings::new(registry, surface);
 
         Ok(Self {
             client,
             surface,
             supported_models,
+            clock,
         })
     }
 
@@ -155,7 +164,7 @@ impl LLMProvider for GeminiProvider {
     }
 
     fn models(&self) -> &[ModelInfo] {
-        &self.supported_models
+        self.supported_models.at(self.clock.now())
     }
 
     fn supports_model(&self, model: &str) -> bool {

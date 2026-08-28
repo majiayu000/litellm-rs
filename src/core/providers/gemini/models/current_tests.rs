@@ -147,8 +147,12 @@ fn gemini_36_static_fallback_uses_current_promotional_price() {
 #[test]
 fn flash_static_pricing_switches_at_the_documented_2027_boundary() {
     let registry = get_gemini_registry();
-    let promotional_date = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
-    let standard_date = chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
+    use chrono::TimeZone;
+
+    let promotional_date = chrono::Utc
+        .with_ymd_and_hms(2026, 12, 31, 23, 59, 59)
+        .unwrap();
+    let standard_date = chrono::Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
 
     for model in ["gemini-3.7-flash", "gemini-3.6-flash"] {
         let promotional = registry
