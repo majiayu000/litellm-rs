@@ -64,6 +64,18 @@ fn current_claude_5_protocol_serializes_adaptive_disabled_and_sampling_rules() {
         );
     }
 
+    for top_p in [1.0001, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut invalid = ChatRequest::new("claude-opus-5").add_user_message("Hello");
+        invalid.top_p = Some(top_p);
+        assert!(
+            anthropic_client()
+                .transform_chat_request(&invalid)
+                .expect_err("Claude 5 top_p must be finite and no greater than 1")
+                .to_string()
+                .contains("top_p")
+        );
+    }
+
     let mut omitted = ChatRequest::new("claude-opus-5").add_user_message("Hello");
     omitted.thinking = Some(ThinkingConfig::medium_effort().include_in_response(false));
     let transformed = anthropic_client()

@@ -91,6 +91,21 @@ mod tests {
         assert_eq!(msg.thinking_text().as_deref(), Some("Step 1: Analyze"));
     }
 
+    #[test]
+    fn anthropic_thinking_without_visible_text_returns_none() {
+        use litellm_rs::core::types::thinking::{AnthropicThinkingBlock, AnthropicThinkingContent};
+
+        for content in [
+            AnthropicThinkingContent::try_from(Vec::new()).expect("valid empty history"),
+            AnthropicThinkingContent::try_from(vec![AnthropicThinkingBlock::RedactedThinking {
+                data: "opaque-data".to_string(),
+            }])
+            .expect("valid redacted history"),
+        ] {
+            assert_eq!(ThinkingContent::AnthropicBlocks { content }.as_text(), None);
+        }
+    }
+
     // ==================== ChatRequest Tests ====================
 
     /// Test chat request creation

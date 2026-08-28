@@ -348,7 +348,10 @@ impl AnthropicClient {
                 ),
             ));
         }
-        if request.top_p.is_some_and(|top_p| top_p < 0.99) {
+        if request
+            .top_p
+            .is_some_and(|top_p| !top_p.is_finite() || !(0.99..=1.0).contains(&top_p))
+        {
             return Err(ProviderError::invalid_request(
                 "anthropic",
                 format!("Model {} does not support non-default top_p", request.model),

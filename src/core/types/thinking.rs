@@ -56,16 +56,14 @@ impl AnthropicThinkingContent {
         &self.blocks
     }
 
-    fn visible_text(&self) -> Cow<'_, str> {
+    fn visible_text(&self) -> Option<Cow<'_, str>> {
         let mut visible = self.blocks.iter().filter_map(|block| match block {
             AnthropicThinkingBlock::Thinking { thinking, .. } => Some(thinking.as_str()),
             AnthropicThinkingBlock::RedactedThinking { .. } => None,
         });
-        let Some(first) = visible.next() else {
-            return Cow::Borrowed("");
-        };
+        let first = visible.next()?;
         let Some(second) = visible.next() else {
-            return Cow::Borrowed(first);
+            return Some(Cow::Borrowed(first));
         };
 
         let mut joined = String::with_capacity(first.len() + second.len());
@@ -74,7 +72,7 @@ impl AnthropicThinkingContent {
         for text in visible {
             joined.push_str(text);
         }
-        Cow::Owned(joined)
+        Some(Cow::Owned(joined))
     }
 
     fn has_redacted_block(&self) -> bool {
@@ -209,7 +207,7 @@ impl ThinkingContent {
             Self::Text { text, .. } => Some(Cow::Borrowed(text)),
             Self::Block { thinking, .. } => Some(Cow::Borrowed(thinking)),
             Self::Redacted { .. } => None,
-            Self::AnthropicBlocks { content } => Some(content.visible_text()),
+            Self::AnthropicBlocks { content } => content.visible_text(),
         }
     }
 

@@ -80,8 +80,11 @@ impl AnthropicProvider {
     /// Validate request
     fn validate_request(&self, request: &ChatRequest) -> Result<(), ProviderError> {
         let registry = get_anthropic_registry();
+        let uses_compatible_model_allow_list = self.client.uses_compatible_model_allow_list();
+        let uses_claude_5_protocol = !uses_compatible_model_allow_list
+            && AnthropicClient::is_claude_5_protocol_model(&request.model);
 
-        let model_spec = if self.client.uses_compatible_model_allow_list() {
+        let model_spec = if uses_compatible_model_allow_list {
             if !self.client.allows_unknown_model(&request.model) {
                 return Err(ProviderError::invalid_request(
                     "anthropic",
@@ -92,6 +95,14 @@ impl AnthropicProvider {
         } else {
             registry.get_model_spec(&request.model)
         };
+
+        if model_spec.is_none() && uses_claude_5_protocol {
+            return crate::core::providers::base::validate_chat_request_common(
+                "anthropic",
+                request,
+                COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS,
+            );
+        }
 
         let Some(model_spec) = model_spec else {
             if !self.client.allows_unknown_model(&request.model) {
@@ -230,7 +241,8 @@ impl LLMProvider for AnthropicProvider {
             return self.client.allows_unknown_model(model);
         }
 
-        self.supported_models.iter().any(|info| info.id == model)
+        AnthropicClient::is_claude_5_protocol_model(model)
+            || self.supported_models.iter().any(|info| info.id == model)
             || self.client.allows_unknown_model(model)
     }
 
@@ -277,9 +289,7 @@ impl LLMProvider for AnthropicProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
-        if !AnthropicClient::is_claude_5_protocol_model(&request.model) {
-            self.validate_request(&request)?;
-        }
+        self.validate_request(&request)?;
         self.client.transform_chat_request(&request)
     }
 
@@ -487,6 +497,23 @@ mod tests {
         assert!(provider.supports_model("claude-3-5-sonnet-20241022"));
         assert!(provider.supports_model("claude-3-haiku-20240307"));
         assert!(!provider.supports_model("gpt-4"));
+    }
+
+    #[test]
+    fn claude_5_protocol_models_share_production_validation_without_catalog_entries() {
+        let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key")).unwrap();
+        assert!(provider.supports_model("claude-opus-5"));
+        let valid = ChatRequest::new("claude-opus-5").add_user_message("Hello");
+        provider
+            .validate_request(&valid)
+            .expect("production validation must accept an exact protocol model");
+
+        let empty = ChatRequest::new("claude-opus-5");
+        assert!(provider.validate_request(&empty).is_err());
+
+        let mut too_many_tokens = ChatRequest::new("claude-opus-5").add_user_message("Hello");
+        too_many_tokens.max_tokens = Some(COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS + 1);
+        assert!(provider.validate_request(&too_many_tokens).is_err());
     }
 
     #[test]
