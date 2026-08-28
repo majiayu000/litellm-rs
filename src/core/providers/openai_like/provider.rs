@@ -306,7 +306,10 @@ impl OpenAILikeProvider {
 
     /// Transform ChatRequest to OpenAI API format
     fn transform_chat_request(&self, request: ChatRequest) -> Result<Value, OpenAILikeError> {
-        let model = self.config.get_effective_model(&request.model);
+        let model = super::models::xai_native_wire_model(
+            &self.config.provider_name,
+            self.config.get_effective_model(&request.model),
+        );
 
         let mut openai_request = serde_json::json!({
             "model": model,
@@ -367,7 +370,12 @@ impl OpenAILikeProvider {
                 .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
         }
 
-        let reasoning_effort = request.reasoning_effort;
+        let mut extra_params = request.extra_params;
+        let reasoning_effort = super::models::take_xai_reasoning_effort(
+            &self.config.provider_name,
+            request.reasoning_effort,
+            &mut extra_params,
+        )?;
 
         let openrouter_thinking_params = if self.config.provider_name == "openrouter" {
             if let Some(thinking_config) = &request.thinking {
@@ -412,7 +420,7 @@ impl OpenAILikeProvider {
         }
 
         if let Some(obj) = openai_request.as_object_mut() {
-            for (key, value) in request.extra_params {
+            for (key, value) in extra_params {
                 obj.entry(key).or_insert(value);
             }
 
@@ -454,7 +462,7 @@ impl OpenAILikeProvider {
             return Ok(());
         }
 
-        Self::reject_xai_reasoning_incompatible_params(request)?;
+        super::models::reject_xai_reasoning_incompatible_params(request)?;
         if let Some(allowed) = super::models::xai_reasoning_efforts_for_model(model)
             && !allowed.contains(&effort.as_str())
         {
@@ -480,25 +488,6 @@ impl OpenAILikeProvider {
                 format!("xAI model {model} does not support reasoning_effort"),
             )),
         }
-    }
-
-    fn reject_xai_reasoning_incompatible_params(request: &Value) -> Result<(), OpenAILikeError> {
-        let incompatible_params = ["stop", "presence_penalty", "frequency_penalty"]
-            .into_iter()
-            .filter(|field| request.get(*field).is_some())
-            .collect::<Vec<_>>();
-
-        if incompatible_params.is_empty() {
-            return Ok(());
-        }
-
-        Err(OpenAILikeError::configuration(
-            PROVIDER_NAME,
-            format!(
-                "xAI reasoning_effort is incompatible with {}",
-                incompatible_params.join(", ")
-            ),
-        ))
     }
 
     fn transform_chat_response(&self, response: Value) -> Result<ChatResponse, OpenAILikeError> {

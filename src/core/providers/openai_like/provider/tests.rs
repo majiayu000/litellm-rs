@@ -430,14 +430,14 @@ async fn test_xai_current_models_use_top_level_reasoning_effort() {
         .with_skip_api_key(true);
     let provider = OpenAILikeProvider::new(config).await.unwrap();
 
-    for (model, effort) in [
-        ("grok-4.5", "low"),
-        ("grok-4.5-latest", "medium"),
-        ("grok-build-latest", "high"),
-        ("grok-4.6", "low"),
-        ("xai/grok-4.6", "medium"),
-        ("grok-4.6", "high"),
-        ("grok-4.6", "xhigh"),
+    for (model, wire_model, effort) in [
+        ("grok-4.5", "grok-4.5", "low"),
+        ("grok-4.5-latest", "grok-4.5-latest", "medium"),
+        ("grok-build-latest", "grok-build-latest", "high"),
+        ("grok-4.6", "grok-4.6", "low"),
+        ("xai/grok-4.6", "grok-4.6", "medium"),
+        ("grok-4.6", "grok-4.6", "high"),
+        ("grok-4.6", "grok-4.6", "xhigh"),
     ] {
         let request = ChatRequest {
             model: model.to_string(),
@@ -447,9 +447,27 @@ async fn test_xai_current_models_use_top_level_reasoning_effort() {
         };
 
         let json = provider.transform_chat_request(request).unwrap();
+        assert_eq!(json["model"], wire_model);
         assert_eq!(json["reasoning_effort"], effort);
         assert!(json.get("reasoning").is_none());
     }
+}
+
+#[tokio::test]
+async fn test_non_xai_transport_preserves_qualified_xai_model_id() {
+    let config = OpenAILikeConfig::new("https://vertex.example.com/v1")
+        .with_provider_name("vertex_ai")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    let request = ChatRequest {
+        model: "xai/grok-4.6".to_string(),
+        messages: vec![],
+        ..Default::default()
+    };
+
+    let json = provider.transform_chat_request(request).unwrap();
+    assert_eq!(json["model"], "xai/grok-4.6");
 }
 
 #[tokio::test]
@@ -468,6 +486,39 @@ async fn test_xai_current_models_enforce_reasoning_effort_levels() {
 
     let err = provider.transform_chat_request(request).unwrap_err();
     assert!(err.to_string().contains("low, medium, high"));
+}
+
+#[tokio::test]
+async fn test_xai_extra_reasoning_effort_uses_the_same_validation_path() {
+    let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+        .with_provider_name("xai")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+
+    let invalid = ChatRequest {
+        model: "grok-4.5".to_string(),
+        messages: vec![],
+        extra_params: std::collections::HashMap::from([(
+            "reasoning_effort".to_string(),
+            serde_json::json!("xhigh"),
+        )]),
+        ..Default::default()
+    };
+    let error = provider.transform_chat_request(invalid).unwrap_err();
+    assert!(error.to_string().contains("low, medium, high"));
+
+    let valid = ChatRequest {
+        model: "grok-4.6".to_string(),
+        messages: vec![],
+        extra_params: std::collections::HashMap::from([(
+            "reasoning_effort".to_string(),
+            serde_json::json!("xhigh"),
+        )]),
+        ..Default::default()
+    };
+    let json = provider.transform_chat_request(valid).unwrap();
+    assert_eq!(json["reasoning_effort"], "xhigh");
+    assert!(json.get("reasoning").is_none());
 }
 
 #[tokio::test]

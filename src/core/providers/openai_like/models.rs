@@ -3,7 +3,10 @@
 //! Dynamic model support - accepts any model name and passes it through
 
 use crate::core::types::{model::ModelInfo, model::ProviderCapability};
+use serde_json::Value;
 use std::collections::HashMap;
+
+use super::error::{OpenAILikeError, PROVIDER_NAME};
 
 const XAI_GROK_43_INPUT_COST_PER_1K: f64 = 0.00125;
 const XAI_GROK_43_OUTPUT_COST_PER_1K: f64 = 0.0025;
@@ -378,6 +381,53 @@ pub fn xai_reasoning_param_for_model(model_id: &str) -> Option<XaiReasoningParam
     } else {
         None
     }
+}
+
+pub fn xai_native_wire_model(provider_name: &str, mut model: String) -> String {
+    if provider_name == "xai" && model.starts_with("xai/") {
+        model.drain(.."xai/".len());
+    }
+    model
+}
+
+pub fn take_xai_reasoning_effort(
+    provider_name: &str,
+    typed: Option<String>,
+    extra_params: &mut HashMap<String, Value>,
+) -> Result<Option<String>, OpenAILikeError> {
+    if provider_name != "xai" {
+        return Ok(typed);
+    }
+
+    let extra = extra_params.remove("reasoning_effort");
+    match (typed, extra) {
+        (Some(effort), _) => Ok(Some(effort)),
+        (None, Some(Value::String(effort))) => Ok(Some(effort)),
+        (None, Some(_)) => Err(OpenAILikeError::configuration(
+            PROVIDER_NAME,
+            "xAI reasoning_effort must be a string",
+        )),
+        (None, None) => Ok(None),
+    }
+}
+
+pub fn reject_xai_reasoning_incompatible_params(request: &Value) -> Result<(), OpenAILikeError> {
+    let incompatible_params = ["stop", "presence_penalty", "frequency_penalty"]
+        .into_iter()
+        .filter(|field| request.get(*field).is_some())
+        .collect::<Vec<_>>();
+
+    if incompatible_params.is_empty() {
+        return Ok(());
+    }
+
+    Err(OpenAILikeError::configuration(
+        PROVIDER_NAME,
+        format!(
+            "xAI reasoning_effort is incompatible with {}",
+            incompatible_params.join(", ")
+        ),
+    ))
 }
 
 pub fn xai_reasoning_efforts_for_model(model_id: &str) -> Option<&'static [&'static str]> {
