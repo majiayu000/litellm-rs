@@ -9,6 +9,7 @@ mod key_budget;
 mod pricing;
 mod unpriced;
 
+use std::borrow::Cow;
 use uuid::Uuid;
 
 use crate::config::models::gateway::GatewayPricingConfig;
@@ -18,6 +19,7 @@ use crate::core::budget::{
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::types::model_id::ModelIdRef;
 use crate::core::types::responses::{ChatChunk, Usage};
 #[cfg(test)]
 use std::sync::LazyLock;
@@ -48,6 +50,34 @@ pub(super) use unpriced::{
 
 pub(super) fn stream_chunk_has_candidate_output(chunk: &ChatChunk) -> bool {
     !chunk.choices.is_empty()
+}
+
+fn token_count_model_id<'a>(provider: &str, model: &'a str) -> Cow<'a, str> {
+    let parsed = ModelIdRef::parse(model);
+    if parsed
+        .provider()
+        .is_some_and(|qualified| qualified.eq_ignore_ascii_case(provider))
+    {
+        Cow::Borrowed(model)
+    } else {
+        Cow::Owned(format!("{provider}/{model}"))
+    }
+}
+
+fn token_count_error(
+    budget_provider: &str,
+    budget_model: &str,
+    pricing_provider: &str,
+    pricing_model: &str,
+    error: impl std::fmt::Display,
+) -> ProviderError {
+    ProviderError::invalid_request(
+        "token_count",
+        format!(
+            "token counting failed for served model '{budget_provider}/{budget_model}' using \
+             pricing identity '{pricing_provider}/{pricing_model}': {error}"
+        ),
+    )
 }
 
 /// Reject a request before it reaches the upstream provider when the served

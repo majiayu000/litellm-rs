@@ -142,6 +142,70 @@ fn test_unknown_openai_like_model_remains_marked_approximate() {
 }
 
 #[test]
+fn test_explicit_unknown_openai_model_returns_tokenizer_error() {
+    let counter = TokenCounter::new();
+
+    let error = counter
+        .count_completion_tokens("openai/gpt-future-unknown", "Hello world")
+        .expect_err("an explicit unknown OpenAI tokenizer must not be approximated");
+
+    let message = error.to_string();
+    assert!(message.contains("explicit OpenAI model"));
+    assert!(message.contains("openai/gpt-future-unknown"));
+}
+
+#[test]
+fn test_explicit_unknown_openai_chat_model_returns_tokenizer_error() {
+    let counter = TokenCounter::new();
+    let messages = vec![ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("hello".to_string())),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    }];
+
+    let error = counter
+        .count_chat_tokens("OPENAI/gpt-future-unknown", &messages)
+        .expect_err("explicit OpenAI chat tokenization must resolve exactly");
+
+    assert!(error.to_string().contains("OPENAI/gpt-future-unknown"));
+}
+
+#[test]
+fn test_provider_native_and_custom_deployments_remain_approximate() {
+    let counter = TokenCounter::new();
+
+    for model in [
+        "azure/custom-deployment",
+        "azure_ai/Phi-4",
+        "anthropic/claude-private-deployment",
+        "unknown-provider/BAAI/bge-m3",
+        "openai_like/gpt-future-unknown",
+    ] {
+        let estimate = counter
+            .count_completion_tokens(model, "Hello world")
+            .unwrap_or_else(|error| panic!("{model} should permit approximation: {error}"));
+
+        assert!(estimate.is_approximate, "{model}");
+        assert!(estimate.confidence < 1.0, "{model}");
+    }
+}
+
+#[test]
+fn test_explicit_unknown_openai_output_estimation_returns_error() {
+    let counter = TokenCounter::new();
+
+    let error = counter
+        .estimate_output_tokens(None, 10, "openai/gpt-future-unknown")
+        .expect_err("output reservation must not hide an explicit tokenizer error");
+
+    assert!(error.to_string().contains("tokenizer resolution failed"));
+}
+
+#[test]
 fn test_tool_call_chat_token_count_remains_marked_approximate() {
     let counter = TokenCounter::new();
     let messages = vec![ChatMessage {

@@ -102,9 +102,24 @@ impl StreamingHandler {
                 }
             }
 
-            // Send final chunk with usage information
-            if let Ok(final_event) = self.create_final_chunk().await {
-                let _ = tx.send(Ok(final_event.to_bytes())).await;
+            // Send final chunk with usage information. A tokenizer failure must
+            // be visible to the client instead of silently omitting usage or
+            // replacing it with a lower-confidence count.
+            match self.create_final_chunk().await {
+                Ok(final_event) => {
+                    let _ = tx.send(Ok(final_event.to_bytes())).await;
+                }
+                Err(error) => {
+                    tracing::error!(
+                        model = %self.model,
+                        error = %error,
+                        "failed to synthesize streaming usage"
+                    );
+                    let error_event = Event::default()
+                        .event("error")
+                        .data(&json!({"error": error.to_string()}).to_string());
+                    let _ = tx.send(Ok(error_event.to_bytes())).await;
+                }
             }
 
             // Send done event
@@ -200,10 +215,18 @@ impl StreamingHandler {
     async fn create_final_chunk(&self) -> Result<Event> {
         // Calculate actual token counts using the token counter
         let token_counter = crate::utils::ai::counter::token_counter::TokenCounter::new();
-        let completion_tokens = token_counter
-            .count_completion_tokens(&self.model, &self.accumulated_content)
-            .map(|estimate| estimate.input_tokens)
-            .unwrap_or_else(|_| self.estimate_token_count(&self.accumulated_content));
+        let completion_estimate =
+            token_counter.count_completion_tokens(&self.model, &self.accumulated_content)?;
+        if completion_estimate.is_approximate {
+            tracing::warn!(
+                model = %self.model,
+                input = "streaming_completion",
+                approximate = true,
+                confidence = completion_estimate.confidence,
+                "using approximate token count for synthesized streaming usage"
+            );
+        }
+        let completion_tokens = completion_estimate.input_tokens;
 
         // For prompt tokens, we'd need the original request context
         // For now, use a reasonable estimate based on typical chat requests
@@ -242,12 +265,6 @@ impl StreamingHandler {
         let event = Event::default().data(&serde_json::to_string(&final_chunk)?);
 
         Ok(event)
-    }
-
-    /// Estimate token count from text (simplified)
-    pub(crate) fn estimate_token_count(&self, text: &str) -> u32 {
-        // Very rough estimation: ~4 characters per token
-        (text.len() as f64 / 4.0).ceil() as u32
     }
 
     /// Estimate prompt tokens based on typical chat requests
@@ -298,45 +315,6 @@ mod tests {
         let handler2 = StreamingHandler::new("gpt-4".to_string());
 
         assert_ne!(handler1.request_id, handler2.request_id);
-    }
-
-    // ==================== Token Estimation Tests ====================
-
-    #[test]
-    fn test_estimate_token_count_empty() {
-        let handler = StreamingHandler::new("gpt-4".to_string());
-        assert_eq!(handler.estimate_token_count(""), 0);
-    }
-
-    #[test]
-    fn test_estimate_token_count_short_text() {
-        let handler = StreamingHandler::new("gpt-4".to_string());
-        // "Hi" = 2 chars => 2/4 = 0.5 => ceil = 1
-        assert_eq!(handler.estimate_token_count("Hi"), 1);
-    }
-
-    #[test]
-    fn test_estimate_token_count_medium_text() {
-        let handler = StreamingHandler::new("gpt-4".to_string());
-        // "Hello world" = 11 chars => 11/4 = 2.75 => ceil = 3
-        assert_eq!(handler.estimate_token_count("Hello world"), 3);
-    }
-
-    #[test]
-    fn test_estimate_token_count_long_text() {
-        let handler = StreamingHandler::new("gpt-4".to_string());
-        // 100 chars => 100/4 = 25
-        let text = "a".repeat(100);
-        assert_eq!(handler.estimate_token_count(&text), 25);
-    }
-
-    #[test]
-    fn test_estimate_token_count_unicode() {
-        let handler = StreamingHandler::new("gpt-4".to_string());
-        // Unicode characters are counted by byte length in Rust's len()
-        let text = "你好世界"; // 4 Chinese chars = 12 bytes
-        let estimated = handler.estimate_token_count(text);
-        assert!(estimated > 0);
     }
 
     #[test]
@@ -591,6 +569,48 @@ mod tests {
         assert!(event_str.contains("prompt_tokens"));
         assert!(event_str.contains("completion_tokens"));
         assert!(event_str.contains("total_tokens"));
+    }
+
+    #[tokio::test]
+    async fn test_create_final_chunk_rejects_explicit_unknown_openai_tokenizer() {
+        let mut handler = StreamingHandler::new("openai/gpt-future-unknown".to_string());
+        handler.accumulated_content = "This usage must not be approximated.".to_string();
+
+        let error = handler
+            .create_final_chunk()
+            .await
+            .expect_err("explicit OpenAI tokenizer errors must propagate");
+
+        assert!(error.to_string().contains("openai/gpt-future-unknown"));
+    }
+
+    #[tokio::test]
+    async fn test_create_final_chunk_allows_provider_native_approximation() {
+        let mut handler = StreamingHandler::new("azure/custom-deployment".to_string());
+        handler.accumulated_content = "Provider-native deployments may be estimated.".to_string();
+
+        assert!(handler.create_final_chunk().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sse_stream_marks_explicit_tokenizer_failure() {
+        let handler = StreamingHandler::new("openai/gpt-future-unknown".to_string());
+        let provider_stream = futures::stream::iter(vec![Ok(
+            r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#.to_string(),
+        )]);
+
+        let chunks = handler
+            .create_sse_stream(provider_stream, None)
+            .collect::<Vec<_>>()
+            .await;
+        let body = chunks
+            .into_iter()
+            .map(|chunk| String::from_utf8_lossy(&chunk.unwrap()).into_owned())
+            .collect::<String>();
+
+        assert!(body.contains("event: error"));
+        assert!(body.contains("openai/gpt-future-unknown"));
+        assert!(!body.contains("\"usage\""));
     }
 
     // ==================== Edge Cases ====================

@@ -93,7 +93,16 @@ pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_policy(
     pricing_model: &str,
     input: &EmbeddingInput,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
-    let prompt_tokens = estimate_embedding_input_tokens(pricing_model, input);
+    let prompt_tokens = estimate_embedding_input_tokens(pricing_provider, pricing_model, input)
+        .map_err(|error| {
+            super::token_count_error(
+                budget_provider,
+                budget_model,
+                pricing_provider,
+                pricing_model,
+                error,
+            )
+        })?;
     reserve_completion_budget_with_split_pricing(
         pricing_service,
         pricing_config,
@@ -273,26 +282,54 @@ fn reserve_completion_budget_with_split_pricing(
         })
 }
 
-fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
+fn estimate_embedding_input_tokens(
+    provider: &str,
+    model: &str,
+    input: &EmbeddingInput,
+) -> crate::utils::error::gateway_error::Result<u32> {
     let counter = TokenCounter::new();
-    input.iter().fold(0u32, |total, text| {
-        let tokens = counter
-            .count_completion_tokens(model, text)
-            .map(|estimate| estimate.input_tokens)
-            .unwrap_or_else(|error| {
-                tracing::warn!(
-                    "embedding token estimation failed for model '{model}': {error}; \
-                     using fallback estimate"
-                );
-                u32::try_from(text.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
-            });
-        total.saturating_add(tokens)
+    let token_model = super::token_count_model_id(provider, model);
+    input.iter().try_fold(0u32, |total, text| {
+        let estimate = counter.count_completion_tokens(&token_model, text)?;
+        if estimate.is_approximate {
+            tracing::warn!(
+                model = %token_model,
+                input = "embedding",
+                approximate = true,
+                confidence = estimate.confidence,
+                "approximate token count used"
+            );
+        }
+        Ok(total.saturating_add(estimate.input_tokens))
     })
 }
 
 #[cfg(test)]
 mod mapped_identity_tests {
     use super::*;
+
+    #[test]
+    fn explicit_unknown_openai_embedding_tokenizer_fails_before_pricing() {
+        let pricing = PricingService::new(None);
+        let budget = UnifiedBudgetLimits::new();
+        let input = EmbeddingInput::Text("hello".to_string());
+
+        let error = match reserve_embedding_budget_with_policy(
+            &pricing,
+            &GatewayPricingConfig::default(),
+            &budget,
+            "openai",
+            "gpt-future-unknown",
+            "openai",
+            "gpt-future-unknown",
+            &input,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("explicit OpenAI tokenizer failure must stop embedding reservation"),
+        };
+
+        assert!(error.to_string().contains("tokenizer resolution failed"));
+    }
 
     #[test]
     fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {

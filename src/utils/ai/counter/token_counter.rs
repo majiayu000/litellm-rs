@@ -2,6 +2,7 @@
 
 use super::types::{ModelTokenConfig, TokenEstimate};
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent};
+use crate::core::types::model_id::ModelIdRef;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
 use tiktoken_rs::{ChatCompletionRequestMessage, bpe_for_model, num_tokens_from_messages};
@@ -27,6 +28,7 @@ impl TokenCounter {
         model: &str,
         messages: &[ChatMessage],
     ) -> Result<TokenEstimate> {
+        ensure_explicit_openai_tokenizer(model)?;
         if let Some(total_tokens) = self.exact_chat_tokens(model, messages)? {
             return Ok(TokenEstimate {
                 input_tokens: total_tokens,
@@ -152,6 +154,7 @@ impl TokenCounter {
 
     /// Count tokens in completion request
     pub fn count_completion_tokens(&self, model: &str, prompt: &str) -> Result<TokenEstimate> {
+        ensure_explicit_openai_tokenizer(model)?;
         if let Some(input_tokens) = exact_text_tokens(model, prompt)? {
             return Ok(TokenEstimate {
                 input_tokens,
@@ -176,6 +179,7 @@ impl TokenCounter {
 
     /// Count tokens in embedding request
     pub fn count_embedding_tokens(&self, model: &str, input: &[String]) -> Result<TokenEstimate> {
+        ensure_explicit_openai_tokenizer(model)?;
         let exact_counts = input
             .iter()
             .map(|text| exact_text_tokens(model, text))
@@ -214,6 +218,7 @@ impl TokenCounter {
         input_tokens: u32,
         model: &str,
     ) -> Result<u32> {
+        ensure_explicit_openai_tokenizer(model)?;
         let config = self.get_model_config(model)?;
 
         if let Some(max) = max_tokens {
@@ -234,6 +239,7 @@ impl TokenCounter {
         input_tokens: u32,
         max_output_tokens: Option<u32>,
     ) -> Result<bool> {
+        ensure_explicit_openai_tokenizer(model)?;
         let config = self.get_model_config(model)?;
         let output_tokens = max_output_tokens.unwrap_or(0);
         let total_tokens = input_tokens + output_tokens;
@@ -334,6 +340,9 @@ impl TokenCounter {
         }
         match num_tokens_from_messages(tokenizer_model_name(model), &tiktoken_messages) {
             Ok(tokens) => Ok(Some(usize_to_u32(tokens)?)),
+            Err(_) if requires_exact_openai_tokenizer(model) => {
+                Err(explicit_openai_tokenizer_error(model))
+            }
             Err(_) => Ok(None),
         }
     }
@@ -348,12 +357,34 @@ impl Default for TokenCounter {
 fn exact_text_tokens(model: &str, text: &str) -> Result<Option<u32>> {
     match exact_bpe_for_model(model) {
         Ok(bpe) => Ok(Some(usize_to_u32(bpe.count_with_special_tokens(text))?)),
+        Err(_) if requires_exact_openai_tokenizer(model) => {
+            Err(explicit_openai_tokenizer_error(model))
+        }
         Err(_) => Ok(None),
     }
 }
 
 fn exact_bpe_for_model(model: &str) -> std::result::Result<&'static tiktoken_rs::CoreBPE, ()> {
     bpe_for_model(tokenizer_model_name(model)).map_err(|_| ())
+}
+
+fn requires_exact_openai_tokenizer(model: &str) -> bool {
+    ModelIdRef::parse(model)
+        .provider()
+        .is_some_and(|provider| provider.eq_ignore_ascii_case("openai"))
+}
+
+fn explicit_openai_tokenizer_error(model: &str) -> GatewayError {
+    GatewayError::Config(format!(
+        "tokenizer resolution failed for explicit OpenAI model '{model}'"
+    ))
+}
+
+fn ensure_explicit_openai_tokenizer(model: &str) -> Result<()> {
+    if requires_exact_openai_tokenizer(model) && exact_bpe_for_model(model).is_err() {
+        return Err(explicit_openai_tokenizer_error(model));
+    }
+    Ok(())
 }
 
 fn plain_text_message_content(message: &ChatMessage) -> Option<Option<String>> {
