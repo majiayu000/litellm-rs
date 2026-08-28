@@ -233,8 +233,30 @@ fn credential_resolver_and_construction_source_guards() {
         }
     }
     let gateway = include_str!("gateway_config.rs");
-    let construction = function(gateway, "pub async fn from_gateway_config_with_aliases(");
-    assert_eq!(construction.matches("create_provider(").count(), 1);
+    let identity = include_str!("gateway_identity.rs");
+    let canonical = function(
+        gateway,
+        "pub(super) async fn from_gateway_config_with_identity(",
+    );
+    assert_eq!(canonical.matches("create_provider(").count(), 1);
+
+    let construction_entry_points = [
+        function(gateway, "pub async fn from_gateway_config("),
+        function(gateway, "pub async fn from_gateway_config_with_aliases("),
+        canonical,
+        function(identity, "pub async fn from_gateway_config_with_pricing("),
+        function(
+            identity,
+            "pub async fn from_gateway_config_with_aliases_and_pricing(",
+        ),
+    ];
+    assert_eq!(
+        construction_entry_points
+            .iter()
+            .map(|entry_point| entry_point.matches("create_provider(").count())
+            .sum::<usize>(),
+        1
+    );
 }
 
 #[test]
