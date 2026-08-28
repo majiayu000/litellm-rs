@@ -39,7 +39,11 @@ impl TryFrom<&str> for AnthropicSignature {
     type Error = AnthropicContinuationError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
+        if value.is_empty() {
+            Err(AnthropicContinuationError::EmptySignature)
+        } else {
+            Ok(Self(value.to_string()))
+        }
     }
 }
 
@@ -108,7 +112,11 @@ impl TryFrom<&str> for AnthropicRedactedData {
     type Error = AnthropicContinuationError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_string())
+        if value.is_empty() {
+            Err(AnthropicContinuationError::EmptyRedactedData)
+        } else {
+            Ok(Self(value.to_string()))
+        }
     }
 }
 
