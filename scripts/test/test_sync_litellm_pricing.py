@@ -287,6 +287,7 @@ class CatalogAuthorityTests(unittest.TestCase):
                     endpoints=["invented_endpoint"],
                     capabilities=["chat_completion"],
                     supported_parameters=["messages"],
+                    aliases=[],
                 ),
                 self.decision(
                     "openai",
@@ -309,6 +310,7 @@ class CatalogAuthorityTests(unittest.TestCase):
                     endpoints=["chat_completions"],
                     capabilities=["chat_completion"],
                     supported_parameters=["messages"],
+                    aliases=[],
                 ),
                 self.decision(
                     "openai",
@@ -321,6 +323,21 @@ class CatalogAuthorityTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(SystemExit, "pricing_only.*capabilities"):
             sync.build_catalog_authority(prices, malformed_pricing)
+
+    def test_callable_aliases_are_required_by_the_strict_schema(self) -> None:
+        prices = {"gpt-test": {"litellm_provider": "openai"}}
+        missing_aliases = self.document(
+            [
+                self.decision(
+                    "openai",
+                    "gpt-test",
+                    "callable",
+                    catalog_model_id="gpt-test",
+                )
+            ]
+        )
+        with self.assertRaisesRegex(SystemExit, "aliases.*string list"):
+            sync.build_catalog_authority(prices, missing_aliases)
 
     def test_exact_case_and_native_slash_keys_are_preserved_deterministically(self) -> None:
         prices = {
@@ -340,6 +357,7 @@ class CatalogAuthorityTests(unittest.TestCase):
                 endpoints=["embeddings"],
                 capabilities=["embeddings"],
                 supported_parameters=["input"],
+                aliases=[],
             )
             for key in reversed(list(prices))
         ]
@@ -379,6 +397,7 @@ class CatalogAuthorityTests(unittest.TestCase):
                 "second",
                 "callable",
                 catalog_model_id="second",
+                aliases=[],
             ),
         ]
         for ordered in (entries, list(reversed(entries))):
@@ -402,6 +421,7 @@ class CatalogAuthorityTests(unittest.TestCase):
                         }
                         callable_fields: dict[str, object] = {
                             "catalog_model_id": "callable-model",
+                            "aliases": [],
                         }
                         callable_fields[field] = (
                             [target_key] if field == "aliases" else target_key
@@ -455,6 +475,7 @@ class CatalogAuthorityTests(unittest.TestCase):
                     "callable-target",
                     "callable",
                     catalog_model_id="target-model",
+                    aliases=[],
                 ),
             ]
         )

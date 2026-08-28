@@ -281,6 +281,14 @@ fn strict_schema_and_exact_collisions_fail_closed() {
             .to_string()
             .contains("duplicate pricing classification")
     );
+
+    let mut missing_aliases: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("test fixture must parse");
+    missing_aliases["entries"][0]
+        .as_object_mut()
+        .expect("callable entry must be an object")
+        .remove("aliases");
+    assert!(CatalogAuthority::from_json(&missing_aliases.to_string()).is_err());
 }
 
 #[test]

@@ -227,7 +227,7 @@ def _validate_entry(
     if supported_parameters:
         result["supported_parameters"] = sorted(supported_parameters)
     result["aliases"] = sorted(
-        _string_list(value.get("aliases", []), f"callable {provider}/{pricing_key}.aliases")
+        _string_list(value.get("aliases"), f"callable {provider}/{pricing_key}.aliases")
     )
     return result
 
