@@ -248,24 +248,65 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
     }
 
     fn finish_stream(&mut self) -> Result<Vec<ChatChunk>, ProviderError> {
-        let mut chunks = Vec::new();
-        let pending = std::mem::take(&mut self.pending_utf8);
-        self.buffer.push_str(&String::from_utf8_lossy(&pending));
-        if !self.buffer.is_empty() {
-            let line = std::mem::take(&mut self.buffer);
-            chunks.extend(self.process_line(&line, true)?);
+        let parsed = (|| {
+            let mut chunks = Vec::new();
+            let pending = std::mem::take(&mut self.pending_utf8);
+            self.buffer.push_str(&String::from_utf8_lossy(&pending));
+            if !self.buffer.is_empty() {
+                let line = std::mem::take(&mut self.buffer);
+                chunks.extend(self.process_line(&line, true)?);
+            }
+            if let Some(event) = self.current_event.take() {
+                chunks.extend(self.process_event(event, true)?);
+            }
+            Ok::<_, ProviderError>(chunks)
+        })();
+        match (parsed, self.transformer.finish_stream()) {
+            (Ok(mut chunks), Ok(chunk)) => {
+                chunks.extend(chunk);
+                Ok(chunks)
+            }
+            (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
+            (Err(parse), Err(lifecycle)) => Err(combine_stream_errors(
+                self.transformer.provider_name(),
+                parse,
+                lifecycle,
+            )),
         }
-        if let Some(event) = self.current_event.take() {
-            chunks.extend(self.process_event(event, true)?);
-        }
-        if let Some(chunk) = self.transformer.finish_stream()? {
-            chunks.push(chunk);
-        }
-        Ok(chunks)
     }
 }
 
 const MAX_CHUNK_BUFFER_SIZE: usize = 10_000;
+
+fn combine_stream_errors(
+    provider: &'static str,
+    first: ProviderError,
+    finalization: ProviderError,
+) -> ProviderError {
+    let first = format!("{:?}", first.redacted());
+    match finalization.redacted() {
+        ProviderError::Streaming {
+            provider,
+            stream_type,
+            position,
+            message,
+            ..
+        } => ProviderError::Streaming {
+            provider,
+            stream_type,
+            position,
+            last_chunk: None,
+            message: format!("{message}; preceding stream error: {first}"),
+        },
+        finalization => ProviderError::streaming_error(
+            provider,
+            "sse.termination",
+            None,
+            None,
+            format!("multiple stream errors: {first}; finalization: {finalization:?}"),
+        ),
+    }
+}
 
 pub struct UnifiedSSEStream<S, T>
 where
@@ -323,6 +364,7 @@ where
                         Poll::Pending
                     } else {
                         if this.chunk_buffer.len() + chunks.len() > MAX_CHUNK_BUFFER_SIZE {
+                            this.finished = true;
                             return Poll::Ready(Some(Err(ProviderError::network(
                                 this.parser.transformer.provider_name(),
                                 format!(
@@ -340,7 +382,10 @@ where
                         }
                     }
                 }
-                Err(e) => Poll::Ready(Some(Err(e))),
+                Err(error) => {
+                    this.finished = true;
+                    Poll::Ready(Some(Err(error)))
+                }
             },
             Poll::Ready(Some(Err(error))) => {
                 let error = ProviderError::network(
@@ -355,7 +400,11 @@ where
                         Poll::Ready(this.chunk_buffer.pop_front().map(Ok))
                     }
                     Ok(_) => Poll::Ready(Some(Err(error))),
-                    Err(error) => Poll::Ready(Some(Err(error))),
+                    Err(finalization) => Poll::Ready(Some(Err(combine_stream_errors(
+                        this.parser.transformer.provider_name(),
+                        error,
+                        finalization,
+                    )))),
                 }
             }
             Poll::Ready(None) => {
@@ -413,17 +462,7 @@ mod tests {
         assert!(!transformer.is_end_marker("data: {\"test\": 1}"));
 
         // Test JSON transformation
-        let json_data = r#"{
-            "id": "test-id",
-            "object": "chat.completion.chunk",
-            "created": 1234567890,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "delta": {"content": "Hello"},
-                "finish_reason": null
-            }]
-        }"#;
+        let json_data = r#"{"id":"test-id","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}"#;
 
         let result = transformer.transform_chunk(json_data).unwrap().unwrap();
         assert_eq!(result.id, "test-id");
@@ -435,20 +474,7 @@ mod tests {
     fn test_openai_transformer_reasoning_content_to_thinking() {
         let transformer = OpenAICompatibleTransformer::new("test");
 
-        let json_data = r#"{
-            "id": "test-id-reasoning",
-            "object": "chat.completion.chunk",
-            "created": 1234567890,
-            "model": "deepseek-r1",
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "content": "Answer",
-                    "reasoning_content": "chain-of-thought"
-                },
-                "finish_reason": null
-            }]
-        }"#;
+        let json_data = r#"{"id":"test-id-reasoning","object":"chat.completion.chunk","created":1234567890,"model":"deepseek-r1","choices":[{"index":0,"delta":{"content":"Answer","reasoning_content":"chain-of-thought"},"finish_reason":null}]}"#;
 
         let result = transformer.transform_chunk(json_data).unwrap().unwrap();
         assert_eq!(
@@ -466,20 +492,7 @@ mod tests {
     fn test_openai_transformer_reasoning_to_thinking() {
         let transformer = OpenAICompatibleTransformer::new("test");
 
-        let json_data = r#"{
-            "id": "test-id-reasoning",
-            "object": "chat.completion.chunk",
-            "created": 1234567890,
-            "model": "openai-reasoning",
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "content": "Answer",
-                    "reasoning": "openai chain-of-thought"
-                },
-                "finish_reason": null
-            }]
-        }"#;
+        let json_data = r#"{"id":"test-id-reasoning","object":"chat.completion.chunk","created":1234567890,"model":"openai-reasoning","choices":[{"index":0,"delta":{"content":"Answer","reasoning":"openai chain-of-thought"},"finish_reason":null}]}"#;
 
         let result = match transformer.transform_chunk(json_data) {
             Ok(Some(result)) => result,
@@ -501,21 +514,7 @@ mod tests {
     fn test_openai_transformer_empty_reasoning_content_falls_back_to_reasoning() {
         let transformer = OpenAICompatibleTransformer::new("test");
 
-        let json_data = r#"{
-            "id": "test-id-reasoning",
-            "object": "chat.completion.chunk",
-            "created": 1234567890,
-            "model": "openai-reasoning",
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "content": "Answer",
-                    "reasoning_content": "",
-                    "reasoning": "fallback chain-of-thought"
-                },
-                "finish_reason": null
-            }]
-        }"#;
+        let json_data = r#"{"id":"test-id-reasoning","object":"chat.completion.chunk","created":1234567890,"model":"openai-reasoning","choices":[{"index":0,"delta":{"content":"Answer","reasoning_content":"","reasoning":"fallback chain-of-thought"},"finish_reason":null}]}"#;
 
         let result = match transformer.transform_chunk(json_data) {
             Ok(Some(result)) => result,

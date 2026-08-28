@@ -23,6 +23,10 @@ fn transform(
 }
 
 fn assert_lifecycle_error(error: ProviderError, index: u64, detail: &str) {
+    assert_lifecycle_error_contexts(error, index, &[detail]);
+}
+
+fn assert_lifecycle_error_contexts(error: ProviderError, index: u64, details: &[&str]) {
     match error {
         ProviderError::Streaming {
             provider,
@@ -35,10 +39,87 @@ fn assert_lifecycle_error(error: ProviderError, index: u64, detail: &str) {
             assert_eq!(stream_type, "chat.thinking");
             assert_eq!(position, Some(index));
             assert!(last_chunk.is_none());
-            assert!(message.contains(detail), "unexpected error: {message}");
+            for detail in details {
+                assert!(message.contains(detail), "unexpected error: {message}");
+            }
         }
         error => panic!("unexpected error variant: {error}"),
     }
+}
+
+#[tokio::test]
+async fn transform_error_is_terminal_and_later_events_cannot_repair_stream() {
+    let events = [
+        serde_json::json!({"type":"content_block_start","index":3,"content_block":{"type":"thinking","thinking":""}}),
+        serde_json::json!({"type":"content_block_delta","index":3,"delta":{"type":"signature_delta","signature":""}}),
+        serde_json::json!({"type":"content_block_delta","index":3,"delta":{"type":"signature_delta","signature":"valid"}}),
+        serde_json::json!({"type":"content_block_stop","index":3}),
+    ]
+    .map(|event| Ok::<Bytes, reqwest::Error>(Bytes::from(sse_event(event))));
+    let mut output = UnifiedSSEStream::new(stream::iter(events), AnthropicTransformer::new("test"));
+
+    assert!(output.next().await.unwrap().is_ok());
+    assert_lifecycle_error(
+        output.next().await.unwrap().unwrap_err(),
+        3,
+        "empty signature",
+    );
+    assert!(
+        output.next().await.is_none(),
+        "failed stream must stay terminal"
+    );
+}
+
+#[tokio::test]
+async fn pending_invalid_event_at_eof_preserves_parse_and_lifecycle_errors() {
+    let body = format!(
+        "{}data: {{",
+        sse_event(
+            serde_json::json!({"type":"content_block_start","index":4,"content_block":{"type":"thinking","thinking":""}})
+        )
+    );
+    let source = stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(body))]);
+    let mut output = UnifiedSSEStream::new(source, AnthropicTransformer::new("test"));
+
+    assert!(output.next().await.unwrap().is_ok());
+    assert_lifecycle_error_contexts(
+        output.next().await.unwrap().unwrap_err(),
+        4,
+        &[
+            "ResponseParsing",
+            "Failed to parse Anthropic SSE",
+            "missing its signature",
+        ],
+    );
+    assert!(output.next().await.is_none());
+}
+
+#[tokio::test]
+async fn pending_invalid_event_at_transport_error_preserves_all_contexts() {
+    let prefix = format!(
+        "{}data: {{",
+        sse_event(
+            serde_json::json!({"type":"content_block_start","index":5,"content_block":{"type":"thinking","thinking":""}})
+        )
+    );
+    let response = broken_chunked_response(prefix).await;
+    let mut output = UnifiedSSEStream::new(
+        Box::pin(response.bytes_stream()),
+        AnthropicTransformer::new("test"),
+    );
+
+    assert!(output.next().await.unwrap().is_ok());
+    assert_lifecycle_error_contexts(
+        output.next().await.unwrap().unwrap_err(),
+        5,
+        &[
+            "Stream error",
+            "ResponseParsing",
+            "Failed to parse Anthropic SSE",
+            "missing its signature",
+        ],
+    );
+    assert!(output.next().await.is_none());
 }
 
 fn completed_blocks(transformer: &AnthropicTransformer) -> Vec<(u32, AnthropicThinkingBlock)> {
@@ -232,6 +313,21 @@ async fn non_anthropic_default_finalizer_behavior_is_unchanged() {
             .as_deref(),
         Some("ok")
     );
+    assert!(output.next().await.is_none());
+}
+
+#[tokio::test]
+async fn non_anthropic_pending_parse_error_remains_the_original_error() {
+    let source = stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from("data: {"))]);
+    let mut output = UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("openai"));
+
+    assert!(matches!(
+        output.next().await.unwrap(),
+        Err(ProviderError::ResponseParsing {
+            provider: "openai",
+            ..
+        })
+    ));
     assert!(output.next().await.is_none());
 }
 
