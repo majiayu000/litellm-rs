@@ -16,6 +16,8 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "sync_litellm_pricing.py"
 CATALOG_PATH = REPO_ROOT / "config" / "model_prices_extended.json"
 CATALOG_DECISIONS_PATH = REPO_ROOT / "config" / "model_catalog_decisions.json"
+CATALOG_AUTHORITY_PATH = REPO_ROOT / "config" / "model_catalog_authority.json"
+CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 spec = importlib.util.spec_from_file_location("sync_litellm_pricing", SCRIPT_PATH)
@@ -385,6 +387,81 @@ class CatalogAuthorityTests(unittest.TestCase):
             ):
                 sync.build_catalog_authority(prices, self.document(ordered))
 
+    def test_callable_identities_cannot_upgrade_non_callable_exact_ledger_keys(self) -> None:
+        for field in ("catalog_model_id", "aliases"):
+            for target_decision in ("pricing_only", "unreviewed"):
+                for target_key in ("restricted", "BAAI/restricted-model"):
+                    with self.subTest(
+                        field=field,
+                        target_decision=target_decision,
+                        target_key=target_key,
+                    ):
+                        prices = {
+                            "callable-price": {"litellm_provider": "openai"},
+                            target_key: {"litellm_provider": "openai"},
+                        }
+                        callable_fields: dict[str, object] = {
+                            "catalog_model_id": "callable-model",
+                        }
+                        callable_fields[field] = (
+                            [target_key] if field == "aliases" else target_key
+                        )
+                        target_fields = (
+                            {"reason": "non_callable_charge"}
+                            if target_decision == "pricing_only"
+                            else {}
+                        )
+                        document = self.document(
+                            [
+                                self.decision(
+                                    "openai",
+                                    "callable-price",
+                                    "callable",
+                                    **callable_fields,
+                                ),
+                                self.decision(
+                                    "openai",
+                                    target_key,
+                                    target_decision,
+                                    **target_fields,
+                                ),
+                            ]
+                        )
+                        with self.assertRaisesRegex(
+                            SystemExit, "callable identity.*non-callable"
+                        ):
+                            sync.build_catalog_authority(prices, document)
+
+    def test_callable_identity_ledger_checks_are_provider_and_case_sensitive(self) -> None:
+        prices = {
+            "source-price": {"litellm_provider": "openai"},
+            "restricted": {"litellm_provider": "other"},
+            "Restricted": {"litellm_provider": "openai"},
+            "callable-target": {"litellm_provider": "openai"},
+        }
+        document = self.document(
+            [
+                self.decision(
+                    "openai",
+                    "source-price",
+                    "callable",
+                    catalog_model_id="restricted",
+                    aliases=["callable-target"],
+                ),
+                self.decision("other", "restricted", "unreviewed"),
+                self.decision("openai", "Restricted", "unreviewed"),
+                self.decision(
+                    "openai",
+                    "callable-target",
+                    "callable",
+                    catalog_model_id="target-model",
+                ),
+            ]
+        )
+
+        authority = sync.build_catalog_authority(prices, document)
+        self.assertEqual(len(authority["entries"]), 4)
+
     def test_repository_ledger_has_reviewed_target_counts_without_inferred_capabilities(self) -> None:
         prices = sync.model_entries(sync.load_json(CATALOG_PATH))
         decisions = sync.load_json(CATALOG_DECISIONS_PATH)
@@ -420,6 +497,45 @@ class CatalogAuthorityTests(unittest.TestCase):
         self.assertEqual(
             decisions["sources"][source_id]["location"],
             "https://developers.openai.com/api/docs/models/chatgpt-4o-latest",
+        )
+
+    def test_repository_authority_matches_pricing_set_and_embedded_digests(self) -> None:
+        catalog = sync.load_json(CATALOG_PATH)
+        prices = sync.model_entries(catalog)
+        decisions = sync.load_json(CATALOG_DECISIONS_PATH)
+        generated = sync.build_catalog_authority(prices, decisions)
+        embedded = sync.load_json(CATALOG_AUTHORITY_PATH)
+
+        self.assertEqual(generated, embedded)
+        self.assertEqual(
+            {(entry["provider"], entry["pricing_key"]) for entry in embedded["entries"]},
+            {(row["litellm_provider"], key) for key, row in prices.items()},
+        )
+        metadata = catalog["_metadata"]
+        authority_metadata = embedded["_metadata"]
+        self.assertEqual(
+            metadata["catalog_authority_sha256"],
+            authority_metadata["classification_sha256"],
+        )
+        self.assertEqual(
+            metadata["catalog_decision_source_sha256"],
+            authority_metadata["decision_source_sha256"],
+        )
+        self.assertEqual(
+            metadata["catalog_authority_entry_count"],
+            authority_metadata["total_entry_count"],
+        )
+
+    def test_pull_request_ci_runs_catalog_authority_gates(self) -> None:
+        workflow = CI_WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "python3 -m unittest discover -s scripts/test -p 'test_sync_litellm_pricing.py'",
+            workflow,
+        )
+        self.assertIn("python3 scripts/sync_litellm_pricing.py --check", workflow)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
+        self.assertIn(
+            'test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD}"', workflow
         )
 
 

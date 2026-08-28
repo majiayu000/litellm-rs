@@ -158,6 +158,7 @@ impl CatalogAuthority {
                 "metadata enforced_providers does not match the phase-1 provider set",
             ));
         }
+        validate_callable_ledger_collisions(&document.entries)?;
 
         let mut canonical_providers: HashSet<String> =
             document.provider_aliases.keys().cloned().collect();
@@ -411,6 +412,43 @@ fn build_provider_aliases(
         }
     }
     Ok(aliases)
+}
+
+fn validate_callable_ledger_collisions(
+    entries: &[AuthorityEntry],
+) -> Result<(), CatalogAuthorityError> {
+    let mut ledger = HashMap::new();
+    for entry in entries {
+        let identity = (entry.provider(), entry.pricing_key());
+        if ledger.insert(identity, entry.decision()).is_some() {
+            return Err(invalid(format!(
+                "duplicate pricing classification for {:?}/{:?}",
+                identity.0, identity.1
+            )));
+        }
+    }
+    for entry in entries {
+        let AuthorityEntry::Callable {
+            provider,
+            catalog_model_id,
+            aliases,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        for candidate in std::iter::once(catalog_model_id).chain(aliases) {
+            if ledger
+                .get(&(provider.as_str(), candidate.as_str()))
+                .is_some_and(|decision| *decision != CatalogDecision::Callable)
+            {
+                return Err(invalid(format!(
+                    "callable identity {provider:?}/{candidate:?} collides with a non-callable pricing key"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_digest(field: &str, digest: &str) -> Result<(), CatalogAuthorityError> {

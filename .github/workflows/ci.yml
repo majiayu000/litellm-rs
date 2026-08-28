@@ -17,6 +17,25 @@ env:
   FEATURES: "postgres sqlite redis s3 metrics tracing websockets analytics"
 
 jobs:
+  catalog-authority:
+    name: Model Catalog Authority
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify current PR head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD}"
+
+      - name: Audit pricing and catalog authority
+        run: |
+          python3 -m unittest discover -s scripts/test -p 'test_sync_litellm_pricing.py'
+          python3 scripts/sync_litellm_pricing.py --check
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

@@ -73,6 +73,89 @@ fn authority_json() -> String {
     .to_string()
 }
 
+fn cross_class_authority_json(
+    target_provider: &str,
+    target_key: &str,
+    target_decision: &str,
+    catalog_model_id: &str,
+    aliases: &[&str],
+) -> String {
+    let target_entry = match target_decision {
+        "callable" => serde_json::json!({
+            "provider": target_provider,
+            "pricing_key": target_key,
+            "decision": "callable",
+            "evidence_sources": ["review"],
+            "catalog_model_id": "target-model",
+            "aliases": []
+        }),
+        "pricing_only" => serde_json::json!({
+            "provider": target_provider,
+            "pricing_key": target_key,
+            "decision": "pricing_only",
+            "evidence_sources": ["review"],
+            "reason": "non_callable_charge"
+        }),
+        "unreviewed" => serde_json::json!({
+            "provider": target_provider,
+            "pricing_key": target_key,
+            "decision": "unreviewed",
+            "evidence_sources": ["review"]
+        }),
+        other => panic!("unsupported test decision {other}"),
+    };
+    let target_counts = match target_decision {
+        "callable" => serde_json::json!({"callable": 1, "pricing_only": 0, "unreviewed": 0}),
+        "pricing_only" => {
+            serde_json::json!({"callable": 0, "pricing_only": 1, "unreviewed": 0})
+        }
+        "unreviewed" => {
+            serde_json::json!({"callable": 0, "pricing_only": 0, "unreviewed": 1})
+        }
+        _ => unreachable!(),
+    };
+    let provider_coverage = if target_provider == "openai" {
+        let callable = 1 + usize::from(target_decision == "callable");
+        serde_json::json!({
+            "openai": {
+                "callable": callable,
+                "pricing_only": usize::from(target_decision == "pricing_only"),
+                "unreviewed": usize::from(target_decision == "unreviewed")
+            }
+        })
+    } else {
+        serde_json::json!({
+            "openai": {"callable": 1, "pricing_only": 0, "unreviewed": 0},
+            target_provider: target_counts
+        })
+    };
+    serde_json::json!({
+        "_metadata": {
+            "schema_version": 1,
+            "revision": "test-ledger-1",
+            "decision_source_sha256": "a".repeat(64),
+            "pricing_universe_sha256": "b".repeat(64),
+            "classification_sha256": "c".repeat(64),
+            "total_entry_count": 2,
+            "enforced_providers": ["azure", "azure_ai", "openai"],
+            "provider_coverage": provider_coverage
+        },
+        "provider_aliases": {"openai": [], "other": []},
+        "entries": [
+            {
+                "provider": "openai",
+                "pricing_key": "source-price",
+                "decision": "callable",
+                "evidence_sources": ["review"],
+                "catalog_model_id": catalog_model_id,
+                "aliases": aliases
+            },
+            target_entry
+        ]
+    })
+    .to_string()
+}
+
 #[test]
 fn exact_provider_scoped_resolution_distinguishes_all_three_decisions() {
     let authority = CatalogAuthority::from_json(&authority_json()).expect("valid authority");
@@ -198,6 +281,56 @@ fn strict_schema_and_exact_collisions_fail_closed() {
             .to_string()
             .contains("duplicate pricing classification")
     );
+}
+
+#[test]
+fn callable_identities_cannot_upgrade_non_callable_exact_ledger_keys() {
+    for target_decision in ["pricing_only", "unreviewed"] {
+        for target_key in ["restricted", "BAAI/restricted-model"] {
+            for alias_collision in [false, true] {
+                let catalog_model_id = if alias_collision {
+                    "source-model"
+                } else {
+                    target_key
+                };
+                let aliases = if alias_collision {
+                    vec![target_key]
+                } else {
+                    Vec::new()
+                };
+                let content = cross_class_authority_json(
+                    "openai",
+                    target_key,
+                    target_decision,
+                    catalog_model_id,
+                    &aliases,
+                );
+                let error = CatalogAuthority::from_json(&content)
+                    .expect_err("non-callable exact key must not be upgraded");
+                assert!(
+                    error.to_string().contains("non-callable"),
+                    "{target_decision}/{target_key}/{alias_collision}: {error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn callable_identity_ledger_checks_are_provider_and_case_sensitive() {
+    for content in [
+        cross_class_authority_json("other", "restricted", "unreviewed", "restricted", &[]),
+        cross_class_authority_json("openai", "Restricted", "unreviewed", "restricted", &[]),
+        cross_class_authority_json(
+            "openai",
+            "callable-target",
+            "callable",
+            "source-model",
+            &["callable-target"],
+        ),
+    ] {
+        CatalogAuthority::from_json(&content).expect("exact non-conflicting identity must load");
+    }
 }
 
 #[test]

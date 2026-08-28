@@ -308,6 +308,13 @@ def build_catalog_authority(
             continue
         provider = entry["provider"]
         catalog_id = entry["catalog_model_id"]
+        for candidate in (catalog_id, *entry["aliases"]):
+            ledger_entry = by_tuple.get((provider, candidate))
+            if ledger_entry is not None and ledger_entry["decision"] != "callable":
+                raise SystemExit(
+                    f"callable identity {provider!r}/{candidate!r} collides with "
+                    f"non-callable {ledger_entry['decision']!r} pricing key"
+                )
         identity = (provider, catalog_id)
         if identity in alias_owners:
             raise SystemExit(
