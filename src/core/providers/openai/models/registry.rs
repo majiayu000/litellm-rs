@@ -8,7 +8,11 @@ use std::sync::OnceLock;
 
 use crate::core::pricing::get_pricing_db;
 use crate::core::types::model::ModelInfo;
+use crate::core::types::model_id::ModelIdRef;
 
+use super::model_id::{
+    OpenAICatalogResolveError, ResolvedOpenAICatalogEntry, explicit_identity_for,
+};
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
 };
@@ -438,6 +442,78 @@ impl OpenAIModelRegistry {
     /// Get specific model specification
     pub fn get_model_spec(&self, model_id: &str) -> Option<&OpenAIModelSpec> {
         self.models.get(model_id)
+    }
+
+    /// Resolve a wire model ID to exact OpenAI catalog and capability identities.
+    ///
+    /// Raw exact catalog keys take precedence so slash-bearing pricing keys stay
+    /// reachable. Otherwise, exactly one case-insensitive `openai` provider
+    /// segment may be removed; the remaining model key is always case-sensitive.
+    pub fn resolve_catalog_identity<'registry, 'input>(
+        &'registry self,
+        raw_id: &'input str,
+    ) -> Result<ResolvedOpenAICatalogEntry<'registry, 'input>, OpenAICatalogResolveError<'input>>
+    {
+        if let Some((catalog_key, spec)) = self.models.get_key_value(raw_id) {
+            return Ok(self.resolved_entry(raw_id, catalog_key, spec));
+        }
+
+        let parsed = ModelIdRef::parse(raw_id);
+        let Some(provider) = parsed.provider() else {
+            return Err(OpenAICatalogResolveError::UnknownModel { model_id: raw_id });
+        };
+
+        if !provider.eq_ignore_ascii_case("openai") {
+            return Err(OpenAICatalogResolveError::WrongProvider {
+                model_id: raw_id,
+                provider,
+            });
+        }
+
+        let model_id = parsed.model();
+        if ModelIdRef::parse(model_id)
+            .provider()
+            .is_some_and(|nested| nested.eq_ignore_ascii_case("openai"))
+        {
+            return Err(OpenAICatalogResolveError::DoubleQualification { model_id: raw_id });
+        }
+
+        // A stored `openai/...` key remains distinct from an unqualified key.
+        // Search by exact segments to normalize only provider casing without
+        // allocating or changing model casing.
+        if let Some((catalog_key, spec)) = self.models.iter().find(|(catalog_key, _)| {
+            catalog_key
+                .split_once('/')
+                .is_some_and(|(stored_provider, stored_model)| {
+                    stored_provider == "openai" && stored_model == model_id
+                })
+        }) {
+            return Ok(self.resolved_entry(raw_id, catalog_key, spec));
+        }
+
+        self.models
+            .get_key_value(model_id)
+            .map(|(catalog_key, spec)| self.resolved_entry(raw_id, catalog_key, spec))
+            .ok_or(OpenAICatalogResolveError::UnknownModel { model_id: raw_id })
+    }
+
+    fn resolved_entry<'registry, 'input>(
+        &'registry self,
+        raw_id: &'input str,
+        catalog_key: &'registry str,
+        spec: &'registry OpenAIModelSpec,
+    ) -> ResolvedOpenAICatalogEntry<'registry, 'input> {
+        let capability_identity = (!catalog_key.contains('/')).then_some((catalog_key, spec));
+        let explicit_identity = explicit_identity_for(catalog_key)
+            .filter(|identity| self.models.contains_key(identity.canonical_base_model_id));
+        ResolvedOpenAICatalogEntry::new(
+            raw_id,
+            catalog_key,
+            spec,
+            capability_identity,
+            explicit_identity.map(|identity| identity.canonical_base_model_id),
+            explicit_identity.map(|identity| identity.source),
+        )
     }
 
     /// Check if model supports a feature

@@ -330,17 +330,19 @@ impl OpenAIProvider {
         model_id: &str,
         capability: &ProviderCapability,
     ) -> bool {
-        if let Some(model_spec) = self.model_registry.get_model_spec(model_id) {
-            model_spec.model_info.capabilities.contains(capability)
-        } else {
-            false
-        }
+        self.model_registry
+            .resolve_catalog_identity(model_id)
+            .ok()
+            .and_then(|identity| identity.capability_spec())
+            .is_some_and(|model_spec| model_spec.model_info.capabilities.contains(capability))
     }
 
     /// Get model configuration
     pub fn get_model_config(&self, model_id: &str) -> Option<&super::models::OpenAIModelConfig> {
         self.model_registry
-            .get_model_spec(model_id)
+            .resolve_catalog_identity(model_id)
+            .ok()
+            .and_then(|identity| identity.capability_spec())
             .map(|spec| &spec.config)
     }
 }
@@ -504,10 +506,13 @@ impl LLMProvider for OpenAIProvider {
     // ==================== Python LiteLLM Compatible Interface ====================
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        let model = model.strip_prefix("openai/").unwrap_or(model);
-
         // Return parameters based on model capabilities
-        if let Some(model_spec) = self.model_registry.get_model_spec(model) {
+        if let Some(model_spec) = self
+            .model_registry
+            .resolve_catalog_identity(model)
+            .ok()
+            .and_then(|identity| identity.capability_spec())
+        {
             match model_spec.family {
                 super::models::OpenAIModelFamily::GPT5
                 | super::models::OpenAIModelFamily::GPT5Mini

@@ -105,6 +105,47 @@ fn test_model_supports_capability_unknown_model() {
 }
 
 #[test]
+fn test_model_capability_lookup_uses_exact_catalog_identity() {
+    let provider = create_test_provider();
+
+    assert!(
+        provider.model_supports_capability("openai/gpt-4", &ProviderCapability::ChatCompletion)
+    );
+    assert!(
+        provider.model_supports_capability("OPENAI/gpt-4", &ProviderCapability::ChatCompletion)
+    );
+    assert!(
+        !provider.model_supports_capability("openai/GPT-4", &ProviderCapability::ChatCompletion)
+    );
+    assert!(
+        !provider
+            .model_supports_capability("openai/gpt-4-fake", &ProviderCapability::ChatCompletion)
+    );
+    assert!(!provider.model_supports_capability(
+        "1024-x-1024/dall-e-2",
+        &ProviderCapability::ChatCompletionStream
+    ));
+}
+
+#[test]
+fn test_qualified_model_config_and_params_match_exact_model() {
+    let provider = create_test_provider();
+
+    assert_eq!(
+        provider
+            .get_model_config("OPENAI/gpt-4")
+            .map(|config| (config.max_rpm, config.max_tpm)),
+        provider
+            .get_model_config("gpt-4")
+            .map(|config| (config.max_rpm, config.max_tpm))
+    );
+    assert_eq!(
+        provider.get_supported_openai_params("OPENAI/gpt-4"),
+        provider.get_supported_openai_params("gpt-4")
+    );
+}
+
+#[test]
 fn test_get_model_info() {
     let provider = create_test_provider();
 
