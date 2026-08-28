@@ -300,6 +300,7 @@ pub fn get_anthropic_registry() -> &'static AnthropicModelRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::model::ProviderCapability;
 
     #[test]
     fn test_current_claude_5_catalog() {
@@ -343,6 +344,17 @@ mod tests {
             assert!(spec.model_info.supports_streaming);
             assert!(spec.model_info.supports_tools);
             assert!(spec.model_info.supports_multimodal);
+            assert!(
+                !spec
+                    .model_info
+                    .capabilities
+                    .contains(&ProviderCapability::FunctionCalling),
+                "legacy OpenAI functions are not an Anthropic wire capability"
+            );
+            assert!(
+                !spec.features.contains(&ModelFeature::FunctionCalling),
+                "legacy OpenAI functions must fail closed for Claude 5"
+            );
             assert!(
                 !spec.features.contains(&ModelFeature::ThinkingMode),
                 "Claude 5 does not support manual budget-token thinking"

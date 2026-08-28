@@ -6,6 +6,7 @@ use crate::core::providers::anthropic::error::anthropic_api_error;
 use crate::core::providers::anthropic::models::{ModelFeature, get_anthropic_registry};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::chat::ChatRequest;
+use crate::core::types::message::MessageRole;
 
 use super::AnthropicClient;
 
@@ -35,6 +36,9 @@ impl AnthropicClient {
                 400,
                 format!("Unsupported model: {}", request.model),
             ));
+        }
+        if let Some(model_spec) = model_spec {
+            Self::validate_current_claude_5_request(request, model_spec)?;
         }
         if model_spec.is_none()
             && (request
@@ -189,23 +193,37 @@ impl AnthropicClient {
                     ),
                 ));
             };
-            if !model_spec.features.contains(&ModelFeature::ThinkingMode) {
+            let supports_adaptive_thinking =
+                Self::model_metadata_flag(model_spec, "supports_adaptive_thinking");
+            if supports_adaptive_thinking {
+                let mut adaptive = json!({ "type": "adaptive" });
+                if thinking.include_thinking {
+                    adaptive["display"] = json!("summarized");
+                }
+                anthropic_request["thinking"] = adaptive;
+                if let Some(effort) = thinking.effort {
+                    anthropic_request["output_config"] = json!({
+                        "effort": effort.as_str()
+                    });
+                }
+            } else if !model_spec.features.contains(&ModelFeature::ThinkingMode) {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!("Model {} does not support thinking", request.model),
                 ));
+            } else {
+                let budget = thinking.budget_tokens.unwrap_or(10_000);
+                // Anthropic requires max_tokens > budget_tokens. If the default (4096)
+                // is not greater than budget_tokens, raise max_tokens to budget + 1.
+                let current_max = request.max_tokens.unwrap_or(4096);
+                if current_max <= budget {
+                    anthropic_request["max_tokens"] = json!(budget + 1);
+                }
+                anthropic_request["thinking"] = json!({
+                    "type": "enabled",
+                    "budget_tokens": budget
+                });
             }
-            let budget = thinking.budget_tokens.unwrap_or(10_000);
-            // Anthropic requires max_tokens > budget_tokens. If the default (4096)
-            // is not greater than budget_tokens, raise max_tokens to budget + 1.
-            let current_max = request.max_tokens.unwrap_or(4096);
-            if current_max <= budget {
-                anthropic_request["max_tokens"] = json!(budget + 1);
-            }
-            anthropic_request["thinking"] = json!({
-                "type": "enabled",
-                "budget_tokens": budget
-            });
         }
 
         // Structured outputs: pass json_schema response_format to Anthropic.
@@ -237,5 +255,81 @@ impl AnthropicClient {
         }
 
         Ok(anthropic_request)
+    }
+
+    fn validate_current_claude_5_request(
+        request: &ChatRequest,
+        model_spec: &crate::core::providers::anthropic::models::ModelSpec,
+    ) -> Result<(), ProviderError> {
+        if !Self::model_metadata_flag(model_spec, "supports_adaptive_thinking") {
+            return Ok(());
+        }
+
+        if request
+            .temperature
+            .is_some_and(|temperature| temperature != 1.0)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Model {} does not support non-default temperature",
+                    request.model
+                ),
+            ));
+        }
+        if request.top_p.is_some_and(|top_p| top_p < 0.99) {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support non-default top_p", request.model),
+            ));
+        }
+        if request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| !matches!(message.role, MessageRole::System | MessageRole::Developer))
+            .is_some_and(|message| message.role == MessageRole::Assistant)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support assistant prefill", request.model),
+            ));
+        }
+        if request
+            .functions
+            .as_ref()
+            .is_some_and(|functions| !functions.is_empty())
+            || request.function_call.is_some()
+        {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} does not support legacy functions/function_call; use tools/tool_choice",
+                    request.model
+                ),
+            ));
+        }
+        if request
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| thinking.enabled && thinking.budget_tokens.is_some())
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Model {} uses adaptive thinking and does not support budget_tokens",
+                    request.model
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn model_metadata_flag(
+        model_spec: &crate::core::providers::anthropic::models::ModelSpec,
+        key: &str,
+    ) -> bool {
+        model_spec.model_info.metadata.get(key) == Some(&Value::Bool(true))
     }
 }

@@ -71,7 +71,6 @@ fn claude_5_spec(
                 ProviderCapability::ChatCompletion,
                 ProviderCapability::ChatCompletionStream,
                 ProviderCapability::ToolCalling,
-                ProviderCapability::FunctionCalling,
                 ProviderCapability::BatchProcessing,
             ],
             created_at: None,
@@ -103,7 +102,6 @@ fn claude_5_spec(
         features: vec![
             ModelFeature::MultimodalSupport,
             ModelFeature::ToolCalling,
-            ModelFeature::FunctionCalling,
             ModelFeature::StreamingSupport,
             ModelFeature::CacheControl,
             ModelFeature::SystemMessages,

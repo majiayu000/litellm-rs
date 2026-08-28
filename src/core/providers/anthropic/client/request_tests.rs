@@ -7,6 +7,7 @@ use crate::core::types::content::{
     AudioData, CacheControl, ContentPart, DocumentSource, ImageSource,
 };
 use crate::core::types::message::{MessageContent, MessageRole};
+use crate::core::types::thinking::ThinkingConfig;
 use crate::core::types::tools::{
     FunctionCall, FunctionChoice, FunctionDefinition, Tool, ToolCall, ToolChoice, ToolType,
 };
@@ -24,6 +25,107 @@ fn tool(name: &str) -> Tool {
             parameters: Some(json!({"type": "object"})),
         },
     }
+}
+
+#[test]
+fn current_claude_5_rejects_non_default_sampling_parameters() {
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let mut temperature_request = ChatRequest::new(model).add_user_message("Hello");
+        temperature_request.temperature = Some(0.5);
+        let temperature_error = anthropic_client()
+            .transform_chat_request(&temperature_request)
+            .expect_err("Claude 5 must reject non-default temperature");
+        assert!(temperature_error.to_string().contains("temperature"));
+
+        let mut top_p_request = ChatRequest::new(model).add_user_message("Hello");
+        top_p_request.top_p = Some(0.5);
+        let top_p_error = anthropic_client()
+            .transform_chat_request(&top_p_request)
+            .expect_err("Claude 5 must reject non-default top_p");
+        assert!(top_p_error.to_string().contains("top_p"));
+    }
+}
+
+#[test]
+fn current_claude_5_accepts_sampling_compatibility_defaults() {
+    let mut request = ChatRequest::new("claude-opus-5").add_user_message("Hello");
+    request.temperature = Some(1.0);
+    request.top_p = Some(0.99);
+
+    let transformed = anthropic_client()
+        .transform_chat_request(&request)
+        .expect("Anthropic documents compatibility defaults for Claude 5");
+
+    assert_eq!(transformed["temperature"], json!(1.0));
+    assert!(
+        (transformed["top_p"]
+            .as_f64()
+            .expect("top_p must be numeric")
+            - 0.99)
+            .abs()
+            < 1e-6
+    );
+}
+
+#[test]
+fn current_claude_5_rejects_assistant_prefill() {
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let request = ChatRequest::new(model)
+            .add_user_message("Choose A or B")
+            .add_assistant_message("The answer is (");
+
+        let error = anthropic_client()
+            .transform_chat_request(&request)
+            .expect_err("Claude 5 must reject assistant prefills locally");
+
+        assert!(error.to_string().contains("assistant prefill"));
+    }
+}
+
+#[test]
+fn current_claude_5_serializes_adaptive_thinking_and_effort() {
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let mut request = ChatRequest::new(model).add_user_message("Solve this carefully");
+        request.thinking = Some(ThinkingConfig::medium_effort());
+
+        let transformed = anthropic_client()
+            .transform_chat_request(&request)
+            .expect("Claude 5 must use adaptive thinking");
+
+        assert_eq!(transformed["thinking"]["type"], "adaptive");
+        assert_eq!(transformed["thinking"]["display"], "summarized");
+        assert_eq!(transformed["output_config"]["effort"], "medium");
+        assert!(transformed["thinking"].get("budget_tokens").is_none());
+    }
+}
+
+#[test]
+fn current_claude_5_rejects_manual_thinking_budgets() {
+    let mut request = ChatRequest::new("claude-sonnet-5").add_user_message("Solve this");
+    request.thinking = Some(ThinkingConfig::new().enabled().with_budget(4_096));
+
+    let error = anthropic_client()
+        .transform_chat_request(&request)
+        .expect_err("Claude 5 does not support manual budget-token thinking");
+
+    assert!(error.to_string().contains("budget_tokens"));
+}
+
+#[test]
+fn current_claude_5_rejects_legacy_function_fields() {
+    let mut functions_request = ChatRequest::new("claude-opus-5").add_user_message("lookup");
+    functions_request.functions = Some(vec![json!({"name": "lookup"})]);
+    let functions_error = anthropic_client()
+        .transform_chat_request(&functions_request)
+        .expect_err("Claude 5 must not silently drop legacy functions");
+    assert!(functions_error.to_string().contains("legacy functions"));
+
+    let mut function_call_request = ChatRequest::new("claude-opus-5").add_user_message("lookup");
+    function_call_request.function_call = Some(json!({"name": "lookup"}));
+    let function_call_error = anthropic_client()
+        .transform_chat_request(&function_call_request)
+        .expect_err("Claude 5 must not silently drop legacy function_call");
+    assert!(function_call_error.to_string().contains("legacy functions"));
 }
 
 #[test]
