@@ -3,16 +3,21 @@ use super::*;
 #[tokio::test]
 async fn image_edit_records_flat_output_image_spend_after_success() {
     let mock = MockImageServer::start().await;
-    let state = build_route_policy_test_state(vec![image_provider(
-        "openai-primary",
-        "openai",
-        &mock.base_url,
-        vec!["flat-image-model".to_string()],
-    )])
+    let provider = with_explicit_image_identity(
+        image_provider(
+            "openai-primary",
+            "openai",
+            &mock.base_url,
+            vec!["flat-image-model".to_string()],
+        ),
+        "flat-image-model",
+        "flat-image-model",
+    );
+    let state = build_route_policy_test_state_with_custom_pricing(
+        vec![provider],
+        HashMap::from([("flat-image-model".to_string(), flat_image_model_info(0.06))]),
+    )
     .await;
-    state
-        .pricing
-        .add_custom_model("flat-image-model".to_string(), flat_image_model_info(0.06));
     state.budget_limits.providers.set_provider_limit(
         "openai-primary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -45,6 +50,9 @@ async fn image_edit_records_flat_output_image_spend_after_success() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(mock.paths(), vec!["/v1/images/edits".to_string()]);
+    let upstream_bodies = mock.bodies();
+    let upstream_body = String::from_utf8_lossy(&upstream_bodies[0]);
+    assert!(upstream_body.contains("name=\"model\"\r\n\r\nflat-image-model"));
     let spent = budget_limits
         .providers
         .get_provider_usage("openai-primary")

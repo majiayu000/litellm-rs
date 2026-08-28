@@ -19,15 +19,18 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use tempfile::NamedTempFile;
 
     #[derive(Clone)]
     struct MockImageState {
         paths: Arc<Mutex<Vec<String>>>,
+        bodies: Arc<Mutex<Vec<Bytes>>>,
     }
 
     struct MockImageServer {
         base_url: String,
         paths: Arc<Mutex<Vec<String>>>,
+        bodies: Arc<Mutex<Vec<Bytes>>>,
         handle: actix_web::dev::ServerHandle,
         task: tokio::task::JoinHandle<std::io::Result<()>>,
     }
@@ -35,8 +38,10 @@ mod tests {
     impl MockImageServer {
         async fn start() -> Self {
             let paths = Arc::new(Mutex::new(Vec::new()));
+            let bodies = Arc::new(Mutex::new(Vec::new()));
             let state = MockImageState {
                 paths: Arc::clone(&paths),
+                bodies: Arc::clone(&bodies),
             };
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
@@ -60,6 +65,7 @@ mod tests {
             Self {
                 base_url: format!("http://{address}/v1"),
                 paths,
+                bodies,
                 handle,
                 task,
             }
@@ -67,6 +73,10 @@ mod tests {
 
         fn paths(&self) -> Vec<String> {
             self.paths.lock().unwrap().clone()
+        }
+
+        fn bodies(&self) -> Vec<Bytes> {
+            self.bodies.lock().unwrap().clone()
         }
 
         async fn stop(self) {
@@ -91,9 +101,10 @@ mod tests {
     async fn mock_image_edit(
         state: web::Data<MockImageState>,
         request: HttpRequest,
-        _body: Bytes,
+        body: Bytes,
     ) -> HttpResponse {
         state.paths.lock().unwrap().push(request.path().to_string());
+        state.bodies.lock().unwrap().push(body);
         HttpResponse::Ok().json(json!({
             "created": 1710000000,
             "data": [{ "url": "https://images.example.test/edit.png" }]
@@ -103,9 +114,10 @@ mod tests {
     async fn mock_image_generation(
         state: web::Data<MockImageState>,
         request: HttpRequest,
-        _body: Bytes,
+        body: Bytes,
     ) -> HttpResponse {
         state.paths.lock().unwrap().push(request.path().to_string());
+        state.bodies.lock().unwrap().push(body);
         HttpResponse::Ok().json(json!({
             "created": 1710000002,
             "data": [{ "url": "https://images.example.test/generated.png" }]
@@ -115,6 +127,21 @@ mod tests {
     async fn build_test_state(
         providers: Vec<ProviderConfig>,
     ) -> litellm_rs::server::state::AppState {
+        build_test_state_with_pricing(providers, None).await
+    }
+
+    async fn build_test_state_with_custom_pricing(
+        providers: Vec<ProviderConfig>,
+        pricing: HashMap<String, LiteLLMModelInfo>,
+    ) -> litellm_rs::server::state::AppState {
+        build_test_state_with_pricing(providers, Some(pricing)).await
+    }
+
+    async fn build_test_state_with_pricing(
+        providers: Vec<ProviderConfig>,
+        pricing: Option<HashMap<String, LiteLLMModelInfo>>,
+    ) -> litellm_rs::server::state::AppState {
+        let pricing_file = pricing.map(write_pricing_fixture);
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
@@ -122,6 +149,9 @@ mod tests {
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.providers = providers;
+        if let Some(file) = pricing_file.as_ref() {
+            config.gateway.pricing.source = Some(file.path().to_string_lossy().into_owned());
+        }
 
         GatewayHttpServer::new(&config)
             .await
@@ -131,8 +161,23 @@ mod tests {
     }
 
     async fn build_route_policy_test_state(
-        mut providers: Vec<ProviderConfig>,
+        providers: Vec<ProviderConfig>,
     ) -> litellm_rs::server::state::AppState {
+        build_route_policy_test_state_with_pricing(providers, None).await
+    }
+
+    async fn build_route_policy_test_state_with_custom_pricing(
+        providers: Vec<ProviderConfig>,
+        pricing: HashMap<String, LiteLLMModelInfo>,
+    ) -> litellm_rs::server::state::AppState {
+        build_route_policy_test_state_with_pricing(providers, Some(pricing)).await
+    }
+
+    async fn build_route_policy_test_state_with_pricing(
+        mut providers: Vec<ProviderConfig>,
+        pricing: Option<HashMap<String, LiteLLMModelInfo>>,
+    ) -> litellm_rs::server::state::AppState {
+        let pricing_file = pricing.map(write_pricing_fixture);
         for provider in &mut providers {
             provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
         }
@@ -143,6 +188,9 @@ mod tests {
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.providers = route_policy_bootstrap_providers(&providers);
+        if let Some(file) = pricing_file.as_ref() {
+            config.gateway.pricing.source = Some(file.path().to_string_lossy().into_owned());
+        }
 
         let state = GatewayHttpServer::new(&config)
             .await
@@ -153,6 +201,16 @@ mod tests {
         runtime_config.gateway.providers = providers;
         state.config.store(runtime_config);
         state
+    }
+
+    fn write_pricing_fixture(pricing: HashMap<String, LiteLLMModelInfo>) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("pricing fixture should be created");
+        serde_json::to_writer(file.as_file_mut(), &pricing)
+            .expect("pricing fixture should serialize");
+        file.as_file()
+            .sync_all()
+            .expect("pricing fixture should be flushed");
+        file
     }
 
     fn api_key_with_allowed_models(allowed_models: &[&str]) -> ApiKey {
@@ -209,6 +267,36 @@ mod tests {
             json!({ alias: upstream_model }),
         );
         provider
+    }
+
+    fn with_explicit_image_identity(
+        mut provider: ProviderConfig,
+        deployment: &str,
+        pricing_model: &str,
+    ) -> ProviderConfig {
+        provider.settings.insert(
+            "model_identity_mappings".to_string(),
+            json!({
+                deployment: {
+                    "capability_catalog_model": "gpt-image-1-mini",
+                    "pricing_model": pricing_model,
+                }
+            }),
+        );
+        provider
+    }
+
+    fn openai_image_provider_with_custom_pricing(
+        name: &str,
+        base_url: &str,
+        alias: &str,
+        upstream_model: &str,
+    ) -> ProviderConfig {
+        with_explicit_image_identity(
+            openai_image_provider_with_mapping(name, base_url, alias, upstream_model),
+            alias,
+            upstream_model,
+        )
     }
 
     fn flat_image_model_info(output_cost_per_image: f64) -> LiteLLMModelInfo {
@@ -571,16 +659,16 @@ mod tests {
     #[tokio::test]
     async fn image_generation_records_flat_output_image_spend_after_success() {
         let mock = MockImageServer::start().await;
-        let state = build_test_state(vec![openai_image_provider_with_mapping(
-            "openai-primary",
-            &mock.base_url,
-            "flat-image-alias",
-            "flat-image-model",
-        )])
+        let state = build_test_state_with_custom_pricing(
+            vec![openai_image_provider_with_custom_pricing(
+                "openai-primary",
+                &mock.base_url,
+                "flat-image-alias",
+                "flat-image-model",
+            )],
+            HashMap::from([("flat-image-model".to_string(), flat_image_model_info(0.06))]),
+        )
         .await;
-        state
-            .pricing
-            .add_custom_model("flat-image-model".to_string(), flat_image_model_info(0.06));
         state.budget_limits.providers.set_provider_limit(
             "openai-primary",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -609,6 +697,10 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(mock.paths(), vec!["/v1/images/generations".to_string()]);
+        let upstream_bodies = mock.bodies();
+        let upstream_body: Value =
+            serde_json::from_slice(&upstream_bodies[0]).expect("upstream body should be JSON");
+        assert_eq!(upstream_body["model"], "flat-image-alias");
         let spent = budget_limits
             .providers
             .get_provider_usage("openai-primary")
@@ -621,17 +713,19 @@ mod tests {
     #[tokio::test]
     async fn image_generation_rejects_token_priced_image_model_without_image_price() {
         let mock = MockImageServer::start().await;
-        let state = build_test_state(vec![openai_image_provider_with_mapping(
-            "openai-primary",
-            &mock.base_url,
-            "token-image-alias",
-            "token-priced-image-model",
-        )])
+        let state = build_test_state_with_custom_pricing(
+            vec![openai_image_provider_with_custom_pricing(
+                "openai-primary",
+                &mock.base_url,
+                "token-image-alias",
+                "token-priced-image-model",
+            )],
+            HashMap::from([(
+                "token-priced-image-model".to_string(),
+                token_priced_image_model_info(0.01),
+            )]),
+        )
         .await;
-        state.pricing.add_custom_model(
-            "token-priced-image-model".to_string(),
-            token_priced_image_model_info(0.01),
-        );
         state.budget_limits.providers.set_provider_limit(
             "openai-primary",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -671,21 +765,29 @@ mod tests {
     #[tokio::test]
     async fn image_generation_records_matching_flat_output_image_variant_spend() {
         let mock = MockImageServer::start().await;
-        let state = build_test_state(vec![openai_image_provider_with_mapping(
-            "openai-primary",
-            &mock.base_url,
-            "flat-variant-alias",
-            "flat-variant-model",
-        )])
+        let state = build_test_state_with_custom_pricing(
+            vec![openai_image_provider_with_custom_pricing(
+                "openai-primary",
+                &mock.base_url,
+                "flat-variant-alias",
+                "flat-variant-model",
+            )],
+            HashMap::from([
+                (
+                    "flat-variant-model".to_string(),
+                    flat_image_model_info(0.01),
+                ),
+                (
+                    "standard/512-x-512/flat-variant-model".to_string(),
+                    flat_image_model_info(0.05),
+                ),
+                (
+                    "hd/512-x-512/flat-variant-model".to_string(),
+                    flat_image_model_info(0.10),
+                ),
+            ]),
+        )
         .await;
-        state.pricing.add_custom_model(
-            "standard/512-x-512/flat-variant-model".to_string(),
-            flat_image_model_info(0.05),
-        );
-        state.pricing.add_custom_model(
-            "hd/512-x-512/flat-variant-model".to_string(),
-            flat_image_model_info(0.10),
-        );
         state.budget_limits.providers.set_provider_limit(
             "openai-primary",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -722,6 +824,9 @@ mod tests {
             );
         }
         assert_eq!(mock.paths(), vec!["/v1/images/generations".to_string()]);
+        let upstream_body: Value =
+            serde_json::from_slice(&mock.bodies()[0]).expect("upstream body should be JSON");
+        assert_eq!(upstream_body["model"], "flat-variant-alias");
         let spent = budget_limits
             .providers
             .get_provider_usage("openai-primary")
