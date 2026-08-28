@@ -156,3 +156,51 @@ fn exact_catalog_auto_resolution_needs_no_redundant_mapping() {
     assert_eq!(identity.wire_model(), "gpt-4");
     assert_eq!(identity.capability_catalog_model(), Some("gpt-4"));
 }
+
+#[test]
+fn azure_transports_preserve_wire_identity_and_resolve_underlying_capability_provider() {
+    let (catalog, pricing) = authorities();
+    for (transport, target, expected_provider, expected_model) in [
+        ("azure", "openai/gpt-4", "openai", "gpt-4"),
+        ("azure_ai", "openai/gpt-4", "openai", "gpt-4"),
+        ("azure_ai", "azure_ai/Phi-4", "azure_ai", "Phi-4"),
+    ] {
+        let mapping = ModelIdentityMapping::new(Some(target.to_string()), None);
+        let identity = validate_deployment_identity(
+            "edge",
+            transport,
+            "wire-deployment",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot(),
+        )
+        .expect("valid underlying capability qualifier should resolve");
+
+        assert_eq!(identity.wire_model(), "wire-deployment");
+        assert_eq!(
+            identity.capability_catalog_provider(),
+            Some(expected_provider)
+        );
+        assert_eq!(identity.capability_catalog_model(), Some(expected_model));
+    }
+}
+
+#[test]
+fn azure_capability_mapping_rejects_wrong_and_double_qualifiers() {
+    let (catalog, pricing) = authorities();
+    for target in ["azure/gpt-4", "azure_ai/Phi-4", "openai/openai/gpt-4"] {
+        let mapping = ModelIdentityMapping::new(Some(target.to_string()), None);
+        let error = validate_deployment_identity(
+            "edge-azure",
+            "azure",
+            "wire-deployment",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot(),
+        )
+        .expect_err("wrong or double capability qualifier must fail closed");
+        assert!(error.to_string().contains("provider"), "{error}");
+    }
+}

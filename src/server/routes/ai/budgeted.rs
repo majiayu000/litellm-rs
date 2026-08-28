@@ -15,6 +15,8 @@ use crate::core::router::UnifiedRouter;
 use crate::core::types::model::ProviderCapability;
 use crate::utils::error::gateway_error::GatewayError;
 
+mod stream_settlement;
+
 use super::execution;
 pub(super) use super::execution::StreamingDeploymentLease;
 use super::spend;
@@ -420,7 +422,7 @@ mod tests {
 
     use super::{ApiKeyBudgetPolicy, BudgetedCall, SettledStream};
 
-    fn limited_budget() -> Arc<UnifiedBudgetLimits> {
+    pub(super) fn limited_budget() -> Arc<UnifiedBudgetLimits> {
         let limits = UnifiedBudgetLimits::new();
         limits.providers.set_provider_limit(
             "openai",
@@ -708,7 +710,7 @@ mod tests {
         assert!(settled.load(Ordering::Relaxed));
     }
 
-    fn settled_stream(
+    pub(super) fn settled_stream(
         budget_limits: Arc<UnifiedBudgetLimits>,
         reservation: Option<UnifiedBudgetReservation>,
     ) -> SettledStream {

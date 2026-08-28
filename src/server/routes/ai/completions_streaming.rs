@@ -148,7 +148,7 @@ pub(super) async fn handle_streaming_completion(
     )
     .await
     {
-        Ok(((mut stream, mut settlement), lease)) => {
+        Ok(((mut stream, settlement), lease)) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
             let include_usage = adapter_request.include_usage;
@@ -157,6 +157,7 @@ pub(super) async fn handle_streaming_completion(
 
             tokio::spawn(async move {
                 let mut lease = Some(lease);
+                let mut settlement = settlement.into_abort_safe();
                 let mut output_guardrail =
                     super::super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
                 let mut tokens_used = 0_u64;
@@ -274,6 +275,7 @@ pub(super) async fn handle_streaming_completion(
                                 continue;
                             }
                             saw_upstream_output |= has_candidate_output;
+                            settlement.observe(final_usage.as_ref(), saw_upstream_output);
                             let prefix_for_chunk = if chunk_has_text_delta(&chunk) {
                                 echo_prefix.take()
                             } else {

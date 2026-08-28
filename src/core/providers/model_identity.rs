@@ -37,6 +37,13 @@ pub(crate) struct ExactPricingIdentity {
     model: String,
 }
 
+/// Exact provider-scoped callable catalog address pinned during validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExactCapabilityIdentity {
+    provider: String,
+    model: String,
+}
+
 impl ExactPricingIdentity {
     pub(crate) fn provider(&self) -> &str {
         &self.provider
@@ -51,7 +58,7 @@ impl ExactPricingIdentity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeploymentModelIdentity {
     wire_model: String,
-    capability_catalog_model: Option<String>,
+    capability: Option<ExactCapabilityIdentity>,
     pricing: Option<ExactPricingIdentity>,
 }
 
@@ -79,12 +86,12 @@ impl DeploymentProviderBinding {
 impl DeploymentModelIdentity {
     pub(crate) fn new(
         wire_model: impl Into<String>,
-        capability_catalog_model: Option<String>,
+        capability: Option<ExactCapabilityIdentity>,
         pricing: Option<ExactPricingIdentity>,
     ) -> Self {
         Self {
             wire_model: wire_model.into(),
-            capability_catalog_model,
+            capability,
             pricing,
         }
     }
@@ -93,8 +100,16 @@ impl DeploymentModelIdentity {
         &self.wire_model
     }
 
+    pub fn capability_catalog_provider(&self) -> Option<&str> {
+        self.capability
+            .as_ref()
+            .map(|identity| identity.provider.as_str())
+    }
+
     pub fn capability_catalog_model(&self) -> Option<&str> {
-        self.capability_catalog_model.as_deref()
+        self.capability
+            .as_ref()
+            .map(|identity| identity.model.as_str())
     }
 
     pub fn pricing_provider(&self) -> Option<&str> {
@@ -237,7 +252,10 @@ pub(crate) fn validate_deployment_identity(
                 });
             Ok(DeploymentModelIdentity::new(
                 wire_model,
-                Some(model.catalog_model_id().to_string()),
+                Some(ExactCapabilityIdentity {
+                    provider: canonical_provider.to_string(),
+                    model: model.catalog_model_id().to_string(),
+                }),
                 pricing_identity,
             ))
         }
@@ -268,7 +286,7 @@ fn validate_capability_target(
     wire_model: &str,
     target: &str,
     catalog: &CatalogAuthority,
-) -> Result<String, ModelIdentityValidationError> {
+) -> Result<ExactCapabilityIdentity, ModelIdentityValidationError> {
     if target.trim().is_empty() {
         return Err(invalid_field(
             provider_name,
@@ -278,13 +296,27 @@ fn validate_capability_target(
             "empty target",
         ));
     }
-    reject_wrong_or_double_qualifier(provider_name, selected_provider, wire_model, target)?;
-    let capability_provider = match selected_provider {
-        "azure" => "openai",
-        other => other,
+    let qualifier = single_identity_qualifier(provider_name, wire_model, target)?;
+    let capability_provider = match (selected_provider, qualifier) {
+        ("openai", Some("openai")) | ("azure", Some("openai")) => "openai",
+        ("azure_ai", Some(provider @ ("openai" | "azure_ai"))) => provider,
+        (_, Some(_)) => {
+            return Err(invalid_field(
+                provider_name,
+                wire_model,
+                "capability_catalog_model",
+                target,
+                "wrong provider qualifier",
+            ));
+        }
+        ("azure", None) => "openai",
+        (provider, None) => provider,
     };
     match catalog.resolve_model(capability_provider, target) {
-        CatalogResolution::Callable(model) => Ok(model.catalog_model_id().to_string()),
+        CatalogResolution::Callable(model) => Ok(ExactCapabilityIdentity {
+            provider: capability_provider.to_string(),
+            model: model.catalog_model_id().to_string(),
+        }),
         CatalogResolution::PricingOnly => Err(invalid_field(
             provider_name,
             wire_model,
@@ -325,7 +357,17 @@ fn validate_pricing_target(
             "empty target",
         ));
     }
-    reject_wrong_or_double_qualifier(provider_name, selected_provider, wire_model, target)?;
+    if single_identity_qualifier(provider_name, wire_model, target)?
+        .is_some_and(|qualifier| qualifier != selected_provider)
+    {
+        return Err(invalid_field(
+            provider_name,
+            wire_model,
+            "pricing_model",
+            target,
+            "wrong provider qualifier",
+        ));
+    }
     let (model, _) = pricing
         .get_model_info_for_provider(selected_provider, target)
         .ok_or_else(|| {
@@ -343,28 +385,18 @@ fn validate_pricing_target(
     })
 }
 
-fn reject_wrong_or_double_qualifier(
+fn single_identity_qualifier(
     provider_name: &str,
-    selected_provider: &str,
     wire_model: &str,
     target: &str,
-) -> Result<(), ModelIdentityValidationError> {
+) -> Result<Option<&'static str>, ModelIdentityValidationError> {
     let parsed = ModelIdRef::parse(target);
     let Some(qualifier) = parsed.provider() else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(qualified_provider) = canonical_identity_provider(qualifier) else {
-        return Ok(());
+        return Ok(None);
     };
-    if qualified_provider != selected_provider {
-        return Err(invalid_field(
-            provider_name,
-            wire_model,
-            "identity_target",
-            target,
-            "wrong provider qualifier",
-        ));
-    }
     if ModelIdRef::parse(parsed.model())
         .provider()
         .and_then(canonical_identity_provider)
@@ -378,7 +410,7 @@ fn reject_wrong_or_double_qualifier(
             "double provider qualification",
         ));
     }
-    Ok(())
+    Ok(Some(qualified_provider))
 }
 
 pub(crate) fn canonical_identity_provider(provider: &str) -> Option<&'static str> {

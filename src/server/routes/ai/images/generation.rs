@@ -59,23 +59,11 @@ pub async fn handle_image_generation_with_state(
                         &provider,
                         &selected_model,
                     )?;
-                let base_pricing_model = request_pricing
-                    .estimation_model(&selected_model)
-                    .to_string();
                 if let Some(variant) = super::pricing_keys::resolve_image_request_pricing(
                     &request_pricing,
-                    &selected_model,
                     core_request.size.as_deref(),
                     core_request.quality.as_deref(),
-                )
-                .or_else(|| {
-                    super::pricing_keys::resolve_image_request_pricing(
-                        &request_pricing,
-                        &base_pricing_model,
-                        core_request.size.as_deref(),
-                        core_request.quality.as_deref(),
-                    )
-                }) {
+                ) {
                     request_pricing = variant;
                 }
                 let usage = estimated_image_generation_usage(&core_request, &request_pricing);

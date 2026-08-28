@@ -189,12 +189,8 @@ async fn proxy_image_multipart_endpoint(
                             &selected_provider,
                             &selected_model,
                         )?;
-                        let base_model = request_pricing
-                            .estimation_model(&selected_model)
-                            .to_string();
                         if let Some(variant) = pricing_keys::resolve_image_request_pricing(
                             &request_pricing,
-                            &base_model,
                             form_fields.size.as_deref(),
                             form_fields.quality.as_deref(),
                         ) {

@@ -200,7 +200,7 @@ pub(crate) async fn handle_streaming_response(
 
             tokio::spawn(async move {
                 let mut lease = Some(lease);
-                let mut settlement = settlement;
+                let mut settlement = settlement.into_abort_safe();
                 let mut output_guardrail =
                     super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
 
@@ -373,6 +373,7 @@ pub(crate) async fn handle_streaming_response(
                                 continue;
                             }
                             saw_upstream_output |= has_candidate_output;
+                            settlement.observe(final_usage.as_ref(), saw_upstream_output);
                             for choice in &chunk.choices {
                                 if let Some(r) = &choice.finish_reason {
                                     final_status = finish_reason_enum_to_status(Some(r));

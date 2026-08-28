@@ -36,8 +36,10 @@ pub(super) fn reserve_audio_provider_budget_with_pricing(
     usage: &PricingUsage,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
     super::super::spend::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
-    let budget_reservation = if total_time_seconds.is_some() && request_pricing.has_time_pricing() {
-        match request_pricing.calculate_time(total_time_seconds.unwrap_or_default()) {
+    let budget_reservation = if let Some(total_time_seconds) =
+        total_time_seconds.filter(|_| request_pricing.has_time_pricing())
+    {
+        match request_pricing.calculate_time(total_time_seconds) {
             Ok(cost) if cost.total_cost > 0.0 => budget_limits
                 .reserve_spend(budget_provider, budget_model, cost.total_cost)
                 .map(Some)

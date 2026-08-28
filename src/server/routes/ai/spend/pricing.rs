@@ -180,7 +180,17 @@ pub(in crate::server::routes::ai) fn request_pricing_for_provider(
     provider: &Provider,
     model: &str,
 ) -> Result<RequestPricing, ProviderError> {
+    request_pricing_for_provider_with_snapshot_hook(pricing_service, provider, model, || {})
+}
+
+fn request_pricing_for_provider_with_snapshot_hook(
+    pricing_service: &Arc<PricingService>,
+    provider: &Provider,
+    model: &str,
+    after_snapshot: impl FnOnce(),
+) -> Result<RequestPricing, ProviderError> {
     let snapshot = pricing_service.snapshot();
+    after_snapshot();
     if matches!(
         provider.provider_type(),
         ProviderType::OpenAI | ProviderType::Azure | ProviderType::AzureAI
@@ -218,7 +228,7 @@ pub(in crate::server::routes::ai) fn request_pricing_for_provider(
     }
 
     let (pricing_provider, pricing_model) =
-        pricing_identity_for_provider(pricing_service.as_ref(), provider, model);
+        pricing_identity_for_provider(&snapshot, provider, model);
     let identity = snapshot
         .get_model_info_for_provider(&pricing_provider, &pricing_model)
         .map_or_else(
@@ -234,7 +244,7 @@ pub(in crate::server::routes::ai) fn request_pricing_for_provider(
 }
 
 pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
-    pricing_service: &PricingService,
+    pricing_snapshot: &PricingSnapshot,
     provider: &Provider,
     model: &str,
 ) -> (String, String) {
@@ -276,7 +286,7 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     for pricing_provider in &provider_candidates {
         for pricing_model in &model_candidates {
             if let Some((resolved_model, _)) =
-                pricing_service.get_model_info_for_provider(pricing_provider, pricing_model)
+                pricing_snapshot.get_model_info_for_provider(pricing_provider, pricing_model)
             {
                 return (pricing_provider.clone(), resolved_model);
             }
@@ -666,6 +676,65 @@ fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
 #[cfg(test)]
 mod mapped_identity_tests {
     use super::*;
+    use crate::core::pricing_service::LiteLLMModelInfo;
+    use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
+    use std::collections::HashMap;
+
+    fn pricing_info(provider: &str, input: f64, output: f64) -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
+            max_tokens: Some(4_096),
+            max_input_tokens: Some(4_096),
+            max_output_tokens: Some(1_024),
+            input_cost_per_token: Some(input),
+            output_cost_per_token: Some(output),
+            input_cost_per_character: None,
+            output_cost_per_character: None,
+            cost_per_second: None,
+            litellm_provider: provider.to_string(),
+            mode: "chat".to_string(),
+            supports_function_calling: None,
+            supports_vision: None,
+            supports_streaming: Some(true),
+            supports_parallel_function_calling: None,
+            supports_system_message: None,
+            extra: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_pricing_keeps_the_snapshot_pinned_across_a_refresh() {
+        let pricing = Arc::new(PricingService::new(None));
+        pricing.add_custom_model(
+            "race-model".to_string(),
+            pricing_info("race-provider", 0.01, 0.02),
+        );
+        let provider = Provider::OpenAILike(
+            OpenAILikeProvider::new_openai_compatible(
+                OpenAILikeConfig::new("https://example.com")
+                    .with_skip_api_key(true)
+                    .with_provider_name("race-provider"),
+            )
+            .await
+            .expect("test provider should build"),
+        );
+
+        let pinned = request_pricing_for_provider_with_snapshot_hook(
+            &pricing,
+            &provider,
+            "race-model",
+            || {
+                pricing
+                    .add_custom_model("race-model".to_string(), pricing_info("openai", 1.0, 2.0));
+            },
+        )
+        .expect("the attempt should retain its original pricing generation");
+
+        assert_eq!(pinned.priced_parts(), Some(("race-provider", "race-model")));
+        let cost = pinned
+            .calculate_usage(&PricingUsage::new(10, 5))
+            .expect("the pinned generation should remain priceable");
+        assert!((cost.total_cost - 0.2).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {

@@ -63,10 +63,10 @@ pub(super) fn resolve_image_pricing_model(
 
 pub(super) fn resolve_image_request_pricing(
     pricing: &super::super::spend::RequestPricing,
-    model: &str,
     size: Option<&str>,
     quality: Option<&str>,
 ) -> Option<super::super::spend::RequestPricing> {
+    let (_, model) = pricing.priced_parts()?;
     image_pricing_model_candidates(model, size, quality)
         .into_iter()
         .filter_map(|candidate| pricing.with_exact_priced_model(&candidate))
@@ -75,13 +75,6 @@ pub(super) fn resolve_image_request_pricing(
                 .model_info()
                 .is_some_and(|info| supports_image_output_pricing(&info))
         })
-}
-
-#[cfg(test)]
-pub(super) fn is_variant_image_pricing_key(model: &str) -> bool {
-    model
-        .rsplit_once('/')
-        .is_some_and(|(prefix, _)| prefix.split('/').any(is_image_variant_segment))
 }
 
 fn image_pricing_model_candidates(
@@ -296,5 +289,50 @@ mod tests {
             resolved,
             Some("1024-x-1024/50-steps/stability.stable-diffusion-xl-v1".to_string())
         );
+    }
+
+    fn assert_explicit_mapping_wins_over_wire_variant() {
+        let service = PricingService::new(None);
+        for (model, cost) in [
+            ("mapped-image", 0.01),
+            ("hd/1024-x-1024/mapped-image", 0.02),
+            ("hd/1024-x-1024/wire-image", 0.90),
+        ] {
+            service.add_custom_model(
+                model.to_string(),
+                model_info(HashMap::from([(
+                    "output_cost_per_image".to_string(),
+                    serde_json::Value::from(cost),
+                )])),
+            );
+        }
+        let mapped = super::super::super::spend::RequestPricing::from_exact(
+            &service,
+            "openai",
+            "mapped-image",
+        );
+
+        let resolved = resolve_image_request_pricing(&mapped, Some("1024x1024"), Some("hd"))
+            .expect("mapped image variant should resolve");
+
+        assert_eq!(
+            resolved.priced_parts(),
+            Some(("openai", "hd/1024-x-1024/mapped-image"))
+        );
+    }
+
+    #[test]
+    fn generation_variant_stays_inside_explicit_pricing_mapping() {
+        assert_explicit_mapping_wins_over_wire_variant();
+    }
+
+    #[test]
+    fn edit_variant_stays_inside_explicit_pricing_mapping() {
+        assert_explicit_mapping_wins_over_wire_variant();
+    }
+
+    #[test]
+    fn variation_variant_stays_inside_explicit_pricing_mapping() {
+        assert_explicit_mapping_wins_over_wire_variant();
     }
 }
